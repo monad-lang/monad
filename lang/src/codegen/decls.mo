@@ -11,7 +11,10 @@
 /// (`cli.main::main`), so the literal `"main"` this used to assume
 /// names nothing, and a wrapper supplying it would quietly return an
 /// empty closure.
-use lib::types {Decl, Def, Inductive, Term}
+use lib::types {
+  Decl, Def, Identifier, Inductive, Multiplicity, NamePath, Struct, StructField,
+  Term, Visibility,
+}
 use lib::module {ModuleInfo}
 use lib::codegen::symbols {def_symbol_name}
 use lib::codegen::free_names {collect_referenced_names}
@@ -46,7 +49,25 @@ def extract_defs_go (decl_list : List Decl) (acc : List Def) : List Def := match
         }
 }
 
-/// Extract inductive_d entries from a list of Decl.
+/// Extract struct_d entries from a list of Decl.
+///
+/// Structs are deliberately NOT part of `extract_inductives` (a struct
+/// stays `Decl.struct_d` all the way to codegen -- see `constructor_tag_at`'s
+/// own note on why a struct `mk` gets no tag-map entry), but their
+/// implicit `mk` constructor still needs its FIELD COUNT reachable: a
+/// value-position reference to it (`Point.mk x y`, what a decl-gen macro's
+/// `e_ctor` reifies to -- `std/derive.mo`'s `lens_setter`) has to be
+/// recognized as a constructor application rather than an ordinary call to
+/// some function named `Point.mk`, which is what compiled to
+/// `llc: use of undefined value '@Point.mk'` in `examples/derive.mo`.
+/// Collected separately so that reaching it costs the tag map nothing.
+///
+/// That is why `filter_reachable_decls` has to CARRY the struct decls
+/// through: this runs on the codegen decl list, which reachability has
+/// already reduced to defs plus inductives (see its own doc comment), so
+/// a struct left behind there is a struct this function never sees --
+/// and the reference above silently goes back to being an undefined
+/// function call.
 #[partial]
 def extract_inductives (decl_list : List Decl) : List Inductive :=
     List.reverse (extract_inductives_go decl_list List.empty)
@@ -61,12 +82,29 @@ def extract_inductives_go (decl_list : List Decl) (acc : List Inductive) : List 
         }
 }
 
+#[partial]
+def extract_structs (decl_list : List Decl) : List Struct :=
+    List.reverse (extract_structs_go decl_list List.empty)
+
+#[partial]
+def extract_structs_go (decl_list : List Decl) (acc : List Struct) : List Struct := match decl_list {
+    List.empty => acc,
+    List.cons d rest =>
+        match d {
+            Decl.struct_d s => extract_structs_go rest (List.cons s acc),
+            _ => extract_structs_go rest acc,
+        }
+}
+
 /// Restricts `decl_list` to the transitive closure of Defs reachable from a
 /// top-level `main`, plus every Inductive (kept unconditionally --
 /// constructor-wrapper compilation is cheap, uniform, and, after the
 /// qualified-naming fix in compile_db_inductive_constructors, collision
 /// -free regardless of how many are compiled, so there's no correctness
-/// reason to filter them and every reason to keep this simple).
+/// reason to filter them and every reason to keep this simple) and every
+/// Struct (which compile to nothing at all -- their only codegen
+/// footprint is the ARITY claim their implicit `mk` contributes, see
+/// `extract_structs`'s own doc comment, so keeping them is cheaper still).
 /// `compile_loaded_modules_to_ir` previously fed `compile_db_module`
 /// every loaded module's ENTIRE declaration set -- prelude, init,
 /// string, number, io, id, ... -- regardless of whether the program
@@ -84,6 +122,7 @@ def extract_inductives_go (decl_list : List Decl) (acc : List Inductive) : List 
 def filter_reachable_decls (root : String) (decl_list : List Decl) : List Decl :=
     let all_defs := extract_defs decl_list in
     let all_inds := extract_inductives decl_list in
+    let all_structs := extract_structs decl_list in
     // O(total) once, instead of `reachable_defs_from` re-scanning
     // `all_defs` per worklist item (O(reachable x total) -- confirmed the
     // dominant cost of a full self-compile via `--verbose` stage timing,
@@ -94,7 +133,7 @@ def filter_reachable_decls (root : String) (decl_list : List Decl) : List Decl :
     // `lang/scope.mo`'s `modpath_map_*` already uses.
     let defs_map := build_def_name_map all_defs str_map_empty in
     let reachable := reachable_defs_from defs_map (List.cons root List.empty) str_map_empty List.empty in
-    List.append (map_inductive_decl all_inds) (map_def_decl reachable)
+    List.append (map_inductive_decl all_inds) (List.append (map_struct_decl all_structs) (map_def_decl reachable))
 
 #[partial]
 def build_def_name_map (defs : List Def) (acc : HashMap String Def) : HashMap String Def := match defs {
@@ -120,6 +159,16 @@ def map_inductive_decl (inds : List Inductive) : List Decl :=
 def map_inductive_decl_go (inds : List Inductive) (acc : List Decl) : List Decl := match inds {
     List.empty => acc,
     List.cons i rest => map_inductive_decl_go rest (List.cons (Decl.inductive_d i) acc),
+}
+
+#[partial]
+def map_struct_decl (structs : List Struct) : List Decl :=
+    List.reverse (map_struct_decl_go structs List.empty)
+
+#[partial]
+def map_struct_decl_go (structs : List Struct) (acc : List Decl) : List Decl := match structs {
+    List.empty => acc,
+    List.cons s rest => map_struct_decl_go rest (List.cons (Decl.struct_d s) acc),
 }
 
 /// Reachability works in the same name space the emitted symbols do --
@@ -197,7 +246,45 @@ def reachable_defs_from (defs_map : HashMap String Def) (worklist : List String)
 #[partial]
 def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {
     List.empty => acc,
-    List.cons mod_ rest => 
+    List.cons mod_ rest =>
         let mod_decls := mod_.decl_list in
         collect_all_decls_from_modules rest (List.append mod_decls acc),
 }
+
+// ─── Tests ──────────────────────────────────────────────────────────
+
+/// A one-field `Struct`, built by hand (`extract_structs` is what turns
+/// real decls into these).
+#[partial]
+def unit_test_struct_decl (type_name : String) : Struct :=
+    Struct.mk (Identifier.id type_name)
+        (List.cons (StructField.mk (Identifier.id "x") (Term.type_ 1) Option.none Multiplicity.many) List.empty)
+        List.empty Visibility.package_private
+
+/// A one-constructor `Inductive`, by hand -- the comparison case below.
+#[partial]
+def unit_test_inductive_decl (type_name : String) : Inductive :=
+    Inductive.mk (NamePath.npath (List.cons (Identifier.id type_name) List.empty))
+        List.empty (Term.type_ 1) List.empty List.empty Visibility.package_private
+
+/// `filter_reachable_decls` must carry STRUCT decls through, exactly as
+/// it carries inductives: the constructor-arity table codegen builds
+/// comes from the list THIS function returns (`extract_structs`'s own
+/// doc comment), so a struct dropped here is a struct whose implicit
+/// `mk` codegen never learns is a constructor -- `examples/derive.mo`'s
+/// `llc: use of undefined value '@Point.mk'`, which survived a first
+/// attempt at the fix that taught `extract_structs` about structs but
+/// left reachability still discarding them.
+///
+/// No Defs are needed to make the point: an unreachable root leaves the
+/// def closure empty, so what comes back is exactly "inductives, structs,
+/// and nothing else" -- asserted all three ways so a future filter that
+/// keeps too much fails here too.
+#[test]
+def test_filter_reachable_decls_keeps_structs : Bool :=
+    let decls : List Decl := List.cons (Decl.struct_d (unit_test_struct_decl "Point"))
+        (List.cons (Decl.inductive_d (unit_test_inductive_decl "Slim")) List.empty) in
+    let filtered := filter_reachable_decls "cli.main::main" decls in
+    I64.beq (List.length (extract_structs filtered)) 1
+        && I64.beq (List.length (extract_inductives filtered)) 1
+        && I64.beq (List.length (extract_defs filtered)) 0

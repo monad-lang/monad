@@ -38,7 +38,8 @@ use lib::codegen::validate {
   validate_no_unwired_natives,
 }
 use lib::codegen::ctors {
-  build_constructor_arity_map, build_constructor_tag_map, constructor_arity,
+  build_constructor_arity_map, build_constructor_arity_map_with_structs,
+  build_constructor_tag_map, constructor_arity,
   constructor_tag, is_constructor_var,
 }
 use lib::codegen::natives {
@@ -47,7 +48,7 @@ use lib::codegen::natives {
 }
 use lib::codegen::decls {
   build_def_name_map, collect_all_decls_from_modules, def_name_str, extract_defs,
-  extract_inductives, filter_reachable_decls, reachable_defs_from,
+  extract_inductives, extract_structs, filter_reachable_decls, reachable_defs_from,
 }
 use lib::codegen::tco {apply_self_tco}
 use lib::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
@@ -3983,8 +3984,13 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
 pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_files : List (Pair String String)) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
+    // Structs feed the ARITY table only -- see
+    // `collect_struct_ctor_claims`' own doc comment for why a struct's
+    // `mk` must be arity-known (a value-position `Point.mk` reference)
+    // while staying out of the tag map (its allocation's tag comes from
+    // the bare-name tier, exactly as a struct literal's does).
     let ctor_tags := build_constructor_tag_map inds in
-    let ctor_arities := build_constructor_arity_map inds in
+    let ctor_arities := build_constructor_arity_map_with_structs inds (extract_structs decl_list) in
     let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
     match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities) defs {
@@ -4389,6 +4395,54 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
 def unit_test_param (nm : String) : Param :=
     Param.mk (Identifier.id nm) (Term.type_ 1) Multiplicity.many Option.none List.empty
 
+/// A `Struct` with one field per name given, as a decl-list-free value
+/// (`extract_structs` is what turns real decls into these).
+#[partial]
+def unit_test_struct (type_name : String) (field_names : List String) : Struct :=
+    Struct.mk (Identifier.id type_name)
+        (List.map (fn n => StructField.mk (Identifier.id n) (Term.type_ 1) Option.none Multiplicity.many) field_names)
+        List.empty Visibility.package_private
+
+/// A struct's implicit `mk` is ARITY-known to codegen even though it
+/// stays out of the tag map: `is_constructor_var` answers true for the
+/// owner-qualified `Point.mk` a decl-gen macro emits (`std/derive.mo`'s
+/// `lens_setter`, via `e_ctor`), and the arity is the struct's field
+/// count. Before this tier existed the name was not a constructor at
+/// all, so the reference compiled as a call to a function that does not
+/// exist -- `examples/derive.mo`'s `llc: use of undefined value
+/// '@Point.mk'`. The tag map here is deliberately EMPTY: with no
+/// inductive claiming bare `mk` either, the struct tier is the only
+/// thing that can answer true.
+#[test]
+def test_struct_ctor_reference_is_arity_known : Bool :=
+    let structs : List Struct := List.cons (unit_test_struct "Point" ["x", "y"]) List.empty in
+    let arity_map := build_constructor_arity_map_with_structs List.empty structs in
+    let c := empty_ctx empty_arities str_map_empty arity_map in
+    is_constructor_var c "Point.mk"
+        && I64.beq (constructor_arity c "Point.mk") 2
+
+/// ...and it must ALLOCATE under the tag a struct literal does. A struct
+/// literal's tag comes from the bare-name tier (`constructor_tag_at c
+/// "mk" arity` -- a struct has no composite key), so a reference that
+/// took any other tag would allocate the same shape under a different
+/// tag than every `match` on a literal compares against. Checked with
+/// another type claiming bare `mk` at a DIFFERENT arity, which is where
+/// the two paths could plausibly disagree, and which also pins that the
+/// tag is a real table entry rather than the 0 fallback.
+#[test]
+def test_struct_ctor_reference_shares_the_literals_tag : Bool :=
+    let slim_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
+        (List.cons (unit_test_param "only") List.empty) (Term.type_ 1) in
+    let slim := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Slim") List.empty))
+        List.empty (Term.type_ 1) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
+    let tag_map := build_constructor_tag_map (List.cons slim List.empty) in
+    let arity_map := build_constructor_arity_map_with_structs (List.cons slim List.empty) (List.cons (unit_test_struct "Point" ["x", "y"]) List.empty) in
+    let c := empty_ctx empty_arities tag_map arity_map in
+    let by_reference : I64 := constructor_tag_at c "Point.mk" 2 in
+    let by_literal : I64 := constructor_tag_at c "mk" 2 in
+    I64.gt by_reference 15
+        && I64.beq by_reference by_literal
+
 /// Composite tag keying (`build_constructor_tag_map` +
 /// `constructor_tag_at`): two different types both declaring a `mk`
 /// constructor at DIFFERING arities -- the v29 self-compiled binary's
@@ -4475,6 +4529,74 @@ def test_native_i64_to_string_wraps_value_position_reference : Bool :=
     if check_contains text "call i64 @monad_i64_to_string"
     then not (check_contains text "call i64 @alloc_constructor(i64 0, i64 0)")
     else false
+
+/// The `I64` arithmetic/comparison family's value-position half -- the
+/// same gap as `I64.to_string` above, but a live miscompile rather than a
+/// blank string, because its results are consumed as `Bool`/`I64`
+/// values. Direct calls inline through `native_op_table`, which is
+/// exactly why every earlier wiring pass missed this group; only a
+/// value-position reference (`native_i64_bool_binop I64.beq args` in
+/// `lang/src/core_eval.mo`) reads the def's own body. See
+/// `native_runtime_fn_name`'s `i64_*` group for the full account.
+///
+/// `i64_eq` is the one that broke the meta-evaluator (`0 == 0` answered
+/// false, so every `#[derive]`d `BEq` body took its "different
+/// constructor" arm), so it is the one pinned here; the other six are
+/// pinned by the same table entry and by
+/// `test_native_i64_family_entries_are_wired` below.
+#[test]
+def test_native_i64_beq_wraps_value_position_reference : Bool :=
+    let text := compile_native_def_fixture_text "I64.beq" "i64_eq" in
+    if check_contains text "call i64 @monad_i64_eq"
+    then not (check_contains text "call i64 @alloc_constructor(i64 0, i64 0)")
+    else false
+
+/// `bool_result`, not `passthrough`: a raw 0/1 is not a `Bool` value in
+/// this backend (its `Bool` is a tagged Constructor), so the wrapper must
+/// allocate one from the comparison's result. Same rule
+/// `test_native_string_eq_wraps_raw_result_as_tagged_bool` pins for
+/// `String.beq`.
+#[test]
+def test_native_i64_lt_boxed_as_tagged_bool : Bool :=
+    let text := compile_native_def_fixture_text "I64.lt" "i64_lt" in
+    if check_contains text "call i64 @monad_i64_lt"
+    then check_contains text "call i64 @alloc_constructor"
+    else false
+
+/// `I64.add`'s value-position reference is `passthrough` -- one runtime
+/// call, no boxing.
+#[test]
+def test_native_i64_add_wraps_value_position_reference : Bool :=
+    let text := compile_native_def_fixture_text "I64.add" "i64_add" in
+    if check_contains text "call i64 @monad_i64_add"
+    then not (check_contains text "call i64 @alloc_constructor(i64 0, i64 0)")
+    else false
+
+/// Every `I64` native `native_op_table` registers must ALSO have a
+/// `native_runtime_fn_name` entry -- otherwise it is the value-position
+/// stub again, silently. Pins the whole group at once, so a future
+/// `I64` op added to one table and forgotten in the other fails here
+/// rather than at runtime. `i64_ne` is excluded deliberately: it is dead
+/// code with no runtime backing (see `native_op_table`'s own comment).
+#[test]
+def test_native_i64_family_entries_are_wired : Bool :=
+    native_wrap_is_some (native_attr "i64_add")
+        && native_wrap_is_some (native_attr "i64_sub")
+        && native_wrap_is_some (native_attr "i64_mul")
+        && native_wrap_is_some (native_attr "i64_div")
+        && native_wrap_is_some (native_attr "i64_eq")
+        && native_wrap_is_some (native_attr "i64_lt")
+        && native_wrap_is_some (native_attr "i64_gt")
+
+/// `Option.some _ => true` -- a presence test without needing a `BEq`
+/// instance for `NativeWrapKind` (there is none, and deriving one just to
+/// compare against `Option.none` would be the tail wagging the dog).
+#[partial]
+def native_wrap_is_some (attrs : List Attribute) : Bool :=
+    match native_runtime_fn_name attrs {
+        Option.some _ => true,
+        Option.none => false,
+    }
 
 #[test]
 def test_native_string_eq_wraps_raw_result_as_tagged_bool : Bool :=

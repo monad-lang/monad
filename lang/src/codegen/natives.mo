@@ -26,10 +26,14 @@ def lookup_native (name : String) : Option NativeOp := str_map_lookup name nativ
 /// which mangles to `I64_beq`, never matching a hypothetical `"I64_eq"`
 /// entry at all. Confirmed as a real, previously undiscovered gap via a
 /// direct repro: `I64.beq` compiled to the generic "return Unit" stub
-/// (`native_runtime_fn_name` has no entry for it either) both as a bare
-/// call AND as an `if`'s own condition (`is_native_bool_op_name`/
-/// `ensure_i1_cond` never recognized it as already-i1 either, same root
-/// cause) -- every I64 equality check in real code silently miscompiled.
+/// both as a bare call AND as an `if`'s own condition
+/// (`is_native_bool_op_name`/`ensure_i1_cond` never recognized it as
+/// already-i1 either, same root cause) -- every I64 equality check in
+/// real code silently miscompiled. THIS key fixed the direct-call half;
+/// the stub's other half (a value-position reference, which reads the
+/// def rather than inlining) stayed open for the whole family until
+/// `native_runtime_fn_name` gained its own `i64_*` group -- see that
+/// chain's own comment.
 /// `I64.ne`/`"I64_ne"` has the same "no such identifier" shape
 /// (`Bool.not (I64.beq a b)` is how real code expresses it, per this
 /// session's own `materialize_native_bool_arg` fix) -- its `"I64_ne"` key
@@ -99,13 +103,14 @@ def native_op_table : HashMap String NativeOp :=
 /// named global. That's normally invisible (the global just does the
 /// same arithmetic) EXCEPT `I64.add`/`I64.sub`/etc. are native-signature
 /// defs with no `:=` body at all (`init/number.mo`) -- their "body" is
-/// `Term.hole`, which `compile_db_def_ir` compiles as a bogus `Unit`
-/// constructor stub. Confirmed via a direct repro
-/// (`let a := 2 in let b := 3 in I64.add a b`, non-literal so constant
-/// folding doesn't hide it): every dotted arithmetic call silently
-/// returned a garbage heap pointer instead of computing anything. Try
-/// the underscore-mangled form first (covers arithmetic), then the
-/// bare-extracted form (covers IO), so both naming conventions work.
+/// `Term.hole`. At the time that repro was found,
+/// `compile_db_def_ir` compiled that hole as a bogus `Unit` constructor
+/// stub, so every dotted arithmetic call silently returned a garbage
+/// heap pointer instead of computing anything; the family now has real
+/// `native_runtime_fn_name` wrappers, so the named global is correct in
+/// both call shapes. Try the underscore-mangled form first (covers
+/// arithmetic), then the bare-extracted form (covers IO), so both naming
+/// conventions work.
 ///
 /// `native_op_table` is keyed on what the SOURCE wrote (`I64.add`,
 /// mangled to `I64_add`), but every name reaching codegen now carries
@@ -346,6 +351,30 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "i8_eq" then Option.some (NativeWrapKind.bool_result "monad_i8_eq")
             else if String.beq target "i8_lt" then Option.some (NativeWrapKind.bool_result "monad_i8_lt")
             else if String.beq target "i8_gt" then Option.some (NativeWrapKind.bool_result "monad_i8_gt")
+            // The `I64` arithmetic/comparison family -- the last group in
+            // `native_op_table` (see that table's own doc comment, and
+            // `runtime/src/natives.mo`'s emitters for the semantics).
+            // Every one of these has a DIRECT call site all over the
+            // corpus, and direct call sites inline through
+            // `try_compile_inline_native_db`, so their defs' own compiled
+            // bodies were never reached in ordinary code -- which is why
+            // this group is the one that outlived every earlier wiring
+            // pass. A VALUE-position reference reads the def, and the def
+            // was the generic hole-bodied "return Unit" stub; a stub
+            // result consumed as a `Bool` (`if f x y then ...`) then
+            // answered FALSE for every operand pair, equal or not. Live
+            // consequence: `lang/src/core_eval.mo` passes `I64.beq` into
+            // `native_i64_bool_binop` as a first-class argument, so the
+            // self-hosted meta-evaluator computed `0 == 0` as false and
+            // every `#[derive]`d `BEq`/`BOrd` body silently took its
+            // "different constructor" arm.
+            else if String.beq target "i64_add" then Option.some (NativeWrapKind.passthrough "monad_i64_add")
+            else if String.beq target "i64_sub" then Option.some (NativeWrapKind.passthrough "monad_i64_sub")
+            else if String.beq target "i64_mul" then Option.some (NativeWrapKind.passthrough "monad_i64_mul")
+            else if String.beq target "i64_div" then Option.some (NativeWrapKind.passthrough "monad_i64_div")
+            else if String.beq target "i64_eq" then Option.some (NativeWrapKind.bool_result "monad_i64_eq")
+            else if String.beq target "i64_lt" then Option.some (NativeWrapKind.bool_result "monad_i64_lt")
+            else if String.beq target "i64_gt" then Option.some (NativeWrapKind.bool_result "monad_i64_gt")
             // `F64` (`init/number.mo`): the family that used to be named
             // here only as the reason this backend had no floating point
             // at all. An F64 value is its IEEE-754 BIT PATTERN in an

@@ -31,9 +31,9 @@
 /// here, not silently assumed sufficient forever — genuine fixpoint
 /// requeuing is a follow-up if a real template ever needs it.
 use lib::types {
-  Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor,
-  Inductive, Instance, ModulePath, Param, Struct, StructField, Term,
-  TypeConstraint, id_eq,
+  AttrArg, Attribute, Class, ClassDef, Decl, Def, Identifier,
+  InductConstructor, Inductive, Instance, ModulePath, Param, Struct,
+  StructField, Term, TypeConstraint, id_eq,
 }
 use lib::typecheck::macro_apply {expand_decl_gen_call}
 use lib::typecheck::macro_expand {expand_term}
@@ -202,7 +202,7 @@ def inductive_terms_expand (lookup : Identifier -> Option Term) (ind : Inductive
 
 #[partial]
 def struct_terms_expand (lookup : Identifier -> Option Term) (s : Struct) : Struct :=
-    match s { Struct.mk name fields vis => Struct.mk name (struct_fields_terms_expand lookup fields) vis }
+    match s { Struct.mk name fields attrs vis => Struct.mk name (struct_fields_terms_expand lookup fields) attrs vis }
 
 #[partial]
 def class_terms_expand (lookup : Identifier -> Option Term) (cls : Class) : Class :=
@@ -319,6 +319,208 @@ def expand_decls_go (lookup : Identifier -> Option Term) (decl_gen_registry : Li
                     },
                 _ => List.cons (expand_decl_terms lookup d) (expand_decls_go lookup decl_gen_registry rest),
             },
+    }
+
+// ─── Attribute → macro bridge (`#[derive ...]` / `#[derive_cli]`) ────
+//
+// Mirrors `core/src/eval/macro_expand.rs`'s `Decl::Type(induct)` arm: an
+// attributed type declaration is not a macro CALL in the source at all,
+// so nothing in `expand_decls_go` above would ever look at it — the
+// attribute has to be read back off the decl and turned into the
+// decl-gen macro call the user could have written by hand
+// (`derive_beq! Point` for `#[derive BEq]`). Three pieces, in the
+// reference's own order:
+//
+//   1. `derive_attribute_targets`'s equivalent — flatten a `derive`
+//      attribute's own args (bare-word `#[derive BEq BOrd]` and the
+//      bracketed-group `#[derive [BEq, BOrd]]` both parse, so both are
+//      accepted here too) into target names, and map each through
+//      `derive_macro_name` (`BEq` -> `derive_beq`, …); plus the
+//      independently-named `#[derive_cli]` -> `derive_cli`.
+//   2. Synthesize the macro call exactly as `named_ref` shapes a
+//      type-name argument (`lang/typecheck/name_subst.mo`), then run it
+//      through the SAME registry lookup/template substitution a written
+//      `derive_beq! Point` goes through.
+//   3. The type decl itself is emitted UNCHANGED and its attributes are
+//      left in place (the reference's own choice — it pushes the type
+//      straight to `batch` and only avoids regenerating by never
+//      re-queueing it). Safe here for the same structural reason: this
+//      bridge lives in `lang/module.mo`'s `decl_gen_subst_decls`, which
+//      `expand_decls_graph` runs exactly ONCE per elaboration, and the
+//      per-file `expand_decls` above deliberately does NOT bridge — so
+//      there is no second pass to regenerate from the still-present
+//      attribute. Putting it in `expand_decls_go` as well WOULD double
+//      every generated instance (parse-time pass, then graph pass).
+//
+// Not carried over from the reference: its hard error on an unknown
+// `#[derive Foo]` target. An unregistered macro name is not an error
+// anywhere else in this file (`expand_decls_go`'s own "unresolved is
+// not an error" rule), and `derive_macro_name` is a total four-way map,
+// so an unknown target simply contributes nothing — the same silent
+// shape `#[derive]`-on-a-multi-constructor-type's `derive_lens` already
+// has.
+
+/// `#[derive ...]` target name -> the `std/derive.mo` decl-gen macro
+/// that implements it, verbatim from the reference's own
+/// `derive_macro_name`. `Option.none` for anything else (including a
+/// correctly-spelled target this build has no macro for).
+pub def derive_macro_name (target : Identifier) : Option Identifier :=
+    if id_eq target (Identifier.id "BEq") then Option.some (Identifier.id "derive_beq")
+    else if id_eq target (Identifier.id "BOrd") then Option.some (Identifier.id "derive_bord")
+    else if id_eq target (Identifier.id "Debug") then Option.some (Identifier.id "derive_debug")
+    else if id_eq target (Identifier.id "Lens") then Option.some (Identifier.id "derive_lens")
+    else Option.none
+
+/// One `#[derive ...]` attribute's own args -> its target names.
+/// `AttrArg.group` recurses (the bracketed form); every other arg kind
+/// (`str`/`num`/`named`) is not a target name and contributes nothing —
+/// the reference errors on those instead, see this section's own note.
+#[partial]
+def derive_targets_of_args (args : List AttrArg) : List Identifier :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            match a {
+                AttrArg.ident id => List.cons id (derive_targets_of_args rest),
+                AttrArg.group items => List.append (derive_targets_of_args items) (derive_targets_of_args rest),
+                _ => derive_targets_of_args rest,
+            },
+    }
+
+/// Target names -> macro names, dropping the unknown ones.
+#[partial]
+def derive_macro_names_of_targets (targets : List Identifier) : List Identifier :=
+    match targets {
+        List.empty => List.empty,
+        List.cons t rest =>
+            match derive_macro_name t {
+                Option.some m => List.cons m (derive_macro_names_of_targets rest),
+                Option.none => derive_macro_names_of_targets rest,
+            },
+    }
+
+/// One attribute -> the macros it asks for. `derive` goes through the
+/// target map above; `derive_cli` IS its own macro name (the reference
+/// hard-codes the same pair); anything else asks for nothing.
+#[partial]
+def derive_macro_names_of_attr (attr : Attribute) : List Identifier :=
+    match attr {
+        Attribute.mk name args =>
+            if id_eq name (Identifier.id "derive") then derive_macro_names_of_targets (derive_targets_of_args args)
+            else if id_eq name (Identifier.id "derive_cli") then List.cons (Identifier.id "derive_cli") List.empty
+            else List.empty,
+    }
+
+#[partial]
+def derive_macro_names_of_attrs (attrs : List Attribute) : List Identifier :=
+    match attrs {
+        List.empty => List.empty,
+        List.cons a rest => List.append (derive_macro_names_of_attr a) (derive_macro_names_of_attrs rest),
+    }
+
+/// The attributes an attributed TYPE declaration carries — the two decl
+/// shapes the reference's `Decl::Type` arm covers. NOTE the self-hosted
+/// split the reference doesn't have: `struct` is its OWN `Decl` variant
+/// here, where the reference represents both as one `Inductive` with
+/// `variant: Struct` (`core/src/term.rs`), which is why `#[derive ...]`
+/// on a `struct` needs a parser change (`ParseStruct`/`Struct`'s own
+/// `attrs` slot) as well as this bridge.
+pub def decl_type_attrs (d : Decl) : List Attribute :=
+    match d {
+        Decl.struct_d s => match s { Struct.mk _ _ attrs _ => attrs },
+        Decl.inductive_d ind => match ind { Inductive.mk _ _ _ _ attrs _ => attrs },
+        _ => List.empty,
+    }
+
+/// Every macro name an attributed type declaration asks for.
+pub def decl_derive_macro_names (d : Decl) : List Identifier :=
+    derive_macro_names_of_attrs (decl_type_attrs d)
+
+/// Whether any macro name in the list is registered.
+#[partial]
+def macro_names_registered (registry : List DeclGenEntry) (names : List Identifier) : Bool :=
+    match names {
+        List.empty => false,
+        List.cons n rest =>
+            match lookup_decl_gen registry n {
+                Option.some _ => true,
+                Option.none => macro_names_registered registry rest,
+            },
+    }
+
+/// Whether `d` is an attributed type declaration whose derive would
+/// actually EXPAND — i.e. at least one of its macro names is in the
+/// registry. The registry-dependence is what keeps the flag honest: an
+/// `#[derive BEq]` in a file that never brings `derive_beq` into the
+/// graph generates nothing, so it must not count as a graph change
+/// (`lang/module.mo`'s `raw_changed`/`changed` consumers would otherwise
+/// splice an unexpanded `macro_call_d` into the codegen decl list).
+pub def decl_derive_expands (registry : List DeclGenEntry) (d : Decl) : Bool :=
+    macro_names_registered registry (decl_derive_macro_names d)
+
+#[partial]
+pub def has_derive_expansion (registry : List DeclGenEntry) (decls : List Decl) : Bool :=
+    match decls {
+        List.empty => false,
+        List.cons d rest => if decl_derive_expands registry d then true else has_derive_expansion registry rest,
+    }
+
+/// The `Term` a synthesized macro call passes as its type argument —
+/// the free (sentinel-indexed, `DebugName.named`) variable reference
+/// `lang/typecheck/name_subst.mo`'s own `named_ref` builds, and the
+/// shape `lang/module.mo`'s `term_free_var_name` reads the type's bare
+/// name back out of.
+pub def derive_name_ref (id : Identifier) : Term := Term.var (0 - 1) (DebugName.named id)
+
+/// One synthesized `derive_*! <T>` call -> its expansion, via the same
+/// registry lookup + `expand_decl_gen_call` template substitution
+/// `expand_decls_go` gives a written call. An unregistered name (or an
+/// arity mismatch) yields `List.empty` rather than a leftover
+/// `macro_call_d` — unlike a written call, this one was never in the
+/// source, so there is nothing to preserve on failure.
+#[partial]
+def derive_bridge_one (registry : List DeclGenEntry) (name : Identifier) (arg : Term) : List Decl :=
+    match lookup_decl_gen registry name {
+        Option.some entry =>
+            match entry {
+                DeclGenEntry.dg_entry _ params gen_decls =>
+                    match expand_decl_gen_call params gen_decls (List.cons arg List.empty) {
+                        Option.some expanded => expanded,
+                        Option.none => List.empty,
+                    },
+            },
+        Option.none => List.empty,
+    }
+
+#[partial]
+def derive_bridge_names (registry : List DeclGenEntry) (arg : Term) (names : List Identifier) : List Decl :=
+    match names {
+        List.empty => List.empty,
+        List.cons n rest => List.append (derive_bridge_one registry n arg) (derive_bridge_names registry arg rest),
+    }
+
+/// The decls an attributed type declaration generates — empty for every
+/// other decl kind, and for an attributed type whose derive macros this
+/// graph doesn't have. The type decl itself is NOT part of the result;
+/// its own list already carries it (`lang/module.mo`'s
+/// `decl_gen_subst_decls` appends these right after it).
+#[partial]
+pub def derive_bridge_decls (registry : List DeclGenEntry) (d : Decl) : List Decl :=
+    match d {
+        Decl.struct_d s =>
+            match s {
+                Struct.mk name _fields attrs _vis =>
+                    derive_bridge_names registry (derive_name_ref name) (derive_macro_names_of_attrs attrs),
+            },
+        Decl.inductive_d ind =>
+            match ind {
+                Inductive.mk name _params _typ _cons attrs _vis =>
+                    match name_path_last name {
+                        Option.some id => derive_bridge_names registry (derive_name_ref id) (derive_macro_names_of_attrs attrs),
+                        Option.none => List.empty,
+                    },
+            },
+        _ => List.empty,
     }
 
 // ─── Tests ───────────────────────────────────────────────────────────
@@ -470,3 +672,194 @@ def test_expand_decls_ordinary_decl_with_no_macros_is_unchanged : Bool :=
             },
         List.empty => false,
     }
+
+// ─── Attribute → macro bridge ───────────────────────────────────────
+
+/// The `derive_*! <T>` template shape `std/derive.mo` really has, minus
+/// the other three: one param `T`, one `reflect_type_info! T <meta>`
+/// call. `meta` is named after the macro so `bridge_call_arg_name`'s own
+/// assertions can also tell the templates apart by their meta-def.
+def bridge_template (macro_name : String) : Decl :=
+    let t_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
+    let own_name : NamePath := NamePath.npath (List.cons (Identifier.id macro_name) List.empty) in
+    let meta_name : String := String.concat macro_name "_meta" in
+    let body : Decl :=
+        Decl.macro_call_d (Identifier.id "reflect_type_info")
+            (List.cons (derive_name_ref (Identifier.id "T")) (List.cons (derive_name_ref (Identifier.id meta_name)) List.empty)) in
+    Decl.decl_gen_d own_name (List.cons t_param List.empty) (List.cons body List.empty) List.empty
+
+/// `#[derive BEq BOrd]` -- the bare-word form (one attribute, two
+/// positional ident args), the form `examples/derive.mo` writes.
+def bridge_derive_attr : Attribute :=
+    Attribute.mk (Identifier.id "derive")
+        (List.cons (AttrArg.ident (Identifier.id "BEq")) (List.cons (AttrArg.ident (Identifier.id "BOrd")) List.empty))
+
+/// `#[derive [Debug, Lens]]` -- the bracketed-group form, which
+/// `attr_arg_parser` also accepts (the reference accepts both).
+def bridge_derive_group_attr : Attribute :=
+    Attribute.mk (Identifier.id "derive")
+        (List.cons (AttrArg.group
+            (List.cons (AttrArg.ident (Identifier.id "Debug")) (List.cons (AttrArg.ident (Identifier.id "Lens")) List.empty)))
+            List.empty)
+
+def bridge_struct (attrs : List Attribute) : Decl :=
+    let fld : StructField := StructField.mk (Identifier.id "x") (Term.type_ 0) Option.none Multiplicity.many in
+    Decl.struct_d (Struct.mk (Identifier.id "Point") (List.cons fld List.empty) attrs Visibility.package_private)
+
+/// The type-name argument of a bridge result's first generated call —
+/// what `lang/module.mo`'s `term_free_var_name` reads back out to name
+/// the reflected type.
+#[partial]
+def bridge_call_arg_name (ds : List Decl) : Option String :=
+    match ds {
+        List.empty => Option.none,
+        List.cons d _ =>
+            match d {
+                Decl.macro_call_d _ args =>
+                    match args {
+                        List.cons a _ =>
+                            match a {
+                                Term.var _ dbg =>
+                                    match dbg {
+                                        DebugName.named id => Option.some (show_identifier id),
+                                        DebugName.unnamed => Option.none,
+                                    },
+                                _ => Option.none,
+                            },
+                        List.empty => Option.none,
+                    },
+                _ => Option.none,
+            },
+    }
+
+/// The meta-def name a bridge result's own generated `reflect_type_info!`
+/// call names — the second argument, i.e. which of the four `derive_*`
+/// macros actually produced it.
+#[partial]
+def bridge_call_meta_name (d : Decl) : Option String :=
+    match d {
+        Decl.macro_call_d name args =>
+            if id_eq name (Identifier.id "reflect_type_info") then
+                match args {
+                    List.cons _ rest =>
+                        match rest {
+                            List.cons m _ =>
+                                match m {
+                                    Term.var _ dbg =>
+                                        match dbg {
+                                            DebugName.named id => Option.some (show_identifier id),
+                                            DebugName.unnamed => Option.none,
+                                        },
+                                    _ => Option.none,
+                                },
+                            List.empty => Option.none,
+                        },
+                    List.empty => Option.none,
+                }
+            else Option.none,
+        _ => Option.none,
+    }
+
+#[test]
+def test_derive_macro_name_maps_the_four_real_targets : Bool :=
+    (match derive_macro_name (Identifier.id "BEq") { Option.some m => String.beq (show_identifier m) "derive_beq", Option.none => false }) &&
+    (match derive_macro_name (Identifier.id "BOrd") { Option.some m => String.beq (show_identifier m) "derive_bord", Option.none => false }) &&
+    (match derive_macro_name (Identifier.id "Debug") { Option.some m => String.beq (show_identifier m) "derive_debug", Option.none => false }) &&
+    (match derive_macro_name (Identifier.id "Lens") { Option.some m => String.beq (show_identifier m) "derive_lens", Option.none => false }) &&
+    // Case-sensitive, like the reference's own `match`: `beq`/`LENS` are
+    // not targets.
+    (match derive_macro_name (Identifier.id "beq") { Option.some _ => false, Option.none => true })
+
+#[test]
+def test_derive_bridge_bare_word_form_generates_one_call_per_target : Bool :=
+    // `#[derive BEq BOrd] struct Point {...}` with both macros in the
+    // registry -> two generated decls, each a `reflect_type_info!` call
+    // naming `Point`, in attribute order.
+    let a : Decl := bridge_template "derive_beq" in
+    let b : Decl := bridge_template "derive_bord" in
+    let registry : List DeclGenEntry := build_decl_gen_registry (List.cons a (List.cons b List.empty)) in
+    let generated : List Decl := derive_bridge_decls registry (bridge_struct (List.cons bridge_derive_attr List.empty)) in
+    I64.beq (List.length generated) 2 &&
+    match bridge_call_arg_name generated {
+        Option.some n => String.beq n "Point",
+        Option.none => false,
+    } &&
+    match generated {
+        List.cons first rest =>
+            (match bridge_call_meta_name first { Option.some m => String.beq m "derive_beq_meta", Option.none => false }) &&
+            match rest {
+                List.cons second _ =>
+                    match bridge_call_meta_name second { Option.some m => String.beq m "derive_bord_meta", Option.none => false },
+                List.empty => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_derive_bridge_group_form_flattens : Bool :=
+    // `#[derive [Debug, Lens]]` -- one `AttrArg.group` of two idents,
+    // same two generated decls as the bare-word form.
+    let a : Decl := bridge_template "derive_debug" in
+    let b : Decl := bridge_template "derive_lens" in
+    let registry : List DeclGenEntry := build_decl_gen_registry (List.cons a (List.cons b List.empty)) in
+    let generated : List Decl := derive_bridge_decls registry (bridge_struct (List.cons bridge_derive_group_attr List.empty)) in
+    I64.beq (List.length generated) 2 &&
+    match generated {
+        List.cons first _ =>
+            match bridge_call_meta_name first { Option.some m => String.beq m "derive_debug_meta", Option.none => false },
+        List.empty => false,
+    }
+
+#[test]
+def test_derive_bridge_derive_cli_needs_no_target_args : Bool :=
+    // `#[derive_cli]` IS its own macro name -- no target mapping, and no
+    // args on the attribute at all.
+    let tmpl : Decl := bridge_template "derive_cli" in
+    let registry : List DeclGenEntry := build_decl_gen_registry (List.cons tmpl List.empty) in
+    let attr : Attribute := Attribute.mk (Identifier.id "derive_cli") List.empty in
+    let generated : List Decl := derive_bridge_decls registry (bridge_struct (List.cons attr List.empty)) in
+    I64.beq (List.length generated) 1 &&
+    match bridge_call_arg_name generated { Option.some n => String.beq n "Point", Option.none => false }
+
+#[test]
+def test_derive_bridge_ignores_unregistered_and_unknown : Bool :=
+    // Two independent "generates nothing" cases: a target with no
+    // `derive_macro_name` at all (`Clone`), and a real target whose
+    // macro this graph does not have (`BEq` with an empty registry).
+    // The second is why `decl_derive_expands` is registry-dependent --
+    // an unexpandable attribute must not count as a graph change.
+    let clone_attr : Attribute := Attribute.mk (Identifier.id "derive") (List.cons (AttrArg.ident (Identifier.id "Clone")) List.empty) in
+    let clone_decl : Decl := bridge_struct (List.cons clone_attr List.empty) in
+    let beq_decl : Decl := bridge_struct (List.cons bridge_derive_attr List.empty) in
+    let tmpl : Decl := bridge_template "derive_beq" in
+    let with_beq : List DeclGenEntry := build_decl_gen_registry (List.cons tmpl List.empty) in
+    I64.beq (List.length (derive_bridge_decls with_beq clone_decl)) 0 &&
+    I64.beq (List.length (derive_bridge_decls List.empty beq_decl)) 0 &&
+    not (decl_derive_expands List.empty beq_decl) &&
+    decl_derive_expands with_beq beq_decl
+
+#[test]
+def test_derive_bridge_ignores_unattributed_and_non_type_decls : Bool :=
+    // The common case by a wide margin: an ordinary undecorated struct,
+    // and an attributed `def` (whose attrs are `#[test]`/`#[arg]`-class,
+    // not type-level) both generate nothing.
+    let plain : Decl := bridge_struct List.empty in
+    let d : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 1) empty_constraints (List.cons bridge_derive_attr List.empty) Visibility.package_private) in
+    I64.beq (List.length (derive_bridge_decls List.empty plain)) 0 &&
+    I64.beq (List.length (derive_bridge_decls List.empty d)) 0 &&
+    not (has_derive_expansion List.empty (List.cons plain (List.cons d List.empty)))
+
+#[test]
+def test_decl_type_attrs_reads_struct_and_inductive_only : Bool :=
+    // The two decl shapes the reference's `Decl::Type` arm covers --
+    // and note the self-hosted split: a `struct` is its OWN variant here
+    // (`Struct`'s own `attrs` slot is what `#[derive ...] struct` needs
+    // on top of the `Inductive` one that `#[derive_cli] type` uses).
+    let attr : Attribute := Attribute.mk (Identifier.id "derive_cli") List.empty in
+    let struct_decl : Decl := bridge_struct (List.cons attr List.empty) in
+    let ind : Inductive := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Cmd") List.empty)) List.empty Term.hole List.empty (List.cons attr List.empty) Visibility.package_private in
+    let def_decl : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 1) empty_constraints List.empty Visibility.package_private) in
+    I64.beq (List.length (decl_type_attrs struct_decl)) 1 &&
+    I64.beq (List.length (decl_type_attrs (Decl.inductive_d ind))) 1 &&
+    I64.beq (List.length (decl_type_attrs def_decl)) 0 &&
+    I64.beq (List.length (decl_derive_macro_names (Decl.inductive_d ind))) 1

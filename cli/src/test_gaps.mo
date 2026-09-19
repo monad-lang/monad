@@ -9,7 +9,7 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 10 entries here are what a full corpus sweep actually reports,
+/// The 7 entries here are what a full corpus sweep actually reports,
 /// not a guess, and none is a problem with the test files themselves. In
 /// rough order of how much they cost to close:
 ///
@@ -21,9 +21,33 @@
 ///     parser (`structs.mo`) -- 5 files;
 ///   * a codegen bug the checker used to hide (`init/src/tests.mo`) --
 ///     1 file;
-///   * `#[derive]`/`#[derive_cli]`, whose attributes never reach a macro
-///     (3 files);
 ///   * the async runtime, which does not exist (1 file).
+///
+/// `#[derive]`/`#[derive_cli]` is CLOSED, and with it the whole
+/// attribute/decl-gen family: `std/src/derive_tests.mo` (22/22),
+/// `cli/src/tests/cli_derive_tests.mo` (7/7) and `examples/derive.mo`
+/// (7/7) all run self-hosted now. Three things were missing, in the
+/// order they were hit: the parser refused an attribute on a `struct`
+/// decl at all (so `examples/derive.mo` stopped dead AT the attribute,
+/// which is why its recorded cause read "Failed to load" -- a load
+/// failure, not the codegen one underneath); nothing bridged an
+/// attribute to the decl-gen macros that exist on the host (so
+/// `#[derive_cli]` expanded to nothing and every body referenced an
+/// unknown variable); and a value-position reference to a struct's
+/// implicit constructor -- `Point.mk`, the shape `e_ctor` reifies to
+/// (`std/derive.mo`'s `lens_setter`) -- was not recognized as a
+/// constructor, so it compiled to a call to a function that is never
+/// defined (`llc: use of undefined value '@Point.mk'`). That last one
+/// needed BOTH halves: the constructor-arity table has to know a
+/// struct's `mk` (`extract_structs`), and the decl list codegen is
+/// handed has to still CONTAIN the struct (`filter_reachable_decls`),
+/// which keeps them for the same reason it keeps inductives.
+///
+/// The macro-DERIVED-instance failure this file used to record -- a
+/// generated `BEq Point` reported as "no instance found for `BEq.beq`"
+/// while a hand-written `instance BEq Point` passed -- is CLOSED by the
+/// same bridge, not by the carrier work: the derived instance is a real
+/// instance once the attribute actually expands.
 ///
 /// FLOATING POINT is CLOSED, and with it the whole native-wiring family:
 /// `i64_to_u64`/`u8_to_u64` are identity conversions and the U16/I8
@@ -68,23 +92,24 @@
 /// the driver-compile error, so each token below must be harvested from
 /// the real binary's own output, never transcribed from prose.
 ///
-/// Three index-aligned `List String`s rather than a list of structs:
-/// a user struct constructor inside a list literal miscompiles through
-/// the native backend (`TestGap.mk` inside `[...]` emits a call to an
-/// undefined `@TestGap.mk` and `llc` rejects the module), while three
-/// parallel lists compile and run identically on both backends.
-/// `test_gap_lists_are_aligned` guards the alignment the shape gives up.
+/// Three index-aligned `List String`s rather than a list of structs.
+/// That shape was forced: a user struct constructor inside a list
+/// literal used to miscompile through the native backend (`TestGap.mk`
+/// inside `[...]` emitted a call to an undefined `@TestGap.mk` and `llc`
+/// rejected the module), which is the same missing constructor-arity
+/// entry the `#[derive]` family above needed. That is FIXED, and the
+/// shape is verified to compile now -- but the lists are left as they
+/// are rather than churned into a struct list at the tail end of the
+/// change that fixed them, and `test_gap_lists_are_aligned` still
+/// guards the alignment this shape gives up.
 
 /// Paths, exactly as the runner reports them (repo-relative; identical
 /// whether the user passes a directory or explicit files).
 pub def gap_paths : List String :=
     ["std/src/concurrent/fiber_test.mo",
      "init/src/tests.mo",
-     "std/src/derive_tests.mo",
      "std/src/concurrent/combine_test.mo",
      "lang/src/json.mo",
-     "cli/src/tests/cli_derive_tests.mo",
-     "examples/derive.mo",
      "examples/structs.mo",
      "examples/indexed_monads.mo",
      "examples/state_monad.mo"]
@@ -100,11 +125,8 @@ pub def gap_paths : List String :=
 pub def gap_causes : List String :=
     ["native `fork_io`",
      "driver exited -1",
-     "no instance found for `BEq.beq`",
      "does not typecheck",
      "does not typecheck",
-     "does not typecheck",
-     "Failed to load",
      "does not typecheck",
      "no instance found for `Monad.pure`",
      "no instance found for `MonadState.modify_get`"]
@@ -148,7 +170,7 @@ pub def gap_reasons : List String :=
      // is then resolved against the applied carrier rather than its
      // argument. Closed by: fixing that resolution, not by anything in
      // the test file.",
-     "the option instance's own dict is passed where its ELEMENT dict belongs -- `some 1 == List.get 0 [1, 2, 3]`",
+      "the option instance's own dict is passed where its ELEMENT dict belongs -- `some 1 == List.get 0 [1, 2, 3]`",
      // Measured 2026-09-19 (P6): after the applied-head match AND the
      // callee-signature instantiation both landed, `find_matching_instance`
      // agrees on all of these -- what fails is downstream of the match.
@@ -181,7 +203,6 @@ pub def gap_reasons : List String :=
      //   only, and an app ARGUMENT gets no expected type from its callee's
      //   Pi domain (`BEq.beq Bounded.max_bound gt` -- the sibling argument
      //   pins the callee's `A` to `Ordering`; measured in isolation).
-     "NOT the carrier channel either -- a macro-DERIVED instance is invisible to this pass. MEASURED via probe: `derive_debug! Point` + `Debug.debug pt` fails identically (`needed in `t_derived``, with no module prefix on the generated def), while the same file with a hand-written `instance Debug Point` passes. The reported first error moved from `Debug.debug` to `BEq.beq` (`test_derive_beq_equal`'s `p1 == p2` on the `derive_beq!`-generated instance) when the carrier work landed, which is the same finding one class over: a derived instance is invisible, whichever class is asked first. Belongs to the `reflect_type_info!`/decl-gen family (P10), not P6",
      // (list_tests2.mo's own entry was here: the resolution half was
      // CLOSED by the applied-carrier + signature-instantiation work, and
      // the codegen half -- `BEq (List A)` forwarding the element dict to
@@ -206,20 +227,6 @@ pub def gap_reasons : List String :=
      // pattern then reports a constructor ambiguity downstream of the
      // SAME unknown. The Rust host runs all of the file's tests.
      "the call's own ascription is discarded by the self-hosted parser",
-     // Closed by: the attribute-to-macro bridge. The file LOADS -- to
-     // the self-hosted parser `#[derive_cli]` is just another
-     // `#[name args]` -- but nothing expands it, so the defs it would
-     // generate (notably `parse_democommand`) never exist and every test
-     // body is an unknown variable. Same family as `examples/derive.mo`
-     // below, which dies a stage earlier, at load.
-     "`#[derive_cli]` expands to nothing (no attribute-to-macro bridge)",
-     // Closed by: `#[derive ...]` support in the self-hosted parser and
-     // macro system. The parse stops dead AT the attribute -- an
-     // attributed `struct` decl is not accepted, and the remaining-text
-     // dump starts on the `#[derive BEq BOrd Debug Lens]` line itself --
-     // so nothing downstream ever runs. The declaration-generating
-     // macros these attributes dispatch to exist on the host only.
-     "#[derive] is not supported by the self-hosted parser",
      // PARTIALLY CLOSED, and the half that is left is the harder one.
      //
      // The CONSTRUCTOR half is done: `named_call_check_missing_fields`
@@ -326,6 +333,17 @@ def test_closed_f64_gaps_are_no_longer_listed : Bool :=
     Bool.not (is_known_gap "init/src/optics_tests.mo" "native `f64_mul`")
     && Bool.not (is_known_gap "examples/optics.mo" "native `f64_eq`")
     && Bool.not (is_known_gap "std/src/base.mo" "native `f64_eq`")
+
+/// Same pin for the `#[derive]` family (P10), and for the same reason:
+/// all three of these were listed for a cause that no longer exists, so
+/// a future failure in any of them is a NEW failure and has to be
+/// reported rather than excused. The cause strings are the ones that
+/// used to be recorded for them.
+#[test]
+def test_closed_derive_gaps_are_no_longer_listed : Bool :=
+    Bool.not (is_known_gap "std/src/derive_tests.mo" "no instance found for `BEq.beq`")
+    && Bool.not (is_known_gap "cli/src/tests/cli_derive_tests.mo" "does not typecheck")
+    && Bool.not (is_known_gap "examples/derive.mo" "Failed to load")
 
 #[test]
 def test_gap_reason_for_listed_path : Bool :=

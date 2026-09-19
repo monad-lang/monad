@@ -290,7 +290,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
             },
         Decl.struct_d s =>
             match s {
-                Struct.mk name _ _ =>
+                Struct.mk name _ _ _ =>
                     let empty : List Identifier := List.empty in
                     List.cons name empty,
             },

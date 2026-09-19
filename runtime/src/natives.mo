@@ -85,7 +85,9 @@ def numeric_runtime_functions : List LLVMFunction :=
    emit_u32_shl, emit_u32_shr, emit_u32_eq,
    emit_i64_to_u64, emit_u8_to_u64,
    emit_u16_eq, emit_u16_lt, emit_u16_gt,
-   emit_i8_eq, emit_i8_lt, emit_i8_gt]
+   emit_i8_eq, emit_i8_lt, emit_i8_gt,
+   emit_i64_add, emit_i64_sub, emit_i64_mul, emit_i64_div,
+   emit_i64_eq, emit_i64_lt, emit_i64_gt]
 
 // ─── Shared emitter helpers ─────────────────────────────────────────
 
@@ -559,6 +561,75 @@ def emit_identity_native (name : String) : LLVMFunction :=
 
 def emit_i64_to_u64 : LLVMFunction := emit_identity_native "monad_i64_to_u64"
 def emit_u8_to_u64 : LLVMFunction := emit_identity_native "monad_u8_to_u64"
+
+/// The `I64` arithmetic/comparison family -- the LAST set of natives with
+/// no runtime backing, and the only one whose absence was a live
+/// miscompile rather than a latent one.
+///
+/// `I64.add/sub/mul/div/beq/lt/gt` are all in `native_op_table`, so their
+/// DIRECT call sites inline and never touch a global -- which is how they
+/// survived every prior wiring pass (`init/number.mo`'s
+/// `instance Add I64 { def add (a b : I64) : I64 := I64.add a b }` is
+/// always a direct call, so all ordinary arithmetic worked). A
+/// VALUE-position reference (`apply2 I64.beq a b`, `native_i64_bool_binop
+/// I64.beq args`) reads the def's own compiled body instead, which was the
+/// generic hole-bodied "return Unit" stub.
+///
+/// What that produced was not a clean crash: the stub returns a 0-arity
+/// constructor, and `apply_closure2` on it yields that constructor back,
+/// so a caller that only ever consumed the result as a `Bool`
+/// (`if f x y then ... else ...`) saw a tag that never equals
+/// `Bool.true`'s -- every such comparison answered FALSE, for equal
+/// operands and unequal ones alike. That is exactly how it surfaced:
+/// `lang/src/core_eval.mo`'s `basic_native_table` passes `I64.beq`/`I64.lt`
+/// as first-class arguments, so the self-hosted meta-evaluator judged
+/// `0 == 0` false, and every `#[derive]`d `BEq`/`BOrd` instance body took
+/// its "different constructor" arm. Same shape in the Rust host, which
+/// interprets this very file.
+///
+/// `sdiv` for div, 0 on a zero divisor, wrapping add/sub/mul, and
+/// `icmp`+`zext` (raw 0/1, `bool_result`-wrapped at the def) for the
+/// comparisons -- each matching the reference's `core_native.rs` group
+/// for `i64_*` exactly, which is the same rule the u8/u16/i8 groups here
+/// already follow.
+def emit_i64_add : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "r" (add (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+  { name := "monad_i64_add",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_i64_sub : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+  { name := "monad_i64_sub",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_i64_mul : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+  { name := "monad_i64_mul",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_i64_div : LLVMFunction := emit_guarded_native "monad_i64_div" (sdiv (parm_ 0) (parm_ 1))
+
+def emit_i64_eq : LLVMFunction := emit_icmp_native "monad_i64_eq" (icmp_eq (parm_ 0) (parm_ 1))
+def emit_i64_lt : LLVMFunction := emit_icmp_native "monad_i64_lt" (icmp_slt (parm_ 0) (parm_ 1))
+def emit_i64_gt : LLVMFunction := emit_icmp_native "monad_i64_gt" (icmp_sgt (parm_ 0) (parm_ 1))
 
 /// The `U16`/`I8` comparison families, wired as plain unmasked i64
 /// comparisons for the same reason `emit_u8_eq`/`_lt`/`_gt` are: the

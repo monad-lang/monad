@@ -12,9 +12,9 @@
 /// once put 283 constructors on one tag at seven arities and sized
 /// allocations wrongly; the builtin tiers are checked for a matching
 /// arity for the same reason.
-use lib::types {InductConstructor, Inductive}
+use lib::types {InductConstructor, Inductive, Struct}
 use lib::codegen::ctx {CodegenCtx, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag}
-use lib::codegen::symbols {extract_base_name, name_path_to_str}
+use lib::codegen::symbols {extract_base_name, name_path_to_str, symbol_identifier}
 use lib::codegen::util {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {}
 
@@ -186,6 +186,37 @@ def constructor_arity (c : CodegenCtx) (name : String) : I64 :=
             },
     }
 
+/// Struct `mk`s, as claims -- the missing half of `collect_ctor_claims`.
+///
+/// A struct has exactly one implicit constructor, named `mk`, whose
+/// field count is the struct's own. The claim's keys are rendered the
+/// same way the inductive path renders them (`symbol_identifier` is the
+/// same rendering a reference is looked up under, `collect_ctor_claims`
+/// uses `name_path_to_str` on a one-segment path) so the qualified key
+/// matches a source-written `Point.mk` exactly.
+///
+/// These claims reach ONLY the arity map (`build_constructor_arity_map_
+/// with_structs`), never the tag map: a struct literal allocates with
+/// `constructor_tag_at c "mk" arity`, whose composite key is absent for a
+/// struct and falls through to the bare-name tier -- the same tag a
+/// `Point.mk` reference gets, so the two agree without a tag of their
+/// own (see `constructor_tag_at`'s own note that struct `mk`s stay out
+/// of the tag map).
+#[partial]
+def collect_struct_ctor_claims (structs : List Struct) (acc : List CtorClaim) : List CtorClaim := match structs {
+    List.empty => acc,
+    List.cons s rest =>
+        match s {
+            Struct.mk name fields _attrs _vis =>
+                let claim : CtorClaim := {
+                    bare := "mk",
+                    arity := List.length fields,
+                    qualified := String.concat (symbol_identifier name) ".mk",
+                } in
+                collect_struct_ctor_claims rest (List.cons claim acc),
+        },
+}
+
 /// Check if a variable name is a known constructor.
 /// Handles both simple names ("unit", "true") and qualified names ("Unit.unit", "IO.io"),
 /// falling back to `c`'s own dynamically-built `ctor_tags` table
@@ -194,6 +225,17 @@ def constructor_arity (c : CodegenCtx) (name : String) : I64 :=
 /// several arities still has a ctx-table entry (the -1 ambiguity
 /// sentinel, see `constructor_tag_at`) -- presence alone answers this
 /// question.
+///
+/// The last tier is the ARITY table, which is the only table that knows
+/// about structs at all (`collect_struct_ctor_claims`' own doc comment):
+/// a struct's `mk` carries no tag-map entry, so `Point.mk` -- the shape
+/// a decl-gen macro emits for a struct (std/derive.mo's `lens_setter`)
+/// -- answered `false` here and compiled as a call to a nonexistent
+/// function (`llc: use of undefined value '@Point.mk'`). It is looked up
+/// as WRITTEN rather than by base name on purpose: bare `mk` is claimed
+/// by hundreds of types at seven arities, so only the owner-qualified
+/// form identifies one unambiguously -- which is also how such a
+/// reference is always written.
 #[partial]
 def is_constructor_var (c : CodegenCtx) (name : String) : Bool :=
     let base_name := extract_base_name name in
@@ -202,7 +244,11 @@ def is_constructor_var (c : CodegenCtx) (name : String) : Bool :=
         Option.none =>
             match ctx_lookup_ctor_tag c base_name {
                 Option.some _ => true,
-                Option.none => false,
+                Option.none =>
+                    match ctx_lookup_ctor_arity c name {
+                        Option.some _ => true,
+                        Option.none => false,
+                    },
             },
     }
 
@@ -388,7 +434,22 @@ def build_constructor_tag_map (inds : List Inductive) : HashMap String I64 :=
 /// arbitrary but deterministic; write such references qualified.
 #[partial]
 def build_constructor_arity_map (inds : List Inductive) : HashMap String I64 :=
-    let claims := List.reverse (collect_ctor_claims_inds inds List.empty) in
+    build_constructor_arity_map_with_structs inds List.empty
+
+/// `build_constructor_arity_map` with a program's structs folded in --
+/// the arity table is the ONE constructor table structs appear in (see
+/// `collect_struct_ctor_claims`), and it is what makes `is_constructor_var`
+/// answer true for a value-position `Point.mk` and
+/// `constructor_arity` answer the struct's field count for it.
+///
+/// The inductive claims stay FIRST in declaration order, so the bare-name
+/// tier's "first claim wins" answer (see this function's own doc
+/// comment) is unchanged for every name an inductive also claims: a
+/// struct's `mk` can only answer a bare `mk` lookup in a program where
+/// no inductive claims that name at all.
+#[partial]
+pub def build_constructor_arity_map_with_structs (inds : List Inductive) (structs : List Struct) : HashMap String I64 :=
+    let claims := List.reverse (List.append (collect_ctor_claims_inds inds List.empty) (collect_struct_ctor_claims structs List.empty)) in
     let scan := scan_ctor_bare_arities claims { first := str_map_empty, multi := str_map_empty } in
     add_ctor_arity_keys claims scan str_map_empty
 

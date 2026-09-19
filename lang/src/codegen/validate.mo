@@ -53,12 +53,28 @@ use std::map {}
 /// code the program never uses must not block a compile that works),
 /// with the native target and enclosing def named directly.
 ///
-/// Deliberately NOT covered: a native that IS in `native_op_table` still
-/// has its stub def emitted (direct calls inline, but a VALUE-position
-/// reference -- `List.map I64.to_string ids`, a class-instance method
-/// binding -- calls the stub global). That narrower gap needs the def
-/// itself to compile a wrapper, not a validator; left alone here rather
-/// than false-positive-ing every program that only ever calls it directly.
+/// Deliberately NOT covered: a native that IS in `native_op_table` but has
+/// no `native_runtime_fn_name` entry still has its stub def emitted (direct
+/// calls inline, but a VALUE-position reference -- `List.map I64.to_string
+/// ids`, a class-instance method binding -- calls the stub global). That
+/// narrower gap needs the def itself to compile a wrapper, not a validator;
+/// left alone here rather than false-positive-ing every program that only
+/// ever calls it directly.
+///
+/// That carve-out is now nearly empty, and the exception that ate it is
+/// worth recording: the `I64_*` keys were the one group in
+/// `native_op_table` with no runtime backing at all, and the missing half
+/// was NOT benign. The stub's `alloc_constructor(0, 0)` result, applied
+/// through `apply_closure*`, comes back as a constructor whose tag is
+/// never `Bool.true`'s -- so a value-position `I64.beq`/`I64.lt` consumed
+/// as a `Bool` answered FALSE for every operand pair, and it did so
+/// silently (no crash, no link error). It stayed invisible until
+/// `lang/src/core_eval.mo`'s `basic_native_table` passed `I64.beq` into
+/// `native_i64_bool_binop`, which made the self-hosted meta-evaluator
+/// compute `0 == 0` as false and quietly broke every `#[derive]`d
+/// `BEq`/`BOrd` body. The family is wired now
+/// (`native_runtime_fn_name`'s own `i64_*` group); `I64_ne` remains the
+/// sole unwired key and is unreachable dead code.
 #[partial]
 pub def validate_no_unwired_natives (decl_list : List Decl) : Result String (List Decl) :=
     let msgs := find_unwired_native_defs (extract_defs decl_list) in

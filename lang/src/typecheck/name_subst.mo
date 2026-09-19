@@ -176,7 +176,7 @@ def inductive_name_subst (target : Identifier) (replacement : Term) (ind : Induc
 
 #[partial]
 def struct_name_subst (target : Identifier) (replacement : Term) (s : Struct) : Struct :=
-    match s { Struct.mk name fields vis => Struct.mk name (struct_fields_sig_name_subst target replacement fields) vis }
+    match s { Struct.mk name fields attrs vis => Struct.mk name (struct_fields_sig_name_subst target replacement fields) attrs vis }
 
 #[partial]
 def class_name_subst (target : Identifier) (replacement : Term) (cls : Class) : Class :=

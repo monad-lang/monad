@@ -824,7 +824,7 @@ def test_qualify_rewrites_struct_field_defaults : IO Bool := do {
     let fld := StructField.mk (Identifier.id "f") Term.hole
         (Option.some (Term.var sentinel (DebugName.named (Identifier.id "make_empty"))))
         Multiplicity.many;
-    let st := Decl.struct_d (Struct.mk (Identifier.id "Holder") (List.cons fld List.empty) Visibility.package_private);
+    let st := Decl.struct_d (Struct.mk (Identifier.id "Holder") (List.cons fld List.empty) List.empty Visibility.package_private);
     let a := qtest_module "a" (List.cons helper (List.cons st List.empty));
     let r <- qualify_modules false (List.cons a List.empty);
     match r {
@@ -847,7 +847,7 @@ def struct_default_refs_of_decls (decls : List Decl) : List String := match decl
         match d {
             Decl.struct_d st =>
                 match st {
-                    Struct.mk _n fields _v => List.append (struct_field_default_refs fields) (struct_default_refs_of_decls rest),
+                    Struct.mk _n fields _attrs _v => List.append (struct_field_default_refs fields) (struct_default_refs_of_decls rest),
                 },
             _ => struct_default_refs_of_decls rest,
         },

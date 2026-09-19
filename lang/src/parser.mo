@@ -1099,11 +1099,48 @@ def infix_path (input : String) (op : String) (vis : Visibility) : ParseResult P
 	}
 
 // struct Name { field1 : Type, field2 : Type := default }
+//
+// `#[...]` attributes (e.g. `#[derive BEq BOrd Debug Lens]`) are
+// captured here via `opt_attributes` and patched onto the fully-parsed
+// `Decl` afterward — the exact shape `type_parser`'s own
+// `type_try_attrs`/`type_apply_attrs` pair uses just below, and for the
+// same reason: a bare `struct` parser never even looks at a leading `#`,
+// so `#[derive ...] struct Point {...}` used to fail outright
+// (`examples/derive.mo`).
 
 #[partial]
 def struct_parser (input : String) : ParseResult ParseDecl :=
+	struct_try_attrs (opt_attributes input) input
+
+// Same `skip_docstrings (skip_spaces rem)` gap-fix as `type_try_attrs`
+// documents on itself: `#[attr] // comment` immediately above `struct`
+// has no other skip point.
+#[partial]
+def struct_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult ParseDecl :=
+	match r {
+		success rem attrs => struct_apply_attrs (struct_vis_entry (skip_docstrings (skip_spaces rem))) attrs,
+		fail _ => struct_vis_entry orig
+	}
+
+#[partial]
+def struct_vis_entry (input : String) : ParseResult ParseDecl :=
 	match vis_parser input {
 		success rem vis => struct_vis rem vis,
+		fail e => fail e
+	}
+
+#[partial]
+def struct_apply_attrs (dr : ParseResult ParseDecl) (attrs : List Attribute) : ParseResult ParseDecl :=
+	match dr {
+		success rem decl =>
+			match decl.kind {
+				struct_d s =>
+					match s {
+						ParseStruct.mk name fields _ vis =>
+							success rem (pd_struct_d  (ParseStruct.mk name fields attrs vis))
+					},
+				_ => success rem decl
+			},
 		fail e => fail e
 	}
 
@@ -1137,7 +1174,12 @@ def struct_fields (input : String) (name : Identifier) (vis : Visibility) : Pars
 	match separated_by (tag ",") (preceded_by ws0_and_comments (struct_one_field)) input {
 		success rem fields =>
 			match tag "}" (skip_docstrings (skip_spaces rem)) {
-				success rem2 _ => success rem2 (pd_struct_d  (ParseStruct.mk name fields vis)),
+				// `List.empty` is the placeholder this whole parsing
+				// chain builds with; `struct_apply_attrs` above patches
+				// the real attribute list onto the finished decl,
+				// matching how `type_apply_attrs` treats
+				// `ParseInductive`'s own `attrs` slot.
+				success rem2 _ => success rem2 (pd_struct_d  (ParseStruct.mk name fields List.empty vis)),
 				fail e => fail (ParseError.custom "expected }" rem)
 			},
 		fail e => fail e
@@ -1604,33 +1646,34 @@ def type_cons_try_bare (r : ParseResult ParseTerm) (orig : String) (name : Ident
 /// single-name-only) implementation.
 #[partial]
 def type_cons_one_group_content (input : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
-	// Skip zero-or-more `#[attr]`s before the field itself (e.g. `lang/
-	// tests/cli_derive_self_hosted_tests.mo`'s `compile (path : String)
+	// Capture zero-or-more `#[attr]`s before the field itself (e.g.
+	// `cli/src/tests/cli_derive_tests.mo`'s `compile (path : String)
 	// (#[arg] verbose : Bool)` -- a per-FIELD attribute, distinct from
 	// `def_try_attrs`'s own per-DEF attribute list this constructor-field
-	// grammar never shared code with). Same "accept the syntax, discard
-	// the content" simplification already established for constructor
-	// implicit params (`type_cons_implicit`) -- nothing downstream reads
-	// a field's own attributes today. Without this, `identifier`/`type_
-	// expression` both failed outright on the leading `#`, failing the
-	// whole constructor, the whole enclosing `type`, and (via `decls_
-	// try`'s "any failure silently truncates the rest of the file"
-	// leniency) silently dropping every declaration after it.
+	// grammar never shared code with) and thread them down to the built
+	// `Param` (`ctor_params_for_names_attrs`). Without the skip,
+	// `identifier`/`type_expression` both failed outright on the leading
+	// `#`, failing the whole constructor, the whole enclosing `type`,
+	// and (via `decls_try`'s "any failure silently truncates the rest of
+	// the file" leniency) silently dropping every declaration after it --
+	// which is why the skip came first; the CAPTURE is what
+	// `#[derive_cli]` needs on top (see `ctor_params_for_names_attrs`'s
+	// own doc comment for the concrete bug a discarded list caused).
 	let empty_attrs : List Attribute := List.empty in
 	match opt_attributes_go (skip_spaces input) empty_attrs {
-		success cleaned _ => type_cons_group_name (identifier cleaned) cleaned name params,
+		success cleaned attrs => type_cons_group_name (identifier cleaned) cleaned attrs name params,
 		fail _ =>
 			let cleaned : String := skip_spaces input in
-			type_cons_group_name (identifier cleaned) cleaned name params,
+			type_cons_group_name (identifier cleaned) cleaned empty_attrs name params,
 	}
 
 #[partial]
-def type_cons_group_name (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
+def type_cons_group_name (r : ParseResult String) (orig : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
 	match r {
 		success rem pname =>
 			let names : List Identifier := List.cons (Identifier.id pname) List.empty in
-			type_cons_group_more_names rem name params names orig,
-		fail _ => type_cons_group_bare (type_expression orig) orig name params
+			type_cons_group_more_names rem attrs name params names orig,
+		fail _ => type_cons_group_bare (type_expression orig) orig attrs name params
 	}
 
 /// After the first field name, try more space-separated names sharing
@@ -1647,21 +1690,21 @@ def type_cons_group_name (r : ParseResult String) (orig : String) (name : Identi
 /// expression, not hard-fail (that regressed `std/map.mo`'s `HashMap`
 /// constructor, whose sole field is exactly this shape).
 #[partial]
-def type_cons_group_more_names (input : String) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
-	type_cons_group_more_names_try (identifier (skip_spaces input)) input name params names field_start
+def type_cons_group_more_names (input : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
+	type_cons_group_more_names_try (identifier (skip_spaces input)) input attrs name params names field_start
 
 #[partial]
-def type_cons_group_more_names_try (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
+def type_cons_group_more_names_try (r : ParseResult String) (orig : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
 	match r {
-		success rem pname => type_cons_group_more_names rem name params (List.cons (Identifier.id pname) names) field_start,
-		fail _ => type_cons_group_colon (tag ":" (skip_spaces orig)) name params names field_start
+		success rem pname => type_cons_group_more_names rem attrs name params (List.cons (Identifier.id pname) names) field_start,
+		fail _ => type_cons_group_colon (tag ":" (skip_spaces orig)) attrs name params names field_start
 	}
 
 #[partial]
-def type_cons_group_colon (r : ParseResult String) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
+def type_cons_group_colon (r : ParseResult String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) (field_start : String) : ParseResult ParseInductConstructor :=
 	match r {
-		success rem _ => type_cons_group_type (type_expression (skip_docstrings (skip_spaces rem))) name params names,
-		fail _ => type_cons_group_bare (type_expression field_start) field_start name params
+		success rem _ => type_cons_group_type (type_expression (skip_docstrings (skip_spaces rem))) attrs name params names,
+		fail _ => type_cons_group_bare (type_expression field_start) field_start attrs name params
 	}
 
 /// Builds one `Param` per name (all sharing `typ`) directly onto the
@@ -1672,19 +1715,21 @@ def type_cons_group_colon (r : ParseResult String) (name : Identifier) (params :
 /// interleaves with fields from other groups without a separate merge
 /// step.
 #[partial]
-def type_cons_group_type (r : ParseResult ParseTerm) (name : Identifier) (params : List ParseParam) (names : List Identifier) : ParseResult ParseInductConstructor :=
+def type_cons_group_type (r : ParseResult ParseTerm) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) (names : List Identifier) : ParseResult ParseInductConstructor :=
 	match r {
 		success rem typ =>
-			let new_params : List ParseParam := params_for_names (list_reverse names) typ params in
+			let new_params : List ParseParam := ctor_params_for_names_attrs (list_reverse names) typ attrs params in
 			type_cons_group_after_item rem name new_params,
 		fail e => fail e
 	}
 
 #[partial]
-def type_cons_group_bare (r : ParseResult ParseTerm) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
+def type_cons_group_bare (r : ParseResult ParseTerm) (orig : String) (attrs : List Attribute) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
 	match r {
 		success rem typ =>
-			let p : ParseParam := parse_param_many (Identifier.id "_") typ in
+			let p : ParseParam := match parse_param_many (Identifier.id "_") typ {
+				ParseParam.mk n t m d _ => ParseParam.mk n t m d attrs,
+			} in
 			type_cons_group_after_item rem name (List.cons p params),
 		fail e => fail e
 	}
@@ -2302,15 +2347,18 @@ def params_for_names (names : List Identifier) (typ : ParseTerm) (params : List 
 /// Sibling to `params_for_names` used only by the explicit-param chain
 /// above (which now always has a captured `attrs` list, possibly
 /// empty) — applies `attrs` to every `Param` built from this one
-/// `(...)` group. Deliberately NOT merged into `params_for_names`
-/// itself: `def`'s own `{implicit}` params and `instance`'s implicit-
-/// param chain (`instance_implicit_params_loop`) both go through
-/// `params_for_names` directly and never need `#[arg]`-style attrs —
-/// threading an always-empty extra parameter through those two other
-/// call sites for no benefit isn't worth it. All names in a shared-type
-/// group get the SAME attrs if attributed — untested design choice
-/// (no real corpus example combines `#[arg]` with a multi-name group
-/// either way).
+/// `(...)` group. Its THIRD user is `ctor_params_for_names_attrs` just
+/// below (the constructor-field chain, `type_cons_group_type`); unlike
+/// this one it has no `FieldPattern`/multiplicity to thread, so it is a
+/// separate, simpler sibling rather than the same function. Deliberately
+/// NOT merged into `params_for_names` itself: `def`'s own `{implicit}`
+/// params and `instance`'s implicit-param chain
+/// (`instance_implicit_params_loop`) both go through `params_for_names`
+/// directly and never need attrs — threading an always-empty extra
+/// parameter through those two call sites for no benefit isn't worth
+/// it. All names in a shared-type group get the SAME attrs if
+/// attributed — untested design choice (no real corpus example combines
+/// `#[arg]` with a multi-name group either way).
 #[partial]
 def params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : List Attribute) (mult : Multiplicity) (params : List ParsedParam) : List ParsedParam := match names {
 	List.empty => params,
@@ -2318,6 +2366,32 @@ def params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : 
 		let none : Option ParseTerm := Option.none in
 		let p : ParseParam := ParseParam.mk n typ mult none attrs in
 		params_for_names_attrs rest typ attrs mult (List.cons (ParsedParam.plain p) params),
+}
+
+/// `params_for_names` with a captured per-FIELD `#[...]` attribute list —
+/// the constructor-field chain's own need for the same thing the
+/// explicit-param chain gets from `params_for_names_attrs` above.
+///
+/// This reverses a deliberate earlier simplification:
+/// `type_cons_one_group_content` used to parse a field's leading
+/// `#[arg]` and DISCARD it ("accept the syntax, discard the content",
+/// its own doc comment), on the grounds that "nothing downstream reads a
+/// field's own attributes". `#[derive_cli]` does: `cli/src/args.mo`'s
+/// `derive_cli_meta` classifies each `FieldInfo` into a `--flag` or a
+/// positional purely by `cli_has_arg_attr`, and `FieldInfo.attrs` is fed
+/// from exactly this `Param.attrs` slot through
+/// `lang/typecheck/meta_reflect.mo`'s `attr_names_val`. Discarding it
+/// made every `#[arg]`-annotated field a positional instead — silently,
+/// since the generated parser still type-checked (`verbose` was a
+/// `String` from `Cli.take_positional` bound where a `Bool` was
+/// expected, which nothing on the generated-code path re-verifies).
+#[partial]
+def ctor_params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : List Attribute) (params : List ParseParam) : List ParseParam := match names {
+	List.empty => params,
+	List.cons n rest =>
+		match parse_param_many n typ {
+			ParseParam.mk n2 t2 m2 d2 _ => ctor_params_for_names_attrs rest typ attrs (List.cons (ParseParam.mk n2 t2 m2 d2 attrs) params),
+		},
 }
 
 #[partial]
@@ -8271,6 +8345,93 @@ def test_type_parser_captures_multi_arg_derive_attribute : Bool :=
         fail _ => false
     }
 
+/// `#[derive BEq BOrd Debug Lens]` above a `struct` -- the exact line
+/// `examples/derive.mo` writes, and the case that used to fail outright:
+/// a bare `struct_parser` never looked at a leading `#` at all, so the
+/// whole file died at parse with `#[derive] is not supported by the
+/// self-hosted parser`. Mirrors `type_parser`'s
+/// `type_try_attrs`/`type_apply_attrs` pair exactly.
+#[test]
+def test_struct_parser_captures_multi_arg_derive_attribute : Bool :=
+    match struct_parser "#[derive BEq BOrd Debug Lens]\nstruct Point { x : I64, y : I64 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.struct_d s => match s {
+                    ParseStruct.mk _ _ attrs _ =>
+                        I64.beq (List.length attrs) 1 &&
+                        match attrs {
+                            List.cons attr _ =>
+                                match attr { Attribute.mk name args => id_eq name (Identifier.id "derive") && I64.beq (List.length args) 4 },
+                            List.empty => false,
+                        },
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// `#[derive_cli]` above a `type` and above a `struct` both reach their
+/// own decl shape's `attrs` slot -- the two halves the bridge in
+/// `lang/typecheck/macro_queue.mo` reads back out, and the reason
+/// `Struct` needed a slot of its own where the Rust reference
+/// represents both as one `Inductive`.
+#[test]
+def test_attribute_reaches_both_decl_shapes : Bool :=
+    match type_parser "#[derive_cli]\ntype Cmd { help, }" {
+        success _ out =>
+            match out.kind {
+                ParseDeclKind.inductive_d ind => match ind {
+                    ParseInductive.mk _ _ _ _ attrs _ => I64.beq (List.length attrs) 1,
+                },
+                _ => false
+            },
+        fail _ => false
+    } && (match struct_parser "#[derive_cli]\nstruct Cmd { help : Bool }" {
+        success _ out =>
+            match out.kind {
+                ParseDeclKind.struct_d s => match s {
+                    ParseStruct.mk _ _ attrs _ => I64.beq (List.length attrs) 1,
+                },
+                _ => false
+            },
+        fail _ => false
+    })
+
+/// An `#[attr] // comment` line immediately above `struct` -- the same
+/// `skip_docstrings (skip_spaces rem)` gap `type_try_attrs` documents on
+/// itself, now that `struct_try_attrs` shares the shape.
+#[test]
+def test_struct_parser_attribute_with_trailing_comment : Bool :=
+    match struct_parser "#[derive BEq] // derived equality\nstruct P { x : I64 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.struct_d s => match s {
+                    ParseStruct.mk _ _ attrs _ => I64.beq (List.length attrs) 1,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A plain (unattributed) struct must still parse with an empty attrs
+/// list -- the same "ordinary declarations unaffected" confirmation
+/// `test_type_parser_no_attribute_present` gives for `type`.
+#[test]
+def test_struct_parser_no_attribute_present : Bool :=
+    match struct_parser "struct Point { x : I64 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.struct_d s => match s {
+                    ParseStruct.mk _ _ attrs _ => I64.beq (List.length attrs) 0,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
 /// A plain (unattributed) type must still parse with an empty attrs
 /// list -- previously `type_parser` had no attribute tolerance AT ALL
 /// (unlike `def_parser`, which at least skipped `#[...]`), so this
@@ -8583,6 +8744,77 @@ def test_def_param_no_attribute_present : Bool :=
         success rem out =>
             String.beq rem "" &&
             match out.kind { ParseDeclKind.def_d _ => true, _ => false },
+        fail _ => false
+    }
+
+/// The CONSTRUCTOR-field half of the `#[arg]` capture -- the real corpus
+/// shape (`cli/src/tests/cli_derive_tests.mo`'s `compile (path : String)
+/// (#[arg] verbose : Bool)`, whose field attribute is what
+/// `cli/src/args.mo`'s `derive_cli_meta` classifies a `--flag` by). Used
+/// to be parsed and DISCARDED here; see `ctor_params_for_names_attrs`'s
+/// doc comment for the silent wrong-code consequence.
+#[test]
+def test_type_ctor_field_captures_arg_attribute : Bool :=
+    match type_parser "type Cmd { compile (path : String) (#[arg] verbose : Bool), }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.inductive_d ind => match ind {
+                    ParseInductive.mk _ _ _ ctors _ _ =>
+                        match ctors {
+                            List.cons c _ =>
+                                match c {
+                                    ParseInductConstructor.mk _ params _ =>
+                                        match params {
+                                            List.cons first rest =>
+                                                match rest {
+                                                    List.cons second _ =>
+                                                        (match first { ParseParam.mk _ _ _ _ a => I64.beq (List.length a) 0 }) &&
+                                                        match second { ParseParam.mk _ _ _ _ a => I64.beq (List.length a) 1 && has_attr (Identifier.id "arg") a },
+                                                    List.empty => false,
+                                                },
+                                            List.empty => false,
+                                        },
+                                },
+                            List.empty => false,
+                        },
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// The same field without an attribute: an empty attrs list, and the
+/// group's own multi-name sharing behavior is untouched -- confirms the
+/// capture doesn't change ordinary constructor-field parsing (the
+/// `params_for_names` path it replaced).
+#[test]
+def test_type_ctor_field_no_attribute_present : Bool :=
+    match type_parser "type Pair { mk (a b : I64), }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.inductive_d ind => match ind {
+                    ParseInductive.mk _ _ _ ctors _ _ =>
+                        match ctors {
+                            List.cons c _ =>
+                                match c {
+                                    ParseInductConstructor.mk _ params _ =>
+                                        match params {
+                                            List.cons first rest =>
+                                                (match first { ParseParam.mk _ _ _ _ a => I64.beq (List.length a) 0 }) &&
+                                                match rest {
+                                                    List.cons second _ => match second { ParseParam.mk _ _ _ _ a => I64.beq (List.length a) 0 },
+                                                    List.empty => false,
+                                                },
+                                            List.empty => false,
+                                        },
+                                },
+                            List.empty => false,
+                        },
+                },
+                _ => false
+            },
         fail _ => false
     }
 
@@ -8952,7 +9184,7 @@ def test_struct_linear_field : Bool :=
 #[partial]
 def struct_first_field_is_linear (s : ParseStruct) : Bool :=
     match s {
-        ParseStruct.mk _name fields _vis =>
+        ParseStruct.mk _name fields _attrs _vis =>
             match fields {
                 List.cons f rest => field_mult_is_linear f && field_mult_is_many_second rest,
                 List.empty => false

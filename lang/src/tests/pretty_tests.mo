@@ -322,7 +322,7 @@ def test_show_decl_struct : Bool :=
     let field_x : StructField := StructField.mk (Identifier.id "x") (Term.type_ 1) none_term Multiplicity.many in
     let field_y : StructField := StructField.mk (Identifier.id "y") (Term.type_ 1) none_term Multiplicity.many in
     let fields : List StructField := List.cons field_x (List.cons field_y List.empty) in
-    let s : Struct := Struct.mk (Identifier.id "Point") fields Visibility.package_private in
+    let s : Struct := Struct.mk (Identifier.id "Point") fields List.empty Visibility.package_private in
     let decl : Decl := Decl.struct_d s in
     let result : String := show_decl decl in
     String.beq result "struct Point {\n  x : Type,\n  y : Type\n}"

@@ -592,7 +592,7 @@ def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path :
 /// above's own placeholder convention (nothing downstream inspects it).
 def build_scope_struct (s : Struct) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match s {
-        Struct.mk name fields vis =>
+        Struct.mk name fields _attrs vis =>
             let type_np : NamePath := NamePath.npath (List.cons name List.empty) in
             let type_sd : ScopeDef := {
                 name := type_np,
@@ -1415,7 +1415,7 @@ def resolve_infix_inductive (infixes : List Infix) (ind : Inductive) : Inductive
 
 #[partial]
 def resolve_infix_struct (infixes : List Infix) (s : Struct) : Struct :=
-    match s { Struct.mk sname fields vis => Struct.mk sname (resolve_infix_struct_fields infixes fields) vis }
+    match s { Struct.mk sname fields attrs vis => Struct.mk sname (resolve_infix_struct_fields infixes fields) attrs vis }
 
 #[partial]
 def resolve_infix_class (infixes : List Infix) (cls : Class) : Class :=
@@ -1880,7 +1880,7 @@ def resolve_open_alias_decl (names : HashMap String String) (d : Decl) : Decl :=
 #[partial]
 def resolve_open_alias_struct (names : HashMap String String) (st : Struct) : Struct :=
     match st {
-        Struct.mk name fields vis => Struct.mk name (resolve_open_alias_struct_field_defaults names fields) vis,
+        Struct.mk name fields attrs vis => Struct.mk name (resolve_open_alias_struct_field_defaults names fields) attrs vis,
     }
 
 #[partial]

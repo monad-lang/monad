@@ -163,14 +163,16 @@ host_only=(
 # (`init/src/optics_tests.mo`, `examples/optics.mo`, `std/src/base.mo`)
 # left it when P9 wired the backend, so those three now run self-hosted
 # (11/11, 9/9 and 45/45) and are passed to the RUST runner no longer.
+# The `#[derive]` family went the same way in P10: an attribute on a
+# `struct` decl, the attribute-to-macro bridge, and the struct-ctor
+# arity entry together take `std/src/derive_tests.mo` (22/22),
+# `cli/src/tests/cli_derive_tests.mo` (7/7) and `examples/derive.mo`
+# (7/7) off it.
 gap_files=(
   std/src/concurrent/fiber_test.mo
   init/src/tests.mo
-  std/src/derive_tests.mo
   std/src/concurrent/combine_test.mo
   lang/src/json.mo
-  cli/src/tests/cli_derive_tests.mo
-  examples/derive.mo
   examples/structs.mo
   examples/indexed_monads.mo
   examples/state_monad.mo
@@ -213,31 +215,27 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # neither gate covers the other, and until this ran, nothing in CI used
 # the self-hosted checker on the whole corpus. 180 files, ~52s.
 #
-# Six files fail it today, and all six are already registered in
+# Three files fail it today, and all three are already registered in
 # `cli/src/test_gaps.mo` (their test-side failures):
 #
-#   cli/src/tests/cli_derive_tests.mo  `#[derive_cli]` expands to nothing
-#                                      -> `unknown variable
-#                                      'parse_democommand'`, 7x
-#   examples/derive.mo                 `#[derive]` is not supported by the
-#                                      self-hosted parser
 #   examples/structs.mo                a def's own named-call defaults do not
 #                                      survive the parser
 #   lang/src/json.mo                   the call's own ascription is
 #                                      discarded by the self-hosted parser
 #   std/src/concurrent/combine_test.mo the argument's own ascription is
 #                                      discarded
-#   std/src/derive_tests.mo            a macro-derived instance is invisible
-#                                      to the class-call pass
+#
+# The `#[derive]` trio that headed this list left it with P10, and the
+# comment on `gap_files` above records what closed them -- all three now
+# report 0 errors (`cli/src/tests/cli_derive_tests.mo` was 7,
+# `examples/derive.mo` and `std/src/derive_tests.mo` 1 each).
 #
 # Excluding by path alone would hide a NEW check failure in any of them,
 # so each carries its measured error COUNT: a file whose count changes
 # fails this script even though its path is listed. Anything failing that
 # is not on this list fails it too. The whole list should disappear with
-# its registry entries (P9/P10 close four of the six).
+# its registry entries.
 check_gap_files=(
-  cli/src/tests/cli_derive_tests.mo:7
-  examples/derive.mo:1
   examples/structs.mo:1
   lang/src/json.mo:3
   std/src/concurrent/combine_test.mo:1

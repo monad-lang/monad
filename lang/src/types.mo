@@ -772,6 +772,14 @@ pub struct ParseInstance {
 pub struct ParseStruct {
     name : Identifier,
     fields : List ParseStructField,
+    /// `#[...]` attributes stacked above the `struct` keyword — the same
+    /// slot `ParseInductive` has carried since `#[derive_cli]` had to
+    /// survive `type` (see `lang/parser.mo`'s `type_try_attrs`). Needed
+    /// for `#[derive BEq BOrd Debug Lens] struct Point {...}`
+    /// (`examples/derive.mo`), which the bridge in
+    /// `lang/typecheck/macro_queue.mo` reads back off the lowered
+    /// `Struct`.
+    attrs : List Attribute,
     vis : Visibility,
 }
 
@@ -1112,7 +1120,13 @@ pub type StructField {
 
 // Canonical Struct uses de Bruijn Term. StructV0 is the legacy V0 variant.
 pub type Struct {
-    mk (name: Identifier) (fields: List StructField) (vis: Visibility)
+    /// `attrs` mirrors `Inductive`'s own slot: the `#[...]` attributes
+    /// written above the declaration, preserved through lowering so the
+    /// macro-expansion pass can still see a `#[derive ...]`/
+    /// `#[derive_cli]` request at the point where decl-gen macros are
+    /// resolved (`lang/typecheck/macro_queue.mo`) — the attribute itself
+    /// is not a term or a type, so nothing else could carry it.
+    mk (name: Identifier) (fields: List StructField) (attrs: List Attribute) (vis: Visibility)
 }
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors the

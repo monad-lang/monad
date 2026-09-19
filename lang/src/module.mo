@@ -6,7 +6,7 @@ use std::io {file_exists, is_dir, list_dir, println, read_file}
 use std::bench {now, report, report_since, since}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lib::types {
-  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
+  Class, ClassDef, Decl, Def, Identifier, Instance, InductConstructor, Inductive, Infix,
   LoadedModules, LocalScope, LocalVar, ModulePath, NamePath, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
   inductive_d, list_reverse, mk, mp, name, nid, show_name_path, to_name, union_ids,
@@ -18,7 +18,7 @@ use lib::parser::diagnostic {render_parse_error}
 use lib::mote {MoteManifest, Mote}
 use lib::pretty {show_term}
 use lib::typecheck::macro_apply {expand_decl_gen_call}
-use lib::typecheck::macro_queue {DeclGenEntry, build_decl_gen_registry, expand_decls, lookup_decl_gen}
+use lib::typecheck::macro_queue {DeclGenEntry, build_decl_gen_registry, derive_bridge_decls, expand_decls, lookup_decl_gen}
 use lib::typecheck::meta_eval {meta_eval_invoke}
 use lib::typecheck::meta_reflect {
   build_type_info_value, collect_inductives, find_inductive_by_bare_name,
@@ -32,7 +32,7 @@ use lib::typecheck::meta_reflect {
 use lib::scope {
   OpenAlias,
   add_constraint_dict_params_decls, build_scope_from_decls,
-  collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
+  collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   filter_valid_open_aliases,
   modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
   param_names, promote_instance_defs,
@@ -40,7 +40,6 @@ use lib::scope {
   resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
   scope_find_inductive, scope_push_local, scope_resolve_name,
-  validate_no_unresolved_class_calls,
 }
 use lib::typecheck::diagnostic {render_type_error}
 use lib::typecheck::infer {empty_local_types, empty_locals, mk, type_check}
@@ -1243,7 +1242,7 @@ def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path
 #[partial]
 def check_struct_with_scope (s : Struct) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match s {
-        Struct.mk name fields _vis => do {
+        Struct.mk name fields _attrs _vis => do {
             if verbose then println ("  checking struct " ++ identifier_to_string name) else do { return unit };
             check_struct_fields_with_scope fields scope locals path verbose
         }
@@ -2773,11 +2772,27 @@ def decl_gen_subst_one (registry : List DeclGenEntry) (d : Decl) : List Decl :=
         _ => List.cons d List.empty,
     }
 
+/// One decl -> the decl plus everything it generates: `decl_gen_subst_one`
+/// (the decl itself, or a written macro call's own expansion), then
+/// `derive_bridge_decls` (`#[derive ...]`/`#[derive_cli]` on a type
+/// declaration, expanded into the `derive_*! <T>` call the user could
+/// have written — see `macro_queue.mo`'s own section note for the whole
+/// mechanism). Order is the reference's own: the type declaration first,
+/// its generated instances/lenses after it.
+///
+/// The bridge belongs HERE and not in `macro_queue.mo`'s per-file
+/// `expand_decls`, which `parse_all_decls` runs at parse time: this
+/// function is the whole-graph pass, run once per elaboration, and the
+/// bridge is deliberately not idempotent (a type keeps its attributes —
+/// see the reference's own reason for never re-queueing the type). A
+/// second pass would generate every instance twice.
 #[partial]
 def decl_gen_subst_decls (registry : List DeclGenEntry) (decls : List Decl) : List Decl :=
     match decls {
         List.empty => List.empty,
-        List.cons d rest => list_append (decl_gen_subst_one registry d) (decl_gen_subst_decls registry rest),
+        List.cons d rest =>
+            list_append (decl_gen_subst_one registry d)
+                (list_append (derive_bridge_decls registry d) (decl_gen_subst_decls registry rest)),
     }
 
 /// One `reflect_type_info! T meta_def` call -> the meta-def's own
@@ -2869,43 +2884,110 @@ def has_decl_gen_expansion (registry : List DeclGenEntry) (decls : List Decl) : 
 /// expands (only `std/derive.mo` genuinely invokes `reflect_type_info!`
 /// in this corpus), so `changed = false` lets the caller keep the scope
 /// it already built instead of rebuilding an identical one.
+///
+/// Three decl lists, because there are three consumers and they need the
+/// expansion in two DIFFERENT shapes.
+///
+/// `graph` (whole dependency graph) and `target` (the target's own
+/// decls) are the PREPARED lists -- the same infix/promote/dict-param
+/// form `dict_paramed` is in -- so the caller can rebuild its `Scope`
+/// from them and type-check against it. `raw_target` is the same
+/// expansion applied to the target's own RAW decl list (the
+/// `main_module.decl_list` the parser produced), and it exists because
+/// the CODEGEN paths do not consume a prepared list at all: both
+/// `lang.codegen.emit`'s `compile_loaded_modules_to_ir` and
+/// `lang.codegen.test_driver`'s `compile_loaded_modules_to_test_ir` take
+/// `LoadedModules` and run the elaboration passes THEMSELVES, over each
+/// module's own raw `decl_list` (`qualify_modules` first, so a generated
+/// decl's bare names -- `String.concat`, `Lens`, the `Point.x` lens's
+/// own `lens` -- get the same module qualification every parsed decl
+/// gets). Handing them an already-prepared list is NOT an option:
+/// `promote_instance_defs` APPENDS the promoted defs to the list it is
+/// given, so running the passes over their own output duplicates every
+/// instance method and dictionary value. A generated decl is not a
+/// prepared decl, so it has to enter the pipeline at the same place a
+/// parsed one does -- which is what `raw_target` is for.
+///
+/// `raw_target` covers the MAIN module only. A derive in a DEPENDENCY
+/// module still reaches `graph`/`target` (and so the checker) but not the
+/// codegen paths, which read each module's own `decl_list`; no corpus
+/// file derives into a dependency, and the fix for that case is the same
+/// "codegen consumes the prepared whole graph" step `elaborate_loaded_
+/// modules`'s own doc comment calls Stage 3, not a fourth list here.
 pub struct GraphExpansion {
     graph : List Decl,
     target : List Decl,
+    /// The SAME expansion as `target`, applied to the target's own RAW
+    /// (pre-elaboration) decl list instead of its prepared one -- see
+    /// `expand_decls_graph`'s own doc comment for why the codegen
+    /// pipeline needs this third form.
+    raw_target : List Decl,
     changed : Bool,
+    /// Whether `raw_target` actually differs from the raw list handed in.
+    /// The caller patches the MAIN module's own `decl_list` only when it
+    /// does, so a file that expands nothing keeps the exact list it
+    /// loaded (and `loaded` is a pure value the caller may keep sharing).
+    raw_changed : Bool,
 }
 
-def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) : Result String GraphExpansion :=
+def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) : Result String GraphExpansion :=
     let registry : List DeclGenEntry := build_decl_gen_registry whole_graph_decls in
     let graph_subst : List Decl := decl_gen_subst_decls registry whole_graph_decls in
     let target_subst : List Decl := decl_gen_subst_decls registry target in
+    let raw_subst : List Decl := decl_gen_subst_decls registry raw_target in
     let substituted : Bool :=
         has_decl_gen_expansion registry whole_graph_decls || has_decl_gen_expansion registry target in
-    if has_reflect_type_info_call graph_subst || has_reflect_type_info_call target_subst then
+    // `raw_changed`: a registered decl-gen call anywhere in the RAW target
+    // (its body may or may not contain a `reflect_type_info!`), or a
+    // `reflect_type_info!` call left in the substituted raw target. Both
+    // mean the raw list gains decls, so the main module's own `decl_list`
+    // must be replaced with `raw_target`.
+    let raw_changed : Bool :=
+        has_decl_gen_expansion registry raw_target || has_reflect_type_info_call raw_subst in
+    if has_reflect_type_info_call graph_subst || has_reflect_type_info_call target_subst || has_reflect_type_info_call raw_subst then
         let inds : List Inductive := collect_inductives whole_graph_decls in
         let empty_locs : LocalScope := { vars := List.empty, parent := Option.none } in
+        // `dispatched` is the expansion ENVIRONMENT, not the graph that
+        // gets checked or compiled: it is what `resolve_one_reflect_call`
+        // evaluates the named meta-def against (`meta_eval_invoke`), so it
+        // has to be resolvable for real execution.
+        //
+        // A whole-graph `validate_no_unresolved_class_calls` used to run
+        // here, on this same list, as a fail-fast. It cannot survive
+        // derives: a file that derives (`p1 == p2` over a `#[derive BEq]`
+        // type) legitimately has an unresolvable `BEq.beq` call in it at
+        // this point -- the instance the derive is about to generate does
+        // not exist yet, and once it does it is a RAW decl awaiting the
+        // codegen pipeline's own promotion pass, so no resolution of a
+        // prepared list can see it either. The check now lives where the
+        // resolution actually happens, over the decls the run will really
+        // use: `lang.codegen.emit`'s and `lang.codegen.test_driver`'s own
+        // `validate_no_unresolved_class_calls` on the reachable closure of
+        // the fully-prepared graph. Nothing narrows for a non-derive file:
+        // this validation only ever ran when a `reflect_type_info!` call
+        // was present in the graph, and the downstream gate runs the same
+        // check unconditionally.
         let dispatched := resolve_class_calls_decls (elaborate_module_decls_best_effort scope whole_graph_decls empty_locs) in
-        let dispatched_classes := collect_classes dispatched in
-        match validate_no_unresolved_class_calls dispatched_classes dispatched {
+        match resolve_reflect_calls inds dispatched graph_subst {
             Result.err e => Result.err e,
-            Result.ok _ =>
-                match resolve_reflect_calls inds dispatched graph_subst {
+            Result.ok graph_final =>
+                match resolve_reflect_calls inds dispatched target_subst {
                     Result.err e => Result.err e,
-                    Result.ok graph_final =>
-                        match resolve_reflect_calls inds dispatched target_subst {
+                    // This branch always rewrites at least the
+                    // `reflect_type_info!` call it just resolved.
+                    Result.ok target_final =>
+                        match resolve_reflect_calls inds dispatched raw_subst {
                             Result.err e => Result.err e,
-                            // This branch always rewrites at least the
-                            // `reflect_type_info!` call it just resolved.
-                            Result.ok target_final =>
+                            Result.ok raw_final =>
                                 let expanded : GraphExpansion :=
-                                    { graph := graph_final, target := target_final, changed := true } in
+                                    { graph := graph_final, target := target_final, raw_target := raw_final, changed := true, raw_changed := raw_changed } in
                                 Result.ok expanded,
                         },
                 },
         }
     else
         let unexpanded : GraphExpansion :=
-            { graph := graph_subst, target := target_subst, changed := substituted } in
+            { graph := graph_subst, target := target_subst, raw_target := raw_subst, changed := substituted, raw_changed := raw_changed } in
         Result.ok unexpanded
 
 /// THE canonical front-end pipeline: parse -> load the full transitive
@@ -2939,6 +3021,41 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
 def rebuild_target_scope (target_mp : ModulePath) (decls : List Decl) : Scope :=
     { module_id := target_mp, scope := build_scope_from_decls target_mp decls, parent := Option.none }
 
+/// `loaded` with the MAIN module's own `decl_list` replaced by `decls` --
+/// in both the `main_module` field and the matching entry of
+/// `all_modules`. The two are separate lists and both have to agree:
+/// test discovery and the `main`-rename step read `get_loaded_main`,
+/// while everything that compiles reads `get_loaded_all`.
+///
+/// This is how decl-gen macro output (`#[derive ...]`'s generated
+/// instances and lenses, `derive_beq! Point`'s) reaches the codegen
+/// pipeline -- spliced into the module that wrote the macro call, in the
+/// RAW form that pipeline expects. See `GraphExpansion`'s own doc
+/// comment for why the prepared form is not an alternative.
+#[partial]
+def replace_module_decls (target_mp : ModulePath) (decls : List Decl) (mods : List ModuleInfo) : List ModuleInfo :=
+    match mods {
+        List.empty => List.empty,
+        List.cons m rest =>
+            // The choice is made in the DECL LIST, not by returning one
+            // struct literal or the other from an `if` -- a bare struct
+            // literal in `if`-branch position has no expected type to
+            // desugar against (see `AGENTS.md`), and `ModuleInfo.mk`'s
+            // first field is a `ModulePath`, so the wrong arm would not
+            // even type-check.
+            let chosen : List Decl := if modpath_eq m.path target_mp then decls else m.decl_list in
+            let m2 : ModuleInfo := ModuleInfo.mk m.path m.file_path chosen in
+            List.cons m2 (replace_module_decls target_mp decls rest)
+    }
+
+#[partial]
+def replace_main_decls (loaded : LoadedModules) (target_mp : ModulePath) (decls : List Decl) : LoadedModules :=
+    match loaded {
+        LoadedModules.mk main all =>
+            let new_main : ModuleInfo := ModuleInfo.mk main.path main.file_path decls in
+            let new_all : List ModuleInfo := replace_module_decls target_mp decls all in
+            LoadedModules.mk new_main new_all
+    }
 
 #[partial]
 pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
@@ -3025,7 +3142,7 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
             // -- see `expand_decls_graph`'s own doc comment. A no-op for
             // any file that never (transitively) invokes
             // `reflect_type_info!`, so safe to run unconditionally.
-            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed target_decls_pre;
+            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed target_decls_pre target_decls_raw;
             let t_expand : I64 <- bench_step verbose "  elab: expand_decls_graph" t_target 0;
             match expansion_result {
                 Result.err e => return (Result.err e),
@@ -3103,10 +3220,23 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
                     let t_names : I64 <- bench_step verbose "  elab: names_of_decls" t_scope2 (List.length known_names);
                     let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names;
                     let _t_typs : I64 <- bench_step verbose "  elab: elaborate_def_typs" t_names (List.length target_decls);
+                    // Hand the CODEGEN pipeline the expansion too: the
+                    // generated decls go into the main module's own RAW
+                    // `decl_list`, so both codegen paths (which run the
+                    // elaboration passes themselves, over exactly that
+                    // list) pick them up the same way they pick up a
+                    // parsed decl -- see `GraphExpansion`'s own doc
+                    // comment for why the prepared list is the wrong shape
+                    // to hand them.
+                    let raw_changed : Bool := expansion.raw_changed;
+                    let loaded2 : LoadedModules :=
+                        if raw_changed
+                        then replace_main_decls loaded target_mp expansion.raw_target
+                        else loaded;
                     // Annotated local, not an inline literal --
                     // see `load_module_with_info`'s own note.
                     let elaborated : ElaboratedModules :=
-                        { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded };
+                        { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded2 };
                     return (Result.ok elaborated)
                 },
             }

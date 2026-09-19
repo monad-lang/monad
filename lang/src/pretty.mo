@@ -147,6 +147,35 @@ def show_literal (lit : Literal) : String := match lit {
         let br := String.concat " {\n " cases_str in
         let inner := String.concat lhs br in
         String.concat inner "\n}",
+    // `{ x := 1, y := 2 }` -- a struct literal that never reached the
+    // desugaring (`desugar_struct_lits_decls`, lang/codegen/emit.mo) or
+    // the checker's rewrite, which is the only state this printer can
+    // still see one in: every surviving struct literal is rejected
+    // fail-fast by `validate_no_undesugared_struct_lits` on the compile
+    // path and by `le_struct_lit_survived` on the eval path. Missing
+    // until now, which the self-hosted checker's own exhaustiveness
+    // analysis flagged the moment this printer became reachable from
+    // `lang/module.mo` ("Literal.struct_lit was constructed but not
+    // covered by this match") -- `monad pretty` reaching a literal in
+    // that state would have had no arm at all.
+    struct_lit fields type_name =>
+        let tn := match type_name { Option.some t => String.concat (show_term t) " ", Option.none => "" } in
+        String.concat tn (String.concat "{ " (String.concat (show_struct_lit_fields fields) " }")),
+}
+
+/// One `name := value` pair of a literal's field list, comma-separated.
+/// Takes the list recursively rather than `List.intercalate`/`List.map`
+/// so this stays a plain structural walk like its `show_match_cases`
+/// neighbour.
+#[partial]
+def show_struct_lit_fields (fields : List StructLitField) : String := match fields {
+    List.empty => "",
+    List.cons f rest =>
+        let pair := String.concat (show_identifier f.name) (String.concat " := " (show_term f.value)) in
+        match rest {
+            List.empty => pair,
+            _ => String.concat pair (String.concat ", " (show_struct_lit_fields rest)),
+        },
 }
 
 def show_match_cases (cases : List MatchCase) : String :=
@@ -289,7 +318,7 @@ def param_type (p : Param) : Term := match p {
 
 #[partial]
 def show_struct (s : Struct) : String := match s {
-    Struct.mk name fields vis =>
+    Struct.mk name fields _attrs vis =>
         let name_str := show_identifier name in
         let header := String.concat (show_vis_prefix vis) (String.concat "struct " name_str) in
         let fields_str := show_struct_fields fields in
@@ -773,7 +802,7 @@ def test_show_decl_class : Bool :=
 def test_show_decl_struct : Bool :=
     let name := Identifier.id "Point" in
     let field := StructField.mk (Identifier.id "x") (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none Multiplicity.many in
-    let decl := Decl.struct_d (Struct.mk name (List.cons field List.empty) Visibility.package_private) in
+    let decl := Decl.struct_d (Struct.mk name (List.cons field List.empty) List.empty Visibility.package_private) in
     show_decl decl == "struct Point {\n  x : 0i64\n}"
 
 #[test]

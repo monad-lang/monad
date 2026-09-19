@@ -92,7 +92,7 @@ def collect_inductives (decl_list : List Decl) : List Inductive :=
 
 def struct_to_inductive (s : Struct) : Inductive :=
     match s {
-        Struct.mk name fields vis =>
+        Struct.mk name fields _attrs vis =>
             let type_np : NamePath := NamePath.npath (List.cons name List.empty) in
             let mk_np : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty) in
             let mk_params : List Param := struct_fields_to_params fields in

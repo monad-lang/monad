@@ -889,7 +889,7 @@ def lower_parse_terms (ctx : ParseLowerCtx) (ts : List ParseTerm) : List Term :=
 
 #[partial]
 def lower_parse_struct (ctx : ParseLowerCtx) (s : ParseStruct) : Struct :=
-    Struct.mk s.name (lower_parse_struct_decl_fields ctx s.fields) s.vis
+    Struct.mk s.name (lower_parse_struct_decl_fields ctx s.fields) s.attrs s.vis
 
 
 #[partial]
