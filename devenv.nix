@@ -128,9 +128,18 @@
   # and the one that would regress silently, but it costs another full
   # self-compile per turn, which is more than this job should carry today.
   # Verified by hand at 56e5e33; if this gets cheap enough, add it here.
+  #
+  # It got cheap enough (2026-09-19): the self-hosted compile is ~40s
+  # interpreted against ~320s when this comment was written, so both
+  # modes now cmp their second turn. The `ulimit -s` is load-bearing for
+  # exactly the turn this adds -- the second turn is the binary
+  # interpreting ITSELF, which is where the ladder's own rung-2 first hit
+  # the default 8MB stack (`|| true` keeps a runner whose HARD limit is
+  # lower at its own ceiling rather than failing the task).
   tasks."monad:bootstrap-compile" = {
     exec = ''
       set -euo pipefail
+      ulimit -s 131072 || true
       out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
       rm -rf "$out"; mkdir -p "$out"
       # No timeout, by design: the interpreted self-compile measured ~320s
@@ -146,6 +155,15 @@
       cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --verbose --release
       test -x "$out/monad"
       "$out/monad" check cli/src/main.mo
+      # ... and the FIXPOINT, which is the property that would regress
+      # silently: the binary just built compiles the same source itself,
+      # and the `.ll` it emits (written beside its own `-o` output) must be
+      # byte-identical to the host's. Rung 1 ≡ rung 2, asserted rather than
+      # remembered. A binary that builds and checks but emits different IR
+      # for its own source is a miscompile the front-end tests cannot see.
+      "$out/monad" compile cli/src/main.mo -o "$out/monad2" --release
+      test -x "$out/monad2"
+      cmp "$out/monad.ll" "$out/monad2.ll"
       # And again WITHOUT --release, which is the DEFAULT invocation and was
       # broken for an unknown length of time precisely because nothing ran
       # it: `monad compile cli/src/main.mo` died at `no instance found for
@@ -164,6 +182,11 @@
       cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$dbg/monad" --verbose
       test -x "$dbg/monad"
       "$dbg/monad" check cli/src/main.mo
+      # Same fixpoint in the default (DWARF-emitting) mode -- see the
+      # `--release` block above for why both turns are asserted.
+      "$dbg/monad" compile cli/src/main.mo -o "$dbg/monad2"
+      test -x "$dbg/monad2"
+      cmp "$dbg/monad.ll" "$dbg/monad2.ll"
     '';
   };
 

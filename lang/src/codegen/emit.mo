@@ -1697,16 +1697,36 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                             // one self-compiled binary. Same guard
                             // `build_match_case_block` already applies to
                             // a match arm's own instructions.
+                            // A lifted lambda's own `ret` is the ONE value
+                            // position the boxing helpers below never saw:
+                            // the top-level def path materializes its
+                            // `ret` (`materialize_branch_val` for a plain
+                            // body, `materialize_terminal_ret` when the
+                            // body's value lives in its own merge block),
+                            // but this function appended `ret val_r`
+                            // verbatim -- so a lambda whose BODY is a
+                            // native comparison (`List.find_by (fn x => x
+                            // == 9)`, `std/src/list.mo`) returned a raw
+                            // `icmp`-shaped `i1` from an `i64` function.
+                            // MEASURED: `llc: '%t164' defined with type
+                            // 'i1' but expected 'i64'` at `lambda_69`'s own
+                            // `ret i64 %t164`. Same class as the def-path
+                            // holes those helpers' doc comments record; the
+                            // fix is to give a lifted lambda exactly what
+                            // the def path already gets.
+                            let already_terminated := ends_with_terminator body_instrs in
+                            let bmr := materialize_branch_val ctx2 body body_instrs val_r in
+                            let tb := materialize_terminal_ret already_terminated bmr.ctx body val_r blocks_r in
                             let entry_instrs :=
-                                if ends_with_terminator body_instrs
+                                if already_terminated
                                 then body_instrs
-                                else List.append body_instrs (List.cons (LLVMInstruction.ret val_r) List.empty) in
+                                else List.append bmr.instrs (List.cons (LLVMInstruction.ret bmr.val) List.empty) in
                             let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                             let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
                             let lam_pair := ParamPair.mk "p1" LLVMType.i64_ in
                             let lam_params := List.cons self_pair (List.cons lam_pair List.empty) in
-                            let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (List.cons entry_block blocks_r) false Option.none in
-                            match fresh_temp ctx2 {
+                            let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (append_blocks (List.cons entry_block List.empty) tb.blocks) false Option.none in
+                            match fresh_temp tb.ctx {
                                 CtxStrPair.mk ctx_box temp =>
                                     // `2` here is `lam_func`'s own real
                                     // LLVM param count (self + 1 real
@@ -2000,6 +2020,88 @@ def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_reac
             CompileResult.ok ctx_phi entry_instrs result_val all_blocks all_funcs all_globals,
     }
 
+/// The `Sort` level a builtin sort KEYWORD name stands for, or
+/// `Option.none` for every other name. `Type` -> 1, `Prop`/`Pred` -> 0
+/// (`Pred` is an alias for `Prop`) -- the same mapping the Rust host's
+/// `core_unify.rs` `known_sort_keyword_level` applies, and the same one
+/// `sort_parser`'s literal `Sort N` syntax writes.
+///
+/// The name is normalized twice before matching, because a reference
+/// reaches codegen in whichever shape the parser/qualifier left it: after
+/// its `module::` qualifier (`unqualify_def_name`, matching how the Rust
+/// host looks the atom up by its module PATH's last segment) and after a
+/// trailing `.` (`extract_base_name`, for the dotted spellings). A
+/// deliberately narrow, four-name whitelist -- not a general "is this
+/// name a sort" unfolding -- so no ordinary def can be captured by it.
+/// See the value-position call site below for the bug this closes.
+#[partial]
+def builtin_sort_level (name : String) : Option I64 :=
+    let base := extract_base_name (unqualify_def_name name) in
+    if String.beq base "Type" then Option.some 1
+    else if String.beq base "Prop" then Option.some 0
+    else if String.beq base "Pred" then Option.some 0
+    else if String.beq base "Sort" then Option.some 0
+    else Option.none
+
+/// The level a `Sort <n>` written as an APPLICATION stands for, or
+/// `Option.none` for every other application. `Sort 1`/`Sort 0` reach
+/// this codegen as an ordinary `App(Var "Sort", Lit n)` -- the Rust
+/// host has a dedicated `sort_parser` producing `Sort { level }`, this
+/// parser has no sort rule at all -- and the checker accepts them
+/// through the fake `Sort` ScopeDef's own hole-bodied signature, so
+/// without this arm they compile to `call i64 @"Sort"(i64 1)`, a symbol
+/// nothing defines (measured: `init/src/tests.mo`'s `test_sort_formation`
+/// reached llc as exactly that, one step behind the bare `@Pred` the
+/// `builtin_sort_level` arm below closes).
+///
+/// The bare, UNAPPLIED `Sort` is a different shape and deliberately not
+/// handled here: it arrives as a `Term.var` and `builtin_sort_level`
+/// answers it there. Both spellings land on the same representation --
+/// the level, as a plain i64 immediate -- matching that same arm and the
+/// Rust host's inert `IrLit::Sort(level)`.
+///
+/// Split into one helper per pattern level because this parser has no
+/// nested constructor patterns (`Term.lit (Literal.num n _)` fails to
+/// parse outright, measured), so each level of the shape is peeled by
+/// its own def -- and `term_peel`ed first, because `R3`
+/// (`lang/parser/lower_parse.mo`) puts a position wrapper on every call
+/// argument (and on the called term), so the raw `Term.app` here holds
+/// `Term.ctx` nodes on both sides.
+#[partial]
+def sort_app_level (fun : Term) (arg : Term) : Option I64 :=
+    match term_peel fun {
+        Term.var _ dbg => sort_app_level_named dbg (term_peel arg),
+        _ => Option.none,
+    }
+
+#[partial]
+def sort_app_level_named (dbg : DebugName) (arg : Term) : Option I64 :=
+    match dbg {
+        DebugName.named id =>
+            if String.beq (extract_base_name (unqualify_def_name (symbol_identifier id))) "Sort"
+            then literal_int_level arg
+            else Option.none,
+        DebugName.unnamed => Option.none,
+    }
+
+/// `arg`'s own integer value when it is a numeric literal, else
+/// `Option.none` -- the `Sort <n>` payload, and the only shape this arm
+/// accepts (an applied `Sort` of anything else stays on the ordinary
+/// application path, where it fails exactly as loudly as it did before).
+#[partial]
+def literal_int_level (arg : Term) : Option I64 :=
+    match arg {
+        Term.lit lit => literal_int_of lit,
+        _ => Option.none,
+    }
+
+#[partial]
+def literal_int_of (lit : Literal) : Option I64 :=
+    match lit {
+        Literal.num n suffix => Option.some n,
+        _ => Option.none,
+    }
+
 #[partial]
 def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
     Term.lit val => compile_lit_ir c val,
@@ -2027,6 +2129,35 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                             Option.some _ => true,
                             Option.none => false,
                         } in
+                        match builtin_sort_level name {
+                            // `Pred`/`Prop`/`Type` (and the bare `Sort`
+                            // keyword) are registered as fake ScopeDefs
+                            // whose own body is `Term.hole` (`lang/scope.mo`)
+                            // -- enough for the CHECKER to accept them, and
+                            // enough for this arm to reach the arity lookup
+                            // below and emit `call i64 @"Pred"()`, a symbol
+                            // nothing defines. MEASURED: `init/src/tests.mo`'s
+                            // `let _x : Sort 1 := get_sort Pred in true`
+                            // compiles and then fails to LINK on the
+                            // undefined `@Pred` (the Rust host has these as
+                            // ordinary `ctx` entries whose value IS the sort
+                            // -- see `core_unify.rs`'s
+                            // `known_sort_keyword_level`, `Type` -> 1 and
+                            // `Prop`/`Pred` -> 0).
+                            //
+                            // A sort used as a VALUE needs a runtime
+                            // representation, and in this codegen's uniform
+                            // i64-everywhere convention the sort's own LEVEL
+                            // is the faithful one: every consumer in the
+                            // corpus is an identity through it
+                            // (`get_sort`/`get_identity`, `init/src/
+                            // tests.mo`), and the level is what the Rust
+                            // host's own unifier compares these atoms
+                            // against. Emitted as a plain immediate -- no
+                            // call, no allocation, nothing to define.
+                            Option.some level =>
+                                CompileResult.ok c List.empty (LLVMValue.int_ level) List.empty List.empty List.empty,
+                            Option.none =>
                         if is_constructor_var c name && Bool.not also_a_real_fn then
                             let tag_val := constructor_tag c name in
                             let ctor_arity := constructor_arity c name in
@@ -2179,12 +2310,18 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                             CompileResult.ok ctx_t (List.cons assign_instr List.empty) (LLVMValue.var_ temp) List.empty List.empty List.empty,
                                     },
                             },
+                        },
                 },
             DebugName.unnamed =>
                 CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
         },
     Term.lam dbg typ body => compile_db_lam_ir c dbg typ body,
-    Term.app fun arg => compile_db_app_ir c fun arg,
+    Term.app fun arg =>
+        match sort_app_level fun arg {
+            Option.some level =>
+                CompileResult.ok c List.empty (LLVMValue.int_ level) List.empty List.empty List.empty,
+            Option.none => compile_db_app_ir c fun arg,
+        },
     Term.ntv native => compile_ntv_ir c native,
     Term.con constr => compile_con_ir c constr,
     Term.forall dbg kind body => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,

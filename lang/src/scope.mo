@@ -3145,7 +3145,7 @@ def ann_lambda_carrier (dbg : DebugName) (typ : Term) (body : Term) : Option Ter
 /// that the same as "no matching instance", failing clean at link time
 /// rather than guessing.
 #[partial]
-def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (t : Term) : Option Term :=
+def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (t : Term) : Option Term :=
     // Peels. This reads a CALL'S ARGUMENTS, and placement rule R3
     // (`lang/parser/lower_parse.mo`) keeps wrappers out of a spine's HEAD
     // but deliberately puts one on every argument -- so every arm below
@@ -3184,9 +3184,9 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
         Term.lit v =>
             match v {
                 Literal.if_ _cond then_ else_ =>
-                    match infer_carrier_type env ctor_owners def_types then_ {
+                    match infer_carrier_type env ctor_owners def_types ctor_field_types then_ {
                         Option.some c => Option.some c,
-                        Option.none => infer_carrier_type env ctor_owners def_types else_,
+                        Option.none => infer_carrier_type env ctor_owners def_types ctor_field_types else_,
                     },
                 _ => literal_carrier_type v,
             },
@@ -3325,7 +3325,7 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                             // back keeps every call whose
                                             // arguments determine nothing on
                                             // today's behavior verbatim.
-                                            match instantiate_def_carrier env ctor_owners def_types typ args {
+                                            match instantiate_def_carrier env ctor_owners def_types ctor_field_types typ args {
                                                 Option.some carrier => Option.some carrier,
                                                 Option.none =>
                                                     match type_head_name_local (return_type_after_n_args typ (List.length args)) {
@@ -3345,9 +3345,19 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                         // a `List` literal both already
                                         // resolved, only a bare ctor
                                         // application fell through.
+                                        //
+                                        // The carrier is the ctor's own
+                                        // APPLIED owner (`Option I64`), not
+                                        // the bare one, whenever the field
+                                        // types can be bound from the
+                                        // arguments -- see
+                                        // `ctor_app_carrier`'s own doc
+                                        // comment for the measured gap the
+                                        // bare owner leaves.
                                         Option.none =>
                                             match lookup_ctor_owner ctor_owners (bare_ctor_name id) {
-                                                Option.some owner => Option.some (carrier_var (show_name_path owner)),
+                                                Option.some owner =>
+                                                    Option.some (ctor_app_carrier env ctor_owners def_types ctor_field_types (bare_ctor_name id) owner args),
                                                 Option.none => Option.none,
                                             },
                                     },
@@ -3827,9 +3837,58 @@ def class_param_names (cls : Class) : List Identifier :=
         Class.mk _name params _constraints _methods _vis => param_names params,
     }
 
+/// The bare names standing as a Pi chain's own parameter types that ALSO
+/// occur somewhere else in the same signature -- as an application's
+/// argument, or as the signature's own RESULT type.
+///
+/// This is the set `class_method_var_names` was missing. A class method's
+/// own implicit parameters are not all reachable by "argument applied to a
+/// class parameter": `class Foldable (T : Type -> Type) { def foldr (f : A
+/// -> B -> B) (z : B) (t : T A) : B }` names its element type `A` only
+/// inside `T A` (found), but its ACCUMULATOR type `B` stands bare as the
+/// second domain and as the result -- and a name no caller-side walk can
+/// attribute to a class parameter is still a type variable.
+///
+/// MEASURED, not reasoned: with `B` outside the set, `Foldable.foldl (fn
+/// acc x => acc + x) 0 [1, 2, 3]` could not solve `B` from the `0`
+/// argument (`sig_arg_bindings` refuses to bind a name it does not
+/// recognize as a variable), so the lambda's own accumulator binder stayed
+/// the leaked signature variable `B`; carrier inference then read `B` off
+/// `acc`, `B` matched the prelude's wildcard-headed `instance [HAdd A A A]
+/// Add A`, and the generated dictionary self-recursed forever
+/// (`HAdd_A_A_A_add (__Dict_Add_A ())`) -- the driver died with `-1` while
+/// the Rust evaluator ran the same program fine.
+///
+/// Both guards rule out a real misbinding, the same way
+/// `collect_free_param_names`'s own pair does:
+///
+///   * the name must stand ALONE as a domain (`z : B`), never merely
+///     inside a Pi (`f : A -> B -> B` names `A`/`B` but as the SHAPE of a
+///     function argument, not as a parameter a single call argument
+///     determines).
+///   * it must recur somewhere else in the signature (`B -> B`, `: B`) --
+///     so a concrete type a class method merely takes (`def parse (s :
+///     String) : A`) stays out: it appears once, as a domain, and names a
+///     type rather than a variable.
+#[partial]
+def collect_recurring_domain_names (typ : Term) : List Identifier :=
+    keep_ids_present (collect_bare_param_names typ) (List.append (collect_app_arg_names typ) (bare_type_var_name (final_result_type typ)))
+
+/// The type a Pi chain ultimately returns -- the innermost `ret` of a
+/// (possibly `Forall`-prefixed) function type. See
+/// `collect_recurring_domain_names`.
+#[partial]
+def final_result_type (typ : Term) : Term :=
+    match term_peel typ {
+        Term.forall _ _ body => final_result_type body,
+        Term.pi _ ret => final_result_type ret,
+        _ => term_peel typ,
+    }
+
 /// The variable names of a CLASS's own method signature: the class's
 /// declared parameters (`class_param_names`) plus every name standing as
-/// an argument to one of them -- the method's own implicit parameters.
+/// an argument to one of them -- the method's own implicit parameters --
+/// plus the bare domains `collect_recurring_domain_names` recovers.
 ///
 /// A class parameter can itself be a type-level FUNCTION, and its
 /// signature's own Pi binds the arguments applied to it:
@@ -3855,7 +3914,7 @@ def class_param_names (cls : Class) : List Identifier :=
 #[partial]
 def class_method_var_names (cls : Class) (sig : Term) : List Identifier :=
     let params := class_param_names cls in
-    union_ids params (collect_param_app_arg_names params sig)
+    union_ids (union_ids params (collect_param_app_arg_names params sig)) (collect_recurring_domain_names sig)
 
 /// Every name standing as an argument to an application whose own head
 /// chain bottoms out in one of `params` -- see `class_method_var_names`.
@@ -3994,18 +4053,18 @@ def bind_shape_candidates (names : List Identifier) (shapes : List Term) (carrie
 /// rather than `List`. The recursion is structural on the argument's own
 /// subterm, so it terminates.
 #[partial]
-def bind_params_against_args (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (wildcards : List Identifier) (typ : Term) (args : List Term) (bindings : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+def bind_params_against_args (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (wildcards : List Identifier) (typ : Term) (args : List Term) (bindings : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
     match term_peel typ {
-        Term.forall _ _ body => bind_params_against_args env ctor_owners def_types wildcards body args bindings,
+        Term.forall _ _ body => bind_params_against_args env ctor_owners def_types ctor_field_types wildcards body args bindings,
         Term.pi ptyp ret =>
             match args {
                 List.empty => bindings,
                 List.cons a rest =>
-                    let inner := match infer_carrier_type env ctor_owners def_types a {
+                    let inner := match infer_carrier_type env ctor_owners def_types ctor_field_types a {
                         Option.some actual => bind_term_vars wildcards ptyp actual bindings,
                         Option.none => bindings,
                     } in
-                    bind_params_against_args env ctor_owners def_types wildcards ret rest inner,
+                    bind_params_against_args env ctor_owners def_types ctor_field_types wildcards ret rest inner,
             },
         _ => bindings,
     }
@@ -4047,7 +4106,7 @@ def subst_carrier_bindings (bindings : List (Pair Identifier Term)) (t : Term) :
 /// nothing can match is worse than the head reduction, which at least
 /// says `Option.none` itself and fails clean.
 #[partial]
-def instantiate_def_carrier (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (typ : Term) (args : List Term) : Option Term :=
+def instantiate_def_carrier (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (typ : Term) (args : List Term) : Option Term :=
     // The def's binders: its own `Forall` names when it has any (every
     // ordinary def -- `elaborate_def` wraps free type variables), and
     // otherwise the names a promoted instance method's forall-free
@@ -4061,7 +4120,7 @@ def instantiate_def_carrier (env : List LocalTypeBinding) (ctor_owners : List Ct
             List.empty => collect_free_param_names typ,
             List.cons _ _ => binders,
         } in
-    let bindings := bind_params_against_args env ctor_owners def_types wildcards typ args List.empty in
+    let bindings := bind_params_against_args env ctor_owners def_types ctor_field_types wildcards typ args List.empty in
     match bindings {
         List.empty => Option.none,
         List.cons _ _ =>
@@ -4070,6 +4129,111 @@ def instantiate_def_carrier (env : List LocalTypeBinding) (ctor_owners : List Ct
                 Option.some _ => Option.some substituted,
                 Option.none => Option.none,
             },
+    }
+
+/// The carrier of a CONSTRUCTOR APPLICATION -- `some 42`, `Option.some 42`,
+/// `FromListLiteral.cons 1 rest`. The ctor's own declared FIELD TYPES are
+/// bound positionally against the call's argument carriers, substituted
+/// into the owning inductive's declared type parameters, and applied to
+/// the owner: `List.cons 42 rest` answers `List I64`, not `List`.
+///
+/// Why the bare owner isn't enough: a bare carrier says nothing any
+/// class's own parameters can be solved from, and the callee-signature
+/// hint channel is ALL-OR-NOTHING (`concrete_hint`) -- so one signature
+/// variable that only a constructor's field types could bind drops the
+/// ENTIRE hint for the call. `Foldable.foldr (fn x acc => x + acc) 0
+/// [1, 2, 3]` is exactly that: `foldr`'s element type `A` is said by the
+/// literal's own `cons` field types and by nothing else, the lambda
+/// argument gets no expected type, its `x` stays abstract, and `HAdd.add`
+/// picks the mutually-recursive generic `instance [Add A] HAdd A A A`
+/// (init/src/prelude.mo) whose `__Dict_Add_A` self-recurses --
+/// `driver exited -1`, measured on `init/src/foldable_tests.mo` and
+/// `init/src/foldable_tests_fold.mo`. MEASURED discriminator: the SAME
+/// call with an ascription, `... 0 ([1, 2, 3] : List I64)`, already
+/// resolved correctly, via `ann_lambda_carrier`'s own `List I64`; this is
+/// that same carrier, recovered from the constructor itself instead of
+/// from the ascription.
+///
+/// Falls back to the bare owner in every case that isn't a clean
+/// instantiation (unknown ctor, nothing bound, a parameter left
+/// unsubstituted), which is today's answer verbatim -- so no call that
+/// resolves today resolves differently.
+#[partial]
+def ctor_app_carrier (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (ctor_name : Identifier) (owner : NamePath) (args : List Term) : Term :=
+    let fallback : Term := carrier_var (show_name_path owner) in
+    match lookup_ctor_field_types ctor_field_types ctor_name {
+        Option.none => fallback,
+        Option.some entry =>
+            match entry {
+                CtorFieldTypes.mk _ owner_params field_types =>
+                    match bind_field_types_against_args env ctor_owners def_types ctor_field_types owner_params field_types args List.empty {
+                        List.empty => fallback,
+                        List.cons b rest =>
+                            let bindings : List (Pair Identifier Term) := List.cons b rest in
+                            let applied : Term := apply_carrier_params fallback (carrier_params_of bindings owner_params) in
+                            // A parameter the arguments never bound (a
+                            // phantom one, or a field type mentioning one
+                            // at a position no argument reached) leaves the
+                            // carrier half-applied: a wildcard wearing a
+                            // concrete head, which is the guess this pass
+                            // must not make. The bare owner is at least an
+                            // answer it already gave.
+                            if type_mentions_any owner_params applied
+                            then fallback
+                            else applied,
+                    },
+            },
+    }
+
+/// The owning inductive's own declared type parameters as a carrier's
+/// ARGUMENTS: each parameter's own name, except where the field types
+/// bound it to something concrete (`ctor_app_carrier`'s binding list).
+/// A `List Identifier`, not a `Term` -- which is why this cannot be
+/// `subst_carrier_bindings` (that substitutes inside a type, and a
+/// parameter LIST is not one).
+#[partial]
+def carrier_params_of (bindings : List (Pair Identifier Term)) (owner_params : List Identifier) : List Term :=
+    match owner_params {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match lookup_binding bindings p {
+                Option.some bound => List.cons bound (carrier_params_of bindings rest),
+                Option.none => List.cons (carrier_var (show_identifier p)) (carrier_params_of bindings rest),
+            },
+    }
+
+
+/// Bind a constructor's declared FIELD TYPES positionally against a
+/// call's own argument carriers: `List.cons`'s `[A, List A]` against
+/// `[42, rest]` records `A := I64`. The same walk
+/// `bind_params_against_args` does for a def's Pi chain -- which is
+/// exactly the shape a constructor's own fields are NOT: they are the
+/// inductive declaration's flat parameter list, already in
+/// constructor-argument order. The wildcard set is the OWNER's declared
+/// parameters, the only names a field type is written in terms of.
+#[partial]
+def bind_field_types_against_args (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (owner_params : List Identifier) (field_types : List Term) (args : List Term) (acc : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match field_types {
+        List.empty => acc,
+        List.cons ft rest =>
+            match args {
+                List.empty => acc,
+                List.cons a arest =>
+                    let inner := match infer_carrier_type env ctor_owners def_types ctor_field_types a {
+                        Option.some actual => bind_term_vars owner_params ft actual acc,
+                        Option.none => acc,
+                    } in
+                    bind_field_types_against_args env ctor_owners def_types ctor_field_types owner_params rest arest inner,
+            },
+    }
+
+/// `head` applied to `params`, left to right -- `List` and `[I64]` give
+/// `List I64`, the shape a class carrier carries its own arguments in.
+#[partial]
+def apply_carrier_params (head : Term) (params : List Term) : Term :=
+    match params {
+        List.empty => head,
+        List.cons p rest => apply_carrier_params (Term.app head p) rest,
     }
 
 /// Finds the best-matching instance for `cls_name` against a concrete
@@ -4435,14 +4599,15 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
         Term.lam dbg typ body =>
             match dbg {
                 DebugName.named id =>
+                    let bound_typ : Term := lam_binder_type typ expect in
                     let dict_class := dict_binding_class_of id in
-                    let new_env := List.cons (LocalTypeBinding.mk id typ) env in
+                    let new_env := List.cons (LocalTypeBinding.mk id bound_typ) env in
                     let new_dict_env := match dict_class {
                         Option.some cls_name => List.cons (DictBinding.mk cls_name id) dict_env,
                         Option.none => dict_env,
                     } in
-                    Term.lam dbg (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none typ)
-                        (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types new_env new_dict_env def_carrier Option.none body),
+                    Term.lam dbg (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none bound_typ)
+                        (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types new_env new_dict_env def_carrier (lam_body_expect expect) body),
                 DebugName.unnamed =>
                     Term.lam dbg (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none typ)
                         (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none body),
@@ -4450,7 +4615,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
         Term.app _ _ =>
             match flatten_call_spine t {
                 CallSpine.mk head args =>
-                    let hints := call_arg_hints classes def_types env ctor_owners head args in
+                    let hints := call_arg_hints classes def_types env ctor_owners ctor_field_types head args in
                     let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hints args in
                     match head {
                         Term.var _ dbg =>
@@ -4460,9 +4625,9 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                                         Option.some ref =>
                                             match ref {
                                                 ClassMethodRef.mk cls method_name =>
-                                                    resolve_class_method_call classes instances dict_env def_types cls method_name resolved_args head args def_carrier env ctor_owners expect,
+                                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name resolved_args head args def_carrier env ctor_owners expect,
                                             },
-                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env def_constraints def_types id head resolved_args env ctor_owners,
+                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env def_constraints def_types ctor_field_types id head resolved_args env ctor_owners,
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
@@ -4487,7 +4652,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                         Option.some ref =>
                             match ref {
                                 ClassMethodRef.mk cls method_name =>
-                                    resolve_class_method_call classes instances dict_env def_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect,
+                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect,
                             },
                         Option.none => t,
                     },
@@ -4541,6 +4706,60 @@ def expected_carrier_of (t : Term) : Option Term :=
         _ => Option.some t,
     }
 
+/// The type to bind a lambda's own parameter at: the lambda's WRITTEN
+/// type when it has one, else the domain of whatever expected type the
+/// call site handed down. `fn x acc => x + acc` passed to
+/// `Foldable.foldr` writes nothing at all -- an unannotated parameter is
+/// the parser's `Term.type_ 1` placeholder, not a type -- so `x`'s type,
+/// and with it the carrier every class call in the body resolves
+/// against, is recoverable only from the callee's instantiated
+/// signature, which is exactly what the hint channel already hands this
+/// arm (`sig_hints`/`sig_arg_hints`, positionally, for the argument this
+/// lambda IS).
+///
+/// MEASURED (2026-09-19): without this, `init/src/foldable_tests.mo`'s
+/// `Foldable.foldr (fn x acc => x + acc) 0 [1, 2, 3]` resolved that `+`
+/// with the class's own parameter name as its carrier (`A`), which
+/// matches `instance [Add A] HAdd A A A` -- a dict whose field IS the
+/// mutually-recursive `instance [HAdd A A A] Add A` -- so the driver
+/// called itself forever and died by signal (`driver exited -1`, both
+/// foldable files). The same fold with `(x : I64) (acc : I64)` written
+/// out compiles to `number::Add_I64_add`, which is what pinning the
+/// binder type here recovers.
+///
+/// A written type always wins, INFORMATIVE or not (`expected_carrier_of`
+/// is the same "is this a real type" test `call_arg_hints`'
+/// `lam_param_hints` sibling applies), so every lambda that already
+/// knew its parameter type is emitted exactly as it was.
+def lam_binder_type (written : Term) (expect : Option Term) : Term :=
+    match expected_carrier_of written {
+        Option.some _ => written,
+        Option.none =>
+            match expect {
+                Option.some e =>
+                    match term_peel e {
+                        Term.pi arg _ret => arg,
+                        _ => written,
+                    },
+                Option.none => written,
+            },
+    }
+
+/// The expected type for a lambda's BODY, given the expected type for the
+/// lambda itself: peel one Pi. `fn x acc => body` is nested `Term.lam`s,
+/// so the outer binder consumes the outer domain and hands the rest down
+/// -- that is what lets the second unannotated parameter (`acc` above)
+/// find its type from the same signature-derived hint.
+def lam_body_expect (expect : Option Term) : Option Term :=
+    match expect {
+        Option.some e =>
+            match term_peel e {
+                Term.pi _arg ret => Option.some ret,
+                _ => Option.none,
+            },
+        Option.none => Option.none,
+    }
+
 /// `Option Term` as a 0/1-element candidate list, for appending to the
 /// args-derived carriers `find_matching_instance_carrier_any` and
 /// `resolve_dict_arg` already search.
@@ -4576,11 +4795,11 @@ def lam_param_hints (head : Term) (args : List Term) : List (Option Term) :=
 /// know WHICH argument said nothing, because that is the one it answers
 /// for.
 #[partial]
-def infer_carriers_each (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : List (Option Term) :=
+def infer_carriers_each (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (args : List Term) : List (Option Term) :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
-            List.cons (infer_carrier_type env ctor_owners def_types a) (infer_carriers_each env ctor_owners def_types rest),
+            List.cons (infer_carrier_type env ctor_owners def_types ctor_field_types a) (infer_carriers_each env ctor_owners def_types ctor_field_types rest),
     }
 
 /// Pass 1 of the callee-signature channel: walk a declared signature's Pi
@@ -4662,7 +4881,7 @@ def type_mentions_any (names : List Identifier) (t : Term) : Bool :=
 /// a class method's from the class declaration (`class_param_names`), a
 /// def's from its own `Forall` binders (`collect_forall_names`). See
 /// `class_param_names` for the measured failure that shape-reading caused.
-def sig_hints (names : List Identifier) (sig : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : List (Option Term) :=
+def sig_hints (names : List Identifier) (sig : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (args : List Term) : List (Option Term) :=
     match sig {
         Option.none => List.empty,
         Option.some typ =>
@@ -4676,7 +4895,7 @@ def sig_hints (names : List Identifier) (sig : Option Term) (env : List LocalTyp
             // parameters is the same hazard in reverse, so the guard is
             // exact equality, not a bound.
             if I64.beq (pi_arity typ) (arg_count args) then
-                let each := infer_carriers_each env ctor_owners def_types args in
+                let each := infer_carriers_each env ctor_owners def_types ctor_field_types args in
                 let bindings := sig_arg_bindings typ names each List.empty in
                 sig_arg_hints typ names bindings
             else List.empty,
@@ -4705,7 +4924,7 @@ def arg_count (args : List Term) : I64 :=
 /// (`sig_hints`). Anything else yields no hint at all, which leaves every
 /// existing resolution path exactly as it was.
 #[partial]
-def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (head : Term) (args : List Term) : List (Option Term) :=
+def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (head : Term) (args : List Term) : List (Option Term) :=
     match head {
         Term.lam _ _ _ => lam_param_hints head args,
         Term.var _ dbg =>
@@ -4715,15 +4934,16 @@ def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env
                         Option.some ref =>
                             // A class method's variables are its class's own
                             // parameters plus the arguments applied to them
+                            // and its own bare domains
                             // (`class_method_var_names`); the class-side
-                            // signature is written entirely in those, so its
-                            // `Forall` binder -- when it has one -- names the
-                            // same set the shape walk would find anyway.
+                            // signature is written in those, so its
+                            // `Forall` binder -- when it has one -- names
+                            // the same set the shape walk would find anyway.
                             match ref {
                                 ClassMethodRef.mk cls method_name =>
                                     match class_method_declared_type cls method_name {
                                         Option.none => List.empty,
-                                        Option.some typ => sig_hints (class_method_var_names cls typ) (Option.some typ) env ctor_owners def_types args,
+                                        Option.some typ => sig_hints (class_method_var_names cls typ) (Option.some typ) env ctor_owners def_types ctor_field_types args,
                                     },
                             },
                         Option.none =>
@@ -4736,7 +4956,7 @@ def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env
                             // down as they are. See `class_method_var_names`
                             // for the measured failure shape-reading caused.
                             match lookup_def_type def_types id {
-                                Option.some typ => sig_hints (collect_forall_names typ) (Option.some typ) env ctor_owners def_types args,
+                                Option.some typ => sig_hints (collect_forall_names typ) (Option.some typ) env ctor_owners def_types ctor_field_types args,
                                 Option.none => List.empty,
                             },
                     },
@@ -4785,7 +5005,7 @@ def resolve_class_call_case (classes : List Class) (instances : List Instance) (
 /// resolved via ordinary recursion, per this pass's own "leave
 /// unresolved rather than guess" style, matching `resolve_infix_term`).
 #[partial]
-def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expected : Option Term) : Term :=
+def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expected : Option Term) : Term :=
     let cls_name := class_own_name cls in
     match lookup_dict_binding dict_env cls_name {
         Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
@@ -4804,7 +5024,7 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
             // hint is only consulted where the args revealed nothing at
             // all -- `Map.empty`'s nullary shape, `Bounded.max_bound` --
             // which is the family that could never resolve.
-            let extra_carriers := List.append (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) (carrier_hint_list expected) in
+            let extra_carriers := List.append (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args) (carrier_hint_list expected) in
             resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
     }
 
@@ -5069,24 +5289,24 @@ def resolve_class_method_call_with_dict_args (prefix : String) (classes : List C
 /// existing, already-correct behavior for the common "same type
 /// variable" case); this list is only consulted once that fails.
 #[partial]
-def infer_all_carriers_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : List Term :=
+def infer_all_carriers_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (args : List Term) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
-            match infer_carrier_type env ctor_owners def_types a {
-                Option.some t => List.cons t (infer_all_carriers_from_args_go env ctor_owners def_types rest),
-                Option.none => infer_all_carriers_from_args_go env ctor_owners def_types rest,
+            match infer_carrier_type env ctor_owners def_types ctor_field_types a {
+                Option.some t => List.cons t (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types rest),
+                Option.none => infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types rest,
             },
     }
 
 #[partial]
-def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : Option Term :=
+def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (args : List Term) : Option Term :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
-            match infer_carrier_type env ctor_owners def_types a {
+            match infer_carrier_type env ctor_owners def_types ctor_field_types a {
                 Option.some t => Option.some t,
-                Option.none => infer_carrier_from_args_go env ctor_owners def_types rest,
+                Option.none => infer_carrier_from_args_go env ctor_owners def_types ctor_field_types rest,
             },
     }
 
@@ -5408,18 +5628,18 @@ def find_minted_name_sep (s : String) (i : I64) (n : I64) : I64 :=
 /// passes through completely unchanged -- this must never touch an
 /// ordinary, unconstrained call.
 #[partial]
-def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
+def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
     match lookup_def_constraints def_constraints (NamePath.npath (List.cons id List.empty)) {
         Option.none => rebuild_call head resolved_args,
         Option.some constraints =>
             if arg_is_dict resolved_args
             then rebuild_call head resolved_args
-            else match infer_carrier_from_args_go env ctor_owners def_types resolved_args {
+            else match infer_carrier_from_args_go env ctor_owners def_types ctor_field_types resolved_args {
                 Option.none => rebuild_call head resolved_args,
                 Option.some carrier =>
                     // No instance head here (an ordinary constrained DEF call), so no
                     // bindings: `List.empty` keeps the pre-existing whole-carrier order.
-                    match resolve_dict_args classes instances dict_env List.empty carrier (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) constraints {
+                    match resolve_dict_args classes instances dict_env List.empty carrier (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args) constraints {
                         Option.none => rebuild_call head resolved_args,
                         Option.some dict_args => rebuild_call head (List.append dict_args resolved_args),
                     },
@@ -6002,7 +6222,7 @@ def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
 def test_infer_carrier_type_recurses_into_if_branches : Bool :=
     let if_term := Term.lit (Literal.if_ (Term.var 0 (DebugName.named (Identifier.id "cond")))
         (Term.lit (Literal.num 1 NumSuffix.i64)) (Term.lit (Literal.num 0 NumSuffix.i64))) in
-    match infer_carrier_type List.empty List.empty str_map_empty if_term {
+    match infer_carrier_type List.empty List.empty str_map_empty List.empty if_term {
         Option.some _ => true,
         Option.none => false,
     }
@@ -6013,7 +6233,7 @@ def test_infer_carrier_type_if_branch_none_falls_through_to_else : Bool :=
     // carrier must still be found from the ELSE branch.
     let if_term := Term.lit (Literal.if_ (Term.var 0 (DebugName.named (Identifier.id "cond")))
         (Term.var 1 (DebugName.named (Identifier.id "uninformative"))) (Term.lit (Literal.str "x"))) in
-    match infer_carrier_type List.empty List.empty str_map_empty if_term {
+    match infer_carrier_type List.empty List.empty str_map_empty List.empty if_term {
         Option.some _ => true,
         Option.none => false,
     }
@@ -6024,76 +6244,67 @@ def test_bare_ctor_name_splits_dotted_and_double_colon : Bool :=
     && Similar.similar (bare_ctor_name (Identifier.id "prelude::Option::some")) (Identifier.id "some")
     && Similar.similar (bare_ctor_name (Identifier.id "some")) (Identifier.id "some")
 
-// Regression tests for the bare-ctor-in-argument-position carrier gap
-// (`Foldable.foldl f 0 (some 42)` failed with "no instance found for
-// Foldable.foldl" while the annotated-local and List-literal forms
-// compiled -- `infer_carrier_type`'s app arm only consulted `def_types`,
-// and `ctor_owners` only held 0-arg constructors, so `some`'s `Option`
-// owner was invisible; confirmed via `init/src/foldable_tests.mo`'s
-// `test_foldl_option_some`).
+// Regression tests for the class-side hint channel's own variable set
+// (`class_method_var_names` / `collect_recurring_domain_names`).
+//
+// `class Foldable (T : Type -> Type) { def foldl (f : B -> A -> B) (z :
+// B) (t : T A) : B }` declares its accumulator type `B` as a BARE domain
+// -- it is never an argument applied to a class parameter, so the walk
+// that keyed on class parameters alone never put it in the wildcard set,
+// and `sig_arg_bindings` (which binds only names it recognizes as
+// variables) could not solve it from the call's own `0` argument. The
+// lambda's accumulator binder then stayed the leaked signature variable
+// `B`; carrier inference read `B` off it; `B` matched the prelude's
+// wildcard-headed `instance [HAdd A A A] Add A`; and the emitted
+// dictionary self-recursed (`HAdd_A_A_A_add (__Dict_Add_A ())`) until the
+// driver died. Measured end to end: `init/src/foldable_tests.mo` and
+// `init/src/foldable_tests_fold.mo` went from `driver exited -1` to
+// 24/24, and the emitted call now carries `number::__Dict_Add_I64`.
 
-/// Owners list for an `Option`-like inductive with one PARAMETERIZED
-/// constructor, built through `collect_ctor_owners` so these tests
-/// cover the collection change (parameterized ctors now included), not
-/// just the lookup.
-#[partial]
-def probe_ctor_owners : List CtorOwner :=
-    collect_ctor_owners (List.cons (Decl.inductive_d (Inductive.mk
-        (NamePath.npath (List.cons (Identifier.id "Option") List.empty))
-        List.empty (Term.type_ 0)
-        (List.cons (InductConstructor.mk
-            (NamePath.npath (List.cons (Identifier.id "some") List.empty))
-            (List.cons (Param.mk (Identifier.id "A") (Term.type_ 0) Multiplicity.many Option.none List.empty) List.empty)
-            Term.hole) List.empty)
-        List.empty Visibility.pub_)) List.empty)
+/// A bare named type variable in a declared type -- see `foldl_hint_sig`.
+def hint_var (s : String) : Term :=
+    Term.var 0 (DebugName.named (Identifier.id s))
 
-/// True when `c` is the bare carrier var named `name`.
-#[partial]
-def carrier_is (c : Option Term) (name : String) : Bool :=
-    match c {
-        Option.some t =>
-            match t {
-                Term.var _ dbg =>
-                    match dbg {
-                        DebugName.named id => String.beq (show_identifier id) name,
-                        DebugName.unnamed => false,
-                    },
-                _ => false,
-            },
-        Option.none => false,
+/// `Foldable.foldl`'s own class-side signature, written in the class
+/// parameter `T` applied to the method's own variables: `(B -> A -> B) ->
+/// B -> T A -> B`.
+def foldl_hint_sig : Term :=
+    Term.pi (Term.pi (hint_var "B") (Term.pi (hint_var "A") (hint_var "B")))
+        (Term.pi (hint_var "B") (Term.pi (Term.app (hint_var "T") (hint_var "A")) (hint_var "B")))
+
+#[test]
+def test_final_result_type_peels_the_pi_chain : Bool :=
+    match final_result_type foldl_hint_sig {
+        Term.var _ dbg => match dbg {
+            DebugName.named id => Similar.similar id (Identifier.id "B"),
+            DebugName.unnamed => false,
+        },
+        _ => false,
     }
 
 #[test]
-def test_infer_carrier_type_ctor_app_yields_owner : Bool :=
-    // `some 42` -- bare constructor application in argument position.
-    let app := Term.app (Term.var 0 (DebugName.named (Identifier.id "some")))
-        (Term.lit (Literal.num 42 NumSuffix.i64)) in
-    carrier_is (infer_carrier_type List.empty probe_ctor_owners str_map_empty app) "Option"
+def test_collect_recurring_domain_names_finds_the_bare_accumulator : Bool :=
+    id_member (Identifier.id "B") (collect_recurring_domain_names foldl_hint_sig)
 
 #[test]
-def test_infer_carrier_type_qualified_ctor_head_yields_owner : Bool :=
-    // `Option.some 42` -- dotted spelling; normalization strips the
-    // prefix before the owners lookup.
-    let app := Term.app (Term.var 0 (DebugName.named (Identifier.id "Option.some")))
-        (Term.lit (Literal.num 42 NumSuffix.i64)) in
-    carrier_is (infer_carrier_type List.empty probe_ctor_owners str_map_empty app) "Option"
+def test_collect_recurring_domain_names_skips_a_concrete_domain : Bool :=
+    // `Path` stands alone as a domain but recurs nowhere else in the
+    // signature -- it names a TYPE, not a parameter (`def parse (s :
+    // Path) : A`), and binding it would rewrite the parameter's own
+    // declared type from whatever a caller's argument happened to infer.
+    let sig : Term := Term.pi (hint_var "Path") (hint_var "A") in
+    Bool.not (id_member (Identifier.id "Path") (collect_recurring_domain_names sig))
 
-// Regression test for the `[]`-in-argument-position gap: an empty list
-// literal desugars to `FromListLiteral.empty`, inside-out resolution
-// rewrites it to the promoted 0-arg def ref `FromListLiteral_List_empty`,
-// and a bare-var arm that never consulted `def_types` left the enclosing
-// `Foldable.foldr f 0 []` with no List-revealing argument at all.
 #[test]
-def test_infer_carrier_type_zero_arg_def_ref_yields_declared_head : Bool :=
-    let empty_typ := Term.app (Term.var 0 (DebugName.named (Identifier.id "List")))
-        (Term.var 1 (DebugName.named (Identifier.id "A"))) in
-    let d : Def := {
-        name := NamePath.npath (List.cons (Identifier.id "FromListLiteral_List_empty") List.empty),
-        typ := empty_typ,
-        term := Term.hole,
-        constraints := List.empty,
-        attrs := List.empty,
-        vis := Visibility.package_private,
-    } in
-    let ref_ := Term.var 0 (DebugName.named (Identifier.id "FromListLiteral_List_empty")) in
-    carrier_is (infer_carrier_type List.empty List.empty (collect_def_types (List.cons (Decl.def_d d) List.empty)) ref_) "List"
+def test_class_method_var_names_includes_bare_domains : Bool :=
+    let params : List Param := List.cons (Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty) List.empty in
+    let no_constraints : List TypeConstraint := List.empty in
+    let no_methods : List ClassDef := List.empty in
+    let cls : Class := Class.mk (Identifier.id "Foldable") params no_constraints no_methods Visibility.package_private in
+    let names : List Identifier := class_method_var_names cls foldl_hint_sig in
+    // `T` from the class's own parameters, `A` from `T A`, `B` from the
+    // bare accumulator domain.
+    id_member (Identifier.id "T") names
+    && id_member (Identifier.id "A") names
+    && id_member (Identifier.id "B") names
+

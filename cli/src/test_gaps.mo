@@ -9,18 +9,18 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 17 entries here are what a full corpus sweep
-/// actually reports, not a guess, and none is a problem with the test
-/// files themselves. In rough order of how much they cost to close:
+/// The 15 entries here are what a full corpus sweep actually reports,
+/// not a guess, and none is a problem with the test files themselves. In
+/// rough order of how much they cost to close:
 ///
 ///   * self-hosted checker gaps -- instance resolution with no carrier-
 ///     revealing argument to infer one from (`Monad.pure`,
 ///     `MonadState.modify_get`), the expected-type channel the parser's
 ///     discarded ascriptions leave empty (`combine_test.mo`, `json.mo`),
-///     and named-call defaults, which the checker does not apply
-///     (`structs.mo`) -- 5 files;
-///   * codegen bugs the checker used to hide -- the generic `Add` dict
-///     self-recursion and `Pred` in value position -- 3 files;
+///     and a named call's own declared defaults, which do not survive the
+///     parser (`structs.mo`) -- 5 files;
+///   * a codegen bug the checker used to hide (`init/src/tests.mo`) --
+///     1 file;
 ///   * natives the backend never wired -- `i64_to_u64` and the F64/U16/I8
 ///     comparison families (3 files);
 ///   * `#[derive]`/`#[derive_cli]`, whose attributes never reach a macro
@@ -31,6 +31,17 @@
 /// The legacy dotted-path family (~105 call sites across 8 files) that
 /// used to head this list is CLOSED: the call sites now import the bare
 /// name they call, and both parsers reject a dotted `use` path outright.
+/// The other codegen family that used to sit here -- the generic `Add`
+/// dict self-recursion on an untyped lambda's accumulator
+/// (`init/src/foldable_tests.mo`, `init/src/foldable_tests_fold.mo`) -- is
+/// CLOSED too; both files are 14/14 and 10/10 self-hosted.
+///
+/// `init/src/tests.mo` is a PRE-EXISTING failure, not fallout from any
+/// change listed above: the same 4-line repro fails identically on a
+/// self-hosted binary built at afa2f92 (the commit before this branch's
+/// own .mo work began), and passes on the Rust evaluator -- measure with
+/// the self-hosted binary, because `monad-rs test` runs the Rust
+/// implementation and never touches this compiler at all.
 ///
 /// **Matching is on path AND cause**, deliberately: a listed file that
 /// starts failing for a NEW reason is reported as a real failure, not
@@ -52,8 +63,6 @@ pub def gap_paths : List String :=
      "examples/optics.mo",
      "std/src/concurrent/fiber_test.mo",
      "init/src/tests.mo",
-     "init/src/foldable_tests.mo",
-     "init/src/foldable_tests_fold.mo",
      "std/src/base.mo",
      "std/src/derive_tests.mo",
      "std/src/map_tests.mo",
@@ -78,8 +87,6 @@ pub def gap_causes : List String :=
     ["native `f64_mul`",
      "native `f64_eq`",
      "native `fork_io`",
-     "compilation failed",
-     "driver exited -1",
      "driver exited -1",
      "native `f64_eq`",
      "no instance found for `BEq.beq`",
@@ -103,21 +110,41 @@ pub def gap_reasons : List String :=
      // Closed by: a self-hosted async runtime. Tracked in
      // plans/bootstrapping/self-hosted-async-runtime.md.
      "async runtime not self-hostable yet (fork_io/await_fiber unwired)",
-     // Closed by: codegen support for a builtin sort in value position.
-     // `init/src/tests.mo:537` uses `Pred` as a value (`get_sort Pred`),
-     // which reaches llc as a call to an undefined `@Pred` -- so the
-     // driver compiles and the LINK is what fails.
-     "builtin sort `Pred` in value position emits an undefined symbol",
-     // Closed by: bidirectional inference pushing an expected type into
-     // an unannotated lambda parameter. `acc + x` in `Foldable.foldl (fn
-     // acc x => acc + x) 0 xs` compiles to the generic forwarding
-     // instance `HAdd_A_A_A_add` with the placeholder `__Dict_Add_A`
-     // dict, which self-recurses; the same fold with `I64.add` works.
-     // The carrier inference that used to fail here IS fixed (the call
-     // resolves and the driver builds now) -- this is the next bug
-     // behind it.
-     "+ on untyped lambda params gets a generic Add dict -- self-recurses",
-     "+ on untyped lambda params gets a generic Add dict -- self-recurses",
+     // NOT the `Pred` gap any more -- that one is CLOSED (codegen emits a
+     // boxed constant for the four builtin sort names, so `get_sort Pred`
+     // no longer reaches llc as an undefined `@Pred`), and the failure
+     // moved from the link to a dead driver. What is left is a
+     // dictionary-argument self-reference, and it is PRE-EXISTING: the
+     // same 4-line repro fails on a self-hosted binary built at afa2f92,
+     // and passes on the Rust evaluator (which is a different
+     // implementation -- `monad-rs test` never runs this compiler).
+     //
+     // Minimal repro, measured against the self-hosted binary:
+     //
+     //     #[test]
+     //     def p_get_0 : Bool := some 1 == (List.get 0 [1, 2, 3])
+     //
+     // `init/src/tests.mo:105` is that shape (`test_get_0`). The
+     // element-dict slot of the emitted comparison holds the option
+     // instance's OWN dictionary instead of the element's:
+     //
+     //     %t167 = call @"init::__Dict_BEq_Option_A"()
+     //     ...
+     //     %t175 = call @"init::BEq_Option_A_beq"(%t167, %t168, %t174)
+     //
+     // while the callee's body reads field 0 of that first argument and
+     // applies it to two ELEMENTS -- so the option instance is handed a
+     // dictionary shaped like itself, and the driver dies (exit -1,
+     // SIGSEGV in `monad_get_tag`, reached through `apply_closure2`).
+     // The two-operand form with a CONCRETE literal on both sides is
+     // fine (`Option.some 1 == Option.some 2` emits
+     // `number::__Dict_BEq_I64`), which is why this needs the
+     // `List.get`-typed operand: the carrier that reaches the class-call
+     // pass is the still-generic `Option A`, and the constraint `[BEq A]`
+     // is then resolved against the applied carrier rather than its
+     // argument. Closed by: fixing that resolution, not by anything in
+     // the test file.",
+     "the option instance's own dict is passed where its ELEMENT dict belongs -- `some 1 == List.get 0 [1, 2, 3]`",
      // Measured 2026-09-19 (P6): after the applied-head match AND the
      // callee-signature instantiation both landed, `find_matching_instance`
      // agrees on all of these -- what fails is downstream of the match.
@@ -191,9 +218,34 @@ pub def gap_reasons : List String :=
      // so nothing downstream ever runs. The declaration-generating
      // macros these attributes dispatch to exist on the host only.
      "#[derive] is not supported by the self-hosted parser",
-     // Closed by: named-call argument defaults in the self-hosted
-     // checker -- it demands a field the callee declares a default for.
-     "named-call defaults are not applied by the self-hosted checker",
+     // PARTIALLY CLOSED, and the half that is left is the harder one.
+     //
+     // The CONSTRUCTOR half is done: `named_call_check_missing_fields`
+     // (`lang/typecheck/infer.mo`) no longer demands a field that
+     // declares a `:=` default, so `Rect { w := 50 }` is accepted exactly
+     // as the bare `{ w := 50 }` literal already was. A default can only
+     // exist on a STRUCT's own implicit constructor (`cons_fields_to_params`
+     // rejects `:=` on a bare `type`), and `struct_lit_build_args` already
+     // substituted it, so the two spellings agreed on the value and
+     // disagreed only on whether to accept the omission.
+     //
+     // What is left is the DEF half, and it is not a policy choice but a
+     // missing channel: `ScopeData.def_params` is `List (Pair Identifier
+     // Term)` -- name and type, no `Param` -- because it is recovered
+     // from the elaborated `Term.lam` chain (`def_params_of_term`,
+     // `lang/scope.mo`), and `Term.lam` has no default slot. The parser
+     // DOES parse a def param's `:=` (`ParseParam.mk name type_ mult
+     // default_ attrs`) and `lam_params_loop` DISCARDS it, so
+     // `scale`'s own `factor : I64 := 2` is gone before this path sees
+     // the def. Measured, from the self-hosted binary: `error: named
+     // call: missing required field `factor` in
+     // test_named_call_def_target_uses_declared_default`, the file's only
+     // failure -- `test_named_call_constructor_single_field` and
+     // `test_named_call_def_target` both pass. Closed by: carrying the
+     // default through the parser into the checker (a `Term.lam` field or
+     // a parallel `ScopeData` side-table), which touches every
+     // `Term.lam` construction site.",
+     "a def's own named-call defaults do not survive the parser (`Term.lam` has no default slot)",
      // Same applied-head instance-resolution family as the Map/Show
      // entries above: `Monad.pure`'s only argument is the monad's
      // ELEMENT type, and `MonadState`'s carrier is likewise not

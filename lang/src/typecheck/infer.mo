@@ -3121,21 +3121,36 @@ def named_call_check_unknown_fields (params : List Param) (fields : List StructL
             }
     }
 
-/// Every declared param must be covered by a literal field -- no default
-/// mechanism exists for a `lang/` constructor of ANY kind (ordinary
-/// `type` or `struct`) today, so this is always required (matches the
-/// reference's own finding: `Inductive.defaults` has no `lang/`
-/// equivalent at all).
+/// Every declared param must be covered by a literal field UNLESS it
+/// carries a `:=` default, in which case omission is legal and the
+/// default's own value stands in -- `struct_lit_build_args` (above)
+/// already does exactly that substitution, so this check only has to
+/// stop rejecting the omission.
+///
+/// A default can only ever be present on a STRUCT's own implicit
+/// constructor: `cons_fields_to_params` (`lang/parser.mo`) rejects `:=`
+/// on a bare `type` declaration's constructor, while
+/// `struct_fields_to_params` (`lang/scope.mo`) keeps it. So requiring
+/// every field unconditionally here did not mean "no defaults anywhere"
+/// -- it meant a struct's ctor was MORE demanding than its own bare
+/// literal form, which already accepted `{ w := 50 }` for a `Rect { w :
+/// I64, h : I64 := 100 }`. Both spellings now agree.
+///
+/// A def's own named calls (`named_call_def_pair_args`, below) are a
+/// separate path and still require every field -- see its own comment.
 #[terminating]
 def named_call_check_missing_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
     match params {
         List.empty => ok true,
         List.cons p rest =>
             match p {
-                Param.mk pname _ _ _ _ =>
+                Param.mk pname _ _ pdefault _ =>
                     match struct_lit_find_field fields pname {
                         Option.some _ => named_call_check_missing_fields rest fields,
-                        Option.none => err (TypeError.custom (String.concat "named call: missing required field `" (String.concat (show_identifier pname) "`"))),
+                        Option.none => match pdefault {
+                            Option.some _ => named_call_check_missing_fields rest fields,
+                            Option.none => err (TypeError.custom (String.concat "named call: missing required field `" (String.concat (show_identifier pname) "`"))),
+                        },
                     }
             }
     }
@@ -3270,9 +3285,25 @@ def def_param_pair_exists (params : List (Pair Identifier Term)) (name : Identif
     }
 
 /// Builds `(value, declared_type)` pairs in `params`' own declared order
-/// -- every param must be covered by a literal field (no default
-/// mechanism exists for an ordinary `lang/` def's own params, matching
-/// this plan's own `lang/` Non-Goal).
+/// -- every param must be covered by a literal field.
+///
+/// Unlike the constructor path just above, there is no default to fall
+/// back to here, and the reason is structural rather than a policy
+/// choice: `ScopeData.def_params` is a `List (Pair Identifier Term)` --
+/// name and type, no `Param` -- because it is recovered from the
+/// elaborated `Term.lam` chain (`def_params_of_term`, `lang/scope.mo`),
+/// and `Term.lam` has no default slot. The parser DOES parse a def
+/// param's `:=` (`ParseParam.mk name type_ mult default_ attrs`) and
+/// `lam_params_loop` discards it. So `def scale {factor : I64 := 2, p :
+/// I64}` reaches this function with `factor`'s default gone, and
+/// `scale { p := 4 }` is rejected as a missing field while the ctor
+/// spelling of the same omission is now accepted. Giving defs the same
+/// treatment means a new parser->checker channel for the default (a
+/// `Term.lam` field or a parallel side-table), which touches every
+/// `Term.lam` construction site; `examples/structs.mo`'s
+/// `test_named_call_def_target_uses_declared_default` is the one corpus
+/// test that needs it, and it stays a recorded gap until that channel
+/// exists.
 #[terminating]
 def named_call_def_pair_args (params : List (Pair Identifier Term)) (fields : List StructLitField) : Result TypeError (List (Pair Term Term)) :=
     match params {
@@ -4293,3 +4324,67 @@ def test_extract_pi_ret_mismatched_shape_leaves_signature_alone : Bool :=
     // recording and the return comes back untouched -- still `List A`.
     let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret empty_promoted_sig (Term.type_ 1)) in
     head_is (app_arg_of typ) "A"
+
+// --- Tests for named-call field validation ---
+//
+// A `Rect { w : I64, h : I64 := 100 }`-shaped fixture, matching what
+// `struct_fields_to_params` (`lang/scope.mo`) registers for a struct
+// whose second field declares a default -- the only kind of constructor
+// that can carry one (`cons_fields_to_params` rejects `:=` on a bare
+// `type`'s own constructor).
+
+def rect_default_value : Term := Term.var sentinel (DebugName.named (Identifier.id "the_default"))
+
+def rect_w_param : Param := Param.mk (Identifier.id "w") (Term.type_ 2) Multiplicity.many Option.none List.empty
+
+def rect_h_param : Param := Param.mk (Identifier.id "h") (Term.type_ 2) Multiplicity.many (Option.some rect_default_value) List.empty
+
+def rect_params : List Param := List.cons rect_w_param (List.cons rect_h_param List.empty)
+
+def rect_w_field : StructLitField := StructLitField.mk (Identifier.id "w") (Term.type_ 1)
+
+def rect_w_only_fields : List StructLitField := List.cons rect_w_field List.empty
+
+#[test]
+def test_named_call_ctor_omitted_defaulted_field_is_accepted : Bool :=
+    // `Rect { w := 1 }` -- `h` is omitted but declares a default.
+    match named_call_check_missing_fields rect_params rect_w_only_fields {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_named_call_ctor_omitted_undefaulted_field_is_rejected : Bool :=
+    // `Rect {}` -- `w` has no default, so it must still be required.
+    match named_call_check_missing_fields rect_params List.empty {
+        ok _ => false,
+        err e => match e {
+            TypeError.custom msg => String.contains msg "missing required field `w`",
+            _ => false,
+        },
+    }
+
+#[test]
+def test_struct_lit_build_args_substitutes_the_default : Bool :=
+    // The other half of the acceptance above: the omitted slot must be
+    // filled with the DEFAULT's own value, not left a hole. A hole is
+    // not an error at this point -- `lower_sparse_args` stops at the
+    // first one -- it silently truncates the allocation (see
+    // `struct_lit_build_args`'s own comment on the `scope_data_empty`
+    // SIGSEGV).
+    match struct_lit_build_args rect_params rect_w_only_fields {
+        List.cons _ rest => match rest {
+            List.cons second _ => match second {
+                Option.some filler => match filler {
+                    Term.var _ dbg => match dbg {
+                        DebugName.named id => Similar.similar id (Identifier.id "the_default"),
+                        DebugName.unnamed => false,
+                    },
+                    _ => false,
+                },
+                Option.none => false,
+            },
+            _ => false,
+        },
+        _ => false,
+    }
