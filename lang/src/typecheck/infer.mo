@@ -2902,6 +2902,15 @@ def type_check_pi (arg : Term) (ret : Term) (scope : Scope) (local_types : List 
     }
 
 /// Type check a sort universe level.
+///
+/// `Sort n : Sort m` holds exactly when `n < m`, so the check against an
+/// expected sort is `expected_level > level` — which is the same
+/// relation as `succ level <= expected_level`.
+///
+/// There used to be an `I64.beq expected_level level` arm before that
+/// test, accepting `Sort n` against `Sort n` — a Type-in-Type hole. The
+/// Rust core never had it: `infer(Sort{level})` gives `Sort (level+1)`,
+/// which then fails `level+1 <= level`. Removed so the two agree.
 def type_check_sort_full (level : I64) (expected_type : Term) : Result TypeError TypedTerm :=
     match expected_type {
         Term.hole =>
@@ -2909,9 +2918,7 @@ def type_check_sort_full (level : I64) (expected_type : Term) : Result TypeError
             ok (mk_typed sort_term (Term.type_ (level + 1))),
         Term.type_ expected_level =>
             let sort_term : Term := Term.type_ level in
-            if I64.beq expected_level level then
-                ok (mk_typed sort_term expected_type)
-            else if expected_level > level then
+            if expected_level > level then
                 ok (mk_typed sort_term expected_type)
             else
                 err (TypeError.not_a_type sort_term),

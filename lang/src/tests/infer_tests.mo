@@ -87,6 +87,39 @@ def test_sort_infer_type : Bool :=
         err _ => false,
     }
 
+// A sort is never its own type: `Sort n : Sort m` requires `n < m`, so
+// `Sort n` checked AGAINST `Sort n` must be rejected. Before this pin,
+// `type_check_sort_full`'s `I64.beq expected_level level` arm accepted
+// it — a Type-in-Type hole in the self-hosted checker (the Rust core
+// rejects it: it infers `Sort (n+1)` and then fails `n+1 <= n`).
+//
+// Note this hole was reachable only through `Term.type_ N` terms the
+// checker constructs itself, NOT through `Sort N` surface syntax:
+// `Sort` is registered as a `Term.hole`-signatured free variable
+// (`add_builtin_sort`, lang/scope.mo), so `Sort 1` in source lowers to
+// an ordinary application and goes through `type_check_app`. Real
+// `Sort N` syntax (making this reachable from source) is the next
+// step, which is why this fix lands first.
+#[test]
+def test_sort_not_its_own_type : Bool :=
+    match run_check (Term.type_ 1) (Term.type_ 1) {
+        ok _ => false,
+        err e => match e {
+            not_a_type _ => true,
+            _ => false,
+        },
+    }
+
+#[test]
+def test_sort_prop_not_its_own_type : Bool :=
+    match run_check (Term.type_ 0) (Term.type_ 0) {
+        ok _ => false,
+        err e => match e {
+            not_a_type _ => true,
+            _ => false,
+        },
+    }
+
 // --- Variable tests ---
 
 #[test]
@@ -217,7 +250,11 @@ def test_app_id : Bool :=
     let arg_typ : Term := Term.type_ 1 in
     let id_body : Term := Term.var 0 x_dbg in
     let id_lam : Term := Term.lam x_dbg arg_typ id_body in
-    let result : Term := Term.app id_lam (Term.type_ 1) in
+    // The lambda is `Sort 1 -> Sort 1`, so its argument must have type
+    // `Sort 1` -- which `Sort 0` does (`Sort 0 : Sort 1`). This used to
+    // be applied to `Term.type_ 1`, which is `Sort 1 : Sort 1` -- true
+    // only under the Type-in-Type hole `type_check_sort_full` had.
+    let result : Term := Term.app id_lam (Term.type_ 0) in
     match run_check result Term.hole {
         ok _ => true,
         err _ => false,
@@ -701,7 +738,10 @@ def test_lam_app_chain : Bool :=
     let ret_typ : Term := Term.type_ 1 in
     let inner_lam : Term := Term.lam y_dbg arg_b (Term.var 0 y_dbg) in
     let outer_lam : Term := Term.lam x_dbg arg_a inner_lam in
-    let applied : Term := Term.app (Term.app outer_lam (Term.type_ 1)) (Term.type_ 1) in
+    // Both lambdas are `Sort 1 -> ...`, so both arguments must have type
+    // `Sort 1` -- `Sort 0` does. See `test_app_id` above: passing
+    // `Term.type_ 1` here asserted `Sort 1 : Sort 1`.
+    let applied : Term := Term.app (Term.app outer_lam (Term.type_ 0)) (Term.type_ 0) in
     match run_check applied Term.hole {
         ok _ => true,
         err _ => false,
