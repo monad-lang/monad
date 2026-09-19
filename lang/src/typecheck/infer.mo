@@ -2882,28 +2882,39 @@ def con_spine_result_typ (f_term : Term) (fallback : Term) (scope : Scope) : Ter
     }
 
 /// Type check a forall binder.
+///
+/// The universe is the `max` of the two components' sorts -- the standard rule,
+/// and previously a flat `Term.type_ 1` that discarded both. `level_of_type`
+/// answers `concrete 1` for a component that is not a known sort, so anything
+/// outside the sort hierarchy contributes exactly what it contributed before;
+/// what changes is a component that IS a sort, which now contributes its own
+/// level instead of being ignored. `sort_term_of_level` renders the result, so
+/// a `max` that lands on a concrete level is spelled `Term.type_ n` exactly as
+/// before (see the note there).
 def type_check_forall (dbg : DebugName) (kind : Term) (body : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check kind Term.hole scope local_types locals {
-        ok _ =>
+        ok kind_tt =>
             let extended_types : List Term := List.cons kind local_types in
             match type_check body Term.hole scope extended_types locals {
-                ok _ =>
+                ok body_tt =>
                     let forall_term : Term := Term.forall dbg kind body in
-                    ok (mk_typed forall_term (Term.type_ 1)),
+                    let universe : Term := sort_term_of_level (SortLevel.max (level_of_type kind_tt.typ) (level_of_type body_tt.typ)) in
+                    ok (mk_typed forall_term universe),
                 err e => err e,
             },
         err e => err e,
     }
 
-/// Type check a Pi type.
+/// Type check a Pi type. Universe rule as in `type_check_forall` above.
 def type_check_pi (arg : Term) (ret : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check arg Term.hole scope local_types locals {
-        ok _ =>
+        ok arg_tt =>
             let extended_types : List Term := List.cons arg local_types in
             match type_check ret Term.hole scope extended_types locals {
-                ok _ =>
+                ok ret_tt =>
                     let pi_term : Term := Term.pi arg ret in
-                    ok (mk_typed pi_term (Term.type_ 1)),
+                    let universe : Term := sort_term_of_level (SortLevel.max (level_of_type arg_tt.typ) (level_of_type ret_tt.typ)) in
+                    ok (mk_typed pi_term universe),
                 err e => err e,
             },
         err e => err e,

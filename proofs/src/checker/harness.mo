@@ -22,11 +22,18 @@
 // What this harness therefore CANNOT reach, and the pins it implies:
 //   - `TypeError` (lang/src/types.mo) is not `pub`, so pins assert
 //     accept/reject, never a specific error variant.
-//   - `DebugName` is not `pub`, so no pin here builds a lambda or a
-//     binder -- sort and leaf-rule pins only.
-//   - `Similar` (a class) is not `pub`, so no pin inspects an inferred
-//     type directly; where a rule must be observed, the pin asserts
-//     through a `check` that only succeeds at the right answer.
+//   - `DebugName` was not `pub` at first, which is why the earliest pins
+//     built no binder at all. It was widened deliberately (W1.2) so the
+//     `Forall` universe arm could be pinned: `type_check_pi` and
+//     `type_check_forall` are separate arms, and a `max` added to one and
+//     not the other is precisely the half-fix a pin has to catch. It is
+//     the only export widened so far.
+//   - `Similar` (a class) is not `pub`, so no pin compares two arbitrary
+//     inferred types. What a pin CAN do is read a concrete sort level out
+//     of an inferred type (`inferred_sort_level`, pattern-matching the
+//     `pub` `Term` constructors); where a rule cannot be observed that
+//     way, the pin asserts through a `check` that only succeeds at the
+//     right answer.
 // None of these is a reason to widen `lang`'s exports yet. If a pin
 // genuinely needs one, widen it deliberately, one name at a time.
 
@@ -66,3 +73,33 @@ def accepted (term : Term) (expected_type : Term) : Bool :=
 /// The negation of `accepted`, named for what a pin usually means: the
 /// checker must REFUSE this.
 def rejected (term : Term) (expected_type : Term) : Bool := not (accepted term expected_type)
+
+/// The concrete sort level the checker INFERS for `term`, or `Option.none`
+/// when it infers something that is not a concrete sort (including an
+/// error, and including a level that is not a literal -- a `Term.sort`
+/// whose level is a variable has no `I64` to report, and `level_const` is
+/// not `pub` here to ask more precisely).
+///
+/// This exists because `accepted` structurally cannot see a `Pi`'s or a
+/// `Forall`'s universe: `type_check`'s `Term.pi`/`Term.forall` arms ignore
+/// the expectation and answer the universe they computed, so EVERY
+/// expectation is accepted for a well-formed Pi and an accept/reject pin
+/// over one cannot discriminate at all. Reading the inferred type is the
+/// only observable route, and the `Term` constructors are `pub`, so no new
+/// export is needed for it.
+def inferred_sort_level (term : Term) : Option I64 :=
+    match type_check term Term.hole proof_scope empty_local_types empty_locals {
+        ok tt => match tt.typ {
+            Term.type_ n => Option.some n,
+            _ => Option.none,
+        },
+        err _ => Option.none,
+    }
+
+/// Does the checker infer `term`'s type to be the sort at concrete level
+/// `n`? The readable form of `inferred_sort_level` for a pin.
+def infers_sort_at (term : Term) (n : I64) : Bool :=
+    match inferred_sort_level term {
+        Option.some m => I64.beq m n,
+        Option.none => false,
+    }

@@ -165,13 +165,24 @@ def test_var_free_unknown : Bool :=
     }
 
 // --- Pi tests ---
+//
+// The universe a `Pi`/`Forall` INFERS is the `max` of its components'
+// sorts (W1.2), not the flat `Term.type_ 1` these tests used to assert.
+// A component contributes the sort of its TYPE: `Type` is `Sort 1`, so
+// `Type : Sort 2` and `(A : Type) -> Type` is itself a `Sort 2`. Three
+// of the four affected tests are below; the fourth, `test_forall_infer`,
+// is in the Forall section and says the same thing about the other arm.
+// They were the corpus's only pins on the old rule, and `monad test` is
+// what found them: `check` never validates a signature's KIND, so no
+// `check`-based comparison can see a universe move.
 
 #[test]
 def test_pi_simple : Bool :=
     let t : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
     match run_check t Term.hole {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            // Both components are `Type`, contributing 2 each.
+            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
         err _ => false,
     }
 
@@ -184,7 +195,10 @@ def test_pi_dependent : Bool :=
     let types : List Term := List.cons arg List.empty in
     match type_check t Term.hole test_scope types empty_locals {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            // The domain `Type` contributes 2; the body's type is
+            // `A`'s own local type, `Type`, contributing 1 -- so the
+            // `max` is still 2, and the domain is what decides it.
+            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
         err _ => false,
     }
 
@@ -282,7 +296,10 @@ def test_forall_infer : Bool :=
     let t : Term := Term.forall a_dbg kind body in
     match run_check t Term.hole {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            // Same rule on the `Forall` arm: both components are
+            // `Type`, contributing 2 each (see the note above the Pi
+            // tests).
+            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
         err _ => false,
     }
 
@@ -758,7 +775,11 @@ def test_pi_of_pi : Bool :=
     let t : Term := Term.pi arg body in
     match type_check t Term.hole test_scope types empty_locals {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            // The domain is the inner `Pi`, which infers `Sort 2`; the
+            // body `F`'s own type IS that inner `Pi`, which is not a
+            // sort, so it contributes `level_of_type`'s default of 1.
+            // `max (2) (1)` is 2.
+            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
         err _ => false,
     }
 

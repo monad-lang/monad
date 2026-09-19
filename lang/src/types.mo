@@ -542,7 +542,7 @@ pub type Native {
 // Names are never used for identity or equality — de Bruijn indices
 // determine identity. DebugName exists solely for error messages
 // and pretty-printing during debugging.
-type DebugName {
+pub type DebugName {
     named (id: Identifier),
     unnamed,
 }
@@ -1791,6 +1791,38 @@ def sort_level_of (t: Term) : Option SortLevel := match term_peel t {
     Term.sort level => Option.some level,
     Term.type_ n => Option.some (SortLevel.concrete n),
     _ => Option.none,
+}
+
+/// The INVERSE of `sort_level_of` where a spelling has to be chosen: a
+/// concrete level is rendered back as `Term.type_ n`, anything else as
+/// `Term.sort l`.
+///
+/// Preferring the concrete spelling is what keeps a computed level from
+/// changing the spelling of sorts that were concrete all along. `type_check_pi`
+/// now computes a `max` instead of answering a flat `Term.type_ 1`, and every
+/// `Pi`/`Forall` in the corpus today has components whose levels are all
+/// concrete -- so without this the whole corpus would spell its `Pi` universes
+/// as `Term.sort ...` and every downstream match would take the other path.
+/// Going through here, the diff is the levels that actually moved and nothing
+/// else. `similar`'s `type_`/`sort` arms absorb the difference either way, so
+/// no caller has to care which spelling comes out.
+#[partial]
+def sort_term_of_level (l: SortLevel) : Term := match level_const l {
+    Option.some n => Term.type_ n,
+    Option.none => Term.sort l,
+}
+
+/// The sort level of a term known to be a TYPE, for a caller that must answer
+/// with a level rather than an `Option`.
+///
+/// The default is `concrete 1`, i.e. `Term.type_ 1` -- exactly what the
+/// callers answered unconditionally before, so any component that is not a
+/// known sort keeps its old contribution. A component whose type IS a sort
+/// contributes that sort's level, which is the standard rule: the sort of
+/// `Pi A B` is the max of the sorts of `A` and `B`.
+def level_of_type (t: Term) : SortLevel := match sort_level_of t {
+    Option.some l => l,
+    Option.none => SortLevel.concrete 1,
 }
 
 instance Similar Term {

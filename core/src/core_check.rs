@@ -922,6 +922,17 @@ fn expect_pi(
   }
 }
 
+/// The universe level of a term that is known to be a type, for the
+/// `Pi`/`Forall` universe rule in `infer` below. A term that is not a sort
+/// contributes `1` — the flat level those two arms answered before, so a
+/// component outside the sort hierarchy keeps its old contribution.
+fn sort_level_or_default(t: &CoreTerm) -> u64 {
+  match t {
+    CoreTerm::Sort { level } => *level,
+    _ => 1,
+  }
+}
+
 /// Infer `term`'s type from its own structure, with no ambient
 /// expectation — used at the leaves/heads of an application spine
 /// (`Free`/`Meta` occurrences, `App`'s function position, `Sort`,
@@ -955,19 +966,39 @@ pub fn infer(
     // is about, and out of scope to overhaul here.
     CoreTerm::Sort { level } => Ok(CoreTerm::Sort { level: level + 1 }),
 
+    // Universe rule for the type-formers: the sort of `Forall typ body` is
+    // the `max` of the sorts of `typ` and `body` — the standard rule, and a
+    // deliberate exception to the "deliberately simple" note above, which
+    // returned only `infer(body)`: with that in place `Forall (Sort 5) Bool`
+    // infers `Sort 1`, silently discarding the domain's level. The rest of
+    // the hierarchy is still unenforced (nothing here stratifies levels or
+    // rejects Type-in-Type), so this corrects the one rule that was outright
+    // wrong rather than being the overhaul that note puts out of scope.
+    //
+    // Returning a `Sort` rather than the body's inferred type also closes a
+    // hole: the body is inferred under a freshly opened atom, so a body that
+    // IS that variable inferred to `Free(atom)` and the old arm returned a
+    // type mentioning an atom that escapes this call. A sort is always
+    // closed.
     CoreTerm::Forall { typ, body, .. } => {
-      infer(mctx, ctx, structs, typ)?;
+      let typ_sort = sort_level_or_default(&infer(mctx, ctx, structs, typ)?);
       let atom = Atom::fresh();
       let ctx2 = open_ctx(ctx, atom, (**typ).clone());
       let opened_body = open_with(body, &CoreTerm::Free(atom));
-      infer(mctx, &ctx2, structs, &opened_body)
+      let body_sort = sort_level_or_default(&infer(mctx, &ctx2, structs, &opened_body)?);
+      Ok(CoreTerm::Sort {
+        level: typ_sort.max(body_sort),
+      })
     }
     CoreTerm::Pi { arg, ret, .. } => {
-      infer(mctx, ctx, structs, arg)?;
+      let arg_sort = sort_level_or_default(&infer(mctx, ctx, structs, arg)?);
       let atom = Atom::fresh();
       let ctx2 = open_ctx(ctx, atom, (**arg).clone());
       let opened_ret = open_with(ret, &CoreTerm::Free(atom));
-      infer(mctx, &ctx2, structs, &opened_ret)
+      let ret_sort = sort_level_or_default(&infer(mctx, &ctx2, structs, &opened_ret)?);
+      Ok(CoreTerm::Sort {
+        level: arg_sort.max(ret_sort),
+      })
     }
 
     CoreTerm::Lam {
@@ -3929,6 +3960,103 @@ mod test {
         &CoreTerm::Hole
       )
       .is_ok()
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // The Pi/Forall universe rule: `max` of the components' sorts.
+  //
+  // Every level asserted below is one HIGHER than the level its component
+  // is written at, and that is the rule rather than an off-by-one: a
+  // component's contribution is the sort of its TYPE, and `Sort n : Sort
+  // (n+1)`. So a domain of `Sort 1` contributes 2, a codomain of
+  // `Sort 3` contributes 4, and the Pi over both infers `Sort 4`.
+  //
+  // These are hand-built `CoreTerm`s rather than `lower`ed ones on
+  // purpose: the arms under test read the component's inferred TYPE, so
+  // the components must be terms whose type `infer` decides by structure
+  // alone (`Sort`), with nothing to look up and no binder to open.
+  // -------------------------------------------------------------------
+
+  fn sort_n(n: u64) -> CoreTerm {
+    CoreTerm::Sort { level: n }
+  }
+
+  fn core_pi(arg: CoreTerm, ret: CoreTerm) -> CoreTerm {
+    CoreTerm::Pi {
+      dbg: DebugName::Anonymous,
+      arg: Box::new(arg),
+      ret: Box::new(ret),
+      mult: Multiplicity::Many,
+    }
+  }
+
+  fn core_forall(typ: CoreTerm, body: CoreTerm) -> CoreTerm {
+    CoreTerm::Forall {
+      dbg: DebugName::Anonymous,
+      typ: Box::new(typ),
+      body: Box::new(body),
+    }
+  }
+
+  /// `fn a : Sort 1 => a` — a term whose inferred type is a `Pi`, i.e. NOT
+  /// a sort, which is what `sort_level_or_default`'s fallback is for.
+  fn core_lam_id() -> CoreTerm {
+    CoreTerm::Lam {
+      dbg: DebugName::Anonymous,
+      param_typ: Box::new(sort_n(1)),
+      body: Box::new(CoreTerm::Bound(0)),
+    }
+  }
+
+  fn infer_ty(t: &CoreTerm) -> CoreTerm {
+    infer(&mut MetaContext::new(), &empty_ctx(), &empty_structs(), t)
+      .expect("inference should succeed")
+  }
+
+  #[test]
+  fn test_infer_pi_universe_is_max_of_domain_and_codomain() {
+    // `(Sort 1) -> Sort 3` infers `Sort 4`, not the domain's 2.
+    assert_eq!(infer_ty(&core_pi(sort_n(1), sort_n(3))), sort_n(4));
+  }
+
+  #[test]
+  fn test_infer_pi_universe_is_max_not_the_codomain() {
+    // The mirror image -- `(Sort 3) -> Sort 2`, where the DOMAIN is the
+    // higher one. Together with the test above, neither "always the
+    // first" nor "always the second" survives both.
+    assert_eq!(infer_ty(&core_pi(sort_n(3), sort_n(2))), sort_n(4));
+  }
+
+  #[test]
+  fn test_infer_forall_universe_is_max_of_domain_and_body() {
+    // `Forall` is a separate arm; a `max` added to one and not the other
+    // is the half-fix these two tests exist to catch.
+    assert_eq!(infer_ty(&core_forall(sort_n(1), sort_n(3))), sort_n(4));
+    assert_eq!(infer_ty(&core_forall(sort_n(3), sort_n(1))), sort_n(4));
+  }
+
+  #[test]
+  fn test_infer_pi_universe_defaults_a_non_sort_component_to_1() {
+    // A component that is not a known sort contributes the flat level
+    // those arms answered unconditionally before the `max`. Both sides
+    // non-sort, so the fallback IS the answer and `Sort 0` would fail
+    // here.
+    assert_eq!(infer_ty(&core_pi(core_lam_id(), core_lam_id())), sort_n(1));
+  }
+
+  #[test]
+  fn test_infer_forall_of_a_bound_body_does_not_escape_its_atom() {
+    // The body IS the freshly opened variable: `Forall (Sort 1) (Bound 0)`
+    // is `forall (A : Sort 1). A`. The old arm returned the body's own
+    // inferred type, which is the atom's type here -- a term mentioning an
+    // atom minted inside this call, i.e. one that escapes it. Answering a
+    // `Sort` instead is always closed, and `max (2) (1)` puts this at 2
+    // (`A : Sort 1` contributes 1 as a component; the `Forall`'s domain
+    // contributes 2).
+    assert_eq!(
+      infer_ty(&core_forall(sort_n(1), CoreTerm::Bound(0))),
+      sort_n(2)
     );
   }
 

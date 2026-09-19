@@ -17,7 +17,7 @@
 // "is this sort a valid inhabitant of that sort", a strictly lower
 // relation.
 
-use lib::checker::harness {accepted, rejected}
+use lib::checker::harness {accepted, rejected, infers_sort_at}
 
 // --- The soundness pin ---
 
@@ -143,3 +143,53 @@ def sort_spelling_evaluates_a_succ_level : Bool :=
 #[test]
 def sort_spelling_is_accepted_with_no_expectation : Bool :=
     accepted (Term.sort (SortLevel.concrete 1)) Term.hole
+
+// --- The universe of a Pi/Forall is the MAX of its components ---
+//
+// These pin W1.2. They cannot be written with `accepted`: `type_check`'s
+// `Term.pi`/`Term.forall` arms ignore the expectation completely and answer
+// the universe they computed, so every well-formed Pi is accepted against
+// EVERY expectation and no accept/reject pair can tell a `max` from a flat
+// `Term.type_ 1`. They read the inferred type instead, through the
+// harness's `inferred_sort_level`.
+//
+// Every level below is one higher than the level its component is written
+// at, and that is the rule rather than an off-by-one: a component's
+// contribution is the sort of its TYPE, and `Sort n : Sort (n+1)`. So
+// `Term.type_ 1` (Type) contributes 2, `Term.type_ 3` (Sort 3)
+// contributes 4, and the Pi over both lives at 4.
+
+/// The codomain decides when it is the higher one: `(Type) -> Sort 3`
+/// lives at 4, not at the domain's 2.
+#[test]
+def pi_universe_is_the_max_of_its_parts : Bool :=
+    infers_sort_at (Term.pi (Term.type_ 1) (Term.type_ 3)) 4
+
+/// The domain decides when IT is the higher one -- the mirror image, so
+/// neither "always the first" nor "always the second" survives both pins.
+/// `(Sort 3) -> Sort 2`: the domain contributes 4, the codomain 3.
+#[test]
+def pi_universe_is_the_max_not_the_last_part : Bool :=
+    infers_sort_at (Term.pi (Term.type_ 3) (Term.type_ 2)) 4
+
+/// `Forall` is the same rule, pinned separately because it is a separate
+/// arm -- a `max` added to one arm and not the other is exactly the shape
+/// of half-fix this file exists to catch.
+#[test]
+def forall_universe_is_the_max_of_its_parts : Bool :=
+    infers_sort_at (Term.forall (DebugName.named (Identifier.id "a")) (Term.type_ 1) (Term.type_ 3)) 4
+
+/// A component that is not a known sort contributes a flat 1, which is
+/// what both arms answered unconditionally before W1.2. This is the pin
+/// that says the `max` did not quietly become "the sort of anything,
+/// defaulting to 0" -- a hole at both ends must still land at 1.
+#[test]
+def pi_universe_defaults_an_unknown_component_to_1 : Bool :=
+    infers_sort_at (Term.pi Term.hole Term.hole) 1
+
+/// `Prop` at both ends: both components contribute 1 (`Prop : Type`), so
+/// the Pi is at 1 -- the level W1.2 must NOT move, since every `Pi` in the
+/// corpus today has components at exactly this level.
+#[test]
+def pi_universe_of_prop_components_stays_at_1 : Bool :=
+    infers_sort_at (Term.pi (Term.type_ 0) (Term.type_ 0)) 1
