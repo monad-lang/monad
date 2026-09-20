@@ -6,6 +6,7 @@ use std::io {file_exists, is_dir, list_dir, println, read_file}
 use std::bench {now, report, report_since, since}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lib::types {
+  module_path_to_string_colon,
   Class, ClassDef, Decl, Def, Identifier, Instance, InductConstructor, Inductive, Infix,
   LoadedModules, LocalScope, LocalVar, ModulePath, NamePath, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
@@ -703,7 +704,10 @@ def collect_dep_module_infos (to_visit : List PendingModule) (visiting : List Mo
                 // later importing file re-print; acceptable -- verbose
                 // output is already per-decl noisy in `check`, and it
                 // gives per-file progress there.)
-                module_line verbose (Show.show head);
+                // `::`-joined: this line is read by a person, and `::`
+                // is how they wrote the module path. `Show ModulePath`
+                // renders the dot-joined INTERNAL spelling.
+                module_line verbose (module_path_to_string_colon head);
                 // Cached: within one `check`/`compile` run the same
                 // dependency is reached once per importing file, and
                 // re-reading + re-parsing it each time is the dominant

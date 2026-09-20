@@ -112,7 +112,8 @@ pub def gap_paths : List String :=
      "lang/src/json.mo",
      "examples/structs.mo",
      "examples/indexed_monads.mo",
-     "examples/state_monad.mo"]
+     "examples/state_monad.mo",
+     "std/src/qualified_ref_tests.mo"]
 
 /// The distinguishing substring of each file's own known error.
 ///
@@ -129,7 +130,8 @@ pub def gap_causes : List String :=
      "does not typecheck",
      "does not typecheck",
      "no instance found for `Monad.pure`",
-     "no instance found for `MonadState.modify_get`"]
+     "no instance found for `MonadState.modify_get`",
+     "does not typecheck"]
 
 /// Why each gap is open, and what closes it.
 pub def gap_reasons : List String :=
@@ -260,7 +262,27 @@ pub def gap_reasons : List String :=
      // ELEMENT type, and `MonadState`'s carrier is likewise not
      // recoverable from the call's own arguments.
      "no carrier-revealing argument to infer an instance from",
-     "no carrier-revealing argument to infer an instance from"]
+     "no carrier-revealing argument to infer an instance from",
+     // A qualified reference in TARGET position cannot resolve
+     // self-hosted, and the blocker is structural rather than a missing
+     // case. `build_scope_from_decls` (`lang/scope.mo`) takes ONE
+     // `ModulePath` and the pipeline hands it the TARGET's, because
+     // `flatten_visible_module_decls` (`lang/module.mo`) has already
+     // merged every module's decls into a single list -- as its own doc
+     // comment puts it, "each decl's owning module is no longer
+     // recoverable". Every dependency def therefore registers with the
+     // CONSUMER's module path, so `find_def_by_module_and_name`'s pair
+     // match (name == `qn.qname` AND module == `qn.qmod`) can never
+     // succeed across a module boundary, however the flattened name is
+     // re-split. The DEPENDENCY-position half of the same feature IS
+     // fixed (the reference and definition now agree on one symbol
+     // spelling, so it no longer dies in `llc`), and the Rust host runs
+     // all four of this file's tests. Closed by: routing the pipeline
+     // through `build_scope_from_modules` (which preserves per-module
+     // identity but is not the path taken today), or carrying each
+     // decl's owning module through the flatten -- both touch where
+     // `priv` is enforced.",
+     "the flatten drops each decl's owning module, so a cross-module qualified ref cannot pair-match"]
 
 #[partial]
 def gap_len (xs : List String) : I64 :=

@@ -179,6 +179,12 @@ gap_files=(
   examples/structs.mo
   examples/indexed_monads.mo
   examples/state_monad.mo
+  # Qualified references in TARGET position do not resolve self-hosted:
+  # the flatten drops each decl's owning module, so the pair match
+  # cannot succeed across a module boundary (see cli/src/test_gaps.mo
+  # for the full reason). The Rust runner below still runs all four of
+  # its tests, and the DEPENDENCY-position half of the feature works.
+  std/src/qualified_ref_tests.mo
 )
 
 out="${TMPDIR:-/tmp}/monad-bootstrap-ci"

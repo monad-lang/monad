@@ -50,7 +50,7 @@ use lib::types {
 // the duplicate-top-level-name collision item 18 records). The grammar no
 // longer resolves names at all, so nothing flows the other way: it
 // imports `lower_parse_do` from here and that is the only edge.
-use lib::types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span_is_unknown, show_name_path, show_operator, show_qualified_name}
+use lib::types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span_is_unknown, show_module_path, show_name_path, show_operator}
 // The monomorphic string map, from the leaf module -- never `Map.lookup`,
 // whose generic dispatch can resolve to the wrong instance
 // (`lang/codegen/util.mo` documents the live bug).
@@ -218,6 +218,16 @@ def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64
 def show_name_path_dotted (np : NamePath) : String := show_name_path np
 
 
+/// A qualified reference rendered the way codegen spells a DEFINITION:
+/// dotted module half, `::`, dotted name half (`std.process::process_id`).
+/// Mirrors `qualified_def_name_str` (`lang/codegen/qualify.mo`) -- the two
+/// must stay in step, which `emit.mo`'s `gate_result` check assumes.
+#[partial]
+def qualified_ref_symbol (qn : QualifiedName) : String :=
+    String.concat (show_module_path qn.qmod)
+        (String.concat "::" (show_name_path qn.qname))
+
+
 /// Faithful to `lang/parser.mo`'s original, INCLUDING the `nop` arm: an
 /// operator keeps its spelling, because `resolve_infix_decls`
 /// (`lang/scope.mo`) rewrites placeholder operator vars into their real
@@ -227,7 +237,15 @@ def show_name_path_dotted (np : NamePath) : String := show_name_path np
 def name_ref_to_string (nref : NameRef) : Option String := match nref {
     NameRef.nid id => Option.some (show_identifier id),
     NameRef.nnp np => Option.some (show_name_path_dotted np),
-    NameRef.nqn qn => Option.some (show_qualified_name qn),
+    // The DEF-side symbol convention (`show_module_path` dotted, then
+    // `::`, then the dotted name half) -- NOT `show_qualified_name`,
+    // which renders the module half `::`-joined to match the Rust host's
+    // `Display` (see its doc comment in `lang/types.mo`) and is what
+    // diagnostics should keep showing. A reference must agree with what
+    // codegen emits for the DEFINITION (`qualified_def_name_str`,
+    // `lang/codegen/qualify.mo`), or the call is emitted under a symbol
+    // nothing defines and `llc` fails with "use of undefined value".
+    NameRef.nqn qn => Option.some (qualified_ref_symbol qn),
     NameRef.nop op => Option.some (show_operator op),
 }
 

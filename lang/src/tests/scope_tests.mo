@@ -759,3 +759,72 @@ def test_dict_param_type_is_hole : Bool :=
                 _ => false,
             },
     }
+
+// --- Module-qualified references (`NameRef.nqn`) ---
+//
+// These are the first tests anywhere to exercise `nqn`. The parser builds
+// one, but `lower_parse.mo` renders it to a flat `DebugName` string and
+// every checker call site rebuilt it as a bare `nid` -- so
+// `resolve_name_in_scope`'s `nqn` arm was unreachable and a qualified
+// reference always reported `unknown variable`.
+
+/// A `nqn` resolves by matching (module, name) as a PAIR: a def declared
+/// bare (`process_id` in `std::process`) carries no prefix in its own
+/// registered name, so the flattened-key lookup misses and the by-module
+/// fallback is what has to answer.
+#[test]
+def test_scope_resolve_qualified_name : Bool :=
+    let mod_path : ModulePath := ModulePath.mp
+        (List.cons (Identifier.id "std") (List.cons (Identifier.id "process") List.empty)) in
+    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "process_id") List.empty) in
+    let def_entry : ScopeDef := {
+        name := def_name,
+        module := mod_path,
+        sig := Term.hole,
+        body := Term.hole,
+        vis := Visibility.package_private,
+    } in
+    let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
+    let s : Scope := {
+        module_id := ModulePath.mp (List.cons (Identifier.id "Main") List.empty),
+        scope := sd,
+        parent := Option.none,
+    } in
+    let qn : QualifiedName := { qmod := mod_path, qname := def_name } in
+    let empty_parent : Option LocalScope := Option.none in
+    let locals : LocalScope := { vars := List.empty, parent := empty_parent } in
+    match scope_resolve_name (NameRef.nqn qn) s locals {
+        ok found => true,
+        err _ => false
+    }
+
+/// The MODULE half must be load-bearing: a qualified reference naming the
+/// right def in the WRONG module must not resolve, or the qualifier is
+/// decoration and a typo silently becomes a working reference.
+#[test]
+def test_scope_qualified_wrong_module_does_not_resolve : Bool :=
+    let mod_path : ModulePath := ModulePath.mp
+        (List.cons (Identifier.id "std") (List.cons (Identifier.id "process") List.empty)) in
+    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "process_id") List.empty) in
+    let def_entry : ScopeDef := {
+        name := def_name,
+        module := mod_path,
+        sig := Term.hole,
+        body := Term.hole,
+        vis := Visibility.package_private,
+    } in
+    let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
+    let s : Scope := {
+        module_id := ModulePath.mp (List.cons (Identifier.id "Main") List.empty),
+        scope := sd,
+        parent := Option.none,
+    } in
+    let wrong : ModulePath := ModulePath.mp
+        (List.cons (Identifier.id "std") (List.cons (Identifier.id "nosuch") List.empty)) in
+    let qn : QualifiedName := { qmod := wrong, qname := def_name } in
+    let empty_parent : Option LocalScope := Option.none in
+    let locals : LocalScope := { vars := List.empty, parent := empty_parent } in
+    match scope_resolve_name (NameRef.nqn qn) s locals {
+        ok _ => false,
+        err _ => true
+    }

@@ -192,11 +192,15 @@ pub def show_qualified_name (qn : QualifiedName) : String :=
     String.concat (module_path_to_string_colon qn.qmod)
         (String.concat "::" (show_name_path qn.qname))
 
-/// The `::`-joined module-half rendering `show_qualified_name` builds
-/// on — a local helper, NOT the general `module_path_to_string`
-/// (lang/parser.mo), which exists for use-decl rendering and error
-/// messages and would make a circular parser->types import.
-def module_path_to_string_colon (mp : ModulePath) : String := match mp {
+/// A module path spelled the way SOURCE spells it: `::`-joined
+/// (`std::process`). This is the right rendering for anything a user
+/// reads -- diagnostics, verbose progress lines, `use` decls -- because
+/// `::` is what they wrote. `show_module_path`'s dot-joined form is the
+/// INTERNAL spelling (symbol names, map keys) and should not surface.
+///
+/// Distinct from the general `module_path_to_string` (lang/parser.mo)
+/// only to avoid a circular parser->types import; the two agree.
+pub def module_path_to_string_colon (mp : ModulePath) : String := match mp {
     ModulePath.mp ids => List.intercalate "::" (List.map show_identifier ids),
 }
 

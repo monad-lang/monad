@@ -7,6 +7,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -1217,7 +1218,41 @@ void* monad_build_args(int argc, char** argv) {
 
 int64_t main_monad(void* args);
 
+/* Raise the stack limit before running any Monad code.
+ *
+ * The compiler recurses deeply over the module graph and over terms --
+ * deeply enough that compiling a large program (the compiler itself, at
+ * ~140 modules) overflows the usual 8 MB stack and dies with a bare
+ * SIGSEGV: no diagnostic, no stage name, just exit 139. `devenv.nix`'s
+ * bootstrap task has carried `ulimit -s 131072` for exactly this reason,
+ * but that only helps the task; anyone invoking a compiled binary
+ * directly got the silent crash.
+ *
+ * Raising RLIMIT_STACK here makes the binary self-sufficient. Only the
+ * SOFT limit is raised, and only up to whatever hard limit the system
+ * allows, so this can never exceed what the user's environment permits.
+ * Failure is ignored deliberately: a lower ceiling is the environment's
+ * decision, and the program should still run for inputs that fit.
+ *
+ * Note this must happen before the deep recursion starts, and cannot be
+ * done from Monad code -- by the time `main_monad` runs it is too late
+ * to grow the stack the current thread is already using. */
+static void raise_stack_limit(void) {
+    const rlim_t wanted = (rlim_t)128 * 1024 * 1024; /* matches devenv.nix */
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) != 0) return;
+    if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < wanted) {
+        rlim_t target = wanted;
+        if (rl.rlim_max != RLIM_INFINITY && target > rl.rlim_max) target = rl.rlim_max;
+        if (target > rl.rlim_cur) {
+            rl.rlim_cur = target;
+            setrlimit(RLIMIT_STACK, &rl);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
+    raise_stack_limit();
     GC_INIT();
     /* Exclude argv[0] (the binary's own path) -- matches the
        interpreter's own `run <file> <args...>` semantics (args passed to

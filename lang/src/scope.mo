@@ -899,11 +899,106 @@ def resolve_name_in_locals (nref : NameRef) (locals : LocalScope) : Option Scope
         NameRef.nop _ => Option.none
     }
 
+/// Index just past the LAST `::` in `s`, or -1 if there is none.
+///
+/// Deliberately ignores `.`: the name half of a qualified reference may
+/// itself be dotted (`std::io::IO.println`), and that half must survive
+/// intact. `text_after_last_sep` cuts at the last `.` OR `::`, which is
+/// the right rule for a bare constructor name and the wrong one here.
+#[partial]
+def last_colon_colon (s : String) (i : I64) (best : I64) : I64 :=
+    if i + 1 < String.length s then
+        match String.get s i {
+            Option.some b =>
+                if U8.beq b 58u8 then
+                    match String.get s (i + 1) {
+                        Option.some b2 =>
+                            if U8.beq b2 58u8
+                            then last_colon_colon s (i + 2) (i + 2)
+                            else last_colon_colon s (i + 1) best,
+                        Option.none => best,
+                    }
+                else last_colon_colon s (i + 1) best,
+            Option.none => best,
+        }
+    else best
+
+/// Split a `mod::name` spelling back into a `QualifiedName`.
+///
+/// The parser builds a real `NameRef.nqn`, but `lower_parse.mo` renders
+/// it to a flat `DebugName` string and every checker call site rebuilds
+/// it as a bare `nid` -- so the `nqn` arm below was unreachable and a
+/// qualified reference always reported `unknown variable`. Recovering
+/// the structure here makes that arm live for all of them at once
+/// (`infer.mo`'s four sites, `lower_core_ir.mo`, `module.mo`).
+def split_qualified_identifier (i : Identifier) : Option QualifiedName :=
+    let text : String := show_identifier i in
+    let cut : I64 := last_colon_colon text 0 (0 - 1) in
+    if cut < 3 then Option.none
+    else
+        // `String.slice` takes a LENGTH, not an end index; `cut` is the
+        // index just past the `::`, so the module half is `cut - 2` long.
+        let module_text : String := String.slice text 0 (cut - 2) in
+        let name_text : String := String.drop cut text in
+        if String.beq module_text "" then Option.none
+        else if String.beq name_text "" then Option.none
+        else
+            let qmod : ModulePath := ModulePath.mp (split_ids module_text 58u8 true) in
+            let qname : NamePath := NamePath.npath (split_ids name_text 46u8 false) in
+            // Annotated local, NOT a bare `Option.some { .. }`: a struct
+            // literal in argument position never desugars to a
+            // constructor and silently compiles to a void placeholder
+            // (`le_struct_lit_survived` rejects it outright).
+            let qn : QualifiedName := { qmod := qmod, qname := qname } in
+            Option.some qn
+
+/// Split `s` on a single-byte separator (`.`) or a `::` pair, into
+/// `Identifier`s. Written here rather than reused because the corpus has
+/// no general string-splitting helper at all.
+#[partial]
+def split_ids (s : String) (sep : U8) (pair : Bool) : List Identifier :=
+    split_ids_go s sep pair 0 0 List.empty
+
+#[partial]
+def split_ids_go (s : String) (sep : U8) (pair : Bool) (i : I64) (start : I64) (acc : List Identifier) : List Identifier :=
+    if i < String.length s then
+        match String.get s i {
+            Option.some b =>
+                if U8.beq b sep then
+                    let width : I64 := if pair then 2 else 1 in
+                    let seg : String := String.slice s start (i - start) in
+                    split_ids_go s sep pair (i + width) (i + width) (List.cons (Identifier.id seg) acc)
+                else split_ids_go s sep pair (i + 1) start acc,
+            Option.none => finish_split_ids s start acc,
+        }
+    else finish_split_ids s start acc
+
+#[partial]
+def finish_split_ids (s : String) (start : I64) (acc : List Identifier) : List Identifier :=
+    let seg : String := String.drop start s in
+    List.reverse (List.cons (Identifier.id seg) acc)
+
 def resolve_name_in_scope (nref : NameRef) (s : Scope) : Result ScopeError ScopeDef :=
     match nref {
+        // A `::` in the spelling MAY be a `NameRef.nqn` that the parse
+        // lowering flattened to a string -- but it may equally be a
+        // compiler-MINTED name (`with_module_prefix` mangles a promoted
+        // instance method to `lang.codegen.ctors::BEq_I64_beq`), which
+        // is registered under that whole string as its own key. So try
+        // the plain lookup FIRST and only fall back to re-splitting:
+        // re-splitting eagerly sent minted instance methods down the
+        // qualified path and broke class resolution
+        // (`no instance found for BEq.beq`).
         NameRef.nid i =>
             let name : NamePath := NamePath.npath (List.cons i List.empty) in
-            resolve_def_in_scope_by_name name s,
+            match resolve_def_in_scope_by_name name s {
+                Result.ok d => Result.ok d,
+                Result.err e =>
+                    match split_qualified_identifier i {
+                        Option.some qn => resolve_qualified_in_scope qn s,
+                        Option.none => Result.err e,
+                    },
+            },
         NameRef.nnp np =>
             resolve_def_in_scope_by_name np s,
         // A module-qualified ref is always a global. First flatten
@@ -912,13 +1007,21 @@ def resolve_name_in_scope (nref : NameRef) (s : Scope) : Result ScopeError Scope
         // that misses (the common cross-module case, where the def's
         // own name carries no prefix), match on the pair instead --
         // registered name == `qn.qname` and owning module == `qn.qmod`.
-        NameRef.nqn qn =>
-            match resolve_def_in_scope_by_name (qualified_name_to_name_path qn) s {
-                Result.ok d => Result.ok d,
-                Result.err _ => resolve_def_in_scope_by_module qn s,
-            },
+        NameRef.nqn qn => resolve_qualified_in_scope qn s,
         NameRef.nop _ =>
             err (ScopeError.name_not_found nref)
+    }
+
+/// Resolve a `QualifiedName`: first flatten `mod::name` to the same
+/// `.`-rendered key a dotted-declared def registers under
+/// (`IO.file_exists` in `std/io.mo`); when that misses (the common
+/// cross-module case, where the def's own name carries no prefix),
+/// match on the pair instead -- registered name == `qn.qname` and
+/// owning module == `qn.qmod`.
+def resolve_qualified_in_scope (qn : QualifiedName) (s : Scope) : Result ScopeError ScopeDef :=
+    match resolve_def_in_scope_by_name (qualified_name_to_name_path qn) s {
+        Result.ok d => Result.ok d,
+        Result.err _ => resolve_def_in_scope_by_module qn s,
     }
 
 /// `mod::name` flattened to the `.`-rendered `NamePath` key a
@@ -6450,3 +6553,92 @@ def test_class_method_var_names_includes_bare_domains : Bool :=
     && id_member (Identifier.id "A") names
     && id_member (Identifier.id "B") names
 
+
+// --- Qualified-name re-split (`split_qualified_identifier`) ---
+//
+// `lower_parse.mo` flattens a parsed `NameRef.nqn` to a `DebugName`
+// string and every checker call site rebuilds it as a bare `nid`, so
+// `resolve_name_in_scope`'s `nqn` arm was unreachable and every
+// qualified reference reported `unknown variable`. These pin the
+// recovery that makes that arm live.
+
+#[test]
+def test_split_qualified_simple : Bool :=
+    match split_qualified_identifier (Identifier.id "std::process::process_id") {
+        Option.some qn =>
+            String.beq (show_module_path qn.qmod) "std.process"
+                && String.beq (show_name_path qn.qname) "process_id",
+        Option.none => false,
+    }
+
+/// The NAME half may itself be dotted (`IO.println` is how std declares
+/// most of its defs), and it must survive intact -- splitting on the
+/// last separator of ANY kind would cut it down to `println`.
+#[test]
+def test_split_qualified_keeps_dotted_name_half : Bool :=
+    match split_qualified_identifier (Identifier.id "std::io::IO.println") {
+        Option.some qn =>
+            String.beq (show_module_path qn.qmod) "std.io"
+                && String.beq (show_name_path qn.qname) "IO.println",
+        Option.none => false,
+    }
+
+/// A bare name has no `::` and must not be mistaken for a qualified one.
+#[test]
+def test_split_qualified_bare_is_none : Bool :=
+    match split_qualified_identifier (Identifier.id "process_id") {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+/// A compiler-MINTED name (`qualify.mo`'s `qualified_def_name_str`) has a
+/// DOTTED module half, unlike a source spelling's `::`-joined one. Both
+/// must recover the same `QualifiedName`, since after this branch the
+/// parse lowering renders references in the minted convention too.
+#[test]
+def test_split_qualified_accepts_minted_dotted_module : Bool :=
+    match split_qualified_identifier (Identifier.id "std.process::process_id") {
+        Option.some qn =>
+            String.beq (show_module_path qn.qmod) "std.process"
+                && String.beq (show_name_path qn.qname) "process_id",
+        Option.none => false,
+    }
+
+/// The lowering now renders references in the DEF-side convention, whose
+/// module half is DOTTED (`std.process::process_id`). Splitting that half
+/// on `::` yields one segment, but `show_module_path` re-joins segments
+/// with `.`, so the rendered comparison in `find_def_by_module_and_name`
+/// still matches -- this pins that equivalence rather than leaving it to
+/// luck.
+#[test]
+def test_split_qualified_module_renders_back : Bool :=
+    match split_qualified_identifier (Identifier.id "std.process::process_id") {
+        Option.some qn => String.beq (show_module_path qn.qmod) "std.process",
+        Option.none => false,
+    }
+
+/// End-to-end of the `nid` arm: a flattened qualified reference, in the
+/// exact DEF-side spelling the parse lowering now emits, must resolve
+/// through the re-split when the def's own registered name is bare.
+#[test]
+def test_nid_arm_resolves_flattened_qualified : Bool :=
+    let mod_path : ModulePath := ModulePath.mp
+        (List.cons (Identifier.id "std") (List.cons (Identifier.id "process") List.empty)) in
+    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "process_id") List.empty) in
+    let def_entry : ScopeDef := {
+        name := def_name,
+        module := mod_path,
+        sig := Term.hole,
+        body := Term.hole,
+        vis := Visibility.package_private,
+    } in
+    let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
+    let s : Scope := {
+        module_id := ModulePath.mp (List.cons (Identifier.id "Main") List.empty),
+        scope := sd,
+        parent := Option.none,
+    } in
+    match resolve_name_in_scope (NameRef.nid (Identifier.id "std.process::process_id")) s {
+        Result.ok _ => true,
+        Result.err _ => false,
+    }

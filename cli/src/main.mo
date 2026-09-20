@@ -120,6 +120,16 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
 /// own doc comment) -- that is NOT a second copy of this gate.
 #[partial]
 def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) : IO I64 {
+    // Checked HERE, before anything is printed: a missing input is not a
+    // load failure to be recovered from, and reporting it as one
+    // ("FAILED at stage: load (could not load dependencies: ...)") buries
+    // the actual problem under a stage name. `compile_file_codegen` has
+    // the same guard for its own direct callers.
+    let input_exists : Bool <- file_exists (Path.path file_path);
+    if not input_exists then do {
+        println ("error: file not found: " ++ file_path);
+        return 1
+    } else do {
     let total_start : I64 <- Bench.now;
     println <| "compiling: " ++ file_path ++ " to " ++ Path.to_string (Path.join output_dir output_name);
     stage verbose "load + elaborate modules";
@@ -170,6 +180,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
             } else return unit;
             return link_result
         },
+    }
     }
 }
 
@@ -340,6 +351,19 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
     // every successful compile. `Option.none` (the gate's own load
     // failed) falls back to loading here, so the error path still
     // produces the same rendered diagnostic it always did.
+    // Fail FAST on a missing input. Without this the load below fails,
+    // the error path falls back to "parse without dependencies for error
+    // reporting", `read_file` on a nonexistent path yields empty text,
+    // the lenient parser happily "succeeds" with an EMPTY decl list, and
+    // the compile proceeds -- writing IR and invoking the linker for a
+    // file that does not exist. The linker error that eventually appears
+    // names an object file, not the missing source, which is a poor
+    // diagnostic for the simplest possible mistake.
+    let input_exists : Bool <- file_exists (Path.path file_path);
+    if not input_exists then do {
+        println ("error: file not found: " ++ file_path);
+        return 1
+    } else do {
     let res : Result String LoadedModules <-
         match preloaded {
             Option.some already => do { return (Result.ok already) },
@@ -401,6 +425,7 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
                 }
             }
         }
+    }
     }
 }
 

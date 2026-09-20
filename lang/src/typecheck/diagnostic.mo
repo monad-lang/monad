@@ -22,7 +22,13 @@ use lib::pretty {show_term}
 #[partial]
 def name_ref_to_string (n : NameRef) : String :=
 	match n {
-		NameRef.nid id => show_identifier id,
+		// A `nid` may hold a FLATTENED qualified reference: the parse
+		// lowering renders a `nqn` in the def-side symbol convention
+		// (`std.process::process_id`) so references and definitions agree
+		// for codegen, and the checker rebuilds it as a bare `nid`.
+		// Printing that verbatim shows an internal spelling the user
+		// never wrote -- restore the SOURCE form for display.
+		NameRef.nid id => show_source_spelling id,
 		NameRef.nnp np => show_name_path np,
 		NameRef.nqn qn => show_qualified_name qn,
 		NameRef.nop op => show_operator op,
@@ -97,3 +103,66 @@ def test_render_type_error_no_path : Bool :=
 	let rendered : String := render_type_error "my_def" Option.none (TypeError.custom "bad thing") in
 	String.contains rendered "error: bad thing in my_def"
 		&& String.contains rendered "-->"
+
+
+/// An identifier as the user would have written it. Only a flattened
+/// qualified reference differs: its module half is dot-joined internally
+/// and `::`-joined in source. Everything else passes through untouched.
+#[partial]
+def show_source_spelling (id : Identifier) : String :=
+	let text : String := show_identifier id in
+	let cut : I64 := source_spelling_sep text 0 in
+	if cut < 0 then text
+	else String.concat (dots_to_colons (String.slice text 0 cut)) (String.drop cut text)
+
+/// Index of the `::` separating the module half from the name half, or
+/// -1 when there is none. Only the FIRST `::` matters: a minted name has
+/// exactly one, and the name half's own `.`s must be left alone.
+#[partial]
+def source_spelling_sep (s : String) (i : I64) : I64 :=
+	if i + 1 < String.length s then
+		if String.beq (String.slice s i 2) "::" then i
+		else source_spelling_sep s (i + 1)
+	else (0 - 1)
+
+/// Rewrite `.` to `::` in a module half. Byte-wise rebuild rather than
+/// split+intercalate: the list-accumulator form tripped the self-hosted
+/// checker (`expected (List String), found (List A)`), and this needs no
+/// list at all.
+#[partial]
+def dots_to_colons (s : String) : String := dots_to_colons_go s 0 ""
+
+#[partial]
+def dots_to_colons_go (s : String) (i : I64) (acc : String) : String :=
+	if i < String.length s then
+		match String.get s i {
+			Option.some b =>
+				if U8.beq b 46u8
+				then dots_to_colons_go s (i + 1) (String.concat acc "::")
+				else dots_to_colons_go s (i + 1) (String.concat acc (String.slice s i 1)),
+			Option.none => acc,
+		}
+	else acc
+
+/// A flattened qualified reference prints as the user WROTE it: module
+/// half `::`-joined, not the dot-joined internal symbol spelling.
+#[test]
+def test_flattened_qualified_prints_source_spelling : Bool :=
+	String.beq
+		(name_ref_to_string (NameRef.nid (Identifier.id "std.process::process_id")))
+		"std::process::process_id"
+
+/// The NAME half keeps its dots -- `IO.println` is a dotted def name,
+/// not a module path, and must not become `IO::println`.
+#[test]
+def test_flattened_qualified_keeps_dotted_name_half : Bool :=
+	String.beq
+		(name_ref_to_string (NameRef.nid (Identifier.id "std.io::IO.println")))
+		"std::io::IO.println"
+
+/// An ordinary dotted name has no `::` and passes through untouched.
+#[test]
+def test_plain_dotted_name_is_unchanged : Bool :=
+	String.beq
+		(name_ref_to_string (NameRef.nid (Identifier.id "List.cons")))
+		"List.cons"
