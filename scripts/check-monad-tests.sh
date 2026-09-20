@@ -30,8 +30,9 @@
 # Then the same binary CHECKS the same corpus, which is the one gate here
 # that is not about tests: the pre-commit hook's `monad check` is the Rust
 # host, so the self-hosted checker was never run over the corpus by CI at
-# all. See the block below for the six known check-gap files and how their
-# error counts are held fixed.
+# all. See `check_gap_files` below for the known check-gap files and how
+# their error counts are held fixed (the count is deliberately not
+# repeated here -- it went stale the first time the list changed).
 set -euo pipefail
 
 # The 5 files the self-hosted runner cannot build a working driver for
@@ -255,6 +256,12 @@ check_gap_files=(
   examples/structs.mo:1
   lang/src/json.mo:3
   std/src/concurrent/combine_test.mo:1
+  # Same cause as its `gap_files` entry: a qualified reference in TARGET
+  # position cannot resolve self-hosted, because the flatten drops each
+  # decl's owning module (see cli/src/test_gaps.mo for the full reason).
+  # Two of its four tests use one; the other two resolve through the
+  # target's own module and check clean.
+  std/src/qualified_ref_tests.mo:2
 )
 
 check_targets=()

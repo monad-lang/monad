@@ -203,7 +203,13 @@ impl NameRef {
     match (self, other) {
       (NameRef::Qn(a), NameRef::Qn(b)) => a == b,
       (NameRef::Qn(_), _) | (_, NameRef::Qn(_)) => false,
-      (a, b) if a.is_name() && b.is_name() => a.to_name_path() == b.to_name_path(),
+      // Guarded on SELF only, matching the code this replaced. The
+      // asymmetry is deliberate: `to_name_path()` is `Some` for `Macro`
+      // too, so an `Np` can equal a `Macro` of the same spelling.
+      // Requiring `other.is_name()` as well would quietly narrow that,
+      // and macro expansion is not guaranteed to have run everywhere
+      // these comparisons are reached.
+      (a, b) if a.is_name() => a.to_name_path() == b.to_name_path(),
       (a, b) => a == b,
     }
   }
