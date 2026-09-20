@@ -49,8 +49,9 @@
 /// someone will look for it first.
 use lib::types {
   Con, DebugName, FieldPattern, Identifier, Literal, Location, MatchCase,
-  Native, StructLitField, Term,
+  ModulePath, Native, Param, Scope, StructLitField, Term,
 }
+use lib::scope {find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor}
 use std::list {length}
 
 // ─── Use counting ──────────────────────────────────────────────────
@@ -190,6 +191,18 @@ pub struct BinderUse {
     kind : BinderKind,
     typ : Term,
     count : I64,
+    /// For a `bk_match` binder, the constructor whose pattern bound it;
+    /// `Identifier.id ""` for a `bk_lam` one. Paired with `pos`, this is
+    /// everything `attribute_binder_types` needs to look the real type
+    /// up later, without this walk taking a `Scope`.
+    ctor : Identifier := Identifier.id "",
+    /// Position of this binder within that constructor's arguments, in
+    /// written order, 0-based. `-1` for a `bk_lam` binder.
+    ///
+    /// NOT the de-Bruijn index -- pattern binders are pushed left to
+    /// right, so the binder at written position `i` of `n` sits at index
+    /// `n - 1 - i` inside the body. `collect_case_args` computes both.
+    pos : I64 := 0 - 1,
 }
 
 /// Typed accessors, one per field this module's own tests read.
@@ -208,6 +221,10 @@ pub def BinderUse.name (u : BinderUse) : Identifier := u.name
 pub def BinderUse.typ (u : BinderUse) : Term := u.typ
 
 pub def BinderUse.kind (u : BinderUse) : BinderKind := u.kind
+
+pub def BinderUse.ctor (u : BinderUse) : Identifier := u.ctor
+
+pub def BinderUse.pos (u : BinderUse) : I64 := u.pos
 
 /// `DebugName` -> a printable identifier. An unnamed binder reports as
 /// `_`, matching how the corpus already spells a binder nobody reads.
@@ -244,7 +261,9 @@ def collect_uses_term (t : Term) (acc : List BinderUse) : List BinderUse :=
                 { name := binder_name dbg,
                   kind := BinderKind.bk_lam,
                   typ := typ,
-                  count := uses_of 0 body } in
+                  count := uses_of 0 body,
+                  ctor := Identifier.id "",
+                  pos := 0 - 1 } in
             collect_uses_term body (List.cons u acc),
         // A `forall` binds a TYPE variable. It is erased before run time,
         // so it is not a runtime binder and never owns memory -- walk
@@ -287,9 +306,9 @@ def collect_uses_cases (cases : List MatchCase) (acc : List BinderUse) : List Bi
 #[partial]
 def collect_uses_case (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
     match c {
-        MatchCase.mc _name args body _fp =>
+        MatchCase.mc name args body _fp =>
             let n : I64 := List.length args in
-            let with_args : List BinderUse := collect_case_args args 0 n body acc in
+            let with_args : List BinderUse := collect_case_args name args 0 n body acc in
             collect_uses_term body with_args,
     }
 
@@ -302,7 +321,7 @@ def collect_uses_case (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
 /// binder's count to a different binder, which is why it is spelled out
 /// rather than inlined.
 #[partial]
-def collect_case_args (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List BinderUse) : List BinderUse :=
+def collect_case_args (ctor : Identifier) (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List BinderUse) : List BinderUse :=
     match args {
         List.empty => acc,
         List.cons nm rest =>
@@ -311,8 +330,10 @@ def collect_case_args (args : List Identifier) (i : I64) (n : I64) (body : Term)
                 { name := nm,
                   kind := BinderKind.bk_match,
                   typ := Term.hole,
-                  count := uses_of idx body } in
-            collect_case_args rest (i + 1) n body (List.cons u acc),
+                  count := uses_of idx body,
+                  ctor := ctor,
+                  pos := i } in
+            collect_case_args ctor rest (i + 1) n body (List.cons u acc),
     }
 
 #[partial]
@@ -346,6 +367,102 @@ def collect_uses_opt_args (args : List (Option Term)) (acc : List BinderUse) : L
                 Option.some t => collect_uses_opt_args rest (collect_uses_term t acc),
                 Option.none => collect_uses_opt_args rest acc,
             },
+    }
+
+// ─── Type attribution for match-arm binders ────────────────────────
+//
+// `collect_binder_uses` is a pure function of the term, so a match-arm
+// binder comes back with `typ = Term.hole`: its type lives on the
+// matched constructor, and reaching that needs a `Scope`. This layer is
+// the scope-taking refinement, kept separate so the counter itself stays
+// pure and testable without one.
+//
+// It matters more than it looks. On the compiler's own closure, 723 of
+// the 2,419 over-used binders reported as unknown -- 30% of the number
+// the whole experiment turns on, unattributed.
+
+/// Fill in `typ` for every `bk_match` binder whose constructor resolves
+/// unambiguously. Leaves the rest at `Term.hole`.
+#[partial]
+pub def attribute_binder_types (s : Scope) (us : List BinderUse) : List BinderUse :=
+    List.reverse (attribute_binder_types_go s us List.empty)
+
+#[partial]
+def attribute_binder_types_go (s : Scope) (us : List BinderUse) (acc : List BinderUse) : List BinderUse :=
+    match us {
+        List.empty => acc,
+        List.cons u rest => attribute_binder_types_go s rest (List.cons (attribute_one s u) acc),
+    }
+
+/// One binder. A `bk_lam` binder already carries its annotation, and a
+/// `bk_match` binder is resolved through its constructor -- or left
+/// unknown, which is the honest answer whenever it cannot be.
+def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
+    match BinderUse.kind u {
+        BinderKind.bk_lam => u,
+        BinderKind.bk_match =>
+            match ctor_field_type s (BinderUse.ctor u) (BinderUse.pos u) {
+                Option.some t => { u with typ := t },
+                Option.none => u,
+            },
+    }
+
+/// The declared type of a constructor's `pos`-th field, when exactly one
+/// inductive in scope declares that constructor.
+///
+/// **Exactly one, deliberately.** There is no by-constructor index, only
+/// a scan, and a `struct`'s auto-generated constructor is always named
+/// `mk` (`build_scope_struct`, `lang/scope.mo`) -- so `mk` matches every
+/// struct in the whole loaded corpus. `scope_find_inductive_by_
+/// constructor` would hand back whichever hash-bucket order found first,
+/// which for `mk` is arbitrary, and scope.mo's own doc comment records
+/// that exact ambiguity silently returning the WRONG field elsewhere.
+/// Reporting `?` for an ambiguous constructor is a smaller lie than
+/// reporting a confident wrong type name, and it keeps the measurement's
+/// error in the one direction that cannot flatter the design.
+///
+/// The resolved type is the constructor's DECLARED field type, so a
+/// generic constructor's field comes back as its uninstantiated type
+/// parameter (`A`, not `ParseError`) -- instantiating it needs the
+/// scrutinee's type, which is inference, not lookup. For a report that
+/// groups by type head name that is the right trade: `A` is an honest
+/// answer, and the compiler's own constructors are overwhelmingly
+/// monomorphic.
+def ctor_field_type (s : Scope) (ctor : Identifier) (pos : I64) : Option Term :=
+    if I64.lt pos 0 then Option.none
+    else
+        let con_mp : ModulePath := ModulePath.mp (List.cons ctor List.empty) in
+        match scope_find_all_inductives_by_constructor con_mp s {
+            List.empty => Option.none,
+            List.cons ind rest =>
+                match rest {
+                    // Two or more inductives declare it -- see above.
+                    List.cons _ _ => Option.none,
+                    List.empty =>
+                        match find_constructor_in_inductive ind con_mp {
+                            Option.none => Option.none,
+                            Option.some c =>
+                                match c {
+                                    InductConstructor.mk _name params _typ => nth_param_type params pos,
+                                },
+                        },
+                },
+        }
+
+/// The `n`-th parameter's declared type. `Option.none` when the pattern
+/// binds more names than the constructor declares fields -- which the
+/// checker rejects, but this walk runs over elaborated terms and should
+/// not assume it never sees one.
+#[partial]
+def nth_param_type (params : List Param) (n : I64) : Option Term :=
+    match params {
+        List.empty => Option.none,
+        List.cons p rest =>
+            if I64.beq n 0 then
+                match p {
+                    Param.mk _name type_ _mult _default _attrs => Option.some type_,
+                }
+            else nth_param_type rest (n - 1),
     }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -494,3 +611,99 @@ def test_collect_skips_forall_binders : Bool :=
     let inner : Term := Term.lam dbg_x Term.hole Term.hole in
     let t : Term := Term.forall dbg_x (Term.type_ 0) inner in
     I64.beq (List.length (collect_binder_uses t)) 1
+
+// ─── Tests: type attribution ───────────────────────────────────────
+
+def empty_scope : Scope :=
+    { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
+      scope := scope_data_empty,
+      parent := Option.none }
+
+def probe_param (name : String) (ty : String) : Param :=
+    let ty_term : Term := Term.var (0 - 1) (DebugName.named (Identifier.id ty)) in
+    Param.mk (Identifier.id name) ty_term Multiplicity.many Option.none List.empty
+
+#[test]
+def test_nth_param_type_picks_the_right_slot : Bool :=
+    let ps : List Param :=
+        List.cons (probe_param "a" "I64") (List.cons (probe_param "b" "String") List.empty) in
+    match nth_param_type ps 1 {
+        Option.some t =>
+            match t {
+                Term.var _idx dbg =>
+                    match dbg {
+                        DebugName.named id => Similar.similar id (Identifier.id "String"),
+                        DebugName.unnamed => false,
+                    },
+                _ => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_nth_param_type_runs_off_the_end : Bool :=
+    // A pattern binding more names than the constructor declares. The
+    // checker rejects it, but this walk must not assume that.
+    match nth_param_type (List.cons (probe_param "a" "I64") List.empty) 3 {
+        Option.some _t => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_attribute_leaves_lambda_binders_alone : Bool :=
+    // A `bk_lam` binder already carries its annotation; attribution must
+    // not overwrite it with a constructor lookup that was never asked
+    // for.
+    let annotated : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64")) in
+    let u : BinderUse :=
+        { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := annotated,
+          count := 1, ctor := Identifier.id "", pos := 0 - 1 } in
+    match attribute_binder_types empty_scope (List.cons u List.empty) {
+        List.cons out _rest =>
+            match BinderUse.typ out {
+                Term.var _idx dbg =>
+                    match dbg {
+                        DebugName.named id => Similar.similar id (Identifier.id "I64"),
+                        DebugName.unnamed => false,
+                    },
+                _ => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_attribute_fails_closed_on_an_unknown_constructor : Bool :=
+    // Nothing in scope declares `nope`, so the binder stays unknown
+    // rather than acquiring a confident wrong type.
+    let u : BinderUse :=
+        { name := Identifier.id "f", kind := BinderKind.bk_match, typ := Term.hole,
+          count := 2, ctor := Identifier.id "nope", pos := 0 } in
+    match attribute_binder_types empty_scope (List.cons u List.empty) {
+        List.cons out _rest =>
+            match BinderUse.typ out {
+                Term.hole => true,
+                _ => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_collect_records_the_constructor_and_position : Bool :=
+    // The two fields attribution runs on. Position is written order,
+    // NOT the de-Bruijn index -- `b` is written second and sits at
+    // index 0.
+    let no_fp : Option FieldPattern := Option.none in
+    let args : List Identifier :=
+        List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty) in
+    let arm : MatchCase := MatchCase.mc (Identifier.id "pair") args (Term.var 0 dbg_x) no_fp in
+    let arms : List MatchCase := List.cons arm List.empty in
+    let t : Term := Term.lit (Literal.match_ Term.hole arms) in
+    match collect_binder_uses t {
+        List.cons u _rest =>
+            // The accumulator reverses, so `b` (written position 1)
+            // comes back first, and it is the one the body uses.
+            Similar.similar (BinderUse.ctor u) (Identifier.id "pair")
+                && I64.beq (BinderUse.pos u) 1
+                && I64.beq (BinderUse.count u) 1,
+        List.empty => false,
+    }

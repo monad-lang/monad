@@ -52,8 +52,8 @@
 use std::io {println}
 open IO {println}
 use lang::module {ElaboratedModules, elaborate_loaded_modules}
-use lang::types {Decl, Def, Term, show_identifier}
-use lang::typecheck::usage {BinderUse, collect_binder_uses}
+use lang::types {Decl, Def, Scope, Term, show_identifier}
+use lang::typecheck::usage {BinderUse, attribute_binder_types, collect_binder_uses}
 use std::list {length}
 
 // ─── Reading a binder's type ───────────────────────────────────────
@@ -152,6 +152,10 @@ pub struct Totals {
     /// the upper bound on the migration cost, and the milestone gate.
     many_non_copy : I64,
     by_type : List TypeTally,
+    /// Over-used match-arm binders whose type attribution FAILED,
+    /// tallied by the constructor that bound them. Makes the `?` row
+    /// legible instead of a shrug -- see `print_totals`.
+    unresolved : List TypeTally,
 }
 
 pub def Totals.binders (t : Totals) : I64 := t.binders
@@ -166,8 +170,26 @@ pub def Totals.many_non_copy (t : Totals) : I64 := t.many_non_copy
 
 pub def Totals.by_type (t : Totals) : List TypeTally := t.by_type
 
+pub def Totals.unresolved (t : Totals) : List TypeTally := t.unresolved
+
 def totals_empty : Totals :=
-    { binders := 0, zero := 0, one := 0, many := 0, many_non_copy := 0, by_type := List.empty }
+    { binders := 0, zero := 0, one := 0, many := 0, many_non_copy := 0,
+      by_type := List.empty, unresolved := List.empty }
+
+/// How an unattributed over-used binder is labelled in the residue
+/// table. A `bk_lam` binder carries no constructor, and its blank name
+/// read as a mystery row -- it is not one: it is a lambda whose
+/// elaborated annotation is a hole, a different gap from an ambiguous
+/// constructor and worth telling apart.
+def residue_key (u : BinderUse) : String :=
+    match BinderUse.kind u {
+        BinderKind.bk_lam => "(lambda, no annotation)",
+        // A blank name here is the third case, and a small one: a
+        // destructured parameter's field pattern is elaborated with
+        // `Identifier.id ""` as its case name (`lam_parsed_params_loop`,
+        // `lang/parser.mo`), so there is no constructor to look up.
+        BinderKind.bk_match => show_identifier (BinderUse.ctor u),
+    }
 
 /// Fold one binder into the running totals. Accumulator-passing all the
 /// way down, like every list walker in `lang/codegen/` — this runs over
@@ -184,11 +206,16 @@ def tally_binder (u : BinderUse) (acc : Totals) : Totals :=
         let non_copy : I64 :=
             if is_copy_approx tname then Totals.many_non_copy acc
             else Totals.many_non_copy acc + 1 in
+        let residue : List TypeTally :=
+            if String.beq tname "?" then
+                tally_bump (residue_key u) (Totals.unresolved acc)
+            else Totals.unresolved acc in
         { acc with
             binders := Totals.binders acc + 1,
             many := Totals.many acc + 1,
             many_non_copy := non_copy,
-            by_type := tally_bump tname (Totals.by_type acc) }
+            by_type := tally_bump tname (Totals.by_type acc),
+            unresolved := residue }
 
 #[partial]
 def tally_binders (us : List BinderUse) (acc : Totals) : Totals :=
@@ -201,22 +228,29 @@ def tally_binders (us : List BinderUse) (acc : Totals) : Totals :=
 
 def def_term (d : Def) : Term := d.term
 
+/// `attribute_binder_types` runs between collection and tallying: the
+/// counter is a pure function of the term and so reports every match-arm
+/// binder as unknown, and on the compiler's own closure that was 723 of
+/// the 2,419 over-used binders -- 30% of the number this whole report
+/// exists to produce.
 #[partial]
-def tally_decls (ds : List Decl) (acc : Totals) : Totals :=
+def tally_decls (s : Scope) (ds : List Decl) (acc : Totals) : Totals :=
     match ds {
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Decl.def_d def_ => tally_decls rest (tally_binders (collect_binder_uses (def_term def_)) acc),
+                Decl.def_d def_ =>
+                    let raw : List BinderUse := collect_binder_uses (def_term def_) in
+                    tally_decls s rest (tally_binders (attribute_binder_types s raw) acc),
                 // A macro body is a template, not code that runs; its
                 // binders are not runtime owners.
-                Decl.def_macro_d _def => tally_decls rest acc,
+                Decl.def_macro_d _def => tally_decls s rest acc,
                 // A scoped open wraps one real decl. Codegen ignores
                 // these today (`Decl.scoped_open_d`'s own doc comment),
                 // so the report does too rather than disagree with the
                 // backend it is sizing work for.
-                Decl.scoped_open_d _path _filter _inner => tally_decls rest acc,
-                _ => tally_decls rest acc,
+                Decl.scoped_open_d _path _filter _inner => tally_decls s rest acc,
+                _ => tally_decls s rest acc,
             },
     }
 
@@ -290,6 +324,12 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
     println "  ^ upper bound on the migration cost (scalar approximation of Copy)";
     println "  2+ uses by type, most first:";
     let _printed : I64 <- print_top (Totals.by_type t) 20;
+    println "  unattributed (`?`) 2+ binders, by the constructor that bound them:";
+    let _residue : I64 <- print_top (Totals.unresolved t) 10;
+    println "  ^ every row here is GENUINE ambiguity, resolved fail-closed:";
+    println "    `mk` is every struct's constructor; `cons` is List and Vec;";
+    println "    `ok` is Result and CompileResult. Disambiguating needs the";
+    println "    scrutinee's type, which is inference, not lookup.";
     return true
 }
 
@@ -311,7 +351,7 @@ def report_on (path : String) : IO Bool := do {
             return false
         },
         Result.ok em => do {
-            let totals : Totals := tally_decls em.elaborated_decls totals_empty;
+            let totals : Totals := tally_decls em.scope em.elaborated_decls totals_empty;
             print_totals path totals
         }
     }
@@ -333,7 +373,8 @@ def report_affine_usage_compiler : IO Bool := report_on "lang/src/lib.mo"
 // ─── Tests for the aggregation itself ──────────────────────────────
 
 def tally_of (count : I64) (typ : Term) : BinderUse :=
-    { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := typ, count := count }
+    { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := typ, count := count,
+      ctor := Identifier.id "", pos := 0 - 1 }
 
 def i64_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64"))
 
