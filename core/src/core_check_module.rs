@@ -321,6 +321,7 @@ pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -
         ind,
         &config,
         atoms,
+        Some(module.path()),
       );
     }
   }
@@ -536,6 +537,14 @@ impl Default for ModuleCheckEnv {
 /// have an instance, which is the overwhelming majority of real usage) —
 /// real per-instance dictionary resolution is a further, deeper gap (see
 /// the module doc), not attempted here.
+/// `module` is the declaring module's path when the inductive comes from
+/// a LOADED module, and `None` for decls the file under check declares
+/// itself. When present, the inductive and each of its constructors are
+/// ALSO registered under their `Module::name` qualified spelling, so a
+/// `NameRef::Qn` in a type (`std::list::List`) or in term position
+/// (`std::list::List.cons`) resolves to the same atom as the bare form.
+/// Defs get this treatment in `ground_truth` directly; without it here,
+/// only defs were reachable qualified.
 fn register_inductive(
   ctx: &mut TyCtx,
   known_globals: &mut Map<GlobalRef, Atom>,
@@ -543,7 +552,49 @@ fn register_inductive(
   ind: &Inductive,
   config: &LowerConfig,
   atoms: &mut AtomTable,
+  module: Option<&ModulePath>,
 ) {
+  // Register `name` under its qualified spelling too, sharing `local_atom`
+  // so both spellings check identically.
+  // Aliased onto the LOCAL atom rather than interned fresh: a type's
+  // identity IS its atom, so a separate atom for the qualified spelling
+  // would make `std::base::Ordering` a different type from `Ordering`.
+  //
+  // Applied to CONSTRUCTORS only, deliberately. The inductive's own name
+  // cannot be aliased this way: `structs.inductive_paths`, `atom_paths`
+  // and `compute_unqualified_aliases` are all keyed by atom and assume
+  // ONE path per atom, so a second spelling makes those reverse lookups
+  // return the qualified path and breaks class-method resolution
+  // (`unresolved global: BEq.beq`) and inductive lookup
+  // (`UnknownInductive`). A qualified TYPE reference resolves through
+  // the scope's `qualified_refs` index instead (`term/module.rs`), which
+  // is keyed by spelling and needs no atom aliasing.
+  let register_qualified = |known_globals: &mut Option<&mut Map<GlobalRef, Atom>>,
+                            atoms: &mut AtomTable,
+                            name: &NamePath,
+                            local_atom: Atom| {
+    let Some(module) = module else { return };
+    let qn = QualifiedName {
+      module: module.clone(),
+      name: name.clone(),
+    };
+    atoms.alias(GlobalRef::Qualified(qn.clone()), local_atom);
+    // `known_globals` is INVERTED into `atom_paths` (one path per
+    // atom) in `type_check_module_decls_new_inner`. That is safe only
+    // when a `Local` entry also exists for this atom, because the
+    // inversion prefers `Local`. An ordinary inductive's own bare name
+    // is deliberately NOT in `known_globals` (see the
+    // `inductive_paths` comment below), so adding ONLY a `Qualified`
+    // entry for it makes the qualified spelling that atom's sole
+    // recorded path -- which then beats `structs.inductive_paths` in
+    // `core_check.rs`'s instance resolution
+    // (`atom_paths.get(..).or_else(|| inductive_paths.get(..))`), the
+    // `known_instances` lookup misses, and resolution degrades into a
+    // pathological retry that exhausts memory on a whole-corpus check.
+    if let Some(known_globals) = known_globals.as_mut() {
+      known_globals.insert(GlobalRef::Qualified(qn), local_atom);
+    }
+  };
   if *ind.variant() == InductiveVariant::Class {
     let Some(cons) = ind.constructors().first() else {
       return;
@@ -690,6 +741,7 @@ fn register_inductive(
       ) {
         ctx.insert(ctor_atom, ctor_ty_c);
       }
+      register_qualified(&mut Some(known_globals), atoms, ctor.name(), ctor_atom);
     }
     // An ordinary (non-Class) inductive's own BARE name (`List`, `Option`)
     // never otherwise becomes a `known_globals` entry — only its
@@ -731,6 +783,15 @@ fn register_inductive(
     ) {
       ctx.insert(inductive_atom, kind_c);
     }
+    // The inductive's own name, so `(x : std::base::Ordering)` is the
+    // same type as `(x : Ordering)`. Safe only because every atom-keyed
+    // reverse lookup now resolves the ambiguity toward the `Local`
+    // spelling -- `AtomTable::path_of`, the `known_globals` inversion in
+    // `type_check_module_decls_new_inner`, and
+    // `compute_unqualified_aliases` (which skips non-`Local` entries
+    // outright). Without those three, this aliasing breaks class-method
+    // resolution and `structs.inductive_paths` lookups.
+    register_qualified(&mut None, atoms, ind.name(), inductive_atom);
     // E2: every ordinary constructor's own field types, in declaration
     // order, still referencing the inductive's own declared params freely
     // (NOT yet substituted with any specific use site's concrete type
@@ -877,7 +938,7 @@ fn register_type_decls(
 ) {
   for decl in decls {
     if let Decl::Type(ind) = &**decl {
-      register_inductive(ctx, known_globals, structs, ind, config, atoms);
+      register_inductive(ctx, known_globals, structs, ind, config, atoms, None);
     }
   }
 }
@@ -916,6 +977,16 @@ fn compute_unqualified_aliases(
   let opens_vec: Vec<&Open> = opens.to_vec();
   let mut aliases = Map::new();
   for (gref, atom) in known_globals {
+    // Only a `Local` spelling contributes an `open`-shortened alias.
+    // A `Qualified` entry is the SAME name registered a second time for
+    // `::` resolution, and flattening it (`init.base.BEq`) yields the
+    // same last segment (`BEq`) as some unrelated local name -- so
+    // including it here let one arbitrary map-iteration order overwrite
+    // a correct alias with another name's atom, breaking class-method
+    // resolution (`unresolved global: BEq.beq`).
+    if !matches!(gref, GlobalRef::Local(_)) {
+      continue;
+    }
     for short in gref.to_flat_name_path().open(&opens_vec) {
       aliases.insert(short.last().clone(), *atom);
     }
@@ -1135,6 +1206,7 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
         ind,
         &config_no_aliases,
         &mut atoms,
+        Some(module.path()),
       );
     }
   }
@@ -2576,10 +2648,22 @@ pub fn type_check_module_decls_new_inner(
   // default/loaded-module name plus this file's own), reused for every
   // def (each def additionally extends its OWN copy with its peeled
   // Forall params — see `check_one_def_new`).
-  let mut global_atom_paths: AtomPathMap = known_globals
-    .iter()
-    .map(|(path, atom)| (*atom, path.clone()))
-    .collect();
+  // Inverting `known_globals` is many-to-one: a qualified spelling
+  // (`std::base::Ordering`) deliberately shares its atom with the local
+  // one (`Ordering`) so both are the same type. The LOCAL spelling must
+  // win this inversion -- it is the canonical path global assembly
+  // (`lower_core_ir`) and `raise_core` key on, and map iteration order
+  // must not decide which one a def is recorded under.
+  let mut global_atom_paths: AtomPathMap = AtomPathMap::new();
+  for (path, atom) in known_globals.iter() {
+    let local_wins = matches!(path, GlobalRef::Local(_));
+    match global_atom_paths.get(atom) {
+      Some(GlobalRef::Local(_)) if !local_wins => {}
+      _ => {
+        global_atom_paths.insert(*atom, path.clone());
+      }
+    }
+  }
   // Cross-module bare-name collision guard: `known_globals`'s BARE entry
   // for a given name (`list_contains`, say) is shared across every
   // MODULE that happens to declare something under that same bare name
@@ -2683,7 +2767,7 @@ pub fn type_check_module_decls_new_inner(
         )
         .map(Decl::Def)
       }
-      Decl::Type(ref ind) => check_strict_positivity(ind).map(|()| decl.clone()),
+      Decl::Type(ref ind) => check_strict_positivity(path, ind).map(|()| decl.clone()),
       Decl::Ins(ref instance) => {
         // `Module`'s own `instances` field (`term/module.rs`'s `module()`
         // constructor) is built by a plain top-level filter over these
@@ -2934,6 +3018,105 @@ mod test {
     let env = ModuleCheckEnv::new();
     let report = check_module_source(&env, "def first : I64 := second\ndef second : I64 := 1\n");
     assert_eq!(report.passed(), 2, "report: {report:?}");
+  }
+
+  // ── Module-qualified references (`NameRef::Qn`) ──
+  //
+  // `plans/implementations/qualified-names.md` makes `::` qualification
+  // valid in expression AND type-annotation position. Phase 1's gate
+  // asked for these tests and they were never written, which is why a
+  // half-wired feature shipped green: no corpus file uses `::` outside a
+  // `use` path, so nothing else exercises any of this.
+
+  /// The regression that motivated the whole pass: a qualified name in a
+  /// TYPE annotation used to panic (`free_vars` unwrapping a `Qn`'s
+  /// `to_name_path()`, which is always `None`), aborting a whole-
+  /// directory `monad check` with exit 101. Must be an ordinary check.
+  #[test]
+  fn test_qualified_name_in_type_annotation_does_not_panic() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::base {}\n\ndef o : std::base::Ordering := std::base::Ordering.lt\n",
+    );
+    assert_eq!(report.defs.len(), 1, "report: {report:?}");
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  /// A qualified reference to a plain `def`.
+  #[test]
+  fn test_qualified_def_reference_resolves() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::process {}\n\ndef p : I64 := std::process::process_id\n",
+    );
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+  }
+
+  /// The DOTTED name half (`IO.println`) behind a `::` module half --
+  /// the fully-qualified spelling the design doc calls canonical, and
+  /// the shape most of std actually declares (`pub def IO.println`, not
+  /// `println`). The host used to leave `.println` unconsumed and read
+  /// it as an infix `.` operator.
+  #[test]
+  fn test_qualified_reference_with_dotted_name_half_resolves() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::io {}\n\ndef greet (args : List String) : IO Unit := std::io::IO.println \"hi\"\n",
+    );
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+  }
+
+  /// A qualified name that resolves to nothing is a normal diagnostic,
+  /// not a panic and not a silent pass.
+  #[test]
+  fn test_unknown_qualified_name_reports_cleanly() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(&env, "def bad : I64 := std::nosuch::thing\n");
+    assert_eq!(report.defs.len(), 1, "report: {report:?}");
+    assert!(
+      report.defs[0].result.is_err(),
+      "an unresolvable qualified name must be an error"
+    );
+  }
+
+  /// The module half must be LOAD-BEARING. Resolving a `Qn` by its name
+  /// half alone would make `std::totally::bogus::String.concat` silently
+  /// mean `String.concat`, turning the qualifier into decoration and
+  /// letting a typo through as a working reference.
+  #[test]
+  fn test_qualified_name_with_wrong_module_is_unbound() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "def a : String := std::totally::bogus::String.concat \"a\" \"b\"\n",
+    );
+    assert_eq!(report.defs.len(), 1, "report: {report:?}");
+    assert!(
+      report.defs[0].result.is_err(),
+      "a qualified name whose MODULE half is wrong must not resolve"
+    );
+  }
+
+  /// Both spellings of one name must be the SAME type, not two. Atoms
+  /// are keyed by spelling, so the qualified form is deliberately
+  /// aliased onto the local form's atom -- without that, this reports
+  /// "type mismatch: `Ordering` vs. `std::base::Ordering`", a name
+  /// failing to match itself.
+  #[test]
+  fn test_qualified_and_bare_spellings_are_one_type() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "use std::base {Ordering}\n\ndef o : Ordering := std::base::Ordering.lt\n",
+    );
+    assert_eq!(report.passed(), 1, "report: {report:?}");
   }
 
   #[test]

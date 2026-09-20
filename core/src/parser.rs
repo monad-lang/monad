@@ -1397,9 +1397,19 @@ fn qualified_name_expression<X: Clone>(input: Span<X>) -> Res<QualifiedName, X> 
   // The `::`-chain after `first`; ≥ 1 segment (a bare identifier never
   // reaches this parser — `variable` tries the simpler forms first).
   let (input, chain) = many1(preceded((ws0, tag("::")), preceded(ws0, identifier))).parse(input)?;
+  // The tail alternatives mirror `name_path_expression`'s own inner
+  // `alt`: that parser requires a `.` of its own, so on a SINGLE-segment
+  // tail (`List.cons`) it fails, `opt` restores the input, and `.cons`
+  // is left in the stream to be re-read as an infix `.` application.
   let (input, dotted) = opt(preceded(
     (ws0, tag(".")),
-    preceded(ws0, name_path_expression),
+    preceded(
+      ws0,
+      alt((
+        name_path_expression,
+        map(identifier, |i| NamePath::new(vec![i])),
+      )),
+    ),
   ))
   .parse(input)?;
   if dotted.is_some() {

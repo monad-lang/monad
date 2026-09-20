@@ -809,34 +809,56 @@ cargo test core_check_module::
 cargo test core_eval::
 ```
 
-### Running Monad Tests
+### Memory: whole-corpus checks and the test suite
+
+A whole-corpus `monad-rs check` and `cargo test --release` are the two
+heaviest things in this repo, and both run from the pre-commit hooks. A
+bug that makes name resolution miss can turn either into unbounded
+allocation that exhausts system memory and hard-restarts the machine —
+this happened repeatedly on 2026-09-20, taking the desktop down with it
+rather than just failing the run.
+
+**The measurement that finds it**, and the way to run either safely:
 
 ```bash
-# Run tests from a single file
-cargo run -- test init/src/tests.mo
-
-# Run tests from an entire directory (recursively finds all .mo files with #[test])
-cargo run -- test init/
-
-# Run all test suites
-cargo run -- test init/ && cargo run -- test examples/
+systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0 \
+  cargo run --release -- check init std
 ```
 
-The test runner supports both files and directories. When given a directory, it recursively scans for `.mo` files and runs any definitions annotated with `#[test]`, reporting pass/fail.
+Exit 137 means it was killed at the cap — that is the signal. A healthy
+whole-corpus check (142 files) completes under 6 GB, and `init std` alone
+completes under 4 GB. Bisect by narrowing the target, not by widening the
+cap: `check init` is cheap, `check init std` is where a blow-up first
+shows.
 
-### No Personal-Machine Details or Hardcoded Paths
+**One real instance, worth understanding before touching name
+registration:** registering a global under a SECOND spelling in
+`known_globals` is only safe when that atom also has a `Local` entry.
+`known_globals` is inverted into `atom_paths` (one path per atom), and an
+ordinary inductive's own bare name is deliberately absent from it — so
+adding only a qualified spelling made that the atom's sole recorded path,
+which then beat `structs.inductive_paths` in instance resolution,
+the `known_instances` lookup missed, and resolution degraded into a
+retry that ate 30+ GB. Alias the ATOM freely; be careful what you add to
+`known_globals`.
 
-Never hardcode a contributor's local machine details into code — absolute
-paths under a personal home directory, machine-specific usernames, or
-anything else that only exists on one person's checkout. This includes test
-fixtures: resolve repo files relative to `CARGO_MANIFEST_DIR` (see
-`core_check_module.rs`'s `repo_search_paths`), never via an absolute path.
-A real instance of this broke CI while passing locally, since the hardcoded
-path only existed on its author's machine.
+Ordinary hygiene that also helps:
 
-### Pre-commit
+- **Do not run two cargo invocations at once.** Let one finish first,
+  including background jobs you started and forgot.
+- **Narrow the scope.** `cargo test -p monad-core --lib <name>` is cheap
+  and usually enough; reserve the full run for a final check.
+- **Bound the parallelism**: `cargo test -j 2 -- --test-threads=2`.
 
-The pre-commit config (`.pre-commit-config.yaml`) is managed by Nix via `git-hooks.nix`. Do NOT edit it directly. Instead, modify the Nix configuration that generates it. The `monad-tests` hook currently runs `cargo run --release -- test init std lang examples` (see `devenv.nix`) — recursing into every `.mo` file under those four directories, `lang/tests/` included. If this hook fails, run the same command directly (or narrow to one directory, e.g. `cargo run -- test lang/`) to see all test failures.
+**A polling memory watchdog does NOT work** — sampling `/proc/meminfo`
+every few seconds cannot catch a fast allocation spike; the OOM killer
+fires between polls, and the false confidence is worse than no safeguard.
+Use the `MemoryMax` cap instead, which is enforced by the kernel.
+
+If you are an agent working in this repo: `git commit` runs the full test
+suite and a whole-corpus check via hooks, so it is not a cheap operation.
+If the user has said not to run tests, that includes committing — say so
+rather than discovering it together.
 
 ## Development Workflow
 

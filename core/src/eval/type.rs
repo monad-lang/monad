@@ -849,10 +849,24 @@ fn did_you_mean(name: &str, candidates: &[String]) -> Option<String> {
     .map(|(_, c)| c)
 }
 
-fn check_strict_pos(type_name: &NamePath, typ: &Term, polarity: bool) -> Result<(), TypeError> {
+/// `module` is the path of the module declaring the inductive, so a
+/// module-qualified self-occurrence (`w::T` inside `w`'s own `T`) is
+/// recognised. Matching the name half ALONE would be wrong in the
+/// rejecting direction: it would flag another module's same-named type
+/// as a non-strictly-positive occurrence of this one.
+fn check_strict_pos(
+  module: &ModulePath,
+  type_name: &NamePath,
+  typ: &Term,
+  polarity: bool,
+) -> Result<(), TypeError> {
   match typ {
     Term::Var { name } => {
-      if name.to_name_path().as_ref() == Some(type_name) {
+      let is_self = match name.to_qualified() {
+        Some(qn) => qn.module == *module && qn.name == *type_name,
+        None => name.to_name_path().as_ref() == Some(type_name),
+      };
+      if is_self {
         if polarity {
           Ok(())
         } else {
@@ -866,26 +880,29 @@ fn check_strict_pos(type_name: &NamePath, typ: &Term, polarity: bool) -> Result<
       }
     }
     Term::App { fun, arg } => {
-      check_strict_pos(type_name, fun, polarity)?;
-      check_strict_pos(type_name, arg, polarity)
+      check_strict_pos(module, type_name, fun, polarity)?;
+      check_strict_pos(module, type_name, arg, polarity)
     }
     Term::Pi { arg, ret, .. } => {
-      check_strict_pos(type_name, arg, !polarity)?;
-      check_strict_pos(type_name, ret, polarity)
+      check_strict_pos(module, type_name, arg, !polarity)?;
+      check_strict_pos(module, type_name, ret, polarity)
     }
     Term::Forall { typ, body, .. } => {
-      check_strict_pos(type_name, typ, !polarity)?;
-      check_strict_pos(type_name, body, polarity)
+      check_strict_pos(module, type_name, typ, !polarity)?;
+      check_strict_pos(module, type_name, body, polarity)
     }
     _ => Ok(()),
   }
 }
 
-pub(crate) fn check_strict_positivity(ind: &Inductive) -> Result<(), TypeError> {
+pub(crate) fn check_strict_positivity(
+  module: &ModulePath,
+  ind: &Inductive,
+) -> Result<(), TypeError> {
   let name = ind.name();
   for cons in ind.constructors() {
     for param in cons.params() {
-      check_strict_pos(name, param.typ(), true)?;
+      check_strict_pos(module, name, param.typ(), true)?;
     }
   }
   Ok(())
@@ -1234,13 +1251,23 @@ fn resolve_def_alias(
   scope: Option<&Scope>,
   visiting: &mut Set<NamePath>,
 ) -> Option<Term> {
-  let path = name.clone().to_name_path()?;
+  // A `Qn` has no name path; it resolves through the qualified index
+  // instead. Both spellings share one `visiting` key space, keyed on the
+  // flattened rendering, so a cycle through a qualified alias is caught
+  // the same way a dotted one is.
+  let path = match name.to_qualified() {
+    Some(qn) => qn.to_flat_name_path(),
+    None => name.clone().to_name_path()?,
+  };
   if !visiting.insert(path.clone()) {
     // Already visiting this path — cycle detected, stop
     return None;
   }
   let scope = scope?;
-  let def_ref = scope.global().find_ref(&path)?;
+  let def_ref = match name.to_qualified() {
+    Some(qn) => scope.global().find_qualified_ref(qn)?,
+    None => scope.global().find_ref(&path)?,
+  };
   match def_ref.term() {
     // Lam means it's a function definition, not a simple type alias — don't expand
     Term::Lam { .. } => None,
@@ -1307,11 +1334,7 @@ pub fn compare_types(left: &Term, right: &Term, free_vars: &FreeVars) -> bool {
           return true;
         }
       }
-      if n1.is_name() {
-        n1.clone().to_name_path() == n2.clone().to_name_path()
-      } else {
-        n1 == n2
-      }
+      n1.same_ref(n2)
     }
     (Sort { .. }, Sort { .. }) => true,
     _ => left == right,
@@ -1394,13 +1417,9 @@ fn match_resolve_type_inner<'a>(
     (Ctx { term, .. }, _) => match_resolve_type_inner(term, right, free_vars, scope, visiting),
     (_, Ctx { term, .. }) => match_resolve_type_inner(left, term, free_vars, scope, visiting),
     (Var { name: n1 }, Var { name: n2 }) => {
-      let name_eq = if n1.is_name() {
-        match n1.as_id() {
-          Some(id) if check_free_vars(id, right, free_vars) => true,
-          _ => n1.clone().to_name_path() == n2.clone().to_name_path(),
-        }
-      } else {
-        n1 == n2
+      let name_eq = match n1.as_id() {
+        Some(id) if check_free_vars(id, right, free_vars) => true,
+        _ => n1.same_ref(n2),
       };
       if name_eq {
         true
@@ -1476,10 +1495,24 @@ pub fn free_vars(typ: &Term, known_names: &Set<&NamePath>) -> Set<Identifier> {
       }
       a
     }
-    Var { name } if name.is_name() && !known_names.contains(&name.to_name_path().unwrap()) => name
-      .as_id()
-      .map(|id| set_of(vec![id.clone()].into_iter()))
-      .unwrap_or(empty_set()),
+    // `to_name_path()` is `None` for a `Qn`, which `is_name()` accepts --
+    // so unwrapping here panicked on every module-qualified reference in
+    // a type. A `Qn` is a resolved global, never a free type variable, so
+    // it must NOT be collected for implicit `Forall` wrapping: it falls
+    // through to the `_` arm below, which is also what this arm's own
+    // body would have produced (`as_id()` is `None` for anything but
+    // `Id`).
+    Var { name }
+      if name.is_name()
+        && name
+          .to_name_path()
+          .is_some_and(|p| !known_names.contains(&p)) =>
+    {
+      name
+        .as_id()
+        .map(|id| set_of(vec![id.clone()].into_iter()))
+        .unwrap_or(empty_set())
+    }
     App { fun, arg } => {
       let mut f = free_vars(fun, known_names);
       let a = free_vars(arg, known_names);

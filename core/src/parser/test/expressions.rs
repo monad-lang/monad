@@ -455,3 +455,44 @@ fn test_ann_term() {
   let result = term(r#"(1 : I64)"#);
   assert!(result.is_ok(), "parse failed: {:?}", result);
 }
+
+/// The `::` module/name boundary in expression position, including the
+/// DOTTED name half (`std::list::List.cons`) that the design doc calls
+/// the fully-qualified spelling.
+///
+/// The dotted tail regressed silently: it was parsed with
+/// `name_path_expression` alone, which requires a `.` of its OWN, so a
+/// single-segment tail (`.cons`) failed, `opt` restored the input, and
+/// the `.` was re-read as an infix operator — leaving the reference
+/// spelled `std::list::List` with a stray `.cons` applied to it. These
+/// assert the whole spelling is CONSUMED into one `Qn`.
+#[test]
+fn test_qualified_name_expression() {
+  let term = |s: &'static str| term::<()>(s.into()).finish();
+
+  let qn = |module: &[&str], name: &[&str]| Term::Var {
+    name: NameRef::Qn(Box::new(QualifiedName {
+      module: ModulePath::new(module.iter().map(|s| crate::term::id(s)).collect()),
+      name: NamePath::new(name.iter().map(|s| crate::term::id(s)).collect()),
+    })),
+  };
+
+  // Bare name half — the shape that already worked.
+  let (rest, a) = term("std::process::exec_cmd").unwrap();
+  assert_eq!(*rest.fragment(), "");
+  similar!(a, qn(&["std", "process"], &["exec_cmd"]));
+
+  // Single-segment DOTTED name half — the regression.
+  let (rest, b) = term("std::list::List.cons").unwrap();
+  assert_eq!(
+    *rest.fragment(),
+    "",
+    "the dotted name half must be consumed, not left as infix `.`"
+  );
+  similar!(b, qn(&["std", "list"], &["List", "cons"]));
+
+  // Multi-segment dotted name half.
+  let (rest, c) = term("a::b::C.d.e").unwrap();
+  assert_eq!(*rest.fragment(), "");
+  similar!(c, qn(&["a", "b"], &["C", "d", "e"]));
+}

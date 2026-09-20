@@ -85,10 +85,25 @@ fn extract_params(body: &Term) -> Vec<Identifier> {
   params
 }
 
+/// The name a reference contributes to recursion analysis.
+///
+/// A module-qualified `Qn` has no `NamePath`, so it was invisible here
+/// and a `w::f` self-call could not be seen at all. Its NAME half is
+/// used instead: the group's names are unqualified, and matching on the
+/// name half can only ever make the check consider MORE calls recursive,
+/// never fewer -- an over-approximation is sound for a termination
+/// check, where missing a call is the unsafe direction.
+fn recursion_name(name: &crate::term::NameRef) -> Option<NamePath> {
+  match name.to_qualified() {
+    Some(qn) => Some(qn.name.clone()),
+    None => name.to_name_path(),
+  }
+}
+
 /// Check if a term is a reference to any name in the given set.
 fn is_ref_to_any(term: &Term, names: &RecursiveNames) -> bool {
   match term {
-    Var { name } => name.to_name_path().map_or(false, |p| names.contains(&p)),
+    Var { name } => recursion_name(name).is_some_and(|p| names.contains(&p)),
     _ => false,
   }
 }
@@ -330,7 +345,7 @@ fn find_callees(term: &Term, known_names: &crate::Set<&NamePath>) -> crate::Set<
   fn walk(term: &Term, known: &crate::Set<&NamePath>, callees: &mut crate::Set<NamePath>) {
     match term {
       Var { name } => {
-        if let Some(path) = name.to_name_path() {
+        if let Some(path) = recursion_name(name) {
           if known.contains(&path) {
             callees.insert(path);
           }
@@ -977,6 +992,53 @@ mod tests {
     let graph = build_call_graph(&defs);
     assert!(graph.get(&f_name).unwrap().contains(&g_name));
     assert!(graph.get(&g_name).unwrap().is_empty());
+  }
+
+  /// A module-qualified call (`w::g`) must be visible to the call graph.
+  ///
+  /// A `Qn` has no `NamePath` at all, so it used to be invisible here --
+  /// meaning a self- or mutual recursion written qualified was never
+  /// checked for termination. The name HALF is matched, which can only
+  /// ever consider more calls recursive, never fewer: for a termination
+  /// check, missing a call is the unsound direction.
+  #[test]
+  fn test_build_call_graph_sees_a_module_qualified_call() {
+    let f_name = test_def("f");
+    let g_name = test_def("g");
+
+    let qualified_g = Term::Var {
+      name: crate::term::NameRef::Qn(Box::new(crate::term::QualifiedName {
+        module: crate::term::ModulePath::top("w"),
+        name: g_name.clone(),
+      })),
+    };
+
+    let f_def = Def {
+      name: f_name.clone(),
+      typ: Term::Hole,
+      term: lam(
+        param(id("x"), Term::Hole),
+        crate::term::app(qualified_g, var("x")),
+      ),
+      type_constraints: vec![],
+      attributes: vec![],
+      vis: Default::default(),
+    };
+    let g_def = Def {
+      name: g_name.clone(),
+      typ: Term::Hole,
+      term: lam(param(id("x"), Term::Hole), var("x")),
+      type_constraints: vec![],
+      attributes: vec![],
+      vis: Default::default(),
+    };
+
+    let defs = [&f_def, &g_def];
+    let graph = build_call_graph(&defs);
+    assert!(
+      graph.get(&f_name).unwrap().contains(&g_name),
+      "a `w::g` call must register as a call to `g`"
+    );
   }
 
   #[test]

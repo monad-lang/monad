@@ -191,6 +191,23 @@ impl NameRef {
     }
   }
 
+  /// Do two references name the same thing, as written?
+  ///
+  /// Comparing `to_name_path()` directly is WRONG for a `Qn`, whose name
+  /// path is `None`: two DISTINCT qualified names both yield `None` and
+  /// so compare equal. A `Qn` is only ever equal to an identical `Qn` --
+  /// `std::list::List` and a bare `List` are different references until
+  /// scope resolution maps them onto one def, which is not this
+  /// function's job.
+  pub fn same_ref(&self, other: &NameRef) -> bool {
+    match (self, other) {
+      (NameRef::Qn(a), NameRef::Qn(b)) => a == b,
+      (NameRef::Qn(_), _) | (_, NameRef::Qn(_)) => false,
+      (a, b) if a.is_name() && b.is_name() => a.to_name_path() == b.to_name_path(),
+      (a, b) => a == b,
+    }
+  }
+
   pub fn is_id(&self) -> bool {
     matches!(self, Id(_))
   }
@@ -758,7 +775,7 @@ fn compare_instance_term(
         true
       }
     }
-    (Term::Var { name: n1 }, Term::Var { name: n2 }) => n1.to_name_path() == n2.to_name_path(),
+    (Term::Var { name: n1 }, Term::Var { name: n2 }) => n1.same_ref(n2),
     _ => instance_term == key_term,
   }
 }

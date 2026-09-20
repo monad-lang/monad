@@ -180,6 +180,17 @@ fn name_to_string(name: &NameRef) -> String {
 /// The inverse of `name_to_string` — a plain (possibly dotted) name
 /// string back into a `Var` term, qualified (`pvar`) if it contains a
 /// `.`, a bare `Var{Id}` otherwise.
+///
+/// Deliberately does NOT interpret `::` as a module qualification, even
+/// though `name_to_string` can render a `NameRef::Qn` that way: the
+/// strings reaching here are not all references. `std/derive.mo`'s
+/// `Debug` backend builds a DISPLAY LABEL `"TypeName::CtorName"` for a
+/// multi-constructor type (`std/src/derive.mo`, `is_single` branch), and
+/// treating that as a qualified reference turns a label into a lookup of
+/// a module that does not exist. A `Qn` is therefore not round-trippable
+/// through reflection; reflecting one is not a shape any macro produces
+/// today, and distinguishing the two would need the reflected value to
+/// carry the `NameRef` variant rather than a bare string.
 fn name_ref_term(name: &str) -> Term {
   if name.contains('.') {
     pvar(name.split('.').collect())

@@ -543,9 +543,31 @@ fn lower_var(ctx: &mut LowerContext, name: &NameRef) -> Result<CoreTerm, LowerEr
     // binding. This is the whole point of the `::` spelling — it
     // disambiguates at parse time what `.` leaves ambiguous until
     // lowering.
-    NameRef::Qn(qn) => Ok(CoreTerm::Free(
-      ctx.global_atom(GlobalRef::Qualified((**qn).clone())),
-    )),
+    //
+    // Shares the LOCAL spelling's atom so `std::base::Ordering` is the
+    // same TYPE as `Ordering` rather than a second, incompatible one --
+    // but only once the qualified spelling itself has been registered
+    // (`register_inductive`'s `register_qualified`, which fires only
+    // for a module actually in scope). Falling back to the name half
+    // unconditionally would make the module half decorative: a typo'd
+    // `std::totally::bogus::String.concat` would silently resolve.
+    //
+    // Only the atom is shared; the qualified `GlobalRef` is
+    // deliberately NOT recorded as a second path for it, because
+    // `structs.inductive_paths`, `atom_paths` and
+    // `compute_unqualified_aliases` all assume one path per atom.
+    NameRef::Qn(qn) => {
+      let qualified = GlobalRef::Qualified((**qn).clone());
+      let atom = match ctx.atoms.get(&qualified) {
+        // Registered: `alias` already points this spelling at the local
+        // atom, so interning it returns that same atom.
+        Some(atom) => atom,
+        // Not registered -- keep it distinct so it fails to resolve
+        // rather than silently becoming the bare name.
+        None => ctx.global_atom(qualified),
+      };
+      Ok(CoreTerm::Free(atom))
+    }
     NameRef::Index(i) => Err(LowerError::UnexpectedIndex(*i)),
     NameRef::Op(op) => match ctx.config.infix.get(op).cloned() {
       Some(path) => Ok(CoreTerm::Free(ctx.global_atom(GlobalRef::Local(path)))),

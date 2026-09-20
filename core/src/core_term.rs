@@ -151,13 +151,48 @@ impl AtomTable {
     *self.0.entry(path).or_insert_with(Atom::fresh)
   }
 
-  /// Reverse lookup for error rendering only — an `Atom`'s originating
-  /// `GlobalRef`, if this table interned one for it. A linear scan is
-  /// fine here: only ever called on an already-failed check's error path
-  /// (rendering a handful of `Diagnostic` messages), never in the hot
-  /// path of checking itself.
+  /// The atom already interned for `path`, without allocating one.
+  pub fn get(&self, path: &GlobalRef) -> Option<Atom> {
+    self.0.get(path).copied()
+  }
+
+  /// Point a SECOND spelling of an already-interned global at that same
+  /// atom, so both spellings are one identity rather than two.
+  ///
+  /// Needed because atoms are keyed by the full spelling: a bare `List`
+  /// and a module-qualified `std::base::Ordering` would otherwise be
+  /// different atoms and so different TYPES, producing a "type mismatch:
+  /// `Ordering` vs. `std::base::Ordering`" between a name and itself.
+  /// Giving both spellings the same type (what the `def` path does) is
+  /// enough for a term, but not for a type, where the atom IS the
+  /// identity.
+  pub fn alias(&mut self, path: GlobalRef, atom: Atom) {
+    self.0.insert(path, atom);
+  }
+
+  /// Reverse lookup — an `Atom`'s originating `GlobalRef`, if this table
+  /// interned one for it. A linear scan is fine here: only ever called on
+  /// an already-failed check's error path (rendering a handful of
+  /// `Diagnostic` messages) or on assembly's own name lookups, never in
+  /// the hot path of checking itself.
+  ///
+  /// A `Local` spelling WINS over a `Qualified` one that `alias` pointed
+  /// at the same atom: the local path is the canonical one that global
+  /// assembly (`lower_core_ir`) and native resolution key on, and an
+  /// arbitrary map-iteration order must not decide which spelling a
+  /// def's body is found under.
   pub fn path_of(&self, atom: Atom) -> Option<&GlobalRef> {
-    self.0.iter().find(|(_, a)| **a == atom).map(|(p, _)| p)
+    let mut qualified: Option<&GlobalRef> = None;
+    for (path, a) in self.0.iter() {
+      if *a != atom {
+        continue;
+      }
+      match path {
+        GlobalRef::Local(_) => return Some(path),
+        _ => qualified = qualified.or(Some(path)),
+      }
+    }
+    qualified
   }
 
   /// Every `(path, atom)` pair this table has interned so far — used to
