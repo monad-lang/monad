@@ -1,5 +1,5 @@
 use lib::types {
-  Con, DebugName, Identifier, Literal, LocalScope, MatchCase, ModulePath,
+  Con, DebugName, Identifier, Literal, LocalScope, MatchCase, NamePath,
   NameRef, Scope, Term, id_eq, show_identifier, sentinel, term_peel,
 }
 use lib::scope {
@@ -172,7 +172,7 @@ def whnf_simple_name (id : Identifier) : Identifier :=
 /// would have been delta-unfolded already, but a type name, a class,
 /// or an unbound name all stay stuck and must not dispatch.
 def whnf_is_constructor (simple : Identifier) (scope : Scope) : Bool :=
-    match scope_find_inductive_by_constructor (ModulePath.mp (List.cons simple List.empty)) scope {
+    match scope_find_inductive_by_constructor (NamePath.npath (List.cons simple List.empty)) scope {
         Option.some _ => true,
         Option.none => false,
     }

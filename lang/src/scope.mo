@@ -572,8 +572,8 @@ def scope_data_add_def_return_type (sd : ScopeData) (name : NamePath) (ret_typ :
 def scope_data_add_def_sig (sd : ScopeData) (name : NamePath) (sig : Term) : ScopeData :=
     { sd with def_sigs := npath_map_insert name sig sd.def_sigs }
 
-def scope_data_add_def_body (sd : ScopeData) (name : ModulePath) (body : Term) : ScopeData :=
-    { sd with def_bodies := modpath_map_insert name body sd.def_bodies }
+def scope_data_add_def_body (sd : ScopeData) (name : NamePath) (body : Term) : ScopeData :=
+    { sd with def_bodies := npath_map_insert name body sd.def_bodies }
 
 /// Registers `ind` two ways: into `.inductives` (constructor/arity
 /// lookups — `scope_find_inductive` and friends) *and*, like
@@ -1201,13 +1201,13 @@ def scope_data_find_def_sig (sd : ScopeData) (name : NamePath) : Option Term :=
 
 // --- ScopeData: a def's BODY (delta reduction) ---
 
-def scope_data_find_def_body (sd : ScopeData) (name : ModulePath) : Option Term :=
-    modpath_map_lookup name sd.def_bodies
+def scope_data_find_def_body (sd : ScopeData) (name : NamePath) : Option Term :=
+    npath_map_lookup name sd.def_bodies
 
 /// Top-level `Scope`-based wrapper, same shape as `scope_find_def_sig`.
 /// Globals only (`scope_globals`), which is the point: delta unfolds
 /// top-level `def`s, never local bindings.
-pub def scope_find_def_body (name : ModulePath) (s : Scope) : Option Term :=
+pub def scope_find_def_body (name : NamePath) (s : Scope) : Option Term :=
     let g : ScopeData := scope_globals s in
     scope_data_find_def_body g name
 
