@@ -48,10 +48,16 @@
 /// 3 (drop points), and it is noted here because this module is where
 /// someone will look for it first.
 use lib::types {
-  Con, DebugName, FieldPattern, Identifier, Literal, Location, MatchCase,
-  ModulePath, Native, Param, Scope, StructLitField, Term,
+  Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive, Literal,
+  Location, MatchCase, NamePath, Native, Param, Scope, ScopeData, StructLitField, Term,
+  show_name_path,
 }
-use lib::scope {find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor}
+use lib::scope {
+  find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
+  scope_globals,
+}
+use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
+use std::map {}
 use std::list {length}
 
 // ─── Use counting ──────────────────────────────────────────────────
@@ -166,6 +172,274 @@ def uses_of_opt_args (target : I64) (args : List (Option Term)) : I64 :=
             },
     }
 
+// ─── Owning vs borrowing uses ──────────────────────────────────────
+//
+// M1 said 11.3% of binders are used more than once, and that those
+// concentrate in `String`, `List`, `Term` and `ModulePath` -- heap types
+// Design B's Copy policy says can never be Copy. That decided the gate
+// in favour of borrows. This section measures what borrows would
+// actually buy, which is the question the gate raised and did not
+// answer.
+//
+// The distinction: a use that only READS a value can be a borrow (the
+// owner is not moved, so it does not count against Σ). A use that takes
+// OWNERSHIP -- storing the value into a constructor, or being the value
+// a scope produces -- genuinely moves it. Under affine-plus-borrows a
+// binder can afford **one** owning use and any number of reads. Two
+// owning uses need real duplication: `Copy`, `Clone`, or a rewrite.
+//
+// So `owning_uses ≤ 1` is the borrowable set, and `owning_uses ≥ 2` is
+// the irreducible migration cost.
+//
+// **This bound is optimistic, and in the opposite direction from the
+// report's Copy approximation** -- stated plainly because the two
+// bracket the truth rather than agreeing. An argument passed to a
+// function is counted as a read, but it is only really a borrow if the
+// callee does not retain it; a callee that stores its argument makes
+// that an owning use in disguise. Telling those apart is
+// interprocedural, which this is not. So: Copy-only is the pessimistic
+// bound, borrows-work-for-all-reads is the optimistic one, and the real
+// cost sits between them.
+
+/// Where a use of a binder sits, which is what says whether it could be
+/// a borrow.
+pub type UsePos {
+    /// Callee of an application -- calling a closure reads it.
+    up_app_head,
+    /// Argument of an ordinary (non-constructor) application. A read
+    /// **if** the callee does not retain it; see the caveat above.
+    up_app_arg,
+    /// Scrutinee of a `match`, or an `if`'s condition. Always a read:
+    /// matching inspects a value, it does not consume it.
+    up_scrutinee,
+    /// Stored into a constructor, a struct literal, or a struct update.
+    /// An OWNING use -- the value outlives the expression.
+    up_con_field,
+    /// The value a scope produces: a bare body, a branch result, a
+    /// match arm's result. An OWNING use -- it is moved out.
+    up_value,
+}
+
+/// Owning uses of `target` in `t` — the `up_con_field` and `up_value`
+/// ones. `0` or `1` means the binder is borrowable as written.
+#[partial]
+pub def owning_uses (ctors : HashMap String Bool) (target : I64) (t : Term) : I64 :=
+    owning_at ctors UsePos.up_value target t
+
+/// The head of an application spine, peeled of `ctx` wrappers.
+///
+/// Needed because a multi-argument constructor is CURRIED: `List.cons x
+/// xs` is `app (app List.cons x) xs`, so its arguments arrive at
+/// `Term.app`, not at `Term.con`'s own `args`. Classifying those as
+/// ordinary call arguments would count an owning store into a cons cell
+/// as a read, which is exactly the direction that would flatter the
+/// design.
+#[partial]
+def app_spine_head (t : Term) : Term :=
+    match t {
+        Term.app callee _arg => app_spine_head callee,
+        Term.ctx _loc inner => app_spine_head inner,
+        _ => t,
+    }
+
+/// The set of names that refer to a constructor, for
+/// `head_is_ctor`. Built once per report run and threaded down.
+///
+/// **This exists because testing for `Term.con` does not work.** A probe
+/// over the compiler's own elaborated closure found 44,609 application
+/// nodes, of which **zero** had a `Term.con` spine head, against 19,738
+/// with a dotted name — elaboration leaves a constructor reference as an
+/// ordinary named `Term.var` (there are only 212 `Term.con` nodes in the
+/// whole tree). A `Term.con` test therefore never fires, and every
+/// constructor store silently reads as a call argument. That produced a
+/// "99.9% of over-uses are borrowable" figure which was an artifact of
+/// the blind classifier, not a property of the corpus.
+///
+/// A dotted-name test alone would be just as wrong in the other
+/// direction: most of those 19,738 heads are ordinary qualified calls
+/// (`String.concat`, `List.map`), not constructors. So the names are
+/// resolved against the real inductives in scope.
+///
+/// Each constructor goes in twice: under its bare name (`cons`) and
+/// under its rendered path (`List.cons`), so a head resolves whichever
+/// spelling its `DebugName` carries.
+pub def ctor_name_set (s : Scope) : HashMap String Bool :=
+    let sd : ScopeData := scope_globals s in
+    ctor_names_from_inds (HashMap.to_list sd.inductives) str_map_empty
+
+#[partial]
+def ctor_names_from_inds (pairs : List (Pair String Inductive)) (acc : HashMap String Bool) : HashMap String Bool :=
+    match pairs {
+        List.empty => acc,
+        List.cons p rest =>
+            match p {
+                Pair.pair _key ind =>
+                    match ind {
+                        Inductive.mk _name _params _typ ctors _attrs _vis =>
+                            ctor_names_from_inds rest (ctor_names_from_ctors ctors acc),
+                    },
+            },
+    }
+
+#[partial]
+def ctor_names_from_ctors (ctors : List InductConstructor) (acc : HashMap String Bool) : HashMap String Bool :=
+    match ctors {
+        List.empty => acc,
+        List.cons c rest =>
+            match c {
+                InductConstructor.mk name _params _typ =>
+                    let full : String := show_name_path name in
+                    let with_full : HashMap String Bool := str_map_insert full true acc in
+                    ctor_names_from_ctors rest (str_map_insert (last_dotted_segment full) true with_full),
+            },
+    }
+
+/// `"List.cons"` -> `"cons"`; a name with no dot is returned unchanged.
+/// Mirrors `lang/typecheck/infer.mo`'s own `last_dotted_segment_go`,
+/// which is not exported.
+def last_dotted_segment (s : String) : String :=
+    last_dotted_segment_go s (String.length s - 1)
+
+#[terminating]
+def last_dotted_segment_go (s : String) (idx : I64) : String :=
+    if I64.lt idx 0 then s
+    else
+        match (String.get s idx : Option U8) {
+            Option.none => s,
+            Option.some byte_val =>
+                if U8.beq byte_val 46u8 then // '.' is ASCII 46
+                    // `String.drop`, not `String.slice`: slice's second
+                    // argument is a LENGTH, not an end index, and the
+                    // existing call sites that pass an end index only
+                    // survive because over-reads get clamped.
+                    String.drop (idx + 1) s
+                else last_dotted_segment_go s (idx - 1),
+        }
+
+/// Is this spine head a constructor, so its arguments are owning stores
+/// rather than call arguments? Checks the rendered `DebugName` and its
+/// last dotted segment against `ctors`.
+def head_is_ctor (ctors : HashMap String Bool) (t : Term) : Bool :=
+    match t {
+        Term.con _c => true,
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id => name_is_ctor ctors (show_identifier id),
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
+def name_is_ctor (ctors : HashMap String Bool) (nm : String) : Bool :=
+    match str_map_lookup nm ctors {
+        Option.some _ => true,
+        Option.none =>
+            match str_map_lookup (last_dotted_segment nm) ctors {
+                Option.some _ => true,
+                Option.none => false,
+            },
+    }
+
+/// `ctx` is the position the CURRENT subterm occupies. A `Term.var`
+/// matching `target` contributes 1 when that position is an owning one.
+#[partial]
+def owning_at (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (t : Term) : I64 :=
+    match t {
+        Term.var idx _dbg =>
+            if I64.beq idx target then (if pos_is_owning ctx then 1 else 0) else 0,
+        Term.var_macro _idx _dbg => 0,
+        // A binder resets the position: its body is the value the
+        // closure produces, not whatever slot the closure itself fills.
+        Term.lam _dbg _typ body => owning_at ctors UsePos.up_value (target + 1) body,
+        Term.forall _dbg _kind body => owning_at ctors UsePos.up_value (target + 1) body,
+        Term.pi _arg _ret => 0,
+        Term.app callee arg =>
+            let arg_pos : UsePos :=
+                if head_is_ctor ctors (app_spine_head callee) then UsePos.up_con_field
+                else UsePos.up_app_arg in
+            owning_at ctors UsePos.up_app_head target callee + owning_at ctors arg_pos target arg,
+        Term.lit value => owning_at_literal ctors ctx target value,
+        // A native's arguments are call arguments, not stores.
+        Term.ntv n =>
+            match n {
+                Native.mk _name _num_args args => owning_at_opt_args ctors UsePos.up_app_arg target args,
+            },
+        Term.con c =>
+            match c {
+                Con.mk _name _typ_name _num_args args => owning_at_opt_args ctors UsePos.up_con_field target args,
+            },
+        Term.type_ _u => 0,
+        Term.hole => 0,
+        Term.quote_ _inner => 0,
+        Term.ctx _loc inner => owning_at ctors ctx target inner,
+    }
+
+def pos_is_owning (p : UsePos) : Bool :=
+    match p {
+        UsePos.up_con_field => true,
+        UsePos.up_value => true,
+        UsePos.up_app_head => false,
+        UsePos.up_app_arg => false,
+        UsePos.up_scrutinee => false,
+    }
+
+#[partial]
+def owning_at_literal (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (l : Literal) : I64 :=
+    match l {
+        Literal.str _v => 0,
+        Literal.char _v => 0,
+        Literal.num _n _suf => 0,
+        Literal.flt _t _suf => 0,
+        // Branches inherit the position the whole `if` occupies, and
+        // combine by MAX for the same reason `uses_of` does -- only one
+        // of them runs, so only one of them owns.
+        Literal.if_ cond then_ else_ =>
+            owning_at ctors UsePos.up_scrutinee target cond
+                + i64_max (owning_at ctors ctx target then_) (owning_at ctors ctx target else_),
+        Literal.match_ scrut cases =>
+            owning_at ctors UsePos.up_scrutinee target scrut + owning_at_cases ctors ctx target cases,
+        Literal.struct_lit fields _type_name => owning_at_fields ctors target fields,
+        // The base of a struct update is consumed to build the new one.
+        Literal.struct_update base fields =>
+            owning_at ctors UsePos.up_con_field target base + owning_at_fields ctors target fields,
+    }
+
+#[partial]
+def owning_at_cases (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (cases : List MatchCase) : I64 :=
+    match cases {
+        List.empty => 0,
+        List.cons c rest =>
+            i64_max (owning_at_case ctors ctx target c) (owning_at_cases ctors ctx target rest),
+    }
+
+#[partial]
+def owning_at_case (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (c : MatchCase) : I64 :=
+    match c {
+        MatchCase.mc _name args body _fp => owning_at ctors ctx (target + List.length args) body,
+    }
+
+#[partial]
+def owning_at_fields (ctors : HashMap String Bool) (target : I64) (fields : List StructLitField) : I64 :=
+    match fields {
+        List.empty => 0,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk _name value =>
+                    owning_at ctors UsePos.up_con_field target value + owning_at_fields ctors target rest,
+            },
+    }
+
+#[partial]
+def owning_at_opt_args (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (args : List (Option Term)) : I64 :=
+    match args {
+        List.empty => 0,
+        List.cons a rest =>
+            match a {
+                Option.some t => owning_at ctors ctx target t + owning_at_opt_args ctors ctx target rest,
+                Option.none => owning_at_opt_args ctors ctx target rest,
+            },
+    }
+
 // ─── Per-binder collection ─────────────────────────────────────────
 
 /// Where a binder came from. Enough to read a report by; deliberately
@@ -196,6 +470,10 @@ pub struct BinderUse {
     /// everything `attribute_binder_types` needs to look the real type
     /// up later, without this walk taking a `Scope`.
     ctor : Identifier := Identifier.id "",
+    /// Owning uses of this binder — `owning_uses` on its body. `0` or
+    /// `1` means it is borrowable as written (one move, the rest
+    /// reads); `2` or more means it genuinely needs duplication.
+    owning : I64 := 0,
     /// Position of this binder within that constructor's arguments, in
     /// written order, 0-based. `-1` for a `bk_lam` binder.
     ///
@@ -226,6 +504,8 @@ pub def BinderUse.ctor (u : BinderUse) : Identifier := u.ctor
 
 pub def BinderUse.pos (u : BinderUse) : I64 := u.pos
 
+pub def BinderUse.owning (u : BinderUse) : I64 := u.owning
+
 /// `DebugName` -> a printable identifier. An unnamed binder reports as
 /// `_`, matching how the corpus already spells a binder nobody reads.
 def binder_name (dbg : DebugName) : Identifier :=
@@ -248,11 +528,11 @@ def binder_name (dbg : DebugName) : Identifier :=
 /// Order is unspecified -- the accumulator reverses, and the report
 /// sorts by count anyway.
 #[partial]
-pub def collect_binder_uses (t : Term) : List BinderUse :=
-    collect_uses_term t List.empty
+pub def collect_binder_uses (ctors : HashMap String Bool) (t : Term) : List BinderUse :=
+    collect_uses_term ctors t List.empty
 
 #[partial]
-def collect_uses_term (t : Term) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_term (ctors : HashMap String Bool) (t : Term) (acc : List BinderUse) : List BinderUse :=
     match t {
         Term.var _idx _dbg => acc,
         Term.var_macro _idx _dbg => acc,
@@ -262,54 +542,55 @@ def collect_uses_term (t : Term) (acc : List BinderUse) : List BinderUse :=
                   kind := BinderKind.bk_lam,
                   typ := typ,
                   count := uses_of 0 body,
+                  owning := owning_uses ctors 0 body,
                   ctor := Identifier.id "",
                   pos := 0 - 1 } in
-            collect_uses_term body (List.cons u acc),
+            collect_uses_term ctors body (List.cons u acc),
         // A `forall` binds a TYPE variable. It is erased before run time,
         // so it is not a runtime binder and never owns memory -- walk
         // through it for the binders nested inside, but do not report it.
-        Term.forall _dbg _kind body => collect_uses_term body acc,
+        Term.forall _dbg _kind body => collect_uses_term ctors body acc,
         // Entirely a type position (rule 2). Any `lam` nested inside a
         // type is likewise compile-time and reports nothing.
         Term.pi _arg _ret => acc,
-        Term.app callee arg => collect_uses_term arg (collect_uses_term callee acc),
-        Term.lit value => collect_uses_literal value acc,
-        Term.ntv n => collect_uses_native n acc,
-        Term.con c => collect_uses_con c acc,
+        Term.app callee arg => collect_uses_term ctors arg (collect_uses_term ctors callee acc),
+        Term.lit value => collect_uses_literal ctors value acc,
+        Term.ntv n => collect_uses_native ctors n acc,
+        Term.con c => collect_uses_con ctors c acc,
         Term.type_ _u => acc,
         Term.hole => acc,
         Term.quote_ _inner => acc,
-        Term.ctx _loc inner => collect_uses_term inner acc,
+        Term.ctx _loc inner => collect_uses_term ctors inner acc,
     }
 
 #[partial]
-def collect_uses_literal (l : Literal) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_literal (ctors : HashMap String Bool) (l : Literal) (acc : List BinderUse) : List BinderUse :=
     match l {
         Literal.str _v => acc,
         Literal.char _v => acc,
         Literal.num _n _suf => acc,
         Literal.flt _t _suf => acc,
         Literal.if_ cond then_ else_ =>
-            collect_uses_term else_ (collect_uses_term then_ (collect_uses_term cond acc)),
-        Literal.match_ scrut cases => collect_uses_cases cases (collect_uses_term scrut acc),
-        Literal.struct_lit fields _type_name => collect_uses_fields fields acc,
-        Literal.struct_update base fields => collect_uses_fields fields (collect_uses_term base acc),
+            collect_uses_term ctors else_ (collect_uses_term ctors then_ (collect_uses_term ctors cond acc)),
+        Literal.match_ scrut cases => collect_uses_cases ctors cases (collect_uses_term ctors scrut acc),
+        Literal.struct_lit fields _type_name => collect_uses_fields ctors fields acc,
+        Literal.struct_update base fields => collect_uses_fields ctors fields (collect_uses_term ctors base acc),
     }
 
 #[partial]
-def collect_uses_cases (cases : List MatchCase) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_cases (ctors : HashMap String Bool) (cases : List MatchCase) (acc : List BinderUse) : List BinderUse :=
     match cases {
         List.empty => acc,
-        List.cons c rest => collect_uses_cases rest (collect_uses_case c acc),
+        List.cons c rest => collect_uses_cases ctors rest (collect_uses_case ctors c acc),
     }
 
 #[partial]
-def collect_uses_case (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_case (ctors : HashMap String Bool) (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
     match c {
         MatchCase.mc name args body _fp =>
             let n : I64 := List.length args in
-            let with_args : List BinderUse := collect_case_args name args 0 n body acc in
-            collect_uses_term body with_args,
+            let with_args : List BinderUse := collect_case_args ctors name args 0 n body acc in
+            collect_uses_term ctors body with_args,
     }
 
 /// Pattern binders are pushed onto the local context left to right
@@ -321,7 +602,7 @@ def collect_uses_case (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
 /// binder's count to a different binder, which is why it is spelled out
 /// rather than inlined.
 #[partial]
-def collect_case_args (ctor : Identifier) (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List BinderUse) : List BinderUse :=
+def collect_case_args (ctors : HashMap String Bool) (ctor : Identifier) (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List BinderUse) : List BinderUse :=
     match args {
         List.empty => acc,
         List.cons nm rest =>
@@ -331,41 +612,42 @@ def collect_case_args (ctor : Identifier) (args : List Identifier) (i : I64) (n 
                   kind := BinderKind.bk_match,
                   typ := Term.hole,
                   count := uses_of idx body,
+                  owning := owning_uses ctors idx body,
                   ctor := ctor,
                   pos := i } in
-            collect_case_args ctor rest (i + 1) n body (List.cons u acc),
+            collect_case_args ctors ctor rest (i + 1) n body (List.cons u acc),
     }
 
 #[partial]
-def collect_uses_fields (fields : List StructLitField) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_fields (ctors : HashMap String Bool) (fields : List StructLitField) (acc : List BinderUse) : List BinderUse :=
     match fields {
         List.empty => acc,
         List.cons f rest =>
             match f {
-                StructLitField.mk _name value => collect_uses_fields rest (collect_uses_term value acc),
+                StructLitField.mk _name value => collect_uses_fields ctors rest (collect_uses_term ctors value acc),
             },
     }
 
 #[partial]
-def collect_uses_con (c : Con) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_con (ctors : HashMap String Bool) (c : Con) (acc : List BinderUse) : List BinderUse :=
     match c {
-        Con.mk _name _typ_name _num_args args => collect_uses_opt_args args acc,
+        Con.mk _name _typ_name _num_args args => collect_uses_opt_args ctors args acc,
     }
 
 #[partial]
-def collect_uses_native (n : Native) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_native (ctors : HashMap String Bool) (n : Native) (acc : List BinderUse) : List BinderUse :=
     match n {
-        Native.mk _native_name _num_args args => collect_uses_opt_args args acc,
+        Native.mk _native_name _num_args args => collect_uses_opt_args ctors args acc,
     }
 
 #[partial]
-def collect_uses_opt_args (args : List (Option Term)) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_opt_args (ctors : HashMap String Bool) (args : List (Option Term)) (acc : List BinderUse) : List BinderUse :=
     match args {
         List.empty => acc,
         List.cons a rest =>
             match a {
-                Option.some t => collect_uses_opt_args rest (collect_uses_term t acc),
-                Option.none => collect_uses_opt_args rest acc,
+                Option.some t => collect_uses_opt_args ctors rest (collect_uses_term ctors t acc),
+                Option.none => collect_uses_opt_args ctors rest acc,
             },
     }
 
@@ -431,7 +713,7 @@ def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
 def ctor_field_type (s : Scope) (ctor : Identifier) (pos : I64) : Option Term :=
     if I64.lt pos 0 then Option.none
     else
-        let con_mp : ModulePath := ModulePath.mp (List.cons ctor List.empty) in
+        let con_mp : NamePath := NamePath.npath (List.cons ctor List.empty) in
         match scope_find_all_inductives_by_constructor con_mp s {
             List.empty => Option.none,
             List.cons ind rest =>
@@ -471,6 +753,11 @@ def nth_param_type (params : List Param) (n : I64) : Option Term :=
 // one of them is a way to produce a plausible-looking wrong number.
 
 def dbg_x : DebugName := DebugName.named (Identifier.id "x")
+
+/// The constructor set the tests below resolve against: just `P`, the
+/// one constructor they build terms out of. Real runs get this from
+/// `ctor_name_set`.
+def probe_ctors : HashMap String Bool := str_map_insert "P" true str_map_empty
 
 /// `var 0` -- the binder itself, used once.
 def t_var0 : Term := Term.var 0 dbg_x
@@ -565,14 +852,14 @@ def test_uses_of_counts_constructor_args : Bool :=
     // Constructor argument slots all run, so they sum.
     let args : List (Option Term) :=
         List.cons (Option.some t_var0) (List.cons (Option.some t_var0) List.empty) in
-    let c : Con := Con.mk (Identifier.id "P") (ModulePath.mp (List.cons (Identifier.id "P") List.empty)) 2 args in
+    let c : Con := Con.mk (Identifier.id "P") (NamePath.npath (List.cons (Identifier.id "P") List.empty)) 2 args in
     I64.beq (uses_of 0 (Term.con c)) 2
 
 #[test]
 def test_uses_of_skips_unsaturated_constructor_slots : Bool :=
     let args : List (Option Term) :=
         List.cons (Option.some t_var0) (List.cons Option.none List.empty) in
-    let c : Con := Con.mk (Identifier.id "P") (ModulePath.mp (List.cons (Identifier.id "P") List.empty)) 2 args in
+    let c : Con := Con.mk (Identifier.id "P") (NamePath.npath (List.cons (Identifier.id "P") List.empty)) 2 args in
     I64.beq (uses_of 0 (Term.con c)) 1
 
 #[test]
@@ -582,14 +869,14 @@ def test_collect_reports_one_binder_per_lambda : Bool :=
     // affine-by-default must free automatically.
     let inner : Term := Term.lam dbg_x Term.hole (Term.var 0 dbg_x) in
     let t : Term := Term.lam dbg_x Term.hole inner in
-    I64.beq (List.length (collect_binder_uses t)) 2
+    I64.beq (List.length (collect_binder_uses probe_ctors t)) 2
 
 #[test]
 def test_collect_records_an_unused_binder_as_zero : Bool :=
     // `fn x => <hole>` -- one binder, zero uses. Affine-legal (weakening
     // is admissible), and a release point under Milestone 3.
     let t : Term := Term.lam dbg_x Term.hole Term.hole in
-    match collect_binder_uses t {
+    match collect_binder_uses probe_ctors t {
         List.cons u _rest => I64.beq (BinderUse.count u) 0,
         List.empty => false,
     }
@@ -599,7 +886,7 @@ def test_collect_records_an_overused_binder : Bool :=
     // `fn x => x x` -- two uses. This is the shape that needs `Copy`.
     let body : Term := Term.app (Term.var 0 dbg_x) (Term.var 0 dbg_x) in
     let t : Term := Term.lam dbg_x Term.hole body in
-    match collect_binder_uses t {
+    match collect_binder_uses probe_ctors t {
         List.cons u _rest => I64.beq (BinderUse.count u) 2,
         List.empty => false,
     }
@@ -610,7 +897,7 @@ def test_collect_skips_forall_binders : Bool :=
     // The `lam` nested under it is still reported.
     let inner : Term := Term.lam dbg_x Term.hole Term.hole in
     let t : Term := Term.forall dbg_x (Term.type_ 0) inner in
-    I64.beq (List.length (collect_binder_uses t)) 1
+    I64.beq (List.length (collect_binder_uses probe_ctors t)) 1
 
 // ─── Tests: type attribution ───────────────────────────────────────
 
@@ -657,7 +944,7 @@ def test_attribute_leaves_lambda_binders_alone : Bool :=
     let annotated : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64")) in
     let u : BinderUse :=
         { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := annotated,
-          count := 1, ctor := Identifier.id "", pos := 0 - 1 } in
+          count := 1, owning := 1, ctor := Identifier.id "", pos := 0 - 1 } in
     match attribute_binder_types empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {
@@ -677,7 +964,7 @@ def test_attribute_fails_closed_on_an_unknown_constructor : Bool :=
     // rather than acquiring a confident wrong type.
     let u : BinderUse :=
         { name := Identifier.id "f", kind := BinderKind.bk_match, typ := Term.hole,
-          count := 2, ctor := Identifier.id "nope", pos := 0 } in
+          count := 2, owning := 2, ctor := Identifier.id "nope", pos := 0 } in
     match attribute_binder_types empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {
@@ -698,12 +985,92 @@ def test_collect_records_the_constructor_and_position : Bool :=
     let arm : MatchCase := MatchCase.mc (Identifier.id "pair") args (Term.var 0 dbg_x) no_fp in
     let arms : List MatchCase := List.cons arm List.empty in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
-    match collect_binder_uses t {
+    match collect_binder_uses probe_ctors t {
         List.cons u _rest =>
             // The accumulator reverses, so `b` (written position 1)
             // comes back first, and it is the one the body uses.
             Similar.similar (BinderUse.ctor u) (Identifier.id "pair")
                 && I64.beq (BinderUse.pos u) 1
                 && I64.beq (BinderUse.count u) 1,
+        List.empty => false,
+    }
+
+// ─── Tests: owning vs borrowing uses ───────────────────────────────
+
+/// A constructor term with `n` slots filled by `t_var0`, for testing
+/// that an owning store is recognised as one.
+def con_of (args : List (Option Term)) : Term :=
+    let nm : NamePath := NamePath.npath (List.cons (Identifier.id "P") List.empty) in
+    Term.con (Con.mk (Identifier.id "P") nm 2 args)
+
+#[test]
+def test_owning_a_bare_body_is_a_move : Bool :=
+    // The value a scope produces is moved out. One owning use.
+    I64.beq (owning_uses probe_ctors 0 t_var0) 1
+
+#[test]
+def test_owning_ignores_a_call_argument : Bool :=
+    // `f x` with `f` free -- passing to a function is a read, which a
+    // borrow could serve. The head is a free var (idx sentinel), not
+    // the target.
+    let f : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "f")) in
+    I64.beq (owning_uses probe_ctors 0 (Term.app f t_var0)) 0
+
+#[test]
+def test_owning_ignores_a_match_scrutinee : Bool :=
+    // Matching inspects a value; it does not consume it.
+    let no_fp : Option FieldPattern := Option.none in
+    let arm : MatchCase := MatchCase.mc (Identifier.id "a") List.empty Term.hole no_fp in
+    let t : Term := Term.lit (Literal.match_ t_var0 (List.cons arm List.empty)) in
+    I64.beq (owning_uses probe_ctors 0 t) 0
+
+#[test]
+def test_owning_counts_a_constructor_field : Bool :=
+    // Stored into a constructor: the value outlives the expression.
+    let args : List (Option Term) := List.cons (Option.some t_var0) List.empty in
+    I64.beq (owning_uses probe_ctors 0 (con_of args)) 1
+
+#[test]
+def test_owning_counts_both_constructor_fields : Bool :=
+    // The same value stored twice. THIS is what genuinely needs
+    // duplication -- no borrow discipline rescues it.
+    let args : List (Option Term) :=
+        List.cons (Option.some t_var0) (List.cons (Option.some t_var0) List.empty) in
+    I64.beq (owning_uses probe_ctors 0 (con_of args)) 2
+
+#[test]
+def test_owning_counts_a_curried_constructor_argument : Bool :=
+    // `P x` written as an application, not as saturated `Con.args`.
+    // Multi-arg constructors are CURRIED, so this is the shape most
+    // constructor stores actually arrive in -- misreading it as a call
+    // argument would count an owning store as a free read.
+    let empty_args : List (Option Term) := List.empty in
+    let head : Term := con_of empty_args in
+    I64.beq (owning_uses probe_ctors 0 (Term.app head t_var0)) 1
+
+#[test]
+def test_owning_takes_max_across_branches : Bool :=
+    // Moved out on both arms, but only one arm runs. One owning use,
+    // so this is still affine-legal.
+    let t : Term := Term.lit (Literal.if_ Term.hole t_var0 t_var0) in
+    I64.beq (owning_uses probe_ctors 0 t) 1
+
+#[test]
+def test_owning_separates_the_read_from_the_move : Bool :=
+    // `if x then x else <hole>` -- read as the condition, moved out on
+    // one arm. One owning use: borrowable, one move. The distinction
+    // the whole section exists to draw.
+    let t : Term := Term.lit (Literal.if_ t_var0 t_var0 Term.hole) in
+    I64.beq (uses_of 0 t) 2 && I64.beq (owning_uses probe_ctors 0 t) 1
+
+#[test]
+def test_collect_records_owning_uses : Bool :=
+    // `fn x => P x x` -- used twice, and both are owning stores.
+    let empty_args : List (Option Term) := List.empty in
+    let head : Term := con_of empty_args in
+    let body : Term := Term.app (Term.app head (Term.var 0 dbg_x)) (Term.var 0 dbg_x) in
+    let t : Term := Term.lam dbg_x Term.hole body in
+    match collect_binder_uses probe_ctors t {
+        List.cons u _rest => I64.beq (BinderUse.count u) 2 && I64.beq (BinderUse.owning u) 2,
         List.empty => false,
     }

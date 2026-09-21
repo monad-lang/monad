@@ -53,7 +53,8 @@ use std::io {println}
 open IO {println}
 use lang::module {ElaboratedModules, elaborate_loaded_modules}
 use lang::types {Decl, Def, Scope, Term, show_identifier}
-use lang::typecheck::usage {BinderUse, attribute_binder_types, collect_binder_uses}
+use lang::typecheck::usage {BinderUse, attribute_binder_types, collect_binder_uses, ctor_name_set}
+use std::map {}
 use std::list {length}
 
 // ─── Reading a binder's type ───────────────────────────────────────
@@ -156,6 +157,18 @@ pub struct Totals {
     /// tallied by the constructor that bound them. Makes the `?` row
     /// legible instead of a shrug -- see `print_totals`.
     unresolved : List TypeTally,
+    /// Of the Σ ≥ 2 binders, those with **at most one owning use** —
+    /// one move plus any number of reads, which a borrow discipline
+    /// serves without duplicating anything.
+    borrowable : I64,
+    /// Of the Σ ≥ 2 binders, those with **two or more owning uses** —
+    /// the same value stored or returned twice. No borrow rescues
+    /// these: they need `Copy`, `Clone`, or a rewrite. The irreducible
+    /// migration cost.
+    needs_dup : I64,
+    /// `needs_dup`, restricted to types the scalar approximation does
+    /// not call `Copy`.
+    needs_dup_non_copy : I64,
 }
 
 pub def Totals.binders (t : Totals) : I64 := t.binders
@@ -172,9 +185,16 @@ pub def Totals.by_type (t : Totals) : List TypeTally := t.by_type
 
 pub def Totals.unresolved (t : Totals) : List TypeTally := t.unresolved
 
+pub def Totals.borrowable (t : Totals) : I64 := t.borrowable
+
+pub def Totals.needs_dup (t : Totals) : I64 := t.needs_dup
+
+pub def Totals.needs_dup_non_copy (t : Totals) : I64 := t.needs_dup_non_copy
+
 def totals_empty : Totals :=
     { binders := 0, zero := 0, one := 0, many := 0, many_non_copy := 0,
-      by_type := List.empty, unresolved := List.empty }
+      by_type := List.empty, unresolved := List.empty,
+      borrowable := 0, needs_dup := 0, needs_dup_non_copy := 0 }
 
 /// How an unattributed over-used binder is labelled in the residue
 /// table. A `bk_lam` binder carries no constructor, and its blank name
@@ -210,12 +230,20 @@ def tally_binder (u : BinderUse) (acc : Totals) : Totals :=
             if String.beq tname "?" then
                 tally_bump (residue_key u) (Totals.unresolved acc)
             else Totals.unresolved acc in
+        // At most one owning use means one move plus reads, which
+        // borrows serve. Two or more is real duplication.
+        let dup : Bool := I64.gt (BinderUse.owning u) 1 in
         { acc with
             binders := Totals.binders acc + 1,
             many := Totals.many acc + 1,
             many_non_copy := non_copy,
             by_type := tally_bump tname (Totals.by_type acc),
-            unresolved := residue }
+            unresolved := residue,
+            borrowable := if dup then Totals.borrowable acc else Totals.borrowable acc + 1,
+            needs_dup := if dup then Totals.needs_dup acc + 1 else Totals.needs_dup acc,
+            needs_dup_non_copy :=
+                if dup && not (is_copy_approx tname) then Totals.needs_dup_non_copy acc + 1
+                else Totals.needs_dup_non_copy acc }
 
 #[partial]
 def tally_binders (us : List BinderUse) (acc : Totals) : Totals :=
@@ -234,23 +262,23 @@ def def_term (d : Def) : Term := d.term
 /// the 2,419 over-used binders -- 30% of the number this whole report
 /// exists to produce.
 #[partial]
-def tally_decls (s : Scope) (ds : List Decl) (acc : Totals) : Totals :=
+def tally_decls (ctors : HashMap String Bool) (s : Scope) (ds : List Decl) (acc : Totals) : Totals :=
     match ds {
         List.empty => acc,
         List.cons d rest =>
             match d {
                 Decl.def_d def_ =>
-                    let raw : List BinderUse := collect_binder_uses (def_term def_) in
-                    tally_decls s rest (tally_binders (attribute_binder_types s raw) acc),
+                    let raw : List BinderUse := collect_binder_uses ctors (def_term def_) in
+                    tally_decls ctors s rest (tally_binders (attribute_binder_types s raw) acc),
                 // A macro body is a template, not code that runs; its
                 // binders are not runtime owners.
-                Decl.def_macro_d _def => tally_decls s rest acc,
+                Decl.def_macro_d _def => tally_decls ctors s rest acc,
                 // A scoped open wraps one real decl. Codegen ignores
                 // these today (`Decl.scoped_open_d`'s own doc comment),
                 // so the report does too rather than disagree with the
                 // backend it is sizing work for.
-                Decl.scoped_open_d _path _filter _inner => tally_decls s rest acc,
-                _ => tally_decls s rest acc,
+                Decl.scoped_open_d _path _filter _inner => tally_decls ctors s rest acc,
+                _ => tally_decls ctors s rest acc,
             },
     }
 
@@ -321,7 +349,14 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
     println ("  used 1 time  (move)    " ++ I64.to_string (Totals.one t) ++ "  (" ++ pct (Totals.one t) n ++ "%)");
     println ("  used 2+ times          " ++ I64.to_string (Totals.many t) ++ "  (" ++ pct (Totals.many t) n ++ "%)");
     println ("  ... of those, non-Copy " ++ I64.to_string (Totals.many_non_copy t) ++ "  (" ++ pct (Totals.many_non_copy t) n ++ "%)");
-    println "  ^ upper bound on the migration cost (scalar approximation of Copy)";
+    println "  ^ PESSIMISTIC bound: what Copy alone would have to cover.";
+    println "";
+    println "  splitting the 2+ set by how the extra uses are spent:";
+    println ("    borrowable (<=1 owning use) " ++ I64.to_string (Totals.borrowable t) ++ "  (" ++ pct (Totals.borrowable t) (Totals.many t) ++ "% of the 2+ set)");
+    println ("    needs duplication (2+ owning) " ++ I64.to_string (Totals.needs_dup t) ++ "  (" ++ pct (Totals.needs_dup t) (Totals.many t) ++ "%)");
+    println ("    ... of those, non-Copy       " ++ I64.to_string (Totals.needs_dup_non_copy t) ++ "  (" ++ pct (Totals.needs_dup_non_copy t) n ++ "% of all binders)");
+    println "  ^ OPTIMISTIC bound: assumes a callee never retains an argument.";
+    println "    The real cost sits between the two.";
     println "  2+ uses by type, most first:";
     let _printed : I64 <- print_top (Totals.by_type t) 20;
     println "  unattributed (`?`) 2+ binders, by the constructor that bound them:";
@@ -351,7 +386,11 @@ def report_on (path : String) : IO Bool := do {
             return false
         },
         Result.ok em => do {
-            let totals : Totals := tally_decls em.scope em.elaborated_decls totals_empty;
+            // Built once per run: a per-node scope lookup would be a
+            // full scan of the inductives map at every one of the
+            // corpus's 44,609 application nodes.
+            let ctors : HashMap String Bool := ctor_name_set em.scope;
+            let totals : Totals := tally_decls ctors em.scope em.elaborated_decls totals_empty;
             print_totals path totals
         }
     }
@@ -374,7 +413,7 @@ def report_affine_usage_compiler : IO Bool := report_on "lang/src/lib.mo"
 
 def tally_of (count : I64) (typ : Term) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := typ, count := count,
-      ctor := Identifier.id "", pos := 0 - 1 }
+      owning := count, ctor := Identifier.id "", pos := 0 - 1 }
 
 def i64_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64"))
 
