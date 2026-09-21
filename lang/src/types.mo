@@ -1825,6 +1825,52 @@ def level_of_type (t: Term) : SortLevel := match sort_level_of t {
     Option.none => SortLevel.concrete 1,
 }
 
+// ─── Level variables: the substitution half (W1.3) ────────────────────
+//
+// The comparison helpers above all REFUSE an unresolved level. These
+// three are what resolve one, and they are the whole reason levels are
+// name-keyed rather than de Bruijn: a level variable can only be bound
+// at a def boundary, so it is free by construction, and there is no
+// second index space for `term_shift`/`term_subst`/`term_permute` to
+// maintain.
+
+/// Every free level variable in a level, in first-seen order.
+def free_level_vars_of (l: SortLevel) : List Identifier := match l {
+    SortLevel.concrete _ => List.empty,
+    SortLevel.var name => List.cons name List.empty,
+    SortLevel.succ inner => free_level_vars_of inner,
+    SortLevel.max left right =>
+        union_ids (free_level_vars_of left) (free_level_vars_of right),
+}
+
+/// Substitute level variables inside a LEVEL. Unmentioned variables are
+/// left alone rather than defaulted, so a partial solution stays partial
+/// -- the same non-committal discipline `solve_typevars` follows.
+def level_subst (l: SortLevel) (binds: List (Pair Identifier SortLevel)) : SortLevel := match l {
+    SortLevel.concrete n => SortLevel.concrete n,
+    SortLevel.var name => match level_lookup name binds {
+        Option.some replacement => replacement,
+        Option.none => SortLevel.var name,
+    },
+    SortLevel.succ inner => SortLevel.succ (level_subst inner binds),
+    SortLevel.max left right =>
+        SortLevel.max (level_subst left binds) (level_subst right binds),
+}
+
+/// First binding for `name`, or none. A plain assoc walk: a level
+/// substitution holds one entry per generalized binder, so this is
+/// never long enough to want a map.
+def level_lookup (name: Identifier) (binds: List (Pair Identifier SortLevel)) : Option SortLevel :=
+    match binds {
+        List.cons entry rest => match entry {
+            Pair.pair key val =>
+                if Similar.similar key name
+                then Option.some val
+                else level_lookup name rest,
+        },
+        List.empty => Option.none,
+    }
+
 instance Similar Term {
     /// Peels BOTH sides before comparing, so a location wrapper never
     /// makes two otherwise-identical terms compare unequal. Without this,
