@@ -108,7 +108,7 @@ def type_head_name (t : Term) : String :=
 ///
 /// Milestone 2 replaced a hardcoded list of scalar names with
 /// `copy_class.copy_verdict`, which resolves an actual `Copy` instance
-/// out of the scope (`std/src/copy.mo` declares the class and the
+/// out of the scope (`init/src/copy.mo` declares the class and the
 /// builtin instances). The report is the first consumer precisely
 /// because it exercises the gate over the whole corpus before anything
 /// uses it to reject a program.
@@ -448,7 +448,7 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
     println ("  used 1 time  (move)    " ++ I64.to_string (Totals.one t) ++ "  (" ++ pct (Totals.one t) n ++ "%)");
     println ("  used 2+ times          " ++ I64.to_string (Totals.many t) ++ "  (" ++ pct (Totals.many t) n ++ "%)");
     println ("  ... of those, non-Copy " ++ I64.to_string (Totals.many_non_copy t) ++ "  (" ++ pct (Totals.many_non_copy t) n ++ "%)");
-    println ("  ... Copy granted           " ++ I64.to_string (Totals.copy_granted t) ++ "   (real instances, std/src/copy.mo)");
+    println ("  ... Copy granted           " ++ I64.to_string (Totals.copy_granted t) ++ "   (real instances, init/src/copy.mo)");
     println ("  ... Copy ambiguous          " ++ I64.to_string (Totals.copy_ambiguous t) ++ "   (2+ concrete instances matched; denied)");
     println "  ^ PESSIMISTIC bound: what Copy alone would have to cover.";
     println "";
@@ -521,9 +521,10 @@ def report_affine_usage_lang : IO Bool := report_on "lang/src/typecheck/traverse
 
 /// The headline number: the self-hosted compiler's own dependency
 /// closure. The target is `affine_target.mo`, not `lang/src/lib.mo`
-/// directly -- it pulls in the same closure PLUS `std::copy`, so the
+/// directly -- it pulls in the same closure PLUS `init::copy`, so the
 /// scope the `Copy` gate resolves against actually contains the
-/// instances. See that file for why `Copy` is not ambient yet.
+/// instances. See that file for why the shim is still needed after
+/// `Copy` moved into `init`, and for the shortcut that did not work.
 #[test]
 def report_affine_usage_compiler : IO Bool := report_on "bench/src/affine_target.mo"
 

@@ -7,6 +7,18 @@
 /// consult, and `lang/src/typecheck/copy_class.mo` is the side that
 /// consults it.
 ///
+/// ## Why this lives in `init`
+///
+/// `init` is the pure, portable core — it "depends on nothing: it must
+/// work in any environment, wasm and embedded targets included"
+/// (`init/mote.toml`). `Copy` is a type-system concept with no OS
+/// surface, and `Pair`, which `copy` returns, is already here
+/// (`init/src/prelude.mo`). It started out in `std` and had to move:
+/// `Borrow A` belongs in `init` for the same reason, `std` depends on
+/// `init` and never the reverse, so a `Copy` in `std` would strand
+/// `instance Copy (Borrow A)` away from its own type and put it out of
+/// reach of every `init`-only consumer.
+///
 /// ## Why a class and not a compiler table
 ///
 /// Under Design B every binder is affine by default: usable at most

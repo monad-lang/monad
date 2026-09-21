@@ -11,9 +11,17 @@
 /// ## Real instances, not a table
 ///
 /// The verdict comes from resolving a genuine `Copy` instance
-/// (`std/src/copy.mo`) through the scope's own instance registry, so a
+/// (`init/src/copy.mo`) through the scope's own instance registry, so a
 /// user type can opt in with `instance Copy T { ... }` and the gate is
 /// extensible rather than closed.
+///
+/// This module deliberately does NOT import `init::copy`. Importing it
+/// here looks like it should put the instances in scope and does not:
+/// they reach a scope only via the elaborated dependency closure of
+/// whatever is being checked, and `lang/src/lib.mo` re-exports a small
+/// surface that never reaches this file. Measured, not assumed — see
+/// `bench/src/affine_target.mo`, which records the experiment that
+/// established it.
 ///
 /// A concern was raised and checked before this was built: the corpus
 /// documents a "first-registered-instance-wins" fragility in instance
