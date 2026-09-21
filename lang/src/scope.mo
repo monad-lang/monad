@@ -3,7 +3,7 @@ use lib::types {
   Identifier, InductConstructor, Inductive,
   Infix, Instance, InstanceKey, Literal, LocalScope, LocalVar, MatchCase, Module, ModuleRegistry,
   ModulePath, NamePath, NameRef, Native, Operator, Param, QualifiedName, Scope, ScopeClassDef,
-  ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Struct, StructField, StructLitField,
+  ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, SortLevel, Struct, StructField, StructLitField,
   Term, class_d, class_not_found, def_d, hole, id, inductive_d, inductive_not_found, infix_d,
   instance_d, instance_not_found, mk, mp, name, name_not_found, name_path_similar, nid, nnp, nop,
   npath, nqn, open_d, scoped_open_d, show_name_path, struct_d, type_, use_d,
@@ -6053,6 +6053,13 @@ def expected_carrier_of (t : Term) : Option Term :=
     match t {
         Term.hole => Option.none,
         Term.type_ _ => Option.none,
+        // Same placeholder in the other spelling. W1.1's lowering flip
+        // made the PARSER emit `Term.sort (concrete 1)` where it used to
+        // emit `Term.type_ 1`, so an un-annotated lambda parameter now
+        // arrives spelled this way -- and without this arm it reads as a
+        // real carrier, which is exactly the regression the measurement
+        // above describes.
+        Term.sort _ => Option.none,
         _ => Option.some t,
     }
 
@@ -7914,6 +7921,32 @@ def test_infer_carrier_type_if_branch_none_falls_through_to_else : Bool :=
     match infer_carrier_type List.empty List.empty str_map_empty List.empty if_term {
         Option.some _ => true,
         Option.none => false,
+    }
+
+// Both spellings of the universe placeholder are UNINFORMATIVE as a
+// carrier. The `Term.sort` half is a regression pin with a measured
+// history: W1.1's lowering flip made the parser emit
+// `Term.sort (concrete 1)` where it had emitted `Term.type_ 1`, and
+// because this function only rejected the old spelling, an un-annotated
+// lambda parameter started reading as a REAL carrier. `lam_binder_type`
+// then kept the placeholder instead of taking the callee's signature
+// hint, so `fn x acc => x + acc` resolved `+` against the class's own
+// parameter `A`, matched `instance [Add A] HAdd A A A` -- whose field is
+// the mutually-recursive `instance [HAdd A A A] Add A` -- and the driver
+// self-called until GC died (`driver exited -1` on both foldable files
+// and `examples/iteration_advanced.mo`). The pair is asserted together
+// because the two spellings must stay indistinguishable HERE; a test on
+// `Term.type_` alone is what let the regression through.
+#[test]
+def test_expected_carrier_of_rejects_both_sort_spellings : Bool :=
+    let old_spelling : Option Term := expected_carrier_of (Term.type_ 1) in
+    let new_spelling : Option Term := expected_carrier_of (Term.sort (SortLevel.concrete 1)) in
+    match old_spelling {
+        Option.none => match new_spelling {
+            Option.none => true,
+            Option.some _ => false,
+        },
+        Option.some _ => false,
     }
 
 #[test]
