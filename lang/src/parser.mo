@@ -4942,14 +4942,38 @@ def sort_form_sort (input : String) : ParseResult ParseTerm :=
 #[partial]
 def sort_form_sort_kw (r : ParseResult String) : ParseResult ParseTerm :=
 	match r {
-		success rem _ => sort_form_sort_num (number (skip_spaces rem)),
+		success rem _ => sort_form_sort_level (skip_spaces rem),
 		fail e => fail e
 	}
 
+/// `Sort` takes either a NUMERAL (`Sort 2`) or a level VARIABLE
+/// (`Sort u`). The numeral is tried first so every existing `Sort N` in
+/// the corpus takes exactly the path it always took; only input that is
+/// not a numeral can reach the variable arm.
+///
+/// A bare `Sort` with neither still falls through to the ordinary
+/// variable path, because both arms fail and `variable_try_sort_alt`
+/// discards this error -- that is what keeps the hole-typed `Sort`
+/// global working as it did before any of this.
 #[partial]
-def sort_form_sort_num (r : ParseResult I64) : ParseResult ParseTerm :=
+def sort_form_sort_level (rem : String) : ParseResult ParseTerm :=
+	sort_form_sort_num (number rem) rem
+
+#[partial]
+def sort_form_sort_num (r : ParseResult I64) (rem : String) : ParseResult ParseTerm :=
 	match r {
-		success rem n => success rem (pt_type_ n),
+		success rest n => success rest (pt_type_ n),
+		fail _ => sort_form_sort_var (identifier rem)
+	}
+
+/// The level-variable arm. `identifier` already rejects reserved
+/// keywords and validates the start character, so `Sort match` does not
+/// become a level named `match`.
+#[partial]
+def sort_form_sort_var (r : ParseResult String) : ParseResult ParseTerm :=
+	match r {
+		success rest name =>
+			success rest (pt_sort (SortLevel.var (Identifier.id name))),
 		fail e => fail e
 	}
 
@@ -7521,6 +7545,57 @@ def test_t_var_shadow : Bool :=
 		fail _ => false
 	}
 
+// ─── `Sort u`: the level-variable form (W1.3) ─────────────────────────
+
+/// `Sort 1` must still take the NUMERAL path and lower to the concrete
+/// spelling. This is the regression guard for adding the variable arm:
+/// if the numeral arm stopped being tried first, every `Sort N` in the
+/// corpus would silently become a level variable named by its digits.
+#[test]
+def test_sort_numeral_still_parses_concrete : Bool :=
+	match expression "Sort 2" {
+		success rem out =>
+			String.beq rem "" &&
+			match out.kind {
+				ParseTermKind.type_ u => I64.beq u 2,
+				_ => false,
+			},
+		fail _ => false
+	}
+
+/// `Sort u` is the form that had NO representation before this change:
+/// `pt_type_` carries an `I64`, so a level variable could not be built
+/// at all.
+#[test]
+def test_sort_variable_parses_as_a_level_var : Bool :=
+	match expression "Sort u" {
+		success rem out =>
+			String.beq rem "" &&
+			match out.kind {
+				ParseTermKind.sort level => match level {
+					SortLevel.var name => Similar.similar name (Identifier.id "u"),
+					_ => false,
+				},
+				_ => false,
+			},
+		fail _ => false
+	}
+
+/// A BARE `Sort` (no numeral, no variable) must still fall through to
+/// the ordinary variable path and reach the hole-typed `Sort` global --
+/// the pre-W1.1b behaviour that everything before this work relied on.
+#[test]
+def test_bare_sort_is_still_an_ordinary_variable : Bool :=
+	match expression "Sort" {
+		success rem out =>
+			String.beq rem "" &&
+			match out.kind {
+				ParseTermKind.var _ => true,
+				_ => false,
+			},
+		fail _ => false
+	}
+
 #[test]
 def test_t_lambda_identity : Bool :=
 	// fn x => x  →  lam (named "x") (hole) (var 0 (named "x"))
@@ -7534,12 +7609,13 @@ def test_t_lambda_identity : Bool :=
 						ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
 						ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
 						ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
-						ParseTermKind.type_ _ => false
+						ParseTermKind.type_ _ => false, ParseTermKind.sort _ => false
 					},
 				ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
 				ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,
 				ParseTermKind.lit _ => false, ParseTermKind.ntv _ => false,
-				ParseTermKind.con _ => false, ParseTermKind.type_ _ => false, ParseTermKind.hole => false
+				ParseTermKind.con _ => false, ParseTermKind.type_ _ => false,
+				ParseTermKind.sort _ => false, ParseTermKind.hole => false
 			},
 		fail _ => false
 	}

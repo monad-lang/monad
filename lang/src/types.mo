@@ -731,6 +731,11 @@ def pt_lit (l : ParseLiteral) : ParseTerm := pt_ (ParseTermKind.lit l)
 #[partial]
 def pt_type_ (u : I64) : ParseTerm := pt_ (ParseTermKind.type_ u)
 
+/// `Sort u` -- a sort at a level VARIABLE. `pt_type_` above covers every
+/// concrete level, so this is only for the form that has no numeral.
+#[partial]
+def pt_sort (l : SortLevel) : ParseTerm := pt_ (ParseTermKind.sort l)
+
 #[partial]
 def pt_quote_ (t : ParseTerm) : ParseTerm := pt_ (ParseTermKind.quote_ t)
 
@@ -979,6 +984,17 @@ pub type ParseTermKind {
     ntv (native: ParseNative),
     con (c: ParseCon),
     type_ (universe: I64),
+    /// A sort whose level is NOT a plain numeral -- today only `Sort u`,
+    /// a level variable. `type_` above stays the concrete-level spelling
+    /// and every existing `Sort N`/`Type`/`Prop` form still lowers
+    /// through it, so this variant is reached only by source that could
+    /// not be represented at all before.
+    ///
+    /// Separate variant rather than re-typing `type_`'s `I64` payload,
+    /// for the reason `Term.sort` is separate from `Term.type_`: a
+    /// payload change breaks every positional match site at runtime, and
+    /// the self-hosted compiler has no exhaustiveness check to find them.
+    sort (level: SortLevel),
     quote_ (term: ParseTerm),
     /// A `do { }` block, kept as STATEMENTS rather than desugared during
     /// parsing. Do-notation is syntax, so it belongs in the parse AST;

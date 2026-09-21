@@ -46,6 +46,7 @@ use lib::scope {
 }
 use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error}
+use lib::typecheck::levels {is_level_binder_kind}
 use lib::typecheck::infer {empty_local_types, empty_locals, mk, type_check}
 // `--verbose` per-module/per-stage trace (see `std/src/log.mo`'s own header
 // for why the helpers gate themselves and why `bench_step` below prints
@@ -1261,8 +1262,18 @@ def bind_unresolved_as_local_typevars (names : List Identifier) (scope : Scope) 
 #[partial]
 def forall_chain_binder_names (typ : Term) : List Identifier :=
     match typ {
-        Term.forall dbg _kind body =>
-            match dbg {
+        Term.forall dbg kind body =>
+            // A LEVEL binder's name is not a type variable: its only
+            // consumer, `locals_with_def_typevars`, skolemizes these
+            // names into `LocalScope` as TERM locals, and a level
+            // variable must never land there (`scope_find_local` would
+            // then find it, and `whnf_delta`'s local check would refuse
+            // to unfold a same-named global). Levels live in the
+            // signature as binders and are resolved by level
+            // substitution, never by local lookup.
+            if is_level_binder_kind kind
+            then forall_chain_binder_names body
+            else match dbg {
                 DebugName.named id =>
                     let rest : List Identifier := forall_chain_binder_names body in
                     union_ids (List.cons id List.empty) rest,

@@ -447,3 +447,52 @@ def test_keyword_prefix_is_not_hijacked : Bool :=
 #[test]
 def test_type_decl_kind_position_accepts_the_sort_forms : Bool :=
     typecheck_source "type Foo : Sort 1 { mk }\ntype Bar { mk2 }"
+
+// ─── Level variables: `Sort u` (W1.3) ─────────────────────────────────
+//
+// `Sort u` had no representation before this work: `pt_type_` carries an
+// `I64`, so a level VARIABLE could not be built by the parser at all,
+// and `Sort u` parsed as an APPLICATION of the hole-typed `Sort` global
+// to the variable `u`. That is why the first pin below is fail-first and
+// the second is not -- measured against a clean-HEAD worktree, not
+// assumed:
+//
+//   def bad : Sort u := Sort u   -> ACCEPTED at HEAD, refused here
+//   def idL {A : Sort u} ...     -> accepted at HEAD (vacuously, as an
+//                                   application) and accepted here (as a
+//                                   real level binder), so it is a
+//                                   REGRESSION GUARD, not a discriminator
+
+/// A level-polymorphic signature checks. Deliberately NOT claimed as
+/// fail-first: it was accepted before this change too, for the wrong
+/// reason (`Sort u` was an application of a hole-typed global, and a
+/// hole accepts anything). What it guards is that generalization does
+/// not BREAK the form -- `wrap_level_forall` binds `u`, so it must not
+/// end up unbound and rejected.
+#[test]
+def test_level_polymorphic_signature_checks : Bool :=
+    typecheck_source "def idL {A : Sort u} (x : A) : A := x"
+
+/// FAIL-FIRST, and the reason this commit is observable at all: a sort
+/// is not its own type, in the VARIABLE spelling as well as the concrete
+/// one. At HEAD this was accepted because both sides were applications
+/// of the hole-typed `Sort` global.
+#[test]
+def test_sort_var_is_not_its_own_type : Bool :=
+    not (typecheck_source "def bad : Sort u := Sort u")
+
+/// An unresolved level is REFUSED rather than guessed. `level_le`
+/// answers false for anything it cannot evaluate (`lang/types.mo`), so
+/// two DIFFERENT level variables do not unify -- the sound direction,
+/// which costs completeness and never soundness. W1.5's normalizing
+/// comparison is what will resolve these structurally; until then this
+/// pin records that the checker refuses rather than accepts.
+#[test]
+def test_distinct_level_vars_do_not_unify : Bool :=
+    not (typecheck_source "def cross : Sort v := Sort u")
+
+/// The concrete hierarchy still behaves: adding the variable arm must
+/// not disturb `Sort 1 : Sort 2`, which takes the numeral path.
+#[test]
+def test_concrete_hierarchy_still_holds_with_var_arm_present : Bool :=
+    typecheck_source "def u2 : Sort 2 := Sort 1"

@@ -387,6 +387,8 @@ def collect_kind_rems (k : ParseTermKind) (acc : List I64) : List I64 := match k
     ParseTermKind.con _ => acc,
     ParseTermKind.ntv _ => acc,
     ParseTermKind.type_ _ => acc,
+    // A level carries no `rem`: it is not a ParseTerm child.
+    ParseTermKind.sort _ => acc,
     ParseTermKind.hole => acc,
 }
 
@@ -461,6 +463,7 @@ def kind_wants_loc (k : ParseTermKind) : Bool := match k {
     ParseTermKind.forall _ _ _ => false,
     ParseTermKind.pi _ _ _ => false,
     ParseTermKind.type_ _ => false,
+    ParseTermKind.sort _ => false,
     ParseTermKind.quote_ _ => false,
     ParseTermKind.hole => false,
 }
@@ -583,6 +586,8 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // later change (W1.1b) -- `Sort n` today still parses as an
         // application of the `Sort` global.
         ParseTermKind.type_ u => Term.sort (SortLevel.concrete u),
+        // Already a `SortLevel`; carry it straight across.
+        ParseTermKind.sort level => Term.sort level,
         ParseTermKind.quote_ inner => Term.quote_ (lower_parse_term ctx inner),
         // Desugared HERE, not in the grammar -- this is the whole reason
         // the parse stage can drop `ctx`.

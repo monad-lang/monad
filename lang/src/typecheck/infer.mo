@@ -26,6 +26,7 @@ use lib::scope {
   scope_resolve_name,
 }
 use lib::typecheck::name_subst {name_subst_term}
+use lib::typecheck::levels {is_level_binder_kind}
 use lib::typecheck::subst {term_permute, term_subst}
 use lib::typecheck::unify {unify, unify_structural}
 use std::list {length}
@@ -2474,10 +2475,26 @@ def sig_tvars_params_ret (sig : Term) : SigInfo :=
 #[partial]
 def sig_tvars_go (t : Term) (n : I64) (params : List Term) : SigInfo :=
     match t {
-        Term.forall _dbg _kind body =>
-            let fresh : Identifier := Identifier.id (String.concat "sig_tv_" (I64.to_string n)) in
-            let placeholder : Term := Term.var sentinel (DebugName.named fresh) in
-            sig_tvars_go (term_subst 0 placeholder body) (n + 1) params,
+        Term.forall _dbg kind body =>
+            // A LEVEL binder is not a type variable and must not be
+            // opened with a term placeholder. Substituting `sig_tv_<n>`
+            // for it would rename the binder while the `SortLevel.var u`
+            // occurrences in the body keep the ORIGINAL name -- leaving
+            // an unresolved level, which every comparison in
+            // `lang/types.mo` answers `false` for, i.e. a spurious
+            // rejection rather than an error anyone could read.
+            //
+            // A level binder carries no term-level index, so dropping it
+            // outright (rather than substituting) is what keeps the body's
+            // de Bruijn indices correct: `term_subst 0` is exactly the
+            // shift that removing one binder requires, and the level
+            // variables are name-keyed, so they need no shifting at all.
+            if is_level_binder_kind kind
+            then sig_tvars_go (term_subst 0 (Term.sort (SortLevel.concrete 0)) body) n params
+            else
+                let fresh : Identifier := Identifier.id (String.concat "sig_tv_" (I64.to_string n)) in
+                let placeholder : Term := Term.var sentinel (DebugName.named fresh) in
+                sig_tvars_go (term_subst 0 placeholder body) (n + 1) params,
         Term.pi arg ret =>
             sig_tvars_go ret n (list_append params [arg]),
         _ => { params := params, ret := t },

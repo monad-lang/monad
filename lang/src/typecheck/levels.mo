@@ -61,6 +61,34 @@ pub def free_level_vars (t: Term) : List Identifier := match t {
     _ => List.empty,
 }
 
+/// Is this `forall` binder a LEVEL binder rather than a type-variable
+/// binder? `wrap_level_forall` (`lang/elaborate.mo`) marks one by giving
+/// it a SORT as its kind, where `wrap_forall` gives a term binder
+/// `Term.type_ 1`.
+///
+/// Reading the marker with `sort_level_of` covers both spellings, and
+/// `Term.type_ 1` is NOT a level binder -- that is the term-binder
+/// marker -- so the test is "is a sort AND is at level 0". Nothing else
+/// inspects a binder's kind shape, which is what makes this marker safe
+/// (see `wrap_level_forall`'s own comment).
+///
+/// The marker cannot collide with a user-written binder, because there
+/// is no way to write one: the grammar has NO `forall` keyword
+/// (`ParseTermKind`'s own comment in `lang/types.mo` records this), so
+/// every `Term.forall` in the tree is built by `wrap_forall` or
+/// `wrap_level_forall`. If a `forall` syntax is ever added, a source
+/// binder written at `Prop` would land here and this test would need a
+/// real discriminator instead of a level comparison.
+#[partial]
+pub def is_level_binder_kind (kind : Term) : Bool :=
+    match sort_level_of kind {
+        Option.some l => match level_const l {
+            Option.some n => I64.beq n 0,
+            Option.none => false,
+        },
+        Option.none => false,
+    }
+
 // ─── Test helpers ─────────────────────────────────────────────────────
 //
 // Written out because the self-hosted parser has no NESTED patterns:

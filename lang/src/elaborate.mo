@@ -1,3 +1,4 @@
+use lib::typecheck::levels {free_level_vars}
 use lib::types {
   Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive,
   Instance, MatchCase, ModulePath, Param, Struct, Term, TypeConstraint,
@@ -146,7 +147,38 @@ def elaborate_type (typ : Term) (constraints : List TypeConstraint) (known_names
     let fv := free_vars typ known_names in
     let cv := collect_constraint_vars constraints known_names in
     let all_vars := union_ids fv cv in
-    wrap_forall typ all_vars
+    // Level variables generalize the same way term-level type variables
+    // do, and at the same boundary -- that is the whole reason levels
+    // are name-keyed (see `lang/typecheck/levels.mo`'s header). A
+    // signature mentioning `Sort u` gets a `u` binder here, so `u` is
+    // bound by the def rather than dangling free.
+    let lv := free_level_vars typ in
+    wrap_level_forall (wrap_forall typ all_vars) lv
+
+/// Wrap a type with a `Forall` binder for each free LEVEL variable.
+///
+/// Sibling of `wrap_forall` below, deliberately kept separate rather
+/// than folded into it: the two bind different things and are marked
+/// differently, and a caller that generalizes one must be able to not
+/// generalize the other.
+///
+/// The binder's KIND is what distinguishes a level binder from a term
+/// binder downstream -- `Term.sort (SortLevel.concrete 0)` here versus
+/// `wrap_forall`'s `Term.type_ 1`. That marker is readable with
+/// `sort_level_of`, and it is safe because nothing inspects a `forall`
+/// binder's kind SHAPE: `type_check_forall` type-checks the kind and
+/// pushes it into `local_types`, but never matches on it.
+///
+/// Level binders go OUTSIDE the term binders (this wraps
+/// `wrap_forall`'s result), so a signature's levels are bound before the
+/// types that mention them.
+def wrap_level_forall (typ : Term) (lvars : List Identifier) : Term :=
+    match lvars {
+        List.cons hd rest =>
+            let kind : Term := Term.sort (SortLevel.concrete 0) in
+            Term.forall (DebugName.named hd) kind (wrap_level_forall typ rest),
+        List.empty => typ,
+    }
 
 /// Wrap a type with Forall binders for each free var (in order).
 def wrap_forall (typ : Term) (vars : List Identifier) : Term :=
@@ -454,4 +486,48 @@ def elaborate_decls_map (decl_list : List Decl) (known_names : List Identifier) 
             let elaborated_rest := elaborate_decls_map rest known_names in
             List.cons elaborated_hd elaborated_rest,
         List.empty => List.empty,
+    }
+
+// ─── Level generalization (W1.3) ──────────────────────────────────────
+
+/// A signature mentioning `Sort u` gains a binder for `u`.
+///
+/// This is a UNIT pin on `elaborate_type`, deliberately, because the
+/// source-level pins in `lang/tests/typecheck_examples_tests.mo` cannot
+/// see this yet: nothing consumes a level binder until W1.4 instantiates
+/// them at call sites, so `def idL {A : Sort u} ...` checks the same
+/// whether or not `u` is generalized. Measured, not assumed -- mutating
+/// `elaborate_type` to generalize NOTHING leaves all 27 of those source
+/// pins passing, and fails this one.
+#[test]
+def test_elaborate_type_binds_a_free_level_var : Bool :=
+    let typ : Term := Term.sort (SortLevel.var (Identifier.id "u")) in
+    match elaborate_type typ List.empty List.empty {
+        Term.forall _dbg _kind _body => true,
+        _ => false,
+    }
+
+/// ...and the binder is marked as a LEVEL binder, not a term binder.
+/// `wrap_forall` marks a term binder `Term.type_ 1`; this one must be a
+/// sort at level 0, which is what `is_level_binder_kind`
+/// (`lang/typecheck/levels.mo`) reads to keep the two apart at the three
+/// sites that open a `forall` chain.
+#[test]
+def test_level_binder_is_marked_as_a_sort : Bool :=
+    let typ : Term := Term.sort (SortLevel.var (Identifier.id "u")) in
+    match elaborate_type typ List.empty List.empty {
+        Term.forall _dbg kind _body => match kind {
+            Term.sort _l => true,
+            _ => false,
+        },
+        _ => false,
+    }
+
+/// A type with NO level variable gains no level binder -- generalization
+/// must not wrap every signature in the corpus.
+#[test]
+def test_concrete_type_gains_no_level_binder : Bool :=
+    match elaborate_type (Term.type_ 1) List.empty List.empty {
+        Term.forall _dbg _kind _body => false,
+        _ => true,
     }
