@@ -177,8 +177,14 @@ def build_alias_map (aliases : List OpenAlias) (acc : HashMap String String) : H
     }
 
 // --- Helper: empty ScopeData ---
+//
+// `pub` because it crosses a mote boundary: `bench/src/affine_report.mo`
+// builds an instance-free `Scope` from it to test that the affine
+// experiment's `Copy` gate denies every carrier when nothing is
+// registered (the fail-closed direction). Package-private would stop
+// crossing that boundary, and the checker warns about it today.
 
-def scope_data_empty : ScopeData := {
+pub def scope_data_empty : ScopeData := {
     def_refs := npath_map_empty,
     class_defs := List.empty,
     instances := List.empty,

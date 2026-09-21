@@ -53,7 +53,9 @@ use std::io {println}
 open IO {println}
 use lang::module {ElaboratedModules, elaborate_loaded_modules}
 use lang::types {Decl, Def, Scope, Term, show_identifier}
+use lang::scope {scope_data_empty}
 use lang::typecheck::usage {BinderUse, attribute_binder_types, collect_binder_uses, ctor_name_set}
+use lang::typecheck::copy_class {copy_verdict}
 use std::map {}
 use std::list {length}
 
@@ -100,18 +102,31 @@ def type_head_name (t : Term) : String :=
         Term.var_macro _idx _dbg => "?",
     }
 
-/// The builtin-scalar approximation of `Copy` — see this file's own doc
-/// comment for why it is an approximation and which way it errs.
+/// Was the scalar approximation of `Copy`; is now the real gate.
 ///
-/// These are the types Design B lists as getting compiler-provided
-/// `Copy` instances (`quantitative-types.md`, *Copy policy for core
-/// types*): scalars, `Bool`, `Char`, `Unit`. `String` is deliberately
-/// absent — it is a heap buffer, and Design B says share it via a
-/// borrow, not a copy.
-def is_copy_approx (name : String) : Bool :=
-    String.beq name "I64" || String.beq name "U64" || String.beq name "I32"
-        || String.beq name "U32" || String.beq name "U8" || String.beq name "F64"
-        || String.beq name "Bool" || String.beq name "Char" || String.beq name "Unit"
+/// Milestone 2 replaced a hardcoded list of scalar names with
+/// `copy_class.copy_verdict`, which resolves an actual `Copy` instance
+/// out of the scope (`std/src/copy.mo` declares the class and the
+/// builtin instances). The report is the first consumer precisely
+/// because it exercises the gate over the whole corpus before anything
+/// uses it to reject a program.
+///
+/// The fail-closed direction is unchanged, so the headline figure keeps
+/// meaning the same thing: anything the gate cannot resolve counts as
+/// non-Copy, and the "needs Copy, a borrow, or a rewrite" number stays
+/// an upper bound.
+def binder_is_copy (scope : Scope) (typ : Term) : Bool :=
+    match copy_verdict scope typ {
+        CopyVerdict.cv_copy => true,
+        CopyVerdict.cv_not_copy => false,
+        CopyVerdict.cv_ambiguous => false,
+    }
+
+def binder_is_ambiguous (scope : Scope) (typ : Term) : Bool :=
+    match copy_verdict scope typ {
+        CopyVerdict.cv_ambiguous => true,
+        _ => false,
+    }
 
 // ─── Tallies ───────────────────────────────────────────────────────
 
@@ -169,6 +184,15 @@ pub struct Totals {
     /// `needs_dup`, restricted to types the scalar approximation does
     /// not call `Copy`.
     needs_dup_non_copy : I64,
+    /// Σ ≥ 2 binders the real `Copy` gate granted ω to. Under the old
+    /// scalar approximation this was implicit; with real instances it
+    /// is worth seeing, because it is the first measurement of whether
+    /// instance resolution works at corpus scale.
+    copy_granted : I64,
+    /// Σ ≥ 2 binders whose carrier matched TWO OR MORE concrete `Copy`
+    /// instances. Denied ω, and a real instance collision worth
+    /// knowing about.
+    copy_ambiguous : I64,
 }
 
 pub def Totals.binders (t : Totals) : I64 := t.binders
@@ -191,10 +215,15 @@ pub def Totals.needs_dup (t : Totals) : I64 := t.needs_dup
 
 pub def Totals.needs_dup_non_copy (t : Totals) : I64 := t.needs_dup_non_copy
 
+pub def Totals.copy_granted (t : Totals) : I64 := t.copy_granted
+
+pub def Totals.copy_ambiguous (t : Totals) : I64 := t.copy_ambiguous
+
 def totals_empty : Totals :=
     { binders := 0, zero := 0, one := 0, many := 0, many_non_copy := 0,
       by_type := List.empty, unresolved := List.empty,
-      borrowable := 0, needs_dup := 0, needs_dup_non_copy := 0 }
+      borrowable := 0, needs_dup := 0, needs_dup_non_copy := 0,
+      copy_granted := 0, copy_ambiguous := 0 }
 
 /// How an unattributed over-used binder is labelled in the residue
 /// table. A `bk_lam` binder carries no constructor, and its blank name
@@ -215,16 +244,17 @@ def residue_key (u : BinderUse) : String :=
 /// way down, like every list walker in `lang/codegen/` — this runs over
 /// whole modules, and the natural non-tail shape holds a native frame
 /// per binder.
-def tally_binder (u : BinderUse) (acc : Totals) : Totals :=
+def tally_binder (scope : Scope) (u : BinderUse) (acc : Totals) : Totals :=
     let n : I64 := BinderUse.count u in
     let tname : String := type_head_name (BinderUse.typ u) in
+    let copyable : Bool := binder_is_copy scope (BinderUse.typ u) in
     if I64.beq n 0 then
         { acc with binders := Totals.binders acc + 1, zero := Totals.zero acc + 1 }
     else if I64.beq n 1 then
         { acc with binders := Totals.binders acc + 1, one := Totals.one acc + 1 }
     else
         let non_copy : I64 :=
-            if is_copy_approx tname then Totals.many_non_copy acc
+            if copyable then Totals.many_non_copy acc
             else Totals.many_non_copy acc + 1 in
         let residue : List TypeTally :=
             if String.beq tname "?" then
@@ -242,14 +272,19 @@ def tally_binder (u : BinderUse) (acc : Totals) : Totals :=
             borrowable := if dup then Totals.borrowable acc else Totals.borrowable acc + 1,
             needs_dup := if dup then Totals.needs_dup acc + 1 else Totals.needs_dup acc,
             needs_dup_non_copy :=
-                if dup && not (is_copy_approx tname) then Totals.needs_dup_non_copy acc + 1
-                else Totals.needs_dup_non_copy acc }
+                if dup && not copyable then Totals.needs_dup_non_copy acc + 1
+                else Totals.needs_dup_non_copy acc,
+            copy_granted :=
+                if copyable then Totals.copy_granted acc + 1 else Totals.copy_granted acc,
+            copy_ambiguous :=
+                if binder_is_ambiguous scope (BinderUse.typ u) then Totals.copy_ambiguous acc + 1
+                else Totals.copy_ambiguous acc }
 
 #[partial]
-def tally_binders (us : List BinderUse) (acc : Totals) : Totals :=
+def tally_binders (scope : Scope) (us : List BinderUse) (acc : Totals) : Totals :=
     match us {
         List.empty => acc,
-        List.cons u rest => tally_binders rest (tally_binder u acc),
+        List.cons u rest => tally_binders scope rest (tally_binder scope u acc),
     }
 
 // ─── Walking a module's defs ───────────────────────────────────────
@@ -269,7 +304,7 @@ def tally_decls (ctors : HashMap String Bool) (s : Scope) (ds : List Decl) (acc 
             match d {
                 Decl.def_d def_ =>
                     let raw : List BinderUse := collect_binder_uses ctors (def_term def_) in
-                    tally_decls ctors s rest (tally_binders (attribute_binder_types s raw) acc),
+                    tally_decls ctors s rest (tally_binders s (attribute_binder_types s raw) acc),
                 // A macro body is a template, not code that runs; its
                 // binders are not runtime owners.
                 Decl.def_macro_d _def => tally_decls ctors s rest acc,
@@ -349,6 +384,8 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
     println ("  used 1 time  (move)    " ++ I64.to_string (Totals.one t) ++ "  (" ++ pct (Totals.one t) n ++ "%)");
     println ("  used 2+ times          " ++ I64.to_string (Totals.many t) ++ "  (" ++ pct (Totals.many t) n ++ "%)");
     println ("  ... of those, non-Copy " ++ I64.to_string (Totals.many_non_copy t) ++ "  (" ++ pct (Totals.many_non_copy t) n ++ "%)");
+    println ("  ... Copy granted           " ++ I64.to_string (Totals.copy_granted t) ++ "   (real instances, std/src/copy.mo)");
+    println ("  ... Copy ambiguous          " ++ I64.to_string (Totals.copy_ambiguous t) ++ "   (2+ concrete instances matched; denied)");
     println "  ^ PESSIMISTIC bound: what Copy alone would have to cover.";
     println "";
     println "  splitting the 2+ set by how the extra uses are spent:";
@@ -403,11 +440,12 @@ def report_affine_usage_std : IO Bool := report_on "std/src/list.mo"
 def report_affine_usage_lang : IO Bool := report_on "lang/src/typecheck/traverse.mo"
 
 /// The headline number: the self-hosted compiler's own dependency
-/// closure. `lang/src/lib.mo` is the compiler as a library, so one
-/// elaboration here covers prelude, init, std and every compiler module
-/// -- the corpus the experiment actually has to carry.
+/// closure. The target is `affine_target.mo`, not `lang/src/lib.mo`
+/// directly -- it pulls in the same closure PLUS `std::copy`, so the
+/// scope the `Copy` gate resolves against actually contains the
+/// instances. See that file for why `Copy` is not ambient yet.
 #[test]
-def report_affine_usage_compiler : IO Bool := report_on "lang/src/lib.mo"
+def report_affine_usage_compiler : IO Bool := report_on "bench/src/affine_target.mo"
 
 // ─── Tests for the aggregation itself ──────────────────────────────
 
@@ -429,9 +467,19 @@ def test_type_head_name_peels_application_spine : Bool :=
 def test_type_head_name_reports_unknown_as_question : Bool :=
     String.beq (type_head_name Term.hole) "?"
 
+/// An empty scope has no `Copy` instances at all, so the gate denies
+/// every carrier. That is the fail-closed direction, and it is what the
+/// aggregation tests below are built on: they check the tally's own
+/// arithmetic, not instance resolution, which only a real corpus scope
+/// can exercise (and which `report_affine_usage_compiler` does).
+def probe_scope : Scope :=
+    { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
+      scope := scope_data_empty,
+      parent := Option.none }
+
 #[test]
-def test_scalar_is_copy_but_string_is_not : Bool :=
-    is_copy_approx "I64" && not (is_copy_approx "String")
+def test_empty_scope_grants_no_copy : Bool :=
+    not (binder_is_copy probe_scope i64_type)
 
 #[test]
 def test_tally_splits_the_three_buckets : Bool :=
@@ -439,17 +487,18 @@ def test_tally_splits_the_three_buckets : Bool :=
         List.cons (tally_of 0 term_type)
             (List.cons (tally_of 1 term_type)
                 (List.cons (tally_of 3 term_type) List.empty)) in
-    let t : Totals := tally_binders us totals_empty in
+    let t : Totals := tally_binders probe_scope us totals_empty in
     I64.beq (Totals.zero t) 1 && I64.beq (Totals.one t) 1 && I64.beq (Totals.many t) 1
 
 #[test]
-def test_tally_excludes_scalars_from_the_migration_cost : Bool :=
-    // Two over-used binders, one `I64` and one `Term`. Only the `Term`
-    // one is a migration cost -- the scalar gets a builtin Copy.
+def test_tally_counts_every_overuse_as_non_copy_without_instances : Bool :=
+    // With no `Copy` instances in scope the gate denies both, so both
+    // count against the migration cost. The fail-closed direction,
+    // measured through the tally rather than asserted at the gate.
     let us : List BinderUse :=
         List.cons (tally_of 2 i64_type) (List.cons (tally_of 2 term_type) List.empty) in
-    let t : Totals := tally_binders us totals_empty in
-    I64.beq (Totals.many t) 2 && I64.beq (Totals.many_non_copy t) 1
+    let t : Totals := tally_binders probe_scope us totals_empty in
+    I64.beq (Totals.many t) 2 && I64.beq (Totals.many_non_copy t) 2
 
 #[test]
 def test_tally_bump_increments_an_existing_name : Bool :=
