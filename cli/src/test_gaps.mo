@@ -9,19 +9,52 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 7 entries here are what a full corpus sweep actually reports,
+/// The 5 entries here are what a full corpus sweep actually reports,
 /// not a guess, and none is a problem with the test files themselves. In
 /// rough order of how much they cost to close:
 ///
-///   * self-hosted checker gaps -- instance resolution with no carrier-
-///     revealing argument to infer one from (`Monad.pure`,
-///     `MonadState.modify_get`), the expected-type channel the parser's
-///     discarded ascriptions leave empty (`combine_test.mo`, `json.mo`),
-///     and a named call's own declared defaults, which do not survive the
-///     parser (`structs.mo`) -- 5 files;
+///   * the async runtime, which does not exist -- `std/src/concurrent/
+///     fiber_test.mo` (the unwired `fork_io`/`await_fiber` family) and
+///     `std/src/concurrent/combine_test.mo` (the same family's
+///     `scope_new`/`scope_drop`/`scope_fork`/`sleep_io`; this is ALL that
+///     is left of that file -- its checker failure is CLOSED, see the
+///     Phase-1 paragraph below) -- 2 files;
 ///   * a codegen bug the checker used to hide (`init/src/tests.mo`) --
 ///     1 file;
-///   * the async runtime, which does not exist (1 file).
+///   * a named call's own declared defaults, which do not survive the
+///     parser (`structs.mo`) -- 1 file;
+///   * the flatten dropping each decl's owning module, so a cross-module
+///     qualified reference cannot pair-match (`qualified_ref_tests.mo`) --
+///     1 file.
+///
+/// PHASE 1 IS CLOSED, and these three were its whole registry footprint:
+/// `lang/src/json.mo` (56/56), `examples/indexed_monads.mo` (3/3) and
+/// `examples/state_monad.mo` (5/5) all run self-hosted now, and
+/// `std/src/concurrent/combine_test.mo` has stopped failing its checker
+/// (it reaches the natives above instead, which is why it stays listed).
+/// Measured with a binary rebuilt from the fix. The channel they were
+/// waiting on was one missing thing in two places, both in
+/// `lang/src/scope.mo`'s carrier inference:
+///
+///   1. an application whose HEAD is a local variable -- a def's own
+///      parameter, or a `let`-bound name -- produced NO carrier at all
+///      (`infer_carrier_type`'s `Term.app` arm knew only `def_types` and
+///      `ctor_owners`), so `Monad.bind (f s) ...` inside
+///      `combine.mo`'s `scoped (f : Scope -> IO A)` had nothing to infer
+///      `IO` from. The other two binds in that same def are named defs
+///      (`scope_new`, `scope_drop s`) and always had a carrier, which is
+///      why only that one shape failed, and why the do-block spelling and
+///      the hand-written nest failed IDENTICALLY -- the desugaring was
+///      never involved;
+///   2. a def call whose own declared return type has no type variable to
+///      instantiate (`get_obj : I64 -> IO Obj`) reported the BARE head
+///      (`IO`), which binds nothing against a parameter shape like `M A`
+///      -- so the callee-signature hint channel dropped the whole
+///      parameter hint and every class call inside the enclosing lambda
+///      stayed unresolved.
+///
+/// Both now keep the return type APPLIED (`IO Obj`), which is what
+/// `bind_term_vars` needs to bind `M := IO`.
 ///
 /// `#[derive]`/`#[derive_cli]` is CLOSED, and with it the whole
 /// attribute/decl-gen family: `std/src/derive_tests.mo` (22/22),
@@ -109,10 +142,7 @@ pub def gap_paths : List String :=
     ["std/src/concurrent/fiber_test.mo",
      "init/src/tests.mo",
      "std/src/concurrent/combine_test.mo",
-     "lang/src/json.mo",
      "examples/structs.mo",
-     "examples/indexed_monads.mo",
-     "examples/state_monad.mo",
      "std/src/qualified_ref_tests.mo"]
 
 /// The distinguishing substring of each file's own known error.
@@ -126,11 +156,14 @@ pub def gap_paths : List String :=
 pub def gap_causes : List String :=
     ["native `fork_io`",
      "driver exited -1",
+     // The unwired-native family, not the checker: the message this token
+     // is harvested from lists every native the file needs
+     // (`fork_io`, `cancel_fiber`, `await_fiber`, `scope_new`,
+     // `scope_drop`, `scope_fork`, `sleep_io`). `scope_fork` is unique to
+     // `combine.mo` -- `fiber.mo` declares none of the `scope_*` families
+     // -- so the two async entries stay distinguishable.
+     "native `scope_fork`",
      "does not typecheck",
-     "does not typecheck",
-     "does not typecheck",
-     "no instance found for `Monad.pure`",
-     "no instance found for `MonadState.modify_get`",
      "does not typecheck"]
 
 /// Why each gap is open, and what closes it.
@@ -173,62 +206,17 @@ pub def gap_reasons : List String :=
      // argument. Closed by: fixing that resolution, not by anything in
      // the test file.",
       "the option instance's own dict is passed where its ELEMENT dict belongs -- `some 1 == List.get 0 [1, 2, 3]`",
-     // Measured 2026-09-19 (P6): after the applied-head match AND the
-     // callee-signature instantiation both landed, `find_matching_instance`
-     // agrees on all of these -- what fails is downstream of the match.
-     //
-     // * dict-arg bindings -- CLOSED for list literals, which is what took
-     //   `std/src/list_tests1.mo` off this list and moved
-     //   `std/src/list_tests2.mo` onto the codegen bug above. That half was
-     //   two bugs: the carrier of a list literal used to be the bare head
-     //   `List` (a list literal desugars to `FromListLiteral.cons`, whose
-     //   promoted declared type is `A -> List A -> List A` with no Forall
-     //   binder at all, so a signature instantiation that only reads
-     //   Forall binders found nothing to bind), and a match bound the
-     //   instance's own type parameters nowhere. The carrier is now the
-     //   instantiated `List I64` and `carrier_bindings` binds the
-     //   instance's `A`, so `[Show A]`/`[BEq A]` resolve to the element
-     //   dictionary (`__Dict_Show_I64` / `__Dict_BEq_I64`, verified in the
-     //   emitted IR).
-     // * expected carrier: a call with no carrier-revealing argument at
-     //   all (`Map.empty`, `Bounded.max_bound`) never even reaches a
-     //   match -- CLOSED for the annotated-let shape (`let m : BTreeMap
-     //   I64 I64 := Map.empty` now resolves; that is what took the
-     //   checker failure off `std/src/map_tests.mo` and
-     //   `std/src/test_map_full.mo`, and off base.mo's `Bounded.max_bound`
-     //   -- all three then stopped on a native, and P9 has since wired
-     //   the whole f64 family, so all three are off this list entirely).
-     //   What still has no channel is a call whose carrier comes
-     //   from neither an argument nor an annotation, which is what
-     //   `Monad.pure`/`MonadState.modify_get` below are left on: the
-     //   enclosing def's own declared return type is consulted for `Monad`
-     //   only, and an app ARGUMENT gets no expected type from its callee's
-     //   Pi domain (`BEq.beq Bounded.max_bound gt` -- the sibling argument
-     //   pins the callee's `A` to `Ordering`; measured in isolation).
-     // (list_tests2.mo's own entry was here: the resolution half was
-     // CLOSED by the applied-carrier + signature-instantiation work, and
-     // the codegen half -- `BEq (List A)` forwarding the element dict to
-     // the comparison of the list TAILS -- was closed by P8's D5/D4
-     // override plus the already-dict-args guard. Both halves are now
-     // verified in the emitted IR: the recursive tail comparison is
-     // `BEq_List_A_beq __Dict_BEq_I64 x_tail y_tail`, arity 3.)
-     // NOT the same mechanism, and this file is the counter-example
-     // worth keeping: the instantiation work does not move it either
-     // way. `all_i64`'s `IO.pure (List.empty : List I64)` loses its
-     // ascription -- the self-hosted parser's `paren_try_ann` parses
-     // `: T` and DROPS it (no `Term.ann` exists) -- so the call's
-     // element type is never pinned and reports `expected (IO A), found
-     // (IO (List I64))`. That is the expected-type/carrier channel P6
-     // owns, alongside `lang/src/json.mo` below.
-     "the argument's own ascription is discarded by the self-hosted parser",
-     // Same discarded-ascription channel as combine_test.mo above, not
-     // type-variable instantiation: the ascriptions on the call (`:
-     // Result String Bool`, `: Result String Person`) report `expected
-     // A, found <concrete>` because the parser dropped them, which also
-     // leaves the match scrutinee's type unknown -- the bare `mk`
-     // pattern then reports a constructor ambiguity downstream of the
-     // SAME unknown. The Rust host runs all of the file's tests.
-     "the call's own ascription is discarded by the self-hosted parser",
+     // The async runtime, which is the ONLY thing left in this file: its
+     // checker failure -- the missing expected-type channel that used to
+     // report `no instance found for `Monad.bind` (needed in
+     // `std.concurrent.combine::scoped`)` -- is CLOSED (see this file's
+     // header). It now stops on the unwired natives above, exactly as
+     // `fiber_test.mo` does, and both leave this list together when the
+     // runtime lands. Its own `scoped (f : Scope -> IO A)` is what
+     // isolated the local-variable-head half of that channel, and it is
+     // the minimal repro for it: the two other binds in the same def call
+     // named defs (`scope_new`, `scope_drop s`) and always had a carrier.
+     "async runtime not self-hostable yet (scope_new/scope_drop/scope_fork/sleep_io unwired)",
      // PARTIALLY CLOSED, and the half that is left is the harder one.
      //
      // The CONSTRUCTOR half is done: `named_call_check_missing_fields`
@@ -257,12 +245,6 @@ pub def gap_reasons : List String :=
      // a parallel `ScopeData` side-table), which touches every
      // `Term.lam` construction site.",
      "a def's own named-call defaults do not survive the parser (`Term.lam` has no default slot)",
-     // Same applied-head instance-resolution family as the Map/Show
-     // entries above: `Monad.pure`'s only argument is the monad's
-     // ELEMENT type, and `MonadState`'s carrier is likewise not
-     // recoverable from the call's own arguments.
-     "no carrier-revealing argument to infer an instance from",
-     "no carrier-revealing argument to infer an instance from",
      // A qualified reference in TARGET position cannot resolve
      // self-hosted, and the blocker is structural rather than a missing
      // case. `build_scope_from_decls` (`lang/scope.mo`) takes ONE
@@ -366,6 +348,30 @@ def test_closed_derive_gaps_are_no_longer_listed : Bool :=
     Bool.not (is_known_gap "std/src/derive_tests.mo" "no instance found for `BEq.beq`")
     && Bool.not (is_known_gap "cli/src/tests/cli_derive_tests.mo" "does not typecheck")
     && Bool.not (is_known_gap "examples/derive.mo" "Failed to load")
+
+/// Same pin for Phase 1's three files, and for the same reason: each was
+/// listed for a cause that no longer exists, so a future failure in any
+/// of them is a NEW failure and must be reported rather than excused. The
+/// cause strings are the ones that used to be recorded for them (for
+/// json.mo and indexed_monads.mo, the checker's own wording; for
+/// state_monad.mo, its instance-resolution failure).
+#[test]
+def test_closed_expected_type_gaps_are_no_longer_listed : Bool :=
+    Bool.not (is_known_gap "lang/src/json.mo" "expected A, found Bool")
+    && Bool.not (is_known_gap "examples/indexed_monads.mo" "no instance found for `Monad.pure`")
+    && Bool.not (is_known_gap "examples/state_monad.mo" "no instance found for `MonadState.modify_get`")
+
+/// `combine_test.mo` is STILL listed, but for the async reason now rather
+/// than the checker one, and this pins both halves: its recorded cause
+/// has to be a token that really occurs in the natives message (or the
+/// entry would excuse nothing and the file would be reported FAIL), and
+/// it must no longer be excusing the `Monad.bind` failure that Phase 1
+/// closed -- a file left listed for a cause it no longer fails for is
+/// exactly what hides a regression.
+#[test]
+def test_combine_test_is_listed_for_the_native_family_only : Bool :=
+    is_known_gap "std/src/concurrent/combine_test.mo" "native `scope_fork` (needed by def `std.concurrent.combine::scope_fork`) is not wired"
+    && Bool.not (is_known_gap "std/src/concurrent/combine_test.mo" "no instance found for `Monad.bind`")
 
 #[test]
 def test_gap_reason_for_listed_path : Bool :=

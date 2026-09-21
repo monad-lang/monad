@@ -2093,13 +2093,43 @@ def class_defs_names (cds : List ClassDef) : List Identifier :=
             },
     }
 
-/// Finds the `Class` an instance's own `cls : ModulePath` field names,
-/// among a flat `List Class` (`collect_classes`'s output). Every real
-/// class in the corpus is a single-segment name (`BEq`, `Append`, ...,
-/// confirmed by direct reading) -- comparing `ModulePath.mp [cls.name]`
-/// against the instance's own `cls` field this way is exactly the same
-/// single-segment assumption `scope_resolve_instance`'s own class-name
-/// matching already makes elsewhere.
+/// Class-name equality, tolerant of the TWO spellings the same class
+/// arrives in:
+///
+///   * the class DECL's own name is ONE joined identifier -- `class
+///     Json.Deserializer (D : Type)` is recorded as the single segment
+///     `"Json.Deserializer"`, because `Class.name` is an `Identifier` and
+///     the elaborated dotted name is `show_name_path`-joined into it
+///     (`class_own_name` below re-wraps it the same way);
+///   * every REFERENCE to that class is a genuine multi-segment
+///     `NamePath` -- `instance Json.Deserializer Bool { ... }`'s head is
+///     parsed by `name_path_parser` into `[Json, Deserializer]`.
+///
+/// `npath_eq` is `name_path_similar` (types.mo), element-wise with
+/// `String.beq` per segment, so the two spellings DISAGREE despite
+/// `show_name_path` rendering both as `Json.Deserializer`: every dotted
+/// class name found zero instances and zero declared signatures, and
+/// `lang/src/json.mo`'s `Json.Deserializer.deserialize` calls reported
+/// `no instance found` however concrete the carrier (measured: the
+/// `filter_instances_by_class` result was empty while the same file's
+/// four `Json.Deserializer` instances were right there).
+///
+/// Render before comparing. `join_identifiers` is `.`-joined and an
+/// Identifier cannot contain `.` (see `BOrd Identifier`, types.mo), so
+/// equal renders mean the same name and nothing else; a module-qualified
+/// spelling (`json::Json.Deserializer`) still renders differently and
+/// stays distinct, where a last-segment comparison would coarsen the two
+/// apart.
+#[partial]
+def class_name_eq (a : NamePath) (b : NamePath) : Bool :=
+    String.beq (show_name_path a) (show_name_path b)
+
+/// Finds the `Class` an instance's own `cls : NamePath` field names,
+/// among a flat `List Class` (`collect_classes`'s output). Every single-
+/// segment class in the corpus (`BEq`, `Append`, ...) matches under
+/// either spelling, which is why `npath_eq` served here for so long;
+/// `class_name_eq` is what the dotted ones (`Json.Deserializer`) need --
+/// see its own comment.
 #[partial]
 def find_class_by_name (classes : List Class) (cls_name : NamePath) : Option Class :=
     match classes {
@@ -2107,7 +2137,7 @@ def find_class_by_name (classes : List Class) (cls_name : NamePath) : Option Cla
         List.cons cls rest =>
             match cls {
                 Class.mk cname _ _ _ _ =>
-                    if npath_eq (NamePath.npath (List.cons cname List.empty)) cls_name
+                    if class_name_eq (NamePath.npath (List.cons cname List.empty)) cls_name
                     then Option.some cls
                     else find_class_by_name rest cls_name,
             },
@@ -2806,11 +2836,16 @@ def type_head_name_local (t : Term) : Option Identifier :=
 /// `match p { Ctor a b => ... }` arm recover `a`/`b`'s real types from
 /// `Ctor`'s own declared params, the same way `Term.lam` already
 /// registers a lambda param's declared type into `env` (see
-/// `resolve_class_call_term`'s `Literal.match_` case below). Keyed by
-/// the constructor's bare name only (`last_segment`), matching
+/// `resolve_class_call_term`'s `Literal.match_` case below). `ctor_name`
+/// is the constructor's bare name (`last_segment`), matching
 /// `CtorOwner`'s own convention -- `MatchCase.mc`'s own `name` field is
 /// bare too, with no type-qualification available structurally at this
 /// syntactic pass.
+/// `owner` -- the owning inductive's own name path -- is what makes the
+/// table usable at all: EVERY `struct`'s own constructor is named `mk`,
+/// so a whole-program table holds one `mk` entry per struct in the
+/// corpus, and a name-only lookup hands a match arm whichever struct was
+/// declared first. See `lookup_ctor_field_types_owned`.
 /// `owner_params` -- the OWNING inductive's own declared type-param
 /// identifiers (e.g. `[A, B]` for `type Pair A B { pair (fst:A) (snd:B) }`)
 /// -- in the same order `field_types` references them. Needed because a
@@ -2820,7 +2855,7 @@ def type_head_name_local (t : Term) : Option Identifier :=
 /// not `String`/`Json`) -- `match_arm_env` below substitutes using the
 /// scrutinee's own concrete type args once it has both pieces.
 pub type CtorFieldTypes {
-    mk (ctor_name : Identifier) (owner_params : List Identifier) (field_types : List Term),
+    mk (ctor_name : Identifier) (owner : NamePath) (owner_params : List Identifier) (field_types : List Term),
 }
 
 #[partial]
@@ -2831,21 +2866,42 @@ def collect_ctor_field_types (decl_list : List Decl) : List CtorFieldTypes :=
             match d {
                 Decl.inductive_d ind =>
                     match ind {
-                        Inductive.mk _owner params _ constructors _ _ =>
-                            List.append (ctor_field_types_of (param_names_of params) constructors) (collect_ctor_field_types rest),
+                        Inductive.mk owner params _ constructors _ _ =>
+                            List.append (ctor_field_types_of owner (param_names_of params) constructors) (collect_ctor_field_types rest),
                     },
+                Decl.struct_d s => List.append (ctor_field_types_of_struct s) (collect_ctor_field_types rest),
                 _ => collect_ctor_field_types rest,
             },
     }
 
+/// A `struct` decl's own single `mk` constructor. `struct` is a distinct
+/// decl kind all the way through this pass -- `struct_to_inductive`
+/// (`lang/typecheck/meta_reflect.mo`) is what the meta-eval side uses --
+/// so a table that read only `Decl.inductive_d` had NO entry for ANY
+/// struct. MEASURED on `lang/src/json.mo`: `match p { mk name age => ... }`
+/// with `p : Person` fell back to whichever other struct's `mk` the decl
+/// order put first (`Param`'s `(Identifier, Term)` fields), so `name`
+/// bound as `Identifier` and `Json.Serializer.serialize name` resolved to
+/// no instance at all -- an undefined `@Json.Serializer.serialize` in the
+/// driver's IR. `Struct` carries no type params of its own (a generic
+/// record is a `type` decl), so `owner_params` is empty.
 #[partial]
-def ctor_field_types_of (owner_params : List Identifier) (constructors : List InductConstructor) : List CtorFieldTypes :=
+def ctor_field_types_of_struct (s : Struct) : List CtorFieldTypes :=
+    match s {
+        Struct.mk name fields _attrs _vis =>
+            let owner : NamePath := NamePath.npath (List.cons name List.empty) in
+            let field_types : List Term := param_types_of (struct_fields_to_params fields) in
+            List.cons (CtorFieldTypes.mk (Identifier.id "mk") owner List.empty field_types) List.empty,
+    }
+
+#[partial]
+def ctor_field_types_of (owner : NamePath) (owner_params : List Identifier) (constructors : List InductConstructor) : List CtorFieldTypes :=
     match constructors {
         List.empty => List.empty,
         List.cons c rest =>
             match c {
                 InductConstructor.mk cname params _ =>
-                    List.cons (CtorFieldTypes.mk (last_segment cname) owner_params (param_types_of params)) (ctor_field_types_of owner_params rest),
+                    List.cons (CtorFieldTypes.mk (last_segment cname) owner owner_params (param_types_of params)) (ctor_field_types_of owner owner_params rest),
             },
     }
 
@@ -2875,11 +2931,64 @@ def lookup_ctor_field_types (entries : List CtorFieldTypes) (ctor_name : Identif
         List.empty => Option.none,
         List.cons e rest =>
             match e {
-                CtorFieldTypes.mk ename _ _ =>
+                CtorFieldTypes.mk ename _ _ _ =>
                     if Similar.similar ename ctor_name
                     then Option.some e
                     else lookup_ctor_field_types rest ctor_name,
             },
+    }
+
+/// `ctor_name`'s entry whose OWNER is `head` -- the scrutinee's own
+/// declared type head (`Person` for `match p { mk name age => ... }`,
+/// `p : Person`). Needed because every `struct`'s own constructor is
+/// named `mk`: the table holds one `mk` entry per struct in the whole
+/// program (`Attribute`, `ParseParam`, `ParseMatchCase`, `Person`, ...),
+/// and matching on the NAME alone hands the arm whichever struct the
+/// decl order put first. Measured on `lang/src/json.mo`: the arm for
+/// `Person` picked up `ParseMatchCase`'s fields (`Identifier`, `List
+/// Identifier`), so `Json.Serializer.serialize name` derived the carrier
+/// `Identifier`, no instance matched it, and the driver's IR kept a
+/// reference to a `Json.Serializer.serialize` that was never emitted.
+/// Two spellings again: the decl's `owner` is module-stamped
+/// (`json.Person`) while the env's own annotation is as written
+/// (`Person`), and `last_segment` splits a single joined dotted segment
+/// -- so `owner_head_match` compares both renderings.
+#[partial]
+def lookup_ctor_field_types_owned (entries : List CtorFieldTypes) (ctor_name : Identifier) (head : Identifier) : Option CtorFieldTypes :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                CtorFieldTypes.mk ename owner _ _ =>
+                    if Similar.similar ename ctor_name && owner_head_match owner head
+                    then Option.some e
+                    else lookup_ctor_field_types_owned rest ctor_name head,
+            },
+    }
+
+/// The decl's `owner` (`json.Person`) against the scrutinee's own
+/// annotation (`Person`): equal full renderings first, else equal last
+/// segments. `bare_ctor_name` on the head mirrors what `last_segment`
+/// does to the owner for a joined `Module.Type` identifier.
+#[partial]
+def owner_head_match (owner : NamePath) (head : Identifier) : Bool :=
+    String.beq (show_name_path owner) (show_identifier head)
+        || String.beq (show_identifier (last_segment owner)) (show_identifier (bare_ctor_name head))
+
+/// The entry to use for an arm: the owner-scoped one when the
+/// scrutinee's own type is recoverable, else the old name-only first
+/// match (a scrutinee this pass cannot type -- a call, a nested match --
+/// keeps exactly its previous environment, which is the behavior every
+/// currently-passing file depends on).
+#[partial]
+def lookup_ctor_field_types_for (entries : List CtorFieldTypes) (ctor_name : Identifier) (head : Option Identifier) : Option CtorFieldTypes :=
+    match head {
+        Option.some id =>
+            match lookup_ctor_field_types_owned entries ctor_name id {
+                Option.some e => Option.some e,
+                Option.none => lookup_ctor_field_types entries ctor_name,
+            },
+        Option.none => lookup_ctor_field_types entries ctor_name,
     }
 
 /// Position of `id` within `owner_params` (0-indexed), if present --
@@ -2973,10 +3082,10 @@ def extend_env_with_ctor_fields (env : List LocalTypeBinding) (owner_params : Li
 /// match, ...) yields `List.empty` -- match arms in that position get
 /// no field-type env enrichment, same as before this fix.
 #[partial]
-def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List Term :=
+def scrutinee_type_spine (env : List LocalTypeBinding) (scrutinee : Term) : Option CallSpine :=
     // Peels. A match scrutinee IS located (`lower_parse.mo`'s
     // `Literal.match_` lowers it with `lower_parse_term`, not `_bare`), so
-    // without this every located scrutinee fell to the `List.empty` arm
+    // without this every located scrutinee fell to the `Option.none` arm
     // below and match arms silently lost their field-type enrichment --
     // which `Map.insert k v acc`-shaped calls in an arm depend on to find
     // their carrier.
@@ -2985,13 +3094,48 @@ def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List 
             match dbg {
                 DebugName.named id =>
                     match lookup_local_type env id {
-                        Option.some raw_typ =>
-                            match flatten_call_spine raw_typ { CallSpine.mk _head args => args },
-                        Option.none => List.empty,
+                        Option.some raw_typ => Option.some (flatten_call_spine raw_typ),
+                        Option.none => Option.none,
                     },
-                DebugName.unnamed => List.empty,
+                DebugName.unnamed => Option.none,
             },
-        _ => List.empty,
+        _ => Option.none,
+    }
+
+#[partial]
+def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List Term :=
+    match scrutinee_type_spine env scrutinee {
+        Option.some spine =>
+            match spine {
+                CallSpine.mk _head args => args,
+            },
+        Option.none => List.empty,
+    }
+
+/// The scrutinee's own declared type HEAD, bare (`Person` for a scrutinee
+/// declared `p : Person`) -- what tells one same-named constructor from
+/// another in `match_arm_env` below. `Option.none` whenever the
+/// scrutinee's type isn't recoverable from `env`, which falls the lookup
+/// back to name-only.
+#[partial]
+def scrutinee_type_head (env : List LocalTypeBinding) (scrutinee : Term) : Option Identifier :=
+    match scrutinee_type_spine env scrutinee {
+        Option.some spine =>
+            match spine {
+                CallSpine.mk head _args => term_head_identifier head,
+            },
+        Option.none => Option.none,
+    }
+
+#[partial]
+def term_head_identifier (t : Term) : Option Identifier :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => Option.some id,
+                DebugName.unnamed => Option.none,
+            },
+        _ => Option.none,
     }
 
 /// `env` for one match arm's own body -- looks up the matched
@@ -3000,15 +3144,16 @@ def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List 
 /// (`scrutinee_type_args`), and extends `env` accordingly; falls back to
 /// the unchanged `env` when the constructor isn't found (e.g. a name
 /// this pass doesn't recognize) -- the existing behavior, not a
-/// regression.
+/// regression. The entry is chosen by OWNER first (`lookup_ctor_field_types_for`),
+/// since `mk` names every struct's constructor.
 #[partial]
 def match_arm_env (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (scrutinee : Term) (case_ : MatchCase) : List LocalTypeBinding :=
     match case_ {
         MatchCase.mc cname cargs _body _fp =>
-            match lookup_ctor_field_types ctor_field_types cname {
+            match lookup_ctor_field_types_for ctor_field_types cname (scrutinee_type_head env scrutinee) {
                 Option.some entry =>
                     match entry {
-                        CtorFieldTypes.mk _ owner_params field_types =>
+                        CtorFieldTypes.mk _ _owner owner_params field_types =>
                             let concrete_args := scrutinee_type_args env scrutinee in
                             extend_env_with_ctor_fields env owner_params concrete_args cargs field_types,
                     },
@@ -3027,8 +3172,20 @@ def collect_ctor_owners (decl_list : List Decl) : List CtorOwner :=
                         Inductive.mk owner _ _ constructors _ _ =>
                             List.append (ctor_owners_of owner constructors) (collect_ctor_owners rest),
                     },
+                Decl.struct_d s => List.append (struct_ctor_owners s) (collect_ctor_owners rest),
                 _ => collect_ctor_owners rest,
             },
+    }
+
+/// A `struct` decl's own `mk` owner -- same decl-kind blindness as
+/// `ctor_field_types_of_struct` above, and the same fix: without it
+/// `Person.mk "Alice" 30` in argument position has no owner to resolve a
+/// carrier from.
+#[partial]
+def struct_ctor_owners (s : Struct) : List CtorOwner :=
+    match s {
+        Struct.mk name _fields _attrs _vis =>
+            List.cons (CtorOwner.mk (Identifier.id "mk") (NamePath.npath (List.cons name List.empty))) List.empty,
     }
 
 /// Collects EVERY constructor's owner, not just the 0-arg ones: a
@@ -3076,30 +3233,65 @@ def bare_ctor_name (id : Identifier) : Identifier :=
 /// `-1` meaning none. Bytes, not chars -- identifiers are ASCII here
 /// by construction (parser-generated or `::`-joined), matching the
 /// byte-level `last_dot_index` scan beside it.
+///
+/// One scanner serves both directions of the split -- `bare_ctor_name`
+/// wants what FOLLOWS the last separator, `qualifier_of` what precedes
+/// it -- so the recursion returns the INDEX and the two wrappers below
+/// cut the string.
 #[partial]
-def text_after_last_sep (s : String) (i : I64) (dot : I64) (colon : I64) : String :=
+def last_separator_cut (s : String) (i : I64) (dot : I64) (colon : I64) : I64 :=
     if i < String.length s then
         match String.get s i {
             Option.some b =>
-                if U8.beq b 46u8 then text_after_last_sep s (i + 1) (i + 1) colon
+                if U8.beq b 46u8 then last_separator_cut s (i + 1) (i + 1) colon
                 else if U8.beq b 58u8 then
                     // ':' is only a separator as a "::" PAIR -- check the
                     // next byte before claiming it.
                     match String.get s (i + 1) {
                         Option.some b2 =>
-                            if U8.beq b2 58u8 then text_after_last_sep s (i + 2) dot (i + 2)
-                            else text_after_last_sep s (i + 1) dot colon,
-                        Option.none => finish_after_last_sep s dot colon,
+                            if U8.beq b2 58u8 then last_separator_cut s (i + 2) dot (i + 2)
+                            else last_separator_cut s (i + 1) dot colon,
+                        Option.none => finish_separator_cut dot colon,
                     }
-                else text_after_last_sep s (i + 1) dot colon,
-            Option.none => finish_after_last_sep s dot colon,
+                else last_separator_cut s (i + 1) dot colon,
+            Option.none => finish_separator_cut dot colon,
         }
-    else finish_after_last_sep s dot colon
+    else finish_separator_cut dot colon
 
 #[partial]
-def finish_after_last_sep (s : String) (dot : I64) (colon : I64) : String :=
-    let cut := if colon > dot then colon else dot in
+def finish_separator_cut (dot : I64) (colon : I64) : I64 :=
+    if colon > dot then colon else dot
+
+#[partial]
+def text_after_last_sep (s : String) (i : I64) (dot : I64) (colon : I64) : String :=
+    let cut := last_separator_cut s i dot colon in
     if cut < 1 then s else String.drop cut s
+
+/// The component BEFORE a possibly-qualified reference's last separator
+/// -- `BTreeMap` for `BTreeMap.empty`, `prelude::List` for
+/// `prelude::List::empty`, and `Option.none` for a bare `empty` (a
+/// reference with no separator carries no qualifier, so there is
+/// nothing to check an owner against). Callers that need the single
+/// OWNER component rather than the whole prefix run the result through
+/// `bare_ctor_name`, exactly as they do with a ctor name.
+#[partial]
+def qualifier_of (id : Identifier) : Option Identifier :=
+    let s := show_identifier id in
+    let cut := last_separator_cut s 0 (0 - 1) (0 - 1) in
+    if cut < 1 then Option.none
+    else
+        // `cut` is the index PAST the separator, so the separator's own
+        // bytes end at `cut - 1`; a `::` pair is two bytes, and
+        // `last_separator_cut` only advances past one when both colons
+        // were seen adjacent -- so a ':' at `cut - 2` means the pair.
+        let sep_len :=
+            if cut < 2 then 1
+            else match String.get s (cut - 2) {
+                     Option.some b => if U8.beq b 58u8 then 2 else 1,
+                     Option.none => 1,
+                 } in
+        let qlen := cut - sep_len in
+        if qlen < 1 then Option.none else Option.some (Identifier.id (String.slice s 0 qlen))
 
 #[partial]
 def last_segment (np : NamePath) : Identifier :=
@@ -3161,6 +3353,51 @@ def lookup_ctor_owner (owners : List CtorOwner) (id : Identifier) : Option NameP
                     if Similar.similar cname id
                     then Option.some owner
                     else lookup_ctor_owner rest id,
+            },
+    }
+
+/// `lookup_ctor_owner` for a possibly-QUALIFIED reference: when `id`
+/// carries a qualifier it names the owner outright, so the lookup must
+/// match on both the bare name and that owner before it may fall back
+/// to a name-only match (which is all an unqualified `some` can offer).
+///
+/// Matching the bare name alone is what made
+/// `Map.insert "a" 1 BTreeMap.empty` resolve against the class's
+/// DEFAULT carrier and crash on a tag mismatch. `empty` names `List`'s
+/// first constructor as well as `BTreeMap`'s (`init/src/prelude.mo:313`,
+/// `std/src/map.mo:26`), so the name-only lookup answered `List` for a
+/// `BTreeMap` value -- a wrong carrier, and never repaired downstream:
+/// nothing else in the call revealed `BTreeMap`, so the instance search
+/// fell through to `HashMap` and the emitted call became
+/// `Map_HashMap_insert(..., alloc_constructor(5, 0))`, a `BTreeMap` tag
+/// handed to `HashMap`'s dictionary. Same collision class as the
+/// bare-`mk` one `CtorFieldTypes.owner` closed; the qualifier is what
+/// distinguishes them.
+#[partial]
+def lookup_ctor_owner_for (owners : List CtorOwner) (id : Identifier) : Option NamePath :=
+    match qualifier_of id {
+        Option.some qualifier =>
+            match lookup_ctor_owner_owned owners (bare_ctor_name id) qualifier {
+                Option.some owner => Option.some owner,
+                // The qualifier matched no owner -- still better to try
+                // the name alone than to report nothing (a ctor reached
+                // through an import alias the owners map spells
+                // differently, say).
+                Option.none => lookup_ctor_owner owners (bare_ctor_name id),
+            },
+        Option.none => lookup_ctor_owner owners (bare_ctor_name id),
+    }
+
+#[partial]
+def lookup_ctor_owner_owned (owners : List CtorOwner) (cname : Identifier) (qualifier : Identifier) : Option NamePath :=
+    match owners {
+        List.empty => Option.none,
+        List.cons o rest =>
+            match o {
+                CtorOwner.mk oname owner =>
+                    if Similar.similar oname cname && owner_head_match owner qualifier
+                    then Option.some owner
+                    else lookup_ctor_owner_owned rest cname qualifier,
             },
     }
 
@@ -3337,11 +3574,17 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                 Option.none => Option.some typ,
                             },
                         Option.none =>
-                            // Normalized (`bare_ctor_name`): a 0-arg
-                            // ctor reference may be spelled qualified
-                            // (`Map.empty`) while the owners map keys
-                            // the bare component (`empty`).
-                            match lookup_ctor_owner ctor_owners (bare_ctor_name id) {
+                            // Normalized (`bare_ctor_name`) and
+                            // qualifier-scoped (`lookup_ctor_owner_for`):
+                            // a 0-arg ctor reference is often spelled
+                            // qualified (`Map.empty`, `BTreeMap.empty`),
+                            // and the owners map keys the bare component
+                            // (`empty`) -- which every `empty`/`mk`/`map`
+                            // ctor in the corpus shares, so the
+                            // qualifier has to break the tie. See
+                            // `lookup_ctor_owner_for` for the measured
+                            // crash the name-only match caused.
+                            match lookup_ctor_owner_for ctor_owners id {
                                 Option.some owner => Option.some (carrier_var (show_name_path owner)),
                                 // Not a ctor either -- a bare 0-arg
                                 // DEF reference. The app arm below
@@ -3430,9 +3673,43 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                             // today's behavior verbatim.
                                             match instantiate_def_carrier env ctor_owners def_types ctor_field_types typ args {
                                                 Option.some carrier => Option.some carrier,
+                                                // Nothing to instantiate -- the callee
+                                                // has no type variable at all
+                                                // (`get_obj : I64 -> IO Obj`) or its
+                                                // arguments reveal none -- so its own
+                                                // declared return type IS the answer,
+                                                // ARGUMENTS AND ALL: the same applied
+                                                // shape the local-variable arm above
+                                                // returns, and the same one
+                                                // `full_return_carrier` documents.
+                                                //
+                                                // Collapsing it to the bare head (what
+                                                // this arm used to do) throws away
+                                                // exactly what the callee-signature
+                                                // hint channel needs: a parameter
+                                                // shape like `M A` binds `M := IO`
+                                                // only against an APPLIED `IO Obj`,
+                                                // and against a bare `IO` it binds
+                                                // nothing, so `concrete_hint` drops
+                                                // the whole parameter hint, the
+                                                // enclosing lambda's body expectation
+                                                // stays the class's abstract `M B`,
+                                                // and every class call inside that
+                                                // lambda is left unresolved.
+                                                //
+                                                // MEASURED: `Monad.bind (get_obj 1)
+                                                // (fn o => Monad.bind (f o) (fn r =>
+                                                // IO.pure r))` reports `no instance
+                                                // found for `Monad.bind`` -- while the
+                                                // byte-for-byte same call with
+                                                // `IO.pure obj` or `IO.io obj` in that
+                                                // argument position resolves. The only
+                                                // difference is whether the
+                                                // argument's carrier came back applied.
                                                 Option.none =>
-                                                    match type_head_name_local (return_type_after_n_args typ (List.length args)) {
-                                                        Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
+                                                    let ret_typ : Term := return_type_after_n_args typ (List.length args) in
+                                                    match type_head_name_local ret_typ {
+                                                        Option.some carrier_name => Option.some (carrier_with_normalized_head (show_identifier carrier_name) ret_typ),
                                                         Option.none => Option.none,
                                                     },
                                             },
@@ -3458,10 +3735,53 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                         // comment for the measured gap the
                                         // bare owner leaves.
                                         Option.none =>
-                                            match lookup_ctor_owner ctor_owners (bare_ctor_name id) {
+                                            match lookup_ctor_owner_for ctor_owners id {
                                                 Option.some owner =>
                                                     Option.some (ctor_app_carrier env ctor_owners def_types ctor_field_types (bare_ctor_name id) owner args),
-                                                Option.none => Option.none,
+                                                // Not a def and not a ctor -- so the
+                                                // head is a LOCAL: a lambda
+                                                // parameter or a `let`-bound
+                                                // variable whose declared type
+                                                // is in `env`. Its return type
+                                                // after `args` is the callee's
+                                                // own answer, exactly as for the
+                                                // def arm above, and it must be
+                                                // kept APPLIED for the same
+                                                // reason that arm's fallback
+                                                // keeps it applied.
+                                                //
+                                                // MEASURED (2026-09-21) on
+                                                // `std/src/concurrent/combine.mo`'s
+                                                // `scoped (f : Scope -> IO A)`:
+                                                // the inner `Monad.bind (f s)
+                                                // (fn r => ...)` reported `no
+                                                // instance found for `Monad.bind``.
+                                                // `f s`'s head is the def's own
+                                                // parameter, so it is in NEITHER
+                                                // `def_types` nor `ctor_owners`,
+                                                // and this arm returned
+                                                // `Option.none` for the whole
+                                                // argument -- leaving the enclosing
+                                                // `bind` with no argument-derived
+                                                // carrier to resolve `IO` from. The
+                                                // other two binds in the same def
+                                                // (`scope_new`, `scope_drop s`)
+                                                // are named defs and always had
+                                                // one, which is why only this
+                                                // shape fails and why the
+                                                // do-block spelling and the
+                                                // hand-written nest fail
+                                                // identically.
+                                                Option.none =>
+                                                    match lookup_local_type env id {
+                                                        Option.some local_typ =>
+                                                            let ret_typ : Term := return_type_after_n_args local_typ (List.length args) in
+                                                            match type_head_name_local ret_typ {
+                                                                Option.some head_name => Option.some (carrier_with_normalized_head (show_identifier head_name) ret_typ),
+                                                                Option.none => Option.none,
+                                                            },
+                                                        Option.none => Option.none,
+                                                    },
                                             },
                                     },
                                 DebugName.unnamed => Option.none,
@@ -3496,11 +3816,146 @@ def literal_carrier_type (v : Literal) : Option Term :=
 /// both explicit `{A : Type}` binders (`implicit_params`) AND
 /// constraint-only binders (`[Add A]` on `instance [Add A] HAdd A A A`,
 /// which has no `implicit_params` entry for its own `A` at all).
+///
+/// A THIRD source reaches `implicit_params` by the time an instance list
+/// is matched against: the unquantified type variables of the instance's
+/// own args, recovered by `refine_instance_wildcards` -- see the section
+/// comment below.
 #[partial]
 def instance_wildcard_names (ins : Instance) : List Identifier :=
     match ins {
         Instance.mk _ _ constraints _ _ implicit_params _ =>
             List.append (param_names implicit_params) (constraint_vars constraints),
+    }
+
+// ─── Unquantified instance type variables ───────────────────────────
+//
+// `instance Monad (Protocol I I)` (`examples/indexed_monads.mo`) and
+// `instance Monad (State S)` (`examples/state_monad.mo`) write a type
+// variable in their own args WITHOUT declaring it: no `{I : Type}`
+// binder and no `[C I]` constraint, so `implicit_params` and
+// `constraints` are both empty and `instance_wildcard_names` names
+// nothing at all.
+//
+// The Rust reference resolves such an instance by SUBSTITUTION -- its
+// args are patterns, and a bare name in one is a pattern variable, so
+// `Monad (State S)` matches the `State I64` carrier and binds `S :=
+// I64`. That is the language's behavior, not a host quirk: both example
+// files run their tests on the Rust runner today.
+// `term_matches_carrier` instead asks whether the name is in
+// `instance_wildcard_names`, and with an empty set the leaf falls to
+// `Similar.similar S I64` and fails, leaving the call unresolved
+// (`no instance found for `Monad.pure``).
+//
+// So the unbound names of an instance's args are added to its
+// `implicit_params`, which is exactly what they are. The filter matters
+// as much as the recovery: `instance Json.Deserializer Bool`,
+// `instance BEq (BTreeMap String Json)` and `instance Show Json.Number`
+// name real types in the same position, and treating one of those as a
+// variable would make its instance match ANY carrier -- a silent
+// dispatch to the wrong dictionary, not a resolution failure. A name is
+// kept only when it is not the tail of any type the program declares.
+//
+// Filtering by TAIL (`last_segment_of`) rather than by the whole
+// spelling, because the two sides are spelled differently in general:
+// a decl's own name can be qualified (`json::Number`, the module-
+// qualified spelling `qualify.mo` mints) while a reference to it is
+// written `Json.Number` or bare, and `Similar.similar` does not see
+// through a qualifier.
+//
+// Fail-closed by construction: a name this pass cannot prove is a
+// variable leaves its instance exactly as concrete as it was before, so
+// no instance that resolves today resolves differently.
+
+/// Every type name the program's own decls introduce, as tail segments --
+/// the set `filter_unknown_types` rules an instance arg's names against.
+/// Classes count: a class name is a real name in this position too, and
+/// keeping one out of the variable set is the fail-closed direction.
+#[partial]
+def declared_type_names (decl_list : List Decl) : List Identifier :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest => List.append (decl_type_names d) (declared_type_names rest),
+    }
+
+#[partial]
+def decl_type_names (d : Decl) : List Identifier :=
+    match d {
+        Decl.inductive_d i => match i { Inductive.mk nm _p _t _c _a _v => List.cons (last_segment nm) List.empty },
+        Decl.struct_d s => match s { Struct.mk nm _f _a _v => List.cons nm List.empty },
+        Decl.class_d c => match c { Class.mk nm _p _c _m _v => List.cons nm List.empty },
+        _ => List.empty,
+    }
+
+/// The names an instance's own args mention as types: each arg's own
+/// bare name when the whole arg IS a name (`A` in `instance Foo A`), plus
+/// every name in an application's argument position inside it
+/// (`Protocol I I` -> `I`, `BTreeMap K V` -> `K`, `V`). The head of an
+/// application is NOT collected -- it names the type being applied, which
+/// `declared_type_names` already accounts for.
+#[partial]
+def instance_arg_free_names (args : List Term) : List Identifier :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            List.append (bare_type_var_name a) (List.append (collect_app_arg_names a) (instance_arg_free_names rest)),
+    }
+
+/// `ids` minus every name whose tail segment is one of `known`'s -- see
+/// the section comment above.
+#[partial]
+def filter_unknown_types (ids : List Identifier) (known : List Identifier) : List Identifier :=
+    match ids {
+        List.empty => List.empty,
+        List.cons hd rest =>
+            if tail_member hd known
+            then filter_unknown_types rest known
+            else List.cons hd (filter_unknown_types rest known),
+    }
+
+#[partial]
+def tail_member (id : Identifier) (known : List Identifier) : Bool :=
+    match known {
+        List.empty => false,
+        List.cons k rest =>
+            if String.beq (identifier_tail id) (identifier_tail k)
+            then true
+            else tail_member id rest,
+    }
+
+/// A name's last dotted/colon-separated component (`Json.Number` ->
+/// `Number`, `json::Number` -> `Number`), through the same splitting
+/// `last_segment_of` already does for a decl's own name-path.
+#[partial]
+def identifier_tail (id : Identifier) : String :=
+    show_identifier (last_segment_of (List.cons id List.empty))
+
+/// One `implicit_params` entry per recovered name -- `{A : Type}`'s own
+/// shape (`params_for_names`, `lang/parser.mo`), so everything that reads
+/// `implicit_params` sees the same thing it would have seen had the
+/// instance spelled its binders out.
+#[partial]
+def params_of_ids (ids : List Identifier) : List Param :=
+    match ids {
+        List.empty => List.empty,
+        List.cons id rest =>
+            List.cons (Param.mk id (Term.type_ 1) Multiplicity.many Option.none List.empty) (params_of_ids rest),
+    }
+
+#[partial]
+def add_unquantified_instance_vars (known_types : List Identifier) (ins : Instance) : Instance :=
+    match ins {
+        Instance.mk nm cls constraints args vis implicit_params defs =>
+            let extra := params_of_ids (filter_unknown_types (instance_arg_free_names args) known_types) in
+            Instance.mk nm cls constraints args vis (List.append implicit_params extra) defs,
+    }
+
+#[partial]
+def refine_instance_wildcards (known_types : List Identifier) (instances : List Instance) : List Instance :=
+    match instances {
+        List.empty => List.empty,
+        List.cons ins rest =>
+            List.cons (add_unquantified_instance_vars known_types ins) (refine_instance_wildcards known_types rest),
     }
 
 #[partial]
@@ -3603,9 +4058,9 @@ def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (c
                     },
                 DebugName.unnamed => false,
             },
-        Term.app if_ ia =>
+        Term.app _ _ =>
             match term_peel carrier {
-                Term.app cf ca => term_matches_carrier wildcard_names if_ cf && term_matches_carrier wildcard_names ia ca,
+                Term.app _ _ => spine_matches wildcard_names (flatten_call_spine ins_term) (flatten_call_spine carrier),
                 // A BARE carrier against an APPLIED instance arg -- the
                 // mirror of the arm above, and the shape the carrier
                 // guesser actually produces: `infer_carrier_type`
@@ -3622,7 +4077,9 @@ def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (c
                 // A CONCRETE applied arg (`Show (Option I64)`) is NOT a
                 // wildcard and must keep failing here: the bare carrier
                 // says nothing about its element type.
-                _ => term_is_wildcard wildcard_names ia && term_matches_carrier wildcard_names if_ carrier,
+                _ =>
+                    all_args_are_wildcards wildcard_names (spine_args (flatten_call_spine ins_term))
+                        && term_matches_carrier wildcard_names (spine_head (flatten_call_spine ins_term)) carrier,
             },
         _ => Similar.similar ins_term carrier,
     }
@@ -4276,11 +4733,15 @@ def instantiate_def_carrier (env : List LocalTypeBinding) (ctor_owners : List Ct
 #[partial]
 def ctor_app_carrier (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (ctor_name : Identifier) (owner : NamePath) (args : List Term) : Term :=
     let fallback : Term := carrier_var (show_name_path owner) in
-    match lookup_ctor_field_types ctor_field_types ctor_name {
+    // Owner-scoped: the caller already HAS the ctor's owner
+    // (`lookup_ctor_owner`), and `mk` names every struct's own
+    // constructor -- a name-only lookup here reads a different struct's
+    // fields, the same collision `match_arm_env` had.
+    match lookup_ctor_field_types_owned ctor_field_types ctor_name (last_segment owner) {
         Option.none => fallback,
         Option.some entry =>
             match entry {
-                CtorFieldTypes.mk _ owner_params field_types =>
+                CtorFieldTypes.mk _ _ owner_params field_types =>
                     match bind_field_types_against_args env ctor_owners def_types ctor_field_types owner_params field_types args List.empty {
                         List.empty => fallback,
                         List.cons b rest =>
@@ -4363,7 +4824,15 @@ def find_matching_instance (instances : List Instance) (cls_name : NamePath) (ca
     let concrete := filter_concrete candidates in
     match first_instance_matching concrete carrier {
         Option.some ins => Option.some ins,
-        Option.none => first_instance_matching candidates carrier,
+        Option.none =>
+            // Third tier: head-concrete before the catch-alls. See
+            // `filter_head_concrete` for the catch-all this exists to
+            // lose to a specific instance.
+            let headed := filter_head_concrete candidates in
+            match first_instance_matching headed carrier {
+                Option.some ins => Option.some ins,
+                Option.none => first_instance_matching candidates carrier,
+            },
     }
 
 /// Filters a flat `List Instance` (`collect_instances`'s output) down
@@ -4374,11 +4843,51 @@ def find_matching_instance (instances : List Instance) (cls_name : NamePath) (ca
 /// own doc comment already gives for why this pass can't use `Scope`).
 #[partial]
 def filter_instances_by_class (instances : List Instance) (cls_name : NamePath) : List Instance :=
-    List.filter (fn (ins : Instance) => npath_eq ins.cls cls_name) instances
+    List.filter (fn (ins : Instance) => class_name_eq ins.cls cls_name) instances
 
 #[partial]
 def filter_concrete (instances : List Instance) : List Instance :=
     List.filter instance_is_fully_concrete instances
+
+/// The middle specificity tier `find_matching_instance` falls back to
+/// before it will consider a catch-all: instances whose every declared
+/// arg's own HEAD is concrete -- no wildcard in head position.
+///
+/// `instance_is_fully_concrete` above is the first tier, and it is not
+/// enough on its own: a wildcard at an ARGUMENT position is ordinary
+/// genericity (`instance Monad (State S)`, whose `S` the carrier
+/// supplies), but a wildcard at the HEAD is a catch-all that matches
+/// every carrier whatsoever. `init/src/prelude.mo`'s bridge
+/// `instance {I : Type} [IndexedMonad M] Monad (M I I)` is exactly that
+/// shape: its own head `M` is unquantified, so `refine_instance_wildcards`
+/// adds it to the wildcard set and the arg matches ANY carrier -- even a
+/// bare `Unit` (measured). It sits FIRST in the instance list (prelude
+/// decls precede every consumer's), so `first_instance_matching`'s
+/// first-match-wins picked it over the specific instance the call site
+/// meant: the call then resolved to a `Monad` dictionary whose
+/// `IndexedMonad M` constraint cannot resolve, and the class-call pass
+/// reported `no instance found for `Monad.pure`` in
+/// `examples/indexed_monads.mo` and `examples/state_monad.mo` although the
+/// right instance was declared in the same file.
+#[partial]
+def filter_head_concrete (instances : List Instance) : List Instance :=
+    List.filter instance_head_is_concrete instances
+
+#[partial]
+def instance_head_is_concrete (ins : Instance) : Bool :=
+    match ins {
+        Instance.mk _ _ _ args _ _ _ =>
+            let wildcards := instance_wildcard_names ins in
+            not (any_arg_head_is_wildcard wildcards args),
+    }
+
+#[partial]
+def any_arg_head_is_wildcard (wildcards : List Identifier) (args : List Term) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest =>
+            term_is_wildcard wildcards (spine_head (flatten_call_spine a)) || any_arg_head_is_wildcard wildcards rest,
+    }
 
 #[partial]
 def first_instance_matching (instances : List Instance) (carrier : Term) : Option Instance :=
@@ -4429,6 +4938,58 @@ def rebuild_call (head : Term) (args : List Term) : Term :=
     match args {
         List.empty => head,
         List.cons a rest => rebuild_call (Term.app head a) rest,
+    }
+
+#[partial]
+def spine_head (s : CallSpine) : Term := match s { CallSpine.mk h _ => h }
+
+#[partial]
+def spine_args (s : CallSpine) : List Term := match s { CallSpine.mk _ a => a }
+
+/// Structural match of two APPLIED shapes, LEFT-ALIGNED over the length
+/// they share: heads first (each side's head alone, so the bare-vs-
+/// applied head rule the arms below encode keeps working), then the
+/// arguments pairwise from the first.
+///
+/// The two sides routinely have different arities, because an instance's
+/// own arg is a PARTIAL application of the carrier's head -- `instance
+/// Monad (Protocol I I)` names two of `Protocol`'s three parameters --
+/// while the carrier at a call site is fully applied
+/// (`Protocol Init Init I64`). Comparing the two chains in lockstep from
+/// the OUTSIDE (what the previous `Term.app`/`Term.app` arm did, one
+/// level per recursion) pairs the instance's LAST arg against the
+/// carrier's outermost one: `Init` against `I64`, always false. The
+/// instance could then only ever match through a wildcard at that
+/// position, which is why `instance Monad (Protocol Init Init)` -- every
+/// argument concrete -- matched nothing at all, and why the prelude's
+/// wildcard-headed bridge got the call in `examples/indexed_monads.mo`.
+///
+/// Arguments the INSTANCE names beyond the carrier's own must all be
+/// wildcards (`all_args_are_wildcards` below), which is the pre-existing
+/// `instance [Show A] Show (List A)` against a bare `List` case; what the
+/// carrier applies the head to BEYOND the instance's own args is not
+/// constrained by that instance at all.
+#[partial]
+def spine_matches (wildcard_names : List Identifier) (i : CallSpine) (c : CallSpine) : Bool :=
+    term_matches_carrier wildcard_names (spine_head i) (spine_head c)
+        && args_prefix_match wildcard_names (spine_args i) (spine_args c)
+
+#[partial]
+def args_prefix_match (wildcard_names : List Identifier) (iargs : List Term) (cargs : List Term) : Bool :=
+    match iargs {
+        List.empty => true,
+        List.cons ia irest =>
+            match cargs {
+                List.empty => all_args_are_wildcards wildcard_names iargs,
+                List.cons ca crest => term_matches_carrier wildcard_names ia ca && args_prefix_match wildcard_names irest crest,
+            },
+    }
+
+#[partial]
+def all_args_are_wildcards (wildcard_names : List Identifier) (args : List Term) : Bool :=
+    match args {
+        List.empty => true,
+        List.cons a rest => term_is_wildcard wildcard_names a && all_args_are_wildcards wildcard_names rest,
     }
 
 /// If `id`'s own text is a dotted reference into a known class
@@ -4508,6 +5069,57 @@ def find_matching_instance_carrier_any (instances : List Instance) (cls_name : N
                 Option.none => find_matching_instance_carrier_any instances cls_name rest,
             },
     }
+
+/// `find_matching_instance_carrier_any` for a SPECIFIC (non-catch-all)
+/// match only: the first candidate carrier that matches a fully-concrete
+/// instance, else the first that matches a head-concrete one. `Option.none`
+/// when every candidate only reaches the catch-all tier -- the caller then
+/// falls back to the ordinary first-match-wins path, so nothing that
+/// resolves today stops resolving.
+///
+/// This exists for `Monad.pure`, the one class method whose evidence is
+/// ALL guesswork: its own argument is the monad's ELEMENT type, never the
+/// monad, so the args-derived candidate is a wrong answer rather than a
+/// weak one (`pure 0` reveals `I64`), and the enclosing def's declared
+/// return type is only the monad for a def that returns the do-block's
+/// own type. MEASURED on `examples/state_monad.mo`'s `test_state_pure`
+/// (`... := do { ... } == expected`, so `def_carrier` is `Bool`): the
+/// `pure` call's REAL evidence -- the projected expectation, `State I64`
+/// -- was in the candidate list, but `I64`/`Bool` both matched
+/// `init/src/prelude.mo`'s unquantified bridge
+/// `instance {I : Type} [IndexedMonad M] Monad (M I I)`, whose wildcard
+/// head matches literally any type, so the first candidate's catch-all
+/// match won and the call resolved to a dictionary whose `IndexedMonad M`
+/// constraint cannot resolve -- `no instance found for `Monad.pure``.
+/// Specificity is the only evidence that separates the two, since a
+/// catch-all by definition fits every candidate equally well.
+#[partial]
+def find_specific_matching_carrier (instances : List Instance) (cls_name : NamePath) (carriers : List Term) : Option (Pair Term Instance) :=
+    match find_matching_carrier_at_tier instances cls_name carriers 1 {
+        Option.some p => Option.some p,
+        Option.none => find_matching_carrier_at_tier instances cls_name carriers 2,
+    }
+
+#[partial]
+def find_matching_carrier_at_tier (instances : List Instance) (cls_name : NamePath) (carriers : List Term) (tier : I64) : Option (Pair Term Instance) :=
+    match carriers {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match first_instance_matching (instance_tier_candidates instances cls_name tier) c {
+                Option.some ins => Option.some (Pair.pair c ins),
+                Option.none => find_matching_carrier_at_tier instances cls_name rest tier,
+            },
+    }
+
+/// `find_matching_instance`'s tiers as a selectable list, so a search can
+/// ask for one tier at a time (the catch-all tier is the full candidate
+/// list, exactly as `find_matching_instance`'s own last fallback is).
+#[partial]
+def instance_tier_candidates (instances : List Instance) (cls_name : NamePath) (tier : I64) : List Instance :=
+    let cands := filter_instances_by_class instances cls_name in
+    if I64.beq tier 1 then filter_concrete cands
+    else if I64.beq tier 2 then filter_head_concrete cands
+    else cands
 
 /// Resolves ONE dict argument a promoted method's own constraint
 /// needs, given the concrete `carrier` already established at the outer
@@ -4963,6 +5575,78 @@ def carrier_hint_list (hint : Option Term) : List Term :=
         Option.none => List.empty,
     }
 
+/// A class's own first declared type parameter -- the position its
+/// carrier stands in (`M` in `class Monad (M : Type -> Type)`, `D` in
+/// `class Json.Deserializer (D : Type)`). The carrier is the first
+/// parameter by the language's own convention, and it is the one
+/// `method_carrier_hint` projects a full type hint through.
+#[partial]
+def first_param_name (params : List Param) : Option Identifier :=
+    match params {
+        List.empty => Option.none,
+        List.cons p _rest => match p { Param.mk pname _t _m _d _a => Option.some pname },
+    }
+
+#[partial]
+def class_first_param_name (cls : Class) : Option Identifier :=
+    match cls {
+        Class.mk _nm params _c _m _v => first_param_name params,
+    }
+
+/// The carrier a call's own FULL type hint implies, by projecting that
+/// hint through the callee's declared class signature.
+///
+/// Where the hint is a whole type -- an annotated binding's expected type
+/// (`(Monad.pure 42 : State I64 I64)`), or the enclosing def's declared
+/// return type (`def increment : State I64 I64 := MonadState.modify_get
+/// ...`) -- the carrier it implies is not the type ITSELF. It is that
+/// type with the class's own carrier parameter identified: `M A` against
+/// `State I64 I64` puts the carrier at `M := State I64`, exactly the
+/// shape an instance's own args are written in (`instance MonadState
+/// (State I64)`). Handing the whole type over instead matches NOTHING,
+/// which is why these two files report `no instance found` for a call
+/// whose carrier is plainly written out in the enclosing annotation
+/// (`lang/src/json.mo`'s `Json.Deserializer.deserialize`: `Result String
+/// Person` against `instance Json.Deserializer Person`).
+///
+/// `bind_term_vars` over `final_result_type sig` is the projection, and
+/// `class_method_var_names` its wildcard set -- both already exist for
+/// the instance side (`method_sig_bindings`, `carrier_bindings`). The
+/// lookup is for the CLASS'S FIRST PARAM, so a signature whose codomain
+/// is not headed by that parameter (`Show.show : A -> String`) binds
+/// nothing and yields `Option.none`: no candidate, no guess. That is the
+/// soundness condition this channel rests on -- "the method's result type
+/// IS the carrier applied to its arguments", which is precisely the
+/// codomain case the args-derived channel cannot see.
+///
+/// Appended to the candidate list AFTER everything that channel already
+/// produced, so a call that resolved before resolves to the same instance
+/// it did.
+#[partial]
+def method_carrier_hint (cls : Class) (method_name : Identifier) (hint : Option Term) : Option Term :=
+    match hint {
+        Option.none => Option.none,
+        Option.some full =>
+            match class_method_declared_type cls method_name {
+                Option.none => Option.none,
+                Option.some sig =>
+                    match class_first_param_name cls {
+                        Option.none => Option.none,
+                        Option.some carrier_name =>
+                            lookup_binding (bind_term_vars (class_method_var_names cls sig) (final_result_type sig) full List.empty) carrier_name,
+                    },
+            },
+    }
+
+/// The candidates `method_carrier_hint` contributes for one call: the
+/// projection of `hint`, and (when they differ) of the enclosing def's
+/// own declared return type. Both are `Option Term`s already, so this is
+/// just the two of them as a candidate list -- see `resolve_class_method_
+/// call`'s doc comment on where it goes and why.
+#[partial]
+def method_carrier_hints (cls : Class) (method_name : Identifier) (hint : Option Term) (def_carrier : Option Term) : List Term :=
+    List.append (carrier_hint_list (method_carrier_hint cls method_name hint)) (carrier_hint_list (method_carrier_hint cls method_name def_carrier))
+
 /// One expected-carrier hint per argument of a call spine, read off the
 /// spine's own HEAD when it is a lambda. `Term.app (Term.lam _dbg T body)
 /// value` is exactly what an annotated binding desugars to (`let x : T :=
@@ -5038,9 +5722,73 @@ def sig_arg_hints (sig : Term) (names : List Identifier) (bindings : List (Pair 
 /// is the bare `A`, and it is the sibling's `Ordering` being substituted in
 /// that turns it into a hint at all; this check is what stops every OTHER
 /// still-generic parameter from becoming one.
+///
+/// A LAMBDA-typed parameter (`Monad.bind`'s `A -> M B`) is split instead,
+/// because the two halves of the arrow reach two different consumers and
+/// only ONE of them needs its half to be name-free:
+///
+/// * the DOMAIN is the type `lam_binder_type` binds the lambda's own
+///   parameter at, so it carries the hazard above by itself -- a generic
+///   `A` there is exactly the foldr misresolution
+///   `init/src/foldable_tests.mo` measured. A domain that still names a
+///   signature variable is replaced by `Term.hole`, which is what the
+///   parser writes for a binder the source never annotated: the hint then
+///   says nothing about the binder, exactly as an omitted annotation does,
+///   and `lam_binder_type` keeps whatever the lambda wrote (if anything).
+/// * the CODOMAIN is a lambda BODY's expectation, and there the only thing
+///   that matters is which type the class's carrier parameter lands on.
+///   That projection goes through the class's own declared signature
+///   (`method_carrier_hint`), so a leftover name beside the carrier cannot
+///   become one: `Protocol Init Init B` against `Monad.pure : A -> M A`
+///   binds `M := Protocol Init Init` and nothing else.
+///
+/// So a `B` that nothing binds -- the call's own result position, which the
+/// expectation does not reach -- no longer throws the whole arrow away.
+///
+/// MEASURED (2026-09-21) on `examples/indexed_monads.mo`'s
+/// `do_bind_result`: the do-block desugars to `Monad.bind e (fn x => return
+/// (x + 1))`, whose second parameter is `A -> M B`. `M` is bound to
+/// `Protocol Init Init` by the ascription's expected type, but `A` is
+/// bound by NOTHING -- the sibling argument is `Protocol.protocol 42`,
+/// whose own carrier comes back as the bare `Protocol` (its `I`/`J` indices
+/// are phantom, so `ctor_app_carrier` refuses to guess them), and a bare
+/// carrier binds no variable at all (`bind_term_vars`'s `Term.app` arm needs
+/// an applied actual to descend into). Rejecting the arrow on that unbound
+/// `A` left `Monad.pure` with only its own argument's `I64` to guess from
+/// (`AD_I64`, no expected type at all), and `I64` has no `Monad` instance --
+/// `no instance found for Monad.pure`. Annotating ONLY that argument
+/// (`(Protocol.protocol 42 : Protocol Init Init I64)`) resolves the whole
+/// file, which is what isolates this channel as the one missing.
+///
+/// Every hint the old check ACCEPTED is still accepted with the same value
+/// (`hint_arrow_domain` returns the domain verbatim whenever it is usable),
+/// so this only ever adds resolutions.
+#[partial]
 def concrete_hint (ptyp : Term) (names : List Identifier) (bindings : List (Pair Identifier Term)) : Option Term :=
     let sub := subst_carrier_bindings bindings ptyp in
-    if type_mentions_any names sub then Option.none else expected_carrier_of sub
+    match term_peel sub {
+        Term.pi dom ret =>
+            match expected_carrier_of ret {
+                // A codomain of a hole or a bare universe placeholder says
+                // nothing about the body, so there is nothing to hand down.
+                Option.none => Option.none,
+                Option.some _ => Option.some (Term.pi (hint_arrow_domain names dom) ret),
+            },
+        _ => if type_mentions_any names sub then Option.none else expected_carrier_of sub,
+    }
+
+/// The domain an expected-carrier hint's arrow should carry: the declared
+/// one when it is usable as a lambda parameter's type, else `Term.hole` --
+/// the same value the parser writes for a binder the source left
+/// un-annotated, so a hint with an unusable domain degrades to exactly the
+/// information an omitted annotation carries (none) rather than to a guess.
+#[partial]
+def hint_arrow_domain (names : List Identifier) (dom : Term) : Term :=
+    if type_mentions_any names dom then Term.hole
+    else match expected_carrier_of dom {
+             Option.some d => d,
+             Option.none => Term.hole,
+         }
 
 /// Does any bare name in `names` occur anywhere in `t`?
 #[partial]
@@ -5269,7 +6017,19 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
             // hint is only consulted where the args revealed nothing at
             // all -- `Map.empty`'s nullary shape, `Bounded.max_bound` --
             // which is the family that could never resolve.
-            let extra_carriers := List.append (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args) (carrier_hint_list expected) in
+            //
+            // Then the SAME two hints again, projected through the
+            // callee's own class signature (`method_carrier_hints`): a
+            // hint is a whole type, and the carrier an instance's args are
+            // written in is the class's own carrier parameter applied to
+            // its arguments, which is a subterm of that type in the
+            // codomain position. The raw hint is kept FIRST so the
+            // existing channel's own order, and therefore every resolution
+            // that already worked, is untouched.
+            let ad := infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args in
+            let ex := carrier_hint_list expected in
+            let pj := method_carrier_hints cls method_name expected def_carrier in
+            let extra_carriers := List.append ad (List.append ex pj) in
             resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
     }
 
@@ -5305,11 +6065,30 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
 #[partial]
 def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
     if npath_eq cls_name monad_class_name && String.beq (show_identifier method_name) "pure" then
-        match def_carrier {
-            Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
-            Option.none => resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
+        // `def_carrier` first (the order this case has always used), then
+        // the call's own evidence -- but only a SPECIFIC match is taken
+        // from the list; see `find_specific_matching_carrier` for why
+        // `pure` alone needs that and what it was measured to fix.
+        match find_specific_matching_carrier instances cls_name (instance_carrier_candidates def_carrier extra_carriers) {
+            Option.some found =>
+                match found {
+                    Pair.pair carrier ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
+                },
+            Option.none =>
+                match def_carrier {
+                    Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
+                    Option.none => resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
+                },
         }
     else resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers
+
+/// Every carrier `resolve_class_method_call_d4`'s `pure` case may try, in
+/// order: the enclosing def's declared return type first (its documented
+/// precedence), then whatever the call's own arguments and expected type
+/// revealed.
+#[partial]
+def instance_carrier_candidates (def_carrier : Option Term) (extra_carriers : List Term) : List Term :=
+    List.append (carrier_hint_list def_carrier) extra_carriers
 
 /// `env`/`ctor_owners` are the REAL lexical carrier-inference context
 /// (threaded from `resolve_class_call_term`'s own recursive walk), NOT
@@ -5573,7 +6352,16 @@ def dict_binding_class_of (id : Identifier) : Option NamePath :=
 #[partial]
 pub def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
     let classes := collect_classes decl_list in
-    let instances := collect_instances decl_list in
+    // The instance list every match below reads is the refined one: an
+    // instance that writes a type variable in its own args without
+    // declaring it names nothing to `term_matches_carrier` otherwise --
+    // see `refine_instance_wildcards`' section comment. Refined HERE, at
+    // the pass that needs it and that this function's own doc comment
+    // documents as running "on the FULL loaded decl graph" (which is what
+    // makes `declared_type_names` see every type the program can name),
+    // rather than in `collect_instances` itself -- `promote_instance_defs`
+    // shares that function and must keep seeing the instance as written.
+    let instances := refine_instance_wildcards (declared_type_names decl_list) (collect_instances decl_list) in
     let ctor_owners := collect_ctor_owners decl_list in
     let ctor_field_types := collect_ctor_field_types decl_list in
     let def_constraints := collect_def_constraints decl_list in
@@ -5926,10 +6714,24 @@ pub def strip_all_leading_binders (typ : Term) : Term :=
 /// comment for why this is the right (and only sound, restricted to the
 /// `Monad` class) D4 fallback for a do-notation `bind`/`pure` call
 /// whose own args don't reveal a carrier.
+///
+/// With its ARGUMENTS, normalized head and all (`State I64 I64` stays
+/// applied, head bare) -- `carrier_with_normalized_head`, the same shape
+/// every other carrier candidate carries. It used to be reduced to the
+/// bare head, which matched (the bare-carrier arm of
+/// `term_matches_carrier` reads an applied arg's head against it) but
+/// could never BIND anything: `method_carrier_hint` projects this type
+/// through the callee's own class signature, and
+/// `bind_term_vars [M, A] (M A) (var State)` binds nothing (an applied
+/// shape against a bare actual), so no projection was possible at all.
+/// `State I64 I64` binds `M := State I64` -- the carrier the class's own
+/// `M A` codomain names -- which is what `examples/state_monad.mo`'s
+/// `MonadState.modify_get` needs.
 #[partial]
 def full_return_carrier (typ : Term) : Option Term :=
-    match type_head_name_local (strip_all_leading_binders typ) {
-        Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
+    let stripped : Term := strip_all_leading_binders typ in
+    match type_head_name_local stripped {
+        Option.some carrier_name => Option.some (carrier_with_normalized_head (show_identifier carrier_name) stripped),
         Option.none => Option.none,
     }
 

@@ -1997,8 +1997,26 @@ def type_check_lam (dbg : DebugName) (t : Term) (body : Term) (expected_type : T
             match type_check body ret_typ scope extended_types extended_locals {
                 ok body_tt =>
                     let checked_body : Term := body_tt.term in
+                    let body_typ : Term := body_tt.typ in
                     let lam_term : Term := Term.lam dbg bound_typ checked_body in
-                    ok (mk_typed lam_term expected_type),
+                    // The ambient Pi wins whenever its RETURN carries
+                    // real information -- that is the bidirectional
+                    // precision this arm exists for, and it is
+                    // unchanged. Its return being an uninformative
+                    // hole is the other case, and echoing the whole Pi
+                    // back verbatim then discarded the body type just
+                    // inferred: `(e : T)` desugars (`paren_try_ann`,
+                    // `lang/parser.mo`) to exactly this applied-lambda
+                    // shape, so `IO.pure (List.empty : List I64)` typed
+                    // its ARGUMENT as a hole, `solve_typevars` had
+                    // nothing to solve `A` from, and the whole call
+                    // came out the unsolved `IO A` -- reported one
+                    // level up as "type mismatch: expected (IO A),
+                    // found (IO (List I64))" the moment a match arm
+                    // unified it. Prefer the inferred Pi there.
+                    let lam_typ : Term :=
+                        if is_hole ret_typ then Term.pi bound_typ body_typ else expected_type in
+                    ok (mk_typed lam_term lam_typ),
                 err e => err e,
             },
         _ =>
@@ -2154,10 +2172,43 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     let full_ret : Term :=
                                                                                         rebuild_pi_chain (drop_params (List.length args) params) ret in
                                                                                     let subst_ret : Term := subst_typevars_term full_ret subst in
+                                                                                    // SOLVE THE RETURN DIRECTION.
+                                                                                    // The argument direction above can
+                                                                                    // only solve a type variable the
+                                                                                    // arguments themselves mention, and
+                                                                                    // the arguments this infer-only
+                                                                                    // checker types as a hole are
+                                                                                    // exactly the common ones -- a
+                                                                                    // PARAMETERIZED inductive's
+                                                                                    // constructor application
+                                                                                    // (`List.cons h t`, `Option.some x`)
+                                                                                    // has no recoverable type at all
+                                                                                    // (`con_ref_result_type` declines
+                                                                                    // it by design). The call then came
+                                                                                    // back with its signature's raw `IO
+                                                                                    // A` still free, and reported it as
+                                                                                    // a mismatch the moment a match arm
+                                                                                    // unified it against the def's own
+                                                                                    // declared `IO (List I64)`
+                                                                                    // (`std/src/concurrent/combine_test.
+                                                                                    // mo`'s `all_i64`, `a`'s arms). The
+                                                                                    // ambient expected type is the same
+                                                                                    // kind of already-elaborated
+                                                                                    // information the argument direction
+                                                                                    // solves from, one position over, so
+                                                                                    // solve it the same way and apply it
+                                                                                    // through the same substitution.
+                                                                                    // Purely additive: with nothing left
+                                                                                    // to solve the substitution comes
+                                                                                    // back empty and every term below is
+                                                                                    // unchanged.
+                                                                                    let ret_subst : List (Pair Identifier Term) :=
+                                                                                        solve_typevars scope subst_ret expected_type List.empty in
+                                                                                    let refined_ret : Term := subst_typevars_term subst_ret ret_subst in
                                                                                     let result_typ : Term :=
-                                                                                        match unify subst_ret expected_type {
+                                                                                        match unify refined_ret expected_type {
                                                                                             ok u => u,
-                                                                                            err _ => subst_ret,
+                                                                                            err _ => refined_ret,
                                                                                         } in
                                                                                     let rebuilt : Term := rebuild_call head elab_args in
                                                                                     Option.some (ok (mk_typed rebuilt result_typ)),

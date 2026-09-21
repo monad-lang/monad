@@ -175,11 +175,15 @@ host_only=(
 gap_files=(
   std/src/concurrent/fiber_test.mo
   init/src/tests.mo
+  # Still here, but for the ASYNC natives only: its checker failure --
+  # `no instance found for `Monad.bind`` -- is CLOSED with Phase 1, and
+  # the file now stops on the unwired `scope_*`/`sleep_io` family, the
+  # same reason `fiber_test.mo` is listed. `lang/src/json.mo`,
+  # `examples/indexed_monads.mo` and `examples/state_monad.mo` left this
+  # list in the same commit: all three run self-hosted now (56/56, 3/3
+  # and 5/5).
   std/src/concurrent/combine_test.mo
-  lang/src/json.mo
   examples/structs.mo
-  examples/indexed_monads.mo
-  examples/state_monad.mo
   # Qualified references in TARGET position do not resolve self-hosted:
   # the flatten drops each decl's owning module, so the pair match
   # cannot succeed across a module boundary (see cli/src/test_gaps.mo
@@ -225,15 +229,23 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # neither gate covers the other, and until this ran, nothing in CI used
 # the self-hosted checker on the whole corpus. 180 files, ~52s.
 #
-# Three files fail it today, and all three are already registered in
+# Two files fail it today, and both are already registered in
 # `cli/src/test_gaps.mo` (their test-side failures):
 #
 #   examples/structs.mo                a def's own named-call defaults do not
 #                                      survive the parser
-#   lang/src/json.mo                   the call's own ascription is
-#                                      discarded by the self-hosted parser
-#   std/src/concurrent/combine_test.mo the argument's own ascription is
-#                                      discarded
+#   std/src/qualified_ref_tests.mo     a qualified reference in TARGET
+#                                      position cannot resolve self-hosted
+#
+# `lang/src/json.mo` (3 errors) and `std/src/concurrent/combine_test.mo`
+# (1) left this list with Phase 1's expected-type channel, together with
+# their `gap_files` entries: both were the checker half of the SAME
+# missing channel -- a def call's return type was never solved against
+# the ambient expected type, so `IO.pure (List.empty : List I64)` came
+# back as its signature's raw, unsolved `IO A`. Measured before removing
+# them, with a binary rebuilt from the fix: `monad check
+# lang/src/json.mo std/src/concurrent/combine_test.mo` -> both `ok`, 0
+# error(s) each.
 #
 # The `#[derive]` trio that headed this list left it with P10, and the
 # comment on `gap_files` above records what closed them -- all three now
@@ -254,8 +266,6 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # its registry entries.
 check_gap_files=(
   examples/structs.mo:1
-  lang/src/json.mo:3
-  std/src/concurrent/combine_test.mo:1
   # Same cause as its `gap_files` entry: a qualified reference in TARGET
   # position cannot resolve self-hosted, because the flatten drops each
   # decl's owning module (see cli/src/test_gaps.mo for the full reason).
