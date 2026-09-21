@@ -12,7 +12,9 @@
 /// enforcement actually lands, not to an experiment still deciding
 /// whether enforcement is viable. Loading it here gives the report a
 /// scope containing the instances without perturbing anything the
-/// corpus compiles.
+/// corpus compiles. `init::borrow` rides along for the same reason
+/// (B1, M2.5): the `Copy (Borrow A)` instance must be in this same
+/// closure for the report to see it.
 ///
 /// **A predicted shortcut that did not work, recorded so it is not
 /// retried.** Moving `Copy` into `init` was expected to retire this
@@ -29,6 +31,7 @@
 /// this shim, or re-exporting from `init/src/lib.mo`.
 use lang {}
 use init::copy {}
+use init::borrow {}
 
 /// A test only so the module has a runnable decl; the file's job is its
 /// `use` lines. The report never calls this.

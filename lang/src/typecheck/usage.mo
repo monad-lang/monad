@@ -340,6 +340,35 @@ def name_is_ctor (ctors : HashMap String Bool) (nm : String) : Bool :=
             },
     }
 
+/// Is this spine head SPECIFICALLY `Borrow.of` (`init/src/borrow.mo`,
+/// B1 of the borrow design, `plans/type-system/quantitative-types.md`)?
+///
+/// A deliberately narrow, name-based check — matched by string, exactly
+/// like `head_is_ctor` above, and carrying the same small risk: a
+/// FUTURE type that also declares a bare `of` constructor would be
+/// misclassified as a borrow, undercounting its real owning uses. Two
+/// things make that acceptable for B1 specifically, where every other
+/// ambiguity in this module fails closed instead: (1) there is no such
+/// collision anywhere in the corpus today (checked before this landed);
+/// (2) this module produces WARNINGS, not rejections — B1 is
+/// measurement, not enforcement (`lang/typecheck/affine.mo`'s own
+/// header) — so a misclassification here costs an inflated
+/// `borrowable` count, never a memory-safety decision. B2's escape rule
+/// is where this stops being acceptable and needs a real fix (the
+/// dotted spelling only, or real constructor identity via a `Scope`
+/// this module deliberately does not take).
+def head_is_borrow_of (t : Term) : Bool :=
+    match t {
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    let nm : String := show_identifier id in
+                    String.beq nm "of" || String.beq nm "Borrow.of",
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
 /// `ctx` is the position the CURRENT subterm occupies. A `Term.var`
 /// matching `target` contributes 1 when that position is an owning one.
 #[partial]
@@ -354,8 +383,15 @@ def owning_at (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (t : T
         Term.forall _dbg _kind body => owning_at ctors UsePos.up_value (target + 1) body,
         Term.pi _arg _ret => 0,
         Term.app callee arg =>
+            let head : Term := app_spine_head callee in
             let arg_pos : UsePos :=
-                if head_is_ctor ctors (app_spine_head callee) then UsePos.up_con_field
+                // Borrowing wins over "is a constructor at all": `of`
+                // IS registered in `ctors` (it is a real constructor),
+                // so this check must come first or `head_is_ctor` would
+                // shadow it and every borrow would count as an owning
+                // store -- the exact miscount B1 exists to prevent.
+                if head_is_borrow_of head then UsePos.up_app_arg
+                else if head_is_ctor ctors head then UsePos.up_con_field
                 else UsePos.up_app_arg in
             owning_at ctors UsePos.up_app_head target callee + owning_at ctors arg_pos target arg,
         Term.lit value => owning_at_literal ctors ctx target value,
@@ -1047,6 +1083,41 @@ def test_owning_counts_a_curried_constructor_argument : Bool :=
     let empty_args : List (Option Term) := List.empty in
     let head : Term := con_of empty_args in
     I64.beq (owning_uses probe_ctors 0 (Term.app head t_var0)) 1
+
+/// `probe_ctors` plus `"of"`, registered as a REAL constructor -- the
+/// shape the borrow tests need to prove the override actually wins
+/// over `head_is_ctor`, not just that `of` was never classified as a
+/// constructor to begin with.
+def probe_ctors_with_of : HashMap String Bool :=
+    str_map_insert "of" true probe_ctors
+
+/// `Borrow.of <arg>`, spelled bare `of` -- the same spelling
+/// `head_is_borrow_of` checks first.
+def of_of (arg : Term) : Term :=
+    let head : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "of")) in
+    Term.app head arg
+
+#[test]
+def test_owning_a_borrow_construction_is_a_read_not_a_store : Bool :=
+    // `Borrow.of x` must NOT count as an owning use, even though `of`
+    // is registered as a real constructor -- the whole point is that
+    // the borrow override wins over "any constructor head is a store".
+    I64.beq (owning_uses probe_ctors_with_of 0 (of_of t_var0)) 0
+
+#[test]
+def test_owning_a_value_borrowed_twice_is_still_free : Bool :=
+    // `f (Borrow.of x); g (Borrow.of x)` -- x used twice, ZERO owning
+    // uses either time. This is the property B1 exists to buy: a
+    // borrowed value may be read any number of times without becoming
+    // a duplication cost. Reuses `con_of` purely as a wrapper that
+    // visits two independent subterms in owning field positions --
+    // each subterm's OWN `Term.app` case still computes its `arg_pos`
+    // fresh, ignoring the outer context, so this exercises exactly the
+    // same code path `test_owning_counts_both_constructor_fields`
+    // does, with `of_of t_var0` in place of a bare `t_var0`.
+    let args : List (Option Term) :=
+        List.cons (Option.some (of_of t_var0)) (List.cons (Option.some (of_of t_var0)) List.empty) in
+    I64.beq (owning_uses probe_ctors_with_of 0 (con_of args)) 0
 
 #[test]
 def test_owning_takes_max_across_branches : Bool :=

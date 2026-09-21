@@ -21,6 +21,7 @@ use lib::typecheck::traverse {con_map_children, native_map_children, term_map_ch
 // same whole-graph known-name set the `check` path's `elaborate_def_typs`
 // uses -- see `registered_def_type`'s own doc comment for why.
 use lib::elaborate {elaborate_def, names_of_decls}
+use init::borrow {Borrow}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo` — so this module names what it reaches from
 // `std::map` like any other import. It used to be an empty import, to
@@ -1073,13 +1074,28 @@ def resolve_name_in_locals (nref : NameRef) (locals : LocalScope) : Option Scope
 /// itself be dotted (`std::io::IO.println`), and that half must survive
 /// intact. `text_after_last_sep` cuts at the last `.` OR `::`, which is
 /// the right rule for a bare constructor name and the wrong one here.
+///
+/// `s` is `Borrow String`, not `String` -- the experiment's real B1
+/// conversion (M2.5), chosen
+/// over the first candidate tried (`alias_map_insert`) because THAT one
+/// turned out to have two more callers in `lang/codegen/qualify.mo`'s
+/// hot per-declared-name pass (~3,172 names) that a corpus-wide grep
+/// caught before it shipped -- exactly the danger this experiment's own
+/// sketch flagged for an unerased `Borrow`. This function has exactly
+/// one external caller (`split_qualified_identifier` below, verified
+/// corpus-wide), and its OWN recursion costs nothing extra: every
+/// recursive call passes `s` straight through UNCHANGED -- no new
+/// `Borrow.of` inside the loop, only cheap `Borrow.get` field-reads at
+/// the four places this function actually inspects a byte -- so the
+/// whole scan allocates exactly once (at the single call site), not
+/// once per character.
 #[partial]
-def last_colon_colon (s : String) (i : I64) (best : I64) : I64 :=
-    if i + 1 < String.length s then
-        match String.get s i {
+def last_colon_colon (s : Borrow String) (i : I64) (best : I64) : I64 :=
+    if i + 1 < String.length (Borrow.get s) then
+        match String.get (Borrow.get s) i {
             Option.some b =>
                 if U8.beq b 58u8 then
-                    match String.get s (i + 1) {
+                    match String.get (Borrow.get s) (i + 1) {
                         Option.some b2 =>
                             if U8.beq b2 58u8
                             then last_colon_colon s (i + 2) (i + 2)
@@ -1101,7 +1117,7 @@ def last_colon_colon (s : String) (i : I64) (best : I64) : I64 :=
 /// (`infer.mo`'s four sites, `lower_core_ir.mo`, `module.mo`).
 def split_qualified_identifier (i : Identifier) : Option QualifiedName :=
     let text : String := show_identifier i in
-    let cut : I64 := last_colon_colon text 0 (0 - 1) in
+    let cut : I64 := last_colon_colon (Borrow.of text) 0 (0 - 1) in
     if cut < 3 then Option.none
     else
         // `String.slice` takes a LENGTH, not an end index; `cut` is the

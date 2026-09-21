@@ -48,10 +48,10 @@
 /// collisions are endemic here — `lang/src/typecheck/usage.mo`'s own
 /// attribution had to fail closed on exactly this — and a wrong pick in
 /// *this* predicate frees memory that is still live.
-use lib::types {Instance, NamePath, Scope, Term}
+use lib::types {Identifier, Instance, NamePath, Scope, Term}
 use lib::scope {
-  instance_args_match_carrier, instance_is_fully_concrete, scope_globals,
-  scope_instance_candidates,
+  instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
+  scope_globals, scope_instance_candidates, term_is_wildcard, term_peel,
 }
 
 /// The gate's verdict. Three outcomes, not two, because "I could not
@@ -91,7 +91,7 @@ pub def copy_verdict (scope : Scope) (typ : Term) : CopyVerdict :=
     if not (carrier_is_resolvable carrier) then CopyVerdict.cv_not_copy
     else
         let candidates : List Instance := scope_instance_candidates (scope_globals scope) copy_class_name in
-        let concrete : List Instance := keep_concrete candidates in
+        let concrete : List Instance := keep_admissible candidates in
         let matches : I64 := count_matching concrete carrier in
         if I64.beq matches 1 then CopyVerdict.cv_copy
         else if I64.gt matches 1 then CopyVerdict.cv_ambiguous
@@ -101,11 +101,15 @@ pub def copy_verdict (scope : Scope) (typ : Term) : CopyVerdict :=
 ///
 /// `Copy (Pair A B)` is decided by the instance for `Pair`, so the
 /// carrier handed to instance matching is the spine head, not the whole
-/// applied type. Design B's parametric instances
-/// (`instance [Copy A] [Copy B] Copy (Pair A B)`) are what would then
-/// check the arguments — until those exist, a parameterised type simply
-/// has no concrete instance and falls through to affine, which is the
-/// safe direction.
+/// applied type. A CONSTRAINED parametric instance
+/// (`instance [Copy A] [Copy B] Copy (Pair A B)`) would need to check
+/// those constraints against the real type arguments the carrier
+/// erased here — that resolution is not implemented, so such an
+/// instance keeps falling through to affine. An UNCONSTRAINED one
+/// (`instance {A : Type} Copy (Borrow A)`) needs no such check — it
+/// holds for every `A` — and `instance_unconditionally_copy` below is
+/// what admits exactly that shape without pretending to resolve the
+/// constrained one.
 #[partial]
 def carrier_of (t : Term) : Term :=
     match t {
@@ -146,17 +150,77 @@ def carrier_is_resolvable (t : Term) : Bool :=
         Term.ctx _loc _inner => false,
     }
 
+/// Kept for `instance_admissible` below to fall back on — every
+/// literally concrete instance is still admitted exactly as before.
 #[partial]
-def keep_concrete (instances : List Instance) : List Instance :=
-    keep_concrete_go instances List.empty
+def keep_admissible (instances : List Instance) : List Instance :=
+    keep_admissible_go instances List.empty
 
 #[partial]
-def keep_concrete_go (instances : List Instance) (acc : List Instance) : List Instance :=
+def keep_admissible_go (instances : List Instance) (acc : List Instance) : List Instance :=
     match instances {
         List.empty => acc,
         List.cons ins rest =>
-            if instance_is_fully_concrete ins then keep_concrete_go rest (List.cons ins acc)
-            else keep_concrete_go rest acc,
+            if instance_admissible ins then keep_admissible_go rest (List.cons ins acc)
+            else keep_admissible_go rest acc,
+    }
+
+/// Is this instance safe to match against a carrier WITHOUT resolving
+/// any obligation this module cannot discharge?
+///
+/// `instance_is_fully_concrete` (`lang/scope.mo`) is the right filter
+/// for the class-method dispatch it was built to protect — calling
+/// `Show.show` through a wildcard-headed instance needs the REAL type
+/// argument to pick field-wise behaviour, so an unresolved wildcard
+/// there is a genuine gap. `Copy` can be different: a builtin instance
+/// like `instance {A : Type} Copy (Borrow A)` is true for every `A`
+/// without ever inspecting it — the body duplicates the `Borrow`
+/// marker, not the value underneath — so there is no missing
+/// information to fail closed over, and excluding it (what
+/// `instance_is_fully_concrete` alone would do) denies `Copy` to
+/// something that genuinely has it.
+///
+/// So an instance is admitted here under either of two conditions:
+///
+/// - it is fully concrete (unchanged from before), or
+/// - it carries **no class constraints** — a `[Copy A]` clause is a
+///   real recursive obligation this module does not resolve, so an
+///   instance with one is excluded exactly as it was — **and** its
+///   carrier's own applied HEAD is not itself one of its wildcards.
+///   That second clause is what stops an accidental blanket
+///   `instance {A : Type} Copy A` (head IS the wildcard) from granting
+///   ω to every type in the language; only a wildcard NESTED inside a
+///   concrete head (`Borrow`'s own `A`) is admitted.
+def instance_admissible (ins : Instance) : Bool :=
+    instance_is_fully_concrete ins || instance_unconditionally_copy ins
+
+def instance_unconditionally_copy (ins : Instance) : Bool :=
+    match ins {
+        Instance.mk _name _cls constraints args _vis implicit_params _defs =>
+            List.is_empty constraints
+                && not (List.is_empty implicit_params)
+                && carrier_head_is_concrete (instance_wildcard_names ins) args,
+    }
+
+/// `args` is the class's own parameter list, instantiated at this
+/// instance — one element for `class Copy A`. Its outermost applied
+/// head must name a real type constructor, not a wildcard; see
+/// `instance_unconditionally_copy`'s doc comment for why.
+def carrier_head_is_concrete (wildcards : List Identifier) (args : List Term) : Bool :=
+    match args {
+        List.cons a _rest => not (term_is_wildcard wildcards (spine_head a)),
+        List.empty => false,
+    }
+
+/// Like `carrier_of`, minus the `Copy`-specific resolvability question —
+/// just the structural "peel `ctx`, walk to the outermost applied
+/// head" that both this module's carrier AND an instance's own
+/// declared arg need.
+#[partial]
+def spine_head (t : Term) : Term :=
+    match term_peel t {
+        Term.app f _a => spine_head f,
+        _ => t,
     }
 
 /// How many of `instances` match `carrier`.
