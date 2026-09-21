@@ -9,7 +9,7 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 5 entries here are what a full corpus sweep actually reports,
+/// The 4 entries here are what a full corpus sweep actually reports,
 /// not a guess, and none is a problem with the test files themselves. In
 /// rough order of how much they cost to close:
 ///
@@ -19,13 +19,14 @@
 ///     `scope_new`/`scope_drop`/`scope_fork`/`sleep_io`; this is ALL that
 ///     is left of that file -- its checker failure is CLOSED, see the
 ///     Phase-1 paragraph below) -- 2 files;
-///   * a codegen bug the checker used to hide (`init/src/tests.mo`) --
-///     1 file;
 ///   * a named call's own declared defaults, which do not survive the
 ///     parser (`structs.mo`) -- 1 file;
 ///   * the flatten dropping each decl's owning module, so a cross-module
 ///     qualified reference cannot pair-match (`qualified_ref_tests.mo`) --
 ///     1 file.
+///
+/// Each closed gap is recorded here rather than deleted outright, so the
+/// next reader can tell a fix from a re-registration.
 ///
 /// PHASE 1 IS CLOSED, and these three were its whole registry footprint:
 /// `lang/src/json.mo` (56/56), `examples/indexed_monads.mo` (3/3) and
@@ -112,12 +113,26 @@
 /// (`init/src/foldable_tests.mo`, `init/src/foldable_tests_fold.mo`) -- is
 /// CLOSED too; both files are 14/14 and 10/10 self-hosted.
 ///
-/// `init/src/tests.mo` is a PRE-EXISTING failure, not fallout from any
-/// change listed above: the same 4-line repro fails identically on a
-/// self-hosted binary built at afa2f92 (the commit before this branch's
-/// own .mo work began), and passes on the Rust evaluator -- measure with
-/// the self-hosted binary, because `monad-rs test` runs the Rust
-/// implementation and never touches this compiler at all.
+/// The dictionary self-reference family that used to sit here
+/// (`init/src/tests.mo`, the last entry this list had for a DEAD DRIVER)
+/// is CLOSED: 102/102 self-hosted. Its minimal repro was
+///
+///     #[test]
+///     def p_get_0 : Bool := some 1 == (List.get 0 [1, 2, 3])
+///
+/// and it failed at BOTH operand orders, not only the one it was
+/// recorded with. `List.get 0 [1, 2, 3]` reports a still-GENERIC carrier
+/// (`Option A`), which matches the very option instance being expanded
+/// and leaves its own `[BEq A]` constraint bound to nothing, so the
+/// element slot of the emitted comparison received the option instance's
+/// own dictionary. Fixed in two halves, one per resolver, and both are
+/// needed: the checker refuses such a self-reference and DEFERS
+/// (`lang/typecheck/infer.mo`'s `dict_args_contain_self` -- it has no
+/// argument carriers of its own to fall back on), and `lang/scope.mo`'s
+/// `find_concrete_matching_carrier_any` then prefers a candidate that
+/// pins the matched instance's type variables down over one that leaves
+/// them generic (the codegen pass never sees a call the checker already
+/// rewrote, so it cannot be the only place this is fixed).
 ///
 /// **Matching is on path AND cause**, deliberately: a listed file that
 /// starts failing for a NEW reason is reported as a real failure, not
@@ -140,7 +155,6 @@
 /// whether the user passes a directory or explicit files).
 pub def gap_paths : List String :=
     ["std/src/concurrent/fiber_test.mo",
-     "init/src/tests.mo",
      "std/src/concurrent/combine_test.mo",
      "examples/structs.mo",
      "std/src/qualified_ref_tests.mo"]
@@ -149,13 +163,14 @@ pub def gap_paths : List String :=
 ///
 /// Harvested from the real binary's own output, and note that the
 /// string differs by WHICH stage fails: a driver-compile error carries
-/// the compiler's message, while a link failure and a dead driver are
-/// matched against the wording the runner itself prints for them
-/// ("compilation failed", "driver exited -1") because llc's own
-/// message goes to the console, not into a value the runner holds.
+/// the compiler's message, while a failure that happens earlier -- or in
+/// a dead driver -- is matched against the wording the RUNNER itself
+/// prints for it ("compilation failed", "driver exited -1"), because
+/// llc's own message goes to the console, not into a value the runner
+/// holds. No entry needs either of those two wordings today: A8 was the
+/// last one to (`init/src/tests.mo`'s dead driver), and it is closed.
 pub def gap_causes : List String :=
     ["native `fork_io`",
-     "driver exited -1",
      // The unwired-native family, not the checker: the message this token
      // is harvested from lists every native the file needs
      // (`fork_io`, `cancel_fiber`, `await_fiber`, `scope_new`,
@@ -171,41 +186,6 @@ pub def gap_reasons : List String :=
     // Closed by: a self-hosted async runtime. Tracked in
     // plans/bootstrapping/self-hosted-async-runtime.md.
     ["async runtime not self-hostable yet (fork_io/await_fiber unwired)",
-     // NOT the `Pred` gap any more -- that one is CLOSED (codegen emits a
-     // boxed constant for the four builtin sort names, so `get_sort Pred`
-     // no longer reaches llc as an undefined `@Pred`), and the failure
-     // moved from the link to a dead driver. What is left is a
-     // dictionary-argument self-reference, and it is PRE-EXISTING: the
-     // same 4-line repro fails on a self-hosted binary built at afa2f92,
-     // and passes on the Rust evaluator (which is a different
-     // implementation -- `monad-rs test` never runs this compiler).
-     //
-     // Minimal repro, measured against the self-hosted binary:
-     //
-     //     #[test]
-     //     def p_get_0 : Bool := some 1 == (List.get 0 [1, 2, 3])
-     //
-     // `init/src/tests.mo:105` is that shape (`test_get_0`). The
-     // element-dict slot of the emitted comparison holds the option
-     // instance's OWN dictionary instead of the element's:
-     //
-     //     %t167 = call @"init::__Dict_BEq_Option_A"()
-     //     ...
-     //     %t175 = call @"init::BEq_Option_A_beq"(%t167, %t168, %t174)
-     //
-     // while the callee's body reads field 0 of that first argument and
-     // applies it to two ELEMENTS -- so the option instance is handed a
-     // dictionary shaped like itself, and the driver dies (exit -1,
-     // SIGSEGV in `monad_get_tag`, reached through `apply_closure2`).
-     // The two-operand form with a CONCRETE literal on both sides is
-     // fine (`Option.some 1 == Option.some 2` emits
-     // `number::__Dict_BEq_I64`), which is why this needs the
-     // `List.get`-typed operand: the carrier that reaches the class-call
-     // pass is the still-generic `Option A`, and the constraint `[BEq A]`
-     // is then resolved against the applied carrier rather than its
-     // argument. Closed by: fixing that resolution, not by anything in
-     // the test file.",
-      "the option instance's own dict is passed where its ELEMENT dict belongs -- `some 1 == List.get 0 [1, 2, 3]`",
      // The async runtime, which is the ONLY thing left in this file: its
      // checker failure -- the missing expected-type channel that used to
      // report `no instance found for `Monad.bind` (needed in
@@ -360,6 +340,19 @@ def test_closed_expected_type_gaps_are_no_longer_listed : Bool :=
     Bool.not (is_known_gap "lang/src/json.mo" "expected A, found Bool")
     && Bool.not (is_known_gap "examples/indexed_monads.mo" "no instance found for `Monad.pure`")
     && Bool.not (is_known_gap "examples/state_monad.mo" "no instance found for `MonadState.modify_get`")
+
+/// Same pin for A8, the dictionary self-reference: the only entry this
+/// list ever had for a DEAD DRIVER, and the file behind BOTH of the
+/// runner's non-compiler wordings -- its earlier `@Pred` link failure is
+/// why the "compilation failed" branch tests for a gap at all, and its
+/// dead driver is what "driver exited -1" was recorded for. Both branches
+/// stay where they are with no entry left to exercise them, because which
+/// stage fails is a property of a gap, not something its author chooses.
+/// The cause strings are the ones that used to be recorded for it.
+#[test]
+def test_closed_driver_signal_gap_is_no_longer_listed : Bool :=
+    Bool.not (is_known_gap "init/src/tests.mo" "driver exited -1")
+    && Bool.not (is_known_gap "init/src/tests.mo" "compilation failed")
 
 /// `combine_test.mo` is STILL listed, but for the async reason now rather
 /// than the checker one, and this pins both halves: its recorded cause

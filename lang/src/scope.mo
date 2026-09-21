@@ -5052,6 +5052,64 @@ def find_matching_instance_any (instances : List Instance) (cls_name : NamePath)
             },
     }
 
+/// Does the candidate carrier `c` mention any of the matched instance's
+/// own wildcard type variables?
+///
+/// A candidate that does is a GENERIC instantiation of that instance:
+/// `instance [BEq A] BEq (Option A)` matched at the candidate `Option A`
+/// (which is what `List.get 0 [1, 2, 3]` -- a def-headed application
+/// whose declared return still carries the callee's own binder --
+/// reports as its carrier) says nothing about what `A` is, so the
+/// instance's own `[BEq A]` constraint has no type to resolve against and
+/// falls back onto the whole carrier, which re-matches the very instance
+/// being expanded -- `__Dict_BEq_Option_A` handed to `__Dict_BEq_Option_A`'s
+/// element slot, and unbounded recursion at the first element read. The
+/// same candidate matched at `Option I64` (the other operand, `some 1`,
+/// whose ctor application does bind its element) mentions no wildcard and
+/// resolves the constraint to `__Dict_BEq_I64`.
+def carrier_mentions_wildcards (wildcards : List Identifier) (c : Term) : Bool :=
+    mentions_any_name (instance_arg_free_names (List.cons c List.empty)) wildcards
+
+def mentions_any_name (names : List Identifier) (wildcards : List Identifier) : Bool :=
+    match names {
+        List.empty => false,
+        List.cons n rest => if id_member n wildcards then true else mentions_any_name rest wildcards,
+    }
+
+/// `find_matching_instance_carrier_any`, but preferring a candidate that
+/// actually PINS DOWN the matched instance's own type variables -- see
+/// `carrier_mentions_wildcards`' own doc comment for what goes wrong when
+/// a generic one wins. Falls back to the plain first-match-wins order
+/// when EVERY candidate is generic, so a call whose arguments reveal no
+/// concrete carrier resolves exactly as it did before this preference
+/// existed.
+///
+/// This is why the fix has to live here and not only in the checker: the
+/// checker's own D4 path has no argument carriers at all (`List.empty`
+/// for `extra_carriers`), so it can only DEFER on a self-reference (see
+/// `typecheck/infer.mo`'s `dict_args_contain_self`), and this pass -- which
+/// does have them -- is what then has to pick the concrete one.
+#[partial]
+def find_concrete_matching_carrier_any (instances : List Instance) (cls_name : NamePath) (carriers : List Term) : Option (Pair Term Instance) :=
+    match find_carrier_any_avoiding_wildcards instances cls_name carriers {
+        Option.some p => Option.some p,
+        Option.none => find_matching_instance_carrier_any instances cls_name carriers,
+    }
+
+#[partial]
+def find_carrier_any_avoiding_wildcards (instances : List Instance) (cls_name : NamePath) (carriers : List Term) : Option (Pair Term Instance) :=
+    match carriers {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match find_matching_instance instances cls_name c {
+                Option.none => find_carrier_any_avoiding_wildcards instances cls_name rest,
+                Option.some ins =>
+                    if carrier_mentions_wildcards (instance_wildcard_names ins) c
+                    then find_carrier_any_avoiding_wildcards instances cls_name rest
+                    else Option.some (Pair.pair c ins),
+            },
+    }
+
 /// Sibling of `find_matching_instance_any` that also returns WHICH
 /// candidate carrier matched -- needed by `resolve_class_method_call_d4_
 /// from_args` (unlike `resolve_dict_arg`'s own use of the `_any` form,
@@ -6138,7 +6196,7 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
     // function no longer recomputes it here. Same candidates, same
     // order: with no expectation in hand this is byte-for-byte the
     // previous behavior.
-    match find_matching_instance_carrier_any instances cls_name extra_carriers {
+    match find_concrete_matching_carrier_any instances cls_name extra_carriers {
         Option.some found =>
             match found {
                 Pair.pair carrier ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,

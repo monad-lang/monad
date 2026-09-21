@@ -15,7 +15,7 @@ use lib::scope {
   find_constructor_in_inductive,
   find_matching_instance, flatten_call_spine, inductive_has_constructor,
   instance_wildcard_names, list_append,
-  instance_module_prefix, mangle_instance_method_name, mangled_to_identifier,
+  instance_module_prefix, mangle_instance_dict_name, mangle_instance_method_name, mangled_to_identifier,
   rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
@@ -279,6 +279,59 @@ def strip_n_pis (typ : Term) (n : I64) : Term :=
             _ => typ,
         }
 
+/// Does this call's own nested constraint dictionary reference the
+/// ENCLOSING instance's own dictionary -- `BEq (Option A)`'s element
+/// constraint resolving back to `__Dict_BEq_Option_A`?
+///
+/// That is never a valid resolution. The constraint is on the instance's
+/// own type VARIABLE (`[BEq A]`), and matching it against the WHOLE
+/// carrier re-finds the very instance being expanded, so the promoted
+/// method would be handed its own dictionary in its element slot and
+/// recurse without bound. MEASURED (2026-09-21, A8): `some 1 ==
+/// (List.get 0 [1, 2, 3])` resolved to `BEq_Option_A_beq(
+/// __Dict_BEq_Option_A(), some 1, List.get 0 [1, 2, 3])` -- the driver
+/// then died at the first element read (`driver exited -1`, and
+/// `init/src/tests.mo`'s whole file with it).
+///
+/// `lang.scope`'s own `resolve_dict_arg` does not have this problem: its
+/// candidate list carries the call's own argument carriers
+/// (`extra_carriers`), so it can fall through to the concrete element
+/// carrier this pure-infer-mode checker never sees. It is also the pass
+/// that runs last, so erring here is how this call reaches it: see
+/// `term_is_self_dict`'s own doc comment for why `err` is the right
+/// answer rather than a diagnostic.
+def dict_args_contain_self (self_dict : Identifier) (dict_args : List Term) : Bool :=
+    match dict_args {
+        List.empty => false,
+        List.cons a rest =>
+            term_is_self_dict self_dict a || dict_args_contain_self self_dict rest,
+    }
+
+/// Is `t` a reference to `self_dict`? The dictionary arguments
+/// `resolve_dict_arg` builds are `Term.var (0 - 1) (DebugName.named
+/// <mangled dict name>)` sentinels (`lang/scope.mo`), never a real local
+/// at any depth, so a by-name comparison is exact.
+///
+/// The caller's answer to a `true` here is `err`, deliberately: it lands
+/// in `type_check_free_var`'s own `err _ =>` fallback, which leaves the
+/// call as an unresolved class-method reference -- and `lang.scope`'s
+/// syntactic `resolve_class_calls_decls` pass, which every codegen path
+/// still runs afterwards, resolves exactly this call correctly from the
+/// arguments' own carriers. A dictionary this checker cannot pin down is
+/// not a user-facing error: reporting one would trade a correct
+/// resolution for a spurious diagnostic, and this is the one shape where
+/// the checker's own answer is provably wrong rather than merely
+/// uninformed.
+def term_is_self_dict (self_dict : Identifier) (t : Term) : Bool :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => Similar.similar id self_dict,
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
 def resolve_class_method_d4
     (prefix : String) (ins_cls_name : NamePath) (method_name : Identifier)
     (ins_constraints : List TypeConstraint) (ins_args : List Term) (carrier : Term)
@@ -344,9 +397,18 @@ def resolve_class_method_d4
                     // comment) is out of scope here: this checker-level path
                     // doesn't hard-fail on a miss anyway (see
                     // `resolve_class_method`'s own `err _ =>` fallback to the
-                    // method's abstract signature, `type_check_free_var`),
-                    // and every codegen path re-resolves this same call
-                    // later via the now-fixed `lang.scope` pass regardless.
+                    // method's abstract signature, `type_check_free_var`).
+                    //
+                    // But this call site is NOT merely advisory, and the
+                    // older form of this comment claimed otherwise: a call
+                    // that succeeds HERE is rewritten and is never handed to
+                    // `lang.scope`'s pass again, so a wrong answer is FINAL.
+                    // That is exactly how A8 got into the emitted driver --
+                    // this function resolved `[BEq A]` against the whole
+                    // generic carrier and produced `__Dict_BEq_Option_A` for
+                    // `BEq (Option A)`'s own element slot. Hence the
+                    // self-reference refusal below, which defers instead of
+                    // answering.
                     //
                     // The BINDINGS are not optional, though: what the
                     // matched instance's own head binds for the call site
@@ -371,8 +433,24 @@ def resolve_class_method_d4
                     match resolve_dict_args classes instances dict_env bindings carrier List.empty ins_constraints {
                         Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
                         Option.some dict_args =>
-                            let applied_typ : Term := strip_n_pis inst_sig (List.length dict_args) in
-                            ok (mk_typed (rebuild_call mangled_ref dict_args) applied_typ),
+                            // Refuse the self-match -- see
+                            // `dict_args_contain_self`'s own doc comment.
+                            // The candidate order here (`bindings` first,
+                            // then the whole `carrier`) is right for a
+                            // constraint on a DIFFERENT type variable than
+                            // the instance's own (`Map`'s `[BOrd K]`) and
+                            // wrong for the common same-variable case
+                            // whenever the carrier is still generic:
+                            // `List.get 0 [1, 2, 3]` leaves the carrier at
+                            // `Option A`, so `[BEq A]`'s own `A` binds to
+                            // that unresolved `A` and the whole-carrier
+                            // fallback lands back on `BEq (Option A)` --
+                            // the instance being expanded.
+                            if dict_args_contain_self (mangled_to_identifier (mangle_instance_dict_name prefix ins_cls_name ins_args)) dict_args
+                            then err (TypeError.custom "self-referential instance dictionary")
+                            else
+                                let applied_typ : Term := strip_n_pis inst_sig (List.length dict_args) in
+                                ok (mk_typed (rebuild_call mangled_ref dict_args) applied_typ),
                     },
             },
     }

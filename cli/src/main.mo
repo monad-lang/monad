@@ -884,15 +884,19 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                 // A file-level failure, counted as such:
                                 // no test in it ever ran, so folding it
                                 // into the per-test totals would invent
-                                // results that do not exist. Unless it
-                                // is a recorded gap: `init/src/tests.mo`
-                                // fails HERE (llc rejects a call to an
-                                // undefined `@Pred`), not at the driver
-                                // compile, so the gap test belongs on
-                                // this path too. `llc`'s own message is
-                                // not available here -- it went to the
-                                // console -- so the cause matched is
-                                // this branch's own wording.
+                                // results that do not exist. A recorded
+                                // gap can fail HERE rather than at the
+                                // driver compile -- `init/src/tests.mo`
+                                // did, on an llc-rejected call to an
+                                // undefined `@Pred` -- so the gap test
+                                // belongs on this path too; it is kept
+                                // though nothing is listed for it today,
+                                // because which stage fails is a
+                                // property of the gap and not something
+                                // a new entry gets to choose. `llc`'s own
+                                // message is not available here -- it
+                                // went to the console -- so the cause
+                                // matched is this branch's own wording.
                                 if is_known_gap f "compilation failed" then do {
                                     println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
                                     run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }

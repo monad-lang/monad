@@ -171,10 +171,14 @@ host_only=(
 # `struct` decl, the attribute-to-macro bridge, and the struct-ctor
 # arity entry together take `std/src/derive_tests.mo` (22/22),
 # `cli/src/tests/cli_derive_tests.mo` (7/7) and `examples/derive.mo`
-# (7/7) off it.
+# (7/7) off it. `init/src/tests.mo` is the third to go: the last entry
+# this list had for a DEAD DRIVER, and it was the only one ever listed
+# for that wording. Its `some 1 == (List.get 0 [1, 2, 3])` shape sent the
+# option instance's own dictionary into its ELEMENT slot and killed the
+# driver with a signal, and it now runs 102/102 through the self-hosted
+# runner (see cli/src/test_gaps.mo for both halves of the fix).
 gap_files=(
   std/src/concurrent/fiber_test.mo
-  init/src/tests.mo
   # Still here, but for the ASYNC natives only: its checker failure --
   # `no instance found for `Monad.bind`` -- is CLOSED with Phase 1, and
   # the file now stops on the unwired `scope_*`/`sleep_io` family, the
