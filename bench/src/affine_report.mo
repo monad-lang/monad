@@ -52,10 +52,12 @@
 use std::io {println}
 open IO {println}
 use lang::module {ElaboratedModules, elaborate_loaded_modules}
-use lang::types {Decl, Def, Scope, Term, show_identifier}
+use lang::types {Decl, Def, Scope, Term, TypeError, show_identifier}
 use lang::scope {scope_data_empty}
 use lang::typecheck::usage {BinderUse, attribute_binder_types, collect_binder_uses, ctor_name_set}
 use lang::typecheck::copy_class {copy_verdict}
+use lang::typecheck::affine {check_def}
+use lang::typecheck::diagnostic {type_error_message}
 use std::map {}
 use std::list {length}
 
@@ -193,6 +195,16 @@ pub struct Totals {
     /// instances. Denied ω, and a real instance collision worth
     /// knowing about.
     copy_ambiguous : I64,
+    /// Diagnostics the Milestone 2 rule actually produced, by kind.
+    /// Counted independently of the buckets above, so the two must
+    /// agree — see `print_totals`'s cross-check.
+    diag_copy_required : I64,
+    diag_used_after_move : I64,
+    diag_linear_unused : I64,
+    diag_other : I64,
+    /// The first few rendered messages, newest first — what a user
+    /// would actually see.
+    samples : List String,
 }
 
 pub def Totals.binders (t : Totals) : I64 := t.binders
@@ -219,11 +231,23 @@ pub def Totals.copy_granted (t : Totals) : I64 := t.copy_granted
 
 pub def Totals.copy_ambiguous (t : Totals) : I64 := t.copy_ambiguous
 
+pub def Totals.diag_copy_required (t : Totals) : I64 := t.diag_copy_required
+
+pub def Totals.diag_used_after_move (t : Totals) : I64 := t.diag_used_after_move
+
+pub def Totals.diag_linear_unused (t : Totals) : I64 := t.diag_linear_unused
+
+pub def Totals.diag_other (t : Totals) : I64 := t.diag_other
+
+pub def Totals.samples (t : Totals) : List String := t.samples
+
 def totals_empty : Totals :=
     { binders := 0, zero := 0, one := 0, many := 0, many_non_copy := 0,
       by_type := List.empty, unresolved := List.empty,
       borrowable := 0, needs_dup := 0, needs_dup_non_copy := 0,
-      copy_granted := 0, copy_ambiguous := 0 }
+      copy_granted := 0, copy_ambiguous := 0,
+      diag_copy_required := 0, diag_used_after_move := 0, diag_linear_unused := 0,
+      diag_other := 0, samples := List.empty }
 
 /// How an unattributed over-used binder is labelled in the residue
 /// table. A `bk_lam` binder carries no constructor, and its blank name
@@ -304,7 +328,13 @@ def tally_decls (ctors : HashMap String Bool) (s : Scope) (ds : List Decl) (acc 
             match d {
                 Decl.def_d def_ =>
                     let raw : List BinderUse := collect_binder_uses ctors (def_term def_) in
-                    tally_decls ctors s rest (tally_binders s (attribute_binder_types s raw) acc),
+                    let counted : Totals := tally_binders s (attribute_binder_types s raw) acc in
+                    // The Milestone 2 rule, run over the same def. Counted
+                    // independently of the buckets above so the two can be
+                    // cross-checked -- if the rule and the tally disagree,
+                    // one of them is wrong, and silence would hide it.
+                    let diags : List TypeError := check_def s ctors def_ in
+                    tally_decls ctors s rest (tally_diags diags counted),
                 // A macro body is a template, not code that runs; its
                 // binders are not runtime owners.
                 Decl.def_macro_d _def => tally_decls ctors s rest acc,
@@ -315,6 +345,40 @@ def tally_decls (ctors : HashMap String Bool) (s : Scope) (ds : List Decl) (acc 
                 Decl.scoped_open_d _path _filter _inner => tally_decls ctors s rest acc,
                 _ => tally_decls ctors s rest acc,
             },
+    }
+
+/// Fold the rule's own diagnostics into the totals, keeping the first
+/// handful rendered so the report can show what a user would see.
+#[partial]
+def tally_diags (ds : List TypeError) (acc : Totals) : Totals :=
+    match ds {
+        List.empty => acc,
+        List.cons d rest => tally_diags rest (tally_one_diag d acc),
+    }
+
+def tally_one_diag (d : TypeError) (acc : Totals) : Totals :=
+    let kept : List String :=
+        if I64.lt (List.length (Totals.samples acc)) 6
+        then List.cons (type_error_message d) (Totals.samples acc)
+        else Totals.samples acc in
+    match d {
+        TypeError.copy_required _n _t _u =>
+            { acc with diag_copy_required := Totals.diag_copy_required acc + 1, samples := kept },
+        TypeError.value_used_after_move _n _t _o =>
+            { acc with diag_used_after_move := Totals.diag_used_after_move acc + 1, samples := kept },
+        TypeError.linear_unused _n _t =>
+            { acc with diag_linear_unused := Totals.diag_linear_unused acc + 1, samples := kept },
+        _ => { acc with diag_other := Totals.diag_other acc + 1, samples := kept },
+    }
+
+#[partial]
+def print_lines (ls : List String) : IO I64 :=
+    match ls {
+        List.empty => do { return 0 },
+        List.cons l rest => do {
+            println ("    " ++ l);
+            print_lines rest
+        },
     }
 
 // ─── Rendering ─────────────────────────────────────────────────────
@@ -394,6 +458,22 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
     println ("    ... of those, non-Copy       " ++ I64.to_string (Totals.needs_dup_non_copy t) ++ "  (" ++ pct (Totals.needs_dup_non_copy t) n ++ "% of all binders)");
     println "  ^ OPTIMISTIC bound: assumes a callee never retains an argument.";
     println "    The real cost sits between the two.";
+    println "";
+    println "  what the Milestone 2 rule actually reports:";
+    println ("    copy_required         " ++ I64.to_string (Totals.diag_copy_required t) ++ "  (borrow it, or add a Copy instance)");
+    println ("    value_used_after_move " ++ I64.to_string (Totals.diag_used_after_move t) ++ "  (moved twice; no borrow helps)");
+    println ("    linear_unused         " ++ I64.to_string (Totals.diag_linear_unused t));
+    println ("    other                 " ++ I64.to_string (Totals.diag_other t));
+    // If the rule and the tally disagree, one of them is wrong. Saying
+    // so out loud beats two plausible numbers that quietly differ.
+    let rule_total : I64 := Totals.diag_copy_required t + Totals.diag_used_after_move t;
+    if I64.beq rule_total (Totals.many_non_copy t) then
+        println ("    cross-check OK: rule total " ++ I64.to_string rule_total ++ " == non-Copy 2+ binders")
+    else
+        println ("    CROSS-CHECK FAILED: rule says " ++ I64.to_string rule_total
+            ++ " but the tally says " ++ I64.to_string (Totals.many_non_copy t));
+    println "  a sample, as a user would see them:";
+    let _shown : I64 <- print_lines (Totals.samples t);
     println "  2+ uses by type, most first:";
     let _printed : I64 <- print_top (Totals.by_type t) 20;
     println "  unattributed (`?`) 2+ binders, by the constructor that bound them:";

@@ -1532,6 +1532,26 @@ pub type TypeError {
     not_a_type (term: Term),
     infinite_type (term: Term),
     custom (msg: String),
+    /// A binder used more than once where a borrow or a `Copy`
+    /// instance would make it legal — at most ONE of those uses takes
+    /// ownership, so the value is never actually moved twice.
+    /// Milestone 2 of the affine-by-default experiment.
+    ///
+    /// Produced as a WARNING today: nothing rejects a program for it.
+    /// Warn-versus-error is the driver's decision, not this type's,
+    /// which is exactly why these live on `TypeError` rather than in a
+    /// separate warning type — promotion becomes a caller-side switch
+    /// instead of new plumbing.
+    copy_required (name: Identifier) (typ: Term) (uses: I64),
+    /// A binder whose value is genuinely moved twice — two or more
+    /// OWNING uses (stored into a constructor, or produced as a
+    /// scope's value). No borrow discipline rescues this one; it needs
+    /// `Copy`, `Clone`, or a rewrite.
+    value_used_after_move (name: Identifier) (typ: Term) (owning: I64),
+    /// A `!x` binder that is never used. The one case affine's
+    /// weakening does not excuse: linear means exactly once, so
+    /// dropping it is as wrong as using it twice.
+    linear_unused (name: Identifier) (typ: Term),
 }
 
 /// Canonical EvalError uses de Bruijn Term. EvalErrorV0 is the legacy V0 variant.

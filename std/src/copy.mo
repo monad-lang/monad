@@ -46,6 +46,20 @@
 /// over-used binders in the compiler's own corpus, so a `Copy String`
 /// instance would quietly convert the single biggest borrow-shaped
 /// workload into silent deep copies.
+///
+/// **`Nat` is absent on purpose, and the design's own table disagrees.**
+/// Design B's *Copy policy for core types* lists `Nat` alongside the
+/// scalars as a builtin `Copy`. That is only defensible once `Nat` has
+/// a machine-word representation (the efficient `Nat`/`String`/
+/// `ByteArray` proposal). Today it is a unary inductive —
+/// `type Nat { zero, succ (n : Nat) }` in `init/src/prelude.mo` — so a
+/// value of it is a heap chain, and granting `Copy` would hand two
+/// owners to the same allocation. That is precisely the double free the
+/// gate exists to prevent, so the table is aspirational here and the
+/// instance stays out until the representation changes. The affine
+/// report surfaces the consequence honestly: `Nat` binders show up
+/// under `value_used_after_move`, which is the correct answer for a
+/// linked structure moved twice.
 class Copy A {
     def copy : A -> Pair A A
 }

@@ -67,6 +67,25 @@ pub def type_error_message (e : TypeError) : String :=
 		TypeError.infinite_type term =>
 			String.concat "infinite type: " (show_term term),
 		TypeError.custom msg => msg,
+		// The affine-by-default experiment's three
+		// (Milestone 2).
+		// Each names the remedy that actually applies rather than just
+		// reporting a count, because under Design B the three cases
+		// have genuinely different fixes.
+		TypeError.copy_required name typ uses =>
+			String.concat "`" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				(String.concat " is used " (String.concat (I64.to_string uses)
+				" times but is affine; borrow it, or give its type a Copy instance"))))),
+		TypeError.value_used_after_move name typ owning =>
+			String.concat "`" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				(String.concat " is moved " (String.concat (I64.to_string owning)
+				" times; no borrow can fix this -- it needs Copy, Clone, or a rewrite"))))),
+		TypeError.linear_unused name typ =>
+			String.concat "linear `" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				" is never used; linear means exactly once"))),
 	}
 
 /// Render a full diagnostic for a type error — same visual family as
@@ -191,3 +210,20 @@ def test_plain_dotted_name_is_unchanged : Bool :=
 	String.beq
 		(name_ref_to_string (NameRef.nid (Identifier.id "List.cons")))
 		"List.cons"
+
+#[test]
+def test_type_error_message_copy_required : Bool :=
+	// The message must name the remedy, not just the count -- the
+	// whole point of splitting this from `value_used_after_move`.
+	let e : TypeError := TypeError.copy_required (Identifier.id "s") (Term.type_ 1) 3 in
+	String.contains (type_error_message e) "borrow it, or give its type a Copy instance"
+
+#[test]
+def test_type_error_message_value_used_after_move : Bool :=
+	let e : TypeError := TypeError.value_used_after_move (Identifier.id "t") (Term.type_ 1) 2 in
+	String.contains (type_error_message e) "no borrow can fix this"
+
+#[test]
+def test_type_error_message_linear_unused : Bool :=
+	let e : TypeError := TypeError.linear_unused (Identifier.id "h") (Term.type_ 1) in
+	String.contains (type_error_message e) "never used"
