@@ -3272,29 +3272,126 @@ def extend_env_with_ctor_fields (env : List LocalTypeBinding) (owner_params : Li
 /// match, ...) yields `List.empty` -- match arms in that position get
 /// no field-type env enrichment, same as before this fix.
 #[partial]
-def scrutinee_type_spine (env : List LocalTypeBinding) (scrutinee : Term) : Option CallSpine :=
+def scrutinee_type_spine (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (scrutinee : Term) : Option CallSpine :=
     // Peels. A match scrutinee IS located (`lower_parse.mo`'s
     // `Literal.match_` lowers it with `lower_parse_term`, not `_bare`), so
     // without this every located scrutinee fell to the `Option.none` arm
     // below and match arms silently lost their field-type enrichment --
     // which `Map.insert k v acc`-shaped calls in an arm depend on to find
     // their carrier.
+    //
+    // A CALL scrutinee is read exactly the way `infer_carrier_type`'s own
+    // `Term.app` arm reads a call ARGUMENT -- def head first, then ctor,
+    // then a local callee (`call_return_type` below is that arm's def
+    // treatment, `ctor_app_carrier` its ctor treatment) -- because the arm
+    // env needs the same thing from a scrutinee that a call's carrier
+    // inference needs from an argument: the APPLIED type, whose type args
+    // are what `match_arm_env` substitutes a matched constructor's
+    // declared field types against.
+    //
+    // Before that arm existed, the only scrutinee this function could read
+    // was a variable, so `match Toml.parse s { ok t => Map.lookup "mote" t
+    // … }` left `t` with no carrier at all: `Toml.parse`'s own call said
+    // nothing, no candidate matched an instance, and `Map.lookup` fell
+    // through to the class's own default -- `class Map (M := HashMap)`
+    // (`std/src/map.mo`), `class_default_carrier` below -- and EMITTED
+    // `std.map::Map_HashMap_lookup` on a value actually tagged
+    // `BTreeMap`. `HashMap.lookup` then walks that value's fields as a
+    // bucket list: MEASURED as a flat-heap spin (98.7% CPU, RSS pinned at
+    // 2.5 MB -- `lookup_loop`'s tail call is TCO'd, so it is a loop, not
+    // an allocation blowup, which is why this file was never the
+    // "unbounded allocation" its `host_only` entry claimed) and, at the
+    // generated `#[test]` driver level, as `driver exited -1`.
     match term_peel scrutinee {
         Term.var _ dbg =>
             match dbg {
                 DebugName.named id =>
                     match lookup_local_type env id {
                         Option.some raw_typ => Option.some (flatten_call_spine raw_typ),
-                        Option.none => Option.none,
+                        // Not a local -- a bare 0-arg CTOR or DEF
+                        // reference, a shape with no app for the arms below
+                        // to key on. Same two fallbacks, in the same order,
+                        // that `infer_carrier_type`'s own `Term.var` arm
+                        // makes (`lookup_ctor_owner_for`, then
+                        // `lookup_def_type`) -- and for the same measured
+                        // reason: MEASURED, a `match <0-arg def> { some m
+                        // => Map.lookup k m … }` still emitted
+                        // `Map_HashMap_lookup` after the call arms below
+                        // landed, because the scrutinee is a `Term.var` and
+                        // not a `Term.app`.
+                        Option.none =>
+                            match lookup_ctor_owner_for ctor_owners id {
+                                // The owner BARE: a 0-arg ctor reference
+                                // (`BTreeMap.empty`) says nothing about its
+                                // own type args, which is the same answer
+                                // the argument channel gives.
+                                Option.some owner => Option.some (flatten_call_spine (carrier_var (show_name_path owner))),
+                                Option.none =>
+                                    match lookup_def_type def_types id {
+                                        // `strip_foralls` for the reason
+                                        // `call_return_type` gives: this
+                                        // table holds `elaborate_def`-wrapped
+                                        // values, and a `forall` has no head
+                                        // for a spine to read.
+                                        Option.some typ => Option.some (flatten_call_spine (strip_foralls typ)),
+                                        Option.none => Option.none,
+                                    },
+                            },
                     },
                 DebugName.unnamed => Option.none,
+            },
+        Term.app _ _ =>
+            match flatten_call_spine scrutinee {
+                CallSpine.mk head args =>
+                    match term_peel head {
+                        Term.var _ dbg =>
+                            match dbg {
+                                DebugName.named id =>
+                                    match lookup_def_type def_types id {
+                                        Option.some typ => Option.some (flatten_call_spine (call_return_type env ctor_owners def_types ctor_field_types typ args)),
+                                        Option.none =>
+                                            match lookup_ctor_owner_for ctor_owners id {
+                                                Option.some owner =>
+                                                    Option.some (flatten_call_spine (ctor_app_carrier env ctor_owners def_types ctor_field_types (bare_ctor_name id) owner args)),
+                                                Option.none =>
+                                                    match lookup_local_type env id {
+                                                        Option.some ltyp => Option.some (flatten_call_spine (call_return_type env ctor_owners def_types ctor_field_types ltyp args)),
+                                                        Option.none => Option.none,
+                                                    },
+                                            },
+                                    },
+                                DebugName.unnamed => Option.none,
+                            },
+                        _ => Option.none,
+                    },
             },
         _ => Option.none,
     }
 
+/// The return type of a call whose callee's own DECLARED type is `typ`,
+/// APPLIED -- the scrutinee-side twin of `infer_carrier_type`'s `Term.app`
+/// def arm, and deliberately the same two steps in the same order.
+/// `instantiate_def_carrier` binds the callee's own binders against the
+/// call's arguments and answers the substituted return type, which is
+/// already the whole type and not merely its head (`Toml.parse :
+/// String -> Result Toml.ParseError (BTreeMap String Toml.Value)` answers
+/// the applied `Result …`, whose `BTreeMap …` arg is what `ok t`'s own `t`
+/// needs). Its `Option.none` -- nothing bound, so nothing to substitute --
+/// keeps the declared return type verbatim, which is what the same arm
+/// does. `strip_foralls` runs first there because
+/// `return_type_after_n_args`'s `n < 1` early-out returns a quantified type
+/// as-is (the early-out `infer_carrier_type`'s 0-arg def-reference arm
+/// records the same note about), and a `forall`-headed type has no spine
+/// for an arm env to read.
+def call_return_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (typ : Term) (args : List Term) : Term :=
+    match instantiate_def_carrier env ctor_owners def_types ctor_field_types typ args {
+        Option.some applied => applied,
+        Option.none => return_type_after_n_args (strip_foralls typ) (List.length args),
+    }
+
 #[partial]
-def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List Term :=
-    match scrutinee_type_spine env scrutinee {
+def scrutinee_type_args (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (scrutinee : Term) : List Term :=
+    match scrutinee_type_spine env ctor_owners def_types ctor_field_types scrutinee {
         Option.some spine =>
             match spine {
                 CallSpine.mk _head args => args,
@@ -3308,8 +3405,8 @@ def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List 
 /// scrutinee's type isn't recoverable from `env`, which falls the lookup
 /// back to name-only.
 #[partial]
-def scrutinee_type_head (env : List LocalTypeBinding) (scrutinee : Term) : Option Identifier :=
-    match scrutinee_type_spine env scrutinee {
+def scrutinee_type_head (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (scrutinee : Term) : Option Identifier :=
+    match scrutinee_type_spine env ctor_owners def_types ctor_field_types scrutinee {
         Option.some spine =>
             match spine {
                 CallSpine.mk head _args => term_head_identifier head,
@@ -3337,14 +3434,14 @@ def term_head_identifier (t : Term) : Option Identifier :=
 /// regression. The entry is chosen by OWNER first (`lookup_ctor_field_types_for`),
 /// since `mk` names every struct's constructor.
 #[partial]
-def match_arm_env (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (scrutinee : Term) (case_ : MatchCase) : List LocalTypeBinding :=
+def match_arm_env (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (scrutinee : Term) (case_ : MatchCase) : List LocalTypeBinding :=
     match case_ {
         MatchCase.mc cname cargs _body _fp =>
-            match lookup_ctor_field_types_for ctor_field_types cname (scrutinee_type_head env scrutinee) {
+            match lookup_ctor_field_types_for ctor_field_types cname (scrutinee_type_head env ctor_owners def_types ctor_field_types scrutinee) {
                 Option.some entry =>
                     match entry {
                         CtorFieldTypes.mk _ _owner owner_params field_types =>
-                            let concrete_args := scrutinee_type_args env scrutinee in
+                            let concrete_args := scrutinee_type_args env ctor_owners def_types ctor_field_types scrutinee in
                             extend_env_with_ctor_fields env owner_params concrete_args cargs field_types,
                     },
                 Option.none => env,
@@ -6485,7 +6582,7 @@ def resolve_class_call_cases (classes : List Class) (instances : List Instance) 
 def resolve_class_call_case (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
     match c {
         MatchCase.mc name args body fp =>
-            let new_env := match_arm_env ctor_field_types env scrutinee c in
+            let new_env := match_arm_env ctor_field_types env ctor_owners def_types scrutinee c in
             MatchCase.mc name args (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp,
     }
 

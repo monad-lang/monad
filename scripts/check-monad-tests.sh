@@ -27,6 +27,13 @@
 # checker/codegen bugs). A GAP does not fail the sweep; an
 # unrecognised compile failure does.
 #
+# `host_only` is now EMPTY. `lang/src/toml.mo` was its last entry, and it
+# left with the fix recorded at group 3 below -- so the self-hosted runner
+# now covers every file in the corpus except the gap list, and the Rust
+# runner runs for the gap list alone. The empty array and the
+# `${host_only[@]}` in the fallback line at the tail stay as the mechanism
+# until the gap list empties too and both are deleted together (P12).
+#
 # Then the same binary CHECKS the same corpus, which is the one gate here
 # that is not about tests: the pre-commit hook's `monad check` is the Rust
 # host, so the self-hosted checker was never run over the corpus by CI at
@@ -164,13 +171,47 @@ set -euo pipefail
 #    which is byte-for-byte the raw-type behavior that arm had before the
 #    wrap.
 #
-# 3. Unbounded allocation -- OOM-killed at ~30 GB RSS, no progress in 10
-#    minutes under a 4 GB cap, while its 41 tests pass in milliseconds on
-#    the host. The no-free-runtime memory pathology
-#    (plans/bootstrapping/rung3-oom-no-free-runtime.md). EXCLUDED FOR THE
-#    RUNNER'S SAKE, not just for speed: 30 GB disturbs everything else on
-#    a CI machine.
-#        lang/src/toml.mo
+# 3. (CLOSED, entry removed.) Recorded as "Unbounded allocation -- OOM-killed
+#    at ~30 GB RSS, no progress in 10 minutes under a 4 GB cap", and blamed on
+#    the no-free-runtime pathology. RE-MEASURED 2026-09-22 and the recorded
+#    cause was WRONG in a way that mattered: this file never allocated its way
+#    out of memory. Under `systemd-run --scope -p MemoryMax=4G` it burned the
+#    full 60s timeout at a FLAT 2.5 MB RSS and 98.7% CPU -- a spin, not a
+#    blowup. (`exit 137` is BOTH the OOM kill and the timeout kill; only the
+#    RSS sample tells them apart.)
+#
+#    The emitted IR named it in one line: `test_parse_single_header`'s
+#    `Map.lookup "mote" t` compiled to `std.map::Map_HashMap_lookup` while `t`
+#    was a `BTreeMap String Toml.Value`, so HashMap's bucket walk read
+#    BTreeMap nodes -- and `HashMap.lookup`'s own tail-recursive `lookup_loop`
+#    is TCO'd, which is exactly why the heap stayed flat and the CPU did not.
+#    The carrier had defaulted to `class Map (M : (K : Type) -> (V : Type) ->
+#    Type := HashMap)` (`std/src/map.mo`): the call's map argument was a
+#    match-arm binder over a CALL scrutinee, and `scrutinee_type_spine`
+#    (`lang/src/scope.mo`) only looked a scrutinee up when it was a
+#    `Term.var`. A call scrutinee yielded no spine, so the arm's binder never
+#    got the matched constructor's declared field types substituted against
+#    the scrutinee's concrete type args (`Result Toml.ParseError (BTreeMap
+#    String Toml.Value)`) and the instance search had no carrier to match.
+#
+#    Why only this file, which the recorded prose guessed wrong: every other
+#    test in the corpus reaches its lookup through `toml_table_lookup_eq`,
+#    whose own parameter is typed `BTreeMap String Toml.Value`, so the
+#    binder's carrier comes from the def's signature and never from a
+#    scrutinee. Test 9 is the first INLINE lookup and test 14 the second. The
+#    trigger is not "multi-line" and not "nested table"; it is an inline
+#    `Map.lookup` whose map argument is a match-arm binder over a call
+#    scrutinee.
+#
+#    Fixed by resolving a call scrutinee's return type through the same
+#    def/ctor/local channel `infer_carrier_type`'s application arm already
+#    used for call ARGUMENTS. Measured before removing: 41/41 through the
+#    self-hosted runner in 4.8s (was 8 tests then a hang), and zero
+#    `Map_HashMap_lookup` left in the file's emitted IR.
+#
+#    The 28 GB `check_deps=true` blowup (`lang/src/module.mo:1526`) is NOT
+#    this cause, and this measurement does not decide it -- whatever that is,
+#    the live-set-vs-rooting question stays open for the checker work.
 #
 # 4. (CLOSED, entry removed -- the same bug as group 1.) Same `llc`
 #    forward-reference family, newly EXPOSED (not newly caused):
@@ -196,7 +237,6 @@ set -euo pipefail
 # hand-maintained copies of the same paths, which is one edit away
 # from a file that runs in neither.
 host_only=(
-  lang/src/toml.mo
 )
 
 # The files the self-hosted runner reports as GAPs (cli/src/test_gaps.mo).
@@ -257,9 +297,10 @@ if [ ! -x "$out/monad" ] || [ -n "$(find init std lang cli llvm runtime \
 fi
 test -x "$out/monad"
 
-# The self-hosted sweep: the whole corpus except `host_only`. Those files
-# sit in directories with many healthy files, so they are named
-# individually rather than by pruning their parent directory.
+# The self-hosted sweep: the whole corpus except `host_only` (empty since
+# `lang/src/toml.mo` left it -- see group 3 above). An excluded file sits
+# in a directory with many healthy files, which is why the skip is a
+# per-path compare rather than a pruned parent directory.
 self_hosted_targets=()
 while IFS= read -r f; do
   for skip in "${host_only[@]}"; do
