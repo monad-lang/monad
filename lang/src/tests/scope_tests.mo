@@ -1,6 +1,7 @@
 use lib::types {
   Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
-  InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NamePath,
+  InstanceKey, LocalScope, LocalTypeBinding, LocalVar, Module, ModulePath, ModuleRegistry,
+  NamePath,
   NameRef,
   Param, Scope, ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Term,
   TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nnp, npath,
@@ -8,11 +9,14 @@ use lib::types {
 }
 use lib::scope {
   add_constraint_dict_params, build_scope_from_decls, build_scope_from_modules,
-  list_append, resolve_def_in_scope_by_name, scope_data_add_def,
+  find_constraint_bound_carrier_any, infer_carrier_type, list_append,
+  placeholder_carrier, resolve_def_in_scope_by_name, term_to_slug,
+  scope_data_add_def,
   npath_eq, scope_data_add_inductive, scope_data_add_instance, scope_data_empty,
   scope_find_inductive, scope_find_inductive_by_constructor, scope_find_local,
   scope_globals, scope_push_local, scope_resolve_instance, scope_resolve_name,
 }
+use llvm::strmap {str_map_empty, str_map_insert}
 
 // --- Build scope from empty decl_list ---
 
@@ -828,3 +832,177 @@ def test_scope_qualified_wrong_module_does_not_resolve : Bool :=
         ok _ => false,
         err _ => true
     }
+
+// --- A placeholder is a WEAK carrier, never a dropped one ---
+//
+// `infer_carrier_type`'s `Term.var` arm reads a local's declared type out of
+// the env. An un-annotated `let`'s desugared binder holds the parser's
+// placeholder (`Term.type_ 1`), and a placeholder names no head -- so
+// `term_matches_carrier` cannot fail against one and it matches EVERY
+// instance, which makes it worse than useless whenever it outranks a real
+// carrier.
+//
+// It is still handed on, because it is sometimes the ONLY evidence a call
+// has. MEASURED: refusing it here (answering `Option.none` in that arm)
+// turned `init/src/foldable_tests.mo`'s `Foldable.foldr (fn x acc => x + acc)
+// 0 [] == 0` into `no instance found for `Foldable.foldr`` -- the
+// un-annotated lambda's placeholder-typed binder is the only carrier
+// candidate the empty `[]` leaves behind, so with it dropped nothing matched
+// `instance Foldable List`. The PRECEDENCE problem is what
+// `demote_uninformative_carriers` solves at the call sites, by moving a
+// placeholder behind every real carrier instead of removing it -- see
+// `placeholder_carrier`'s own doc comment in `lang/scope.mo`.
+
+#[test]
+def test_placeholder_carrier_sorts_and_holes : Bool :=
+    placeholder_carrier (Term.type_ 1) && placeholder_carrier (Term.type_ 0) &&
+    placeholder_carrier Term.hole
+
+#[test]
+def test_placeholder_carrier_named_types : Bool :=
+    Bool.not (placeholder_carrier (Term.var 0 (DebugName.named (Identifier.id "I64")))) &&
+    Bool.not (placeholder_carrier (Term.app (Term.var 0 (DebugName.named (Identifier.id "List"))) (Term.var 0 (DebugName.named (Identifier.id "I64")))))
+
+/// The env an un-annotated `let` leaves behind, for one name.
+def placeholder_env (nm : Identifier) (ty : Term) : List LocalTypeBinding :=
+    List.cons (LocalTypeBinding.mk nm ty) List.empty
+
+def local_var (nm : Identifier) : Term :=
+    Term.var 0 (DebugName.named nm)
+
+/// A placeholder-typed local is still OFFERED as a carrier -- dropping it
+/// would lose the `Foldable.foldr ... []` resolution above.
+#[test]
+def test_placeholder_local_yields_a_carrier : Bool :=
+    match infer_carrier_type (placeholder_env (Identifier.id "filtered") (Term.type_ 1)) List.empty str_map_empty List.empty (local_var (Identifier.id "filtered")) {
+        Option.some _ => true,
+        Option.none => false,
+    }
+
+/// Control: a local whose declared type names something still offers itself
+/// as a carrier, with its arguments intact.
+#[test]
+def test_named_local_still_yields_a_carrier : Bool :=
+    match infer_carrier_type (placeholder_env (Identifier.id "xs") (Term.var 0 (DebugName.named (Identifier.id "I64")))) List.empty str_map_empty List.empty (local_var (Identifier.id "xs")) {
+        Option.some c => match c {
+            Term.var _ dbg => match dbg {
+                DebugName.named nm => Similar.similar nm (Identifier.id "I64"),
+                DebugName.unnamed => false,
+            },
+            _ => false,
+        },
+        Option.none => false,
+    }
+
+// --- The constraint's own variable resolves at the BOUND carrier ---
+//
+// `resolve_ordinary_constrained_call` has no instance head of its own, so it
+// passes `bindings = List.empty` to `constraint_carriers`, which then answers
+// `[carrier]` -- the WHOLE carrier. Resolving `[BEq A]` at the whole carrier
+// `List I64` re-matches `instance [BEq A] BEq (List A)`, and a dict name is
+// mangled from the INSTANCE's declared args, so the element slot of a
+// `List I64` comparison received `__Dict_BEq_List_A` and the driver read a
+// raw `I64` in `monad_get_tag`. That is the B3 SIGSEGV in
+// `std/src/list_tests3a.mo`. `find_constraint_bound_carrier_any` resolves the
+// constraint at the carrier the matched instance's own head BINDS that
+// variable to instead (`A := I64`, so `__Dict_BEq_I64`).
+
+def var_named (nm : String) : Term := Term.var 0 (DebugName.named (Identifier.id nm))
+
+def list_of (t : Term) : Term := Term.app (var_named "List") t
+
+def only_instance (ins : Instance) : List Instance := List.cons ins List.empty
+
+def beq_cls : NamePath :=
+    NamePath.npath (List.cons (Identifier.id "BEq") List.empty)
+
+/// `instance [BEq A] BEq (List A)`, in the shape the parser produces it.
+def beq_list_instance : Instance :=
+    Instance.mk (Identifier.id "BEq_List_A") beq_cls
+        (List.cons (TypeConstraint.mk beq_cls (List.cons (Identifier.id "A") List.empty)) List.empty)
+        (List.cons (list_of (var_named "A")) List.empty)
+        Visibility.package_private
+        (List.cons (param_many (Identifier.id "A") (Term.type_ 1)) List.empty)
+        List.empty
+
+/// `instance [Show A] Show A` -- a candidate that binds `A` back to `A` is
+/// no progress at all, so nothing may be read from it.
+def show_a_instance : Instance :=
+    Instance.mk (Identifier.id "Show_A")
+        (NamePath.npath (List.cons (Identifier.id "Show") List.empty))
+        (List.cons (TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty)) List.empty)
+        (List.cons (var_named "A") List.empty)
+        Visibility.package_private
+        (List.cons (param_many (Identifier.id "A") (Term.type_ 1)) List.empty)
+        List.empty
+
+def bound_carrier_slug (ins : Instance) (cls : NamePath) (vars : List Identifier) (c : Term) : String :=
+    match find_constraint_bound_carrier_any (only_instance ins) cls vars (List.cons c List.empty) {
+        Option.some p => match p {
+            Pair.pair bound _matched => term_to_slug bound,
+        },
+        Option.none => "<none>",
+    }
+
+/// The measured B3 shape: `List I64` against `instance [BEq A] BEq (List A)`
+/// binds `A := I64`, so the constraint resolves at `I64`, NOT at the whole
+/// `List I64` that mentions it.
+#[test]
+def test_constraint_bound_carrier_is_the_bound_element : Bool :=
+    String.beq (bound_carrier_slug beq_list_instance beq_cls (List.cons (Identifier.id "A") List.empty) (list_of (var_named "I64"))) "I64"
+
+/// A candidate that binds the constraint's variable BACK to itself makes no
+/// progress, so it is skipped rather than resolved at.
+#[test]
+def test_constraint_bound_carrier_skips_no_progress : Bool :=
+    String.beq (bound_carrier_slug show_a_instance (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) (var_named "A")) "<none>"
+
+/// A candidate that matches no instance at all yields nothing.
+#[test]
+def test_constraint_bound_carrier_requires_a_match : Bool :=
+    String.beq (bound_carrier_slug beq_list_instance beq_cls (List.cons (Identifier.id "A") List.empty) (var_named "I64")) "<none>"
+
+/// ...and so does a constraint with no candidate to read from.
+#[test]
+def test_constraint_bound_carrier_needs_a_candidate : Bool :=
+    match find_constraint_bound_carrier_any (only_instance beq_list_instance) beq_cls (List.cons (Identifier.id "A") List.empty) List.empty {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+// --- The def-type table is `forall`-wrapped, so a HEAD read off it must
+// --- unquantify first.
+//
+// `collect_def_types` registers every def type `elaborate_def`-wrapped
+// (`registered_def_type`), which is what gives the callee-signature
+// channel the `Forall` binders it reads. The arm of `infer_carrier_type`
+// that reads a bare HEAD off that same value (`type_head_name_local`) sees
+// nothing in a `forall`, so it answered NO carrier where the raw type
+// answered one. MEASURED: the promoted `FromListLiteral_List_empty` -- the
+// callee that arm's own comment names as its load-bearing case -- left the
+// enclosing `Foldable.foldr (fn x acc => x + acc) 0 []` with nothing to
+// infer `Foldable`'s own carrier from, and it reported `no instance found`.
+// The bare empty-list literal was the only casualty: an ascription, a typed
+// `let`, `List.empty`, a non-empty literal and a bare `none` all take other
+// arms.
+
+/// The shape this table holds for a def that quantifies over its own
+/// variable -- what `registered_def_type` guarantees.
+def quantified_def_typ : Term :=
+    Term.forall (DebugName.named (Identifier.id "A")) Term.hole (list_of (var_named "A"))
+
+/// The carrier `infer_carrier_type` reads off a 0-arg def REFERENCE
+/// (`empty`, what `[]` desugars to), as a slug.
+def def_ref_carrier_slug (typ : Term) : String :=
+    match infer_carrier_type List.empty List.empty (str_map_insert "empty" typ str_map_empty) List.empty (var_named "empty") {
+        Option.some c => term_to_slug c,
+        Option.none => "<none>",
+    }
+
+#[test]
+def test_def_ref_carrier_reads_through_a_quantified_type : Bool :=
+    String.beq (def_ref_carrier_slug quantified_def_typ) "List"
+
+#[test]
+def test_def_ref_carrier_reads_a_bare_type_too : Bool :=
+    String.beq (def_ref_carrier_slug (list_of (var_named "A"))) "List"

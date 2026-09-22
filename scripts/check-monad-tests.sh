@@ -35,19 +35,19 @@
 # repeated here -- it went stale the first time the list changed).
 set -euo pipefail
 
-# The 3 files the self-hosted runner cannot build a working driver for
-# today. Each is a PRE-EXISTING backend bug -- none is a problem with the
-# test file or with the runner -- and each stays covered by the Rust
-# runner at the bottom of this script, so excluding it here costs no
-# coverage. Three groups, one per remaining bug:
+# The 1 file the self-hosted runner cannot build a working driver for
+# today. It is a PRE-EXISTING backend bug -- not a problem with the test
+# file or with the runner -- and it stays covered by the Rust runner at
+# the bottom of this script, so excluding it here costs no coverage.
 #
-# This list was 10 entries when P10 landed and 5 before Phase 5. Five of
-# the ten had stopped being true and were re-measured file by file on
-# 2026-09-19, and the two group-1/group-4 entries went on 2026-09-21;
-# each flip is recorded at the group it left. Removing an entry whose
-# file now PASSES is as load-bearing as removing a stale GAP -- a file
-# left here silently loses its self-hosted coverage, and the Rust runner
-# (a different implementation) is what tests it instead.
+# This list was 10 entries when P10 landed, 5 before Phase 5 and 3 before
+# Phase 6. Five of the ten had stopped being true and were re-measured
+# file by file on 2026-09-19, the two group-1/group-4 entries went on
+# 2026-09-21, and group 2's two went on 2026-09-22; each flip is recorded
+# at the group it left. Removing an entry whose file now PASSES is as
+# load-bearing as removing a stale GAP -- a file left here silently loses
+# its self-hosted coverage, and the Rust runner (a different
+# implementation) is what tests it instead.
 #
 # 1. (CLOSED, both entries removed.) `llc` rejected the emitted IR with
 #    an ill-typed or forward-referenced `icmp`, in two shapes that turned
@@ -122,11 +122,47 @@ set -euo pipefail
 #      * `examples/iteration_advanced.mo` was the third file on this
 #        group's signal list; it is 6/6 self-hosted now and has left it.
 #
-#    What remains -- the same signal, still unexplained, and the emitted
-#    `BEq_List_A_beq` calls are arity-3 and correct (measured after the
-#    fix, same signal before and after):
-#        std/src/list_tests3a.mo
-#        std/src/array.mo
+#    CLOSED 2026-09-22, both entries removed. The signal was a dictionary
+#    in the WRONG SLOT, and it survived the earlier `BEq_List_A_beq` fix
+#    because a different search picks that slot:
+#    `resolve_ordinary_constrained_call` has no instance head of its own,
+#    so it passes `bindings = List.empty` to `constraint_carriers`, which
+#    then answers `[carrier]` -- the WHOLE carrier. Resolving `[BEq A]` at
+#    `List I64` re-matches `instance [BEq A] BEq (List A)`, and a dict name
+#    is mangled from the INSTANCE's declared args, so the element slot of a
+#    `List I64` comparison received `__Dict_BEq_List_A` and the driver read
+#    a raw `I64` in `monad_get_tag`. `find_constraint_bound_carrier_any`
+#    (`lang/src/scope.mo`) now resolves the constraint at the carrier the
+#    matched instance's own head BINDS the constraint's variable to
+#    (`A := I64`), so the element slot gets `__Dict_BEq_I64`.
+#
+#    Measured before removing them, with a binary rebuilt from the fix:
+#    `std/src/list_tests3a.mo` 7/7 (was `driver exited -1`) and
+#    `std/src/array.mo` 16/16, with no pre-fix PASS lost anywhere in the
+#    sweep. Two screens an earlier attempt added for this same crash were
+#    measured INERT and are removed again rather than left in on a
+#    falsified theory: one on whether a candidate PINS the matched
+#    instance's own variables, and a REFUSAL of a placeholder candidate in
+#    `infer_carrier_type`.
+#
+#    `init/src/foldable_tests.mo` and `init/src/foldable_tests_fold.mo` DID
+#    briefly lose their `Foldable.foldr (fn x acc => x + acc) 0 [] == 0`
+#    test to this work, and the refusal was NOT the cause -- reverting it
+#    left them failing, and a symbol-table reading of the session's own
+#    build artifacts (the wrap-only build has `registered_def_type` and
+#    none of this phase's other new defs) put the blame on the def-type
+#    CHANNEL: `collect_def_types` now registers every def type
+#    `elaborate_def`-wrapped, and the arm of `infer_carrier_type` that reads
+#    a bare HEAD off that value -- the 0-arg def-reference arm, whose own
+#    comment names the promoted `FromListLiteral_List_empty` as its
+#    load-bearing case -- reads nothing off a `forall`, so the bare `[]`
+#    literal answered no carrier at all and the enclosing `Foldable.foldr`
+#    reported `no instance found`. Measured on the wrap-only build: the bare
+#    `[]` fails, while `([] : List I64)`, a typed `let`, `List.empty`,
+#    `[1, 2, 3]` and a bare `none` all pass -- the empty list was the one
+#    arm the wrap could break. It now unquantifies first (`strip_foralls`),
+#    which is byte-for-byte the raw-type behavior that arm had before the
+#    wrap.
 #
 # 3. Unbounded allocation -- OOM-killed at ~30 GB RSS, no progress in 10
 #    minutes under a 4 GB cap, while its 41 tests pass in milliseconds on
@@ -160,8 +196,6 @@ set -euo pipefail
 # hand-maintained copies of the same paths, which is one edit away
 # from a file that runs in neither.
 host_only=(
-  std/src/list_tests3a.mo
-  std/src/array.mo
   lang/src/toml.mo
 )
 

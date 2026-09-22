@@ -9,6 +9,10 @@ use lib::types {
   npath, nqn, open_d, scoped_open_d, show_name_path, struct_d, type_, use_d,
 }
 use lib::typecheck::traverse {con_map_children, native_map_children, term_map_children}
+// `collect_def_types` registers `elaborate_def`-wrapped types and needs the
+// same whole-graph known-name set the `check` path's `elaborate_def_typs`
+// uses -- see `registered_def_type`'s own doc comment for why.
+use lib::elaborate {elaborate_def, names_of_decls}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo`. Empty import: naming any of `std.map`'s
 // `Map`-class-instance exports explicitly hits a pre-existing latent
@@ -2878,9 +2882,55 @@ pub type DefTypeEntry {
 /// `String.beq` of the two strings (`lang/types.mo`), and
 /// `show_identifier` is a pass-through -- so no comparison semantics
 /// change, only how many times they run.
+///
+/// **Every registered type is `elaborate_def`-wrapped** (`registered_def_type`
+/// below). Both consumers of this table read a signature's own type
+/// variables off its LEADING `Term.forall` binders -- `call_arg_hints`'s
+/// def branch via `collect_forall_names`, `instantiate_def_carrier` via the
+/// same call -- and both document the invariant that `elaborate_def`
+/// supplies them. Codegen's
+/// pipeline never ran it: it elaborates its whole-graph decl list with
+/// `elaborate_module_decls_best_effort`, whose `elaborate_def_with_scope`
+/// re-checks each def's BODY against its declared type without touching the
+/// type itself, and `elaborate_def_typs` is called only on the `check`
+/// path's own `target_decls` (`lang/module.mo`). So until this wrap existed,
+/// every def reached by codegen carried a type with free variables and no
+/// binders, `collect_forall_names` answered `List.empty` for all of them,
+/// and the two consumers degraded in the two measured ways those doc
+/// comments describe.
 #[partial]
-def collect_def_types (decl_list : List Decl) : HashMap String Term :=
-    collect_def_types_go decl_list str_map_empty
+def collect_def_types (known_names : List Identifier) (decl_list : List Decl) : HashMap String Term :=
+    collect_def_types_go known_names decl_list str_map_empty
+
+/// The type `collect_def_types` registers for one def: its declared type
+/// with every free type variable wrapped in a `Term.forall` binder, exactly
+/// the shape `elaborate_def_typs` (`lang/module.mo:2802`) gives the `check`
+/// path's decls. See `collect_def_types`'s own doc comment for what reading
+/// it unwrapped cost.
+///
+/// The subtraction is what makes this idempotent. `free_vars`
+/// (`lang/elaborate.mo`) does not track binder scope -- it reports a bound
+/// `A` inside a `Forall A. ...` as free all over again -- so re-wrapping an
+/// already-elaborated decl list would nest `forall A. forall A. ...`. That
+/// is not hypothetical: `cli/src/main.mo`'s compile path hands
+/// `resolve_class_calls_decls` a list whose target-module defs were already
+/// wrapped by `elaborate_loaded_modules`. Adding the already-bound names to
+/// `known_names` suppresses exactly the re-wrap and nothing else.
+///
+/// The whole-`Def` call rather than `elaborate_type typ constraints ...` so
+/// that the constraint-only variables (`F` in `def F.map [Functor F]
+/// (x : F A)`, whose `{F : Type -> Type}` clause the parser drops) are
+/// re-introduced the same way the check path does -- `elaborate_def`'s whole
+/// job.
+#[partial]
+def registered_def_type (df : Def) (known_names : List Identifier) : Term :=
+    match df {
+        Def.mk {typ, ..} =>
+            let bound : List Identifier := collect_forall_names typ in
+            match elaborate_def df (List.append bound known_names) {
+                Def.mk {typ := wrapped, ..} => wrapped,
+            },
+    }
 
 /// First-wins insert: an existing key is left alone, matching the scan's
 /// "first entry in decl order that matches" semantics. `str_map_insert`
@@ -2893,21 +2943,22 @@ def def_type_insert_first (key : String) (typ : Term) (m : HashMap String Term) 
     }
 
 #[partial]
-def collect_def_types_go (decl_list : List Decl) (acc : HashMap String Term) : HashMap String Term :=
+def collect_def_types_go (known_names : List Identifier) (decl_list : List Decl) (acc : HashMap String Term) : HashMap String Term :=
     match decl_list {
         List.empty => acc,
         List.cons d rest =>
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk {name := dname, typ := dtyp, ..} =>
+                        Def.mk {name := dname, ..} =>
+                            let dtyp : Term := registered_def_type def_ known_names in
                             let with_full : HashMap String Term :=
                                 def_type_insert_first (show_name_path dname) dtyp acc in
                             let with_last : HashMap String Term :=
                                 def_type_insert_first (show_identifier (last_segment dname)) dtyp with_full in
-                            collect_def_types_go rest with_last,
+                            collect_def_types_go known_names rest with_last,
                     },
-                _ => collect_def_types_go rest acc,
+                _ => collect_def_types_go known_names rest acc,
             },
     }
 
@@ -2925,14 +2976,15 @@ def collect_def_types_go (decl_list : List Decl) (acc : HashMap String Term) : H
 /// b`'s own `Sub.sub`/`HAdd.add`) silently never fired for any QUALIFIED
 /// dotted call -- confirmed via `bootstrap compile cli/src/main.mo monad`:
 /// `lang/parser.mo`'s `string_find_last` hit exactly this
-/// (`String.length haystack - String.length needle`). Try the FULL
-/// dotted text first (`show_module_path`/`show_identifier`, both
-/// "."-joined, matching surface syntax -- covers the qualified case),
-/// falling back to the existing bare-last-segment match (covers the
-/// unqualified case) -- same "try the fully-qualified form first, then
-/// the bare form" idiom `lookup_native_any`'s own doc comment already
-/// establishes for the identical dotted-vs-bare ambiguity elsewhere in
-/// this file.
+/// (`String.length haystack - String.length needle`). Both spellings are
+/// KEYS IN THE TABLE, not two attempts made here: `collect_def_types_go`
+/// registers every def under its full dotted name (`show_name_path`) AND
+/// under its bare last segment, first-wins, so this lookup stays a single
+/// `str_map_lookup` of the call site's own text and covers the qualified
+/// and the unqualified case alike -- see the table's own doc comment
+/// ("Keyed under BOTH forms, first-wins") for why that reproduces the
+/// linear scan it replaced.
+///
 #[partial]
 def lookup_def_type (entries : HashMap String Term) (name : Identifier) : Option Term :=
     str_map_lookup (show_identifier name) entries
@@ -3589,6 +3641,92 @@ def carrier_with_normalized_head (head_name : String) (typ : Term) : Term :=
         _ => typ,
     }
 
+/// Is `typ` a PLACEHOLDER -- a type that says nothing at all about what
+/// the value is, so it can never be a carrier? A universe (`Term.type_ n`,
+/// which is what an un-annotated `let`'s own desugared binder holds --
+/// `lang/parser.mo`'s placeholder) and a `Term.hole` both qualify.
+///
+/// Every OTHER uninformative shape at least CONSTRAINS something: a bare
+/// `List` still says the value is a list, a bare type variable still says
+/// which instance's parameter it stands for. A placeholder constrains
+/// nothing, so `term_matches_carrier` matches it against EVERY instance --
+/// the same "wrong answer rather than a weak one" shape
+/// `find_specific_matching_carrier` documents for `Monad.pure`. Handing
+/// one to a first-that-wins search is therefore worse than handing that
+/// search nothing at all -- unless it is the ONLY thing on offer, which is
+/// why its callers DEMOTE it rather than drop it.
+///
+/// MEASURED (`std/src/list_tests3a.mo`, the B3 SIGSEGV): the carrier that
+/// WON the `BEq.beq` resolution is a fully CONCRETE `List I64` -- whose
+/// argument is the named variable `I64`, not a placeholder and not a
+/// still-generic `List A` -- so this predicate is not what closed B3; the
+/// fix is `find_constraint_bound_carrier_any`, which resolves the
+/// constraint's own variable at that concrete carrier. The predicate is
+/// kept because a placeholder IS an argument-derived candidate in other
+/// shapes, and `term_matches_carrier` cannot fail against one, so it
+/// silently outranks every real carrier behind it in a first-that-wins
+/// search. See `infer_carrier_type`'s `Term.var` arm for why it must be
+/// DEMOTED and never dropped.
+///
+/// Mirrors `lang.typecheck.infer`'s `is_uninformative_carrier`, which
+/// screens exactly these two shapes; kept local rather than imported so
+/// this file keeps its existing import set.
+def placeholder_carrier (typ : Term) : Bool :=
+    match term_peel typ {
+        Term.hole => true,
+        Term.type_ _ => true,
+        _ => false,
+    }
+
+/// `cs` with every UNINFORMATIVE candidate (`placeholder_carrier`) moved to
+/// the END, order otherwise preserved.
+///
+/// A candidate list assembled from SEVERAL sources (`extra_carriers`' own
+/// `args ++ expected ++ method-hint` splice) can carry a placeholder that no
+/// arm of its own screened, and such a list is searched first-that-wins
+/// (`find_matching_instance_carrier_any`) or first-that-is-not-generic
+/// (`find_carrier_any_avoiding_wildcards`), so a placeholder sitting first
+/// silently outranks every real carrier behind it.
+/// MEASURED (see `infer_carrier_type`'s `Term.var` arm): a placeholder is
+/// sometimes a call's ONLY evidence -- `init/src/foldable_tests.mo`'s
+/// `Foldable.foldr (fn x acc => x + acc) 0 [] == 0` resolves through the
+/// un-annotated lambda's own placeholder-typed binder, because the empty
+/// `[]` argument offers nothing else, and dropping it there is a `no
+/// instance found` compile failure.
+///
+/// DEMOTING rather than DROPPING is deliberate and is what makes this safe to
+/// apply unconditionally: a call whose ONLY evidence is a placeholder keeps
+/// resolving exactly as it did before this existed, so no resolution that
+/// works today is lost -- only the precedence of the uninformative candidate
+/// changes.
+#[partial]
+def demote_uninformative_carriers (cs : List Term) : List Term :=
+    List.append (informative_carriers cs) (uninformative_carriers cs)
+
+/// `cs` less every `placeholder_carrier` -- see
+/// `demote_uninformative_carriers`.
+#[partial]
+def informative_carriers (cs : List Term) : List Term :=
+    match cs {
+        List.empty => List.empty,
+        List.cons c rest =>
+            if placeholder_carrier c
+            then informative_carriers rest
+            else List.cons c (informative_carriers rest),
+    }
+
+/// Just the `placeholder_carrier` members of `cs`, order preserved -- the
+/// tail `demote_uninformative_carriers` appends.
+#[partial]
+def uninformative_carriers (cs : List Term) : List Term :=
+    match cs {
+        List.empty => List.empty,
+        List.cons c rest =>
+            if placeholder_carrier c
+            then List.cons c (uninformative_carriers rest)
+            else uninformative_carriers rest,
+    }
+
 /// The carrier of a `(value : T)` ASCRIPTION, which the self-hosted
 /// parser desugars to the identity function at `T` applied to `value`
 /// (`paren_ann_value`, `lang/parser.mo`). `T` is the value's type --
@@ -3709,6 +3847,21 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                         Term.app _ _ => Option.some (carrier_with_normalized_head (show_identifier head_name) typ),
                                         _ => Option.some (carrier_var (show_identifier head_name)),
                                     },
+                                // No head name at all. A placeholder (an un-annotated `let`'s binder)
+                                // names nothing, so `term_matches_carrier` cannot fail against it and it
+                                // matches ANY instance -- which is why every caller DEMOTES it behind a
+                                // real carrier rather than dropping it (`demote_uninformative_carriers`;
+                                // see `placeholder_carrier`'s own doc comment). It is handed on here
+                                // because it is sometimes the only evidence a call has. MEASURED:
+                                // refusing it here (answering `Option.none`) turned
+                                // `init/src/foldable_tests.mo`'s own
+                                // `Foldable.foldr (fn x acc => x + acc) 0 [] == 0` into `no instance
+                                // found for `Foldable.foldr`` -- the un-annotated lambda's
+                                // placeholder-typed binder is the only carrier candidate the empty `[]`
+                                // leaves behind, so with it dropped nothing matched `instance Foldable
+                                // List`, and the file STOPPED COMPILING while it was in. Every other
+                                // headless shape (`A`, a `Pi`) constrains something and is kept
+                                // verbatim.
                                 Option.none => Option.some typ,
                             },
                         Option.none =>
@@ -3746,7 +3899,46 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                 Option.none =>
                                     match lookup_def_type def_types id {
                                         Option.some typ =>
-                                            match type_head_name_local typ {
+                                            // UNQUANTIFIED first: this
+                                            // table's values are
+                                            // `elaborate_def`-wrapped
+                                            // (`registered_def_type`'s own doc
+                                            // comment), and a `forall` has no
+                                            // head for `type_head_name_local`
+                                            // to read -- so the wrapped value
+                                            // answered NO carrier where the
+                                            // raw one answered `List`.
+                                            //
+                                            // MEASURED, and this arm is
+                                            // exactly where: the promoted
+                                            // `FromListLiteral_List_empty`
+                                            // this arm's comment above names
+                                            // as its load-bearing case left
+                                            // `Foldable.foldr (fn x acc => x +
+                                            // acc) 0 []` reporting `no
+                                            // instance found for
+                                            // `Foldable.foldr``. The bare
+                                            // empty-list literal was the
+                                            // ONLY casualty -- `([] : List
+                                            // I64)`, `List.empty`, a typed
+                                            // `let`, `[1, 2, 3]` and bare
+                                            // `none` all take other arms --
+                                            // which is why the wrap's own
+                                            // unit of blame is this HEAD read
+                                            // and not the wrap.
+                                            //
+                                            // The sibling shape is
+                                            // `return_type_after_n_args`'s
+                                            // own `n < 1` early-out, which
+                                            // returns a quantified type
+                                            // verbatim; it is UNREACHABLE
+                                            // today (every caller passes the
+                                            // length of an app spine, and an
+                                            // `App` always contributes at
+                                            // least one argument), so it is
+                                            // left alone rather than changed
+                                            // on theory.
+                                            match type_head_name_local (strip_foralls typ) {
                                                 Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
                                                 Option.none => Option.none,
                                             },
@@ -4456,10 +4648,11 @@ def collect_forall_names (typ : Term) : List Identifier :=
 ///     `Bar -> Bar`, whose only name is the very type being dispatched on:
 ///     binding it would replace a correct carrier with an inferred one.
 ///
-/// No ordinary def is reachable: `elaborate_def` wraps every free type
-/// variable in Forall by construction, so `collect_forall_names` is
-/// non-empty for it and this set is never consulted (`instantiate_def_carrier`
-/// only falls back here when that set is empty).
+/// No ordinary def is reachable: `collect_def_types` registers every def
+/// type `elaborate_def`-wrapped (`registered_def_type`'s own doc comment),
+/// so `collect_forall_names` is non-empty for it and this set is never
+/// consulted -- `instantiate_def_carrier` only falls back here when that set
+/// is empty.
 #[partial]
 def collect_free_param_names (typ : Term) : List Identifier :=
     keep_ids_present (collect_bare_param_names typ) (collect_app_arg_names typ)
@@ -4818,12 +5011,21 @@ def subst_carrier_bindings (bindings : List (Pair Identifier Term)) (t : Term) :
 #[partial]
 def instantiate_def_carrier (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (typ : Term) (args : List Term) : Option Term :=
     // The def's binders: its own `Forall` names when it has any (every
-    // ordinary def -- `elaborate_def` wraps free type variables), and
-    // otherwise the names a promoted instance method's forall-free
-    // signature still leaves standing (`collect_free_param_names`'s own
-    // doc comment: `FromListLiteral_List_cons`'s `A`). The second set is
-    // never consulted for a def that has the first, so no def that
-    // instantiates today changes behavior here.
+    // ordinary def -- `registered_def_type` runs `elaborate_def` over every
+    // type `collect_def_types` registers, which is what makes its own doc
+    // comment's original claim true), and otherwise the names a promoted
+    // instance method's forall-free signature still leaves standing
+    // (`collect_free_param_names`'s own doc comment:
+    // `FromListLiteral_List_cons`'s `A`). The second set is never consulted
+    // for a def that has the first.
+    //
+    // Which set is consulted DID change for ordinary defs when the wrap
+    // landed, deliberately: `collect_free_param_names` answers `List.empty`
+    // for a signature whose variables never stand alone as a parameter
+    // (`List.filter`'s `(A -> Bool) -> List A -> List A`), so a call whose
+    // result was bound to a bare `let` kept the unsolved `List A` as its
+    // carrier instead of the element type its arguments reveal. That is the
+    // `std/src/list_tests3a.mo` SIGSEGV.
     let binders := collect_forall_names typ in
     let wildcards :=
         match binders {
@@ -5248,6 +5450,77 @@ def find_carrier_any_avoiding_wildcards (instances : List Instance) (cls_name : 
             },
     }
 
+/// The first candidate that both matches an instance AND makes the
+/// constraint's own type variable CONCRETE -- the carrier the matched
+/// instance's declared head binds that variable to (`List I64` against
+/// `(List A)` binds `A := I64`, so `[BEq A]` resolves at `I64`, never at
+/// the `List I64` that mentions it).
+///
+/// This is the missing half of `constraint_carriers`: that function can
+/// only use a binding its CALLER already computed, and
+/// `resolve_ordinary_constrained_call` has none to give (an ordinary
+/// constrained def call has no instance head of its own -- see its own
+/// comment), so `[BEq A]` was resolved against the WHOLE carrier. That
+/// whole carrier `List I64` matches `instance [BEq A] BEq (List A)`, and
+/// the dict name is mangled from the INSTANCE's declared args, so the
+/// element slot of a `List I64` comparison received exactly the outer
+/// `BEq (List A)` dict -- `__Dict_BEq_List_A` -- which the driver then
+/// read as a raw `I64` and died in `monad_get_tag`. MEASURED: this is
+/// `std/src/list_tests3a.mo`'s and `std/src/array.mo`'s B3 SIGSEGV.
+///
+/// The pre-existing screen cannot catch that shape either: the candidate
+/// that wins is a fully concrete `List I64`, so `carrier_mentions_wildcards`
+/// sees no wildcard in it. The bindings are fine; what is wrong is
+/// resolving the constraint at the candidate at all. (An earlier attempt
+/// at this fix screened candidates by whether they PIN the instance's own
+/// variables. Measured inert here for exactly that reason, and removed
+/// again rather than left in on a falsified theory.)
+///
+/// Candidates bound to a placeholder, or bound to themselves (no
+/// progress: `A := A`, or `[Show A]` against `instance [Show A] Show A`),
+/// are skipped, so a constraint whose evidence is only ever generic
+/// resolves exactly as it did before this existed.
+#[partial]
+def find_constraint_bound_carrier_any (instances : List Instance) (cls_name : NamePath) (vars : List Identifier) (carriers : List Term) : Option (Pair Term Instance) :=
+    match carriers {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match find_matching_instance instances cls_name c {
+                Option.none => find_constraint_bound_carrier_any instances cls_name vars rest,
+                Option.some ins =>
+                    match ins {
+                        Instance.mk _ _ _ ins_args _ _ _ =>
+                            match bound_constraint_carrier (carrier_bindings (instance_wildcard_names ins) ins_args c) vars {
+                                Option.some bound =>
+                                    if placeholder_carrier bound
+                                    then find_constraint_bound_carrier_any instances cls_name vars rest
+                                    else if String.beq (term_to_slug bound) (term_to_slug c)
+                                    then find_constraint_bound_carrier_any instances cls_name vars rest
+                                    else Option.some (Pair.pair bound ins),
+                                Option.none => find_constraint_bound_carrier_any instances cls_name vars rest,
+                            },
+                    },
+            },
+    }
+
+/// The dict-value reference for the first candidate that matches
+/// `cls_name` over `carriers`, in plain first-match order.
+///
+/// This is the FALLBACK for a constraint whose every candidate is
+/// generic, self-bound or unrevealing -- the ones no bound carrier could
+/// be read from -- so such a constraint resolves exactly as it did before
+/// `find_constraint_bound_carrier_any` existed.
+#[partial]
+def resolve_dict_arg_plain (instances : List Instance) (cls_name : NamePath) (carriers : List Term) : Option Term :=
+    match find_matching_instance_any instances cls_name carriers {
+        Option.none => Option.none,
+        Option.some ins =>
+            match ins {
+                Instance.mk found_insname _ _ ins_args _ _ _ =>
+                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name (instance_module_prefix found_insname) cls_name ins_args)))),
+            },
+    }
+
 /// Sibling of `find_matching_instance_any` that also returns WHICH
 /// candidate carrier matched -- needed by `resolve_class_method_call_d4_
 /// from_args` (unlike `resolve_dict_arg`'s own use of the `_any` form,
@@ -5356,22 +5629,44 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                     // the old order (whole carrier, then `extra_carriers`)
                     // as its fallback for a constraint whose variable the
                     // instance head does not bind.
-                    let found := match find_matching_instance_any instances cls_name (constraint_carriers bindings vars carrier) {
-                        Option.some ins => Option.some ins,
-                        Option.none => find_matching_instance_any instances cls_name extra_carriers,
-                    } in
-                    match found {
-                        Option.some ins =>
-                            match ins {
-                                Instance.mk found_insname _ _ ins_args _ _ _ =>
-                                    // Sentinel, not `Term.var 0` -- a
-                                    // mangled dict-VALUE name is never a
-                                    // real local either; see
-                                    // `build_dict_fields`'s own doc comment
-                                    // just above for the full rationale.
-                                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name (instance_module_prefix found_insname) cls_name ins_args)))),
+                    //
+                    // The fallback is deliberately the PLAIN first-match
+                    // order: its candidates are exactly the ones no bound
+                    // carrier could be read from, so there is nothing to
+                    // prefer between them. (Screening it instead -- a
+                    // bare-head candidate `List` against `instance [BEq A]
+                    // BEq (List A)` matched without reaching `A` -- was
+                    // tried and measured inert on B3; see
+                    // `find_constraint_bound_carrier_any`.)
+                    let cands : List Term := constraint_carriers bindings vars carrier in
+                    let searched : List Term := List.append cands extra_carriers in
+                    // The constraint's own variable, bound by the matched
+                    // instance's head against the candidate, is the RIGHT
+                    // carrier -- and when the caller had no bindings to
+                    // give (the ordinary constrained-def call path), this
+                    // is the only place that binding can come from. See
+                    // `find_constraint_bound_carrier_any`: without it the
+                    // whole carrier answers for `[BEq A]`, re-matches the
+                    // instance being expanded, and the `List A` dict lands
+                    // in the element slot (B3's SIGSEGV).
+                    //
+                    // `extra_carriers` is deliberately NOT threaded into
+                    // the recursive call: they are the arg-derived
+                    // fallbacks for the ORIGINAL constraint, and
+                    // re-supplying them re-offers the very candidate that
+                    // sent us here (an unbounded refinement loop). A bound
+                    // carrier is concrete by construction, so it needs no
+                    // fallback.
+                    match find_constraint_bound_carrier_any instances cls_name vars searched {
+                        Option.some p =>
+                            match p {
+                                Pair.pair bound _matched_ins =>
+                                    match resolve_dict_arg classes instances dict_env List.empty bound List.empty c {
+                                        Option.some t => Option.some t,
+                                        Option.none => resolve_dict_arg_plain instances cls_name searched,
+                                    },
                             },
-                        Option.none => Option.none,
+                        Option.none => resolve_dict_arg_plain instances cls_name searched,
                     },
             },
     }
@@ -6136,14 +6431,21 @@ def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env
                                     },
                             },
                         Option.none =>
-                            // A def's own variables are its `Forall` binders
-                            // (`elaborate_def` wraps every free type variable
-                            // in one by construction), so a foraller-free
-                            // signature -- a promoted instance method, whose
-                            // domains are the concrete types themselves -- has
-                            // NO variables, and its parameter types are handed
-                            // down as they are. See `class_method_var_names`
-                            // for the measured failure shape-reading caused.
+                            // A def's own variables are its `Forall` binders.
+                            // `collect_def_types` runs `elaborate_def` over
+                            // every registered type for exactly this reader
+                            // (`registered_def_type`'s own doc comment), so the
+                            // binders are always there for an ordinary def --
+                            // and a foraller-free signature therefore really
+                            // does have NO variables now: it is a promoted
+                            // instance method, whose domains are the concrete
+                            // types themselves, and its parameter types are
+                            // handed down as they are. This reader is why that
+                            // wrap exists; without it every def answered
+                            // `List.empty` here and the raw generic declared
+                            // type was handed down as a "concrete" hint. See
+                            // `class_method_var_names` for the measured failure
+                            // shape-reading caused.
                             match lookup_def_type def_types id {
                                 Option.some typ => sig_hints (collect_forall_names typ) (Option.some typ) env ctor_owners def_types ctor_field_types args expect,
                                 Option.none => List.empty,
@@ -6225,7 +6527,7 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
             let ad := infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args in
             let ex := carrier_hint_list expected in
             let pj := method_carrier_hints cls method_name expected def_carrier in
-            let extra_carriers := List.append ad (List.append ex pj) in
+            let extra_carriers := demote_uninformative_carriers (List.append ad (List.append ex pj)) in
             resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
     }
 
@@ -6472,13 +6774,13 @@ def resolve_class_method_call_with_dict_args (prefix : String) (classes : List C
     match resolve_dict_args classes instances dict_env bindings carrier extra_carriers ins_constraints {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some dict_args =>
-            let mangled := mangle_instance_method_name prefix cls_name ins_args method_name in
+            let mangled : Identifier := mangled_to_identifier (mangle_instance_method_name prefix cls_name ins_args method_name) in
             // Sentinel, not `Term.var 0` -- same rationale as
             // `build_dict_fields`'s own mangled-method reference just
             // above: a mangled instance-method name is never a real
             // local, at any depth this D4-resolved call ends up embedded
             // at.
-            let method_fn_ref := Term.var (0 - 1) (DebugName.named (mangled_to_identifier mangled)) in
+            let method_fn_ref := Term.var (0 - 1) (DebugName.named mangled) in
             rebuild_call method_fn_ref (List.append dict_args resolved_args),
     }
 
@@ -6561,7 +6863,12 @@ pub def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
     let ctor_owners := collect_ctor_owners decl_list in
     let ctor_field_types := collect_ctor_field_types decl_list in
     let def_constraints := collect_def_constraints decl_list in
-    let def_types := collect_def_types decl_list in
+    // The registered def types are `elaborate_def`-wrapped, which needs the
+    // same whole-graph known-name set the `check` path's `elaborate_def_typs`
+    // uses (`names_of_decls`, `lang/module.mo`) -- the names subtracted from
+    // `free_vars` so a concrete type (`I64`, `List`) is never mistaken for a
+    // signature variable.
+    let def_types := collect_def_types (names_of_decls decl_list) decl_list in
     resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types decl_list
 
 /// `resolve_class_call_term`'s own resolution chain has a SILENT give-up
@@ -6868,7 +7175,7 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
                 Option.some carrier =>
                     // No instance head here (an ordinary constrained DEF call), so no
                     // bindings: `List.empty` keeps the pre-existing whole-carrier order.
-                    match resolve_dict_args classes instances dict_env List.empty carrier (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args) constraints {
+                    match resolve_dict_args classes instances dict_env List.empty carrier (demote_uninformative_carriers (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args)) constraints {
                         Option.none => rebuild_call head resolved_args,
                         Option.some dict_args => rebuild_call head (List.append dict_args resolved_args),
                     },
@@ -7447,7 +7754,10 @@ def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
     // each def under its last segment as well as its full dotted name,
     // so testing the pair together is what actually covers the
     // behaviour this test is named for.
-    match lookup_def_type (collect_def_types (List.cons (Decl.def_d d) List.empty)) (Identifier.id "println") {
+    // `List.empty` known-names: this fixture's `Term.var`s are de Bruijn
+    // `0`, not the `sentinel` a free type variable carries, so `free_vars`
+    // reports nothing to wrap and the registered type is the fixture's own.
+    match lookup_def_type (collect_def_types List.empty (List.cons (Decl.def_d d) List.empty)) (Identifier.id "println") {
         Option.some _ => true,
         Option.none => false,
     }
