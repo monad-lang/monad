@@ -1320,7 +1320,7 @@ def check_class_method_with_scope (m : ClassDef) (scope : Scope) (locals : Local
 #[partial]
 def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match df {
-        Def.mk name typ body _constraints _attrs _vis => do {
+        Def.mk {name, typ, term := body, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => do {
             if verbose then println ("  checking def " ++ show_name_path name) else do { return unit };
             if is_term_hole body then do {
                 return List.empty
@@ -1453,7 +1453,7 @@ pub def elaborate_module_decls_best_effort (scope : Scope) (decl_list : List Dec
 #[partial]
 def decl_display_name (d : Decl) : String :=
     match d {
-        Decl.def_d def_ => match def_ { Def.mk name _ _ _ _ _ => show_name_path name },
+        Decl.def_d def_ => match def_ { Def.mk {name, ..} => show_name_path name },
         Decl.inductive_d i => match i { Inductive.mk name _ _ _ _ _ => show_name_path name },
         _ => "<non-def decl>",
     }

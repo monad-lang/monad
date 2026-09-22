@@ -233,7 +233,7 @@ def build_arity_table_go (defs : List Def) (acc : HashMap String I64) : HashMap 
     List.empty => acc,
     List.cons d rest =>
         match d {
-            Def.mk name typ term_ constraints attrs _vis =>
+            Def.mk {name, typ, term := term_, constraints, attrs, vis := _vis, ..} =>
                 let llvm_name := def_symbol_name name in
                 let arity := List.length (collect_db_params term_) in
                 build_arity_table_go rest (str_map_insert llvm_name arity acc),

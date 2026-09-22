@@ -97,7 +97,7 @@ def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List Str
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Def.mk name _typ term_ _constraints attrs _vis =>
+                Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs, vis := _vis, ..} =>
                     match strip_db_lams term_ {
                         Term.hole =>
                             match native_attr_target_name attrs {
@@ -177,7 +177,7 @@ def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List String) : 
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Def.mk name _typ term_ _constraints _attrs _vis =>
+                Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
                     if term_has_struct_lit term_
                     then
                         let def_name := name_path_to_str name in

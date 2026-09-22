@@ -58,7 +58,7 @@ def build_term_macro_registry (decl_list : List Decl) : List TermMacroEntry :=
             match d {
                 Decl.def_macro_d d_val =>
                     match d_val {
-                        Def.mk name _ term _ _ _ =>
+                        Def.mk {name, term, ..} =>
                             match name_path_last name {
                                 Option.some id => List.cons (TermMacroEntry.tm_entry id term) (build_term_macro_registry rest),
                                 Option.none => build_term_macro_registry rest,
@@ -188,7 +188,7 @@ def class_defs_terms_expand (lookup : Identifier -> Option Term) (cds : List Cla
 #[partial]
 def def_terms_expand (lookup : Identifier -> Option Term) (d : Def) : Def :=
     match d {
-        Def.mk name typ term constraints attrs vis =>
+        Def.mk {name, typ, term, constraints, attrs, vis, ..} =>
             Def.mk name (expand_term lookup typ) (expand_term lookup term) constraints attrs vis,
     }
 
@@ -562,7 +562,7 @@ def test_expand_decls_expands_term_position_macro_call_inside_a_def : Bool :=
             (match rest { List.empty => true, List.cons _ _ => false }) &&
             match only_decl {
                 Decl.def_d d_val =>
-                    match d_val { Def.mk _ _ term _ _ _ => I64.beq (term_type_level term) 9 },
+                    match d_val { Def.mk {term, ..} => I64.beq (term_type_level term) 9 },
                 _ => false,
             },
         List.empty => false,
@@ -667,7 +667,7 @@ def test_expand_decls_ordinary_decl_with_no_macros_is_unchanged : Bool :=
         List.cons only_decl rest =>
             (match rest { List.empty => true, List.cons _ _ => false }) &&
             match only_decl {
-                Decl.def_d d_val => match d_val { Def.mk _ _ term _ _ _ => I64.beq (term_type_level term) 4 },
+                Decl.def_d d_val => match d_val { Def.mk {term, ..} => I64.beq (term_type_level term) 4 },
                 _ => false,
             },
         List.empty => false,

@@ -160,7 +160,7 @@ def wrap_forall (typ : Term) (vars : List Identifier) : Term :=
 /// Mirrors Rust's elaborate_def (type.rs:2877).
 def elaborate_def (d : Def) (known_names : List Identifier) : Def :=
     match d {
-        Def.mk name typ term constraints attrs vis =>
+        Def.mk {name, typ, term, constraints, attrs, vis, ..} =>
             let elaborated_typ := elaborate_type typ constraints known_names in
             Def.mk name elaborated_typ term constraints attrs vis,
     }
@@ -264,7 +264,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
     match decl {
         Decl.def_d d =>
             match d {
-                Def.mk name _ _ _ _ _ =>
+                Def.mk {name, ..} =>
                     match np_to_maybe_id name {
                         Option.some id =>
                             let empty : List Identifier := List.empty in

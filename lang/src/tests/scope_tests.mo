@@ -752,7 +752,7 @@ def test_dict_param_type_is_hole : Bool :=
     let empty_attrs : List Attribute := List.empty in
     let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private in
     match add_constraint_dict_params df {
-        Def.mk _ _new_typ new_term _ _ _ =>
+        Def.mk {typ := _new_typ, term := new_term, ..} =>
             match new_term {
                 Term.lam _dbg param_typ _body =>
                     match param_typ { Term.hole => true, _ => false, },

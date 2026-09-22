@@ -1929,7 +1929,7 @@ def def_apply_attrs (dr : ParseResult ParseDecl) (attrs : List Attribute) : Pars
 			match decl.kind {
 				def_d d =>
 					match d {
-						ParseDef.mk name typ term constraints _ vis =>
+						ParseDef.mk {name, typ, term, constraints, vis, ..} =>
 							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis))
 					},
 				_ => success rem decl
@@ -2027,7 +2027,7 @@ def def_apply_constraints (dr : ParseResult ParseDecl) (constraints : List TypeC
 			match decl.kind {
 				def_d d =>
 					match d {
-						ParseDef.mk name typ term _ attrs vis =>
+						ParseDef.mk {name, typ, term, attrs, vis, ..} =>
 							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis))
 					},
 				_ => success rem decl
@@ -6717,7 +6717,7 @@ def test_def_implicit_single_name : Bool :=
 	match def_parser "def id {A : Type} (x : A) : A := x" {
 		success rem out => match out.kind {
 			def_d d => match d {
-				ParseDef.mk _name _typ term _constraints _attrs _vis => match term.kind {
+				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => match term.kind {
 					ParseTermKind.lam dbg _ptyp _body => Similar.similar dbg (Identifier.id "x"),
 					_ => false,
 				}
@@ -6732,7 +6732,7 @@ def test_def_implicit_multi_name : Bool :=
 	match def_parser "def create_node {K V : Type} (key : K) (val : V) : K := key" {
 		success rem out => match out.kind {
 			def_d d => match d {
-				ParseDef.mk _name _typ term _constraints _attrs _vis =>
+				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
 					// Exactly the two EXPLICIT params should have made it
 					// through as lambdas — {K V : Type}'s two names must
 					// not have leaked in as extra bindings.
@@ -6771,7 +6771,7 @@ def test_def_params_brace_block_matches_paren_form : Bool :=
 	match def_parser "def scale {factor : I64, p : I64} : I64 := factor * p" {
 		success rem out => match out.kind {
 			def_d d => match d {
-				ParseDef.mk _name _typ term _constraints _attrs _vis =>
+				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
 					match term.kind {
 						ParseTermKind.lam dbg1 _ inner =>
 							Similar.similar dbg1 (Identifier.id "factor")
@@ -6801,7 +6801,7 @@ def test_def_params_brace_block_single_field_still_implicit : Bool :=
 	match def_parser "def f {x : Type} (y : x) : x := y" {
 		success rem out => match out.kind {
 			def_d d => match d {
-				ParseDef.mk _name _typ term _constraints _attrs _vis =>
+				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
 					match term.kind {
 						ParseTermKind.lam dbg _ body =>
 							Similar.similar dbg (Identifier.id "y") && is_body_non_lambda body,
@@ -6822,7 +6822,7 @@ def test_def_params_implicit_multi_name_form_still_unaffected : Bool :=
 	match def_parser "def create_node {K V : Type} (key : K) (val : V) : K := key" {
 		success rem out => match out.kind {
 			def_d d => match d {
-				ParseDef.mk _name _typ term _constraints _attrs _vis =>
+				ParseDef.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
 					match term.kind {
 						ParseTermKind.lam dbg1 _ inner => outer_binding_ok dbg1 inner,
 						_ => false,
@@ -7846,7 +7846,7 @@ def def_param_destructured_body_var_is (_expected_name : Identifier) (expected_i
     match (lower_parse_decl lower_ctx_bare d) {
         Decl.def_d def_ =>
             match def_ {
-                Def.mk _name _typ term _constraints _attrs _vis =>
+                Def.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
                     match term {
                         Term.lam _outer_dbg _outer_typ inner =>
                             match inner {
@@ -8220,7 +8220,7 @@ def test_def_parser_captures_test_attribute : Bool :=
             String.beq rem "" &&
             match out.kind {
                 ParseDeclKind.def_d d => match d {
-                    ParseDef.mk _ _ _ _ attrs _ =>
+                    ParseDef.mk {attrs, ..} =>
                         I64.beq (List.length attrs) 1 && has_attr (Identifier.id "test") attrs,
                 },
                 _ => false
@@ -8237,7 +8237,7 @@ def test_def_parser_no_attribute_present : Bool :=
             String.beq rem "" &&
             match out.kind {
                 ParseDeclKind.def_d d => match d {
-                    ParseDef.mk _ _ _ _ attrs _ => I64.beq (List.length attrs) 0,
+                    ParseDef.mk {attrs, ..} => I64.beq (List.length attrs) 0,
                 },
                 _ => false
             },
@@ -8255,7 +8255,7 @@ def test_def_parser_captures_terminating_attribute : Bool :=
             String.beq rem "" &&
             match out.kind {
                 ParseDeclKind.def_d d => match d {
-                    ParseDef.mk _ _ _ _ attrs _ => has_attr (Identifier.id "terminating") attrs,
+                    ParseDef.mk {attrs, ..} => has_attr (Identifier.id "terminating") attrs,
                 },
                 _ => false
             },
@@ -8286,7 +8286,7 @@ def test_def_parser_terminating_attribute_with_trailing_comment : Bool :=
             String.beq rem "" &&
             match out.kind {
                 ParseDeclKind.def_d d => match d {
-                    ParseDef.mk _ _ _ _ attrs _ => has_attr (Identifier.id "terminating") attrs,
+                    ParseDef.mk {attrs, ..} => has_attr (Identifier.id "terminating") attrs,
                 },
                 _ => false
             },
@@ -8555,7 +8555,7 @@ def test_defmacro_term_body_basic : Bool :=
             String.beq rem "" &&
             match out.kind {
                 ParseDeclKind.def_macro_d d => match d {
-                    ParseDef.mk _ typ term _ _ _ =>
+                    ParseDef.mk {typ, term, ..} =>
                         (match typ.kind { ParseTermKind.hole => true, _ => false }) &&
                         (match term.kind { ParseTermKind.lam _ _ _ => true, _ => false }),
                 },
@@ -8573,7 +8573,7 @@ def test_defmacro_term_body_no_params : Bool :=
             String.beq rem "" &&
             match out.kind {
                 ParseDeclKind.def_macro_d d => match d {
-                    ParseDef.mk _ _ term _ _ _ => match term.kind { ParseTermKind.lit _ => true, _ => false },
+                    ParseDef.mk {term, ..} => match term.kind { ParseTermKind.lit _ => true, _ => false },
                 },
                 _ => false
             },
@@ -9249,7 +9249,7 @@ def test_def_parser_with_constraints : Bool :=
 #[partial]
 def def_has_one_beq_a_constraint (d : ParseDef) : Bool :=
     match d {
-        ParseDef.mk _name _typ _term constraints _attrs _vis =>
+        ParseDef.mk {name := _name, typ := _typ, term := _term, constraints, attrs := _attrs, vis := _vis, ..} =>
             match constraints {
                 List.cons tc rest => constraint_is_beq_a tc && list_is_empty_tc rest,
                 List.empty => false
@@ -9551,7 +9551,7 @@ def test_instance_parser_captures_method_defs : Bool :=
                                     match rest {
                                         List.empty =>
                                             match d {
-                                                ParseDef.mk name _ _ _ _ _ =>
+                                                ParseDef.mk {name, ..} =>
                                                     String.beq (show_name_path name) "map",
                                             },
                                         List.cons _ _ => false,
@@ -9581,7 +9581,7 @@ def test_instance_parser_typed_method_signature : Bool :=
                                     match rest {
                                         List.empty =>
                                             match d {
-                                                ParseDef.mk name typ _ _ _ _ =>
+                                                ParseDef.mk {name, typ, ..} =>
                                                     String.beq (show_name_path name) "beq" &&
                                                     match typ.kind {
                                                         ParseTermKind.pi _ _ _ => true,

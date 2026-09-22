@@ -177,12 +177,12 @@ def map_struct_decl_go (structs : List Struct) (acc : List Decl) : List Decl := 
 /// walk from `main` finds nothing.
 #[partial]
 def def_name_str (d : Def) : String := match d {
-    Def.mk name _typ _term _constraints _attrs _vis => def_symbol_name name,
+    Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => def_symbol_name name,
 }
 
 #[partial]
 def def_body_term (d : Def) : Term := match d {
-    Def.mk _name _typ term_ _constraints _attrs _vis => term_,
+    Def.mk {name := _name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => term_,
 }
 
 /// Worklist-based reachability closure: BFS/DFS over Def names starting

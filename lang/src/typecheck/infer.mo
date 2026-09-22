@@ -1175,8 +1175,9 @@ def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (
                     let old_depths : List I64 := old_depths_of written_to_declared old_n 0 in
                     let new_depths : List I64 := List.map (fn d => new_n - 1 - d) written_to_declared in
                     let permuted_body : Term := term_permute old_n new_n old_depths new_depths body in
-                    let extended_types : List Term := prepend_typed declared_names declared_types local_types in
-                    let extended_locals : LocalScope := prepend_typed_local_vars declared_names declared_types locals in
+                    let declared_binders : List Identifier := declared_order_binders declared_names fp in
+                    let extended_types : List Term := prepend_typed declared_binders declared_types local_types in
+                    let extended_locals : LocalScope := prepend_typed_local_vars declared_binders declared_types locals in
                     // The ELABORATED `MatchCase`'s own `args` (what codegen's
                     // `bind_match_fields`/`free_names_of_cases` actually bind
                     // names against -- see their own doc comments,
@@ -1201,22 +1202,46 @@ def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (
                     // reorders `fp`'s own written binder names into the
                     // same DECLARED position order `args` must be in for
                     // `bind_match_fields`'s positional `monad_get_field`
-                    // extraction to line up -- falling back to a declared
-                    // field's own name only for a `..`-discarded, never-
-                    // written position (unreachable in `body` by
-                    // construction, so what it's bound to there doesn't
-                    // matter for correctness, just needs to be SOME valid
-                    // identifier).
-                    let declared_binders : List Identifier := declared_order_binders declared_names fp in
+                    // extraction to line up -- substituting the `_`
+                    // placeholder (`wildcard_binder_name`) for every
+                    // `..`-discarded position, which is exactly what the
+                    // IDENTICAL positional spelling (`Box.mk a _ c`) puts
+                    // there, so the two spellings now elaborate to the
+                    // same case. `extended_types`/`extended_locals` bind
+                    // this same list, NOT `declared_names` -- see
+                    // `wildcard_binder_name`'s own doc comment for the
+                    // silent capture using `declared_names` there caused.
                     type_check_case_body_checked resolved_name declared_binders permuted_body expected_type scope extended_types extended_locals,
             },
     }
 
+/// The `_` placeholder a `..`-discarded field pattern position binds,
+/// matching what the IDENTICAL positional spelling puts there.
+///
+/// `binder_for_declared_field` used to fall back to the DISCARDED field's
+/// own canonical name, on the documented assumption that such a position
+/// is "unreachable in `body` by construction" so it "just needs to be
+/// SOME valid identifier".  That assumption is false: the arm's `args`
+/// become real local bindings, so a body that legitimately names an outer
+/// variable called `b` -- and whose pattern discards a `Box` field also
+/// called `b` -- silently resolved to the SCRUTINEE's field instead.  A
+/// concrete instance: `def_apply_attrs`'s `ParseDef.mk {name, typ, term,
+/// constraints, vis, ..} =>` discards `attrs` while its body reads the
+/// `attrs` PARAMETER, so the rebuild returned the passed-in value
+/// unchanged -- a silent no-op that stripped every `#[test]`/`#[native]`
+/// attribute and made the self-hosted compiler emit no test bodies at
+/// all.
+///
+/// `_` cannot collide with a real binding (`id_eq` compares structurally,
+/// and the parser rejects `_` as a value identifier), so the two spellings
+/// now elaborate to the same case.
+def wildcard_binder_name : Identifier := Identifier.id "_"
+
 /// See `type_check_field_pattern_case`'s own doc comment above for why
 /// this exists -- reorders a `FieldPattern`'s written `(field, binder)`
-/// entries into DECLARED-field-order binder names, falling back to each
-/// declared field's own canonical name for a position no written entry
-/// covers (only reachable via a trailing `..`).
+/// entries into DECLARED-field-order binder names, using
+/// `wildcard_binder_name` for a position no written entry covers (only
+/// reachable via a trailing `..`).
 #[partial]
 def declared_order_binders (declared_names : List Identifier) (fp : FieldPattern) : List Identifier :=
     match fp {
@@ -1235,7 +1260,7 @@ def declared_order_binders_go (declared_names : List Identifier) (entries : List
 #[partial]
 def binder_for_declared_field (entries : List FieldPatternEntry) (declared_name : Identifier) : Identifier :=
     match entries {
-        List.empty => declared_name,
+        List.empty => wildcard_binder_name,
         List.cons e rest =>
             match e {
                 FieldPatternEntry.mk field binder =>

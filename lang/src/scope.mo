@@ -1504,7 +1504,7 @@ def resolve_infix_class_defs (infixes : List Infix) (cds : List ClassDef) : List
 #[partial]
 def resolve_infix_def (infixes : List Infix) (d : Def) : Def :=
     match d {
-        Def.mk dname typ term constraints attrs vis =>
+        Def.mk {name := dname, typ, term, constraints, attrs, vis, ..} =>
             Def.mk dname (resolve_infix_term infixes typ) (resolve_infix_term infixes term) constraints attrs vis,
     }
 
@@ -1715,7 +1715,7 @@ def collect_open_aliases (decl_list : List Decl) : List OpenAlias :=
 #[partial]
 def def_name_from_decl (d : Decl) : Option String :=
     match d {
-        Decl.def_d dd => match dd { Def.mk name _typ _term _constraints _attrs _vis => Option.some (show_name_path name) },
+        Decl.def_d dd => match dd { Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => Option.some (show_name_path name) },
         _ => Option.none,
     }
 
@@ -1936,7 +1936,7 @@ def resolve_open_alias_match_case (names : HashMap String String) (bound : List 
 #[partial]
 def resolve_open_alias_def (names : HashMap String String) (d : Def) : Def :=
     match d {
-        Def.mk dname typ term constraints attrs vis =>
+        Def.mk {name := dname, typ, term, constraints, attrs, vis, ..} =>
             Def.mk dname typ (resolve_open_alias_term names term) constraints attrs vis,
     }
 
@@ -2154,7 +2154,7 @@ def find_instance_method (defs : List Def) (method_name : Identifier) : Option D
         List.empty => Option.none,
         List.cons d rest =>
             match d {
-                Def.mk dname _ _ _ _ _ =>
+                Def.mk {name := dname, ..} =>
                     if instance_method_name_matches dname method_name
                     then Option.some d
                     else find_instance_method rest method_name,
@@ -2328,7 +2328,7 @@ def promote_methods (prefix : String) (cls_name : NamePath) (ins_args : List Ter
             match find_instance_method defs mname {
                 Option.some d =>
                     match d {
-                        Def.mk _ typ term_ own_constraints attrs vis =>
+                        Def.mk {typ, term := term_, constraints := own_constraints, attrs, vis, ..} =>
                             let new_name := mangle_instance_method_name prefix cls_name ins_args mname in
                             // `ins_constraints` prepended ahead of the
                             // method's own (usually empty) constraints --
@@ -2616,7 +2616,7 @@ def dict_param_name (cls : NamePath) : String :=
 #[partial]
 def add_constraint_dict_params (d : Def) : Def :=
     match d {
-        Def.mk name typ term_ constraints attrs vis =>
+        Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
             let qualifying := qualifying_dict_constraints constraints term_ in
             match qualifying {
                 List.empty => d,
@@ -2762,7 +2762,7 @@ def collect_def_types_go (decl_list : List Decl) (acc : HashMap String Term) : H
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk dname dtyp _ _ _ _ =>
+                        Def.mk {name := dname, typ := dtyp, ..} =>
                             let with_full : HashMap String Term :=
                                 def_type_insert_first (show_name_path dname) dtyp acc in
                             let with_last : HashMap String Term :=
@@ -6323,7 +6323,7 @@ def emitted_dict_constraints (ins : Instance) (method_name : Identifier) : List 
                 Option.none => ins_constraints,
                 Option.some d =>
                     match d {
-                        Def.mk _ _ body own_constraints _ _ =>
+                        Def.mk {term := body, constraints := own_constraints, ..} =>
                             qualifying_dict_constraints (List.append ins_constraints own_constraints) body,
                     },
             },
@@ -6491,7 +6491,7 @@ def find_unresolved_class_calls_decls (classes : List Class) (decl_list : List D
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk name _typ term_ _constraints _attrs _vis =>
+                        Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
                             let found := find_unresolved_class_calls_term classes term_ List.empty in
                             List.append (format_unresolved_class_calls (name_path_to_str_scope name) found) (find_unresolved_class_calls_decls classes rest),
                     },
@@ -6617,7 +6617,7 @@ def collect_def_constraints (decl_list : List Decl) : List DefConstraintEntry :=
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk dname _ _ constraints _ _ =>
+                        Def.mk {name := dname, constraints, ..} =>
                             match constraints {
                                 List.empty => collect_def_constraints rest,
                                 List.cons _ _ => List.cons (DefConstraintEntry.mk dname constraints) (collect_def_constraints rest),
@@ -6745,7 +6745,7 @@ def resolve_class_calls_decls_go (classes : List Class) (instances : List Instan
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk name typ term_ constraints attrs vis =>
+                        Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
                             let def_carrier := full_return_carrier typ in
                             let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types List.empty List.empty def_carrier term_ in
                             List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis)) (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
@@ -7093,7 +7093,7 @@ def test_resolve_infix_decls_rewrites_def_body : Bool :=
             match resolved_decl {
                 Decl.def_d resolved_def =>
                     match resolved_def {
-                        Def.mk _ _ resolved_body _ _ _ =>
+                        Def.mk {term := resolved_body, ..} =>
                             match resolved_body {
                                 Term.app fun_outer _ =>
                                     match fun_outer {
@@ -7188,7 +7188,7 @@ def decl_list_has_def_named (decl_list : List Decl) (name : String) : Bool :=
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk dname _ _ _ _ _ =>
+                        Def.mk {name := dname, ..} =>
                             if String.beq (name_path_to_str_scope dname) name
                             then true
                             else decl_list_has_def_named rest name,
@@ -7235,7 +7235,7 @@ def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
         (List.cons constraint List.empty) List.empty Visibility.package_private in
     let d2 := add_constraint_dict_params d in
     match d2 {
-        Def.mk _ new_typ new_term _ _ _ =>
+        Def.mk {typ := new_typ, term := new_term, ..} =>
             match new_typ {
                 Term.pi _ rest_typ => Similar.similar rest_typ orig_typ,
                 _ => false,
@@ -7256,7 +7256,7 @@ def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
         (List.cons constraint List.empty) List.empty Visibility.package_private in
     let d2 := add_constraint_dict_params d in
     match d2 {
-        Def.mk _ new_typ new_term _ _ _ =>
+        Def.mk {typ := new_typ, term := new_term, ..} =>
             Similar.similar new_typ (Term.type_ 1) && Similar.similar new_term unrelated_body,
     }
 

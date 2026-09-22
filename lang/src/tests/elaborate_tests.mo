@@ -159,7 +159,7 @@ def test_elaborate_def_free_var : Bool :=
     let d : Def := Def.mk mp typ body empty_constraints empty_attrs Visibility.package_private in
     let elaborated : Def := elaborate_def d no_ids in
     match elaborated {
-        Def.mk _ elab_typ _ _ _ _ =>
+        Def.mk {typ := elab_typ, ..} =>
             match elab_typ {
                 forall _ _ _ => true,
                 _ => false,
@@ -185,7 +185,7 @@ def test_elaborate_def_constraint_only_var : Bool :=
     let d : Def := Def.mk mp typ body constraints empty_attrs Visibility.package_private in
     let elaborated : Def := elaborate_def d no_ids in
     match elaborated {
-        Def.mk _ elab_typ _ _ _ _ =>
+        Def.mk {typ := elab_typ, ..} =>
             match elab_typ {
                 forall dbg _kind _body =>
                     match dbg {

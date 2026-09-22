@@ -79,7 +79,7 @@ use io {IO}
 #[partial]
 def is_test_def (d : Def) : Bool :=
     match d {
-        Def.mk _name _typ _term _constraints attrs _vis => has_attr (Identifier.id "test") attrs,
+        Def.mk {name := _name, typ := _typ, term := _term, constraints := _constraints, attrs, vis := _vis, ..} => has_attr (Identifier.id "test") attrs,
     }
 
 /// Every top-level `Def` in `decl_list` carrying a bare `#[test]`
@@ -258,7 +258,7 @@ def rename_user_main (decls : List Decl) : List Decl :=
 #[partial]
 def renamed_entry_def (def_val : Def) : Def :=
     match def_val {
-        Def.mk _name typ term constraints attrs vis =>
+        Def.mk {name := _name, typ, term, constraints, attrs, vis, ..} =>
             Def.mk (bare_npath "__monad_user_entry") typ term constraints attrs vis,
     }
 

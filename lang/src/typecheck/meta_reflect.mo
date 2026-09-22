@@ -1052,7 +1052,7 @@ def test_reify_decl_value_d_def_zero_params : Bool :=
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk name _typ _term _c _a _v =>
+                        Def.mk {name, typ := _typ, term := _term, constraints := _c, attrs := _a, vis := _v, ..} =>
                             match name { NamePath.npath ids => match ids { List.cons id _ => id_is id "Point.x", List.empty => false } },
                     },
                 _ => false,
@@ -1080,7 +1080,7 @@ def test_reify_d_def_outer_params_last_is_index_zero : Bool :=
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk _name _typ term _c _a _v =>
+                        Def.mk {name := _name, typ := _typ, term, constraints := _c, attrs := _a, vis := _v, ..} =>
                             match term {
                                 // fn a => fn b => b
                                 Term.lam _ _ inner =>

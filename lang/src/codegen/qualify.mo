@@ -41,7 +41,7 @@ use std::list {intercalate}
 def decl_def_name (d : Decl) : Option NamePath := match d {
     Decl.def_d dd =>
         match dd {
-            Def.mk name _typ _term _constraints _attrs _vis => Option.some name,
+            Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => Option.some name,
         },
     _ => Option.none,
 }
@@ -389,7 +389,7 @@ def qualify_decl_names (mpath : ModulePath) (renames : HashMap String String) (d
 def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String) (d : Decl) : Decl := match d {
     Decl.def_d dd =>
         match dd {
-            Def.mk name typ term_ constraints attrs vis =>
+            Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
                 Decl.def_d (Def.mk (qualified_def_name mpath name) typ term_ constraints attrs vis),
         },
     // An instance carries the module it was declared in via its own
@@ -507,7 +507,7 @@ def decls_referenced_names_go (decls : List Decl) (acc : HashMap String Bool) : 
 def decl_referenced_names (d : Decl) (acc : HashMap String Bool) : HashMap String Bool := match d {
     Decl.def_d dd =>
         match dd {
-            Def.mk _name _typ term_ _c _a _v => insert_all_names (identifier_names (free_names_of_term List.empty term_)) acc,
+            Def.mk {name := _name, typ := _typ, term := term_, constraints := _c, attrs := _a, vis := _v, ..} => insert_all_names (identifier_names (free_names_of_term List.empty term_)) acc,
         },
     Decl.instance_d ins =>
         match ins {
@@ -523,7 +523,7 @@ def instance_defs_referenced_names (defs : List Def) (acc : HashMap String Bool)
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Def.mk _name _typ term_ _c _a _v =>
+                Def.mk {name := _name, typ := _typ, term := term_, constraints := _c, attrs := _a, vis := _v, ..} =>
                     instance_defs_referenced_names rest (insert_all_names (identifier_names (free_names_of_term List.empty term_)) acc),
             },
     }
@@ -732,7 +732,7 @@ def qtest_refs_of_decls (decls : List Decl) : List String := match decls {
         match d {
             Decl.def_d dd =>
                 match dd {
-                    Def.mk _n _t term_ _c _a _v =>
+                    Def.mk {name := _n, typ := _t, term := term_, constraints := _c, attrs := _a, vis := _v, ..} =>
                         List.append (collect_referenced_names term_ List.empty) (qtest_refs_of_decls rest),
                 },
             _ => qtest_refs_of_decls rest,

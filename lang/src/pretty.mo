@@ -247,7 +247,7 @@ def show_vis_prefix (vis : Visibility) : String := match vis {
 
 #[partial]
 def show_def (d : Def) : String := match d {
-    Def.mk name typ term constraints attrs vis =>
+    Def.mk {name, typ, term, constraints, attrs, vis, ..} =>
         let name_str := show_name_path name in
         let type_str := show_term typ in
         let term_str := show_term term in

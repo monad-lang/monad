@@ -162,7 +162,7 @@ def class_defs_name_subst (target : Identifier) (replacement : Term) (cds : List
 #[partial]
 def def_name_subst (target : Identifier) (replacement : Term) (d : Def) : Def :=
     match d {
-        Def.mk name typ term constraints attrs vis =>
+        Def.mk {name, typ, term, constraints, attrs, vis, ..} =>
             Def.mk name (name_subst_term target replacement typ) (name_subst_term target replacement term) constraints attrs vis,
     }
 
@@ -321,7 +321,7 @@ def test_name_subst_decl_def_d_substitutes_typ_and_term : Bool :=
     match name_subst_decl t_ident replacement d {
         Decl.def_d d_val =>
             match d_val {
-                Def.mk _ typ term _ _ _ => I64.beq (term_type_level typ) 5 && I64.beq (term_type_level term) 5,
+                Def.mk {typ, term, ..} => I64.beq (term_type_level typ) 5 && I64.beq (term_type_level term) 5,
             },
         _ => false,
     }

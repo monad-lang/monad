@@ -99,7 +99,7 @@ def find_def_body (defs : List Def) (path : NamePath) : Option Term :=
     List.empty => Option.none,
     List.cons d rest =>
       match d {
-        Def.mk name _typ term _constraints _attrs _vis =>
+        Def.mk {name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
           if npath_eq name path
           then Option.some term
           else find_def_body rest path,
@@ -115,7 +115,7 @@ def find_def (defs : List Def) (path : NamePath) : Option Def :=
     List.empty => Option.none,
     List.cons d rest =>
       match d {
-        Def.mk name _typ _term _constraints _attrs _vis =>
+        Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
           if npath_eq name path
           then Option.some d
           else find_def rest path,
@@ -803,7 +803,7 @@ def lower_one_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Resul
       },
     Option.some def_ =>
       match def_ {
-        Def.mk _name _typ term _constraints attrs _vis =>
+        Def.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs, vis := _vis, ..} =>
           match find_native_attr_name attrs {
             Option.some native_name =>
               match native_id_for_name (Identifier.id native_name) {

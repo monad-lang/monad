@@ -3576,7 +3576,7 @@ def build_extern_wrapper_table_go (defs : List Def) (acc : HashMap String String
     List.empty => acc,
     List.cons d rest =>
         match d {
-            Def.mk name _typ term_ _constraints _attrs _vis =>
+            Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
                 let llvm_name := def_symbol_name name in
                 let params := collect_db_params term_ in
                 match extern_attr_info d params {
@@ -3631,7 +3631,7 @@ def find_named_arg (key : String) (args : List AttrArg) : Option String := match
 #[partial]
 def extern_attr_info (def_ : Def) (params : List Param) : Option ExternInfo :=
     match def_ {
-        Def.mk name typ _term _constraints attrs _vis => build_extern_info name typ params attrs,
+        Def.mk {name, typ, term := _term, constraints := _constraints, attrs, vis := _vis, ..} => build_extern_info name typ params attrs,
     }
 
 /// Splits `extern_attr_info` into a separate top-level def so the
@@ -4427,7 +4427,7 @@ def materialize_terminal_ret (already_terminated : Bool) (ctx : CodegenCtx) (ter
 /// Compile a canonical Def (de Bruijn Term) to LLVM IR.
 #[partial]
 def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
-    Def.mk name typ term_ constraints attrs _vis =>
+    Def.mk {name, typ, term := term_, constraints, attrs, vis := _vis, ..} =>
         // Must match Term.var's call-site naming exactly -- both ends go
         // through the `def_symbol_name`/`ref_symbol_name` pair for
         // exactly that reason. The last time they diverged, a dotted
@@ -5534,7 +5534,7 @@ def desugar_struct_lit_decl (scope : Scope) (d : Decl) : Decl := match d {
 
 #[partial]
 def desugar_struct_lit_def (scope : Scope) (d : Def) : Def := match d {
-    Def.mk name typ term_ constraints attrs vis =>
+    Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
         Def.mk name typ (desugar_struct_lit_term scope term_) constraints attrs vis,
 }
 
