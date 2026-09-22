@@ -27,12 +27,14 @@
 # checker/codegen bugs). A GAP does not fail the sweep; an
 # unrecognised compile failure does.
 #
-# `host_only` is now EMPTY. `lang/src/toml.mo` was its last entry, and it
-# left with the fix recorded at group 3 below -- so the self-hosted runner
-# now covers every file in the corpus except the gap list, and the Rust
-# runner runs for the gap list alone. The empty array and the
-# `${host_only[@]}` in the fallback line at the tail stay as the mechanism
-# until the gap list empties too and both are deleted together (P12).
+# BOTH LISTS ARE NOW EMPTY, which is the whole point of the mechanism: the
+# self-hosted runner covers the corpus alone and there is ONE total left to
+# read, not two. `host_only`'s last entry (`lang/src/toml.mo`) left with the
+# fix recorded at group 3 below; `gap_files`' last two left with Phase 8's
+# async runtime, which is what they were waiting for. The two arrays, the
+# skip loop and the guarded fallback at the tail stay as the mechanism until
+# Phase 12 deletes the scaffolding outright -- an empty registry is not the
+# same thing as no registry, and the deletion is its own reviewed step.
 #
 # Then the same binary CHECKS the same corpus, which is the one gate here
 # that is not about tests: the pre-commit hook's `monad check` is the Rust
@@ -242,13 +244,18 @@ host_only=(
 # The files the self-hosted runner reports as GAPs (cli/src/test_gaps.mo).
 # Handed to the Rust runner for the same reason `host_only` is: a gap
 # means those tests do not run self-hosted, and a test that runs nowhere
-# is worse than one that runs slowly. This list is expected to shrink to
-# nothing alongside cli/src/test_gaps.mo itself -- the f64 family
-# (`init/src/optics_tests.mo`, `examples/optics.mo`, `std/src/base.mo`)
-# left it when P9 wired the backend, so those three now run self-hosted
-# (11/11, 9/9 and 45/45) and are passed to the RUST runner no longer.
-# The `#[derive]` family went the same way in P10: an attribute on a
-# `struct` decl, the attribute-to-macro bridge, and the struct-ctor
+# is worse than one that runs slowly. This list was expected to shrink to
+# nothing alongside cli/src/test_gaps.mo itself, and it has: the registry
+# is empty, so the array is too, and the two are flipped TOGETHER because
+# a path left here after its GAP has closed would silently move that
+# file's coverage from the real runner to a different implementation's
+# while gaining nothing.
+#
+# The f64 family (`init/src/optics_tests.mo`, `examples/optics.mo`,
+# `std/src/base.mo`) left it when P9 wired the backend, so those three now
+# run self-hosted (11/11, 9/9 and 45/45) and are passed to the RUST runner
+# no longer. The `#[derive]` family went the same way in P10: an attribute
+# on a `struct` decl, the attribute-to-macro bridge, and the struct-ctor
 # arity entry together take `std/src/derive_tests.mo` (22/22),
 # `cli/src/tests/cli_derive_tests.mo` (7/7) and `examples/derive.mo`
 # (7/7) off it. `init/src/tests.mo` is the third to go: the last entry
@@ -257,30 +264,35 @@ host_only=(
 # option instance's own dictionary into its ELEMENT slot and killed the
 # driver with a signal, and it now runs 102/102 through the self-hosted
 # runner (see cli/src/test_gaps.mo for both halves of the fix).
+# `std/src/qualified_ref_tests.mo` left this list with Phase 3, in
+# lockstep with its `check_gap_files` entry. A qualified reference in
+# TARGET position could not resolve self-hosted because the flatten
+# handed the whole decl list a SINGLE `ModulePath` -- the target's --
+# so `build_scope_def` stamped every DEPENDENCY def with the CONSUMER's
+# module, and `find_def_by_module_and_name` matches name AND module, so
+# its pair match could never succeed across a boundary. The flatten now
+# carries each decl's own owning module (`DeclGroup`, lang/src/types.mo)
+# and the pair match compares RENDERED names, because a DECLARED name
+# is one identifier with an embedded dot (`dotted_def_name` ->
+# `Identifier.id`) while a ref's name half is split per dot into
+# segments -- which is why the file's single-segment ref resolved and
+# its dotted one did not. Measured before removing: 0 error(s) and 4/4
+# through the self-hosted runner.
+#
+# The LAST TWO were both for the ASYNC natives, and they were the pair
+# the whole registry was opened for: `std/src/concurrent/fiber_test.mo`
+# (the unwired `fork_io`/`await_fiber`/`cancel_fiber` family) and
+# `std/src/concurrent/combine_test.mo` (the same family's
+# `scope_new`/`scope_fork`/`scope_drop`/`sleep_io`). Phase 8 built the
+# runtime they were waiting for: one OS thread per fiber, with each
+# handle's lifetime kept by the `_Atomic(int64_t)` refcount that every
+# `monad_alloc`'d block already carries (`runtime/src/runtime.c`'s fiber
+# and scope section). `combine_test.mo`'s CHECKER failure -- `no instance
+# found for `Monad.bind`` -- had already closed with Phase 1, which is why
+# the file stopped on the natives alone after that commit; both files were
+# then measured through the self-hosted runner with a binary rebuilt from
+# the change, and both report a clean run.
 gap_files=(
-  std/src/concurrent/fiber_test.mo
-  # Still here, but for the ASYNC natives only: its checker failure --
-  # `no instance found for `Monad.bind`` -- is CLOSED with Phase 1, and
-  # the file now stops on the unwired `scope_*`/`sleep_io` family, the
-  # same reason `fiber_test.mo` is listed. `lang/src/json.mo`,
-  # `examples/indexed_monads.mo` and `examples/state_monad.mo` left this
-  # list in the same commit: all three run self-hosted now (56/56, 3/3
-  # and 5/5).
-  std/src/concurrent/combine_test.mo
-  # `std/src/qualified_ref_tests.mo` left this list with Phase 3, in
-  # lockstep with its `check_gap_files` entry. A qualified reference in
-  # TARGET position could not resolve self-hosted because the flatten
-  # handed the whole decl list a SINGLE `ModulePath` -- the target's --
-  # so `build_scope_def` stamped every DEPENDENCY def with the CONSUMER's
-  # module, and `find_def_by_module_and_name` matches name AND module, so
-  # its pair match could never succeed across a boundary. The flatten now
-  # carries each decl's own owning module (`DeclGroup`, lang/src/types.mo)
-  # and the pair match compares RENDERED names, because a DECLARED name
-  # is one identifier with an embedded dot (`dotted_def_name` ->
-  # `Identifier.id`) while a ref's name half is split per dot into
-  # segments -- which is why the file's single-segment ref resolved and
-  # its dotted one did not. Measured before removing: 0 error(s) and 4/4
-  # through the self-hosted runner.
 )
 
 out="${TMPDIR:-/tmp}/monad-bootstrap-ci"
@@ -405,4 +417,16 @@ echo "self-hosted check: ${check_fails} known check-gap file(s), counts unchange
 # Everything the self-hosted runner could not run, through the Rust
 # runner, so each file stays covered and a real regression in any of them
 # still fails this script.
-cargo run --release -- test "${host_only[@]}" "${gap_files[@]}"
+#
+# Both lists are empty, so there is nothing to hand over -- and the call
+# has to be SKIPPED rather than made with empty arrays: bare `monad test`
+# is not a no-op, it is a different mode (it resolves the mote containing
+# the working directory and tests that), so passing it no paths would run
+# a second, unintended sweep instead of nothing. The guard is what makes
+# the empty registry mean "no fallback", and it is the last piece Phase 12
+# deletes along with the arrays.
+if [ "${#host_only[@]}" -eq 0 ] && [ "${#gap_files[@]}" -eq 0 ]; then
+  echo "rust runner: no files left -- the self-hosted runner covers the corpus alone"
+else
+  cargo run --release -- test "${host_only[@]}" "${gap_files[@]}"
+fi

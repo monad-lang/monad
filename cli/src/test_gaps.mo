@@ -9,14 +9,19 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 2 entries here are what a full corpus sweep actually reports,
-/// not a guess, and neither is a problem with the test files themselves.
-/// Both are the same thing: the async runtime, which does not exist --
-/// `std/src/concurrent/fiber_test.mo` (the unwired `fork_io`/`await_fiber`
-/// family) and `std/src/concurrent/combine_test.mo` (the same family's
-/// `scope_new`/`scope_drop`/`scope_fork`/`sleep_io`; this is ALL that is
-/// left of that file -- its checker failure is CLOSED, see the Phase-1
-/// paragraph below).
+/// **It has now reached zero: all three lists are empty.** The last two
+/// entries were `std/src/concurrent/fiber_test.mo` and
+/// `std/src/concurrent/combine_test.mo`, both listed for the async
+/// runtime, which did not exist -- every native either file needs
+/// (`fork_io`/`await_fiber`/`cancel_fiber`, then
+/// `scope_new`/`scope_fork`/`scope_drop`/`sleep_io`) was unwired, so
+/// `validate_no_unwired_natives` rejected both drivers. Phase 8 built it
+/// (`runtime/src/runtime.c`'s fiber/scope section: one OS thread per
+/// fiber, handles kept by the `Atomic(int64_t)` refcount every
+/// `monad_alloc`'d block already carries), and both files now run through
+/// the shipped runner. The registry is inert from here on -- with no
+/// paths listed, `is_known_gap` answers false for every input, so the
+/// runner's `UNEXPECTED failure` arm is the only one that can fire.
 ///
 /// Each closed gap is recorded here rather than deleted outright, so the
 /// next reader can tell a fix from a re-registration.
@@ -192,9 +197,19 @@
 
 /// Paths, exactly as the runner reports them (repo-relative; identical
 /// whether the user passes a directory or explicit files).
+///
+/// **EMPTY since Phase 8**, and it is expected to stay that way: the last
+/// two entries were `std/src/concurrent/fiber_test.mo` and
+/// `std/src/concurrent/combine_test.mo`, both listed for the same thing --
+/// the async runtime had no compiled implementation at all, so
+/// `validate_no_unwired_natives` rejected both drivers for the unwired
+/// `fork_io`/`await_fiber`/`cancel_fiber`/`scope_*`/`sleep_io` family.
+/// That runtime now exists (`runtime/src/runtime.c`: one OS thread per
+/// fiber, handles kept by the `_Atomic(int64_t)` refcount every
+/// `monad_alloc`'d block carries) and both files run through the shipped
+/// runner -- see the Phase 8 paragraph in this file's header.
 pub def gap_paths : List String :=
-    ["std/src/concurrent/fiber_test.mo",
-     "std/src/concurrent/combine_test.mo"]
+    (List.empty : List String)
 
 /// The distinguishing substring of each file's own known error.
 ///
@@ -207,31 +222,28 @@ pub def gap_paths : List String :=
 /// holds. No entry needs either of those two wordings today: A8 was the
 /// last one to (`init/src/tests.mo`'s dead driver), and it is closed.
 pub def gap_causes : List String :=
-    ["native `fork_io`",
-     // The unwired-native family, not the checker: the message this token
-     // is harvested from lists every native the file needs
-     // (`fork_io`, `cancel_fiber`, `await_fiber`, `scope_new`,
-     // `scope_drop`, `scope_fork`, `sleep_io`). `scope_fork` is unique to
-     // `combine.mo` -- `fiber.mo` declares none of the `scope_*` families
-     // -- so the two async entries stay distinguishable.
-     "native `scope_fork`"]
+    // EMPTY since Phase 8 -- see `gap_paths`' own doc comment. The two
+    // tokens that stood here were `native \`fork_io\`` (fiber_test.mo) and
+    // `native \`scope_fork\`` (combine_test.mo); the latter was chosen
+    // because `scope_fork` is unique to `combine.mo` (`fiber.mo` declares
+    // none of the `scope_*` family), which kept the two entries
+    // distinguishable while both were open.
+    (List.empty : List String)
 
 /// Why each gap is open, and what closes it.
 pub def gap_reasons : List String :=
-    // Closed by: a self-hosted async runtime. Tracked in
-    // plans/bootstrapping/self-hosted-async-runtime.md.
-    ["async runtime not self-hostable yet (fork_io/await_fiber unwired)",
-     // The async runtime, which is the ONLY thing left in this file: its
-     // checker failure -- the missing expected-type channel that used to
-     // report `no instance found for `Monad.bind` (needed in
-     // `std.concurrent.combine::scoped`)` -- is CLOSED (see this file's
-     // header). It now stops on the unwired natives above, exactly as
-     // `fiber_test.mo` does, and both leave this list together when the
-     // runtime lands. Its own `scoped (f : Scope -> IO A)` is what
-     // isolated the local-variable-head half of that channel, and it is
-     // the minimal repro for it: the two other binds in the same def call
-     // named defs (`scope_new`, `scope_drop s`) and always had a carrier.
-     "async runtime not self-hostable yet (scope_new/scope_drop/scope_fork/sleep_io unwired)"]
+    // EMPTY since Phase 8. Both reasons that stood here were the same
+    // one: "async runtime not self-hostable yet (`fork_io`/`await_fiber`
+    // unwired)" and its `scope_*`/`sleep_io` twin. It landed as
+    // `runtime/src/runtime.c`'s fiber/scope section + the seven
+    // `native_runtime_fn_name` entries; `combine_test.mo`'s OTHER failure
+    // -- the missing expected-type channel that reported `no instance
+    // found for `Monad.bind`` -- was already closed by Phase 1, and its
+    // `scoped (f : Scope -> IO A)` is what isolated the
+    // local-variable-head half of that channel (the two other binds in
+    // the same def call named defs, `scope_new` and `scope_drop s`, and
+    // always had a carrier).
+    (List.empty : List String)
 
 #[partial]
 def gap_len (xs : List String) : I64 :=
@@ -280,15 +292,23 @@ def test_gap_lists_are_aligned : Bool :=
     I64.beq (gap_len gap_paths) (gap_len gap_causes)
     && I64.beq (gap_len gap_paths) (gap_len gap_reasons)
 
+/// Phase 8's pin, and the last one this mechanism will need: both files
+/// were listed for exactly one thing -- the async runtime, which now
+/// exists -- so a future failure in either is a NEW failure and must be
+/// reported rather than excused. The cause strings are the ones that used
+/// to be recorded for them.
+///
+/// The two tests this replaces (`…matches_listed_file_with_its_cause` and
+/// `…rejects_unknown_cause_on_listed_path`) are gone rather than left
+/// vacuous: with an empty registry there is no listed path to match a
+/// cause against, so both could only ever have asserted
+/// `Bool.not false`. What they protected -- nothing is excused by path
+/// alone, and nothing is excused by a cause its file is not listed for --
+/// is now guaranteed structurally, by the list being empty.
 #[test]
-def test_is_known_gap_matches_listed_file_with_its_cause : Bool :=
-    is_known_gap "std/src/concurrent/fiber_test.mo" "native `fork_io` (needed by def `io::fork_io`) is not wired"
-
-#[test]
-def test_is_known_gap_rejects_unknown_cause_on_listed_path : Bool :=
-    // The whole point of matching on cause as well as path: this file
-    // is listed, but THIS failure is not the one it is listed for.
-    Bool.not (is_known_gap "std/src/concurrent/fiber_test.mo" "parse error: unexpected token at 12:3")
+def test_closed_async_gaps_are_no_longer_listed : Bool :=
+    Bool.not (is_known_gap "std/src/concurrent/fiber_test.mo" "native `fork_io`")
+    && Bool.not (is_known_gap "std/src/concurrent/combine_test.mo" "native `scope_fork`")
 
 #[test]
 def test_is_known_gap_rejects_unlisted_path : Bool :=
@@ -349,22 +369,6 @@ def test_closed_driver_signal_gap_is_no_longer_listed : Bool :=
 #[test]
 def test_closed_qualified_ref_gap_is_no_longer_listed : Bool :=
     Bool.not (is_known_gap "std/src/qualified_ref_tests.mo" "does not typecheck")
-
-/// `combine_test.mo` is STILL listed, but for the async reason now rather
-/// than the checker one, and this pins both halves: its recorded cause
-/// has to be a token that really occurs in the natives message (or the
-/// entry would excuse nothing and the file would be reported FAIL), and
-/// it must no longer be excusing the `Monad.bind` failure that Phase 1
-/// closed -- a file left listed for a cause it no longer fails for is
-/// exactly what hides a regression.
-#[test]
-def test_combine_test_is_listed_for_the_native_family_only : Bool :=
-    is_known_gap "std/src/concurrent/combine_test.mo" "native `scope_fork` (needed by def `std.concurrent.combine::scope_fork`) is not wired"
-    && Bool.not (is_known_gap "std/src/concurrent/combine_test.mo" "no instance found for `Monad.bind`")
-
-#[test]
-def test_gap_reason_for_listed_path : Bool :=
-    String.contains (gap_reason_for "std/src/concurrent/fiber_test.mo") "async runtime"
 
 #[test]
 def test_gap_reason_for_unlisted_path_is_empty : Bool :=
