@@ -1,4 +1,23 @@
+/* THREADED Boehm, and this define has to come BEFORE <gc.h>: the header
+   uses it to decide whether it declares the thread API at all, and
+   (gc/gc_pthread_redirects.h) to redirect pthread_create/pthread_join to
+   GC_pthread_create/GC_pthread_join -- which is what registers a new
+   thread with the collector and hands it the right stack base. Without
+   it, a worker thread that allocates makes the collector corrupt itself
+   silently: Boehm's single-threaded mode assumes only the GC_INIT thread
+   ever allocates. nixpkgs' boehmgc IS built with thread support --
+   GC_pthread_create and GC_register_my_thread are defined symbols in its
+   libgc.so, verified with nm(1) rather than assumed.
+
+   gc.h is also deliberately the FIRST include, as it already was: when
+   GC_PTHREADS is on, gc_config_macros.h defines `_REENTRANT` itself with
+   a comment saying that only works for system headers included after it.
+   `-pthread` on the compile command (llvm/src/link.mo) sets it up front
+   as well, which is the belt to this braces. */
+#define GC_THREADS
 #include <gc.h>
+#include <pthread.h>
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -454,6 +473,275 @@ void* monad_array_freeze(void* b) {
         monad_set_field(frozen, k, monad_get_field(b, k));
     }
     return frozen;
+}
+
+/* --- Fibers and scopes (`std/concurrent/{fiber,combine}.mo`) --------
+
+   MODEL: one OS thread per fiber, with the handle's lifetime carried by
+   the `_Atomic(int64_t) refcount` every `monad_alloc`'d block already
+   has. This is the explicit INTERIM the language's own ownership work
+   replaces (plans/type-system/quantitative-types.md, Design B milestone
+   M4: the linear `Fiber`/`Scope`) -- which is why the count is
+   maintained here even though nothing reads it yet. It is deliberately
+   not a scheduler: it does not scale to 100k fibers, and it needs no
+   compiler-inserted yield points, the hard half of
+   plans/implementations/async-threading.md's Phase 7c.
+
+   What it buys immediately is REAL concurrency, which the Rust host's
+   lazy/cooperative model cannot express at all: the host defers `forkIO`
+   to `await_fiber` (core/src/core_native.rs's own "Rust Host Status"
+   note), so nothing there can ever interleave. Two visible consequences,
+   both deliberate:
+
+   * `forkIO` starts the thread at fork time (eager), and `await_fiber`
+     waits for it. The corpus is indifferent to the difference -- every
+     `forkIO` in it is awaited, or cancelled-and-discarded -- but a test
+     that *requires* interleaving can only pass here.
+   * Cancellation cannot abort a running thread. `pthread_cancel` would
+     leave Boehm's allocator lock held and the thread unregistered, so
+     `monad_cancel_fiber` records the cancellation instead (which
+     `await_fiber` then refuses to hand a result for, matching the host's
+     error) and does not preempt the body. The host can only ever cancel
+     a fiber it has NOT started, so this is the same observable behaviour
+     on everything the language can currently express.
+
+   HANDLES ARE NOT CONSTRUCTORS, deliberately. A `Fiber`/`Scope` value is
+   the raw struct pointer, tagged `MONAD_FIBER_TAG`/`MONAD_SCOPE_TAG` in
+   `Header.tag` so that `monad_get_tag` (which reads the SAME offset 8)
+   reports a value no constructor tag can collide with -- a `match` on a
+   handle therefore fails loudly instead of reading a heap address as a
+   tag. The Rust host takes the same route for these exact two types: its
+   `handle_value`/`extract_handle_id` are a non-`Con` representation
+   precisely so a handle is never mistaken for a constructor.
+
+   THREADS AND BOEHM: see the GC_THREADS comment at the head of this
+   file. Every thread here is created via `pthread_create`, which under
+   GC_THREADS IS `GC_pthread_create`, and is joined exactly once by
+   whoever reaps it (`GC_pthread_join`, which also drops the collector's
+   per-thread bookkeeping). A fiber nobody ever awaits or cancels keeps
+   its thread entry until the process exits; that is a few hundred bytes
+   per abandoned fiber, and reclaiming it would mean joining threads
+   whose result nobody wants, i.e. blocking `scope_drop` on work the
+   program has explicitly walked away from. */
+
+#define MONAD_FIBER_TAG 17
+#define MONAD_SCOPE_TAG 18
+
+/* A fiber's stack is sized to mirror `raise_stack_limit`'s own 128 MB: a
+   fiber body is compiled Monad code and can recurse exactly as deeply as
+   `main` can, so the plan doc's original 8 KB ucontext stack would
+   overflow on the first recursive helper. The reservation is ADDRESS
+   space, committed on demand, so a fiber that does not recurse deeply
+   never pays for it in RSS -- and an awaited fiber's stack is unmapped
+   again by the join. */
+#define MONAD_FIBER_STACK_BYTES ((size_t)128 * 1024 * 1024)
+
+typedef struct {
+    Header header;
+    void* action;      /* the `Unit -> IO A` closure, until the thread runs */
+    int64_t state;     /* 0 while the thread runs, 1 once it has stopped */
+    int64_t cancelled; /* set by monad_cancel_fiber; see this section's own
+                          doc comment for why it cannot preempt */
+    int64_t io_box;    /* the `IO.io` value the action produced */
+    int64_t reaped;    /* 1 once the thread has been joined */
+    pthread_t thread;
+    pthread_mutex_t lock;
+    pthread_cond_t finished;
+} Fiber;
+
+typedef struct ScopeNode {
+    struct ScopeNode* next;
+    void* fiber; /* retained -- see monad_scope_fork */
+} ScopeNode;
+
+typedef struct {
+    Header header;
+    /* Guards `fibers`. A scope can be forked from inside a fiber (that is
+       what `scoped`'s own callback does), so this is real concurrency and
+       not just cross-test bookkeeping. */
+    pthread_mutex_t lock;
+    ScopeNode* fibers;
+} Scope;
+
+/* Everything a fiber does to its own handle goes through `lock`, so
+   `state`/`cancelled`/`io_box` need no atomics of their own: the mutex's
+   release/acquire pair is the happens-before edge, and it is a stronger
+   one than a bare atomic store. The genuinely atomic thing here is the
+   Header's refcount, which monad_retain/monad_release already maintain
+   with atomic_fetch_add/sub. */
+static void fiber_mark_cancelled(Fiber* f) {
+    pthread_mutex_lock(&f->lock);
+    f->cancelled = 1;
+    pthread_mutex_unlock(&f->lock);
+}
+
+/* Runs the fiber's action, then publishes its result. `arg` is the fiber
+   itself. Not detached: monad_await_fiber is what joins it. */
+static void* fiber_main(void* arg) {
+    Fiber* f = (Fiber*)arg;
+    /* Unit.unit is tag 0, arity 0 -- `builtin_ctor_tags`
+       (lang/src/codegen/ctors.mo) pins it, and it is the same value
+       monad_array_set_in_place returns for its own `IO Unit`. */
+    void* unit = alloc_constructor(0, 0);
+    int64_t box = apply_closure1(f->action, (int64_t)(intptr_t)unit);
+    pthread_mutex_lock(&f->lock);
+    f->io_box = box;
+    f->state = 1;
+    pthread_cond_broadcast(&f->finished);
+    pthread_mutex_unlock(&f->lock);
+    return NULL;
+}
+
+void* monad_fork_io(void* closure) {
+    Fiber* f = (Fiber*)monad_alloc(sizeof(Fiber));
+    if (!f) return NULL;
+    f->header.tag = MONAD_FIBER_TAG;
+    f->action = closure;
+    f->state = 0;
+    f->cancelled = 0;
+    f->io_box = 0;
+    f->reaped = 0;
+    pthread_mutex_init(&f->lock, NULL);
+    pthread_cond_init(&f->finished, NULL);
+    /* The worker's own reference, released by whoever consumes the
+       handle (await or cancel). Boehm's reachability is what actually
+       keeps the block alive today -- the caller holds the pointer too --
+       so this is the ownership handoff M4's linear `Fiber` needs, not a
+       liveness guard. */
+    monad_retain(f);
+    pthread_attr_t attr;
+    int rc = pthread_attr_init(&attr);
+    if (rc == 0) {
+        pthread_attr_setstacksize(&attr, MONAD_FIBER_STACK_BYTES);
+        rc = pthread_create(&f->thread, &attr, fiber_main, f);
+        if (rc != 0) {
+            /* The 128 MB reservation can be refused (thread-count or
+               address-space limits). Retry on the default stack: a fiber
+               on a small stack beats no fiber. */
+            pthread_attr_destroy(&attr);
+            pthread_attr_init(&attr);
+            rc = pthread_create(&f->thread, &attr, fiber_main, f);
+        }
+        pthread_attr_destroy(&attr);
+    }
+    if (rc != 0) {
+        /* No thread at all. Publish an already-finished state rather than
+           leaving a handle that can never become ready: a hang is
+           strictly worse than a NULL payload, because nothing in this
+           backend can raise an error out of a native. */
+        f->state = 1;
+        f->io_box = 0;
+    }
+    return f;
+}
+
+void* monad_await_fiber(void* handle) {
+    Fiber* f = (Fiber*)handle;
+    if (!f) return NULL;
+    pthread_mutex_lock(&f->lock);
+    while (!f->state) pthread_cond_wait(&f->finished, &f->lock);
+    int64_t cancelled = f->cancelled;
+    int64_t box = f->io_box;
+    int reap = !f->reaped;
+    f->reaped = 1;
+    pthread_mutex_unlock(&f->lock);
+    /* Exactly one awaiter joins; a second `await` on the same handle still
+       reads the stored result rather than joining an already-joined
+       thread (pthread_join twice is undefined). */
+    if (reap) pthread_join(f->thread, NULL);
+    monad_release(f);
+    if (cancelled) {
+        /* The host's `await_fiber` is an eval ERROR here ("fiber {id} was
+           cancelled"). This backend has no error channel out of a native,
+           so the closest honest thing is a diagnostic plus a NULL
+           payload: the value is wrong, and it is wrong out loud. Nothing
+           in the corpus can reach it -- `race` cancels every fiber it
+           does NOT then await. */
+        fprintf(stderr, "monad: await_fiber on a cancelled fiber\n");
+        return NULL;
+    }
+    /* The action's own result is an `IO.io` box, because it is typed
+       `Unit -> IO A`; the backend wraps what this returns in a FRESH
+       `IO.io` (NativeWrapKind.io_passthrough), so unwrapping field 0 here
+       is what keeps the count at exactly one -- `IO.io`'s tag is assigned
+       per program, so the tag cannot be consulted, but `type IO A { io A }`
+       is single-constructor and arity 1 by construction (init/io.mo). */
+    return monad_get_field((void*)(intptr_t)box, 0);
+}
+
+void* monad_cancel_fiber(void* handle) {
+    Fiber* f = (Fiber*)handle;
+    if (f) {
+        fiber_mark_cancelled(f);
+        monad_release(f);
+    }
+    return alloc_constructor(0, 0);
+}
+
+void* monad_sleep_io(int64_t ms) {
+    if (ms > 0) {
+        struct timespec ts;
+        ts.tv_sec = ms / 1000;
+        ts.tv_nsec = (ms % 1000) * 1000000;
+        /* nanosleep, not usleep: usleep is obsolete and rejects >= 1s.
+           Resuming with the remainder on EINTR matches the host, which
+           simply sleeps. A negative `ms` sleeps not at all -- the host's
+           own `ms.max(0)`. The loop retries ONLY on EINTR: any other
+           failure (EINVAL, a bad timespec) is permanent, and retrying it
+           would turn a failed sleep into an unkillable spin. */
+        while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+        }
+    }
+    return alloc_constructor(0, 0);
+}
+
+void* monad_scope_new(void) {
+    Scope* s = (Scope*)monad_alloc(sizeof(Scope));
+    if (!s) return NULL;
+    s->header.tag = MONAD_SCOPE_TAG;
+    pthread_mutex_init(&s->lock, NULL);
+    s->fibers = NULL;
+    return s;
+}
+
+void* monad_scope_fork(void* handle, void* closure) {
+    Scope* s = (Scope*)handle;
+    void* fiber = monad_fork_io(closure);
+    if (!s || !fiber) return fiber;
+    ScopeNode* node = (ScopeNode*)monad_alloc(sizeof(ScopeNode));
+    if (!node) return fiber;
+    node->fiber = fiber;
+    monad_retain(fiber);
+    pthread_mutex_lock(&s->lock);
+    node->next = s->fibers;
+    s->fibers = node;
+    pthread_mutex_unlock(&s->lock);
+    return fiber;
+}
+
+void* monad_scope_drop(void* handle) {
+    Scope* s = (Scope*)handle;
+    if (s) {
+        pthread_mutex_lock(&s->lock);
+        ScopeNode* node = s->fibers;
+        s->fibers = NULL;
+        pthread_mutex_unlock(&s->lock);
+        /* Cancels, but does NOT wait: the host's `scope_drop` cancels
+           outstanding fibers and returns, so a `scoped` block that walks
+           away from a long-running fiber must not block here either. The
+           fibers keep running to completion in the background; only the
+           scope's claim on them is given up. */
+        while (node) {
+            ScopeNode* next = node->next;
+            Fiber* f = (Fiber*)node->fiber;
+            if (f) {
+                fiber_mark_cancelled(f);
+                monad_release(f);
+            }
+            node = next;
+        }
+    }
+    return alloc_constructor(0, 0);
 }
 
 void monad_print_str(char* s) {

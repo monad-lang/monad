@@ -449,6 +449,25 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // own `--verbose` stage trace (std/src/log.mo) colorizes through
             // that.
             else if String.beq target "get_env" then Option.some (NativeWrapKind.io_passthrough "monad_get_env")
+            // The async runtime (`std/concurrent/{fiber,combine}.mo`).
+            // Every one of the seven is `IO`-returning, so all are the
+            // same shape: call the runtime, wrap the raw result in
+            // `IO.io`. That wrapping is exactly why `monad_await_fiber`
+            // has to UNWRAP the field 0 of the `IO.io` its action
+            // produced -- see that function's own comment.
+            //
+            // The handles themselves are opaque: `Fiber`/`Scope` values
+            // are raw runtime pointers, never constructors, which is why
+            // nothing here needs a `constructor_tag` lookup for them.
+            // `Fiber`'s own module says so ("Fiber handles are opaque
+            // runtime objects; do not pattern match on them").
+            else if String.beq target "fork_io" then Option.some (NativeWrapKind.io_passthrough "monad_fork_io")
+            else if String.beq target "await_fiber" then Option.some (NativeWrapKind.io_passthrough "monad_await_fiber")
+            else if String.beq target "cancel_fiber" then Option.some (NativeWrapKind.io_passthrough "monad_cancel_fiber")
+            else if String.beq target "sleep_io" then Option.some (NativeWrapKind.io_passthrough "monad_sleep_io")
+            else if String.beq target "scope_new" then Option.some (NativeWrapKind.io_passthrough "monad_scope_new")
+            else if String.beq target "scope_fork" then Option.some (NativeWrapKind.io_passthrough "monad_scope_fork")
+            else if String.beq target "scope_drop" then Option.some (NativeWrapKind.io_passthrough "monad_scope_drop")
             else Option.none,
     }
 
@@ -634,10 +653,27 @@ def runtime_declarations : List LLVMDeclaration :=
     let d54 := mk_decl "monad_f64_gt" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d55 := mk_decl "monad_f64_to_string" (List.cons "i64" List.empty) "i64" in
     let d56 := mk_decl "monad_f64_of_string" (List.cons "i64" List.empty) "i64" in
+    // The async runtime (`runtime.c`). Same "no implicit declare"
+    // requirement as every native above: without these the call-target
+    // gate (`gate_result`, `lang/codegen/emit.mo`) rejects the module
+    // with "call to undefined symbol(s): monad_fork_io". Every one
+    // returns i64 under the CONVENTION at the head of this list -- a
+    // fiber/scope handle and a `char*`/bit-pattern are all just i64 here.
+    // `monad_scope_new` genuinely takes no arguments
+    // (`def scope_new : IO Scope`), so its parameter list is empty and
+    // the emitted `call` has no operands to type.
+    let d57 := mk_decl "monad_fork_io" (List.cons "i64" List.empty) "i64" in
+    let d58 := mk_decl "monad_await_fiber" (List.cons "i64" List.empty) "i64" in
+    let d59 := mk_decl "monad_cancel_fiber" (List.cons "i64" List.empty) "i64" in
+    let d60 := mk_decl "monad_sleep_io" (List.cons "i64" List.empty) "i64" in
+    let d61 := mk_decl "monad_scope_new" List.empty "i64" in
+    let d62 := mk_decl "monad_scope_fork" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d63 := mk_decl "monad_scope_drop" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
-     d48, d49, d50, d51, d52, d53, d54, d55, d56]
+     d48, d49, d50, d51, d52, d53, d54, d55, d56,
+     d57, d58, d59, d60, d61, d62, d63]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

@@ -26,9 +26,16 @@ pub def compile_ir_to_obj (ir_path : String) (obj_path : String) : IO I64 := do 
 
 /// `clang -c` on the runtime. `extra_flags` carries anything the caller
 /// wants defined at compile time (the build-commit define, `-v`).
+///
+/// `-pthread` is not decoration: the runtime is a THREADED Boehm build
+/// (`GC_THREADS` at the head of runtime/src/runtime.c) and its fiber
+/// objects are real OS threads, so the compile needs `_REENTRANT` set for
+/// the system headers and the link needs the threads library. On a glibc
+/// 2.34+ system the symbols live in libc and the link would happen to
+/// succeed without it, which is exactly why it is spelled out.
 #[partial]
 pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (obj_path : String) : IO I64 := do {
-    exec_cmd "clang" (List.append ["-c", runtime_c] (List.append extra_flags ["-o", obj_path]))
+    exec_cmd "clang" (List.append ["-pthread", "-c", runtime_c] (List.append extra_flags ["-o", obj_path]))
 }
 
 /// Link objects into an executable. `-lgc`: the generated runtime's heap is
@@ -36,9 +43,10 @@ pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (ob
 /// plans/bootstrapping/linear-types-memory.md for why that is temporary).
 /// The include and library search paths come from the nix cc-wrapper via
 /// `boehmgc` in devenv.nix, so nothing here hardcodes a store path.
+/// `-pthread` here for the same reason as `compile_runtime_obj` above.
 #[partial]
 pub def link_objects (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
-    exec_cmd "clang" (List.append objs (List.append ["-lgc"] (List.append extra_flags ["-o", output])))
+    exec_cmd "clang" (List.append ["-pthread"] (List.append objs (List.append ["-lgc"] (List.append extra_flags ["-o", output]))))
 }
 
 /// Maps library names (e.g. `["m"]` from a mote's `[link] libs`) to the
