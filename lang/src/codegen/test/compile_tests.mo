@@ -19,7 +19,7 @@ open IO {println, write_file}
 #[partial]
 def mk_def (name : String) (body : Term) : Def :=
     Def.mk (NamePath.npath [Identifier.id name]) (Term.type_ 1) body
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty
 
 #[partial]
 def mk_i64 (n : I64) : Term :=
@@ -136,7 +136,7 @@ def test_compile_multiarg_call : IO Bool := do {
     let sub_body := Term.app (Term.app sub_var x_var) y_var;
     let subtract_term := Term.lam (DebugName.named x_id) (Term.type_ 1) (Term.lam (DebugName.named y_id) (Term.type_ 1) sub_body);
     let subtract_def := Def.mk (NamePath.npath (List.cons (Identifier.id "subtract") List.empty)) (Term.type_ 1) subtract_term
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
     let subtract_ref := Term.var 0 (DebugName.named (Identifier.id "subtract"));
     let main_body := Term.app (Term.app subtract_ref (mk_i64 10)) (mk_i64 3);
     let main_def := mk_def "main" main_body;
@@ -195,7 +195,7 @@ def build_add5_def : Def :=
     let add5_body := Term.app (Term.app add_var a_var) b_var in
     let add5_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) add5_body) in
     Def.mk (NamePath.npath (List.cons (Identifier.id "add5") List.empty)) (Term.type_ 1) add5_term
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty
 
 /// Phase 0 regression test (see
 /// plans/bootstrapping/self-hosted-compiler.md's dictionary-passing
@@ -222,7 +222,7 @@ def test_compile_function_value_as_parameter : IO Bool := do {
         (Term.lam (DebugName.named x_id) (Term.type_ 1)
             (Term.lam (DebugName.named y_id) (Term.type_ 1) apply_body));
     let apply_def := Def.mk (NamePath.npath (List.cons (Identifier.id "apply_binary") List.empty)) (Term.type_ 1) apply_term
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
 
     let add5_ref := Term.var 0 (DebugName.named (Identifier.id "add5"));
     let apply_ref := Term.var 0 (DebugName.named (Identifier.id "apply_binary"));
@@ -404,7 +404,7 @@ def test_promote_instance_defs_compiles_and_runs : IO Bool := do {
     let my_add_body := Term.app (Term.app add_var a_var) b_var;
     let my_add_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) my_add_body);
     let my_add_name := NamePath.npath (List.cons (Identifier.id "add") List.empty);
-    let my_add_def := Def.mk my_add_name (Term.type_ 1) my_add_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+    let my_add_def := Def.mk my_add_name (Term.type_ 1) my_add_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
 
     let a_param := param_many (Identifier.id "A") (Term.type_ 1);
     let add_method := ClassDef.mk (Identifier.id "add") Term.hole (Option.none : Option Term);
@@ -468,7 +468,7 @@ def test_resolve_class_calls_concrete_d4 : IO Bool := do {
     let eq2_body := Term.app (Term.app add_var a_var) b_var;
     let eq2_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) eq2_body);
     let eq2_name := NamePath.npath (List.cons (Identifier.id "eq2") List.empty);
-    let eq2_def := Def.mk eq2_name (Term.type_ 1) eq2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+    let eq2_def := Def.mk eq2_name (Term.type_ 1) eq2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
 
     let a_param := param_many (Identifier.id "A") (Term.type_ 1);
     let eq2_method := ClassDef.mk (Identifier.id "eq2") Term.hole (Option.none : Option Term);
@@ -506,7 +506,7 @@ def test_resolve_class_calls_recursive_dict_arg : IO Bool := do {
     let add2_body := Term.app (Term.app add_var a_var) b_var;
     let add2_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) add2_body);
     let add2_name := NamePath.npath (List.cons (Identifier.id "add2") List.empty);
-    let add2_def := Def.mk add2_name (Term.type_ 1) add2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+    let add2_def := Def.mk add2_name (Term.type_ 1) add2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
 
     let a_param := param_many (Identifier.id "A") (Term.type_ 1);
     let add2_method := ClassDef.mk (Identifier.id "add2") Term.hole (Option.none : Option Term);
@@ -520,7 +520,7 @@ def test_resolve_class_calls_recursive_dict_arg : IO Bool := do {
     let wadd2_body := Term.app (Term.app (Term.var 0 (DebugName.named (Identifier.id "Add2.add2"))) a_var) b_var;
     let wadd2_term := Term.lam (DebugName.named a_id) Term.hole (Term.lam (DebugName.named b_id) Term.hole wadd2_body);
     let wadd2_name := NamePath.npath (List.cons (Identifier.id "wadd2") List.empty);
-    let wadd2_def := Def.mk wadd2_name Term.hole wadd2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+    let wadd2_def := Def.mk wadd2_name Term.hole wadd2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
 
     let wadd2_method := ClassDef.mk (Identifier.id "wadd2") Term.hole (Option.none : Option Term);
     let wrapped2_cls := Class.mk (Identifier.id "Wrapped2") [a_param] ([] : List TypeConstraint) [wadd2_method] Visibility.package_private;
@@ -566,7 +566,7 @@ def test_resolve_class_calls_genuine_polymorphism : IO Bool := do {
     let show3_i64_body := Term.app (Term.app add_var x_var) (mk_i64 100);
     let show3_i64_term := Term.lam (DebugName.named x_id) Term.hole show3_i64_body;
     let show3_i64_name := NamePath.npath (List.cons (Identifier.id "show3") List.empty);
-    let show3_i64_def := Def.mk show3_i64_name Term.hole show3_i64_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+    let show3_i64_def := Def.mk show3_i64_name Term.hole show3_i64_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
 
     let a_param := param_many (Identifier.id "A") (Term.type_ 1);
     let show3_method := ClassDef.mk (Identifier.id "show3") Term.hole (Option.none : Option Term);
@@ -579,7 +579,7 @@ def test_resolve_class_calls_genuine_polymorphism : IO Bool := do {
 
     // instance MyShow3 MyBool { def show3 (x : MyBool) : I64 := 200 }
     let show3_bool_term := Term.lam (DebugName.named x_id) Term.hole (mk_i64 200);
-    let show3_bool_def := Def.mk show3_i64_name Term.hole show3_bool_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+    let show3_bool_def := Def.mk show3_i64_name Term.hole show3_bool_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
     let mybool_arg := Term.var 0 (DebugName.named (Identifier.id "MyBool"));
     let show3_bool_ins := Instance.mk (Identifier.id "_") myshow3_cls_name ([] : List TypeConstraint) [mybool_arg]
         Visibility.package_private ([] : List Param) [show3_bool_def];
@@ -590,7 +590,7 @@ def test_resolve_class_calls_genuine_polymorphism : IO Bool := do {
     let show_twice_term := Term.lam (DebugName.named x_id) Term.hole show_twice_body;
     let show_twice_name := NamePath.npath (List.cons (Identifier.id "show_twice") List.empty);
     let myshow3_constraint := TypeConstraint.mk myshow3_cls_name [Identifier.id "A"];
-    let show_twice_def := Def.mk show_twice_name Term.hole show_twice_term [myshow3_constraint] ([] : List Attribute) Visibility.package_private;
+    let show_twice_def := Def.mk show_twice_name Term.hole show_twice_term [myshow3_constraint] ([] : List Attribute) Visibility.package_private List.empty;
 
     // main := show_twice 5 + show_twice mytrue
     let mytrue_val := Term.con (Con.mk (Identifier.id "mytrue") (NamePath.npath (List.cons (Identifier.id "MyBool") List.empty)) 0 []);

@@ -33,7 +33,7 @@ def test_build_with_def : Bool :=
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
-    let def_decl : Def := Def.mk name Term.hole Term.hole empty_constraints empty_attrs Visibility.package_private in
+    let def_decl : Def := Def.mk name Term.hole Term.hole empty_constraints empty_attrs Visibility.package_private List.empty in
     let decl_list : List Decl := List.cons (Decl.def_d def_decl) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     true
@@ -533,7 +533,7 @@ def test_build_scope_then_resolve_def : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "add") List.empty) in
-    let def_decl : Def := Def.mk def_name Term.hole Term.hole List.empty List.empty Visibility.package_private in
+    let def_decl : Def := Def.mk def_name Term.hole Term.hole List.empty List.empty Visibility.package_private List.empty in
     let decl_list : List Decl := List.cons (Decl.def_d def_decl) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     let s : Scope := {
@@ -750,7 +750,7 @@ def test_dict_param_type_is_hole : Bool :=
     let body : Term := Term.app add_add_ref (Term.var (-1) (DebugName.named (Identifier.id "a"))) in
     let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "HAdd_A_A_A_add") List.empty) in
     let empty_attrs : List Attribute := List.empty in
-    let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private in
+    let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private List.empty in
     match add_constraint_dict_params df {
         Def.mk {typ := _new_typ, term := new_term, ..} =>
             match new_term {

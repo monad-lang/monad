@@ -389,8 +389,8 @@ def qualify_decl_names (mpath : ModulePath) (renames : HashMap String String) (d
 def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String) (d : Decl) : Decl := match d {
     Decl.def_d dd =>
         match dd {
-            Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
-                Decl.def_d (Def.mk (qualified_def_name mpath name) typ term_ constraints attrs vis),
+            Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
+                Decl.def_d (Def.mk (qualified_def_name mpath name) typ term_ constraints attrs vis params),
         },
     // An instance carries the module it was declared in via its own
     // name, so `promote_instance_defs` (Stage 3, on the already-flat
@@ -699,7 +699,7 @@ def qtest_module (name : String) (decls : List Decl) : ModuleInfo :=
 def qtest_def (name : String) (body_ref : String) : Decl :=
     Decl.def_d (Def.mk (bare_npath name) Term.hole
         (Term.var sentinel (DebugName.named (Identifier.id body_ref)))
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private)
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty)
 
 #[partial]
 def qtest_def_names (modules : List ModuleInfo) : List String :=

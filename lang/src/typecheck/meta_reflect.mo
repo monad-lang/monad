@@ -696,7 +696,7 @@ def reify_d_def (args : List Value) : Result String Def :=
                                                                                 (NamePath.npath (List.cons (Identifier.id name) List.empty))
                                                                                 (build_pi_chain params ret_term)
                                                                                 (build_lam_chain params body_term)
-                                                                                no_constraints no_attrs Visibility.package_private),
+                                                                                no_constraints no_attrs Visibility.package_private List.empty),
                                                                     },
                                                             },
                                                     },

@@ -726,10 +726,10 @@ def lam_params_loop (params : List ParseParam) (body : ParseTerm) : ParseTerm :=
 	}
 
 #[partial]
-def def_to_decl (body : ParseTerm) (name : Identifier) (typ : ParseTerm) (vis : Visibility) : ParseDecl :=
+def def_to_decl (body : ParseTerm) (name : Identifier) (typ : ParseTerm) (vis : Visibility) (params : List ParseParam) : ParseDecl :=
 	let empty_constraints : List TypeConstraint := List.empty in
 	let empty_attrs : List Attribute := List.empty in
-	pd_def_d  (ParseDef.mk (NamePath.npath (List.cons name List.empty)) typ body empty_constraints empty_attrs vis)
+	pd_def_d  (ParseDef.mk (NamePath.npath (List.cons name List.empty)) typ body empty_constraints empty_attrs vis params)
 
 // --- Canonical declaration parsers (de Bruijn Term) ---
 
@@ -1929,8 +1929,8 @@ def def_apply_attrs (dr : ParseResult ParseDecl) (attrs : List Attribute) : Pars
 			match decl.kind {
 				def_d d =>
 					match d {
-						ParseDef.mk {name, typ, term, constraints, vis, ..} =>
-							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis))
+						ParseDef.mk {name, typ, term, constraints, vis, params, ..} =>
+							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis params))
 					},
 				_ => success rem decl
 			},
@@ -2027,8 +2027,8 @@ def def_apply_constraints (dr : ParseResult ParseDecl) (constraints : List TypeC
 			match decl.kind {
 				def_d d =>
 					match d {
-						ParseDef.mk {name, typ, term, attrs, vis, ..} =>
-							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis))
+						ParseDef.mk {name, typ, term, attrs, vis, params, ..} =>
+							success rem (pd_def_d  (ParseDef.mk name typ term constraints attrs vis params))
 					},
 				_ => success rem decl
 			},
@@ -2452,7 +2452,7 @@ def def_body_assign (r : ParseResult String) (name : Identifier) (params : List 
 def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) (orig : String) : ParseResult ParseDecl :=
 	match r {
 		success rem _ => def_body_do (do_stmts rem) name params typ vis,
-		fail _ => success orig (def_to_decl (lam_parsed_params params (pt_hole )) name (build_param_pi_chain (parsed_params_as_params params) typ) vis)
+		fail _ => success orig (def_to_decl (lam_parsed_params params (pt_hole )) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params))
 	}
 
 /// The body is correctly wrapped in one lambda per param via `lam_params`,
@@ -2470,14 +2470,14 @@ def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params 
 #[partial]
 def def_body_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem body => success rem (def_to_decl (lam_parsed_params params body) name (build_param_pi_chain (parsed_params_as_params params) typ) vis),
+		success rem body => success rem (def_to_decl (lam_parsed_params params body) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
 		fail e => fail e
 	}
 
 #[partial]
 def def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem stmts => success rem (def_to_decl (lam_parsed_params params (pt_do stmts)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis),
+		success rem stmts => success rem (def_to_decl (lam_parsed_params params (pt_do stmts)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis (parsed_params_as_params params)),
 		fail e => fail e
 	}
 
@@ -3377,7 +3377,7 @@ def instance_method_untyped_body (r : ParseResult ParseTerm) (name : Identifier)
 		success rem body =>
 			let empty_constraints : List TypeConstraint := List.empty in
 			let empty_attrs : List Attribute := List.empty in
-			let d : ParseDef := ParseDef.mk (NamePath.npath (List.cons name List.empty)) (pt_hole ) body empty_constraints empty_attrs Visibility.package_private in
+			let d : ParseDef := ParseDef.mk (NamePath.npath (List.cons name List.empty)) (pt_hole ) body empty_constraints empty_attrs Visibility.package_private List.empty in
 			instance_methods rem cls args (List.cons d methods),
 		fail e => fail e
 	}
@@ -3433,7 +3433,7 @@ def instance_method_finish (input : String) (name : Identifier) (params : List P
 	let empty_constraints : List TypeConstraint := List.empty in
 	let empty_attrs : List Attribute := List.empty in
 	let full_typ := build_param_pi_chain (parsed_params_as_params params) ret_typ in
-	let d : ParseDef := ParseDef.mk (NamePath.npath (List.cons name List.empty)) full_typ (lam_parsed_params params body) empty_constraints empty_attrs Visibility.package_private in
+	let d : ParseDef := ParseDef.mk (NamePath.npath (List.cons name List.empty)) full_typ (lam_parsed_params params body) empty_constraints empty_attrs Visibility.package_private (parsed_params_as_params params) in
 	instance_methods input cls args (List.cons d methods)
 
 /// Fold a `List Param` (already in left-to-right declaration order — the
@@ -3614,7 +3614,7 @@ def defmacro_term_body (r : ParseResult ParseTerm) (name : Identifier) (params :
 			let np_ : NamePath := NamePath.npath (List.cons name List.empty) in
 			let no_attrs : List Attribute := List.empty in
 			let no_constraints : List TypeConstraint := List.empty in
-			success rem (pd_def_macro_d  (ParseDef.mk np_ pt_hole  body no_constraints no_attrs Visibility.package_private)),
+			success rem (pd_def_macro_d  (ParseDef.mk np_ pt_hole  body no_constraints no_attrs Visibility.package_private List.empty)),
 		fail e => fail e
 	}
 

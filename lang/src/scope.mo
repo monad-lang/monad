@@ -412,7 +412,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
 
 def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match df {
-        mk defname typ term_ _ _ vis =>
+        Def.mk {name := defname, typ, term := term_, vis, params := decl_params, ..} =>
             let sd : ScopeDef := {
                 name := defname,
                 module := path,
@@ -432,7 +432,10 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // though `sd.body` above discards it) to recover the def's
             // declared parameter (name, type) list for named-call
             // resolution to consult later.
-            let params : List (Pair Identifier Term) := def_params_of_term term_ in
+            let params : List Param := match decl_params {
+                List.empty => def_params_of_term term_,
+                _ => decl_params,
+            } in
             let with_params : ScopeData := scope_data_add_def_params with_def defname params in
             // `typ` (the def's own DECLARED signature, `Def.typ` -- e.g.
             // `CodegenCtx -> CtxStrPair` -- distinct from `term_`'s body
@@ -450,18 +453,22 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             scope_data_add_def_sig with_ret defname typ
     }
 
-/// A def's declared parameter (name, type) list, in order, recovered
-/// from its own BODY's leading `Term.lam` chain -- `Term.lam` carries no
-/// default/multiplicity slot at all (unlike the reference compiler's own
-/// `Term::Lam{param: Par::P(Param)}`, a full `Param`), so only name+type
-/// survive here -- matches this plan's own `lang/` Non-Goal (no def-param
-/// defaults for v1, see the plan's Phase 7 doc comment). Stops at the
+/// FALLBACK only, now that `Def.params` carries the real declared list:
+/// a def's declared parameter list, in order, recovered from its own
+/// BODY's leading `Term.lam` chain -- for the defs that arrive with no
+/// declared list at all, i.e. macro-synthesized ones (`reify_d_def`,
+/// `lang/typecheck/meta_reflect.mo`) and any decl whose `params` was
+/// never populated. `Term.lam` carries no default/multiplicity/attrs
+/// slot (unlike the reference compiler's own
+/// `Term::Lam{param: Par::P(Param)}`, a full `Param`), so `param_many`
+/// supplies multiplicity `many` with no default and no attrs -- which
+/// is exactly what a param written without `:=` means. Stops at the
 /// first non-`Lam` node (the def's real body).
 #[terminating]
-def def_params_of_term (t : Term) : List (Pair Identifier Term) :=
+def def_params_of_term (t : Term) : List Param :=
     match t {
         Term.lam dbg typ body =>
-            List.cons (Pair.pair (scope_debug_name_to_id dbg) typ) (def_params_of_term body),
+            List.cons (param_many (scope_debug_name_to_id dbg) typ) (def_params_of_term body),
         _ => List.empty,
     }
 
@@ -477,7 +484,7 @@ def scope_debug_name_to_id (dbg : DebugName) : Identifier :=
 
 /// Register `name -> params` into `sd.def_params`, ADDITIONAL to (never
 /// replacing) `scope_data_add_def`'s own `def_refs` registration.
-def scope_data_add_def_params (sd : ScopeData) (name : NamePath) (params : List (Pair Identifier Term)) : ScopeData :=
+def scope_data_add_def_params (sd : ScopeData) (name : NamePath) (params : List Param) : ScopeData :=
     { sd with def_params := npath_map_insert name params sd.def_params }
 
 /// Strips a def's own declared signature (`Def.typ`, a `Term.pi`/
@@ -1087,7 +1094,7 @@ def scope_data_find_def (sd : ScopeData) (name : NamePath) : Option ScopeDef :=
 // --- ScopeData: find a def's own declared param (name, type) list ---
 // (`plans/implementations/named-field-construction.md`'s Phase 6.)
 
-def scope_data_find_def_params (sd : ScopeData) (name : NamePath) : Option (List (Pair Identifier Term)) :=
+def scope_data_find_def_params (sd : ScopeData) (name : NamePath) : Option (List Param) :=
     npath_map_lookup name sd.def_params
 
 /// Top-level `Scope`-based wrapper, mirroring `scope_find_inductive_by_
@@ -1095,7 +1102,7 @@ def scope_data_find_def_params (sd : ScopeData) (name : NamePath) : Option (List
 /// find_inductive`/`scope_find_class_def`) -- "not found" naturally means
 /// "this SHAPE doesn't apply, fall through to a different interpretation"
 /// for named-call resolution's own def-target branch, not a hard error.
-def scope_find_def_params (name : NamePath) (s : Scope) : Option (List (Pair Identifier Term)) :=
+def scope_find_def_params (name : NamePath) (s : Scope) : Option (List Param) :=
     let g : ScopeData := scope_globals s in
     scope_data_find_def_params g name
 
@@ -1504,8 +1511,8 @@ def resolve_infix_class_defs (infixes : List Infix) (cds : List ClassDef) : List
 #[partial]
 def resolve_infix_def (infixes : List Infix) (d : Def) : Def :=
     match d {
-        Def.mk {name := dname, typ, term, constraints, attrs, vis, ..} =>
-            Def.mk dname (resolve_infix_term infixes typ) (resolve_infix_term infixes term) constraints attrs vis,
+        Def.mk {name := dname, typ, term, constraints, attrs, vis, params, ..} =>
+            Def.mk dname (resolve_infix_term infixes typ) (resolve_infix_term infixes term) constraints attrs vis params,
     }
 
 #[partial]
@@ -1936,8 +1943,8 @@ def resolve_open_alias_match_case (names : HashMap String String) (bound : List 
 #[partial]
 def resolve_open_alias_def (names : HashMap String String) (d : Def) : Def :=
     match d {
-        Def.mk {name := dname, typ, term, constraints, attrs, vis, ..} =>
-            Def.mk dname typ (resolve_open_alias_term names term) constraints attrs vis,
+        Def.mk {name := dname, typ, term, constraints, attrs, vis, params, ..} =>
+            Def.mk dname typ (resolve_open_alias_term names term) constraints attrs vis params,
     }
 
 #[partial]
@@ -2309,7 +2316,7 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
                     let dict_name := mangle_instance_dict_name prefix cls_name ins_args in
                     let dict_con := Con.mk (Identifier.id "mk") dict_name (List.length field_terms) (options_of field_terms) in
                     let dict_def := Def.mk dict_name (Term.type_ 1) (Term.con dict_con)
-                        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private in
+                        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty in
                     Option.some (List.cons (Decl.def_d dict_def) method_decls),
                 Option.none => Option.none,
             },
@@ -2328,14 +2335,14 @@ def promote_methods (prefix : String) (cls_name : NamePath) (ins_args : List Ter
             match find_instance_method defs mname {
                 Option.some d =>
                     match d {
-                        Def.mk {typ, term := term_, constraints := own_constraints, attrs, vis, ..} =>
+                        Def.mk {typ, term := term_, constraints := own_constraints, attrs, vis, params, ..} =>
                             let new_name := mangle_instance_method_name prefix cls_name ins_args mname in
                             // `ins_constraints` prepended ahead of the
                             // method's own (usually empty) constraints --
                             // see promote_instance's own doc comment on
                             // why this is here.
                             let all_constraints := List.append ins_constraints own_constraints in
-                            let renamed := Def.mk new_name typ term_ all_constraints attrs vis in
+                            let renamed := Def.mk new_name typ term_ all_constraints attrs vis params in
                             List.cons (Decl.def_d renamed) (promote_methods prefix cls_name ins_args ins_constraints defs rest),
                     },
                 Option.none => promote_methods prefix cls_name ins_args ins_constraints defs rest,
@@ -2616,14 +2623,14 @@ def dict_param_name (cls : NamePath) : String :=
 #[partial]
 def add_constraint_dict_params (d : Def) : Def :=
     match d {
-        Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
+        Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
             let qualifying := qualifying_dict_constraints constraints term_ in
             match qualifying {
                 List.empty => d,
                 List.cons _ _ =>
                     let new_typ := prepend_dict_pis qualifying typ in
                     let new_term := prepend_dict_lams qualifying term_ in
-                    Def.mk name new_typ new_term constraints attrs vis,
+                    Def.mk name new_typ new_term constraints attrs vis params,
             },
     }
 
@@ -6745,10 +6752,10 @@ def resolve_class_calls_decls_go (classes : List Class) (instances : List Instan
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
+                        Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
                             let def_carrier := full_return_carrier typ in
                             let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types List.empty List.empty def_carrier term_ in
-                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis)) (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
+                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis params)) (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
                     },
                 _ => List.cons d (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
             },
@@ -6934,7 +6941,7 @@ def dummy_def_macro_decl : Decl :=
     let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
     let no_constraints : List TypeConstraint := List.empty in
     let no_attrs : List Attribute := List.empty in
-    Decl.def_macro_d (Def.mk np Term.hole Term.hole no_constraints no_attrs Visibility.package_private)
+    Decl.def_macro_d (Def.mk np Term.hole Term.hole no_constraints no_attrs Visibility.package_private List.empty)
 
 def dummy_decl_gen_decl : Decl :=
     let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
@@ -7086,7 +7093,7 @@ def test_resolve_infix_decls_rewrites_def_body : Bool :=
     let one_lit : Term := Term.lit (Literal.num 1 NumSuffix.i64) in
     let body : Term := Term.app (Term.app op_var n_var) one_lit in
     let name : NamePath := NamePath.npath (List.cons (Identifier.id "helper") List.empty) in
-    let d := Def.mk name Term.hole body List.empty List.empty Visibility.package_private in
+    let d := Def.mk name Term.hole body List.empty List.empty Visibility.package_private List.empty in
     let decl_list : List Decl := List.cons (Decl.def_d d) List.empty in
     match resolve_infix_decls dummy_infixes decl_list {
         List.cons resolved_decl _ =>
@@ -7133,7 +7140,7 @@ def dummy_beq_bool_instance : Instance :=
     let bool_arg := Term.var 0 (DebugName.named (Identifier.id "Bool")) in
     let beq_name := NamePath.npath (List.cons (Identifier.id "beq") List.empty) in
     let true_body := Term.var 0 (DebugName.named (Identifier.id "true")) in
-    let beq_def := Def.mk beq_name Term.hole true_body List.empty List.empty Visibility.package_private in
+    let beq_def := Def.mk beq_name Term.hole true_body List.empty List.empty Visibility.package_private List.empty in
     Instance.mk (Identifier.id "_") cls_name List.empty (List.cons bool_arg List.empty)
         Visibility.package_private List.empty (List.cons beq_def List.empty)
 
@@ -7170,7 +7177,7 @@ def test_promote_instance_defs_missing_method_skips_instance : Bool :=
         (List.cons show_method (List.cons extra_method List.empty)) Visibility.package_private in
     let cls_name := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
     let show_name := NamePath.npath (List.cons (Identifier.id "show") List.empty) in
-    let show_def := Def.mk show_name Term.hole (mk_i64_dummy 1) List.empty List.empty Visibility.package_private in
+    let show_def := Def.mk show_name Term.hole (mk_i64_dummy 1) List.empty List.empty Visibility.package_private List.empty in
     let ins := Instance.mk (Identifier.id "_") cls_name List.empty List.empty
         Visibility.package_private List.empty (List.cons show_def List.empty) in
     let decl_list := List.cons (Decl.class_d cls) (List.cons (Decl.instance_d ins) List.empty) in
@@ -7232,7 +7239,7 @@ def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
     let orig_typ := Term.pi Term.hole (Term.type_ 1) in
     let constraint := TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
     let d := Def.mk (NamePath.npath (List.cons (Identifier.id "show_twice") List.empty)) orig_typ orig_term
-        (List.cons constraint List.empty) List.empty Visibility.package_private in
+        (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
     let d2 := add_constraint_dict_params d in
     match d2 {
         Def.mk {typ := new_typ, term := new_term, ..} =>
@@ -7253,7 +7260,7 @@ def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
     let unrelated_body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let constraint := TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
     let d := Def.mk (NamePath.npath (List.cons (Identifier.id "unrelated") List.empty)) (Term.type_ 1) unrelated_body
-        (List.cons constraint List.empty) List.empty Visibility.package_private in
+        (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
     let d2 := add_constraint_dict_params d in
     match d2 {
         Def.mk {typ := new_typ, term := new_term, ..} =>
@@ -7302,6 +7309,7 @@ def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
         constraints := List.empty,
         attrs := List.empty,
         vis := Visibility.pub_,
+        params := List.empty,
     } in
     // Goes through `collect_def_types` rather than hand-building the
     // table: the bare-query answer depends on the builder registering

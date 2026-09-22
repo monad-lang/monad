@@ -158,7 +158,7 @@ def free_var_ (s : String) : Term := Term.var sentinel_ (named_ s)
 def num_ (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
 
 def def_decl_ (name : String) (term : Term) : Decl :=
-    Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private)
+    Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private List.empty)
 
 def value_num_is (v : Value) (expected : I64) : Bool :=
     match v {

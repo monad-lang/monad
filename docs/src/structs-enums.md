@@ -146,12 +146,10 @@ def a : I64 := scale { p := 4, factor := 3 }   // 12
 def b : I64 := scale { p := 4 }                // 8, factor defaulted
 ```
 
-> **The last line works on the bootstrap host only.** The self-hosted compiler
-> parses the declaration and its default, but a call that omits the parameter
-> fails with `named call: missing required field \`factor\``. Defaults declared
-> on `struct` and `type` *fields* are honoured everywhere; it is a def's own
-> parameter defaults that are not. See
-> [The Bootstrap Host](./bootstrap-host.md).
+Both compilers honour it. A def's own parameter defaults now behave exactly
+like a `struct`/`type` field's: `scale { p := 4 }` is 8 everywhere, and an
+omitted parameter is an error only when it declares no default. See
+[The Bootstrap Host](./bootstrap-host.md) for what is still host-only.
 
 ## Linear and Affine Fields
 

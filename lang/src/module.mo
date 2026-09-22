@@ -1385,13 +1385,13 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
 /// body is a `match` whose branches return struct literals checked
 /// against `build_get_env_instrs`'s own declared return type, exactly
 /// the same "body needs `typ`, not `Term.hole`" shape.
-def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis } : Def) (scope : Scope) (locals : LocalScope) : Result String Def :=
+def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis, params } : Def) (scope : Scope) (locals : LocalScope) : Result String Def :=
     if is_term_hole body then
-        Result.ok (Def.mk name typ body constraints attrs vis)
+        Result.ok (Def.mk name typ body constraints attrs vis params)
     else
         let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
         match type_check body typ scope empty_local_types locals_ {
-            Result.ok tt => Result.ok (Def.mk name typ (tt.term) constraints attrs vis),
+            Result.ok tt => Result.ok (Def.mk name typ (tt.term) constraints attrs vis params),
             Result.err e => Result.err (render_type_error (show_name_path name) Option.none e),
         }
 
@@ -2724,9 +2724,9 @@ def decl_is_priv (d : Decl) : Bool :=
 def priv_module_info : ModuleInfo :=
     let owner : ModulePath := ModulePath.mp [Identifier.id "Owner"] in
     let hidden : Def := Def.mk (NamePath.npath [Identifier.id "hidden"]) Term.hole Term.hole
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.priv_ in
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.priv_ List.empty in
     let shown : Def := Def.mk (NamePath.npath [Identifier.id "shown"]) Term.hole Term.hole
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private in
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty in
     { path := owner,
       file_path := "Owner.mo",
       decl_list := [Decl.def_d hidden, Decl.def_d shown] }

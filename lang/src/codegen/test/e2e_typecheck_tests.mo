@@ -25,7 +25,7 @@ def test_compile_simple_function : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "simple"
@@ -46,7 +46,7 @@ def test_compile_arithmetic : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "add i64"
@@ -61,7 +61,7 @@ def test_compile_multiple_defs : Bool :=
         (Term.lit (Literal.num 1 NumSuffix.i64))
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let id2 := Identifier.id "const2" in
     let def2 := Def.mk
         (NamePath.npath (List.cons id2 List.empty))
@@ -69,7 +69,7 @@ def test_compile_multiple_defs : Bool :=
         (Term.lit (Literal.num 2 NumSuffix.i64))
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let defs := List.cons def1 (List.cons def2 List.empty) in
     let mod_ := compile_db_decls_ir defs in
     let text := emit_module mod_ in
@@ -101,7 +101,7 @@ def test_compile_subtraction : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "sub i64"
@@ -123,7 +123,7 @@ def test_compile_multiplication : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "mul i64"
@@ -145,7 +145,7 @@ def test_compile_division : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "sdiv i64"
@@ -175,7 +175,7 @@ def test_compile_equality : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "icmp eq i64"
@@ -200,7 +200,7 @@ def test_compile_nested_arithmetic : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "mul i64" && check_contains text "add i64"
@@ -217,7 +217,7 @@ def test_compile_string_literal : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "hello"
@@ -234,7 +234,7 @@ def test_main_renaming : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "main_monad"
@@ -258,7 +258,7 @@ def test_compile_if_then_else : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     // Should contain branch instruction
@@ -281,7 +281,7 @@ def test_compile_less_than : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "icmp slt i64"
@@ -303,7 +303,7 @@ def test_compile_greater_than : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "icmp sgt i64"
@@ -325,7 +325,7 @@ def test_compile_not_equal : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "icmp ne i64"
@@ -353,7 +353,7 @@ def test_compile_multi_param_function : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "add i64"
@@ -376,7 +376,7 @@ def test_compile_nested_lambdas : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "make_adder"
@@ -396,7 +396,7 @@ def test_compile_constant_folding : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     // Should be optimized to just return 8
@@ -421,7 +421,7 @@ def test_compile_if_with_gt : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     // Should contain branch instruction
@@ -446,7 +446,7 @@ def test_compile_constructor : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "make_pair"
@@ -472,7 +472,7 @@ def test_compile_complex_expression : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "mul i64" && check_contains text "add i64"
@@ -501,7 +501,7 @@ def test_compile_all_arithmetic : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "add i64" && check_contains text "sub i64" && 
@@ -530,7 +530,7 @@ def test_compile_nested_if : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     // Should contain multiple branch instructions
@@ -551,7 +551,7 @@ def test_compile_bool_true : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "bool_true"
@@ -571,7 +571,7 @@ def test_compile_bool_false : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "bool_false"
@@ -596,7 +596,7 @@ def test_compile_bool_not : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "test_not"
@@ -620,7 +620,7 @@ def test_compile_if_with_bool_literals : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "br i1"
@@ -640,7 +640,7 @@ def test_compile_list_empty : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "list_empty"
@@ -665,7 +665,7 @@ def test_compile_list_cons : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "list_cons"
@@ -690,7 +690,7 @@ def test_compile_match_bool : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "match_bool"
@@ -721,7 +721,7 @@ def test_compile_recursive_factorial : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "factorial"
@@ -753,7 +753,7 @@ def test_compile_nested_bool_expr : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "br i1"
@@ -775,7 +775,7 @@ def test_compile_option_some : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "option_some"
@@ -795,7 +795,7 @@ def test_compile_option_none : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "option_none"
@@ -819,7 +819,7 @@ def test_compile_pair : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "make_pair"
@@ -841,7 +841,7 @@ def test_compile_result_ok : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "result_ok"
@@ -863,7 +863,7 @@ def test_compile_result_err : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "result_err"
@@ -894,7 +894,7 @@ def test_compile_nested_constructors : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nested_pair_option"
@@ -914,11 +914,11 @@ def test_compile_mutual_recursion : Bool :=
     // odd(n) = if n == 1 then true else even(n - 1)
     let even_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) zero) (Term.con (Con.mk (Identifier.id "true") (NamePath.npath (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named odd_id)) (Term.app (Term.app sub_var n_var) one))) in
     let even_term := Term.lam (DebugName.named n_id) (Term.type_ 1) even_body in
-    let even_def := Def.mk (NamePath.npath (List.cons even_id List.empty)) (Term.type_ 1) even_term List.empty List.empty Visibility.package_private in
+    let even_def := Def.mk (NamePath.npath (List.cons even_id List.empty)) (Term.type_ 1) even_term List.empty List.empty Visibility.package_private List.empty in
     
     let odd_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) one) (Term.con (Con.mk (Identifier.id "true") (NamePath.npath (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named even_id)) (Term.app (Term.app sub_var n_var) one))) in
     let odd_term := Term.lam (DebugName.named n_id) (Term.type_ 1) odd_body in
-    let odd_def := Def.mk (NamePath.npath (List.cons odd_id List.empty)) (Term.type_ 1) odd_term List.empty List.empty Visibility.package_private in
+    let odd_def := Def.mk (NamePath.npath (List.cons odd_id List.empty)) (Term.type_ 1) odd_term List.empty List.empty Visibility.package_private List.empty in
     
     let defs := List.cons even_def (List.cons odd_def List.empty) in
     let mod_ := compile_db_decls_ir defs in
@@ -956,7 +956,7 @@ def test_compile_complex_control_flow : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "br i1"
@@ -985,7 +985,7 @@ def test_compile_triple : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "triple"
@@ -1011,7 +1011,7 @@ def test_compile_nested_list : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nested_list"
@@ -1039,7 +1039,7 @@ def test_compile_chained_natives : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "add i64" && check_contains text "mul i64" && check_contains text "sub i64"
@@ -1068,7 +1068,7 @@ def test_compile_mixed_bool_arith : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "br i1" && check_contains text "add i64"
@@ -1101,7 +1101,7 @@ def test_compile_result_both : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "result_both"
@@ -1134,7 +1134,7 @@ def test_compile_deeply_nested_if : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     // Should contain multiple branch instructions
@@ -1171,7 +1171,7 @@ def test_compile_lambda_multi_arg : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "lam_multi_arg"
@@ -1192,7 +1192,7 @@ def test_compile_forall_type : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "forall_test"
@@ -1215,7 +1215,7 @@ def test_compile_pi_type : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "pi_test"
@@ -1231,7 +1231,7 @@ def test_compile_type_universe : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "type_universe"
@@ -1247,7 +1247,7 @@ def test_compile_hole : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "hole_test"
@@ -1270,7 +1270,7 @@ def test_compile_partial_application : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "partial_app"
@@ -1293,7 +1293,7 @@ def test_compile_defs_with_deps : Bool :=
         helper_term
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     // main calls helper with 5
     let five := Term.lit (Literal.num 5 NumSuffix.i64) in
     let helper_call := Term.app (Term.var 0 (DebugName.named helper_id)) five in
@@ -1303,7 +1303,7 @@ def test_compile_defs_with_deps : Bool :=
         helper_call
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let defs := List.cons helper_def (List.cons main_def List.empty) in
     let mod_ := compile_db_decls_ir defs in
     let text := emit_module mod_ in
@@ -1331,7 +1331,7 @@ def test_compile_match_multiple_cases : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "match_multi"
@@ -1354,7 +1354,7 @@ def test_compile_comparison_ops : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "comparison_ops"
@@ -1377,7 +1377,7 @@ def test_compile_arithmetic_ops : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "arithmetic_ops"
@@ -1411,7 +1411,7 @@ def test_compile_fibonacci : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "fibonacci"
@@ -1442,7 +1442,7 @@ def test_compile_triple_nested_list : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "triple_nested"
@@ -1483,7 +1483,7 @@ def test_compile_all_constructors : Bool :=
         body
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "all_ctors"
@@ -1503,7 +1503,7 @@ def test_compile_nat_zero : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nat_zero"
@@ -1527,7 +1527,7 @@ def test_compile_nat_succ : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nat_succ"
@@ -1551,7 +1551,7 @@ def test_compile_nested_nat : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nested_nat"
@@ -1587,7 +1587,7 @@ def test_compile_list_option_nat : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "list_option_nat"
@@ -1613,7 +1613,7 @@ def test_compile_nat_three : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nat_three"
@@ -1643,7 +1643,7 @@ def test_compile_option_list_nat : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "option_list_nat"
@@ -1671,7 +1671,7 @@ def test_compile_pair_nat_list : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "pair_nat_list"
@@ -1695,7 +1695,7 @@ def test_compile_result_nat : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "result_nat"
@@ -1723,7 +1723,7 @@ def test_compile_result_option_nat : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "result_option_nat"
@@ -1747,7 +1747,7 @@ def test_compile_match_nat_zero : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "match_nat_zero"
@@ -1773,7 +1773,7 @@ def test_compile_match_nat_zero_succ : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "match_nat_both"
@@ -1811,7 +1811,7 @@ def test_compile_nat_add : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nat_add"
@@ -1849,7 +1849,7 @@ def test_compile_nat_mul : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nat_mul"
@@ -1881,7 +1881,7 @@ def test_compile_nat_pred : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "nat_pred"
@@ -1901,7 +1901,7 @@ def test_compile_string_beq : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "string_beq_test"
@@ -1921,7 +1921,7 @@ def test_compile_string_concat : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "string_concat_test"
@@ -1948,7 +1948,7 @@ def test_compile_list_is_empty : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "list_is_empty"
@@ -1974,7 +1974,7 @@ def test_compile_option_is_some : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "option_is_some"
@@ -1994,7 +1994,7 @@ def test_compile_io_pure : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "io_pure_test"
@@ -2015,7 +2015,7 @@ def test_compile_io_bind : Bool :=
         term_
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ List.empty) in
     let text := emit_module mod_ in
     check_contains text "io_bind_test"

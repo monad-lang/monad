@@ -162,8 +162,8 @@ def class_defs_name_subst (target : Identifier) (replacement : Term) (cds : List
 #[partial]
 def def_name_subst (target : Identifier) (replacement : Term) (d : Def) : Def :=
     match d {
-        Def.mk {name, typ, term, constraints, attrs, vis, ..} =>
-            Def.mk name (name_subst_term target replacement typ) (name_subst_term target replacement term) constraints attrs vis,
+        Def.mk {name, typ, term, constraints, attrs, vis, params, ..} =>
+            Def.mk name (name_subst_term target replacement typ) (name_subst_term target replacement term) constraints attrs vis params,
     }
 
 #[partial]
@@ -317,7 +317,7 @@ def test_name_subst_decl_def_d_substitutes_typ_and_term : Bool :=
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let d : Decl :=
-        Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id "make") List.empty)) (named_ref t_ident) (named_ref t_ident) empty_constraints empty_attrs Visibility.package_private) in
+        Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id "make") List.empty)) (named_ref t_ident) (named_ref t_ident) empty_constraints empty_attrs Visibility.package_private List.empty) in
     match name_subst_decl t_ident replacement d {
         Decl.def_d d_val =>
             match d_val {

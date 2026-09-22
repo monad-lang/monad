@@ -188,8 +188,8 @@ def class_defs_terms_expand (lookup : Identifier -> Option Term) (cds : List Cla
 #[partial]
 def def_terms_expand (lookup : Identifier -> Option Term) (d : Def) : Def :=
     match d {
-        Def.mk {name, typ, term, constraints, attrs, vis, ..} =>
-            Def.mk name (expand_term lookup typ) (expand_term lookup term) constraints attrs vis,
+        Def.mk {name, typ, term, constraints, attrs, vis, params, ..} =>
+            Def.mk name (expand_term lookup typ) (expand_term lookup term) constraints attrs vis params,
     }
 
 #[partial]
@@ -541,7 +541,7 @@ def test_expand_decls_drops_term_macro_definitions : Bool :=
     // registry, produces zero output decl_list.
     let double_name : NamePath := NamePath.npath (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam DebugName.unnamed Term.hole (Term.var 0 DebugName.unnamed) in
-    let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private) in
+    let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private List.empty) in
     match expand_decls (List.cons macro_def List.empty) {
         List.empty => true,
         List.cons _ _ => false,
@@ -554,9 +554,9 @@ def test_expand_decls_expands_term_position_macro_call_inside_a_def : Bool :=
     // and the macro definition itself is dropped from the output.
     let double_name : NamePath := NamePath.npath (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam DebugName.unnamed Term.hole (Term.var 0 DebugName.unnamed) in
-    let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private) in
+    let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private List.empty) in
     let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named (Identifier.id "double"))) (Term.type_ 9) in
-    let y_def : Decl := Decl.def_d (Def.mk dummy_path Term.hole call empty_constraints empty_attrs Visibility.package_private) in
+    let y_def : Decl := Decl.def_d (Def.mk dummy_path Term.hole call empty_constraints empty_attrs Visibility.package_private List.empty) in
     match expand_decls (List.cons macro_def (List.cons y_def List.empty)) {
         List.cons only_decl rest =>
             (match rest { List.empty => true, List.cons _ _ => false }) &&
@@ -662,7 +662,7 @@ def test_expand_decls_arity_mismatch_leaves_call_unresolved : Bool :=
 
 #[test]
 def test_expand_decls_ordinary_decl_with_no_macros_is_unchanged : Bool :=
-    let ordinary : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 4) empty_constraints empty_attrs Visibility.package_private) in
+    let ordinary : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 4) empty_constraints empty_attrs Visibility.package_private List.empty) in
     match expand_decls (List.cons ordinary List.empty) {
         List.cons only_decl rest =>
             (match rest { List.empty => true, List.cons _ _ => false }) &&
@@ -844,7 +844,7 @@ def test_derive_bridge_ignores_unattributed_and_non_type_decls : Bool :=
     // and an attributed `def` (whose attrs are `#[test]`/`#[arg]`-class,
     // not type-level) both generate nothing.
     let plain : Decl := bridge_struct List.empty in
-    let d : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 1) empty_constraints (List.cons bridge_derive_attr List.empty) Visibility.package_private) in
+    let d : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 1) empty_constraints (List.cons bridge_derive_attr List.empty) Visibility.package_private List.empty) in
     I64.beq (List.length (derive_bridge_decls List.empty plain)) 0 &&
     I64.beq (List.length (derive_bridge_decls List.empty d)) 0 &&
     not (has_derive_expansion List.empty (List.cons plain (List.cons d List.empty)))
@@ -858,7 +858,7 @@ def test_decl_type_attrs_reads_struct_and_inductive_only : Bool :=
     let attr : Attribute := Attribute.mk (Identifier.id "derive_cli") List.empty in
     let struct_decl : Decl := bridge_struct (List.cons attr List.empty) in
     let ind : Inductive := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Cmd") List.empty)) List.empty Term.hole List.empty (List.cons attr List.empty) Visibility.package_private in
-    let def_decl : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 1) empty_constraints List.empty Visibility.package_private) in
+    let def_decl : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.type_ 1) empty_constraints List.empty Visibility.package_private List.empty) in
     I64.beq (List.length (decl_type_attrs struct_decl)) 1 &&
     I64.beq (List.length (decl_type_attrs (Decl.inductive_d ind))) 1 &&
     I64.beq (List.length (decl_type_attrs def_decl)) 0 &&

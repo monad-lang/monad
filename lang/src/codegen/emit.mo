@@ -5176,7 +5176,7 @@ def native_def_fixture (name : String) (target : String) : Def :=
     let body := Term.lam (DebugName.named (Identifier.id "a")) Term.hole
         (Term.lam (DebugName.named (Identifier.id "b")) Term.hole Term.hole) in
     Def.mk (NamePath.npath (List.cons (Identifier.id name) List.empty)) Term.hole body
-        List.empty (native_attr target) Visibility.package_private
+        List.empty (native_attr target) Visibility.package_private List.empty
 
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
@@ -5317,7 +5317,7 @@ def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
 #[partial]
 def debug_fixture_def : Def :=
     Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
-        (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private
+        (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private List.empty
 
 /// A def with a source position on an INNER term, as
 /// `decls_parser_located` produces.
@@ -5343,7 +5343,7 @@ def located_fixture_def : Def :=
             (Term.lit (Literal.if_ (Term.lit (Literal.num 1 NumSuffix.i64))
                                    (Term.lit (Literal.num 2 NumSuffix.i64))
                                    (Term.lit (Literal.num 3 NumSuffix.i64)))))
-        List.empty empty_attrs Visibility.package_private
+        List.empty empty_attrs Visibility.package_private List.empty
 
 /// `debug_fixture_def` with the position a located parse puts on the
 /// body -- line 2, column 3, at offset 5.
@@ -5351,7 +5351,7 @@ def located_fixture_def : Def :=
 def located_num_fixture_def : Def :=
     Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
         (Term.ctx (Location.mk 5 2 3) (Term.lit (Literal.num 42 NumSuffix.i64)))
-        List.empty empty_attrs Visibility.package_private
+        List.empty empty_attrs Visibility.package_private List.empty
 
 #[test]
 def test_compile_db_decls_ir_with_debug_emits_dbg : Bool :=
@@ -5447,7 +5447,7 @@ def native_bool_over_branching_fixture_def : Def :=
                                 (Term.var 1 (DebugName.named (Identifier.id "x")))
                                 (Term.var 0 (DebugName.named (Identifier.id "y"))))))
                         (Term.lit (Literal.num (-1) NumSuffix.i64))))))
-        List.empty empty_attrs Visibility.package_private
+        List.empty empty_attrs Visibility.package_private List.empty
 
 /// Regression: a Bool-returning def whose body is a native comparison
 /// over a BRANCHING operand must box its tail value inside the terminal
@@ -5534,8 +5534,8 @@ def desugar_struct_lit_decl (scope : Scope) (d : Decl) : Decl := match d {
 
 #[partial]
 def desugar_struct_lit_def (scope : Scope) (d : Def) : Def := match d {
-    Def.mk {name, typ, term := term_, constraints, attrs, vis, ..} =>
-        Def.mk name typ (desugar_struct_lit_term scope term_) constraints attrs vis,
+    Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
+        Def.mk name typ (desugar_struct_lit_term scope term_) constraints attrs vis params,
 }
 
 /// The term-level rewrite. Structural traversal mirrors

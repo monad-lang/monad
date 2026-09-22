@@ -47,7 +47,7 @@ def free_var (s : String) : Term := Term.var sentinel (named s)
 def num (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
 
 def def_decl (name : String) (term : Term) : Decl :=
-  Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private)
+  Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private List.empty)
 
 def build_ctx (decl_list : List Decl) : LowerCtx :=
   lower_ctx_from_decls (mp1 "test") decl_list
@@ -272,7 +272,7 @@ def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity :
 def native_attr : List Attribute := [Attribute.mk (Identifier.id "native") [AttrArg.ident (Identifier.id "i64_add")]]
 
 def add_native_term : Term := Term.lam (named "a") Term.hole (Term.lam (named "b") Term.hole Term.hole)
-def add_native_decl : Decl := Decl.def_d (Def.mk (np1 "add_native") Term.hole add_native_term List.empty native_attr Visibility.package_private)
+def add_native_decl : Decl := Decl.def_d (Def.mk (np1 "add_native") Term.hole add_native_term List.empty native_attr Visibility.package_private List.empty)
 
 def native_stub_main_term : Term :=
   // add_native 3 4 -- should reduce to 7 via the SAME i64_add native

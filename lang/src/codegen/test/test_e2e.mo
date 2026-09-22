@@ -21,7 +21,7 @@ def test_e2e_simple_literal : Bool :=
         (Term.lit (Literal.num 42 NumSuffix.i64))
         empty_cons
         empty_attrs
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "myfunc"
@@ -37,7 +37,7 @@ def test_e2e_function_with_param : Bool :=
         term_
         empty_cons
         empty_attrs
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "add5"
@@ -65,7 +65,7 @@ def test_e2e_calling_convention : Bool :=
         (Term.lit (Literal.num 1 NumSuffix.i64))
         empty_cons
         empty_attrs
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "cc 9"
@@ -89,7 +89,7 @@ def test_e2e_io_main_unwraps_before_return : Bool :=
         (Term.lit (Literal.num 5 NumSuffix.i64))
         empty_cons
         empty_attrs
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     // `monad_get_field` is always DECLARED at the top of every module
@@ -113,7 +113,7 @@ def test_e2e_non_io_main_does_not_unwrap : Bool :=
         (Term.lit (Literal.num 5 NumSuffix.i64))
         empty_cons
         empty_attrs
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     Bool.not (check_contains text "call i64 @monad_get_field")

@@ -253,13 +253,13 @@ def rename_user_main (decls : List Decl) : List Decl :=
     }
 
 /// `def_val` with only its name replaced. Every other field is copied
-/// across explicitly -- `Def` has six, and a struct-update shorthand
+/// across explicitly -- `Def` has seven, and a struct-update shorthand
 /// here would be one more thing to get wrong silently.
 #[partial]
 def renamed_entry_def (def_val : Def) : Def :=
     match def_val {
-        Def.mk {name := _name, typ, term, constraints, attrs, vis, ..} =>
-            Def.mk (bare_npath "__monad_user_entry") typ term constraints attrs vis,
+        Def.mk {name := _name, typ, term, constraints, attrs, vis, params, ..} =>
+            Def.mk (bare_npath "__monad_user_entry") typ term constraints attrs vis params,
     }
 
 // ─── Driver source synthesis ────────────────────────────────────────
@@ -782,7 +782,7 @@ def dummy_path (name : String) : ModulePath := ModulePath.mp (List.cons (Identif
 def dummy_npath (name : String) : NamePath := NamePath.npath (List.cons (Identifier.id name) List.empty)
 
 def dummy_def (name : String) (attrs : List Attribute) : Def :=
-    Def.mk (dummy_npath name) Term.hole (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty attrs Visibility.package_private
+    Def.mk (dummy_npath name) Term.hole (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty attrs Visibility.package_private List.empty
 
 #[test]
 def test_is_test_def_true_for_tagged : Bool :=
@@ -817,7 +817,7 @@ def test_discover_test_defs_empty_when_none_tagged : Bool :=
 /// would leave it: a bare `Term.var` head for `Bool`, and an
 /// application of the `IO` head to it for `IO Bool`.
 def typed_def (name : String) (typ : Term) : Def :=
-    Def.mk (dummy_npath name) typ (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty test_attr Visibility.package_private
+    Def.mk (dummy_npath name) typ (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty test_attr Visibility.package_private List.empty
 
 def ty_var (name : String) : Term := Term.var 0 (DebugName.named (Identifier.id name))
 

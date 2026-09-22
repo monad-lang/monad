@@ -80,10 +80,10 @@ no multiplicity prefixes. A one-parameter block needs the `:=` default or a
 trailing comma — `def f {x : I64} : I64 := x` is read as an implicit *type*
 binder clause instead.
 
-> **The default is applied by the bootstrap host only.** The self-hosted compiler
-> parses the declaration but rejects a call that omits the parameter, with
-> `named call: missing required field`. Pass every argument, or use positional
-> parameters. See [The Bootstrap Host](./bootstrap-host.md).
+The default is applied by **both** compilers: omitting a parameter that
+declares one is accepted, and the declared default stands in for it, so
+`def scale {factor : I64 := 2, p : I64}` makes `scale { p := 4 }` equal 8.
+See [The Bootstrap Host](./bootstrap-host.md) for what is still host-only.
 
 ## Visibility
 

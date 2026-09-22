@@ -743,7 +743,8 @@ pub struct ParseDef {
     term: ParseTerm,
     constraints: List TypeConstraint,
     attrs: List Attribute,
-    vis: Visibility
+    vis: Visibility,
+    params: List ParseParam
 }
 
 pub struct ParseInductive {
@@ -1086,7 +1087,8 @@ pub struct Def {
     term: Term,
     constraints: List TypeConstraint,
     attrs: List Attribute,
-    vis: Visibility
+    vis: Visibility,
+    params: List Param
 }
 
 pub def Def.name (d : Def) : NamePath := d.name
@@ -1816,16 +1818,19 @@ pub struct LocalVar {
 
 // All resolved entries for a single scope level.
 //
-// `def_params`: a def's own declared parameter (name, type) list, in
+// `def_params`: a def's own DECLARED parameter list (`List Param`), in
 // order -- see `plans/implementations/named-field-construction.md`'s
-// Phase 6. Deliberately a SEPARATE side-table from `def_refs`, not a
+// Phase 6. DECLARED, not recovered: `build_scope_def` registers
+// `Def.params` straight off the decl and only falls back to walking the
+// `Term.lam` chain when the decl carries none. Deliberately a SEPARATE side-table from `def_refs`, not a
 // change to `ScopeDef.sig`/`.body`: that field's `Term.hole` sentinel
 // (set unconditionally by `build_scope_def`) is load-bearing for dozens
 // of existing call sites across the checker, which changing would risk
 // wide-reaching regressions -- named-call resolution only ever needs a
-// def's param NAMES (to match a call's own field names) and TYPES (to
-// check each field's value against), never its full body/signature, so
-// this narrower table is both safer and sufficient. Has a `:=` default
+// def's param NAMES (to match a call's own field names), TYPES (to
+// check each field's value against) and DEFAULTS (to stand in for an
+// omitted field), never its full body/signature, so this side-table is
+// both safer and sufficient. Has a `:=` default
 // (`Map.empty`) so every EXISTING `{ def_refs := .., .. }` struct-literal
 // construction site continues to build correctly unchanged (the checker
 // fills a missing field from its own declared default, same as any other
@@ -1860,7 +1865,7 @@ pub struct ScopeData {
     // an ordinary call site does (confirmed: `Map.empty` here fails at
     // evaluation with "unresolved global: Map.empty") -- `HashMap.map`/
     // `.empty_buckets` are ordinary functions, no dispatch needed.
-    def_params : HashMap String (List (Pair Identifier Term)) := HashMap.map HashMap.empty_buckets,
+    def_params : HashMap String (List Param) := HashMap.map HashMap.empty_buckets,
     // A def's own DECLARED return type (the final non-`Pi`/`Forall` type
     // at the end of its signature's own Pi-chain, `Def.typ` -- NOT its
     // body's inferred type, and NOT `ScopeDef.sig`, which stays

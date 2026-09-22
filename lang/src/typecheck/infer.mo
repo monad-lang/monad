@@ -3290,8 +3290,9 @@ def named_call_check_unknown_fields (params : List Param) (fields : List StructL
 /// literal form, which already accepted `{ w := 50 }` for a `Rect { w :
 /// I64, h : I64 := 100 }`. Both spellings now agree.
 ///
-/// A def's own named calls (`named_call_def_pair_args`, below) are a
-/// separate path and still require every field -- see its own comment.
+/// A def's own named calls run this same check now
+/// (`type_check_named_call_def_target`, below), so an omitted field with
+/// a `:=` default is accepted on the def path on exactly these terms.
 #[terminating]
 def named_call_check_missing_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
     match params {
@@ -3385,16 +3386,24 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
     }
 
 /// Def-target branch of `type_check_named_call` (Phase 6). Builds `args`
-/// in `params`' declared order (name+type pairs recovered from the def's
-/// own `Term.lam` chain by `def_params_of_term`, `lang/scope.mo`), checks
-/// each against its own declared type, then folds them into a plain
-/// curried `Term.app` chain against `f` -- mirroring the reference
-/// compiler's own def-target branch (`try_desugar_named_call`,
-/// `core_check.rs`): no per-field type-CORRELATION machinery is needed
-/// beyond `type_check` itself, since an ordinary curried application's
-/// own per-argument checking already does the right thing at each layer.
-def type_check_named_call_def_target (f : Term) (params : List (Pair Identifier Term)) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Option TypedTerm) :=
-    match named_call_def_check_unknown_fields params fields {
+/// in `params`' declared order -- the def's own DECLARED parameter list
+/// (`Def.params`, registered by `build_scope_def`; `def_params_of_term`
+/// still recovers it for a decl that carries none) -- checks each against
+/// its own declared type, then folds them into a plain curried `Term.app`
+/// chain against `f` -- mirroring the reference compiler's own def-target
+/// branch (`try_desugar_named_call`, `core_check.rs`): no per-field
+/// type-CORRELATION machinery is needed beyond `type_check` itself, since
+/// an ordinary curried application's own per-argument checking already
+/// does the right thing at each layer.
+///
+/// Field validation is the CONSTRUCTOR path's own helpers now, over the
+/// same `List Param`: `named_call_check_unknown_fields` for the field
+/// NAMES, and `named_call_def_pair_args` for the `:=` DEFAULTS. The two
+/// def-side mirrors of them (`named_call_def_check_unknown_fields` and
+/// `def_param_pair_exists`) are deleted rather than widened, so the two
+/// paths cannot drift apart on what an omitted field means again.
+def type_check_named_call_def_target (f : Term) (params : List Param) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Option TypedTerm) :=
+    match named_call_check_unknown_fields params fields {
         err e => err e,
         ok _ =>
             match named_call_def_pair_args params fields {
@@ -3409,64 +3418,43 @@ def type_check_named_call_def_target (f : Term) (params : List (Pair Identifier 
             }
     }
 
-/// Every literal field name must be among `params`' own declared names --
-/// mirrors `named_call_check_unknown_fields`, just over `List (Pair
-/// Identifier Term)` instead of `List Param` (a def's own recovered
-/// params carry no full `Param`, only name+type -- see `ScopeData.
-/// def_params`'s own doc comment).
-#[terminating]
-def named_call_def_check_unknown_fields (params : List (Pair Identifier Term)) (fields : List StructLitField) : Result TypeError Bool :=
-    match fields {
-        List.empty => ok true,
-        List.cons f rest =>
-            match f {
-                StructLitField.mk fname _ =>
-                    if def_param_pair_exists params fname
-                    then named_call_def_check_unknown_fields params rest
-                    else err (TypeError.custom (String.concat "named call: unknown field `" (String.concat (show_identifier fname) "`")))
-            }
-    }
-
-#[terminating]
-def def_param_pair_exists (params : List (Pair Identifier Term)) (name : Identifier) : Bool :=
-    match params {
-        List.empty => false,
-        List.cons p rest =>
-            match p {
-                Pair.pair pname _ =>
-                    if id_eq pname name then true else def_param_pair_exists rest name
-            }
-    }
-
-/// Builds `(value, declared_type)` pairs in `params`' own declared order
-/// -- every param must be covered by a literal field.
+/// Builds `(value, declared_type)` pairs in `params`' own declared order.
 ///
-/// Unlike the constructor path just above, there is no default to fall
-/// back to here, and the reason is structural rather than a policy
-/// choice: `ScopeData.def_params` is a `List (Pair Identifier Term)` --
-/// name and type, no `Param` -- because it is recovered from the
-/// elaborated `Term.lam` chain (`def_params_of_term`, `lang/scope.mo`),
-/// and `Term.lam` has no default slot. The parser DOES parse a def
-/// param's `:=` (`ParseParam.mk name type_ mult default_ attrs`) and
-/// `lam_params_loop` discards it. So `def scale {factor : I64 := 2, p :
-/// I64}` reaches this function with `factor`'s default gone, and
-/// `scale { p := 4 }` is rejected as a missing field while the ctor
-/// spelling of the same omission is now accepted. Giving defs the same
-/// treatment means a new parser->checker channel for the default (a
-/// `Term.lam` field or a parallel side-table), which touches every
-/// `Term.lam` construction site; `examples/structs.mo`'s
-/// `test_named_call_def_target_uses_declared_default` is the one corpus
-/// test that needs it, and it stays a recorded gap until that channel
-/// exists.
+/// A param omitted from `fields` is legal exactly when it declares a `:=`
+/// default, and the DEFAULT's own term then stands in for it -- the same
+/// substitution `struct_lit_build_args` makes on the constructor path, so
+/// `scale { p := 4 }` and `Rect { w := 50 }` are now accepted on the same
+/// terms instead of a def's own spelling being the stricter one. (A default
+/// is spliced in as a plain term, so it sees the CALLER's bindings, not the
+/// callee's -- a default that names an earlier param is not supported, which
+/// is a pre-existing property of this whole named-default design.)
+///
+/// That makes this function subsume the separate missing-fields pass the
+/// def path used to run -- same condition, same message, same order -- so
+/// `named_call_check_missing_fields` stays the constructor path's own and
+/// the only observable difference is that an omitted field with a default
+/// is no longer rejected. `params` is `List Param` rather than the
+/// name+type pair list this used to take because `ScopeData.def_params`
+/// widened with it: the default is the whole point of the widening, and it
+/// can only come from the decl (`Def.params`, populated by the parser from
+/// a brace-form parameter block and lowered by `lower_parse_def`).
 #[terminating]
-def named_call_def_pair_args (params : List (Pair Identifier Term)) (fields : List StructLitField) : Result TypeError (List (Pair Term Term)) :=
+def named_call_def_pair_args (params : List Param) (fields : List StructLitField) : Result TypeError (List (Pair Term Term)) :=
     match params {
         List.empty => ok List.empty,
         List.cons p rest =>
             match p {
-                Pair.pair pname ptyp =>
+                Param.mk pname ptyp _ pdefault _ =>
                     match struct_lit_find_field fields pname {
-                        Option.none => err (TypeError.custom (String.concat "named call: missing required field `" (String.concat (show_identifier pname) "`"))),
+                        Option.none =>
+                            match pdefault {
+                                Option.none => err (TypeError.custom (String.concat "named call: missing required field `" (String.concat (show_identifier pname) "`"))),
+                                Option.some value =>
+                                    match named_call_def_pair_args rest fields {
+                                        err e => err e,
+                                        ok rest_args => ok (List.cons (Pair.pair value ptyp) rest_args),
+                                    },
+                            },
                         Option.some value =>
                             match named_call_def_pair_args rest fields {
                                 err e => err e,
@@ -4120,6 +4108,7 @@ def scale_def : Def := {
     constraints := List.empty,
     attrs := List.empty,
     vis := Visibility.package_private,
+    params := List.empty,
 }
 
 def scale_scope : Scope := {

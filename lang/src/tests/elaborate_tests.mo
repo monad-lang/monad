@@ -156,7 +156,7 @@ def test_elaborate_def_free_var : Bool :=
     let typ : Term := pi v_A v_A in
     let body : Term := var 0 (named (Identifier.id "x")) in
     let mp : NamePath := NamePath.npath (List.cons (Identifier.id "f") List.empty) in
-    let d : Def := Def.mk mp typ body empty_constraints empty_attrs Visibility.package_private in
+    let d : Def := Def.mk mp typ body empty_constraints empty_attrs Visibility.package_private List.empty in
     let elaborated : Def := elaborate_def d no_ids in
     match elaborated {
         Def.mk {typ := elab_typ, ..} =>
@@ -182,7 +182,7 @@ def test_elaborate_def_constraint_only_var : Bool :=
     let constraint : TypeConstraint := TypeConstraint.mk show_cls (List.cons id_A List.empty) in
     let constraints : List TypeConstraint := List.cons constraint List.empty in
     let mp : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
-    let d : Def := Def.mk mp typ body constraints empty_attrs Visibility.package_private in
+    let d : Def := Def.mk mp typ body constraints empty_attrs Visibility.package_private List.empty in
     let elaborated : Def := elaborate_def d no_ids in
     match elaborated {
         Def.mk {typ := elab_typ, ..} =>
@@ -239,7 +239,7 @@ def test_elaborate_decls_empty : Bool :=
 #[test]
 def test_names_of_decl_def : Bool :=
     let mp : NamePath := NamePath.npath (List.cons (Identifier.id "f") List.empty) in
-    let d : Def := Def.mk mp (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private in
+    let d : Def := Def.mk mp (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private List.empty in
     let decl : Decl := Decl.def_d d in
     let names : List Identifier := names_of_decl decl in
     match names {
@@ -279,8 +279,8 @@ def test_names_of_decl_use_empty : Bool :=
 def test_names_of_decls_multiple : Bool :=
     let mp_f : NamePath := NamePath.npath (List.cons (Identifier.id "f") List.empty) in
     let mp_g : NamePath := NamePath.npath (List.cons (Identifier.id "g") List.empty) in
-    let d1 : Decl := Decl.def_d (Def.mk mp_f (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private) in
-    let d2 : Decl := Decl.def_d (Def.mk mp_g (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private) in
+    let d1 : Decl := Decl.def_d (Def.mk mp_f (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private List.empty) in
+    let d2 : Decl := Decl.def_d (Def.mk mp_g (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private List.empty) in
     let decl_list : List Decl := List.cons d1 (List.cons d2 List.empty) in
     let names : List Identifier := names_of_decls decl_list in
     id_member (Identifier.id "f") names && id_member (Identifier.id "g") names

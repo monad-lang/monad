@@ -24,7 +24,7 @@ def build_main42 : List Def :=
         body
         List.empty
         List.empty
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     List.cons def_ List.empty
 
 /// Full e2e: compile 42 to LLVM IR, write file, run llc, link, execute.

@@ -9,7 +9,7 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 4 entries here are what a full corpus sweep actually reports,
+/// The 3 entries here are what a full corpus sweep actually reports,
 /// not a guess, and none is a problem with the test files themselves. In
 /// rough order of how much they cost to close:
 ///
@@ -19,8 +19,6 @@
 ///     `scope_new`/`scope_drop`/`scope_fork`/`sleep_io`; this is ALL that
 ///     is left of that file -- its checker failure is CLOSED, see the
 ///     Phase-1 paragraph below) -- 2 files;
-///   * a named call's own declared defaults, which do not survive the
-///     parser (`structs.mo`) -- 1 file;
 ///   * the flatten dropping each decl's owning module, so a cross-module
 ///     qualified reference cannot pair-match (`qualified_ref_tests.mo`) --
 ///     1 file.
@@ -134,6 +132,21 @@
 /// them generic (the codegen pass never sees a call the checker already
 /// rewrote, so it cannot be the only place this is fixed).
 ///
+/// A DEF'S OWN NAMED-CALL DEFAULTS is CLOSED (`examples/structs.mo`,
+/// 10/10 self-hosted), the last entry this file has held for a checker
+/// error rather than an unwired runtime. It was a missing CHANNEL,
+/// exactly as recorded: `ScopeData.def_params` was a `List (Pair
+/// Identifier Term)` because it was recovered from the def's own
+/// `Term.lam` chain, and `Term.lam` has no default slot -- so
+/// `def scale {factor : I64 := 2, p : I64}` reached the checker with
+/// `factor`'s default gone. `Def` and `ParseDef` now carry the DECLARED
+/// parameter list (`List Param`, threaded from the parser's brace-form
+/// block through `lower_parse_def`), so a named call on a def and one on
+/// a constructor are validated by the same helpers, and a default stands
+/// in for an omitted field on both. Every `ParseDef`/`Def` match site was
+/// converted to a named-field pattern in the same change, which is what
+/// makes this the last field either struct can gain at that price.
+///
 /// **Matching is on path AND cause**, deliberately: a listed file that
 /// starts failing for a NEW reason is reported as a real failure, not
 /// excused by its presence here. The cause is matched as a substring of
@@ -156,7 +169,6 @@
 pub def gap_paths : List String :=
     ["std/src/concurrent/fiber_test.mo",
      "std/src/concurrent/combine_test.mo",
-     "examples/structs.mo",
      "std/src/qualified_ref_tests.mo"]
 
 /// The distinguishing substring of each file's own known error.
@@ -178,7 +190,6 @@ pub def gap_causes : List String :=
      // `combine.mo` -- `fiber.mo` declares none of the `scope_*` families
      // -- so the two async entries stay distinguishable.
      "native `scope_fork`",
-     "does not typecheck",
      "does not typecheck"]
 
 /// Why each gap is open, and what closes it.
@@ -197,34 +208,6 @@ pub def gap_reasons : List String :=
      // the minimal repro for it: the two other binds in the same def call
      // named defs (`scope_new`, `scope_drop s`) and always had a carrier.
      "async runtime not self-hostable yet (scope_new/scope_drop/scope_fork/sleep_io unwired)",
-     // PARTIALLY CLOSED, and the half that is left is the harder one.
-     //
-     // The CONSTRUCTOR half is done: `named_call_check_missing_fields`
-     // (`lang/typecheck/infer.mo`) no longer demands a field that
-     // declares a `:=` default, so `Rect { w := 50 }` is accepted exactly
-     // as the bare `{ w := 50 }` literal already was. A default can only
-     // exist on a STRUCT's own implicit constructor (`cons_fields_to_params`
-     // rejects `:=` on a bare `type`), and `struct_lit_build_args` already
-     // substituted it, so the two spellings agreed on the value and
-     // disagreed only on whether to accept the omission.
-     //
-     // What is left is the DEF half, and it is not a policy choice but a
-     // missing channel: `ScopeData.def_params` is `List (Pair Identifier
-     // Term)` -- name and type, no `Param` -- because it is recovered
-     // from the elaborated `Term.lam` chain (`def_params_of_term`,
-     // `lang/scope.mo`), and `Term.lam` has no default slot. The parser
-     // DOES parse a def param's `:=` (`ParseParam.mk name type_ mult
-     // default_ attrs`) and `lam_params_loop` DISCARDS it, so
-     // `scale`'s own `factor : I64 := 2` is gone before this path sees
-     // the def. Measured, from the self-hosted binary: `error: named
-     // call: missing required field `factor` in
-     // test_named_call_def_target_uses_declared_default`, the file's only
-     // failure -- `test_named_call_constructor_single_field` and
-     // `test_named_call_def_target` both pass. Closed by: carrying the
-     // default through the parser into the checker (a `Term.lam` field or
-     // a parallel `ScopeData` side-table), which touches every
-     // `Term.lam` construction site.",
-     "a def's own named-call defaults do not survive the parser (`Term.lam` has no default slot)",
      // A qualified reference in TARGET position cannot resolve
      // self-hosted, and the blocker is structural rather than a missing
      // case. `build_scope_from_decls` (`lang/scope.mo`) takes ONE

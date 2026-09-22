@@ -46,7 +46,7 @@ commit this book ships with, not inferred from intent.
 | Char literals `'M'` | **Working** | Parse, type-check and compile, escapes included. No `\u{...}` self-hosted (the host has it). `Char` itself is a **stub**: no operations, no `BEq`, no `ToString` — you can write, type and pass one, not inspect it. |
 | `_` holes in term position | **Partial** | In *type* position (`(x : _)`) it works. In *value* position it parses and then lowers to nothing useful — a type-level-term error under `eval`, a void placeholder under `compile`. |
 | Named instances | **Partial** | `instance Name : Class Type { … }` parses — one bare identifier self-hosted, a dotted path on the host. Nothing selects an instance *by* name in either implementation. |
-| Brace-form params with defaults | **Partial** | The declaration parses. The default is **not applied at call sites** self-hosted — an omitted argument is `named call: missing required field`. The host applies it. |
+| Brace-form params with defaults | **Working** | The declaration parses and the default is applied at call sites by both compilers: omit `factor` in `scale { p := 4 }` and the declared `:= 2` stands in. |
 | Multi-binding `let x := 1; y := 2 in` | **Working** | The `;` separator is required self-hosted (the host makes it optional), so write the `;`. Nested `let … in` still works everywhere. |
 | UFCS method calls (`x.f args`) | **Planned** | An earlier host type checker desugared these; neither does now. `x.f` is field access only. |
 | Backtick infix (`` `f` ``) | **Planned** | The parser recognises the token; the expression parser never reduces it. |

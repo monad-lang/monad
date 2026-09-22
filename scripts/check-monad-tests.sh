@@ -193,7 +193,6 @@ gap_files=(
   # list in the same commit: all three run self-hosted now (56/56, 3/3
   # and 5/5).
   std/src/concurrent/combine_test.mo
-  examples/structs.mo
   # Qualified references in TARGET position do not resolve self-hosted:
   # the flatten drops each decl's owning module, so the pair match
   # cannot succeed across a module boundary (see cli/src/test_gaps.mo
@@ -239,13 +238,17 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # neither gate covers the other, and until this ran, nothing in CI used
 # the self-hosted checker on the whole corpus. 180 files, ~52s.
 #
-# Two files fail it today, and both are already registered in
-# `cli/src/test_gaps.mo` (their test-side failures):
+# One file fails it today, and it is already registered in
+# `cli/src/test_gaps.mo` (its test-side failure):
 #
-#   examples/structs.mo                a def's own named-call defaults do not
-#                                      survive the parser
 #   std/src/qualified_ref_tests.mo     a qualified reference in TARGET
 #                                      position cannot resolve self-hosted
+#
+# `examples/structs.mo` left this list with Phase 2, in the same commit
+# as its `gap_files` entry: a def's own declared `:=` defaults now reach
+# the checker, so its one error -- `named call: missing required field
+# `factor`` -- is gone. Measured before removing: the file reports 0
+# error(s) and runs 10/10 through the self-hosted runner.
 #
 # `lang/src/json.mo` (3 errors) and `std/src/concurrent/combine_test.mo`
 # (1) left this list with Phase 1's expected-type channel, together with
@@ -275,7 +278,6 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # is not on this list fails it too. The whole list should disappear with
 # its registry entries.
 check_gap_files=(
-  examples/structs.mo:1
   # Same cause as its `gap_files` entry: a qualified reference in TARGET
   # position cannot resolve self-hosted, because the flatten drops each
   # decl's owning module (see cli/src/test_gaps.mo for the full reason).

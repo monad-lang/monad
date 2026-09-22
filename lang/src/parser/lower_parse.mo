@@ -859,7 +859,8 @@ def lower_parse_def (ctx : ParseLowerCtx) (d : ParseDef) : Def :=
       term := lower_parse_term ctx d.term,
       constraints := d.constraints,
       attrs := d.attrs,
-      vis := d.vis }
+      vis := d.vis,
+      params := lower_parse_params ctx d.params }
 
 
 #[partial]

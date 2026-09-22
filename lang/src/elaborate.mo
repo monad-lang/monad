@@ -160,9 +160,9 @@ def wrap_forall (typ : Term) (vars : List Identifier) : Term :=
 /// Mirrors Rust's elaborate_def (type.rs:2877).
 def elaborate_def (d : Def) (known_names : List Identifier) : Def :=
     match d {
-        Def.mk {name, typ, term, constraints, attrs, vis, ..} =>
+        Def.mk {name, typ, term, constraints, attrs, vis, params, ..} =>
             let elaborated_typ := elaborate_type typ constraints known_names in
-            Def.mk name elaborated_typ term constraints attrs vis,
+            Def.mk name elaborated_typ term constraints attrs vis params,
     }
 
 /// Elaborate an inductive type definition.
@@ -407,7 +407,7 @@ def elaborate_test_def_macro_decl : Decl :=
     let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
     let no_constraints : List TypeConstraint := List.empty in
     let no_attrs : List Attribute := List.empty in
-    Decl.def_macro_d (Def.mk np Term.hole Term.hole no_constraints no_attrs Visibility.package_private)
+    Decl.def_macro_d (Def.mk np Term.hole Term.hole no_constraints no_attrs Visibility.package_private List.empty)
 
 def elaborate_test_decl_gen_decl : Decl :=
     let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in

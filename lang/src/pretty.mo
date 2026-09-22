@@ -769,7 +769,7 @@ def test_show_decl_open_filtered : Bool :=
 
 #[test]
 def test_show_decl_scoped_open : Bool :=
-    let inner := Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty Visibility.package_private) in
+    let inner := Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty Visibility.package_private List.empty) in
     let d := Decl.scoped_open_d (NamePath.npath (List.cons (Identifier.id "Nat") List.empty)) OpenFilter.open_all inner in
     show_decl d == "open Nat in def z : _ := _"
 
@@ -784,7 +784,7 @@ def test_show_decl_def : Bool :=
     let path := Identifier.id "x" in
     let var_t := Term.var 0 (DebugName.named path) in
     let lam := Term.lam (DebugName.named path) (Term.type_ 1) var_t in
-    let d := Def.mk name (Term.type_ 1) lam List.empty List.empty Visibility.package_private in
+    let d := Def.mk name (Term.type_ 1) lam List.empty List.empty Visibility.package_private List.empty in
     let decl := Decl.def_d d in
     show_decl decl == "def id : Type := (fn x : Type => x)"
 
@@ -818,7 +818,7 @@ def test_show_decl_inductive : Bool :=
 #[partial]
 def simple_def_decl (name_str : String) : Decl :=
     let name := NamePath.npath (List.cons (Identifier.id name_str) List.empty) in
-    let d := Def.mk name (Term.type_ 1) (Term.type_ 1) List.empty List.empty Visibility.package_private in
+    let d := Def.mk name (Term.type_ 1) (Term.type_ 1) List.empty List.empty Visibility.package_private List.empty in
     Decl.def_d d
 
 #[test]

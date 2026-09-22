@@ -297,7 +297,7 @@ def test_show_decl_def : Bool :=
     let name : NamePath := NamePath.npath (List.cons (Identifier.id "id") List.empty) in
     let typ : Term := Term.pi (Term.type_ 1) (Term.pi (Term.var 2 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_A))) in
     let body : Term := Term.lam (DebugName.named test_id_x) (Term.var 1 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_x)) in
-    let def_ : Def := Def.mk name typ body empty_constraints empty_attrs Visibility.package_private in
+    let def_ : Def := Def.mk name typ body empty_constraints empty_attrs Visibility.package_private List.empty in
     let decl : Decl := Decl.def_d def_ in
     let result : String := show_decl decl in
     String.beq result "def id : (Type -> (A -> A)) := (fn x : A => x)"

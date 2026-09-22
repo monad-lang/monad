@@ -44,7 +44,7 @@ def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool :=
 
 def typecheck_def (df : Def) (scope : Scope) : Bool :=
     match df {
-        mk _name typ body _constraints _attrs _vis =>
+        Def.mk {name := _name, typ, term := body, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
             // Skip native/abstract definitions (body is Term.hole)
             if is_hole body then
                 true

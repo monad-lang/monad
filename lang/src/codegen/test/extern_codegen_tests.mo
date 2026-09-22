@@ -32,7 +32,7 @@ def mk_puts_def : Def :=
     Def.mk (NamePath.npath (List.cons (id "puts_ffi") List.empty))
         (Term.var 0 (named (id "I32")))
         (Term.lam (DebugName.named s_id) string_term Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
 
 /// `puts_ffi` (String → I32) compiles to:
 ///   declare i32 @puts(i8*)
@@ -76,7 +76,7 @@ def mk_strlen_def : Def :=
     Def.mk (NamePath.npath (List.cons (id "strlen") List.empty))
         (Term.var 0 (named (id "I64")))
         (Term.lam (DebugName.named s_id) string_term Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
 
 /// `#[extern "c" { link_name := "strlen" }]` must emit `declare i64 @strlen(i8*)`
 /// (NOT `@mystrlen` — the override picks the symbol).
@@ -108,7 +108,7 @@ def mk_sin_def : Def :=
     Def.mk (NamePath.npath (List.cons (id "sin") List.empty))
         (Term.var 0 (named (id "F64")))
         (Term.lam (DebugName.named x_id) (Term.var 0 (named (id "F64"))) Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
 
 #[test]
 def test_extern_sin_declare_double : Bool :=
@@ -135,7 +135,7 @@ def mk_abs_def : Def :=
     Def.mk (NamePath.npath (List.cons (id "abs") List.empty))
         (Term.var 0 (named (id "I32")))
         (Term.lam (DebugName.named x_id) (Term.var 0 (named (id "I32"))) Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
 
 #[test]
 def test_extern_abs_declare : Bool :=
@@ -170,7 +170,7 @@ def mk_sin_def_grouped : Def :=
     Def.mk (NamePath.npath (List.cons (id "sin") List.empty))
         (Term.var 0 (named (id "F64")))
         (Term.lam (DebugName.named x_id) (Term.var 0 (named (id "F64"))) Term.hole)
-        ([] : List TypeConstraint) attrs Visibility.package_private
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
 
 #[test]
 def test_extern_link_name_grouped_attr : Bool :=
@@ -185,7 +185,7 @@ def mk_plain_def : Def :=
     let body := Term.var 0 (named x_id) in
     Def.mk (NamePath.npath (List.cons (id "plain") List.empty))
         (Term.type_ 1) body
-        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty
 
 #[test]
 def test_no_extern_attr_no_c_declare : Bool :=
