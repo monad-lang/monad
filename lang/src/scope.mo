@@ -206,7 +206,8 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
         mk indname _ _ _ _ _ => { sd with inductives := npath_map_insert indname ind sd.inductives }
     }
 
-// --- build_scope_from_decls: build ScopeData from parsed declarations ---
+// --- build_scope_from_groups/build_scope_from_decls: build ScopeData
+// from parsed declarations, carrying each decl's OWNING module ---------
 
 // Two-pass: pass 1 (`build_scope_from_decls_go`, unchanged) registers every
 // real `def`/`type`/`class`/`instance`/`infix` declaration exactly as
@@ -237,25 +238,72 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
 // non-test `.mo` file in the corpus was found using `scoped_open_d`'s
 // real scoping semantics (only `lang/parser.mo`'s own unit tests and
 // `lang/pretty.mo`'s round-trip fixture construct one directly).
+/// One module's declarations -- the overwhelmingly common shape. A thin
+/// wrapper over `build_scope_from_groups` with a single group, so the
+/// whole list is stamped with `path` exactly as it was before the grouped
+/// builder existed.
 pub def build_scope_from_decls (path : ModulePath) (decl_list : List Decl) : ScopeData :=
+    build_scope_from_groups (List.cons (DeclGroup.mk path decl_list) List.empty)
+
+/// `build_scope_from_decls`, with each GROUP's decls stamped with that
+/// group's own module path instead of one path for the whole list.
+///
+/// Pass 1 (`build_scope_from_decls_go`) is per-decl independent -- it
+/// folds one declaration's own registrations into the accumulator and
+/// consults nothing else -- so folding it group by group, in order,
+/// produces exactly the same `ScopeData` as one fold over
+/// `decl_groups_flatten groups` would, apart from each `ScopeDef.module`.
+/// That difference is the whole point: a dependency def stamped with the
+/// CONSUMER's path can never pair-match in `find_def_by_module_and_name`,
+/// so a qualified reference across a module boundary could not resolve.
+///
+/// Pass 2 (`alias_decls_in_scope`) deliberately still runs ONCE over the
+/// flattened view: the flat-scope model lets one module's `use`/`open`
+/// alias be visible to another module's defs, and narrowing that to
+/// per-module aliasing is a separate behaviour change that no corpus case
+/// asks for.
+pub def build_scope_from_groups (groups : List DeclGroup) : ScopeData :=
     let empty : ScopeData := scope_data_empty in
-    let with_decls : ScopeData := build_scope_from_decls_go decl_list path empty in
+    let with_decls : ScopeData := build_scope_from_groups_go groups empty in
     let with_builtins : ScopeData := add_builtins with_decls in
+    let all_decls : List Decl := decl_groups_flatten groups in
     // Skip pass 2 entirely when this module has no use_d/open_d/
     // scoped_open_d decls at all (~12% of the current corpus, grep-
     // counted) -- there is nothing for it to alias, so re-walking every
     // decl just to find that out is wasted work. Measured directly
     // (self-hosted-compiler-perf.md Track B): alias_decls_in_scope
-    // accounts for ~29% of build_scope_from_decls's own cost on a
-    // representative sample -- real, but build_scope_from_decls's own
-    // cost is itself a minority of a file's total "scope" phase (most
-    // of which is I/O/parsing, see check_file_cached's --verbose
-    // timings), so this is a modest, not dominant, win -- worth taking
-    // since it's free and correctness-preserving, not because it
-    // explains the bulk of any single regression.
-    if decls_have_aliasable_decls decl_list
-    then alias_decls_in_scope decl_list with_builtins
+    // accounts for ~29% of the scope build's own cost on a
+    // representative sample -- real, but the scope build's own cost is
+    // itself a minority of a file's total "scope" phase (most of which
+    // is I/O/parsing, see check_file_cached's --verbose timings), so this
+    // is a modest, not dominant, win -- worth taking since it's free and
+    // correctness-preserving, not because it explains the bulk of any
+    // single regression.
+    if decls_have_aliasable_decls all_decls
+    then alias_decls_in_scope all_decls with_builtins
     else with_builtins
+
+def build_scope_from_groups_go (groups : List DeclGroup) (acc : ScopeData) : ScopeData :=
+    match groups {
+        List.empty => acc,
+        List.cons g rest =>
+            match g {
+                DeclGroup.mk gpath gdecls =>
+                    build_scope_from_groups_go rest (build_scope_from_decls_go gdecls gpath acc),
+            },
+    }
+
+/// The flattened view of a group list -- every group's decls, in group
+/// order, with nothing added or dropped: the list the pre-group pipeline
+/// would have held at that point.
+pub def decl_groups_flatten (groups : List DeclGroup) : List Decl :=
+    match groups {
+        List.empty => List.empty,
+        List.cons g rest =>
+            match g {
+                DeclGroup.mk _ gdecls => list_append gdecls (decl_groups_flatten rest),
+            },
+    }
 
 /// O(decls) but O(1) per decl (a bare tag match, no `ScopeData` work) --
 /// far cheaper than actually running `alias_decls_in_scope`'s own walk
@@ -1055,13 +1103,29 @@ def resolve_def_in_scope_by_module (qn : QualifiedName) (s : Scope) : Result Sco
 /// has no by-module index (`ScopeData` keeps each def's `.module`
 /// separately from its key), and qualified refs are rare enough that
 /// the scan is only paid where the flattened-key lookup above missed.
+///
+/// Both halves compare RENDERED (`.`-joined) strings, not segments. The
+/// name half is the reason: a DECLARED name is built by `dotted_def_name`
+/// -> `Identifier.id` -> `NamePath.npath [id]` (lang/parser.mo's
+/// `def_kw`), so `pub def String.concat` is ONE segment holding an
+/// embedded dot, while a ref's name half is `split_ids`-split per dot
+/// into `[String; concat]` -- two segments. `name_path_similar` is
+/// element-wise (`id_list_similar`), so the pair could never match and
+/// every cross-module qualified ref with a DOTTED name half
+/// (`init::string::String.concat`, `std::io::IO.println`) reported
+/// `unknown variable` while a single-segment one resolved. Comparing
+/// the rendering is exactly the canonical spelling this model keys defs
+/// by (`qualified_name_to_name_path` above flattens to the same string),
+/// and it is a strict superset of the segment-wise test: equal segments
+/// always render equally. The module half keeps its rendering because
+/// `show_module_path` is what the key is built from.
 def find_def_by_module_and_name (pairs : List (Pair String ScopeDef)) (qn : QualifiedName) : Option ScopeDef :=
     match pairs {
         List.empty => Option.none,
         List.cons p rest =>
             match p {
                 Pair.pair _ sd =>
-                    if name_path_similar sd.name qn.qname && String.beq (show_module_path sd.module) (show_module_path qn.qmod)
+                    if String.beq (show_name_path sd.name) (show_name_path qn.qname) && String.beq (show_module_path sd.module) (show_module_path qn.qmod)
                     then Option.some sd
                     else find_def_by_module_and_name rest qn,
             },
@@ -1605,6 +1669,22 @@ def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List De
     match decl_list {
         List.empty => List.empty,
         List.cons d rest => List.cons (resolve_infix_decl infixes d) (resolve_infix_decls infixes rest),
+    }
+
+/// `resolve_infix_decls` over each group. The rewrite is per-decl -- it
+/// consults only the globally collected infix table, never another
+/// declaration -- so carrying the owner alongside changes nothing about
+/// the result: `decl_groups_flatten` of this is exactly the list the flat
+/// version would have returned.
+#[partial]
+pub def resolve_infix_decl_groups (infixes : List Infix) (groups : List DeclGroup) : List DeclGroup :=
+    match groups {
+        List.empty => List.empty,
+        List.cons g rest =>
+            match g {
+                DeclGroup.mk gpath gdecls =>
+                    List.cons (DeclGroup.mk gpath (resolve_infix_decls infixes gdecls)) (resolve_infix_decl_groups infixes rest),
+            },
     }
 
 // --- Open/use alias resolution: rewrite a bare `open`/`use`-imported
@@ -2446,6 +2526,42 @@ def promote_all_instances (classes : List Class) (instances : List Instance) : L
             },
     }
 
+/// `promote_instance_defs`, grouped -- and deliberately NOT a per-group
+/// application of it.
+///
+/// `promote_instance_defs` collects its class table from its OWN argument,
+/// so promoting each module's decls in isolation would skip every
+/// instance whose class is declared in a different module (`std`'s
+/// instances of `init`'s classes, for one) -- a silent drop that would
+/// surface much later as a symbol codegen never emitted.
+///
+/// So the class table is still collected GLOBALLY, from the flattened
+/// view, and the promoted decls are appended as their own per-owner
+/// groups AFTER every original group. That reproduces the flat result
+/// exactly -- every original decl in order, then every promotion in order
+/// -- while attributing each promotion to the module that owns its
+/// instance. (The instance walk order matches too: groups are held in the
+/// same order the flat list holds their decls.)
+#[partial]
+pub def promote_instance_decl_groups (groups : List DeclGroup) : List DeclGroup :=
+    let all_decls : List Decl := decl_groups_flatten groups in
+    let classes : List Class := collect_classes all_decls in
+    List.append groups (promote_instance_decl_groups_tail groups classes)
+
+/// One appended group per input group, holding that group's own promoted
+/// decls (empty when none of its instances needed promoting).
+#[partial]
+def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List Class) : List DeclGroup :=
+    match groups {
+        List.empty => List.empty,
+        List.cons g rest =>
+            match g {
+                DeclGroup.mk gpath gdecls =>
+                    let promoted : List Decl := promote_all_instances classes (collect_instances gdecls) in
+                    List.cons (DeclGroup.mk gpath promoted) (promote_instance_decl_groups_tail rest classes),
+            },
+    }
+
 // --- Phase 3 (dictionary-passing plan, see
 // plans/bootstrapping/self-hosted-compiler.md): a constrained def whose
 // body actually references a single-var class constraint gains one
@@ -2651,6 +2767,21 @@ def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
             match d {
                 Decl.def_d def_ => List.cons (Decl.def_d (add_constraint_dict_params def_)) (add_constraint_dict_params_decls rest),
                 _ => List.cons d (add_constraint_dict_params_decls rest),
+            },
+    }
+
+/// `add_constraint_dict_params_decls` over each group. Like the infix
+/// pass, this rewrites one declaration at a time (`add_constraint_dict_
+/// params` takes a `Def` and nothing else), so the owner travelling
+/// alongside is irrelevant to the result.
+#[partial]
+pub def add_constraint_dict_params_decl_groups (groups : List DeclGroup) : List DeclGroup :=
+    match groups {
+        List.empty => List.empty,
+        List.cons g rest =>
+            match g {
+                DeclGroup.mk gpath gdecls =>
+                    List.cons (DeclGroup.mk gpath (add_constraint_dict_params_decls gdecls)) (add_constraint_dict_params_decl_groups rest),
             },
     }
 

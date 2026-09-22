@@ -9,19 +9,14 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 3 entries here are what a full corpus sweep actually reports,
-/// not a guess, and none is a problem with the test files themselves. In
-/// rough order of how much they cost to close:
-///
-///   * the async runtime, which does not exist -- `std/src/concurrent/
-///     fiber_test.mo` (the unwired `fork_io`/`await_fiber` family) and
-///     `std/src/concurrent/combine_test.mo` (the same family's
-///     `scope_new`/`scope_drop`/`scope_fork`/`sleep_io`; this is ALL that
-///     is left of that file -- its checker failure is CLOSED, see the
-///     Phase-1 paragraph below) -- 2 files;
-///   * the flatten dropping each decl's owning module, so a cross-module
-///     qualified reference cannot pair-match (`qualified_ref_tests.mo`) --
-///     1 file.
+/// The 2 entries here are what a full corpus sweep actually reports,
+/// not a guess, and neither is a problem with the test files themselves.
+/// Both are the same thing: the async runtime, which does not exist --
+/// `std/src/concurrent/fiber_test.mo` (the unwired `fork_io`/`await_fiber`
+/// family) and `std/src/concurrent/combine_test.mo` (the same family's
+/// `scope_new`/`scope_drop`/`scope_fork`/`sleep_io`; this is ALL that is
+/// left of that file -- its checker failure is CLOSED, see the Phase-1
+/// paragraph below).
 ///
 /// Each closed gap is recorded here rather than deleted outright, so the
 /// next reader can tell a fix from a re-registration.
@@ -147,6 +142,37 @@
 /// converted to a named-field pattern in the same change, which is what
 /// makes this the last field either struct can gain at that price.
 ///
+/// CROSS-MODULE QUALIFIED REFERENCES is CLOSED
+/// (`std/src/qualified_ref_tests.mo`, 4/4 self-hosted). Its recorded
+/// cause was right about the shape -- the flatten drops each decl's
+/// owning module -- and the recorded fix was the wrong half: routing the
+/// pipeline through `build_scope_from_modules` is unusable as written,
+/// because `build_scope_from_one_module` registers defs, inductives,
+/// instances and infixes and NONE of the classes or of the
+/// `def_params`/`def_sigs` side tables, so it would silently regress the
+/// checker -- and it has no production caller at all. The flatten now
+/// carries each decl's own owning module instead: `DeclGroup`
+/// (`lang/src/types.mo`) pairs a `ModulePath` with that module's decls,
+/// and `build_scope_from_groups` (`lang/scope.mo`) folds ONE GROUP AT A
+/// TIME so each def registers under its real module. The four
+/// whole-graph passes could not simply be applied per module -- the
+/// promotion pass collects its class table from its own argument, so a
+/// module promoted in isolation would lose every instance whose class is
+/// declared elsewhere; they collect globally off the flattened view and
+/// append per-owner promotion tail groups, which reproduces the flat
+/// result exactly. That was one half. The other half was the pair
+/// match's NAME comparison in `find_def_by_module_and_name`: a DECLARED
+/// name is built by `dotted_def_name` -> `Identifier.id` ->
+/// `NamePath.npath [id]`, so `pub def String.concat` is ONE segment
+/// holding an embedded dot, while a reference's name half is
+/// `split_ids`-split per dot into TWO -- and `name_path_similar` is
+/// element-wise, so a dotted name half could never match. That is
+/// exactly why the file's single-segment `std::process::process_id`
+/// resolved as soon as the module was right while
+/// `init::string::String.concat` did not, and the comparison is on the
+/// RENDERED name now, which is the canonical spelling this model keys
+/// defs by.
+///
 /// **Matching is on path AND cause**, deliberately: a listed file that
 /// starts failing for a NEW reason is reported as a real failure, not
 /// excused by its presence here. The cause is matched as a substring of
@@ -168,8 +194,7 @@
 /// whether the user passes a directory or explicit files).
 pub def gap_paths : List String :=
     ["std/src/concurrent/fiber_test.mo",
-     "std/src/concurrent/combine_test.mo",
-     "std/src/qualified_ref_tests.mo"]
+     "std/src/concurrent/combine_test.mo"]
 
 /// The distinguishing substring of each file's own known error.
 ///
@@ -189,8 +214,7 @@ pub def gap_causes : List String :=
      // `scope_drop`, `scope_fork`, `sleep_io`). `scope_fork` is unique to
      // `combine.mo` -- `fiber.mo` declares none of the `scope_*` families
      // -- so the two async entries stay distinguishable.
-     "native `scope_fork`",
-     "does not typecheck"]
+     "native `scope_fork`"]
 
 /// Why each gap is open, and what closes it.
 pub def gap_reasons : List String :=
@@ -207,27 +231,7 @@ pub def gap_reasons : List String :=
      // isolated the local-variable-head half of that channel, and it is
      // the minimal repro for it: the two other binds in the same def call
      // named defs (`scope_new`, `scope_drop s`) and always had a carrier.
-     "async runtime not self-hostable yet (scope_new/scope_drop/scope_fork/sleep_io unwired)",
-     // A qualified reference in TARGET position cannot resolve
-     // self-hosted, and the blocker is structural rather than a missing
-     // case. `build_scope_from_decls` (`lang/scope.mo`) takes ONE
-     // `ModulePath` and the pipeline hands it the TARGET's, because
-     // `flatten_visible_module_decls` (`lang/module.mo`) has already
-     // merged every module's decls into a single list -- as its own doc
-     // comment puts it, "each decl's owning module is no longer
-     // recoverable". Every dependency def therefore registers with the
-     // CONSUMER's module path, so `find_def_by_module_and_name`'s pair
-     // match (name == `qn.qname` AND module == `qn.qmod`) can never
-     // succeed across a module boundary, however the flattened name is
-     // re-split. The DEPENDENCY-position half of the same feature IS
-     // fixed (the reference and definition now agree on one symbol
-     // spelling, so it no longer dies in `llc`), and the Rust host runs
-     // all four of this file's tests. Closed by: routing the pipeline
-     // through `build_scope_from_modules` (which preserves per-module
-     // identity but is not the path taken today), or carrying each
-     // decl's owning module through the flatten -- both touch where
-     // `priv` is enforced.",
-     "the flatten drops each decl's owning module, so a cross-module qualified ref cannot pair-match"]
+     "async runtime not self-hostable yet (scope_new/scope_drop/scope_fork/sleep_io unwired)"]
 
 #[partial]
 def gap_len (xs : List String) : I64 :=
@@ -336,6 +340,15 @@ def test_closed_expected_type_gaps_are_no_longer_listed : Bool :=
 def test_closed_driver_signal_gap_is_no_longer_listed : Bool :=
     Bool.not (is_known_gap "init/src/tests.mo" "driver exited -1")
     && Bool.not (is_known_gap "init/src/tests.mo" "compilation failed")
+
+/// Same pin for A7, cross-module qualified references (Phase 3), and
+/// for the same reason: it was listed for a cause that no longer exists,
+/// so a future failure in it is a NEW failure and must be reported
+/// rather than excused. The cause string is the one that used to be
+/// recorded for it.
+#[test]
+def test_closed_qualified_ref_gap_is_no_longer_listed : Bool :=
+    Bool.not (is_known_gap "std/src/qualified_ref_tests.mo" "does not typecheck")
 
 /// `combine_test.mo` is STILL listed, but for the async reason now rather
 /// than the checker one, and this pins both halves: its recorded cause

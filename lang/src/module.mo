@@ -7,7 +7,7 @@ use std::bench {now, report, report_since, since}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lib::types {
   module_path_to_string_colon,
-  Class, ClassDef, Decl, Def, Identifier, Instance, InductConstructor, Inductive, Infix,
+  Class, ClassDef, Decl, DeclGroup, Def, Identifier, Instance, InductConstructor, Inductive, Infix,
   LoadedModules, LocalScope, LocalVar, ModulePath, NamePath, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
   inductive_d, list_reverse, mk, mp, name, nid, show_name_path, to_name, union_ids,
@@ -32,13 +32,14 @@ use lib::typecheck::meta_reflect {
 // Importing it here as well made which one won a coin flip.
 use lib::scope {
   OpenAlias,
-  add_constraint_dict_params_decls, build_scope_from_decls,
+  add_constraint_dict_params_decl_groups, add_constraint_dict_params_decls,
+  build_scope_from_decls, build_scope_from_groups, decl_groups_flatten,
   collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   filter_valid_open_aliases,
   modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
-  param_names, promote_instance_defs,
+  param_names, promote_instance_decl_groups, promote_instance_defs,
   alias_map_empty, build_alias_map,
-  resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls,
+  resolve_class_calls_decls, resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
   scope_find_inductive, scope_push_local, scope_resolve_name,
 }
@@ -2664,16 +2665,36 @@ def flatten_module_decls (modules : List ModuleInfo) (acc : List Decl) : List De
             flatten_module_decls rest (list_append (mod_.decl_list) acc),
     }
 
+/// `flatten_module_decls`' grouped twin -- the same modules in the same
+/// order, but each module's decls kept as their own `DeclGroup`, so the
+/// scope builder can still say which module owns a def.
+///
+/// Order is preserved exactly, which is load-bearing: the flat version
+/// folds each module's decls onto the FRONT of the accumulator, so its
+/// result is the modules in REVERSE load order with each module's own
+/// decls in order. Prepending one group per module reproduces that, and
+/// `decl_groups_flatten` (`lang/scope.mo`) of the result is the very list
+/// `flatten_module_decls` returns.
+#[partial]
+def flatten_module_decl_groups (modules : List ModuleInfo) (acc : List DeclGroup) : List DeclGroup :=
+    match modules {
+        List.empty => acc,
+        List.cons mod_ rest =>
+            flatten_module_decl_groups rest (List.cons (DeclGroup.mk mod_.path mod_.decl_list) acc),
+    }
+
 /// `flatten_module_decls`, minus every `priv` declaration belonging to a
 /// module other than `target`.
 ///
 /// This is where `priv` is actually enforced for a real `check`/`compile`.
 /// The scope builder has its own filter (`scope_def_visible_to`,
 /// lang/src/scope.mo) but only on the `build_scope_from_modules` path,
-/// which the pipeline does not take: it flattens every module's decls into
-/// one list first and builds scope from THAT, where each decl's owning
-/// module is no longer recoverable. The filter therefore has to happen
-/// here, at the flatten, while `ModuleInfo.path` still says who owns what.
+/// which the pipeline does not take. It could do the job here now that
+/// the grouped flatten carries each decl's owning module through
+/// (`flatten_visible_module_decl_groups`), and `scope_def_visible_to`
+/// reads exactly that -- but moving it would change the `check_deps` case,
+/// where one shared scope deliberately shows a dependency its own
+/// internals, so the filter stays at the flatten.
 ///
 /// Two consequences worth knowing before changing this:
 ///
@@ -2694,6 +2715,23 @@ def flatten_visible_module_decls (target : ModulePath) (modules : List ModuleInf
                 then mod_.decl_list
                 else drop_priv_decls mod_.decl_list in
             flatten_visible_module_decls target rest (list_append visible acc),
+    }
+
+/// `flatten_visible_module_decls`' grouped twin -- the same `priv` rule
+/// applied to the same modules in the same order, with each module's
+/// visible decls kept as their own `DeclGroup`. See
+/// `flatten_module_decl_groups` for why the order is preserved by
+/// prepending one group per module.
+#[partial]
+def flatten_visible_module_decl_groups (target : ModulePath) (modules : List ModuleInfo) (acc : List DeclGroup) : List DeclGroup :=
+    match modules {
+        List.empty => acc,
+        List.cons mod_ rest =>
+            let visible : List Decl :=
+                if String.beq (show_module_path mod_.path) (show_module_path target)
+                then mod_.decl_list
+                else drop_priv_decls mod_.decl_list in
+            flatten_visible_module_decl_groups target rest (List.cons (DeclGroup.mk mod_.path visible) acc),
     }
 
 #[partial]
@@ -3072,7 +3110,7 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
 ///     every elaboration pass below) -- dependencies contribute only
 ///     signatures to `scope`, their own bodies are never verified. Fast,
 ///     and what to use for isolating "did THIS file break".
-///   - `true`: the fully-prepared WHOLE-GRAPH decl list (`dict_paramed`,
+///   - `true`: the fully-prepared WHOLE-GRAPH decl list (`dict_paramed_flat`,
 ///     already computed below for `scope`/`elaborated_decls` -- reused
 ///     directly here, no second pass needed) -- every dependency's own
 ///     declarations get body-checked too, not just scoped. Slower
@@ -3154,22 +3192,35 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
             // visibility-declarations.md tracks it.
             let target_module : ModuleInfo := get_loaded_main loaded;
             let target_path : ModulePath := target_module.path;
-            let all_decls : List Decl :=
+            // GROUPS, not a flat list: each group carries its own module's
+            // path, so the scope built below registers every dependency def
+            // under the module that OWNS it. That is what makes a
+            // cross-module qualified reference resolvable -- see
+            // `build_scope_from_groups` (`lang/scope.mo`) for why one path
+            // for the whole list cannot work.
+            let decl_groups : List DeclGroup :=
                 if check_deps
-                then flatten_module_decls (get_loaded_all loaded) List.empty
-                else flatten_visible_module_decls target_path (get_loaded_all loaded) List.empty;
+                then flatten_module_decl_groups (get_loaded_all loaded) List.empty
+                else flatten_visible_module_decl_groups target_path (get_loaded_all loaded) List.empty;
+            let all_decls : List Decl := decl_groups_flatten decl_groups;
             let t_flat : I64 <- bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls);
             let infixes : List Infix := collect_infixes all_decls;
             let t_collect : I64 <- bench_step verbose "  elab: collect_infixes" t_flat (List.length infixes);
-            let resolved : List Decl := resolve_infix_decls infixes all_decls;
-            let t_infix : I64 <- bench_step verbose "  elab: resolve_infix_decls" t_collect (List.length resolved);
-            let promoted : List Decl := promote_instance_defs resolved;
-            let t_promote : I64 <- bench_step verbose "  elab: promote_instance_defs" t_infix (List.length promoted);
-            let dict_paramed : List Decl := add_constraint_dict_params_decls promoted;
-            let t_dict : I64 <- bench_step verbose "  elab: add_constraint_dict_params_decls" t_promote (List.length dict_paramed);
+            let resolved : List DeclGroup := resolve_infix_decl_groups infixes decl_groups;
+            let t_infix : I64 <- bench_step verbose "  elab: resolve_infix_decls" t_collect (List.length (decl_groups_flatten resolved));
+            let promoted : List DeclGroup := promote_instance_decl_groups resolved;
+            let t_promote : I64 <- bench_step verbose "  elab: promote_instance_defs" t_infix (List.length (decl_groups_flatten promoted));
+            let dict_paramed : List DeclGroup := add_constraint_dict_params_decl_groups promoted;
+            let t_dict : I64 <- bench_step verbose "  elab: add_constraint_dict_params_decls" t_promote (List.length (decl_groups_flatten dict_paramed));
+            // Everything after the scope is built from the FLAT view, not
+            // the groups: `expand_decls_graph` and `target_decls_pre` both
+            // take a `List Decl`, and codegen consumes the flat list too.
+            // The grouping exists only to give the scope builder each
+            // decl's owner.
+            let dict_paramed_flat : List Decl := decl_groups_flatten dict_paramed;
             let main_module : ModuleInfo := get_loaded_main loaded;
             let target_mp : ModulePath := main_module.path;
-            let scope_data : ScopeData := build_scope_from_decls target_mp dict_paramed;
+            let scope_data : ScopeData := build_scope_from_groups dict_paramed;
             let t_scope : I64 <- bench_step verbose "  elab: build_scope_from_decls" t_dict (List.length scope_data.classes);
             let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
             // `target_decls` must go through the SAME infix-resolution/
@@ -3182,23 +3233,23 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
             // for under that literal name, only under `HAdd.add` --
             // checking the raw decls against the resolved scope produced
             // a bogus `unknown variable '+'` before this fix. When
-            // `check_deps` is true, `dict_paramed` already IS that fully-
-            // resolved list, for the whole graph (main module's own decls
-            // included -- `all_decls`/`flatten_module_decls` folds;
+            // `check_deps` is true, `dict_paramed_flat` already IS that
+            // fully-resolved list, for the whole graph (main module's own
+            // decls included -- `all_decls`/`flatten_module_decls` folds;
             // `main_module` too, see `load_file_modules`), so reuse it
             // directly instead of redundantly re-running the same three
             // passes on just the main module's own raw decls again.
             let target_decls_raw : List Decl := main_module.decl_list;
             let target_decls_pre : List Decl :=
                 if check_deps then
-                    dict_paramed
+                    dict_paramed_flat
                 else
                     add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw));
             let t_target : I64 <- bench_step verbose "  elab: target-only re-run of the same 3 passes" t_scope (List.length target_decls_pre);
             // Forall-wrap each target def's type with its free + constraint-
             // only type vars (`elaborate_def_typs`), using the whole-graph
             // name set so globals aren't wrapped. `known_names` comes from
-            // `dict_paramed` (the fully-prepared whole-graph list) -- a
+            // `dict_paramed_flat` (the fully-prepared whole-graph list) -- a
             // target-only `names_of_decls` would miss dependency globals and
             // wrongly Forall-wrap them. This re-introduces the implicit
             // type vars the parser deliberately dropped (e.g. `F`;
@@ -3208,7 +3259,7 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
             // -- see `expand_decls_graph`'s own doc comment. A no-op for
             // any file that never (transitively) invokes
             // `reflect_type_info!`, so safe to run unconditionally.
-            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed target_decls_pre target_decls_raw;
+            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed_flat target_decls_pre target_decls_raw;
             let t_expand : I64 <- bench_step verbose "  elab: expand_decls_graph" t_target 0;
             match expansion_result {
                 Result.err e => return (Result.err e),

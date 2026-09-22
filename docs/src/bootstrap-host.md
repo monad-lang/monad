@@ -118,7 +118,6 @@ parameters — has since been implemented self-hosted; what is left is:
 | `#[derive BEq BOrd Debug Lens]` | write the instances by hand. The attribute parses self-hosted, but nothing expands it, so no instances are generated |
 | `\u{XXXX}` in a string or char literal | write the character itself |
 | A dotted instance name (`instance A.B : Class T`) | use a single bare identifier |
-| Omitting a brace param that has a default (`scale { p := 4 }`) | pass every argument. The *declaration* parses in both; only the host applies the default |
 | A `let` with the `;` between bindings left out | write the `;` — the self-hosted parser requires it |
 | `_` as a hole in **value** position | only type position works self-hosted; write the value |
 

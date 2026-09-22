@@ -193,12 +193,20 @@ gap_files=(
   # list in the same commit: all three run self-hosted now (56/56, 3/3
   # and 5/5).
   std/src/concurrent/combine_test.mo
-  # Qualified references in TARGET position do not resolve self-hosted:
-  # the flatten drops each decl's owning module, so the pair match
-  # cannot succeed across a module boundary (see cli/src/test_gaps.mo
-  # for the full reason). The Rust runner below still runs all four of
-  # its tests, and the DEPENDENCY-position half of the feature works.
-  std/src/qualified_ref_tests.mo
+  # `std/src/qualified_ref_tests.mo` left this list with Phase 3, in
+  # lockstep with its `check_gap_files` entry. A qualified reference in
+  # TARGET position could not resolve self-hosted because the flatten
+  # handed the whole decl list a SINGLE `ModulePath` -- the target's --
+  # so `build_scope_def` stamped every DEPENDENCY def with the CONSUMER's
+  # module, and `find_def_by_module_and_name` matches name AND module, so
+  # its pair match could never succeed across a boundary. The flatten now
+  # carries each decl's own owning module (`DeclGroup`, lang/src/types.mo)
+  # and the pair match compares RENDERED names, because a DECLARED name
+  # is one identifier with an embedded dot (`dotted_def_name` ->
+  # `Identifier.id`) while a ref's name half is split per dot into
+  # segments -- which is why the file's single-segment ref resolved and
+  # its dotted one did not. Measured before removing: 0 error(s) and 4/4
+  # through the self-hosted runner.
 )
 
 out="${TMPDIR:-/tmp}/monad-bootstrap-ci"
@@ -238,11 +246,11 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # neither gate covers the other, and until this ran, nothing in CI used
 # the self-hosted checker on the whole corpus. 180 files, ~52s.
 #
-# One file fails it today, and it is already registered in
-# `cli/src/test_gaps.mo` (its test-side failure):
-#
-#   std/src/qualified_ref_tests.mo     a qualified reference in TARGET
-#                                      position cannot resolve self-hosted
+# `std/src/qualified_ref_tests.mo` was the last file on it and left with
+# Phase 3, in lockstep with its `gap_files` entry above -- that entry
+# records the cause and the fix. Measured before removing: `monad check
+# std/src/qualified_ref_tests.mo` -> 0 error(s), and the corpus-wide
+# check log holds no `FAIL` line for it.
 #
 # `examples/structs.mo` left this list with Phase 2, in the same commit
 # as its `gap_files` entry: a def's own declared `:=` defaults now reach
@@ -275,15 +283,15 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # Excluding by path alone would hide a NEW check failure in any of them,
 # so each carries its measured error COUNT: a file whose count changes
 # fails this script even though its path is listed. Anything failing that
-# is not on this list fails it too. The whole list should disappear with
-# its registry entries.
+# is not on this list fails it too.
+#
+# The list is now EMPTY, which is what the whole mechanism was for: the
+# `UNEXPECTED failure` arm below is the only one that can fire, so the
+# corpus-wide self-hosted check is a hard gate and any file that starts
+# failing it fails CI. The loop and the count check stay until Phase 12
+# deletes the scaffolding outright -- an empty registry is not the same
+# thing as no registry, and the deletion is its own reviewed step.
 check_gap_files=(
-  # Same cause as its `gap_files` entry: a qualified reference in TARGET
-  # position cannot resolve self-hosted, because the flatten drops each
-  # decl's owning module (see cli/src/test_gaps.mo for the full reason).
-  # Two of its four tests use one; the other two resolve through the
-  # target's own module and check clean.
-  std/src/qualified_ref_tests.mo:2
 )
 
 check_targets=()

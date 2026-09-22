@@ -1914,6 +1914,21 @@ pub struct Module {
     instances : List ScopeInstance,
 }
 
+// One module's own declarations, tagged with the module that OWNS them.
+//
+// The pipeline used to flatten every loaded module's decls into one
+// `List Decl` and hand the result a SINGLE `ModulePath` -- the target's --
+// so `build_scope_def` (`lang/scope.mo`) stamped every dependency def
+// with the CONSUMER's module. `find_def_by_module_and_name` matches a
+// qualified reference on name AND module, so a cross-module qualified
+// reference could never resolve. Carrying the owner alongside the decls
+// is what lets `build_scope_from_groups` register each def under its real
+// module instead.
+pub struct DeclGroup {
+    path : ModulePath,
+    decls : List Decl,
+}
+
 // A flat registry of loaded modules, keyed positionally by the list.
 //
 // Named `ModuleRegistry`, NOT `LoadedModules`, deliberately: `lang/
