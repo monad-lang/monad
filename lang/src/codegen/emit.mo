@@ -570,7 +570,24 @@ def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase
                                                                     let phi_instr := LLVMInstruction.assign phi_temp (LLVMValue.phi phi_pairs) in
                                                                     let ret_instr := LLVMInstruction.ret (LLVMValue.var_ phi_temp) in
                                                                     let merge_block := LLVMBasicBlock.mk merge_label (List.cons phi_instr (List.cons ret_instr List.empty)) in
-                                                                    let all_blocks := append_blocks blocks_s_spliced (List.cons merge_block chain_blocks) in
+                                                                    // `merge_block` LAST, after `chain_blocks` --
+                                                                    // its own `phi` operands are the case bodies' values,
+                                                                    // each defined inside a `chain_blocks` block, so
+                                                                    // emitting the merge first makes every one of them a
+                                                                    // forward reference. LLVM tolerates a forward
+                                                                    // reference only when the use site's stated type
+                                                                    // matches the definition's; a `phi i64` fed by a case
+                                                                    // block whose value is a raw `icmp`-produced `i1` is
+                                                                    // exactly where that tolerance runs out:
+                                                                    // `llc: instruction forward referenced with type
+                                                                    // 'i64'` pointing at the `icmp` itself. MEASURED,
+                                                                    // `lang/src/parser/position.mo`: `merge_4`'s
+                                                                    // `phi i64 [%t29, %merge_8]` preceded `merge_8`,
+                                                                    // which is where `%t29 = icmp eq i64 %t28, 2` lives.
+                                                                    // The `br label %merge_label` edges from the chain are
+                                                                    // LABEL references, which LLVM has no trouble with in
+                                                                    // either direction -- only the values needed ordering.
+                                                                    let all_blocks := append_blocks blocks_s_spliced (append_blocks chain_blocks (List.cons merge_block List.empty)) in
                                                                     let all_funcs := List.append funcs_s chain_funcs in
                                                                     let all_globals := List.append globals_s chain_globals in
                                                                     CompileResult.ok ctx_final entry_instrs (LLVMValue.var_ phi_temp) all_blocks all_funcs all_globals,
@@ -767,12 +784,28 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
                             // `result.blocks` temps rather than its own
                             // `label`/`blocks` parameters.
                             let bmr := { bmr_raw with ctx := ctx_restore_locals c bmr_raw.ctx } in
+                            // Box an already-terminated arm body's own
+                            // terminal `ret` BEFORE retargeting it -- see
+                            // `materialize_terminal_ret`'s own doc comment.
+                            // Skipped by `materialize_branch_val` above
+                            // (its "already terminated" guard), yet this
+                            // arm's value still becomes a `phi` operand in
+                            // `merge_label`, and `phi i64` does not tolerate
+                            // the raw `icmp`-produced `i1`. MEASURED,
+                            // `lang/src/parser/position.mo`: `Option.some loc
+                            // => I64.beq loc.line 2` -- `loc.line` branches,
+                            // so the comparison's `icmp` was spliced into
+                            // that block and re-closed `ret i64 %tN` on it.
+                            // `tm.val` is therefore the BOXED value, and it
+                            // is what both the retarget search below and the
+                            // `PhiPair` must use.
+                            let tm := materialize_terminal_ret already_terminated bmr.ctx body bmr.val blocks_r in
                             let case_block := build_branch_block case_label merge_label bmr.instrs in
                             if already_terminated
                             then
-                                match retarget_terminal_ret blocks_r bmr.val merge_label {
+                                match retarget_terminal_ret tm.blocks tm.val merge_label {
                                     Option.some result =>
-                                        { ctx := bmr.ctx, blocks := List.cons case_block result.blocks, funcs := funcs_r, globals := globals_r, phis := List.cons (PhiPair.mk bmr.val result.label) List.empty },
+                                        { ctx := tm.ctx, blocks := List.cons case_block result.blocks, funcs := funcs_r, globals := globals_r, phis := List.cons (PhiPair.mk tm.val result.label) List.empty },
                                     // Shouldn't happen -- `splice_into_
                                     // terminal_block`'s own invariant
                                     // (a branching term's last block is
@@ -783,7 +816,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
                                     // violated by something not yet
                                     // accounted for.
                                     Option.none =>
-                                        { ctx := bmr.ctx, blocks := List.cons case_block blocks_r, funcs := funcs_r, globals := globals_r, phis := List.empty },
+                                        { ctx := tm.ctx, blocks := List.cons case_block tm.blocks, funcs := funcs_r, globals := globals_r, phis := List.empty },
                                 }
                             else
                                 { ctx := bmr.ctx, blocks := List.cons case_block blocks_r, funcs := funcs_r, globals := globals_r, phis := List.cons (PhiPair.mk bmr.val case_label) List.empty },
@@ -856,21 +889,38 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
                                 { ctx := ctx_tm, instrs := void_instrs, val := val_v } =>
                                     match materialize_native_bool_arg ctx_tm term_ val_v {
                                         { ctx := ctx_tb, instrs := bool_instrs, val := val } =>
-                                            let instrs_m := List.append instrs (List.append void_instrs bool_instrs) in
-                                            // `compose_seq_acc`, not `compose_seq`: a PURE arg
+                                            // The materialization instrs go in via
+                                            // `compose_seq_acc`, NOT the blind
+                                            // `List.append` this used to be -- see
+                                            // `try_compile_let_beta_db`'s own doc comment
+                                            // for the measured repro (a native
+                                            // comparison whose OPERANDS need not be pure,
+                                            // so the fragment can already end in a
+                                            // terminator, with the boxing landing after it
+                                            // as unreachable dead code that also leaves the
+                                            // merge block's `ret` closed on a raw `icmp`).
+                                            // Same bug class, same fix; a pure
+                                            // `List.append void_instrs bool_instrs` (the
+                                            // overwhelmingly common case) makes this a
+                                            // strict no-op returning the fragment
+                                            // unchanged. `compose_seq_acc`, not
+                                            // `compose_seq`: a PURE arg
                                             // (literal/bare reference -- `triple_is_pure`)
                                             // must leave the accumulator untouched so
                                             // `acc_val` keeps identifying the block
                                             // execution is actually in (its own value
                                             // still reaches `acc_vals` below regardless).
-                                            match compose_seq_acc ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs_m, blocks := blocks_t, val := val }) {
-                                                { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
-                                                    compile_ntv_args_go ctx_tb rest
-                                                        new_instrs new_blocks
-                                                        (List.append acc_funcs funcs_t)
-                                                        (List.append acc_globals globals_t)
-                                                        (List.cons val acc_vals)
-                                                        new_val,
+                                            match compose_seq_acc ({ instrs := instrs, blocks := blocks_t, val := val_raw }) ({ instrs := (List.append void_instrs bool_instrs), blocks := List.empty, val := val }) {
+                                                { instrs := instrs_m, blocks := blocks_m, val := val_m } =>
+                                                    match compose_seq_acc ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs_m, blocks := blocks_m, val := val_m }) {
+                                                        { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
+                                                            compile_ntv_args_go ctx_tb rest
+                                                                new_instrs new_blocks
+                                                                (List.append acc_funcs funcs_t)
+                                                                (List.append acc_globals globals_t)
+                                                                (List.cons val acc_vals)
+                                                                new_val,
+                                                    },
                                             },
                                     },
                             },
@@ -1919,27 +1969,36 @@ def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : St
             // of the identical shape for match arms.
             let then_reaches := not (ends_with_terminator then_instrs_raw) in
             let then_bmr := materialize_branch_val ctx_then then_ then_instrs_raw then_val_raw in
+            // Same terminal-`ret` boxing `build_match_case_block` does for
+            // a match arm -- see `materialize_terminal_ret`'s own doc
+            // comment. A branch that doesn't "reach" the merge (its own
+            // instrs already ended in a terminator) still contributes a
+            // `phi` operand, and `build_merge_result`'s own
+            // `resolve_branch_merge_info` retargets that value's `ret`,
+            // so the box must happen FIRST for both to agree.
+            let then_tm := materialize_terminal_ret (not then_reaches) then_bmr.ctx then_ then_bmr.val blocks_then in
             let then_block := build_branch_block then_label merge_label then_bmr.instrs in
-            match compile_db_term_ir then_bmr.ctx else_ {
+            match compile_db_term_ir then_tm.ctx else_ {
                 CompileResult.ok ctx_else else_instrs_raw else_val_raw blocks_else funcs_else globals_else =>
                     let else_reaches := not (ends_with_terminator else_instrs_raw) in
                     let else_bmr := materialize_branch_val ctx_else else_ else_instrs_raw else_val_raw in
+                    let else_tm := materialize_terminal_ret (not else_reaches) else_bmr.ctx else_ else_bmr.val blocks_else in
                     let else_block := build_branch_block else_label merge_label else_bmr.instrs in
                     build_merge_result {
-                        ctx_else := else_bmr.ctx,
+                        ctx_else := else_tm.ctx,
                         merge_label := merge_label,
                         then_reaches := then_reaches,
-                        then_val := then_bmr.val,
+                        then_val := then_tm.val,
                         then_label := then_label,
                         else_reaches := else_reaches,
-                        else_val := else_bmr.val,
+                        else_val := else_tm.val,
                         else_label := else_label,
                         entry_instrs := entry_instrs,
                         entry_blocks := entry_blocks,
                         entry_funcs := entry_funcs,
                         entry_globals := entry_globals,
-                        blocks_then := blocks_then,
-                        blocks_else := blocks_else,
+                        blocks_then := then_tm.blocks,
+                        blocks_else := else_tm.blocks,
                         funcs_then := funcs_then,
                         funcs_else := funcs_else,
                         globals_then := globals_then,
@@ -2015,7 +2074,20 @@ def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_reac
                     List.cons phi_instr (List.cons ret_instr List.empty),
             } in
             let merge_block := LLVMBasicBlock.mk merge_label merge_instrs in
-            let all_blocks := List.cons then_block (List.cons else_block (List.cons merge_block (append_blocks (append_blocks entry_blocks then_info.blocks) else_info.blocks))) in
+            // Order is dominance order, and it is load-bearing -- see
+            // `compile_match_ir`'s own `merge_block` note for the measured
+            // `llc: instruction forward referenced with type 'i64'` this
+            // class produces. Entry's blocks first (the `br then/else` the
+            // splice put in the cond's own terminal block lives there,
+            // and `then_block`/`else_block` may read values it defines),
+            // then the two branch blocks, then whatever nested blocks each
+            // branch brought with it, and `merge_block` LAST: its own `phi`
+            // operands are the branch values, and a branch value lives
+            // either in its own branch block or -- when that branch's own
+            // instructions already ended in a terminator
+            // (`resolve_branch_merge_info`'s `retarget_terminal_ret` case)
+            // -- inside one of its nested blocks.
+            let all_blocks := append_blocks entry_blocks (List.cons then_block (List.cons else_block (append_blocks (append_blocks then_info.blocks else_info.blocks) (List.cons merge_block List.empty)))) in
             let all_funcs := List.append (List.append entry_funcs funcs_then) funcs_else in
             let all_globals := List.append (List.append entry_globals globals_then) globals_else in
             let result_val := match pairs {
@@ -2424,15 +2496,48 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                     // (correctly, since `Term.var name` isn't itself a
                     // native-op application) and called `monad_get_tag`
                     // on a still-raw `i1` -- `llc: '%tN' defined with
-                    // type 'i1' but expected 'i64'`. Safe to append
-                    // `bool_instrs` directly (no `compose_seq` splicing
-                    // needed): a native comparison never itself compiles
-                    // to a branch/multiple blocks, so `instrs1` never
-                    // ends in a terminator whenever `bool_instrs` is
-                    // non-empty.
+                    // type 'i1' but expected 'i64'`.
+                    //
+                    // The boxing goes in via `compose_seq`, NOT a blind
+                    // `List.append`. This site used to append, justified
+                    // by "a native comparison never itself compiles to a
+                    // branch/multiple blocks, so `instrs1` never ends in a
+                    // terminator" -- and that is FALSE, because the
+                    // comparison's own OPERANDS need not be pure:
+                    //
+                    //     def loc_eq_opt (got : Option Location) ... :=
+                    //         match got {
+                    //             Option.some l => I64.beq l.line expect.line
+                    //                              && I64.beq l.column expect.column,
+                    //             ...
+                    //         }
+                    //
+                    // is a `let`-bound comparison in the desugared form,
+                    // and `l.line` is a struct field access, which is a
+                    // `entry`/`check`/`merge` block chain whose `merge`
+                    // closes with `ret <the raw icmp>` (the `compose_seq`
+                    // convention). So `instrs1` here DID end in a
+                    // terminator (`br label %check_N`), the boxing
+                    // instructions were appended AFTER it as dead code
+                    // referencing a value defined only in a later block,
+                    // and the merge block kept its raw `ret i64 <icmp>`:
+                    // `llc: '%tN' defined with type 'i1' but expected
+                    // 'i64'` at that `ret`, plus every later use of the
+                    // bound name reading a temp that was never computed in
+                    // its own block. MEASURED, four lines, before the fix:
+                    // `let a := I64.beq l.line e.line; let b := ...; Bool.and a b`.
+                    //
+                    // `compose_seq` splices the boxing into whichever block
+                    // ends in `ret <val1_raw>` -- exactly the right place,
+                    // and exactly what `materialize_terminal_ret` does for
+                    // the tail-position case -- while degrading to the old
+                    // blind concatenation whenever `instrs1` is NOT already
+                    // terminated (the pure-operand case that comment was
+                    // written for), so nothing changes there.
                     match materialize_native_bool_arg ctx1 arg val1_raw {
                         { ctx := ctx1b, instrs := bool_instrs, val := val1 } =>
-                            let instrs1m := List.append instrs1 bool_instrs in
+                            match compose_seq ({ instrs := instrs1, blocks := blocks1, val := val1_raw }) ({ instrs := bool_instrs, blocks := List.empty, val := val1 }) {
+                                { instrs := instrs1m, blocks := blocks1m, val := val1m } =>
                             let ctx_bound := ctx_bind_local ctx1b name val1 in
                             match compile_db_term_ir ctx_bound body {
                                 CompileResult.ok ctx2 instrs2_raw val2_raw blocks2 funcs2 globals2 =>
@@ -2463,11 +2568,12 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                                     // terminator then).
                                     match materialize_branch_val ctx2 body instrs2_raw val2_raw {
                                         { ctx := ctx2m, instrs := instrs2, val := val2 } =>
-                                            match compose_seq ({ instrs := instrs1m, blocks := blocks1, val := val1 }) ({ instrs := instrs2, blocks := blocks2, val := val2 }) {
+                                            match compose_seq ({ instrs := instrs1m, blocks := blocks1m, val := val1m }) ({ instrs := instrs2, blocks := blocks2, val := val2 }) {
                                                 { instrs := combined, blocks := all_blocks, val := last_val } =>
                                                     Option.some (CompileResult.ok ctx2m combined last_val all_blocks (List.append funcs1 funcs2) (List.append globals1 globals2)),
                                             },
                                     },
+                            },
                             },
                     },
             },
@@ -2975,22 +3081,31 @@ def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : Lis
                         { ctx := ctx1m, instrs := void_instrs, val := val1_v } =>
                             match materialize_native_bool_arg ctx1m t val1_v {
                                 { ctx := ctx1b, instrs := bool_instrs, val := val1 } =>
-                                    let instrs1m := List.append instrs1 (List.append void_instrs bool_instrs) in
-                                    // `compose_seq_acc` for the same reason as
-                                    // `compile_ntv_args_go` above: a PURE arg
-                                    // (literal/bare reference -- `triple_is_pure`)
-                                    // must leave the accumulator untouched so
-                                    // `acc_val` keeps identifying the block
-                                    // execution is actually in (its own value
-                                    // still reaches `acc_vals` below regardless).
-                                    match compose_seq_acc ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs1m, blocks := blocks1, val := val1 }) {
-                                        { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
-                                            compile_spine_args_go ctx1b rest
-                                                new_instrs new_blocks
-                                                (List.append acc_funcs funcs1)
-                                                (List.append acc_globals globals1)
-                                                (List.cons val1 acc_vals)
-                                                new_val,
+                                    // Splice, don't blind-append -- see
+                                    // `try_compile_let_beta_db`'s own doc
+                                    // comment for the measured repro. `blocks1`
+                                    // MUST come from the splice result rather
+                                    // than the original compile: the boxing's
+                                    // own instructions are what the rewritten
+                                    // terminal block now ends with.
+                                    match compose_seq_acc ({ instrs := instrs1, blocks := blocks1, val := val1_raw }) ({ instrs := (List.append void_instrs bool_instrs), blocks := List.empty, val := val1 }) {
+                                        { instrs := instrs1m, blocks := blocks1m, val := val1m } =>
+                                            // `compose_seq_acc` for the same reason as
+                                            // `compile_ntv_args_go` above: a PURE arg
+                                            // (literal/bare reference -- `triple_is_pure`)
+                                            // must leave the accumulator untouched so
+                                            // `acc_val` keeps identifying the block
+                                            // execution is actually in (its own value
+                                            // still reaches `acc_vals` below regardless).
+                                            match compose_seq_acc ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs1m, blocks := blocks1m, val := val1m }) {
+                                                { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
+                                                    compile_spine_args_go ctx1b rest
+                                                        new_instrs new_blocks
+                                                        (List.append acc_funcs funcs1)
+                                                        (List.append acc_globals globals1)
+                                                        (List.cons val1 acc_vals)
+                                                        new_val,
+                                            },
                                     },
                             },
                     },
@@ -4242,6 +4357,14 @@ def parm_values_for_go (params : List Param) (idx : I64) : List LLVMValue :=
 pub struct TerminalBlocks {
     ctx : CodegenCtx,
     blocks : List LLVMBasicBlock,
+    // Post-boxing value: the boxed Bool constructor when this call
+    // rewrote the terminal block's `ret`, otherwise `val` handed in
+    // unchanged. `lang.scope`'s match/if arms need this because their
+    // value does NOT stay in the terminal block the way a def body's
+    // does -- it becomes a `phi` operand in the enclosing merge block,
+    // and a `phi i64` fed the RAW `icmp`-produced `i1` is rejected with
+    // "'%tN' defined with type 'i1' but expected 'i64'".
+    val : LLVMValue,
 }
 
 /// A def body whose final value lives inside its own merge/case block
@@ -4266,11 +4389,19 @@ pub struct TerminalBlocks {
 /// Fix: when `already_terminated`, box the tail exactly as call arguments
 /// and phi operands already are, splicing the boxing into the terminal
 /// block so its own `ret` closes with the boxed Bool constructor instead.
-/// A total no-op (ctx/blocks returned unchanged) whenever the body is not
-/// a native comparison, and a safe fallback too when no block ends in
+/// A total no-op (ctx/blocks/val returned unchanged) whenever the body is
+/// not a native comparison, and a safe fallback too when no block ends in
 /// `ret <val>` (that would violate `compile_db_if_ir`/`compile_match_ir`'s
 /// own closing invariant; kept non-crashing to match `compose_seq`'s
 /// stance on the same impossibility).
+///
+/// The returned `val` is what makes this usable from the phi paths
+/// (`build_match_case_block`, `build_db_if_blocks`) rather than only the
+/// two `ret` paths (`compile_db_def_ir_body`, `compile_db_lam_ir`):
+/// those need the boxing's RESULT to hand to `PhiPair`/`build_merge_
+/// result`, since their value does not stay in the terminal block. Both
+/// of them therefore call this BEFORE `retarget_terminal_ret`, which
+/// must find (and rewrite) the post-boxing `ret <boxed>`.
 ///
 /// Residual gap, noted not fixed: a body shaped
 /// `let x := <branching> in I64.beq ...` reaches the same hole with a
@@ -4279,16 +4410,16 @@ pub struct TerminalBlocks {
 #[partial]
 def materialize_terminal_ret (already_terminated : Bool) (ctx : CodegenCtx) (term_ : Term) (val : LLVMValue) (blocks : List LLVMBasicBlock) : TerminalBlocks :=
     if not already_terminated
-    then { ctx := ctx, blocks := blocks }
+    then { ctx := ctx, blocks := blocks, val := val }
     else
         match materialize_native_bool_arg ctx term_ val {
             { ctx := ctx1, instrs := box_instrs, val := boxed } =>
                 match box_instrs {
-                    List.empty => { ctx := ctx, blocks := blocks },
+                    List.empty => { ctx := ctx, blocks := blocks, val := val },
                     List.cons _ _ =>
                         match splice_into_terminal_block blocks val box_instrs boxed {
-                            Option.some rewritten => { ctx := ctx1, blocks := rewritten },
-                            Option.none => { ctx := ctx, blocks := blocks },
+                            Option.some rewritten => { ctx := ctx1, blocks := rewritten, val := boxed },
+                            Option.none => { ctx := ctx, blocks := blocks, val := val },
                         },
                 },
         }

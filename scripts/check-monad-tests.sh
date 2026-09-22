@@ -35,49 +35,58 @@
 # repeated here -- it went stale the first time the list changed).
 set -euo pipefail
 
-# The 5 files the self-hosted runner cannot build a working driver for
+# The 3 files the self-hosted runner cannot build a working driver for
 # today. Each is a PRE-EXISTING backend bug -- none is a problem with the
 # test file or with the runner -- and each stays covered by the Rust
 # runner at the bottom of this script, so excluding it here costs no
-# coverage. Four groups:
+# coverage. Three groups, one per remaining bug:
 #
-# This list was 10 entries when P10 landed. Five of the ten had stopped
-# being true, and were re-measured file by file on 2026-09-19: each flip
-# is recorded at the group it left. Removing an entry whose file now
-# PASSES is as load-bearing as removing a stale GAP -- a file left here
-# silently loses its self-hosted coverage, and the Rust runner (a
-# different implementation) is what tests it instead.
+# This list was 10 entries when P10 landed and 5 before Phase 5. Five of
+# the ten had stopped being true and were re-measured file by file on
+# 2026-09-19, and the two group-1/group-4 entries went on 2026-09-21;
+# each flip is recorded at the group it left. Removing an entry whose
+# file now PASSES is as load-bearing as removing a stale GAP -- a file
+# left here silently loses its self-hosted coverage, and the Rust runner
+# (a different implementation) is what tests it instead.
 #
-# 1. `llc` rejects the emitted IR with an ill-typed or forward-referenced
-#    `icmp`. Two shapes, both in a user test's own body -- a `match` arm
-#    that reads a struct field -- and neither in anything the driver
-#    generates:
+# 1. (CLOSED, both entries removed.) `llc` rejected the emitted IR with
+#    an ill-typed or forward-referenced `icmp`, in two shapes that turned
+#    out to be ONE emit defect with three faces, all in `emit.mo`:
 #
 #      * "instruction forward referenced with type 'i64'": a `phi i64`
-#        takes its value from an `icmp` that the emitter writes LATER in
-#        the .ll text, so the reference points forward at a value whose
-#        type the parser has not seen yet. The bad IR is one `phi` per
-#        file (`position.mo`'s `%t31 = phi i64 [%t29, %merge_8]` with
-#        `%t29 = icmp` 11 lines further down; `parser.mo`'s
-#        `%t13321`/`%t13319`, use 11 lines before its def).
+#        took its value from an `icmp` the emitter wrote LATER in the .ll
+#        text. Not a boxing gap at all -- a DOMINANCE-ORDER one: both
+#        `compile_match_ir` and `build_merge_result` emitted the merge
+#        block (whose `phi` operands are the branch/case values) BEFORE
+#        the blocks those values are defined in. LLVM tolerates a forward
+#        reference only when the use site's stated type matches the
+#        definition's, which is exactly why only the `icmp`-produced
+#        cases ever failed loudly. Both now emit merge LAST, in strict
+#        dominance order (entry blocks, branches, their nested blocks,
+#        merge).
 #
-#      * "'%tN' defined with type 'i1' but expected 'i64'": the LIFTED
-#        LAMBDA case of this is FIXED (a lambda's own `ret` now goes
-#        through the same `materialize_branch_val` /
-#        `materialize_terminal_ret` pair a def body does), but the same
-#        missing boxing is still reachable one path over, in a DEF's own
-#        terminal merge block: `position::loc_eq_opt` ends in `merge_22`
-#        with `%t69 = icmp eq i64 %t63, %t68` followed by `ret i64
-#        %t69`. Note the function boxes the SAME shape everywhere else
-#        (`%t70 = zext i1 %t69 to i64`): only the terminal-merge `ret`
-#        misses it.
+#      * "'%tN' defined with type 'i1' but expected 'i64'": the same
+#        merge block's `phi` operand for an ALREADY-TERMINATED arm body.
+#        `materialize_branch_val` deliberately skips such a body (its own
+#        block already `ret`s the value directly, per `compose_seq`'s
+#        convention), so the raw `icmp` reached the `phi` unboxed.
+#        `materialize_terminal_ret` handled that shape for the two `ret`
+#        paths only; it now also returns the boxed value, and the `phi`
+#        paths (`build_match_case_block`, `build_db_if_blocks`) call it
+#        before `retarget_terminal_ret` and use its result.
 #
-#    Diagnosed with a 20-line IR scan (icmp temps used later in an
-#    `i64` position, with the use/def line numbers): 16 hits in
-#    `position.mo`, 1 in `parser.mo`, 0 in the file group 5's closed note
-#    is about -- i.e. the scan reproduces exactly what `llc` reports, so
-#    it is a usable progress oracle for this bug.
-#        lang/src/parser/position.mo
+#      * A third face, same class, in the ARGUMENT path: the
+#        `let`-binding and both accumulated-argument sites
+#        (`compile_ntv_args_go`, `compile_spine_args_go`) blind-appended
+#        the materialization instructions after a fragment that could
+#        already end in a terminator. All three now splice via
+#        `compose_seq_acc`.
+#
+#    Re-measured 2026-09-21 with the self-hosted runner: `position.mo`
+#    10/10 and `parser.mo` 291/291, so the group-4 entry below left with
+#    this one -- the two were always the same bug, recorded twice because
+#    the second only became reachable once the runner's old 255-test
+#    exit-code ceiling was gone.
 #
 # 2. Driver dies by signal, for a cause other than the dict doubling --
 #    and nothing else is left of this group. Two of its four bugs closed
@@ -127,15 +136,14 @@ set -euo pipefail
 #    a CI machine.
 #        lang/src/toml.mo
 #
-# 4. Same `llc` forward-reference family as group 1, newly EXPOSED (not
-#    newly caused): lang/src/parser.mo used to be refused outright by
-#    the runner's 255-test exit-code ceiling, so it never reached `llc`.
-#    The result-file channel removed that ceiling, and the file's first
-#    actual driver compile hits group 1's phi-vs-icmp block ordering
-#    (a `match` arm reading a struct field, same shape as
-#    position.mo's). Stays here with group 1 until that one bug is
-#    fixed; its 288 tests remain covered by the Rust runner below.
-#        lang/src/parser.mo
+# 4. (CLOSED, entry removed -- the same bug as group 1.) Same `llc`
+#    forward-reference family, newly EXPOSED (not newly caused):
+#    lang/src/parser.mo used to be refused outright by the runner's
+#    255-test exit-code ceiling, so it never reached `llc`. The
+#    result-file channel removed that ceiling, and the file's first
+#    actual driver compile hit group 1's phi-vs-icmp block ordering (a
+#    `match` arm reading a struct field, same shape as position.mo's).
+#    With group 1 closed it runs 291/291 through the self-hosted runner.
 #
 # Group 5 (CLOSED, entry removed). `llc` used to reject the emitted IR
 #    with "use of undefined value '@parse_democommand'": the bare
@@ -152,11 +160,9 @@ set -euo pipefail
 # hand-maintained copies of the same paths, which is one edit away
 # from a file that runs in neither.
 host_only=(
-  lang/src/parser/position.mo
   std/src/list_tests3a.mo
   std/src/array.mo
   lang/src/toml.mo
-  lang/src/parser.mo
 )
 
 # The files the self-hosted runner reports as GAPs (cli/src/test_gaps.mo).
