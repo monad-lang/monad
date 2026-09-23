@@ -39,18 +39,21 @@
 # Then the same binary CHECKS the same corpus, which is the one gate here
 # that is not about tests: the pre-commit hook's `monad check` is the Rust
 # host, so the self-hosted checker was never run over the corpus by CI at
-# all. See `check_gap_files` below for the known check-gap files and how
-# their error counts are held fixed (the count is deliberately not
-# repeated here -- it went stale the first time the list changed).
+# all. This is now a HARD gate with no registry behind it: `check_gap_files`
+# allowed a listed file to fail with a recorded error count, that array is
+# deleted as of Phase 13, and every `FAIL` line fails the script. The count
+# that used to be held fixed per path is gone with it -- it was the thing
+# that went stale the first time the list changed.
 set -euo pipefail
 
 # `host_only`: the files the self-hosted runner could not build a working
-# driver for. It is EMPTY and stays declared, because the skip loop below
-# reads it -- every entry it ever held was a PRE-EXISTING backend bug,
+# driver for. Every entry it ever held was a PRE-EXISTING backend bug,
 # never a problem with the test file or with the runner, and while one was
 # listed the Rust runner at the bottom of this script covered it, so
 # excluding it here cost no coverage. That fallback is gone as of Phase
-# 12, so a live entry here would now cost real coverage.
+# 12 and the ARRAY is gone as of Phase 13, so its record is all that is
+# left -- with nothing reading it, a live entry could only have cost real
+# coverage while looking like a maintained exclusion.
 #
 # This list was 10 entries when P10 landed, 5 before Phase 5 and 3 before
 # Phase 6. Five of the ten had stopped being true and were re-measured
@@ -238,11 +241,13 @@ set -euo pipefail
 #    file is 5/5 self-hosted, so it has left `host_only` and the sweep
 #    now runs its tests through the shipped runner.
 #
-# ONE list, read by the sweep's skip loop (and, until Phase 12, by the
-# Rust fallback too) -- they were two hand-maintained copies of the same
-# paths, which is one edit away from a file that runs in neither.
-host_only=(
-)
+# The list itself is DELETED as of Phase 13, for the reason `gap_files`
+# went in Phase 12: it had been empty since `lang/src/toml.mo` left it
+# (group 3 above), and an empty array whose only reader is a skip loop is
+# not the same thing as no array -- repopulating it would silently move a
+# file's coverage off the self-hosted runner while gaining nothing, and
+# this branch's history is largely a list of exclusions that outlived
+# their causes. The record above is kept, because every entry names a fix.
 
 # The files the self-hosted runner reported as GAPs. THIS ARRAY IS DELETED
 # as of Phase 12, together with the `cli/src/test_gaps.mo` registry that
@@ -266,9 +271,18 @@ host_only=(
 # for that wording. Its `some 1 == (List.get 0 [1, 2, 3])` shape sent the
 # option instance's own dictionary into its ELEMENT slot and killed the
 # driver with a signal, and it now runs 102/102 through the self-hosted
-# runner (see cli/src/test_gaps.mo for both halves of the fix).
+# runner. The fix has two halves, both required, and the file that
+# recorded them (`cli/src/test_gaps.mo`) is deleted as of Phase 12 -- so
+# the record is here: the checker's `resolve_class_method_d4` refuses the
+# self-reference and defers, and `lang/src/scope.mo`'s
+# `find_concrete_matching_carrier_any` prefers a candidate that pins the
+# matched instance's type variables down over one that leaves them
+# generic. Order matters and was measured: with only the first half,
+# `(some 1) == (List.get ...)` passed while the reverse operand order still
+# SIGSEGVed.
 # `std/src/qualified_ref_tests.mo` left this list with Phase 3, in
-# lockstep with its `check_gap_files` entry. A qualified reference in
+# lockstep with its `check_gap_files` entry (since deleted). A qualified
+# reference in
 # TARGET position could not resolve self-hosted because the flatten
 # handed the whole decl list a SINGLE `ModulePath` -- the target's --
 # so `build_scope_def` stamped every DEPENDENCY def with the CONSUMER's
@@ -309,19 +323,21 @@ if [ ! -x "$out/monad" ] || [ -n "$(find init std lang cli llvm runtime \
 fi
 test -x "$out/monad"
 
-# The self-hosted sweep: the whole corpus except `host_only` (empty since
-# `lang/src/toml.mo` left it -- see group 3 above). An excluded file sits
-# in a directory with many healthy files, which is why the skip is a
-# per-path compare rather than a pruned parent directory.
+# The self-hosted sweep: the whole corpus, with no exclusions at all.
+# `host_only` was the last registry and it is deleted above, so the loop
+# that read it is gone with it.
+#
+# `bench` is now swept here as well as checked below. It was the one
+# directory the check `find` covered and this one did not, and that gap
+# was not cosmetic: `bench/src/hashmap_bucket_dispatch.mo` had been
+# failing to compile on an unwired `number::U64.add` native for as long
+# as the file has existed, and nothing reported it, because `check`
+# cannot see an unwired native -- only codegen can. Adding it here found
+# it on the first run, which is why the two `find` lists now agree.
 self_hosted_targets=()
 while IFS= read -r f; do
-  for skip in "${host_only[@]}"; do
-    if [ "$f" = "$skip" ]; then
-      continue 2
-    fi
-  done
   self_hosted_targets+=("$f")
-done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.mo' | sort)
+done < <(find init std examples lang cli llvm runtime motes slow_tests bench -name '*.mo' | sort)
 
 self_hosted_rc=0
 "$out/monad" test "${self_hosted_targets[@]}" || self_hosted_rc=$?
@@ -334,19 +350,24 @@ if [ "$self_hosted_rc" -ne 0 ]; then
   echo "self-hosted tests FAILED (exit $self_hosted_rc) -- the check phase still runs"
 fi
 
-# The self-hosted `check` over the SAME corpus (plus `bench`, which has no
-# tests to sweep but is source like any other): the sweep above proves
-# each file's tests RUN, this proves each file TYPECHECKS under the
-# checker the shipped compiler actually uses. The pre-commit hook's
-# `monad check` is the RUST host -- a different implementation -- so
-# neither gate covers the other, and until this ran, nothing in CI used
-# the self-hosted checker on the whole corpus. 180 files, ~52s.
+# The self-hosted `check` over the SAME corpus as the sweep above -- the
+# two `find` lists agree exactly as of Phase 13, `bench` included in both.
+# The sweep proves each file's tests RUN, this proves each file TYPECHECKS
+# under the checker the shipped compiler actually uses. The pre-commit
+# hook's `monad check` is the RUST host -- a different implementation --
+# so neither gate covers the other, and until this ran, nothing in CI used
+# the self-hosted checker on the whole corpus. ~52s.
+#
+# Both gates are needed, and `bench` is the demonstration: the check phase
+# passed over `bench/src/hashmap_bucket_dispatch.mo` for as long as the
+# file existed while its codegen could not compile it at all, because an
+# unwired native is not a check error -- only the sweep can see one.
 #
 # `std/src/qualified_ref_tests.mo` was the last file on it and left with
 # Phase 3, in lockstep with its `gap_files` entry -- that array is now
-# deleted, and its entry recorded the cause and the fix. Measured before removing: `monad check
-# std/src/qualified_ref_tests.mo` -> 0 error(s), and the corpus-wide
-# check log holds no `FAIL` line for it.
+# deleted, so its entry is the record of the cause and the fix. Measured
+# before removing: `monad check std/src/qualified_ref_tests.mo` -> 0
+# error(s), and the corpus-wide check log holds no `FAIL` line for it.
 #
 # `examples/structs.mo` left this list with Phase 2, in the same commit
 # as its `gap_files` entry (since deleted): a def's own declared `:=`
@@ -383,14 +404,25 @@ fi
 # fails this script even though its path is listed. Anything failing that
 # is not on this list fails it too.
 #
-# The list is now EMPTY, which is what the whole mechanism was for: the
-# `UNEXPECTED failure` arm below is the only one that can fire, so the
-# corpus-wide self-hosted check is a hard gate and any file that starts
-# failing it fails CI. The loop and the count check stay until Phase 12
-# deletes the scaffolding outright -- an empty registry is not the same
-# thing as no registry, and the deletion is its own reviewed step.
-check_gap_files=(
-)
+# The list is DELETED as of Phase 13, and the loop that read it with it.
+# It had been empty since its last entry closed, and the loop's behaviour
+# at that point did not depend on the array being populated: a FAIL line
+# whose path matched no entry fell to the `-z "$want"` arm, which set
+# `check_bad` unconditionally. So the gate is unchanged -- ANY `FAIL` line
+# fails CI -- and what replaces the loop is that same condition written
+# directly, below.
+#
+# The exit STATUS is now the gate too, and that is a real tightening, not
+# a restatement. The old shape read `if cmd; then check_fails=0; else
+# check_fails=$(grep -c ...)` -- so a check phase that died without
+# printing a `FAIL` line (a crash, a missing input, a driver killed by the
+# OOM-reaper) left `check_fails=0`, `check_bad` at 0, and the script
+# printing the green line: the same "a failed phase is indistinguishable
+# from a passing one" class this script's `set -e` bug belonged to. On the
+# normal path the two agree rather than merely coexist, and that is read
+# off `run_check_loop` rather than hoped for: it returns 1 iff `errors > 0`
+# (cli/src/main.mo:551) and prints a `FAIL` line exactly when a file has
+# diagnostics, so `rc != 0` <=> `check_fails != 0` there.
 
 check_targets=()
 while IFS= read -r f; do
@@ -398,32 +430,15 @@ while IFS= read -r f; do
 done < <(find init std examples lang cli llvm runtime motes slow_tests bench -name '*.mo' | sort)
 
 check_log="$out/check.log"
-if "$out/monad" check "${check_targets[@]}" > "$check_log" 2>&1; then
-  check_fails=0
-else
-  check_fails=$(grep -cE '^FAIL ' "$check_log" || true)
-fi
-check_bad=0
-while IFS= read -r line; do
-  path="${line#FAIL}"; path="${path#"${path%%[! ]*}"}"; path="${path%% (*}"
-  count="${line#*\(}"; count="${count%% *}"
-  want=""
-  for entry in "${check_gap_files[@]}"; do
-    case "$entry" in "$path:"*) want="${entry##*:}" ;; esac
-  done
-  if [ -z "$want" ]; then
-    echo "self-hosted check: UNEXPECTED failure -- $line" >&2
-    check_bad=1
-  elif [ "$want" != "$count" ]; then
-    echo "self-hosted check: $path now reports $count error(s), recorded $want" >&2
-    check_bad=1
-  fi
-done < <(grep -E '^FAIL ' "$check_log" || true)
-if [ "$check_bad" != 0 ]; then
+check_rc=0
+"$out/monad" check "${check_targets[@]}" > "$check_log" 2>&1 || check_rc=$?
+check_fails=$(grep -cE '^FAIL ' "$check_log" || true)
+if [ "$check_rc" -ne 0 ] || [ "$check_fails" != 0 ]; then
+  echo "self-hosted check: ${check_fails} failure(s), exit ${check_rc} -- no check-gap file is registered any more" >&2
   cat "$check_log" >&2
   exit 1
 fi
-echo "self-hosted check: ${check_fails} known check-gap file(s), counts unchanged"
+echo "self-hosted check: 0 failures over ${#check_targets[@]} file(s)"
 
 # The Rust fallback ran here: everything the self-hosted runner could not
 # run went through it, so each file stayed covered and a real regression in

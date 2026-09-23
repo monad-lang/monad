@@ -80,6 +80,8 @@ def string_runtime_functions : List LLVMFunction :=
 def numeric_runtime_functions : List LLVMFunction :=
   [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
    emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div,
+   emit_u64_add, emit_u64_sub, emit_u64_mul, emit_u64_xor,
+   emit_u64_lt, emit_u64_gt,
    emit_u8_add, emit_u8_to_u32, emit_i64_to_u32, emit_u32_to_u8,
    emit_u32_add, emit_u32_sub, emit_u32_mul, emit_u32_and, emit_u32_or,
    emit_u32_xor,
@@ -275,6 +277,78 @@ def emit_u8_lt : LLVMFunction := emit_icmp_native "monad_u8_lt" (icmp_slt (parm_
 def emit_u8_gt : LLVMFunction := emit_icmp_native "monad_u8_gt" (icmp_sgt (parm_ 0) (parm_ 1))
 
 def emit_u64_eq : LLVMFunction := emit_icmp_native "monad_u64_eq" (icmp_eq (parm_ 0) (parm_ 1))
+
+/// `monad_u64_lt/gt` (wired `bool_result`): SIGNED `slt`/`sgt` on the i64
+/// payload, mirroring the reference exactly. `u64_lt`/`u64_gt` are in the
+/// same generic `int_cmp` group as every other width's comparisons
+/// (`core_native.rs:217-222`, `|a, b| a < b` on `i64`), so the reference
+/// applies NO mask and NO unsigned reinterpretation -- the same rule
+/// `emit_u8_lt`/`emit_u8_gt` follow. Worth stating plainly rather than
+/// leaving implied: this is NOT true unsigned ordering for values at or
+/// above 2^63, and that is a property of the reference being mirrored,
+/// not an oversight here. `U64` is the only width where the distinction
+/// can arise at all, since masking is a no-op at 64 bits (the reference's
+/// own comment records the missing-mask bug for I8/I16/I32/U8/U16).
+def emit_u64_lt : LLVMFunction := emit_icmp_native "monad_u64_lt" (icmp_slt (parm_ 0) (parm_ 1))
+def emit_u64_gt : LLVMFunction := emit_icmp_native "monad_u64_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+
+/// `monad_u64_add/sub/mul` (wired `passthrough`): plain i64 wrapping
+/// arithmetic, matching the reference exactly -- `core_native.rs`
+/// routes all three through `int_binop(|a, b| a.wrapping_*(b))` with
+/// NO width mask. `U64` is 64 bits wide and these values are i64-
+/// carried, so "no mask" and "full width" coincide: unlike the `U32`
+/// family there is nothing to mask, and unlike `emit_u8_div` there is
+/// no signed/unsigned split to pick, since wrapping i64 add/sub/mul
+/// are bit-identical either way. Div and mod DO split -- they are the
+/// `uint_binop`/`udiv`/`urem` pair above.
+def emit_u64_add : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "r" (add (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+  { name := "monad_u64_add",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_u64_sub : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+  { name := "monad_u64_sub",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_u64_mul : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+  { name := "monad_u64_mul",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+/// `monad_u64_xor` (wired `passthrough`): `int_binop(|a, b| a ^ b)`
+/// (`core_native.rs:213`), a plain i64 xor for the same reason as the
+/// three above. The `xor` *constructor* is spelled `xor_` because
+/// `xor` is a keyword in this compiler's own grammar -- the same
+/// spelling `emit_u32_xor` uses.
+def emit_u64_xor : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "r" (xor_ (parm_ 0) (parm_ 1)), ret (var_ "r")] in
+  { name := "monad_u64_xor",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 #[partial]
 def emit_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
