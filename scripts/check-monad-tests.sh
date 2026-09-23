@@ -19,22 +19,22 @@
 # just lang/: cli/ holds the compile target, llvm/ and runtime/ the
 # backend.
 #
-# Two runners, one corpus. Every .mo file is tested by exactly one of
-# them, and none is left untested by both: the SELF-HOSTED runner takes
-# the whole corpus except `host_only` below, and the RUST runner takes
-# `host_only` plus any file the self-hosted runner reports as a GAP
-# (`cli/src/test_gaps.mo` -- the async runtime, and a handful of
-# checker/codegen bugs). A GAP does not fail the sweep; an
-# unrecognised compile failure does.
+# ONE runner, one corpus: the self-hosted runner tests every .mo file in it
+# and there is ONE total to read. That is where the mechanism was always
+# headed, and Phase 12 finished it -- the Rust fallback at the tail of this
+# script, the `gap_files` array that fed it, and the `cli/src/test_gaps.mo`
+# registry that filled that array are all deleted.
 #
-# BOTH LISTS ARE NOW EMPTY, which is the whole point of the mechanism: the
-# self-hosted runner covers the corpus alone and there is ONE total left to
-# read, not two. `host_only`'s last entry (`lang/src/toml.mo`) left with the
-# fix recorded at group 3 below; `gap_files`' last two left with Phase 8's
-# async runtime, which is what they were waiting for. The two arrays, the
-# skip loop and the guarded fallback at the tail stay as the mechanism until
-# Phase 12 deletes the scaffolding outright -- an empty registry is not the
-# same thing as no registry, and the deletion is its own reviewed step.
+# The record of how it got here is kept, because each stage names the fix
+# that closed it. There were once TWO runners and every .mo file was tested
+# by exactly one of them: the SELF-HOSTED runner took the whole corpus
+# except `host_only` below, and the RUST runner took `host_only` plus any
+# file the self-hosted runner reported as a GAP (the async runtime, and a
+# handful of checker/codegen bugs). A GAP did not fail the sweep; an
+# unrecognised compile failure did. Both lists emptied before they were
+# deleted: `host_only`'s last entry (`lang/src/toml.mo`) left with the fix
+# recorded at group 3 below, and `gap_files`' last two left with Phase 8's
+# async runtime, which is what they were waiting for.
 #
 # Then the same binary CHECKS the same corpus, which is the one gate here
 # that is not about tests: the pre-commit hook's `monad check` is the Rust
@@ -44,10 +44,13 @@
 # repeated here -- it went stale the first time the list changed).
 set -euo pipefail
 
-# The 1 file the self-hosted runner cannot build a working driver for
-# today. It is a PRE-EXISTING backend bug -- not a problem with the test
-# file or with the runner -- and it stays covered by the Rust runner at
-# the bottom of this script, so excluding it here costs no coverage.
+# `host_only`: the files the self-hosted runner could not build a working
+# driver for. It is EMPTY and stays declared, because the skip loop below
+# reads it -- every entry it ever held was a PRE-EXISTING backend bug,
+# never a problem with the test file or with the runner, and while one was
+# listed the Rust runner at the bottom of this script covered it, so
+# excluding it here cost no coverage. That fallback is gone as of Phase
+# 12, so a live entry here would now cost real coverage.
 #
 # This list was 10 entries when P10 landed, 5 before Phase 5 and 3 before
 # Phase 6. Five of the ten had stopped being true and were re-measured
@@ -55,8 +58,8 @@ set -euo pipefail
 # 2026-09-21, and group 2's two went on 2026-09-22; each flip is recorded
 # at the group it left. Removing an entry whose file now PASSES is as
 # load-bearing as removing a stale GAP -- a file left here silently loses
-# its self-hosted coverage, and the Rust runner (a different
-# implementation) is what tests it instead.
+# its self-hosted coverage, and with the Rust fallback deleted there is
+# now nothing behind it at all.
 #
 # 1. (CLOSED, both entries removed.) `llc` rejected the emitted IR with
 #    an ill-typed or forward-referenced `icmp`, in two shapes that turned
@@ -229,27 +232,27 @@ set -euo pipefail
 #    `derive_cli!` decl-macro's own generated defs never reached codegen
 #    at all -- the driver's IR held five `call i64 @parse_democommand(...)`
 #    and NO definition of it under any name, an absence rather than a
-#    mangling mismatch, which is the same finding `cli/src/test_gaps.mo`
+#    mangling mismatch, which is the same finding the deleted `cli/src/test_gaps.mo`
 #    recorded for the `#[derive_cli]`/`#[derive]` family. The bridge that
 #    closed that family (P10, 707bbd7) closes this one: re-measured, the
 #    file is 5/5 self-hosted, so it has left `host_only` and the sweep
 #    now runs its tests through the shipped runner.
 #
-# ONE list, used by both the sweep and the Rust fallback -- they were two
-# hand-maintained copies of the same paths, which is one edit away
-# from a file that runs in neither.
+# ONE list, read by the sweep's skip loop (and, until Phase 12, by the
+# Rust fallback too) -- they were two hand-maintained copies of the same
+# paths, which is one edit away from a file that runs in neither.
 host_only=(
 )
 
-# The files the self-hosted runner reports as GAPs (cli/src/test_gaps.mo).
-# Handed to the Rust runner for the same reason `host_only` is: a gap
-# means those tests do not run self-hosted, and a test that runs nowhere
-# is worse than one that runs slowly. This list was expected to shrink to
-# nothing alongside cli/src/test_gaps.mo itself, and it has: the registry
-# is empty, so the array is too, and the two are flipped TOGETHER because
-# a path left here after its GAP has closed would silently move that
-# file's coverage from the real runner to a different implementation's
-# while gaining nothing.
+# The files the self-hosted runner reported as GAPs. THIS ARRAY IS DELETED
+# as of Phase 12, together with the `cli/src/test_gaps.mo` registry that
+# filled it and the Rust fallback it fed: the self-hosted runner covers the
+# whole corpus alone, so there is nothing left to hand over. It was emptied
+# before it was deleted, deliberately, because a path left here after its
+# GAP had closed would have silently moved that file's coverage from the
+# self-hosted runner to a different implementation's while gaining nothing.
+#
+# The record of what left it, kept because every entry names a fix:
 #
 # The f64 family (`init/src/optics_tests.mo`, `examples/optics.mo`,
 # `std/src/base.mo`) left it when P9 wired the backend, so those three now
@@ -292,9 +295,6 @@ host_only=(
 # the file stopped on the natives alone after that commit; both files were
 # then measured through the self-hosted runner with a binary rebuilt from
 # the change, and both report a clean run.
-gap_files=(
-)
-
 out="${TMPDIR:-/tmp}/monad-bootstrap-ci"
 # Staleness: every input that ends up INSIDE the binary. `init` and `std`
 # are compiled into it just as `lang`/`cli`/`llvm`/`runtime` are, and
@@ -323,7 +323,16 @@ while IFS= read -r f; do
   self_hosted_targets+=("$f")
 done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.mo' | sort)
 
-"$out/monad" test "${self_hosted_targets[@]}"
+self_hosted_rc=0
+"$out/monad" test "${self_hosted_targets[@]}" || self_hosted_rc=$?
+if [ "$self_hosted_rc" -ne 0 ]; then
+  # Deliberately NOT fatal: `set -e` used to abort here, which dropped the
+  # whole check phase (and, before Phase 12, the Rust fallback) whenever a
+  # single test failed -- so a red sweep reported one total and no
+  # `self-hosted check:` line, indistinguishable from a truncated run.
+  # The status is re-raised at the end of the script.
+  echo "self-hosted tests FAILED (exit $self_hosted_rc) -- the check phase still runs"
+fi
 
 # The self-hosted `check` over the SAME corpus (plus `bench`, which has no
 # tests to sweep but is source like any other): the sweep above proves
@@ -334,20 +343,22 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # the self-hosted checker on the whole corpus. 180 files, ~52s.
 #
 # `std/src/qualified_ref_tests.mo` was the last file on it and left with
-# Phase 3, in lockstep with its `gap_files` entry above -- that entry
-# records the cause and the fix. Measured before removing: `monad check
+# Phase 3, in lockstep with its `gap_files` entry -- that array is now
+# deleted, and its entry recorded the cause and the fix. Measured before removing: `monad check
 # std/src/qualified_ref_tests.mo` -> 0 error(s), and the corpus-wide
 # check log holds no `FAIL` line for it.
 #
 # `examples/structs.mo` left this list with Phase 2, in the same commit
-# as its `gap_files` entry: a def's own declared `:=` defaults now reach
+# as its `gap_files` entry (since deleted): a def's own declared `:=`
+# defaults now reach
 # the checker, so its one error -- `named call: missing required field
 # `factor`` -- is gone. Measured before removing: the file reports 0
 # error(s) and runs 10/10 through the self-hosted runner.
 #
 # `lang/src/json.mo` (3 errors) and `std/src/concurrent/combine_test.mo`
 # (1) left this list with Phase 1's expected-type channel, together with
-# their `gap_files` entries: both were the checker half of the SAME
+# their `gap_files` entries (since deleted): both were the checker half of
+# the SAME
 # missing channel -- a def call's return type was never solved against
 # the ambient expected type, so `IO.pure (List.empty : List I64)` came
 # back as its signature's raw, unsolved `IO A`. Measured before removing
@@ -414,19 +425,23 @@ if [ "$check_bad" != 0 ]; then
 fi
 echo "self-hosted check: ${check_fails} known check-gap file(s), counts unchanged"
 
-# Everything the self-hosted runner could not run, through the Rust
-# runner, so each file stays covered and a real regression in any of them
-# still fails this script.
+# The Rust fallback ran here: everything the self-hosted runner could not
+# run went through it, so each file stayed covered and a real regression in
+# any of them still failed this script. There is nothing left for it to
+# cover -- both lists are empty and the registry that filled them is
+# deleted -- so Phase 12 deleted the call and kept its message below.
 #
 # Both lists are empty, so there is nothing to hand over -- and the call
 # has to be SKIPPED rather than made with empty arrays: bare `monad test`
 # is not a no-op, it is a different mode (it resolves the mote containing
 # the working directory and tests that), so passing it no paths would run
-# a second, unintended sweep instead of nothing. The guard is what makes
-# the empty registry mean "no fallback", and it is the last piece Phase 12
-# deletes along with the arrays.
-if [ "${#host_only[@]}" -eq 0 ] && [ "${#gap_files[@]}" -eq 0 ]; then
-  echo "rust runner: no files left -- the self-hosted runner covers the corpus alone"
-else
-  cargo run --release -- test "${host_only[@]}" "${gap_files[@]}"
-fi
+# a second, unintended sweep instead of nothing. That guard was deleted in
+# Phase 12 along with the fallback: with both lists empty the guard had no
+# work left but to hold the message, and the message is what the sweep
+# asserts below.
+echo "rust runner: no files left -- the self-hosted runner covers the corpus alone"
+
+# Re-raise the captured self-hosted status: without this the `|| self_hosted_rc=$?`
+# above would turn a red run into an exit 0, which is worse than the abort it
+# replaced. A bad check phase has already exited 1 by now.
+exit "$self_hosted_rc"

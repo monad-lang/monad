@@ -13,7 +13,6 @@ use lang::mote {MoteManifest}
 use std::map {}
 use lang::pretty {show_decls}
 use lang::codegen::test_driver {TestIrResult, compile_loaded_modules_to_test_ir, is_no_tests_error, parse_driver_result}
-use lib::test_gaps {gap_reason_for, is_known_gap}
 use lib::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`std/src/log.mo` -- its own header documents the gating rules).
@@ -851,7 +850,7 @@ def resolve_runtime_src : IO String := do {
 def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 := do {
     let expanded : List String <- expand_check_paths files;
     let total_files : I64 := List.length expanded;
-    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, tests_passed := 0, tests_failed := 0, files_failed := 0, skipped := 0, gaps := 0, file_idx := 0, total_files := total_files, verbose := verbose, cache := module_info_cache_empty }
+    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, tests_passed := 0, tests_failed := 0, files_failed := 0, skipped := 0, file_idx := 0, total_files := total_files, verbose := verbose, cache := module_info_cache_empty }
 }
 
 /// `tests_passed`/`tests_failed` count individual TESTS across all
@@ -874,7 +873,7 @@ def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 
 /// 5-file `check` run over `lang/`, the same cache serves 69 of 92
 /// dependency loads (75%) from an earlier file's work.
 #[partial]
-def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (gaps : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (cache : ModuleInfoCache) : IO I64 :=
+def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (cache : ModuleInfoCache) : IO I64 :=
     match files {
         List.empty => do {
             let total_tests := tests_passed + tests_failed;
@@ -893,16 +892,6 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                 // would misreport both.
                 if I64.gt skipped 0 then
                     println (I64.to_string skipped ++ " file(s) skipped (no tests)")
-                else do { return unit };
-                // Kept distinct from `skipped`, and from the exit code:
-                // a gap is a file whose tests genuinely do not run, for
-                // a reason recorded in `cli/src/test_gaps.mo`. Reporting
-                // it as "skipped" is what hid ~220 tests running nowhere;
-                // failing on it would block CI on already-tracked work.
-                // The line is loud on purpose -- it should shrink to
-                // nothing and take that file with it.
-                if I64.gt gaps 0 then
-                    println (I64.to_string gaps ++ " file(s) with known gaps (see cli/src/test_gaps.mo)")
                 else do { return unit };
                 // Same whole-run cache visibility `run_check_loop` prints --
                 // `hits` counts dependency loads served from an earlier
@@ -937,13 +926,8 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                     // classification below, one gate earlier. Counting
                     // it as `skipped` (which affects no exit code) is
                     // what let broken files pass CI silently.
-                    if is_known_gap f e then do {
-                        println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
-                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
-                    } else do {
-                        println ("[31mFAIL  " ++ f ++ " (" ++ e ++ ")[0m");
-                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
-                    }
+                    println ("[31mFAIL  " ++ f ++ " (" ++ e ++ ")[0m");
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
                 },
                 Result.ok em =>
                     do {
@@ -956,17 +940,10 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                                     // diagnostics were already printed,
                                     // and a file whose tests cannot even
                                     // be type-checked has run nothing.
-                                    // A gap file is excused only if its
-                                    // recorded cause still matches.
-                                    if is_known_gap f "does not typecheck" then do {
-                                        println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
-                                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
-                                    } else do {
-                                        println ("[31mFAIL  " ++ f ++ " (does not typecheck)[0m");
-                                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
-                                    }
+                                    println ("[31mFAIL  " ++ f ++ " (does not typecheck)[0m");
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
                                 },
-                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps, file_idx := file_idx, total_files := total_files, verbose := verbose, preloaded := Option.some em.loaded, cache := out_cache },
+                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, file_idx := file_idx, total_files := total_files, verbose := verbose, preloaded := Option.some em.loaded, cache := out_cache },
                             }
                     },
             }
@@ -977,7 +954,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
 /// own loading + compile + run pipeline, reached only once the gate
 /// above has confirmed `f` itself checks cleanly.
 #[partial]
-def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (gaps : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (preloaded : Option LoadedModules) (cache : ModuleInfoCache) : IO I64 := do {
+def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (preloaded : Option LoadedModules) (cache : ModuleInfoCache) : IO I64 := do {
             // Reuses the module set `run_test_loop`'s typecheck gate
             // already loaded -- see `compile_file_codegen`'s own
             // `preloaded` comment for the redundancy this removes.
@@ -993,7 +970,7 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
             match res {
                 err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                 },
                 ok loaded => do {
                     // The per-binary result file the driver writes its
@@ -1026,21 +1003,13 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             //         an instance error starts with the
                             //         same `no `; see
                             //         `is_no_tests_error`).
-                            //   GAP   a known, recorded failure, matched
-                            //         on PATH AND CAUSE
-                            //         (`cli/src/test_gaps.mo`), so a
-                            //         listed file failing a NEW way
-                            //         still fails here.
                             //   FAIL  anything else -- exit 1.
                             if is_no_tests_error e then do {
                                 println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
-                            } else if is_known_gap f e then do {
-                                println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
-                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                             } else do {
-                                println ("[31mFAIL  " ++ f ++ " (" ++ e ++ ")[0m");
-                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                            println ("[31mFAIL  " ++ f ++ " (" ++ e ++ ")[0m");
+                            run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                             }
                         },
                         ok ir_result => do {
@@ -1080,22 +1049,12 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                 // gap can fail HERE rather than at the
                                 // driver compile -- `init/src/tests.mo`
                                 // did, on an llc-rejected call to an
-                                // undefined `@Pred` -- so the gap test
-                                // belongs on this path too; it is kept
-                                // though nothing is listed for it today,
-                                // because which stage fails is a
-                                // property of the gap and not something
-                                // a new entry gets to choose. `llc`'s own
-                                // message is not available here -- it
-                                // went to the console -- so the cause
-                                // matched is this branch's own wording.
-                                if is_known_gap f "compilation failed" then do {
-                                    println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
-                                } else do {
-                                    println ("[31mFAIL  " ++ f ++ " (compilation failed)[0m");
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
-                                }
+                                // undefined `@Pred` -- `llc`'s own message
+                                // is not available here (it went to the
+                                // console), so what is reported is this
+                                // branch's own wording.
+                                println ("[31mFAIL  " ++ f ++ " (compilation failed)[0m");
+                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                             } else do {
                                 let bin_path := out_dir ++ "/" ++ bin_name;
                                 // The driver's authoritative report is
@@ -1142,18 +1101,9 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                     // after it compiles), so the same
                                     // path-and-cause test applies. The
                                     // cause is the message this branch
-                                    // itself prints, so a listed file
-                                    // that starts failing with a
-                                    // different exit code is still
-                                    // reported.
                                     let why : String := "driver exited " ++ I64.to_string exit_code;
-                                    if is_known_gap f why then do {
-                                        println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
-                                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
-                                    } else do {
-                                        println ("[31mFAIL  " ++ f ++ " (" ++ why ++ ")[0m");
-                                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
-                                    }
+                                    println ("[31mFAIL  " ++ f ++ " (" ++ why ++ ")[0m");
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                                 } else do {
                                     // `bad` is false, so `parsed` is
                                     // `Option.some failed` with
@@ -1164,7 +1114,7 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                         Option.some failed2 => failed2,
                                         Option.none => 0,
                                     };
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed + (total - failed), tests_failed := tests_failed + failed, files_failed := files_failed, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed + (total - failed), tests_failed := tests_failed + failed, files_failed := files_failed, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                                 }
                             }
                         }
