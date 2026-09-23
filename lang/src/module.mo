@@ -7,10 +7,11 @@ use std::bench {now, report, report_since, since}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lib::types {
   module_path_to_string_colon,
-  Class, ClassDef, Decl, DeclGroup, Def, Identifier, Instance, InductConstructor, Inductive, Infix,
-  LoadedModules, LocalScope, LocalVar, ModulePath, NamePath, NameRef, Scope,
-  ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
-  inductive_d, list_reverse, mk, mp, name, nid, show_name_path, to_name, union_ids,
+  Class, ClassDef, Decl, DeclGroup, DebugName, Def, Identifier, Instance, InductConstructor, Inductive, Infix,
+  LoadedModules, LocalScope, LocalVar, ModulePath, NamePath, NameRef, Param, Scope,
+  ScopeData, ScopeInstance, Struct, StructField, Term, TypeError, def_d, hole, id, id_eq,
+  inductive_d, list_reverse, mk, mp, name, nid, show_identifier, show_module_path, show_name_path,
+  term_peel, to_name, union_ids,
   use_d,
 }
 use lib::parser {decls_parser, decls_parser_located, decls_parser_strict, module_path_to_string}
@@ -1762,13 +1763,177 @@ def elaborate_module_decls_go (scope : Scope) (decl_list : List Decl) (locals : 
             },
     }
 
+// --- Strict positivity (the `check` pass) ---
+//
+// An inductive's constructors may mention the inductive itself, but only in
+// a strictly positive position: a self-occurrence to the LEFT of an arrow
+// -- a field whose type is a function *from* the type being declared -- is
+// a type that can be built without ever being smaller, which is the same
+// circularity the termination check exists to keep out of the logic. The
+// Rust reference runs this as `check_strict_positivity`
+// (`core/src/eval/type.rs`), once per `Decl::Type` on its live path
+// (`core_check_module.rs`); the self-hosted checker did not, so
+// `type Bad { mkBad (f : Bad -> I64) }` was rejected by the host and
+// accepted here. Measured 2026-09-23 before the port: the host rejects it,
+// and the same file checks clean self-hosted.
+//
+// Polarity starts `true` at each constructor parameter and flips on every
+// arrow's DOMAIN (`Term.pi`'s `arg`, `Term.forall`'s `kind`), staying put
+// across the codomain. So `Bad -> I64` is negative and rejected, while
+// `I64 -> Bad` and `(Bad -> I64) -> I64` -- two flips -- are accepted. Both
+// of those were measured against the host rather than reasoned about.
+//
+// Self-reference is matched on the SPELLING the elaborator left in the
+// term, exactly as the reference matches it, and for a qualified occurrence
+// the module half is compared too. That half is not decoration: the same
+// source checked twice by `target/release/monad-rs` gets different verdicts
+// depending on the module the file is checked AS -- `check probe_qual.mo`
+// (module `probe_qual`) rejects `type Q { mkQ (f : probe_qual::Q -> I64) }`
+// while the identical file named by absolute path (module
+// `home.anderscs.src.monad-bootstrap.probe_qual`) accepts it. Comparing the
+// name half alone would flag the second invocation too, and would likewise
+// flag another module's same-named type; `check_strict_pos`'s own doc
+// comment names that as the reason the module is compared.
+//
+// The message is the reference's `TypeError::Generic` text verbatim, and it
+// is rendered through `render_type_error` like every other per-declaration
+// diagnostic here. The reference renders it through its `Diagnostic` and so
+// prints a context header and a `1:1` span; this compiler's AST carries no
+// span to print, which is the pre-existing difference in how the two frame
+// an error (see `lang/typecheck/diagnostic.mo`'s own header), not a
+// difference in the message.
+//
+// Deliberately inductive-only: the reference calls this for `Decl::Type`
+// and not for `Decl::Struct`, and `check_decl_with_scope` routes a struct to
+// `check_struct_with_scope`, so hooking this at `check_inductive_with_scope`
+// keeps that boundary without a second guard.
+
+/// Index of the last `::` in `s` (scanning up to `n`), or `found` --
+/// started at -1 -- when there is none. A left-to-right scan that remembers
+/// its last hit, which is what `strip_module_qualifier`
+/// (`lang/src/termination.mo`) does for the same reason: the name half of a
+/// qualified reference may itself be dotted (`std::io::IO.println`), so the
+/// split has to be at the LAST separator and not the first.
+#[partial]
+def strict_pos_last_sep (s : String) (i : I64) (n : I64) (found : I64) : I64 :=
+    if I64.gt (I64.add i 2) n then found
+    else if String.beq (String.slice s i 2) "::" then strict_pos_last_sep s (I64.add i 1) n i
+    else strict_pos_last_sep s (I64.add i 1) n found
+
+/// The polarity of the other side of an arrow. A local helper rather than
+/// the ambient `not`: this module has never used that name, and it resolves
+/// through the same always-on table as everything else -- one line here
+/// costs less than a name-resolution question at three call sites.
+def strict_pos_flip (b : Bool) : Bool :=
+    if b then false else true
+
+/// Is `spelling` an occurrence of the type called `type_str` that THIS
+/// module -- `module_str` -- declares?
+///
+/// A qualified spelling (`mod::Name`) is that type only when both halves
+/// agree; a bare one when the whole spelling equals the name, mirroring
+/// `check_strict_pos`'s `to_qualified()` split. `type_str` is the type's
+/// dotted `show_name_path` spelling, which is also what the elaborator
+/// stores for a bare reference (`lower_name_global`,
+/// `lang/parser/lower_parse.mo`), and a qualified one is stored as
+/// `show_module_path qmod` ++ `"::"` ++ that same spelling
+/// (`qualified_ref_symbol`) -- so both sides of each comparison are
+/// compared in one convention.
+#[partial]
+def strict_pos_is_self (module_str : String) (type_str : String) (spelling : String) : Bool :=
+    let n : I64 := String.length spelling in
+    let idx : I64 := strict_pos_last_sep spelling 0 n (0 - 1) in
+    if I64.lt idx 0
+    then String.beq spelling type_str
+    else String.beq (String.slice spelling (I64.add idx 2) (I64.sub n (I64.add idx 2))) type_str
+        && String.beq (String.slice spelling 0 idx) module_str
+
+/// Does `t` contain a non-strictly-positive occurrence of the type called
+/// `type_str`? `polarity` is this position's own sign, `true` for a
+/// positive one; a self-occurrence under `false` is the error, and that is
+/// the only thing this returns `true` for.
+///
+/// `term_peel` at entry, not a `Term.ctx` arm: the parser stores every term
+/// with its source position as a transparent wrapper
+/// (`decls_parser_located`), so a located `Term.pi` would match none of the
+/// arms below and the walk would silently stop descending -- the failure
+/// mode `term_peel`'s own doc comment warns about.
+#[partial]
+def strict_pos_bad (module_str : String) (type_str : String) (t : Term) (polarity : Bool) : Bool :=
+    match term_peel t {
+        Term.var _ dbg =>
+            if polarity
+            then false
+            else match dbg {
+                DebugName.named id => strict_pos_is_self module_str type_str (show_identifier id),
+                DebugName.unnamed => false,
+            },
+        Term.app fun arg =>
+            strict_pos_bad module_str type_str fun polarity || strict_pos_bad module_str type_str arg polarity,
+        Term.pi arg ret =>
+            strict_pos_bad module_str type_str arg (strict_pos_flip polarity) || strict_pos_bad module_str type_str ret polarity,
+        Term.forall _ kind body =>
+            strict_pos_bad module_str type_str kind (strict_pos_flip polarity) || strict_pos_bad module_str type_str body polarity,
+        // Every other shape is opaque to the rule, matching the reference's
+        // `_ => Ok(())` -- in particular `Term.lam`, whose body the
+        // reference does not descend into either.
+        _ => false,
+    }
+
+#[partial]
+def strict_pos_params_bad (module_str : String) (type_str : String) (ps : List Param) : Bool :=
+    match ps {
+        List.empty => false,
+        List.cons p rest =>
+            match p {
+                Param.mk _name typ _mult _default _attrs =>
+                    strict_pos_bad module_str type_str typ true || strict_pos_params_bad module_str type_str rest,
+            },
+    }
+
+#[partial]
+def strict_pos_ctors_bad (module_str : String) (type_str : String) (cs : List InductConstructor) : Bool :=
+    match cs {
+        List.empty => false,
+        List.cons c rest =>
+            strict_pos_ctor_bad module_str type_str c || strict_pos_ctors_bad module_str type_str rest,
+    }
+
+#[partial]
+def strict_pos_ctor_bad (module_str : String) (type_str : String) (c : InductConstructor) : Bool :=
+    match c {
+        InductConstructor.mk _name params _typ => strict_pos_params_bad module_str type_str params,
+    }
+
+/// An inductive's strict-positivity diagnostic, or `List.empty` when it has
+/// none -- the shape `check_inductive_with_scope` below appends into.
+///
+/// Runs over the constructors' declared PARAMETERS, not over the
+/// constructors' own `typ`: that is where the reference reads them
+/// (`cons.params()`), and measured here it is also the only place they are
+/// -- an elaborated `InductConstructor`'s `typ` is a hole for the field-free
+/// shapes and the params carry every real type.
+#[partial]
+def check_strict_positivity_with_scope (scope : Scope) (ind : Inductive) (path : Option String) : List String :=
+    match scope {
+        Scope.mk module_id _sd _parent =>
+            match ind {
+                Inductive.mk name _params _typ constructors _attrs _vis =>
+                    let type_str : String := show_name_path name in
+                    if strict_pos_ctors_bad (show_module_path module_id) type_str constructors
+                    then [render_type_error type_str path (TypeError.custom ("non-strictly positive occurrence of " ++ type_str))]
+                    else List.empty,
+            },
+    }
+
 #[partial]
 def check_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match ind {
         Inductive.mk name _params _typ constructors _attrs _vis => do {
             if verbose then println ("  checking type " ++ show_name_path name) else do { return unit };
             let locals_ : LocalScope := locals_with_inductive_params ind scope locals;
-            check_constructors_with_scope constructors scope locals_ path verbose
+            let cons_diags : List String <- check_constructors_with_scope constructors scope locals_ path verbose;
+            return (list_append (check_strict_positivity_with_scope scope ind path) cons_diags)
         }
     }
 
@@ -3791,6 +3956,98 @@ def test_check_module_with_scope_paramed_inductive : IO Bool := do {
         },
         ParseResult.fail _ => do { return false }
     }
+}
+
+// --- Tests: strict positivity ---
+//
+// Synthetic, because the corpus has none: `non-strictly` appears in no
+// `.mo` file, and a scan of all 162 inductive declarations across the repo
+// found 0 the rule flags. This closes a soundness gap, so the test is the
+// only thing holding the rule in place -- the sweep cannot.
+
+/// The diagnostics `check_module_with_scope` reports for `src`, checked as
+/// a module called `module_name` with no locals in scope. Every test below
+/// is a one-line source plus the verdict, so they share this.
+def strict_pos_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
+    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty);
+    match parse_all_decls src {
+        ParseResult.success _ decl_list => do {
+            let sd : ScopeData := build_scope_from_decls path decl_list;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            check_module_with_scope scope decl_list locals Option.none false
+        },
+        ParseResult.fail _ => do { return List.cons "PARSE FAILED" List.empty }
+    }
+}
+
+#[partial]
+def strict_pos_has_diag (needle : String) (diags : List String) : Bool :=
+    match diags {
+        List.empty => false,
+        List.cons d rest => if String.contains d needle then true else strict_pos_has_diag needle rest,
+    }
+
+def strict_pos_lacks_diag (needle : String) (diags : List String) : Bool :=
+    if strict_pos_has_diag needle diags then false else true
+
+/// The rule's own case: a constructor field whose type is a function FROM
+/// the type being declared. Rejected by the reference
+/// (`target/release/monad-rs check` on exactly this source, 2026-09-23).
+/// Asserting the message, not just non-emptiness, is what makes this fail if
+/// the diagnostic's wording drifts away from `TypeError::Generic`'s.
+#[test]
+def test_check_module_strict_pos_rejects_negative_self : IO Bool := do {
+    let diags : List String <- strict_pos_diags_of_source "type Bad { mkBad (f : Bad -> I64) }" "probe";
+    return (strict_pos_has_diag "non-strictly positive occurrence of Bad" diags && I64.beq (List.length diags) 1)
+}
+
+/// Recursion in the codomain, one constructor field per shape: a direct
+/// field, an arrow whose RESULT is the type, and an arrow whose DOMAIN is
+/// itself an arrow (two flips, so positive). All three are accepted by the
+/// reference on the same source.
+#[test]
+def test_check_module_strict_pos_accepts_positive_self : IO Bool := do {
+    let src : String := "type Tree { leaf (n : I64), node (l : Tree) (r : Tree) }\ntype Fwd { mkFwd (k : I64 -> Fwd) }\ntype Neg { mkNeg (h : (Neg -> I64) -> I64) }";
+    let diags : List String <- strict_pos_diags_of_source src "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// The module half of a qualified reference, both directions. `probe::Q` IS
+/// this module's `Q` and is rejected; `other::Q` is not, and is accepted
+/// even though its name half matches. The reference was measured producing
+/// exactly this split for this pair of spellings, and it is the reason its
+/// own comparison is not name-half-only: the same source checked as a
+/// different module gets the other verdict.
+#[test]
+def test_check_module_strict_pos_qualified_self_is_this_module : IO Bool := do {
+    let diags : List String <- strict_pos_diags_of_source "type Q { mkQ (f : probe::Q -> I64) }" "probe";
+    return (strict_pos_has_diag "non-strictly positive occurrence of Q" diags)
+}
+
+#[test]
+def test_check_module_strict_pos_qualified_other_module_is_not : IO Bool := do {
+    let diags : List String <- strict_pos_diags_of_source "type Q { mkQ (f : other::Q -> I64) }" "probe";
+    return (strict_pos_lacks_diag "non-strictly positive occurrence" diags)
+}
+
+/// A dotted type name is compared whole -- the elaborator stores a bare
+/// reference as the name's dotted `show_name_path` spelling, so `D.E` has to
+/// match `D.E` and not just its last segment.
+#[test]
+def test_check_module_strict_pos_dotted_name : IO Bool := do {
+    let diags : List String <- strict_pos_diags_of_source "type D.E { mkE (g : D.E -> I64) }" "probe";
+    return (strict_pos_has_diag "non-strictly positive occurrence of D.E" diags)
+}
+
+/// A struct with the same shape is NOT flagged: the reference runs this for
+/// `Decl::Type` only, and `check_decl_with_scope` routes a struct to
+/// `check_struct_with_scope` instead. Without this the check would be one
+/// `Decl.struct_d` arm away from over-rejecting, and nothing else says so.
+#[test]
+def test_check_module_strict_pos_skips_structs : IO Bool := do {
+    let diags : List String <- strict_pos_diags_of_source "struct S { f : S -> I64 }" "probe";
+    return (strict_pos_lacks_diag "non-strictly positive occurrence" diags)
 }
 
 /// Confirms `check_module_with_scope` *accumulates* — the failing

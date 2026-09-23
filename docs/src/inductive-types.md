@@ -159,6 +159,41 @@ Each of these recurses on a structural subterm of its argument, so the
 (`List.is_empty`, `List.append`, and `List.first` already exist in the prelude —
 these are shown as illustrations.)
 
+## Strict Positivity
+
+A recursive type must mention itself in a *strictly positive* position. Its own
+name may appear to the right of an arrow, or as an argument to something else,
+but it may not sit to the **left** of an arrow — a constructor field whose type
+is a function *from* the type being declared:
+
+```monad,ignore
+type Bad {
+    mkBad (f : Bad -> I64)      // rejected
+}
+```
+
+```text
+error: non-strictly positive occurrence of Bad in Bad
+  --> bad.mo
+```
+
+Both compilers apply the rule and both name the type; they differ only in how
+they *frame* the error. The host adds an `In Bad:` header line and a source
+span (`error: … at 1:1`, then `--> bad.mo:1:1`), where this compiler's syntax
+tree carries no span to print, so it puts the type's name after `in` instead.
+The wording of the message itself is the same on both sides.
+
+The rule is about polarity, and it flips once per arrow. Recursing in the
+codomain is fine (`type Fwd { mkFwd (k : I64 -> Fwd) }`), and so is an arrow
+whose *domain* is itself an arrow, because two flips land back on positive
+(`type Neg { mkNeg (h : (Neg -> I64) -> I64) }`). What is rejected is an odd
+number of flips between the declaration and the occurrence — which is exactly
+the shape that lets you write a non-terminating term without any recursion at
+all.
+
+This is checked for `type`, not for `struct`. The two compilers agree on the
+rule and both reject the example above.
+
 ## Type Parameters
 
 Types can have type parameters for polymorphism:
@@ -215,6 +250,7 @@ Monad provides these types in the prelude, available without any import:
 - Pattern matching destructures values, one constructor level at a time
 - Recursive functions operate on inductive types
 - Type parameters (`A`) make types polymorphic
+- A recursive occurrence must be strictly positive
 - Tuple syntax `(a, b)` is sugar for `Pair`
 
 Next, we'll explore **type classes**, Monad's mechanism for ad-hoc polymorphism.

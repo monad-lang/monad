@@ -31,7 +31,7 @@ commit this book ships with, not inferred from intent.
 | [Syntax & parser](./reference.md) | **Working** | Stable and well covered. Every `def` needs a type annotation — there is no top-level inference. |
 | Type checker | **Working** | Bidirectional, with implicits and holes. Catches most errors; see the instance caveat below. |
 | [Type classes & instances](./type-classes.md) | **Partial** | Resolution and superclass constraints work. But instances resolve at **run time**, so a missing instance type-checks and then fails with `unresolved global:`. Empty instance bodies do not parse, so class defaults cannot be inherited wholesale. Resolution keys on the type *head*, so an instance whose head is a variable (`MonadLiftT m m`, `Monad (M I I)`) type-checks and never dispatches. |
-| [Inductive types](./inductive-types.md) | **Working** | Parameters, recursion, indexed families. |
+| [Inductive types](./inductive-types.md) | **Working** | Parameters, recursion, indexed families, and the strict-positivity rule — a constructor field of a function type *from* the type being declared is rejected. |
 | Pattern matching | **Partial** | One constructor level deep. No nested patterns, no literal patterns, no guards, no or-patterns, and **no exhaustiveness checking**. |
 | [Structs](./structs-enums.md) | **Partial** | Records, field defaults, `{ s with … }` update, keyword construction, and field destructuring all work. **Generic structs are effectively unconstructible** — use a `type` with a positional constructor. |
 | [Dependent types](./dependent-types.md) | **Partial** | Pi and forall types, implicits, `Sort N` universes, `Prop`, and length-indexed `Vec` all work. Propositional `Eq` type-checks but **cannot be eliminated** — `Eq.rec`'s native is unimplemented and matching on `refl` fails at run time. No dependent pattern matching, no tactics, no universe polymorphism. |
@@ -57,7 +57,7 @@ commit this book ships with, not inferred from intent.
 
 | Area | Level | What that means |
 |------|-------|-----------------|
-| [Self-hosted compiler](./compiling.md) | **Working** | ~55k lines of Monad in `lang/`. It compiles itself, and the result type-checks the compiler's own source. CI runs this on every push. The bootstrap has reached a fixpoint. |
+| [Self-hosted compiler](./compiling.md) | **Working** | ~64k lines of Monad in `lang/`. It compiles itself, and the result type-checks the compiler's own source. CI runs this on every push. The bootstrap has reached a fixpoint. |
 | LLVM native backend | **Partial** | Arithmetic, strings, file I/O and the seven concurrency natives are wired. A program reaching an unwired native **fails to compile** rather than miscompiling — one of four fail-fast gates. |
 | `monad check` | **Working** | The corpus checks clean, and the check phase of CI's sweep carries no exclusion list. `check` takes explicit paths, `--workspace`, or the mote you are standing in. |
 | `monad run` | **Working** | Compiles the file and executes the binary in one step. The binary is always named `run_out`, so there is no `-o`. |
@@ -91,9 +91,9 @@ For context on what "alpha" means here:
 
 | | |
 |---|---|
-| Monad source (`.mo`) | ~81,200 lines, of which `lang/` is ~64,200 |
+| Monad source (`.mo`) | ~81,500 lines, of which `lang/` is ~64,500 |
 | Rust source (bootstrap host) | ~56,400 lines |
-| Monad tests (`#[test]`) | 1,958 |
+| Monad tests (`#[test]`) | 2,033 defined; **1,964** run by CI's sweep |
 | Native functions | 137 declared in `init/`+`std/`; 3 unimplemented everywhere; the backend wires a subset |
 | Standard library | ~440 public defs, 35 classes, 132 instances (excluding test modules) |
 
