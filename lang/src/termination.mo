@@ -61,6 +61,16 @@
 /// codegen pass, downstream of every check. Within one module no two defs share a
 /// name, so discarding the qualifier (as `recursion_name` does) cannot conflate
 /// two of them.
+///
+/// That precondition is load-bearing, and one caller can violate it:
+/// `elaborate_loaded_modules` with `check_deps=true` passes the whole
+/// dependency closure. Measured 2026-09-23, that reports 188 spurious `No
+/// recursive parameters found for '__Dict_...'` diagnostics across 7 of 18
+/// `slow_tests/typecheck_init_tests.mo` tests -- the promoted dictionary
+/// defs of every module in the closure collide on their bare names, and a
+/// group of two with no formal parameters is an error by the reference's
+/// own rule. `check_deps` stays `false` everywhere; see
+/// `plans/bootstrapping/check-deps-memory-blowup.md`.
 
 use lib::types {
   Attribute, Decl, DebugName, Def, Identifier, MatchCase, Term,

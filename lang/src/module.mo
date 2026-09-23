@@ -3658,6 +3658,25 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
 ///     (checks everything reachable, once per call), but the check
 ///     actually named "check"/"compile"/"test" should mean: verifying a
 ///     file also verifies what it depends on.
+///
+/// **`true` is not usable, and the reason is not cost.** Measured
+/// 2026-09-23: it hands `check_module_with_scope` a multi-module decl
+/// list, and that function also runs `check_termination_all` over
+/// whatever it is given -- a pass whose own doc comment
+/// (`lang/src/termination.mo`) states its precondition, one module's own
+/// declarations before qualification, which is what makes its name-half
+/// comparison sound. On a closure it reports 188 spurious
+/// `No recursive parameters found for '__Dict_...'` diagnostics across 7
+/// of 18 `slow_tests/typecheck_init_tests.mo` tests, and its
+/// cubic-in-|defs| cost does not finish on this compiler's own ~2200-decl
+/// closure. Making it usable means running the termination half once per
+/// OWNING module rather than over the flat list -- the grouping exists
+/// upstream as `flatten_module_decl_groups`' `List DeclGroup` and is
+/// flattened away before the checker sees it. Nothing needs it today:
+/// the sweep's check phase body-checks every `.mo` file in the corpus as
+/// its own target, so every dependency is covered without this flag.
+/// Full measurements and the code shape:
+/// `plans/bootstrapping/check-deps-memory-blowup.md`.
 /// The post-expansion scope, as its own def so the struct literal has a
 /// declared return type to desugar against -- see the call site for why
 /// neither an inline literal nor an annotated `let` inside the branch

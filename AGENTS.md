@@ -88,15 +88,21 @@ a different branch and cause confusion.
 │                     #     `cli/src/main.mo`'s own top-level decls, NOT its
 │                     #     dependencies' bodies (dependencies only
 │                     #     contribute signatures to scope). `check_deps=true`
-│                     #     exists (see `elaborate_loaded_modules`'s own doc
-│                     #     comment) but is NOT currently used anywhere,
-│                     #     including here or by the real `check`/`compile`/
-│                     #     `test` CLI commands -- turning it on for
-│                     #     `cli/src/main.mo`'s own full closure (≈2200 decls,
-│                     #     including this self-hosted compiler's own
-│                     #     richly-recursive AST types) caused unbounded
-│                     #     memory growth (28GB+ RSS and still climbing);
-│                     #     root cause under investigation, see
+│                     #     exists (see `elaborate_loaded_modules`' own doc
+│                     #     comment) but is NOT used anywhere, and should not
+│                     #     be: measured 2026-09-23 it is semantically wrong,
+│                     #     not merely slow -- it hands the whole closure to
+│                     #     `check_termination_all`, a pass documented as
+│                     #     running on ONE module's own declarations, which
+│                     #     yields 188 spurious `No recursive parameters
+│                     #     found for '__Dict_...'` diagnostics over 7 of 18
+│                     #     `typecheck_init_tests.mo` tests (and, being cubic
+│                     #     in |defs|, does not finish on `cli/src/main.mo`'s
+│                     #     own ≈2200-decl closure: flat 152.4MB RSS at ~100%
+│                     #     CPU for 5+ min against a 23.28s baseline). The
+│                     #     old "28GB+ RSS" claim was a spin misread as a
+│                     #     blowup; closed, with measurements and the code
+│                     #     shape, in
 │                     #     `bootstrapping/check-deps-memory-blowup.md`.
 │                     #     typecheck_init_tests.mo/typecheck_std_tests.mo
 │                     #     are kept as separate per-file tests regardless
@@ -2244,13 +2250,13 @@ Key patterns when writing self-hosted Monad code:
     test slow_tests` — same 29 pre-existing `test_typecheck_*` failures
     (a known, unrelated self-hosted-checker gap — see this file's
     Troubleshooting section on `Map`/`BOrd` dispatch inside
-    `load_module_with_dependencies`), not a new regression. **Not yet
-    re-measured**: the `check_deps=true` 28GB-RSS repro from
-    `check-deps-memory-blowup.md` — not reachable from this branch (that
-    flag lives on `checker/fix-coverage`, not merged here). This fix
-    targets that investigation's leading hypothesis #1 directly; re-run
-    that repro once `check_deps` is available here to confirm how much of
-    it this closes.
+    `load_module_with_dependencies`), not a new regression. **Re-measured
+    2026-09-23, hypothesis #1 refuted**: the `check_deps=true` 28GB-RSS
+    repro from `check-deps-memory-blowup.md` is not a memory repro at all
+    — the flag runs at a flat 152.4MB RSS and ~100% CPU (a spin), and it
+    is wrong before it is slow. See that file's verdict; this fix
+    (structural sharing in the interpreter) was aimed at a hypothesis the
+    measurement no longer supports.
 18. **The self-hosted compiler's global name table is not module-scoped --
     duplicate top-level names across different `lang/*.mo` files silently
     collide**, confirmed both structurally and via a grep sweep

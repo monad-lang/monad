@@ -22,6 +22,19 @@ pub def empty_local_scope : LocalScope := {
 /// Type check a file with its full dependency scope (ambient prelude/init
 /// included), reporting a load failure as a test failure rather than a
 /// crash.
+///
+/// `check_deps` is `false` deliberately, and must not be flipped. It was
+/// measured both ways on 2026-09-23: with `true` this file's callers go
+/// from 18/18 to 11/18 on `typecheck_init_tests.mo` (188 spurious
+/// `No recursive parameters found for '__Dict_...'` diagnostics), because
+/// `check_module_with_scope` runs `check_termination_all` over whatever
+/// decl list it is handed and that pass works on ONE module's own
+/// declarations; and on `cli/src/main.mo`'s ~2200-decl closure it does not
+/// finish at all (flat 152.4MB RSS at ~100% CPU for 5+ min against a
+/// 23.28s baseline). Nothing is lost by leaving it `false`: the sweep's
+/// check phase body-checks every `.mo` file in the corpus as its own
+/// target, so dependencies are covered there. Measurements:
+/// `plans/bootstrapping/check-deps-memory-blowup.md`.
 #[partial]
 pub def typecheck_file (file_path : String) : IO Bool := do {
     // Annotated the same way cli/src/main.mo annotates its own
