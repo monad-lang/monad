@@ -209,8 +209,9 @@ A complete SHA-256 implementation in pure Monad, with no natives, built on the
 ### `std.concurrent.fiber` / `std.concurrent.combine` — **not ambient**
 
 Fibers and structured-concurrency combinators. Read
-[Concurrency](./concurrency.md) before using them — the model is cooperative and
-lazy, and they cannot be compiled at all.
+[Concurrency](./concurrency.md) before using them — compiled binaries run fibers
+on real OS threads, while the bootstrap host's interpreter is lazy and
+cooperative, so the two backends disagree about what a `forkIO` means.
 
 ## Gaps Worth Knowing About
 

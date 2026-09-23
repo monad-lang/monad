@@ -3180,14 +3180,30 @@ def instance_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam
 
 /// Try to parse a named instance prefix `Name :` before the class name.
 /// Returns the instance name (or `Identifier.id "_"` if unnamed) and the
-/// remaining input to parse the class name from.  The name is a single
-/// identifier — matching the Rust host's `def_name` (a `ModulePath`, but
-/// in practice always a single identifier for named instances).
+/// remaining input to parse the class name from.
+///
+/// The name is a DOTTED path, matching the Rust host's `def_name`
+/// (`alt((name_path_expression, map(name, NamePath::single)))`): the host
+/// accepts `instance My.Greet : Greet I64` and this parser used to stop
+/// at the first dot and reject the decl outright ("did not fully
+/// parse"). The name is stored as the JOINED string `"My.Greet"`, which
+/// is exactly how the one consumer that reads it renders a `NamePath` --
+/// `qualified_def_name_str` (`lang/codegen/qualify.mo`) calls
+/// `bare_npath (show_identifier insname)`, whose dotted spelling is the
+/// same string -- so the dictionary symbol is identical either way.
+/// `Identifier.id "_"` remains the anonymous sentinel for the unnamed
+/// form.
+///
+/// The ambiguity this introduces is resolved the way the host resolves
+/// it, and the corpus depends on it: a dotted run NOT followed by `:` is
+/// no name at all but the start of a dotted CLASS name --
+/// `instance Json.Serializer Bool`, eight sites in `lang/src/json.mo` --
+/// so the fallback re-parses from `input` unchanged.
 def instance_try_named (input : String) : Pair Identifier String :=
-	match identifier (skip_spaces input) {
-		success after_name name =>
+	match dotted_identifier (skip_spaces input) {
+		success after_name ids =>
 			match tag ":" (skip_spaces after_name) {
-				success after_colon _ => Pair.pair (Identifier.id name) after_colon,
+				success after_colon _ => Pair.pair (Identifier.id (join_dotted_identifiers ids)) after_colon,
 				fail _ => Pair.pair (Identifier.id "_") input
 			},
 		fail _ => Pair.pair (Identifier.id "_") input

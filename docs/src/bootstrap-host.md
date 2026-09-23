@@ -42,11 +42,10 @@ monad-rs test init std
 monad-rs test lang --json -j 8 --timeout 30
 ```
 
-The self-hosted `monad test` now runs the whole corpus (CI's sweep uses it),
-but it runs files one at a time and has no `--json`, `-j`, or `--timeout`. It
-also cannot run tests whose bodies reach a native the compiled backend does not
-wire — the concurrency ones above all — where the host's interpreter can. For
-those, and for tooling that wants to parse results, use the host.
+The self-hosted `monad test` now runs the whole corpus, including the
+concurrency tests — CI's sweep uses it and carries no exclusions — but it runs
+files one at a time and has no `--json`, `-j`, or `--timeout`. For parallelism,
+machine-readable output, or a per-test timeout, use the host.
 
 ### Editor and agent tooling
 
@@ -88,9 +87,14 @@ detection. Registry and git dependencies parse and are then rejected:
 dependency from-registry 1.0: registry deps not yet supported
 ```
 
-There are no `build`/`add`/`publish` commands. **The self-hosted compiler has no
-mote support at all** — its module resolution is a fixed cascade, described in
-[Modules and Imports](./modules.md#how-modules-are-found).
+There are no `build`/`add`/`publish` commands. The self-hosted compiler reads
+manifests too — `check`, `test` and `compile` share one mode dispatch (explicit
+paths, `--workspace`, or the mote you are standing in) and resolve a module
+path from the mote doing the `use`, falling back to the directory conventions
+for script modules. See
+[How Modules Are Found](./modules.md#how-modules-are-found). What remains
+host-only is everything beyond a manifest's declared paths: transitive walking,
+the `mote.lock` format, version-conflict detection, and the registry.
 
 ### Termination checking
 
@@ -102,28 +106,54 @@ host.
 
 ### Module resolution knobs
 
-`--mote-path DIR` (repeatable), `--manifest-path PATH`, `MONAD_STDLIB`, and
-`--workspace` all belong to the host. Resolution there is relative to the working
-directory.
+`--mote-path DIR` (repeatable), `--manifest-path PATH` and `MONAD_STDLIB` all
+belong to the host, and resolution there is relative to the working directory.
+`--workspace`/`-w` is on both, which is what makes
+`monad check --workspace` mean the same thing either way.
 
-## Syntax the host accepts and the self-hosted compiler rejects
+## Behaviour the two compilers read differently
 
-Each entry below is also marked in the chapter where it appears. Most of what
-used to be in this table — char literals, named instances, `_` holes,
-multi-binding `let`, brace-parameter declarations, multiplicity prefixes on
-parameters — has since been implemented self-hosted; what is left is:
+This section used to be a syntax table, and it is **empty now**. Everything that
+was in it has been implemented self-hosted: char literals, named instances, `_`
+holes, multi-binding `let`, brace-parameter declarations, multiplicity prefixes
+on parameters, `#[derive …]`, `\u{XXXX}` escapes and dotted instance names.
+There is no construct left that you can write for the host and not for the
+self-hosted compiler.
 
-| Construct | Portable alternative |
-|-----------|----------------------|
-| `#[derive BEq BOrd Debug Lens]` | write the instances by hand. The attribute parses self-hosted, but nothing expands it, so no instances are generated |
-| `\u{XXXX}` in a string or char literal | write the character itself |
-| A dotted instance name (`instance A.B : Class T`) | use a single bare identifier |
-| A `let` with the `;` between bindings left out | write the `;` — the self-hosted parser requires it |
-| `_` as a hole in **value** position | only type position works self-hosted; write the value |
+Two *behavioural* differences remain — code both compilers accept, which they
+then read differently. Neither is a syntax gap.
+
+**A missing `;` between `let` bindings.** Both parse it. Self-hosted, the
+binding's value expression is `atom (atom)*`, so it swallows the *next
+statement* as an argument whenever that statement's head is an expression atom:
+
+```monad,ignore
+def f : I64 := do {
+  let a : I64 := 1
+  I64.add a 2       // absorbed: the value became `1 I64.add a 2`
+}                   // error: unknown variable 'a' in f
+```
+
+The binder then never scopes where you meant it to. The host's grammar requires
+a *path* head for an application, so it cannot swallow and reads the statement
+correctly. The missing `;` is harmless when the next statement begins with a
+keyword rather than an expression (`let b : I64 := 2` follows fine), which is
+what makes this one easy to write by accident: **write the `;`.** This is the
+same grammar difference as the atom-in-function-position entry below, seen from
+the other side.
+
+**A `_` whose type cannot be inferred.** `def h : I64 := _` is accepted by both,
+and by both it lowers to a value that is not what you wanted (`I64.beq h 0`
+fails under each). The divergence is only in the *un-inferable* shape: the host
+rejects a hole no expected type reaches — `def k : I64 := (fn x => x) _` is
+*"cannot infer the type of a hole"* — while self-hosted accepts it silently.
+That strictness is the host's, and matching it self-hosted is the metavariable
+work the checker-architecture plan owns, not a syntax feature. Either way: write
+the value.
 
 ## Syntax the self-hosted compiler accepts and the host rejects
 
-Three, in this direction.
+Four, in this direction.
 
 Term macros:
 
@@ -145,6 +175,21 @@ def sum_coord (!{fst, snd} : Coord) : I64 := fst + snd
 The host's destructured-parameter parser never reads a prefix, so this is a
 parse error there. See [Linear Types](./linear-types.md).
 
+An **atom in function position** — an application whose head is a literal
+rather than a path:
+
+```monad,ignore
+def g : I64 := 1 5
+```
+
+Self-hosted this parses (`"s" 5` and `(1) 5` do too; nothing checks the head is
+callable). The host rejects it: a bare literal head is a parse error, and a
+parenthesised one gets as far as *"expected a function type, found `I64`"*. No
+real program wants this, so the portable alternative is simply not to write it
+— but it is worth knowing, because it is the grammar fact behind the missing-`;`
+mis-scope described above: the same `atom (atom)*` shape is what lets a `let`
+value swallow the statement after it.
+
 And a codegen behaviour rather than syntax: the self-hosted backend runs a
 pre-elaboration pass that desugars annotated struct literals, and aborts loudly
 if one ever reaches codegen undesugared. The host resolves struct literals in
@@ -156,11 +201,15 @@ If you are writing Monad, target the self-hosted compiler: everything in the
 main chapters works there. Use the host for its tooling — editor diagnostics, a
 REPL, and running test suites.
 
-If you are working on the compiler itself, you need both, and you should expect
-the host to be stricter (termination) and more permissive (the syntax table
-above) at the same time — with the two directions now much closer in size than
-they were.
+If you are working on the compiler itself, you need both. The host is still the
+stricter of the two where it counts — termination checking, and a hole it cannot
+give a type — while the self-hosted grammar is the more permissive one at the
+edges, in the four places listed above. That second direction is now the larger
+of the two, which is a change of sign from where this appendix started.
 
-Each gap is tracked in the project's plans as
-`bootstrapping/self-hosted-parity-gaps.md` and
-`bootstrapping/self-hosted-test-runner-multi-test.md`.
+This appendix is the current record. The two plans it used to point at are
+historical: `bootstrapping/self-hosted-parity-gaps.md` was a 2026-09-07
+inventory of constructs the host accepted and the self-hosted compiler did not,
+and essentially all of it has since landed;
+`bootstrapping/self-hosted-test-runner-multi-test.md` tracked files the
+self-hosted test runner skipped, and the sweep now carries no exclusions.

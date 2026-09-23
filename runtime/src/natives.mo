@@ -81,8 +81,9 @@ def numeric_runtime_functions : List LLVMFunction :=
   [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
    emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div,
    emit_u8_add, emit_u8_to_u32, emit_i64_to_u32, emit_u32_to_u8,
-   emit_u32_add, emit_u32_sub, emit_u32_and, emit_u32_or, emit_u32_xor,
-   emit_u32_shl, emit_u32_shr, emit_u32_eq,
+   emit_u32_add, emit_u32_sub, emit_u32_mul, emit_u32_and, emit_u32_or,
+   emit_u32_xor,
+   emit_u32_shl, emit_u32_shr, emit_u32_eq, emit_u32_lt, emit_u32_gt,
    emit_i64_to_u64, emit_u8_to_u64,
    emit_u16_eq, emit_u16_lt, emit_u16_gt,
    emit_i8_eq, emit_i8_lt, emit_i8_gt,
@@ -430,6 +431,18 @@ def emit_u32_add : LLVMFunction :=
 def emit_u32_sub : LLVMFunction :=
   emit_masked_binop "monad_u32_sub" u32_mask (sub (var_ "a") (var_ "b"))
 
+/// `monad_u32_mul(a, b)`: masked product, matching `int_binop_width`'s
+/// `mask_to_suffix(a.wrapping_mul(b), U32)`.
+///
+/// It was missing until the `\u{...}` escape decoder
+/// (`lang/src/parser/string.mo`) accumulated a hex digit as
+/// `U32.add (U32.mul acc 16u32) digit` -- sha256, the only earlier `U32`
+/// client, never multiplied. `validate_no_unwired_natives` caught it as
+/// a build failure rather than letting the def compile to a
+/// silent `return Unit` stub.
+def emit_u32_mul : LLVMFunction :=
+  emit_masked_binop "monad_u32_mul" u32_mask (mul (var_ "a") (var_ "b"))
+
 def emit_u32_and : LLVMFunction :=
   emit_masked_binop "monad_u32_and" u32_mask (and_ (var_ "a") (var_ "b"))
 
@@ -447,23 +460,44 @@ def emit_u32_shl : LLVMFunction :=
 def emit_u32_shr : LLVMFunction :=
   emit_masked_binop "monad_u32_shr" u32_mask (lshr_ (var_ "a") (var_ "b"))
 
-/// `monad_u32_eq(a, b) -> raw 0/1` (wired `bool_result`), comparing the
-/// MASKED operands -- `icmp eq` on unmasked i64s would call `0x1_0000_0000`
-/// and `0` different when both are zero as u32.
-def emit_u32_eq : LLVMFunction :=
+/// A two-argument comparison native that masks both operands to `mask`
+/// before comparing, then widens the `i1` for the wrapper's `2 - raw`
+/// Bool boxing. `cmp` is built from `var_ "a"`/`var_ "b"` by the caller.
+///
+/// Masking is what makes the comparison correct, not a detail: `u32_eq`
+/// on unmasked i64s would call `0x1_0000_0000` and `0` different when
+/// both are zero as u32. Signed `icmp` after masking is right for the
+/// same reason it is in the reference -- `int_cmp_width`
+/// (core/src/core_native.rs) masks both operands to `u32` first, so
+/// every value compared is in `0..2^32-1` and signed and unsigned
+/// ordering agree.
+def emit_masked_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
   let entry :=
     LLVMBasicBlock.mk "entry"
       [assign "a" (and_ (parm_ 0) u32_mask),
        assign "b" (and_ (parm_ 1) u32_mask),
-       assign "c" (icmp_eq (var_ "a") (var_ "b")),
+       assign "c" cmp,
        assign "r" (zext (var_ "c") i1_ i64_),
        ret (var_ "r")] in
-  { name := "monad_u32_eq",
+  { name := name,
     params := (i64_params 2),
     ret_ty := i64_,
     blocks := [entry],
     ghc_cc := false,
     dbg_loc := Option.none }
+
+def emit_u32_eq : LLVMFunction :=
+  emit_masked_icmp_native "monad_u32_eq" (icmp_eq (var_ "a") (var_ "b"))
+
+/// `monad_u32_lt`/`_gt` -- `BOrd U32`'s two methods. Needed by the same
+/// escape decoder as `emit_u32_mul` above: it rejects the surrogate
+/// range and picks a UTF-8 byte width by comparing the decoded codepoint
+/// against fixed bounds.
+def emit_u32_lt : LLVMFunction :=
+  emit_masked_icmp_native "monad_u32_lt" (icmp_slt (var_ "a") (var_ "b"))
+
+def emit_u32_gt : LLVMFunction :=
+  emit_masked_icmp_native "monad_u32_gt" (icmp_sgt (var_ "a") (var_ "b"))
 
 /// `monad_string_get_char(s, i) -> Option Char` (wired `passthrough`):
 /// `none` for `i < 0` or an out-of-range index, else `some` wrapping the

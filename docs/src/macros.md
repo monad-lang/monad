@@ -114,11 +114,13 @@ handle.
 
 ## `#[derive ...]`
 
-> **Bootstrap host only.** The attribute itself parses self-hosted, but nothing
-> expands it — there is no derive expansion pass in `lang/` at all, so no
-> instances are generated and the uses fail later. Write the instances by hand
-> for code that must compile with the self-hosted compiler. Everything in this
-> section works under the [bootstrap host](./bootstrap-host.md).
+> **Works on both compilers.** The self-hosted compiler bridges the attribute
+> to the same `std/derive.mo` macros the host calls
+> (`derive_bridge_decls`, `lang/src/typecheck/macro_queue.mo`), so
+> `#[derive BEq BOrd Debug Lens]` generates its instances either way. What you
+> must do on both is *import the backend* — `#[derive BEq]` dispatches by name
+> to a macro, and a macro that is not in scope is "macro `derive_beq` not
+> found".
 
 The attribute form dispatches to those macros by name. Arguments are
 **space-separated bare names** — not `#[derive(BEq, BOrd)]`:
@@ -206,16 +208,19 @@ for `#[derive_cli]`, generating an argv parser from a struct's fields and their
 
 ## Limitations
 
-- `#[derive ...]` is not accepted by the self-hosted compiler at all — the
-  attribute-to-macro bridge and `reflect_type_info!` are host-only so far.
 - Only the four targets above are wired into the `#[derive ...]` attribute; your
   own macros are called with `!` syntax.
 - `Expr` is not a full mirror of the compiler's `Term`: `Pi`, `Forall`, `Sort`,
   `Ann`, and `Quote` are excluded, because no shipped derive needs them.
 - `TypeInfo` does not carry a type's generic parameters, per-field defaults, or
   field multiplicities.
-- The self-hosted parser does not yet accept `#[derive_cli]`, which is why
-  `lang/main.mo` hand-writes its argument parsing.
+
+`cli/src/main.mo` hand-writes its own argv parser rather than using
+`#[derive_cli]`, and stays free of macro syntax on purpose: the self-hosted
+parse/scope/typecheck suite re-parses that file through the self-hosted
+pipeline, and it is the one file where an attribute would be load-bearing for
+the bootstrap itself. `cli/src/tests/cli_derive_tests.mo` is the derived
+equivalent.
 
 ## Summary
 
@@ -223,7 +228,7 @@ for `#[derive_cli]`, generating an argv parser from a struct's fields and their
 - `reflect_type_info!` passes a type's structure to an ordinary Monad function
 - `#[derive BEq BOrd Debug Lens]` — space-separated, and the backend must be imported
 - Derives are library code in `std/derive.mo`, not compiler built-ins
-- Term macros are self-hosted-only; `#[derive …]` is host-only. The two
-  implementations diverge here in both directions.
+- Both compilers expand `#[derive …]`; term macros (`double!`) are
+  self-hosted-only, which is the one divergence left in this area
 
 Next, we'll look at **linear types**.

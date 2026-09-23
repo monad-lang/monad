@@ -155,32 +155,69 @@ See [The Standard Library](./stdlib.md) for what is in each.
 
 ## How Modules Are Found
 
-Resolution is a fixed cascade with three special cases, and no configuration.
-For a module path `a::b`, the compiler tries, in order:
+Resolution is **mote-based**, with the directory conventions kept underneath as
+the script-mode fallback. For a module path `a::b`, the compiler tries, in
+order:
 
 | Candidate | Notes |
 |-----------|-------|
-| `init/prelude.mo` | only for the exact name `prelude` |
-| `init/lib.mo` | only for the exact name `init` |
-| `std/lib.mo` | only for the exact name `std` |
+| `init/src/prelude.mo` | only for the exact name `prelude` |
+| `init/src/lib.mo` | only for the exact name `init` |
+| `std/src/lib.mo` | only for the exact name `std` |
+| `{importing file's mote root}/a/b.mo` | the mote doing the `use` |
 | `{dir of the importing file}/a/b.mo` | relative to the file doing the `use` |
 | `a/b.mo` | relative to the working directory |
-| `init/a/b.mo` | |
-| `std/a/b.mo` | |
-| `lang/a/b.mo` | |
-| `examples/a/b.mo` | |
+| `a/src/b.mo`, `a/src/lib.mo` | the head segment names a mote: `use example::greet` → `example/src/greet.mo` |
+| `init/src/a/b.mo` | |
+| `std/src/a/b.mo` | |
+| `lang/src/a/b.mo` | |
 
 First hit wins. `init` and `std` need their own cases because their module
 *names* no longer match their *file* names — both resolve to a `lib.mo`
 re-export hub.
 
-Four of the nine candidates are relative to the working directory, so running
-the compiler from a different directory can change which modules resolve. That
-is the most common cause of a surprising "module not found".
+Only when every one of those misses does the compiler look further, and this
+half is what makes the word *mote* load-bearing rather than decorative:
 
-There is no search-path flag and no environment variable. There is also no
-package system — the [bootstrap host](./bootstrap-host.md#packages-motes) has
-one (*motes*), but the self-hosted compiler does not read manifests at all.
+1. **The `motes/` convention.** Every `motes/*/src/{stem}.mo` is probed, which
+   is how a bare `use greet` finds `motes/example/src/greet.mo` without naming
+   its mote; then `motes/{head}/src/{rest}.mo` for the qualified spelling.
+2. **The importing file's own manifest.** `mote.toml`'s declared dependency
+   paths answer the lookup, so `use std::list` resolves to the dependency's
+   real `src/list.mo` rather than to a directory that happens to be named like
+   it. This is the step that makes resolution key off the **mote**, not the
+   working directory.
+
+The first three candidates are spelled relative to the checkout root, so from a
+directory that is not the root they miss — which is why they *also* consult the
+manifest, and why `monad check src/main.mo` from inside `cli/` now loads its own
+`init`/`std` and reports nothing. Run the compiler from the checkout root and
+nothing changes, because the first candidate always hits there.
+
+`check`, `test` and `compile` each take the same three modes: explicit paths,
+`--workspace`/`-w` (every mote in the enclosing workspace), or bare — the mote
+containing the working directory:
+
+```bash
+monad check --workspace
+monad test src/main.mo
+monad compile .            # builds the manifest's [bin] target
+```
+
+A file with no `mote.toml` above it is a **script module**: it declares the
+mote it belongs to inline, with a file-level `#![mote { … }]` annotation whose
+`deps` are validated the way a manifest's are.
+
+```monad
+#![mote { name := "structs", deps := [init, std] }]
+```
+
+Three keys are accepted: `name`, `deps` and `libs` (the last mirroring a
+manifest's `[link] libs`). Anything else is an `unknown_mote_key_error` — an
+inline annotation never silently swallows a misspelled key.
+
+There is no search-path flag and no environment variable; those belong to the
+[bootstrap host](./bootstrap-host.md#packages-motes).
 
 ## Visibility
 
@@ -231,8 +268,9 @@ def main (args : List String) : IO Unit :=
 - `{*}` imports everything; bare `use`/`open` is deprecated
 - `init/` is pure and portable, `std/` is OS-specific
 - Only 12 modules are ambient — most of `std/` needs an explicit import
-- Resolution is a fixed nine-candidate cascade, partly working-directory relative
-- There is no package system in the self-hosted compiler
+- Resolution is mote-based: a mote's own root first, the directory cascade only as the script-mode fallback
+- `check`/`test`/`compile` each take explicit paths, `--workspace`, or the mote you are standing in
+- A script module names its mote with a leading `#![mote { name := …, deps := […] }]`
 - `pub`/`priv`/package-private control visibility
 
 Next, we'll explore **the IO monad** for effectful programming.

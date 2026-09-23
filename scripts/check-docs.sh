@@ -27,12 +27,13 @@
 #   MONAD_BIN=/path/to/monad scripts/check-docs.sh
 #
 # Both binaries take the same `check <paths>...` shape and the same exit codes,
-# so no other change is needed. The self-hosted run may still report a failure or
-# two: blocks demonstrating the remaining host-only constructs -- `#[derive]`,
-# a `\u{...}` escape, a dotted instance name, or a call relying on a brace
-# parameter's default. Every one of those carries a "Bootstrap host only" note in
-# the prose beside it, and the full list is in docs/src/bootstrap-host.md. A
-# failure without such a note is a real problem.
+# so no other change is needed. The self-hosted run is expected to be GREEN:
+# every construct this header used to tolerate a failure for -- `#[derive]`, a
+# `\u{...}` escape, a dotted instance name, a call relying on a brace
+# parameter's default -- now checks self-hosted. Measured 2026-09-23 with a
+# binary built from the tree: 114 block(s) checked, 0 error(s). Anything it
+# reports is therefore a real problem, and docs/src/bootstrap-host.md is where
+# the differences that remain between the two compilers are recorded.
 #
 # The reverse also exists, which is why a few blocks are tagged
 # ```monad,ignore even though they are correct: a multiplicity prefix on a
@@ -119,7 +120,21 @@ fi
 echo "$out"
 echo
 echo "check-docs: FAILED -- the block(s) above came from:" >&2
+# Only the blocks the diagnostics actually named. Listing all of them buries
+# the failure under every origin in the book, and the diagnostic does name the
+# block's file, so a substring test on the basename finds the right ones.
+# If nothing matches -- a `check` that failed without naming a file, say -- fall
+# back to the full list rather than printing nothing.
+found_all=0
 for i in "${!blocks[@]}"; do
-  echo "  $(basename "${blocks[$i]}")  <-  ${origins[$i]}" >&2
+  if grep -qF "$(basename "${blocks[$i]}")" <<<"$out"; then
+    echo "  $(basename "${blocks[$i]}")  <-  ${origins[$i]}" >&2
+    found_all=1
+  fi
 done
+if [ "$found_all" -eq 0 ]; then
+  for i in "${!blocks[@]}"; do
+    echo "  $(basename "${blocks[$i]}")  <-  ${origins[$i]}" >&2
+  done
+fi
 exit 1

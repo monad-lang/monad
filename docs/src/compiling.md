@@ -115,18 +115,16 @@ Flags are position-independent — `monad compile -v hello.mo` and
 `monad compile hello.mo -v` are the same command. `--output`/`-o` takes its value
 as a **separate argument**: `--output=NAME` is not recognised.
 
-`monad test` with no paths enumerates motes, so it covers only directories that
-have a `mote.toml` — `examples/` has none, and its files are reached by naming
-them. Run mote- and workspace-wide invocations **from the workspace root**:
-dependency resolution is relative to the working directory, so from inside
-`llvm/` the `std` and `init` motes do not resolve.
+`monad test` with no paths covers the mote containing the working directory, so
+it enumerates that mote's sources; `--workspace` covers every member. Pass
+explicit paths for anything else. Resolution keys off the mote doing the `use`,
+so an invocation from inside a mote finds its own `init`/`std` dependencies —
+there is no need to run it from the workspace root.
 
 > **`monad test` reads each driver's failure count from a result file the
 > driver itself writes**, not from its exit code, so a file's test count is no
-> longer capped at 255. A handful of files still cannot be run self-hosted at
-> all (the async runtime, `#[derive]`, and a few checker/codegen bugs) — those
-> are listed in `cli/src/test_gaps.mo`, reported as `GAP`, and covered by the
-> [bootstrap host](./bootstrap-host.md) in CI instead.
+> longer capped at 255. Every file in the corpus runs self-hosted; CI's sweep
+> carries no exclusion list.
 
 > **`monad eval` is not a general interpreter.** Eight natives are wired into it
 > — `i64_add`, `i64_sub`, `i64_mul`, `i64_eq`, `i64_lt`, `string_concat`,

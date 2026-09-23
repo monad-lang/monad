@@ -215,10 +215,15 @@ def test_show_literal_char : Bool :=
     String.beq result "'M'"
 
 /// Multi-byte codepoint: `Char` holds all of its UTF-8 bytes, so a
-/// non-ASCII char survives the round trip too. Written as a raw
-/// character on purpose -- `escape_replacement` (`lang/parser/string.mo`)
-/// has no `\u{...}` escape, so the self-hosted parser would reject one
-/// here even though the Rust host accepts it.
+/// non-ASCII char survives the round trip too. Written as a RAW
+/// character deliberately, to pin the plain non-escape path;
+/// `'\u{03BB}'` decodes to the same `Char` and is covered in
+/// `lang/src/tests/escape_tests.mo`.
+///
+/// This comment used to say the raw spelling was forced, because
+/// `escape_replacement` (`lang/parser/string.mo`) had no `\u{...}`
+/// escape and the self-hosted parser would reject one -- true when it
+/// was written, and false since Phase 10a.
 #[test]
 def test_show_literal_char_multibyte : Bool :=
     let lit : Literal := Literal.char (Char.of_bytes (String.to_list "λ")) in

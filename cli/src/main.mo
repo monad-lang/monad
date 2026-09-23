@@ -1174,15 +1174,16 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
 }
 
 // `Command` and its argv parser are hand-written (not `#[derive_cli]`) and
-// this file stays free of any macro/attribute-derive syntax on purpose: the
-// self-hosted compiler's own parser/typechecker (lang/parser.mo,
-// lang/typecheck/infer.mo) doesn't understand `#[derive_cli]` yet, and
+// this file stays free of any macro/attribute-derive syntax on purpose:
 // cli/src/main.mo is one of the files the self-hosted parse/scope/typecheck
 // test suite (slow_tests/parser_file_tests.mo, scope_all_tests.mo,
-// typecheck_lang_tests.mo) re-parses with that self-hosted pipeline. It
-// does share `cli/src/args.mo`'s small runtime helpers with the macro-derived
-// demo in cli/src/tests/cli_derive_tests.mo, though — same argv-munging
-// primitives either way.
+// typecheck_lang_tests.mo) re-parses with that self-hosted pipeline, and it is
+// the file the bootstrap itself is built from — an attribute here would be
+// load-bearing for the compiler building itself. `#[derive_cli]` was NOT the
+// reason: it has worked self-hosted since `ae3a457`, and this comment claimed
+// otherwise long after that. It does share `cli/src/args.mo`'s small runtime
+// helpers with the macro-derived demo in cli/src/tests/cli_derive_tests.mo,
+// though — same argv-munging primitives either way.
 type Command {
     compile (file: Path) (out_name: Path) (verbose: Bool) (debug: Bool),
     run (file: Path) (verbose: Bool) (debug: Bool),
