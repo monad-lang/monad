@@ -1245,6 +1245,10 @@ def is_terminator_instr (instr : LLVMInstruction) : Bool := match instr {
     LLVMInstruction.assign a b => false,
     LLVMInstruction.store _a _pty _b => false,
     LLVMInstruction.comment a => false,
+    // A void call (`monad_release`) falls straight through to the
+    // next instruction, same as any other statement -- not a
+    // terminator.
+    LLVMInstruction.call_void a => false,
     // NOT a terminator. Also why a marker must never sit last in a list:
     // `ends_with_terminator` reads only the final element.
     LLVMInstruction.loc_marker _loc => false,
@@ -1414,6 +1418,8 @@ def instr_is_ret_of (i : LLVMInstruction) (target_val : LLVMValue) : Bool := mat
     LLVMInstruction.assign a b => false,
     LLVMInstruction.store _a _pty _b => false,
     LLVMInstruction.comment a => false,
+    // Not a `ret`.
+    LLVMInstruction.call_void a => false,
     LLVMInstruction.loc_marker _loc => false,
 }
 

@@ -355,6 +355,11 @@ def call_targets_in_instr (i : LLVMInstruction) : List String := match i {
     LLVMInstruction.store v _pty p => List.append (call_targets_in_value v) (call_targets_in_value p),
     LLVMInstruction.jump _l => List.empty,
     LLVMInstruction.comment _t => List.empty,
+    // Same reachability treatment as `assign`/`ret`/`branch`/`store`
+    // above -- a `call_void` calls a real function (`monad_release`,
+    // currently) and must be tracked or reachability would strip a
+    // declaration something in this instruction list genuinely calls.
+    LLVMInstruction.call_void v => call_targets_in_value v,
     // Calls no one -- must stay empty, or reachability would keep a def alive
     // that nothing actually references.
     LLVMInstruction.loc_marker _loc => List.empty,

@@ -164,6 +164,22 @@ pub type LLVMInstruction {
     /// already at that width (e.g. `trunc` for an `i8*` store).
     store (val : LLVMValue) (ptr_ty : LLVMType) (ptr : LLVMValue),
     comment (text : String),
+    /// A VOID-returning call as a bare statement -- `assign` cannot
+    /// represent this: `%t = call void @f(...)` is not legal LLVM IR
+    /// (a `void` value cannot be bound to an SSA name), so a call whose
+    /// declared return type is `void` needs its own instruction shape
+    /// rather than reusing `assign` with a discarded target. `value`
+    /// is expected to be an `LLVMValue.call` (or `fn_ref`-headed
+    /// equivalent) whose `ret_ty` is `LLVMType.void` -- nothing enforces
+    /// that structurally, the same way `assign`'s own `value` field
+    /// isn't restricted to non-void calls either, but every
+    /// construction site in this codebase only ever builds one from a
+    /// `LLVMValue.call _ LLVMType.void _ _`. Added for
+    /// `monad_release` (`lang/typecheck/dropck.mo`'s drop-point
+    /// analysis, M3 of the affine-by-default experiment) — the first
+    /// void-returning runtime call this backend has ever needed to
+    /// emit as a statement.
+    call_void (value : LLVMValue),
     /// Zero-width marker: "every instruction from here on belongs to this
     /// source position, until the next marker." Renders to nothing.
     ///
@@ -251,7 +267,7 @@ open LLVMValue {
   int_, inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint, sdiv,
   sext, shl_, sub, trunc, udiv, urem, var_, void_val, xor_, zext,
 }
-open LLVMInstruction {assign, branch, comment, jump, ret, store}
+open LLVMInstruction {assign, branch, call_void, comment, jump, ret, store}
 open ParamPair {mk}
 open PhiPair {mk}
 
@@ -632,6 +648,13 @@ def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String :=
     ret val => String.concat (show_ret_instr val) dbg_suffix,
     comment text =>
         String.concat "  ; " text,
+    // Reuses `show_llvm_value`'s own `call` rendering (`show_call`) --
+    // that already produces the full `call void @name(...)` text;
+    // this arm only supplies the "  " indent and `!dbg` suffix every
+    // other statement-shaped instruction gets, mirroring `assign`'s own
+    // arm minus the `%target = ` prefix.
+    call_void value =>
+        String.concat "  " (String.concat (show_llvm_value value) dbg_suffix),
     // Unreachable: `emit_instrs` consumes a marker to update the current
     // suffix and never renders it. The arm exists because this match is
     // exhaustive, and a marker that DID reach here must produce no line
@@ -1348,6 +1371,19 @@ def test_instruction_assign : Bool :=
 #[test]
 def test_instruction_ret_void : Bool :=
     String.beq (show_instruction (ret void_val) "") "  ret void"
+
+#[test]
+def test_instruction_call_void : Bool :=
+    // The exact shape `monad_release` needs: a void-returning call as
+    // a bare statement, no `%target =` -- `assign` cannot express this
+    // (`%t = call void @f(...)` is not legal LLVM IR).
+    let instr := call_void (call "monad_release" LLVMType.void (List.cons (parm_ 0) List.empty) false) in
+    String.beq (show_instruction instr "") "  call void @monad_release(i64 %p0)"
+
+#[test]
+def test_instruction_call_void_with_dbg_suffix : Bool :=
+    let instr := call_void (call "monad_release" LLVMType.void (List.cons (parm_ 0) List.empty) false) in
+    String.beq (show_instruction instr ", !dbg !7") "  call void @monad_release(i64 %p0), !dbg !7"
 
 #[test]
 def test_instruction_ret_int : Bool :=
