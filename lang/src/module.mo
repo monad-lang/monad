@@ -43,6 +43,7 @@ use lib::scope {
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
   scope_find_inductive, scope_push_local, scope_resolve_name,
 }
+use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error}
 use lib::typecheck::infer {empty_local_types, empty_locals, mk, type_check}
 // `--verbose` per-module/per-stage trace (see `std/src/log.mo`'s own header
@@ -1396,16 +1397,36 @@ def locals_with_inductive_params ({ params, .. } : Inductive) (scope : Scope) (l
 /// these all became `IO`-returning (were pure `Bool`/`List String`)
 /// purely to allow that `println`; the accumulation logic itself is
 /// unchanged.
+/// `check_module_with_scope`'s own walk, under its own name: the pub
+/// entry point below is this plus the termination check, so every existing
+/// caller gets both without a second call site to keep in step.
 #[partial]
-pub def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+def check_module_decls_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match decl_list {
         List.empty => do { return List.empty },
         List.cons d rest => do {
             let here : List String <- check_decl_with_scope d scope locals path verbose;
-            let there : List String <- check_module_with_scope scope rest locals path verbose;
+            let there : List String <- check_module_decls_with_scope scope rest locals path verbose;
             return (list_append here there)
         }
     }
+
+/// A module's type diagnostics, then its termination diagnostics --
+/// `lang/src/termination.mo`'s port of the host's `check_termination_all`
+/// (`core/src/eval/termination.rs`), which the host likewise runs once per
+/// module over that module's own declarations. Before this, both attributes
+/// parsed and were ignored self-hosted, so a definition that loops forever
+/// checked clean here while the host rejected it.
+///
+/// The termination pass is a decl-list walk, not a per-decl one, because it
+/// needs the whole module to build its call graph; appending its result here
+/// keeps the two gates in the one place the host has them.
+pub def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) := do {
+    // Annotated bind: an IO bind's result type isn't recoverable in pure
+    // infer mode, as at `typecheck_module_with_scope` below.
+    let diags : List String <- check_module_decls_with_scope scope decl_list locals path verbose;
+    return (list_append diags (check_termination_all decl_list))
+}
 
 /// `promote_instance_defs`'s own `__Dict_ClassName_Args` value def
 /// (`lang/scope.mo`'s `promote_instance`, e.g. `__Dict_Speak_Dog`) is a

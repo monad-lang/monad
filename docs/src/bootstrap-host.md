@@ -96,14 +96,6 @@ for script modules. See
 host-only is everything beyond a manifest's declared paths: transitive walking,
 the `mote.lock` format, version-conflict detection, and the registry.
 
-### Termination checking
-
-The host rejects recursion it cannot see decreasing structurally; the
-self-hosted compiler performs no termination analysis. See
-[Termination Checking](./termination.md) — this is the divergence most likely to
-surprise you, because code that checks clean self-hosted can fail under the
-host.
-
 ### Module resolution knobs
 
 `--mote-path DIR` (repeatable), `--manifest-path PATH` and `MONAD_STDLIB` all
@@ -202,10 +194,10 @@ main chapters works there. Use the host for its tooling — editor diagnostics, 
 REPL, and running test suites.
 
 If you are working on the compiler itself, you need both. The host is still the
-stricter of the two where it counts — termination checking, and a hole it cannot
-give a type — while the self-hosted grammar is the more permissive one at the
-edges, in the four places listed above. That second direction is now the larger
-of the two, which is a change of sign from where this appendix started.
+stricter of the two in one place — a hole it cannot give a type — while the
+self-hosted grammar is the more permissive one at the edges, in the four places
+listed above. That second direction is now the larger of the two, which is a
+change of sign from where this appendix started.
 
 This appendix is the current record. The two plans it used to point at are
 historical: `bootstrapping/self-hosted-parity-gaps.md` was a 2026-09-07

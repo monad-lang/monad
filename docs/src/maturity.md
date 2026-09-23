@@ -40,7 +40,7 @@ commit this book ships with, not inferred from intent.
 | Tuples, raw strings | **Working** | Both real and stable. |
 | Optics | **Working** | `Lens` and `Prism` in `init.optics`. |
 | Indexed monads | **Experimental** | `IndexedMonad`, `IndexedMonadState` and `IndexedMonadLift` exist and type-check, and `examples/indexed_monads.mo` exercises them. The `Monad (M I I)` bridge instance in the prelude does not dispatch (variable head), so an indexed monad still needs its own `Monad` instance written out. |
-| [Termination checking](./termination.md) | **Planned** | **Not performed at all.** `#[terminating]`/`#[partial]` parse and are ignored; an infinite loop checks clean. The host does enforce it, so write as though it were on. |
+| [Termination checking](./termination.md) | **Working** | A structural subterm check, run once per module over that module's own declarations by both compilers, with the same message either way. Recursion over an inductive type is accepted; counting down an `I64` needs `#[terminating]` or `#[partial]`. |
 | [Linear & affine types](./linear-types.md) | **Partial** | The syntax parses everywhere it is meant to: struct fields, `def` and lambda parameters, and destructured parameters (`(!{x, y} : P)`, which the *host* still rejects). **Nothing is enforced** — lowering drops the multiplicity, and every binder the checker builds is `Many`. |
 | `#[derive BEq BOrd Debug Lens]` | **Working** | Both compilers bridge the attribute to the same `std/derive.mo` macros. The backend must be imported — `#[derive BEq]` dispatches to `derive_beq` by name. |
 | Char literals `'M'` | **Working** | Parse, type-check and compile, escapes included, `\u{...}` on both. `Char` itself is a **stub**: no operations, no `BEq`, no `ToString` — you can write, type and pass one, not inspect it. |
@@ -91,9 +91,9 @@ For context on what "alpha" means here:
 
 | | |
 |---|---|
-| Monad source (`.mo`) | ~66,100 lines, of which `lang/` is ~55,500 |
-| Rust source (bootstrap host) | ~54,200 lines |
-| Monad tests (`#[test]`) | 1,720 |
+| Monad source (`.mo`) | ~81,200 lines, of which `lang/` is ~64,200 |
+| Rust source (bootstrap host) | ~56,400 lines |
+| Monad tests (`#[test]`) | 1,958 |
 | Native functions | 137 declared in `init/`+`std/`; 3 unimplemented everywhere; the backend wires a subset |
 | Standard library | ~440 public defs, 35 classes, 132 instances (excluding test modules) |
 
@@ -104,8 +104,8 @@ compiles itself, and reaches a fixpoint. The type checker, the class system, the
 module system, and a genuine macro system all work.
 
 What it is not yet: **safe by construction** (the self-hosted compiler checks
-neither termination nor linearity — the multiplicity syntax parses everywhere
-now, and means nothing), **scalable in concurrency** (fibers are 1:1 pthreads
+termination but not linearity — the multiplicity syntax parses everywhere now,
+and means nothing), **scalable in concurrency** (fibers are 1:1 pthreads
 with 128 MB stacks, real but not the design that ships), or **distributable**
 (nightly binaries exist; a lockfile and a registry do not). Its test runner
 compiles and runs a driver binary per test file, and covers the whole corpus

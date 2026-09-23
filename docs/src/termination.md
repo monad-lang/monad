@@ -1,16 +1,14 @@
 # Termination Checking
 
-Monad's design calls for recursive definitions to be checked for termination.
+Monad checks recursive definitions for termination. The check is structural,
+and both compilers run it, on every `def`, by default.
 
 > [!WARNING]
-> **The self-hosted compiler performs no termination analysis.** `#[terminating]`
-> and `#[partial]` parse and are ignored; a definition that loops forever checks
-> clean. The [bootstrap host](./bootstrap-host.md) *does* enforce this, on every
-> `def`, by default.
->
-> That makes this the divergence most likely to bite you: code that checks clean
-> with `monad check` can be rejected by `monad-rs check` — which is what the
-> project's own pre-commit hook and CI run.
+> **The check is structural, and both compilers enforce it.** A recursive call
+> is accepted only when one of its arguments is a subterm bound by pattern
+> matching *inside* the corresponding parameter, so recursion over `List`, `Nat`
+> or any inductive type is fine while counting down an `I64` is not — that needs
+> `#[terminating]` or `#[partial]`. It is the case you are most likely to hit.
 
 ## Why It Exists
 
@@ -71,7 +69,8 @@ def countdown (n : I64) : I64 :=
     if n == 0 then 0 else countdown (n - 1)
 ```
 
-Under the self-hosted compiler this checks clean. Under the bootstrap host:
+Both compilers reject it, in the same words — below is the host's output, with
+the elaborated call elided:
 
 ```text
 error: Termination check failed for 'countdown'
@@ -80,15 +79,17 @@ error: Termination check failed for 'countdown'
     — add #[terminating] if this function is well-founded
 ```
 
-The error prints the recursive call after elaboration, so the subtraction shows
-up as its desugared `Sub` instance dispatch. That is noisy, but the parameter
-names at the end tell you what it wanted.
+The error prints the recursive call *after elaboration*, so the subtraction
+arrives as its desugared `Sub` dispatch — and the two compilers spell that
+dispatch differently (the host inlines the dictionary into a `match`, this
+compiler keeps it as a call), so the middle line is the one line of the message
+that differs between them. It is noisy either way, but the parameter names at
+the end tell you what it wanted.
 
 ## The Attributes
 
-Two attributes turn the check off for one definition. Both parse in the
-self-hosted compiler, where they are no-ops, and both are honoured by the host —
-so writing them is forward-compatible and costs nothing.
+Two attributes turn the check off for one definition, in both compilers. They
+are the only way to write recursion the structural rule cannot see.
 
 ### `#[terminating]`
 
@@ -114,14 +115,13 @@ def spin (n : I64) : I64 := spin n
 ```
 
 The difference is what you are telling the reader: `#[terminating]` is a claim
-about the code, `#[partial]` is an admission. Neither is verified, so an
-incorrect `#[terminating]` will hang the host's checker if the definition is ever
-unfolded during type checking.
+about the code, `#[partial]` is an admission. Nothing verifies either one, so an
+incorrect `#[terminating]` passes both compilers — and a definition the host's
+checker unfolds while type-checking will hang it.
 
 ## Practical Guidance
 
-Write as though the check were on, even though the self-hosted compiler does not
-run it:
+The rule is narrow, so most recursion falls into one of three cases:
 
 - Recursing over `List`, `Nat`, or any inductive type usually just works —
   recurse on what the `match` bound, not on something you computed.
@@ -131,12 +131,12 @@ run it:
   the need for the attribute, at the cost of unary arithmetic.
 - The standard library uses both attributes freely; they are not a code smell.
 
-The payoff is that your code keeps working under both implementations, and keeps
-working when the self-hosted compiler gains the check.
+Code written this way is accepted by both compilers, and stays accepted if the
+checker ever grows stricter than the structural rule.
 
 ## Limitations
 
-Where the check *is* implemented, it is deliberately simple:
+In both implementations the check is deliberately simple:
 
 - No termination inference beyond the structural rule — no size measures, no
   lexicographic orderings, no user-supplied well-founded relations.
