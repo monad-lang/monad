@@ -619,7 +619,17 @@ def test_termination_rejects_a_self_call_that_does_not_decrease : Bool :=
     let d := t_def "spin" (t_lam "n" (t_app (t_var "spin") (t_var "n"))) List.empty in
     match check_termination_all (List.cons d List.empty) {
         List.cons msg _ =>
-            if String.contains msg "Termination check failed" then String.contains msg "spin"
+            // Pinned to the whole rendering, not just "something was reported":
+            // the `error: ` prefix comes from `render_diag` and nowhere else, and
+            // the suggestion is the reference's own text, an em dash included
+            // (`args_not_structural_msg`, above; `core/src/eval/termination.rs`
+            // spells it `format!("{} — add #[terminating] ...")`). A port that
+            // dropped the prefix, or wrote ` -- ` for ` — `, is the failure this
+            // is here to catch, and it is not one the corpus can catch for us:
+            // every corpus def that trips the check carries `#[terminating]`.
+            if String.contains msg "error: Termination check failed" then
+                if String.contains msg "spin" then String.contains msg " — add #[terminating] if this function is well-founded"
+                else false
             else false,
         List.empty => false,
     }
