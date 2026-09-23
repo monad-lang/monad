@@ -6293,10 +6293,48 @@ def lambda_body (r: ParseResult ParseTerm) (names: List Identifier) : ParseResul
 
 /// `[a, b, c]`, `body` → `fn a => (fn b => (fn c => body))` — mirrors
 /// the Rust reference's `lams()` fold exactly (first param outermost).
+///
+/// The param type is `Term.hole`, not `Term.type_ 1` (`Type`/`Sort 1`):
+/// the reference's own bare-name lambda param is `param(i, Hole)`
+/// (`core/src/parser.rs:464-466`'s `lam_param` first alternative, and
+/// `:1881` for macro params), so an ABSENT annotation and a WRITTEN `_`
+/// are the same construct there.
+///
+/// `pt_type_ 1` was wrong here, and not because it collided with another
+/// spelling: a source `Type`/`Prop`/`Sort n` never lowers to
+/// `Term.type_ 1`, because this parser has no sort grammar rule at all.
+/// Those names are registered as ordinary globals (`lang/src/scope.mo`'s
+/// `"Type"`/`"Prop"`/`"Sort"` insertions) and reach codegen as
+/// `Term.var`/`App(Var "Sort", Lit n)`. `ParseTermKind.type_` is
+/// constructed at exactly three sites, all of them `pt_type_ 1`
+/// (`:1372`/`:1423`/`:2667`), and each of those marks an OMITTED KIND on a
+/// type binder -- a different question from an omitted annotation on a
+/// value's parameter. Written here it ASSERTED a type no source had said.
+///
+/// Two consequences, both real. It made the `param_typ` test in the
+/// reference's `App(Lam{param_typ: Hole}, arg)` arm false for
+/// `fn x => x`, so that arm -- which INFERS the argument rather than
+/// checking it (`core/src/core_check.rs:1582-1593`, twin at `:946-964`)
+/// and so rejects a hole with `InferError::CannotInferHole` (`:884`) --
+/// could not fire, and the self-hosted compiler accepted
+/// `def k : I64 := (fn x => x) _` where the host reports "cannot infer the
+/// type of a hole; add a type annotation". And it gave the argument a
+/// nonsense expected type, since `app_arg_expected_type` hands a lam's
+/// `param_typ` straight to its argument: `(fn x => x) arg` was checking
+/// `arg` against the sort `Type`.
+///
+/// Which is why the repair belongs here rather than in the guard: the
+/// guard's premise was true of the reference and false of the port, so the
+/// honest fix is to make the value match, not to teach a predicate which
+/// wrong value to tolerate.
+///
+/// `pt_type_ 1` remains correct at its other three sites
+/// (`:1372`/`:1423`/`:2667`) -- there the param IS a type binder whose
+/// kind defaults to `Type`, which is exactly what the reference writes.
 #[partial]
 def build_nested_lambdas (names : List Identifier) (body : ParseTerm) : ParseTerm :=
     match names {
-        List.cons n rest => pt_lam n (pt_type_  1) (build_nested_lambdas rest body),
+        List.cons n rest => pt_lam n pt_hole (build_nested_lambdas rest body),
         List.empty => body,
     }
 
@@ -7368,18 +7406,18 @@ def test_t_var_shadow : Bool :=
 
 #[test]
 def test_t_lambda_identity : Bool :=
-	// fn x => x  →  lam (named "x") (type_ 1) (var 0 (named "x"))
+	// fn x => x  →  lam (named "x") (hole) (var 0 (named "x"))
 	match expression "fn x => x" {
 		success rem out =>
 			match out.kind {
 				ParseTermKind.lam dbg typ body =>
 					match typ.kind {
-						ParseTermKind.type_ u => I64.beq u 1 && String.beq rem "",
+						ParseTermKind.hole => String.beq rem "",
 						ParseTermKind.var _ => false, ParseTermKind.lam _ _ _ => false,
 						ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
 						ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
 						ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
-						ParseTermKind.hole => false
+						ParseTermKind.type_ _ => false
 					},
 				ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
 				ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,

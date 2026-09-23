@@ -3986,8 +3986,10 @@ def test_check_module_with_scope_paramed_inductive : IO Bool := do {
 
 /// The diagnostics `check_module_with_scope` reports for `src`, checked as
 /// a module called `module_name` with no locals in scope. Every test below
-/// is a one-line source plus the verdict, so they share this.
-def strict_pos_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
+/// is a one-line source plus the verdict, so they share this -- and so do
+/// the hole-in-infer-position tests in the section after next, which is why
+/// this trio is named for the checker rather than for either rule.
+def check_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty);
     match parse_all_decls src {
         ParseResult.success _ decl_list => do {
@@ -4001,14 +4003,14 @@ def strict_pos_diags_of_source (src : String) (module_name : String) : IO (List 
 }
 
 #[partial]
-def strict_pos_has_diag (needle : String) (diags : List String) : Bool :=
+def diags_contain (needle : String) (diags : List String) : Bool :=
     match diags {
         List.empty => false,
-        List.cons d rest => if String.contains d needle then true else strict_pos_has_diag needle rest,
+        List.cons d rest => if String.contains d needle then true else diags_contain needle rest,
     }
 
-def strict_pos_lacks_diag (needle : String) (diags : List String) : Bool :=
-    if strict_pos_has_diag needle diags then false else true
+def diags_lack (needle : String) (diags : List String) : Bool :=
+    if diags_contain needle diags then false else true
 
 /// The rule's own case: a constructor field whose type is a function FROM
 /// the type being declared. Rejected by the reference
@@ -4017,8 +4019,8 @@ def strict_pos_lacks_diag (needle : String) (diags : List String) : Bool :=
 /// the diagnostic's wording drifts away from `TypeError::Generic`'s.
 #[test]
 def test_check_module_strict_pos_rejects_negative_self : IO Bool := do {
-    let diags : List String <- strict_pos_diags_of_source "type Bad { mkBad (f : Bad -> I64) }" "probe";
-    return (strict_pos_has_diag "non-strictly positive occurrence of Bad" diags && I64.beq (List.length diags) 1)
+    let diags : List String <- check_diags_of_source "type Bad { mkBad (f : Bad -> I64) }" "probe";
+    return (diags_contain "non-strictly positive occurrence of Bad" diags && I64.beq (List.length diags) 1)
 }
 
 /// Recursion in the codomain, one constructor field per shape: a direct
@@ -4028,7 +4030,7 @@ def test_check_module_strict_pos_rejects_negative_self : IO Bool := do {
 #[test]
 def test_check_module_strict_pos_accepts_positive_self : IO Bool := do {
     let src : String := "type Tree { leaf (n : I64), node (l : Tree) (r : Tree) }\ntype Fwd { mkFwd (k : I64 -> Fwd) }\ntype Neg { mkNeg (h : (Neg -> I64) -> I64) }";
-    let diags : List String <- strict_pos_diags_of_source src "probe";
+    let diags : List String <- check_diags_of_source src "probe";
     return (I64.beq (List.length diags) 0)
 }
 
@@ -4040,14 +4042,14 @@ def test_check_module_strict_pos_accepts_positive_self : IO Bool := do {
 /// different module gets the other verdict.
 #[test]
 def test_check_module_strict_pos_qualified_self_is_this_module : IO Bool := do {
-    let diags : List String <- strict_pos_diags_of_source "type Q { mkQ (f : probe::Q -> I64) }" "probe";
-    return (strict_pos_has_diag "non-strictly positive occurrence of Q" diags)
+    let diags : List String <- check_diags_of_source "type Q { mkQ (f : probe::Q -> I64) }" "probe";
+    return (diags_contain "non-strictly positive occurrence of Q" diags)
 }
 
 #[test]
 def test_check_module_strict_pos_qualified_other_module_is_not : IO Bool := do {
-    let diags : List String <- strict_pos_diags_of_source "type Q { mkQ (f : other::Q -> I64) }" "probe";
-    return (strict_pos_lacks_diag "non-strictly positive occurrence" diags)
+    let diags : List String <- check_diags_of_source "type Q { mkQ (f : other::Q -> I64) }" "probe";
+    return (diags_lack "non-strictly positive occurrence" diags)
 }
 
 /// A dotted type name is compared whole -- the elaborator stores a bare
@@ -4055,8 +4057,8 @@ def test_check_module_strict_pos_qualified_other_module_is_not : IO Bool := do {
 /// match `D.E` and not just its last segment.
 #[test]
 def test_check_module_strict_pos_dotted_name : IO Bool := do {
-    let diags : List String <- strict_pos_diags_of_source "type D.E { mkE (g : D.E -> I64) }" "probe";
-    return (strict_pos_has_diag "non-strictly positive occurrence of D.E" diags)
+    let diags : List String <- check_diags_of_source "type D.E { mkE (g : D.E -> I64) }" "probe";
+    return (diags_contain "non-strictly positive occurrence of D.E" diags)
 }
 
 /// A struct with the same shape is NOT flagged: the reference runs this for
@@ -4065,8 +4067,189 @@ def test_check_module_strict_pos_dotted_name : IO Bool := do {
 /// `Decl.struct_d` arm away from over-rejecting, and nothing else says so.
 #[test]
 def test_check_module_strict_pos_skips_structs : IO Bool := do {
-    let diags : List String <- strict_pos_diags_of_source "struct S { f : S -> I64 }" "probe";
-    return (strict_pos_lacks_diag "non-strictly positive occurrence" diags)
+    let diags : List String <- check_diags_of_source "struct S { f : S -> I64 }" "probe";
+    return (diags_lack "non-strictly positive occurrence" diags)
+}
+
+// --- Tests: the hole-in-infer-position arm ---
+//
+// The reference's `App(Lam{param_typ: Hole}, arg)` arms
+// (`core/src/core_check.rs:1582-1593` in `check`, the twin at `:946-964` in
+// `infer`) do not CHECK their argument against the unannotated parameter's
+// type; they INFER it -- and `infer` on a hole is
+// `InferError::CannotInferHole` (`:884`), rendered "cannot infer the type of
+// a hole; add a type annotation". So the reference REJECTS
+// `def k : I64 := (fn x => x) _`, while the self-hosted checker, which has no
+// separate infer mode (`type_check a Term.hole` IS infer mode there),
+// accepted it. `infer_position_hole` (`lang/typecheck/infer.mo`) is that arm
+// ported, and these are its two halves.
+//
+// The arm is SYNTACTIC on the callee's term shape -- the reference's own test
+// is a `matches!` on `fun.strip_ctx()` -- and that width is load-bearing
+// rather than incidental, which is what three earlier candidate rules each
+// got wrong. It is also why the producer half matters: the reference's
+// bare-name lambda param is `param(i, Hole)` (`core/src/parser.rs:464-466`),
+// the port's was `Term.type_ 1` until this phase, and with that placeholder
+// `infer_position_hole` could tell neither p6 nor the written-`Type` row
+// apart.
+//
+// Synthetic, and the corpus cannot cover it: the divergence's own rows are
+// programs the reference refuses, so no `.mo` file in the repo contains one.
+// The other half is the must-keep-ACCEPTING set, which is what fails silently
+// if the arm is widened by one construct -- and it was: three candidate rules
+// each fit nearly all of the matrix and each is refuted by exactly one row
+// (s2, because the curried case's inner callee is an app rather than a
+// literal lambda; s1, because a declared `_` behaves exactly like an absent
+// annotation; r1/r3, because the reference accepts both).
+//
+// Every row is measured against `target/release/monad-rs check` on this same
+// source, and against the compiled self-hosted binary. `T` is declared EMPTY
+// (`type T {}`) so the rows need no constructor and no `open` -- each row's
+// value is a lambda -- and `T` doubles as row r2's non-arrow type. That is
+// also why the matrix's `I64` spellings are `T -> T` here: the arm is
+// type-agnostic, and `I64` is not in scope with no dependency loaded.
+//
+// Two rows of the recorded 15-probe matrix are deliberately absent, for two
+// different reasons:
+//
+//   * `p5` (`List.cons 1 _`) needs `std` in scope, which
+//     `build_scope_from_decls` over a bare source string does not have. Rows
+//     p3 and p4 cover its class: a non-lambda callee taking a hole argument,
+//     accepted;
+//   * `r2` (`def k : T := (fn x => x)`) is still ACCEPTED by the self-hosted
+//     checker. A lambda checked against a non-function type is the separate
+//     "the expected-type channel is a hint, not an obligation" unsoundness --
+//     nine further positions are in that same family -- and not this arm's, so
+//     it is recorded in `plans/bootstrapping/self-hosted-compiler-review-2.md`
+//     rather than pinned here as intended behaviour.
+
+/// The matrix's shared preamble: the three named callee shapes a row can
+/// reach -- `apply`, whose second parameter is declared `T -> T`; `f1`, the
+/// same declaration reached through an arrow head; and `f2`, whose parameter
+/// is declared `_`.
+def hole_infer_preamble : String := "type T {}\n\ndef apply (g : (T -> T) -> (T -> T)) (x : T -> T) : T -> T := g x\ndef f1 (x : T -> T) : T -> T := x\ndef f2 (x : _) : T -> T := (fn z => z)\n"
+
+def hole_infer_src (row : String) : String := hole_infer_preamble ++ row
+
+/// Row `p6`, the arm's own case. The argument is a bare hole and the callee is
+/// a literal lambda that never wrote its parameter's type down, so
+/// `app_arg_expected_type`'s answer for it is itself a hole -- which is the
+/// whole point: a check *against* a hole succeeds, and the reference does not
+/// check here at all, it infers.
+///
+/// The message is asserted, not merely non-emptiness, because it is what pins
+/// the diagnostic to `TypeError::custom`'s rendering -- the reference's
+/// `infer_error_location` returns `None` for `CannotInferHole`
+/// (`core_check_module.rs`) and renders against the enclosing decl, which is
+/// exactly what `TypeError.custom` does. The count is asserted too: a second
+/// diagnostic would mean the arm also disturbed the ordinary check behind it.
+#[test]
+def test_hole_in_infer_position_rejects_unannotated_lam_param : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def p6 : T -> T := (fn x => x) _") "probe";
+    return (diags_contain "cannot infer the type of a hole; add a type annotation" diags && I64.beq (List.length diags) 1)
+}
+
+/// Row `s1`: a *declared* `_` parameter rejects exactly like the absent
+/// annotation of p6, because `let`/lambda desugaring produces `Term.hole` for
+/// both spellings. This is the row that refutes "a declared `_` is rigid, so
+/// only an absent annotation is unsolved".
+#[test]
+def test_hole_in_infer_position_rejects_declared_hole_lam_param : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def s1 : T -> T := (fn (x : _) => x) _") "probe";
+    return (diags_contain "cannot infer the type of a hole; add a type annotation" diags && I64.beq (List.length diags) 1)
+}
+
+/// Row `s2`, the row that kills the obvious over-wide rule. The callee is
+/// itself an *application*, not a literal lambda, so the arm is not reached at
+/// all and the inner lambda's hole parameter is ordinary -- the reference
+/// accepts, and its own arm's test is a syntactic `matches!` on the callee for
+/// exactly this reason.
+#[test]
+def test_hole_in_infer_position_accepts_application_callee : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def s2 : T -> T := (fn x => fn y => x) (fn z => z) _") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `p1`: the callee is a named def whose second parameter is declared
+/// `T -> T`, so its argument's expected type is informative and the hole is an
+/// ordinary hole in a check. Accepted by the reference.
+#[test]
+def test_hole_in_infer_position_accepts_named_callee : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def p1 : T -> T := apply (fn x => x) _") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `p3`: the same shape with an atomic argument. Accepted.
+#[test]
+def test_hole_in_infer_position_accepts_named_callee_atomic_arg : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def p3 : T -> T := f1 _") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `p4`: a named callee whose own parameter is declared `_`. Distinct from
+/// p1 because the callee's signature is uninformative -- and still accepted,
+/// which is the half that says the arm keys on the *callee's term shape* and
+/// not on the expected type being a hole.
+#[test]
+def test_hole_in_infer_position_accepts_named_callee_hole_param : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def p4 : T -> T := f2 _") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `p7`: a literal-lambda callee whose parameter type IS written down.
+/// Accepted -- so the arm's `param_typ` test has to look at what the lambda
+/// actually wrote, not merely at the callee being a lambda.
+#[test]
+def test_hole_in_infer_position_accepts_annotated_lam_param : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def p7 : T -> T := (fn (x : T -> T) => x) _") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `s3`: the argument is an ascription, which the parser desugars to an
+/// application of an annotated identity lambda, so no hole is in infer
+/// position. Accepted.
+#[test]
+def test_hole_in_infer_position_accepts_ascribed_arg : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def s3 : T -> T := (fn x => x) (_ : T -> T)") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `p2`: a def body that is a bare hole. Not an application, so the arm is
+/// never reached and the body's hole checks against the declared type, as the
+/// reference does. Accepted.
+#[test]
+def test_hole_in_infer_position_accepts_bare_hole_body : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def p2 : T -> T := _") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Rows `r1` and `p8` together. They are two rows of the recorded matrix --
+/// an atomic argument and a compound one -- and they collapse into one case
+/// once the concrete type is a lambda type, since a lambda is the only value
+/// available with no dependency loaded. The property they pin is that a
+/// non-hole argument is untouched by the arm, whatever its shape.
+#[test]
+def test_hole_in_infer_position_accepts_non_hole_arg : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def r1 : T -> T := (fn x => x) (fn z => z)\ndef p8 : T -> T := (fn x => x) (fn z => z)") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `r3`: the lambda IS the value, with no application anywhere. Accepted,
+/// and the row that refutes "the reference rejects inferring an unannotated
+/// lambda" -- it is only the *argument* of a hole-parametered one that is
+/// inferred.
+#[test]
+def test_hole_in_infer_position_accepts_bare_lam_value : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def r3 : (T -> T) -> (T -> T) := (fn x => x)") "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// Row `r4`: a named callee with a lambda argument -- the combination of p1's
+/// callee and r1's argument. Accepted.
+#[test]
+def test_hole_in_infer_position_accepts_named_callee_lam_arg : IO Bool := do {
+    let diags : List String <- check_diags_of_source (hole_infer_src "def r4 : T -> T := apply (fn x => x) (fn z => z)") "probe";
+    return (I64.beq (List.length diags) 0)
 }
 
 /// Confirms `check_module_with_scope` *accumulates* — the failing

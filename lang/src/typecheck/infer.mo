@@ -2635,6 +2635,9 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
     match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
         Option.some r => r,
         Option.none =>
+    match infer_position_hole f a {
+        Option.some e => err e,
+        Option.none =>
     let a_expected : Term := app_arg_expected_type f in
     match type_check a a_expected scope local_types locals {
         ok a_tt =>
@@ -2671,6 +2674,76 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
                     }
             },
     }
+    }
+    }
+
+/// The reference checker's `App(Lam{param_typ: Hole}, arg)` arms --
+/// `check`'s at `core/src/core_check.rs:1582-1593` (the `matches!` is
+/// `:1587`), `infer`'s twin at `:946-964` -- do not CHECK their argument
+/// against the unannotated parameter's type; they INFER it, and `infer` on
+/// a hole is `InferError::CannotInferHole` (`:884`), rendered "cannot infer
+/// the type of a hole; add a type annotation" (`core_check_module.rs:1829-
+/// 1831`). Every other application reaches the generic arm, which
+/// `expect_pi`s and then CHECKs -- and a check *against* a hole succeeds,
+/// both directions pinned by the reference's own
+/// `test_infer_hole_errors_but_check_hole_succeeds` (`core_check.rs:3817`).
+///
+/// Self-hosted there is no separate `infer`: `type_check a Term.hole` IS
+/// the infer mode, and `Term.hole => ok (mk_typed expected_type
+/// expected_type)` (`type_check`, above) accepts anything, holes included.
+/// So this arm's observable content here is exactly a hole ARGUMENT whose
+/// callee is a literal, hole-annotated lambda -- which is also what that
+/// argument's expected type already was (`app_arg_expected_type` above), so
+/// the two spellings coincide at this one site and nothing else has to
+/// change.
+///
+/// The callee test is syntactic because the reference's own is
+/// (`matches!(fun.strip_ctx(), Lam{param_typ, ..} if matches!(param_typ
+/// .strip_ctx(), Hole))`) -- and that syntactic width is load-bearing
+/// rather than incidental, which is what three earlier candidate rules
+/// each got wrong. `(fn x => fn y => x) 1 _` must stay ACCEPTED: there the
+/// OUTER callee is an application, not a lambda, so it reaches the generic
+/// `check(arg, Hole)` path exactly as the reference documents. A rule that
+/// instead rejected every hole argument reaching the uninformative
+/// `app_arg_expected_type` DEFAULT arm would reject that probe; a rule keyed
+/// on "the callee's parameter is a declared `_`" fails on `(fn (x : _) =>
+/// x) _`, which the reference rejects exactly like the unannotated form,
+/// because a written `_` and an absent annotation are the same construct
+/// there.
+///
+/// `term_peel` on each of the three terms mirrors the reference's own
+/// `strip_ctx()` (`core/src/core_term.rs:393`) at the same positions;
+/// without it a located hole would silently stop matching.
+///
+/// This arm is only HALF the port, and the other half is in the parser:
+/// the reference's bare-name lambda param IS `param(i, Hole)`
+/// (`core/src/parser.rs:464-466`), while the port's `build_nested_lambdas`
+/// wrote `Term.type_ 1` there -- the sort `Type`. That was not a collision
+/// with another spelling (a source `Type` never lowers to `Term.type_ 1`;
+/// this parser has no sort grammar rule, so `Type`/`Prop`/`Sort n` are
+/// ordinary globals), it was an assertion of a type no source had said,
+/// minted because `pt_type_ 1` is the port's marker for an OMITTED KIND at
+/// its three type-binder sites (`:1372`/`:1423`/`:2667`). Written onto a
+/// value's parameter it made the `param_typ` test above false for
+/// `fn x => x`, so the arm fired only for a written `_` and
+/// `(fn x => x) _` stayed accepted, with no source able to explain why.
+/// The assertion was visible from the other side too: `app_arg_expected_type`
+/// hands a lam's `param_typ` to its ARGUMENT as the expected type, so
+/// `(fn x => x) arg` was checking `arg` against `Type`. Both halves are
+/// needed and neither is sufficient, and the repair belongs in the producer
+/// -- the guard's premise was true of the reference and false of the port,
+/// so the value had to be made to match rather than a predicate taught which
+/// wrong value to tolerate. `type T {}`-based rows for the accepted half,
+/// and the two rejected rows, are pinned in `lang/src/module.mo`'s
+/// hole-in-infer-position tests.
+#[partial]
+def infer_position_hole (f : Term) (a : Term) : Option TypeError :=
+    match term_peel f {
+        Term.lam _dbg param_typ _body =>
+            if is_hole (term_peel param_typ) && is_hole (term_peel a)
+            then Option.some (TypeError.custom "cannot infer the type of a hole; add a type annotation")
+            else Option.none,
+        _ => Option.none,
     }
 
 /// The ordinary (non-named-call) continuation of `type_check_app` once
