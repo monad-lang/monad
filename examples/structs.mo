@@ -2,6 +2,8 @@
 // are used below (via the companion `open IO {println}`, which is
 // unaffected) but deliberately NOT listed in THIS `use`; naming anything
 // here breaks implicit `Monad IO` instance lookup at runtime.
+#![mote { name := "structs", deps := [init] }]
+
 use io {}
 open IO {println}
 

@@ -6,6 +6,8 @@
 /// per declaration. Each derive is a `.mo`-authored macro in
 /// `std/derive.mo`, built on a handful of reflection intrinsics in the
 /// compiler itself — see that file's doc comments for the full design.
+#![mote { name := "derive", deps := [init, std] }]
+
 
 // `derive_beq`/`derive_bord`/`derive_debug`/`derive_lens` are only ever
 // invoked via the `#[derive BEq BOrd Debug Lens]` attribute below (macro

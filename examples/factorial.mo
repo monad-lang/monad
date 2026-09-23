@@ -1,3 +1,5 @@
+#![mote { name := "factorial" }]
+
 open IO {println}
 
 #[terminating]

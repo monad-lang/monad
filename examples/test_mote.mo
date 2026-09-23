@@ -1,4 +1,6 @@
-use greet {greet}
+#![mote { name := "test_mote", deps := [example] }]
+
+use example::greet {greet}
 
 #[test]
 def test_mote_greet : Bool :=

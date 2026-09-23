@@ -696,6 +696,33 @@ def attribute_close (input : String) (name : Identifier) (args : List AttrArg) :
 		fail e => fail (ParseError.custom "expected ] to close attribute" input)
 	}
 
+/// `#![mote { name := "x", deps := [init, std] }]` -- the file-level
+/// INNER attribute, i.e. `attribute_parser` with a `!` after the `#`.
+///
+/// It reuses the whole name/args/close chain verbatim, so the `{ ... }`
+/// body parses as one `AttrArg.group` of `AttrArg.named` entries (see
+/// `attr_arg_named_close`'s comment: that is this parser's shape, and it
+/// differs from the Rust reference's flattened one). Anything reading
+/// the attribute must therefore tolerate BOTH shapes -- see
+/// `Mote.mote_attr_named` (lang/mote.mo), which flattens unconditionally.
+///
+/// Deliberately a `decl_parsers` alternative rather than something
+/// `decls_skip` special-cases: keeping it a declaration is what makes a
+/// misplaced `#![mote]` reachable as an ordinary `Decl.mote_d` for
+/// `validate_mote_attr_position` (lang/module.mo) to diagnose, instead of
+/// stopping the parse. See `decls_try`'s own KNOWN GAP comment for why a
+/// parser-level rejection here would silently truncate the file.
+#[partial]
+def mote_attr_parser (input : String) : ParseResult ParseDecl :=
+	mote_attr_decl (attribute_open (tag "#![" input))
+
+#[partial]
+def mote_attr_decl (r : ParseResult Attribute) : ParseResult ParseDecl :=
+	match r {
+		success rem attr => success rem (pd_mote_d attr),
+		fail e => fail e
+	}
+
 /// Zero or more stacked attributes ahead of a declaration (`#[a]\n#[b]\n
 /// def ...`). Mirrors `opt_attributes` (core/src/parser.rs).
 #[partial]
@@ -2766,7 +2793,7 @@ def class_method_name (r : ParseResult String) (name : Identifier) (methods : Li
 /// (via `decls_try`'s own "any failure silently truncates the rest of
 /// the file" leniency) silently dropping every declaration after it --
 /// the second half of `init/foldable.mo`'s own silent-truncation bug
-/// this session's new `load_module_decls` EOF check surfaced (see
+/// the new `load_module_decls_at` EOF check surfaced (see
 /// `class_method_try_implicit`'s doc comment for the first half, the
 /// same method's missing `{A B : Type}` support -- both gaps sit on
 /// this exact one method signature, constraint first, implicit params
@@ -2809,7 +2836,7 @@ def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Iden
 /// outright, failing the WHOLE enclosing class and (via `decls_try`'s
 /// own "any failure silently truncates the rest of the file" leniency)
 /// silently dropping every declaration after it -- confirmed live via
-/// `load_module_decls`'s new EOF check (this same session): `init/
+/// `load_module_decls_at`'s new EOF check (this same session): `init/
 /// foldable.mo` was silently truncating right here, taking `Foldable`/
 /// `Semigroup`/`Monoid`'s own `List`/`String` instances down with it for
 /// the self-hosted checker. Mirrors `type_cons_implicit`'s identical
@@ -3743,7 +3770,7 @@ def macro_call_decl_args (input : String) (name : Identifier) (acc : List ParseT
 // expression grammar the same way).
 #[partial]
 def decl_parsers : List (String -> ParseResult ParseDecl) :=
-	[use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
+	[mote_attr_parser, use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
 	 struct_parser, type_parser, class_parser, instance_parser, macro_call_decl_parser]
 
 /// `input` is the exact text the declaration starts at -- `decls_skip`

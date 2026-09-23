@@ -1,4 +1,6 @@
 /// Demonstrates std/sha256.mo's SHA-256 implementation.
+#![mote { name := "sha256", deps := [init, std] }]
+
 
 use io {}
 open IO {println}

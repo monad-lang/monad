@@ -3275,6 +3275,26 @@ pub enum Decl {
   },
   DeclGen(DeclGenDef),
   Generated(Vec<Decl>),
+  /// `#![mote { name := "x", deps := [init, std] }]` — a file-level
+  /// INNER attribute declaring this file's mote inline. Held as a bare
+  /// `Attribute` (the only `Decl` variant of that shape; every other one
+  /// carries a `Vec<Attribute>` on its payload struct), mirroring the
+  /// self-hosted `Decl.mote_d (attr: Attribute)`
+  /// (`lang/src/types.mo`).
+  ///
+  /// Valid ONLY as the first declaration of a file. The diagnostic for a
+  /// misplaced one lives in the SELF-HOSTED compiler —
+  /// `validate_mote_attr_position` (`lang/src/module.mo`) — deliberately as
+  /// a module-load rule rather than a parser rule, so a misplaced attribute
+  /// does not cost the rest of the file its parse. The host parses the
+  /// attribute and stops there: it has no module-level metadata-validation
+  /// pass at all, and `Module::add_decl` ignores this variant (nothing to
+  /// register — it is metadata about the FILE, not a symbol).
+  ///
+  /// Appended LAST, matching the self-hosted variant's ordering.
+  MoteAttr {
+    attr: Attribute,
+  },
 }
 
 impl Decl {
@@ -3303,6 +3323,14 @@ impl Decl {
         .first()
         .map(|d| d.to_ref())
         .expect("Generated decls cannot be empty"),
+      // A file-level `#![mote { ... }]` names no symbol of its own, so
+      // it takes the same placeholder `MacroCall` does rather than
+      // pretending the attribute name is a declaration name.
+      Decl::MoteAttr { .. } => {
+        use std::sync::OnceLock;
+        static PLACEHOLDER: OnceLock<NamePath> = OnceLock::new();
+        Cow::Borrowed(PLACEHOLDER.get_or_init(|| NamePath::top("__mote_attr__")))
+      }
     }
   }
 }

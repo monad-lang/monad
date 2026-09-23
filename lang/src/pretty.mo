@@ -1,4 +1,5 @@
 use lib::types {
+  AttrArg, Attribute,
   Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor,
   char_to_string,
   Inductive, Instance, Literal, MatchCase, ModulePath, Multiplicity, Native, NamePath,
@@ -16,7 +17,7 @@ use std::list {intercalate}
 open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
 open Literal {char, flt, if_, match_, num, str}
 open Decl {
-  class_d, def_d, inductive_d, infix_d, instance_d, open_d, scoped_open_d,
+  class_d, def_d, inductive_d, infix_d, instance_d, mote_d, open_d, scoped_open_d,
   struct_d, use_d,
 }
 open Multiplicity {affine, linear, many, zero}
@@ -438,6 +439,31 @@ def show_use_path (path : ModulePath) : String :=
     }
 
 #[partial]
+/// One `AttrArg`, at the same readable-source level as the rest of this
+/// module — no exact round-trip guarantee. `Attribute` had no printer
+/// anywhere before the `mote_d` arm below needed one (`show_decl`'s own
+/// other arms only ever render `Term`s inside a decl's body, and no
+/// attribute reaches those).
+def show_attr_arg (a : AttrArg) : String := match a {
+    AttrArg.ident i => show_identifier i,
+    AttrArg.str s => s,
+    AttrArg.num n => I64.to_string n,
+    AttrArg.named name value =>
+        String.concat (String.concat (show_identifier name) " := ") (show_attr_arg value),
+    AttrArg.group items =>
+        String.concat "{" (String.concat (show_attr_args items "") "}"),
+}
+
+def show_attr_args (args : List AttrArg) (acc : String) : String := match args {
+    List.empty => acc,
+    List.cons a rest => show_attr_args rest (String.concat acc (String.concat " " (show_attr_arg a))),
+}
+
+def show_attribute (a : Attribute) : String := match a {
+    Attribute.mk name args =>
+        String.concat (show_identifier name) (String.concat (show_attr_args args "") " "),
+}
+
 def show_decl (d : Decl) : String := match d {
     def_d def_ => show_def def_,
     inductive_d ind => show_inductive ind,
@@ -445,6 +471,9 @@ def show_decl (d : Decl) : String := match d {
     class_d cls => show_class cls,
     instance_d ins => show_instance ins,
     infix_d op path vis => show_infix_decl op path vis,
+    // `#![mote { ... }]` — the `#![]` spelling is the parser's own, so it
+    // is re-added here rather than being carried in `Attribute`.
+    mote_d attr => String.concat "#![" (String.concat (show_attribute attr) "]"),
     use_d path filter public =>
         let path_str := show_use_path path in
         String.concat (String.concat (show_use_pub_prefix public) (String.concat "use " path_str)) (show_use_filter filter),

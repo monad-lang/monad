@@ -1,3 +1,5 @@
+#![mote { name := "iteration" }]
+
 
 def double (x : I64) : I64 := x * 2
 

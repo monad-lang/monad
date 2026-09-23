@@ -7,6 +7,8 @@
 // count any content can be embedded.
 //
 // Usage: monad test examples/raw_strings.mo
+#![mote { name := "raw_strings", deps := [init] }]
+
 
 use io {}
 open IO {println}

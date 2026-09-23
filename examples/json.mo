@@ -1,6 +1,8 @@
 // Read a JSON file passed on the command line, parse it, and print the result.
 //
 // Usage: monad run examples/json.mo <file.json>
+#![mote { name := "json", deps := [lang] }]
+
 
 use lang::json {Json, ParseError, parse, to_string}
 

@@ -1,3 +1,5 @@
+#![mote { name := "iteration_advanced", deps := [init] }]
+
 use init::foldable {Foldable}
 
 def multiply (x : I64) (y : I64) : I64 := x * y

@@ -1,3 +1,5 @@
+#![mote { name := "tests" }]
+
 
 #[test]
 def test_addition : Bool :=

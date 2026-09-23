@@ -1,6 +1,8 @@
 // Read a TOML file passed on the command line, parse it, and print the result.
 //
 // Usage: monad run examples/toml.mo <file.toml>
+#![mote { name := "toml", deps := [lang] }]
+
 
 // TODO: `BTreeMap` is used as a bare type annotation below but is
 // deliberately NOT listed here — see the matching TODO in

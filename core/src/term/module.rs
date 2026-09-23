@@ -3443,6 +3443,13 @@ impl Module {
           self.add_decl(d);
         }
       }
+      // A file-level `#![mote { ... }]` registers nothing: it is metadata
+      // about the FILE (which mote it belongs to, what it depends on),
+      // consumed by `Manifest`-resolution rather than by the module's own
+      // scope. Reaching here is normal, not an error — unlike
+      // `Decl::MacroCall`, which panics because expansion should have
+      // consumed it.
+      Decl::MoteAttr { .. } => {}
       Decl::Type(ind) => {
         Arc::make_mut(&mut self.inductives).insert(ind.name.clone(), SourceContext::no_ctx(ind));
       }

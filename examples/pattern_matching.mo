@@ -1,3 +1,5 @@
+#![mote { name := "pattern_matching" }]
+
 
 #[test]
 def test_match_bool : Bool :=

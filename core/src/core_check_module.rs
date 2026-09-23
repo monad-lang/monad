@@ -1039,6 +1039,7 @@ fn decl_kind(decl: &Decl) -> &'static str {
     Decl::MacroCall { .. } => "macro_call",
     Decl::DeclGen(_) => "declgen",
     Decl::Generated(_) => "generated",
+    Decl::MoteAttr { .. } => "mote_attr",
   }
 }
 

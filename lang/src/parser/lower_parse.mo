@@ -306,6 +306,10 @@ def collect_decl_kind_rems (k : ParseDeclKind) (acc : List I64) : List I64 := ma
     ParseDeclKind.scoped_open_d _p _f inner => collect_decl_kind_rems inner.kind acc,
     ParseDeclKind.decl_gen_d _n params decls _a => collect_decl_rems decls (collect_param_rems params acc),
     ParseDeclKind.macro_call_d _n args => collect_term_list_rems args acc,
+    // An `Attribute` holds only `AttrArg`s, which carry no spans of their
+    // own, so there is nothing here to collect -- same reason `attrs` is
+    // never visited on the inductive/struct/class arms above.
+    ParseDeclKind.mote_d _a => acc,
     ParseDeclKind.infix_d _o _p _v => acc,
     ParseDeclKind.use_d _p _f _pub => acc,
     ParseDeclKind.open_d _p _f => acc,
@@ -935,6 +939,10 @@ def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
                             (lower_parse_decls ctx decl_list) attrs,
         ParseDeclKind.macro_call_d name args =>
             Decl.macro_call_d name (lower_parse_terms ctx args),
+        // Pass-through, not a lowering: both ASTs spell this as the same
+        // `Attribute`, and an `Attribute` contains no `ParseTerm` to
+        // de-Bruijn.
+        ParseDeclKind.mote_d attr => Decl.mote_d attr,
     }
 
 

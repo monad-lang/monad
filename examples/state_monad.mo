@@ -1,4 +1,6 @@
 /// State monad example: a simple counter using the MonadState class
+#![mote { name := "state_monad" }]
+
 
 /// State monad wrapping a state-transformer function S -> (S, A)
 type State S A {

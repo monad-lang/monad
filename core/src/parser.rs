@@ -1655,6 +1655,48 @@ fn attribute_parser<X: Clone>(input: Span<X>) -> Res<Attribute, X> {
   ))
 }
 
+/// `#![mote { name := "x", deps := [init, std] }]` — the file-level INNER
+/// attribute, i.e. `attribute_parser` with a `!` after the `#`.
+///
+/// Deliberately parsed as an ordinary declaration (`Decl::MoteAttr`)
+/// rather than handled by `decls_parser`'s loop: that is what lets a
+/// MISPLACED one reach `validate_mote_attr_position`
+/// (`lang/src/module.mo`, the SELF-HOSTED compiler) as a real diagnostic
+/// instead of stopping the parse at whichever position it appears. The host
+/// itself only parses it — there is no module-level metadata-validation pass
+/// here — and `Module::add_decl` ignores the variant.
+///
+/// Note the args shape differs from the self-hosted parser's: Rust's
+/// `attr_arg_parser` returns a `Vec` per call, so a `{ ... }` block
+/// FLATTENS its `AttrArg::Named` entries directly onto `attr.args`,
+/// while `lang/src/parser.mo`'s `attr_arg_named_close` wraps them in one
+/// `AttrArg::Group`. Anything reading this attribute must accept both —
+/// see `Mote.mote_attr_flatten` (`lang/src/mote.mo`), which does.
+///
+/// A second, smaller divergence: Rust's named block is `many1`, so an
+/// empty `#![mote {}]` fails here but parses self-hosted. No real file
+/// writes one (it declares nothing), and the reader treats "no named
+/// args" as "no fields set" either way.
+fn mote_attr_parser(input: Span) -> Res<Decl> {
+  let (input, start) = info(input)?;
+  let (input, _) = tag("#![")(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, (name, args_vecs)) = (name, many0(preceded(ws1, attr_arg_parser))).parse(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = context("closing bracket for file attribute", tag("]")).parse(input)?;
+  let (input, end) = info(input)?;
+  Ok((
+    input,
+    Decl::MoteAttr {
+      attr: Attribute {
+        name,
+        args: args_vecs.into_iter().flatten().collect(),
+        source_location: SourceRange::new(start.into(), end.into()),
+      },
+    },
+  ))
+}
+
 fn opt_attributes<X: Clone>(input: Span<X>) -> Res<Vec<Attribute>, X> {
   // `ws0` before each attribute allows stacking (`#[a]\n#[b]\ndef ...` or
   // `#[a] #[b] def ...`) — the trailing `ws0` before the declaration
@@ -2542,6 +2584,7 @@ fn open_parser(input: Span) -> Res<Decl> {
 /// `Decl::MacroCall` here.
 fn decl_parser_no_macro(input: Span) -> Res<Decl> {
   let (input, decl) = alt((
+    mote_attr_parser,
     map(use_parser, Decl::Use),
     open_parser,
     decl_gen_parser,
@@ -2563,6 +2606,7 @@ fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
   let (input, _) = ws0(input)?;
   let (input, start) = info(input)?;
   let (input, decl) = alt((
+    mote_attr_parser,
     map(use_parser, Decl::Use),
     open_parser,
     decl_gen_parser,

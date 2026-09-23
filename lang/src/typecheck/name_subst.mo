@@ -225,6 +225,13 @@ def name_subst_decl (target : Identifier) (replacement : Term) (d : Decl) : Decl
         Decl.decl_gen_d name params decl_list attrs =>
             Decl.decl_gen_d name (params_name_subst target replacement params) (name_subst_decls target replacement decl_list) attrs,
         Decl.macro_call_d name args => Decl.macro_call_d name (terms_name_subst target replacement args),
+        // An `Attribute` carries no `Term`, so there is nothing here to
+        // substitute. The arm is still REQUIRED: this match has no
+        // wildcard (see `elaborate.mo`'s note on the missing static
+        // exhaustiveness check), so leaving it off is a latent runtime
+        // `NonExhaustiveMatch` for any macro template that carries the
+        // file-level attribute.
+        Decl.mote_d attr => Decl.mote_d attr,
     }
 
 #[partial]

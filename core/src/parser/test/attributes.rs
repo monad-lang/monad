@@ -600,3 +600,82 @@ fn test_extern_c_plus_plus_parses() {
   let native = unwrap_ntv_body(res.value());
   assert_eq!(native.native_name, id("f"));
 }
+
+#[test]
+fn test_mote_inner_attr_parses_as_a_decl() {
+  // `#![mote { ... }]` is a DECLARATION in the AST, not a prefix on the
+  // next one -- that is what lets a misplaced one reach
+  // `validate_mote_attr_position` (`lang/src/module.mo`, the self-hosted
+  // compiler) as a real diagnostic instead of stopping the parse. The host
+  // only parses it; what this test pins is the AST shape both compilers
+  // must agree on.
+  let s = r#"#![mote { name := "structs", deps := [init, std] }]
+    def foo : I64 := 1
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    name: id("mote"),
+    // The FLATTENED shape: `attr_arg_parser` returns a `Vec` per call,
+    // so the `{ ... }` block's `Named` entries land directly on
+    // `attr.args`. The self-hosted parser wraps them in one
+    // `AttrArg::Group` instead -- see `mote_attr_parser`'s doc comment.
+    // Both readers must accept this shape.
+    args: vec![
+      AttrArg::Named {
+        name: id("name"),
+        value: Box::new(AttrArg::Str("structs".to_string())),
+      },
+      AttrArg::Named {
+        name: id("deps"),
+        value: Box::new(AttrArg::Group(vec![
+          AttrArg::Ident(id("init")),
+          AttrArg::Ident(id("std")),
+        ])),
+      },
+    ],
+  }];
+
+  match res.value() {
+    Decl::MoteAttr { attr } => assert_eq!(*attr, expected_attrs[0]),
+    _ => panic!("expected MoteAttr, got {:?}", res.value()),
+  }
+}
+
+#[test]
+fn test_mote_inner_attr_does_not_consume_the_next_decl() {
+  // The failure mode this guards: if the attribute were parsed as a
+  // prefix, `decl_parser` would return the DEF and the attribute would
+  // be silently lost.
+  let s = r#"#![mote { name := "solo" }]
+    def foo : I64 := 1
+    "#
+  .into();
+  let (rem, res) = decl_parser(s).unwrap();
+  assert!(matches!(res.value(), Decl::MoteAttr { .. }));
+  let (_, next) = decl_parser(rem).unwrap();
+  assert!(matches!(next.value(), Decl::Def(_)));
+}
+
+#[test]
+fn test_mote_inner_attr_parses_in_a_whole_file() {
+  use crate::parser::parse_file;
+  let s = r#"#![mote { name := "x" }]
+    def foo : I64 := 1
+    "#
+  .into();
+  let parsed = parse_file(s).unwrap();
+  let kinds: Vec<&Decl> = parsed.decls.iter().map(|d| d.value()).collect();
+  assert!(
+    matches!(kinds.first(), Some(Decl::MoteAttr { .. })),
+    "first decl should be the mote attribute, got {:?}",
+    kinds.first()
+  );
+  assert!(
+    matches!(kinds.get(1), Some(Decl::Def(_))),
+    "second decl should be the def, got {:?}",
+    kinds.get(1)
+  );
+}

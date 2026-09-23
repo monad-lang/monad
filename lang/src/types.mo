@@ -817,6 +817,12 @@ pub type ParseDeclKind {
     def_macro_d (ParseDef),
     decl_gen_d (name: NamePath) (params: List ParseParam) (decl_list: List ParseDecl) (attrs: List Attribute),
     macro_call_d (name: Identifier) (args: List ParseTerm),
+    /// `#![mote { ... }]` — the file-level INNER attribute, carried until
+    /// lowering as `Decl.mote_d`. Appended LAST deliberately: these are
+    /// constructor-named variants, so nothing is positional, but a
+    /// variant's TAG is its declaration order and appending is what
+    /// guarantees no existing tag moves.
+    mote_d (attr: Attribute),
 }
 
 /// Build a `ParseDecl` whose position has not been recorded yet.
@@ -880,6 +886,14 @@ def pd_decl_gen_d (name : NamePath) (params : List ParseParam) (decl_list : List
 #[partial]
 def pd_macro_call_d (name : Identifier) (args : List ParseTerm) : ParseDecl :=
     pd_ (ParseDeclKind.macro_call_d name args)
+
+/// `#![mote { ... }]`. Takes the already-parsed `Attribute` (the `#![]`
+/// spelling is the parser's business, not this constructor's) so it can
+/// reuse `attribute_open` rather than duplicating the whole
+/// name/args/close chain for a one-character difference.
+#[partial]
+def pd_mote_d (attr : Attribute) : ParseDecl :=
+    pd_ (ParseDeclKind.mote_d attr)
 
 pub type ParseTermKind {
     var (name: NameRef),
@@ -1197,6 +1211,20 @@ pub type Decl {
     /// exactly (core/src/term.rs). `args` are whitespace-separated
     /// terms, not a comma/paren-delimited call.
     macro_call_d (name: Identifier) (args: List Term),
+    /// `#![mote { name := "x", deps := [init, std] }]` — a file-level
+    /// INNER attribute declaring this file's mote inline, so a module
+    /// with no `mote.toml` above it is a mote rather than "script mode"
+    /// (`Mote.discover`'s own `Option.none`). This is what takes
+    /// `examples/` out of the untracked state the plan's item G records,
+    /// and what makes `validate_module_deps` apply to it.
+    ///
+    /// Valid ONLY as the first declaration of a file, and the diagnostic
+    /// for a misplaced one comes from `validate_mote_attr_position`
+    /// (lang/module.mo) rather than from the parser — see that def's
+    /// comment for why the parser is the wrong place to reject it.
+    ///
+    /// Appended LAST for the same reason as `ParseDeclKind.mote_d`.
+    mote_d (attr: Attribute),
 }
 
 def Decl.to_name (d : Decl) : NamePath :=

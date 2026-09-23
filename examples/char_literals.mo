@@ -16,6 +16,8 @@
 // their value. See AGENTS.md's `Char` item before reaching for it.
 //
 // Usage: monad test examples/char_literals.mo
+#![mote { name := "char_literals" }]
+
 
 /// A plain ASCII character.
 def letter : Char := 'M'

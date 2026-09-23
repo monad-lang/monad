@@ -249,6 +249,13 @@ def expand_decl_terms (lookup : Identifier -> Option Term) (d : Decl) : Decl :=
         Decl.def_macro_d d_val => Decl.def_macro_d d_val,
         Decl.decl_gen_d name params gen_decls attrs => Decl.decl_gen_d name params gen_decls attrs,
         Decl.macro_call_d name args => Decl.macro_call_d name args,
+        // `#![mote { ... }]` holds an `Attribute`, which contains no
+        // `Term` at all, so there is nothing for this pass to rewrite --
+        // but the arm is REQUIRED, not optional: this match has no
+        // wildcard, so an unmatched `mote_d` is a runtime
+        // `NonExhaustiveMatch`, and this pass runs over every decl of
+        // every loaded module.
+        Decl.mote_d attr => Decl.mote_d attr,
     }
 
 #[partial]

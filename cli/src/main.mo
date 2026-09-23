@@ -63,7 +63,8 @@ def link_compiled_module (mod_result : Result String LLVMModule) (link_libs : Li
             let t_emit : I64 <- Bench.now;
             let ir_text : String := emit_module mod_;
             let _t_emit : I64 <- bench_step verbose "emit_module (render .ll)" t_emit (String.length ir_text);
-            link_ir Runtime.c_path ir_text output_dir output_name link_libs verbose
+            let runtime_src : String <- resolve_runtime_src;
+            link_ir runtime_src ir_text output_dir output_name link_libs verbose
         },
     }
 
@@ -85,7 +86,8 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
     // from. A program that needs `-l` flags cannot reach here anyway --
     // its `use` lines are what failed to load.
     println <| "Writing LLVM IR to: " ++ Path.to_string (Path.with_suffix (Path.join output_dir output_name) ".ll");
-    link_ir Runtime.c_path ir_text output_dir output_name List.empty verbose
+    let runtime_src : String <- resolve_runtime_src;
+    link_ir runtime_src ir_text output_dir output_name List.empty verbose
 }
 
 // (The v1 per-def location table this section used to build --
@@ -101,6 +103,79 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
 // `--debug` no longer re-reads and re-parses the whole dependency graph to
 // get them. That second parse was 76029ms of a 172143ms debug self-compile;
 // it is now simply absent.)
+
+/// The output name a mote's `[bin]` target is built as, given what the
+/// caller asked for. Split out of `compile_target` because a `let … in`
+/// inside a do-block does not parse (see that def), and this is the
+/// value it needs there.
+///
+/// `"source"` is the literal `Command.from_args` substitutes when
+/// neither `-o`/`--output` nor a positional name was given; anything
+/// else is the caller's own choice, which always wins.
+/// With no name of the manifest's own either, the source file's own
+/// stem is used -- `cli/src/main.mo` -> `main`, the same rule a
+/// file compile has always applied via
+/// `module_name_from_path`.
+def compile_out_name (requested : String) (manifest : MoteManifest) (src : String) : String :=
+    if Bool.not (String.beq requested "source") then requested
+    else match manifest.bin_name {
+        Option.some n => n,
+        Option.none => module_name_from_path src,
+    }
+
+/// `monad compile <path>` with a mote-aware path.
+///
+/// A FILE compiles exactly as before. A DIRECTORY is read as a mote and
+/// its `[bin]` target decides what is built -- `monad compile cli` from
+/// the workspace root, or `monad compile .` from inside `cli/`, builds
+/// `cli/src/main.mo` as `monad`, which is what `cli/mote.toml`'s
+/// `[bin] path`/`[bin] name` declare that binary to be. This is the
+/// mirror, in the only spelling `compile` has, of `check`/`test`'s
+/// "with no paths, the mote containing the working directory": it takes
+/// one positional path, so handing it a directory is the request to
+/// build that mote.
+///
+/// `manifest.bin_path` arrives already joined onto the mote's own `dir`
+/// (`Mote.bin_target_path`), so it is a path relative to the working
+/// directory exactly as stored -- which is what `compile_file` wants,
+/// and what makes `monad compile cli` work from the workspace root.
+///
+/// A directory that is not a mote, or is one with no `[bin]` target, is
+/// an error rather than a guess: `[bin]` is the manifest's own statement
+/// of what this mote's binary is, and inventing one (`src/main.mo`, say)
+/// would build something the mote never declared. Note that only a mote
+/// with a binary target needs a `[bin]` table at all -- `lang`, `std`,
+/// `llvm`, `init` and `runtime` are libraries and correctly have none.
+#[partial]
+def compile_target (path : String) (out_name : String) (verbose : Bool) (debug : Bool) : IO I64 := do {
+    let is_a_dir : Bool <- IO.is_dir (Path.path path);
+    if Bool.not is_a_dir
+    then compile_file path default_output_dir (Path.path out_name) verbose debug
+    else do {
+        let m : Option MoteManifest <- Mote.discover path;
+        match m {
+            Option.none => do {
+                println ("error: " ++ path ++ " is a directory, and no mote.toml was found in it or above it");
+                println "hint: `monad compile <file.mo>` compiles a single file";
+                return 1
+            },
+            Option.some manifest => do {
+                match manifest.bin_path {
+                    Option.none => do {
+                        println ("error: mote `" ++ manifest.name ++ "` declares no [bin] target, so there is nothing to build");
+                        println ("hint: add a [bin] table to " ++ path ++ "/mote.toml, naming `path` and (optionally) `name`");
+                        return 1
+                    },
+                    Option.some src => do {
+                        let name : String := compile_out_name out_name manifest src;
+                        println ("building mote `" ++ manifest.name ++ "`'s [bin] target: " ++ src);
+                        compile_file src default_output_dir (Path.path name) verbose debug
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
@@ -523,11 +598,108 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
 /// prebuilt here and handed down, was accepted but never read by
 /// `check_file_cached`, so building it cost ~3.7s of dead work on
 /// every `check` invocation; it is gone.
+/// Decide WHICH files `check` and `test` run, from the three modes the
+/// two subcommands share:
+///
+///   * explicit paths -> exactly those (directories expanded by the
+///                       caller, since `expand_check_paths` is one more
+///                       I/O step neither wants inside here);
+///   * `--workspace`  -> every mote in the enclosing workspace;
+///   * neither        -> the mote containing the working directory, so
+///                       `monad check` inside `std/` checks `std`.
+///
+/// `Option.none` means "nothing was asked for": no explicit paths, and
+/// no `mote.toml` above. Both callers answer that the same way `check`
+/// and `test` did before any of this existed -- `print_help`, exit 0 --
+/// because a bare subcommand in an arbitrary directory has nothing to
+/// do and should say so rather than sweep the filesystem.
+///
+/// `Option.some List.empty` is the other empty case and is deliberately
+/// NOT folded into `Option.none`: `--workspace` was given, and no
+/// `[workspace] members` was found above, so the subcommand was asked
+/// to enumerate something and found nothing. The diagnostic is printed
+/// here, where the flag is still in hand, and both callers turn the
+/// empty list into a failing exit -- an invocation that was told to
+/// cover a workspace and covered zero files is a broken invocation, not
+/// a pass. (The explicit-path branch can never return `some []`, since
+/// it only runs when the caller's list is non-empty.)
+///
+/// `verb` is the gerund the found mote is reported with ("Checking" /
+/// "Testing") and `subcommand` the spelled-out name in the `--workspace`
+/// diagnostic, so one helper serves both without either printing the
+/// other's word.
+///
+/// **The mote root is what resolution keys off now, not the working
+/// directory.** `lang/module.mo`'s `resolve_via_manifest` discovers the
+/// manifest of the file being resolved and reads that manifest's own
+/// `[dependencies.<name>] path = "..."` entries, so a mote found from
+/// inside its own directory resolves its dependencies from its own
+/// manifest wherever the CWD is. This used to be untrue -- resolution
+/// walked a fixed directory cascade relative to the CWD, so
+/// `monad test` from inside `llvm/` reported a wall of "unknown
+/// variable" -- and the note that this def used to print saying so is
+/// gone with the cause.
 #[partial]
-def run_check (files : List String) (verbose : Bool) : IO I64 := do {
-    let expanded : List String <- expand_check_paths files;
-    let cache : ModuleInfoCache := module_info_cache_empty;
-    run_check_loop cache expanded 0 0 verbose
+def resolve_target_paths (verb : String) (subcommand : String) (files : List String) (workspace : Bool) : IO (Option (List String)) := do {
+    // `List.empty`/`List.cons` are deliberately NOT used as match
+    // patterns here: this file's test driver loads the whole compiler
+    // closure, where `BTreeMap` and `Vec` also declare `empty`/`cons`
+    // and the bare pattern names turn ambiguous.
+    if Bool.not (List.is_empty files) then return (Option.some files)
+    else if workspace then do {
+        // The workspace root is where the `[workspace]` manifest is.
+        // `Mote.discover` stops AT a virtual root (returning none,
+        // since a root declares no `[mote]`), so the root is found by
+        // looking for the members list directly, walking up from here.
+        // The walk hands back members already joined onto the root it
+        // found, which is why `--workspace` works from a subdirectory.
+        let members <- find_workspace_members "" 32;
+        if List.is_empty members then do {
+            println ("monad " ++ subcommand ++ " --workspace: no workspace manifest found (no [workspace] members above this directory)");
+            return (Option.some List.empty)
+        } else return (Option.some members)
+    } else do {
+        // Annotated like lang/module.mo's own `Mote.discover` call
+        // sites: the checker only knows the bind's type from the
+        // annotation, and the match below needs the scrutinee's type.
+        let m : Option MoteManifest <- Mote.discover "";
+        match m {
+            Option.none => return Option.none,
+            Option.some manifest => do {
+                // `manifest.dir` is where the manifest was found,
+                // RELATIVE to the working directory -- `""` when the
+                // CWD is the mote root itself, which a path expander
+                // wants spelled `"."`. Either way the mote is named
+                // and located, so the two cases differ in the path
+                // only.
+                let dir := if String.beq manifest.dir "" then "." else manifest.dir;
+                println (verb ++ " mote " ++ manifest.name ++ " (" ++ dir ++ ")");
+                return (Option.some (List.cons dir List.empty))
+            }
+        }
+    }
+}
+
+#[partial]
+def run_check (files : List String) (workspace : Bool) (verbose : Bool) : IO I64 := do {
+    let targets <- resolve_target_paths "Checking" "check" files workspace;
+    match targets {
+        // Empty only from `--workspace` with no workspace manifest --
+        // see `resolve_target_paths`, which has already printed why.
+        // Failing rather than "0 file(s) checked" is the point: a
+        // `--workspace` run that checked nothing did not pass.
+        Option.some ts => if List.is_empty ts then return 1
+        else do {
+            let expanded : List String <- expand_check_paths ts;
+            let cache : ModuleInfoCache := module_info_cache_empty;
+            run_check_loop cache expanded 0 0 verbose
+        },
+        // Nothing named, inside no mote: the behaviour before any of
+        // this existed, kept because a bare `monad check` in an
+        // arbitrary directory has nothing to check and should say so
+        // rather than sweep the filesystem.
+        Option.none => print_help
+    }
 }
 
 /// A `monad test <path>...` subcommand mirroring `monad-rs test`: for
@@ -563,13 +735,8 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 /// by the driver for a human running the binary by hand, but is never
 /// trusted here: a missing or unparseable result file means the driver
 /// died before finishing, and is classified as a crash.
-/// Decide WHICH files `monad test` runs, then run them.
-///
-///   * explicit paths        -> exactly those (directories expanded);
-///   * `--workspace`         -> every mote in the enclosing workspace;
-///   * neither               -> the mote containing the working
-///                              directory, so `monad test` inside
-///                              `std/` tests `std`.
+/// Decide WHICH files `monad test` runs (`resolve_target_paths`, the
+/// dispatcher `check` shares), then run them.
 ///
 /// Outside any mote and with no paths, it prints help and exits 0 --
 /// the behaviour before this existed, kept because a bare `monad test`
@@ -579,63 +746,19 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 /// Note that a mote-enumerating run covers only directories that ARE
 /// motes: `examples/` has no manifest, so its 19 files are reached by
 /// naming them (or by CI's own explicit sweep), not by `--workspace`.
-///
-/// **Run these from the workspace root.** Dependency resolution is
-/// relative to the WORKING DIRECTORY, not to the mote being tested:
-/// from inside `llvm/`, `std`/`init` do not resolve and every file
-/// reports "unknown variable" instead of running. That is pre-existing
-/// (`monad test llvm/src/strmap.mo` works from the root and fails as
-/// `./src/strmap.mo` from inside `llvm/`), not something these paths
-/// introduce -- but a bare `monad test` inside a mote is exactly the
-/// invocation that walks into it, so it says so rather than printing a
-/// wall of misleading failures.
 #[partial]
 def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (verbose : Bool) : IO I64 := do {
-    // `List.empty`/`List.cons` are deliberately NOT used as match
-    // patterns here: this file's test driver loads the whole compiler
-    // closure, where `BTreeMap` and `Vec` also declare `empty`/`cons`
-    // and the bare pattern names turn ambiguous.
-    if List.is_empty files then do {
-        if workspace then do {
-            // The workspace root is where the `[workspace]` manifest
-            // is. `Mote.discover` stops AT a virtual root (returning
-            // none, since a root declares no `[mote]`), so the root
-            // is found by looking for the members list directly,
-            // walking up from here.
-            let members <- find_workspace_members "" 32;
-            if List.is_empty members then do {
-                println "monad test --workspace: no workspace manifest found (no [workspace] members above this directory)";
-                return 1
-            } else run_test members out_dir verbose
-        } else do {
-            // Annotated like lang/module.mo's own `Mote.discover` call
-            // sites: the checker only knows the bind's type from the
-            // annotation, and the match below needs the scrutinee's type.
-            let m : Option MoteManifest <- Mote.discover "";
-            match m {
-                Option.some manifest => do {
-                    // `manifest.dir` is where the manifest was
-                    // found, RELATIVE to the working directory --
-                    // `""` when the CWD is the mote root itself.
-                    // Testing it then means testing `.`, and
-                    // dependency resolution is relative to the CWD
-                    // (see this def's own doc comment), so that
-                    // only works when the CWD is also the
-                    // workspace root.
-                    if String.beq manifest.dir "" then do {
-                        println ("Testing mote " ++ manifest.name ++ " (.)");
-                        println "note: run from the workspace root if dependencies fail to resolve";
-                        run_test (List.cons "." List.empty) out_dir verbose
-                    } else do {
-                        println ("Testing mote " ++ manifest.name ++ " (" ++ manifest.dir ++ ")");
-                        run_test (List.cons manifest.dir List.empty) out_dir verbose
-                    }
-                },
-                // Not inside a mote: nothing to enumerate.
-                Option.none => print_help,
-            }
-        }
-    } else run_test files out_dir verbose
+    let targets <- resolve_target_paths "Testing" "test" files workspace;
+    match targets {
+        // Empty only from `--workspace` with no workspace manifest --
+        // see `resolve_target_paths`, which has already printed why.
+        // `return 1` rather than reaching `run_test`'s own empty-list
+        // "No tests found": same exit code, without a second line
+        // saying the same thing.
+        Option.some ts => if List.is_empty ts then return 1
+        else run_test ts out_dir verbose,
+        Option.none => print_help
+    }
 }
 
 /// Walk up looking for a manifest with `[workspace] members`, returning
@@ -653,6 +776,74 @@ def find_workspace_members (dir : String) (depth : I64) : IO (List String) := do
             else if String.beq dir "/" then do { return List.empty }
             else find_workspace_members (raw_path_join dir "..") (depth - 1)
         else do { return here }
+    }
+}
+
+/// The workspace ROOT above `dir`: the directory whose `mote.toml` carries
+/// `[workspace] members`. `find_workspace_members` is the same walk, and it
+/// answers with that root's expanded MEMBERS; a caller looking for a file
+/// that is not one of them (see `resolve_runtime_src`) needs the root
+/// itself, which is the one thing the expansion throws away.
+///
+/// `Option.some ""` means the working directory is the root -- the same
+/// case `find_workspace_members ""` already handles, where `dir` is `""`
+/// and every path the caller builds from it stays CWD-relative.
+#[partial]
+def find_workspace_root (dir : String) (depth : I64) : IO (Option String) := do {
+    if I64.lt depth 1 then do { return Option.none }
+    else do {
+        let here : List String <- Mote.workspace_members dir;
+        if Bool.not (List.is_empty here) then do { return (Option.some dir) }
+        else if String.beq dir "" then find_workspace_root ".." (depth - 1)
+        else if String.beq dir "/" then do { return Option.none }
+        else find_workspace_root (raw_path_join dir "..") (depth - 1)
+    }
+}
+
+/// The runtime C source, located from the workspace root above the working
+/// directory.
+///
+/// `Runtime.c_path` is the checkout-root-relative literal for it
+/// (`runtime/src/lib.mo`), and that is the right answer exactly when the
+/// working directory IS that root. Everything else about a `monad test`
+/// from inside `cli/` resolves from the mote now, and this argument was the
+/// one input left that was still CWD-relative: the typecheck passed, the
+/// driver compiled, and then `clang: error: no such file or directory:
+/// 'runtime/src/runtime.c'`, `compiling runtime failed`.
+///
+/// The working directory is the only correct anchor here, and not as a
+/// convenience: `clang` resolves this argument against the COMPILER's own
+/// CWD, so any other base -- `runtime/src/lib.mo`'s own resolved path, say,
+/// which is the anchor module resolution uses -- would name a file that
+/// clang then goes looking for somewhere else entirely. Walking up from
+/// `""` for the workspace root is the anchor `--workspace` already uses,
+/// and the root is what makes the answer portable: `../runtime/src/
+/// runtime.c` holds from inside `cli/`, where `runtime/src/runtime.c` does
+/// not.
+///
+/// Falls back to `Runtime.c_path` when there is no workspace root above the
+/// working directory (a single-mote checkout, a file outside the workspace),
+/// which is the behaviour that existed before this. The candidate is
+/// existence-checked first for the same reason: at the root the walk answers
+/// `""` and the candidate IS `Runtime.c_path`, so nothing about the root
+/// path changes.
+///
+/// Deliberately NOT passed through `lang.module.mo`'s `normalize_path`,
+/// even though the walk leaves the `..` in: that spelling is valid only
+/// relative to the CWD it was walked from, so collapsing it to
+/// `runtime/src/runtime.c` would name a file that does not exist from
+/// inside `cli/`. `normalize_path` is safe for module resolution because
+/// the resolved path is read in the same process that resolved it; this one
+/// is handed to a child process.
+def resolve_runtime_src : IO String := do {
+    let root <- find_workspace_root "" 32;
+    match root {
+        Option.none => return Runtime.c_path,
+        Option.some r => do {
+            let candidate := raw_path_join r "runtime/src/runtime.c";
+            let exists <- file_exists (Path.path candidate);
+            return (if exists then candidate else Runtime.c_path)
+        }
     }
 }
 
@@ -879,7 +1070,8 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             // `run`/`compile` path passes, instead of an
                             // `undefined reference` at link.
                             let link_libs : List String <- collect_link_libs (get_loaded_all loaded);
-                            let link_result <- link_ir Runtime.c_path ir_text (Path.path out_dir) (Path.path bin_name) link_libs verbose;
+                            let runtime_src : String <- resolve_runtime_src;
+                            let link_result <- link_ir runtime_src ir_text (Path.path out_dir) (Path.path bin_name) link_libs verbose;
                             if not (link_result == 0) then do {
                                 // A file-level failure, counted as such:
                                 // no test in it ever ran, so folding it
@@ -996,7 +1188,7 @@ type Command {
     run (file: Path) (verbose: Bool) (debug: Bool),
     eval (file: Path) (verbose: Bool),
     pretty (file: String),
-    check (files: List String) (verbose: Bool),
+    check (files: List String) (verbose: Bool) (workspace: Bool),
     test (files: List String) (verbose: Bool) (workspace: Bool),
     version,
     help
@@ -1112,7 +1304,19 @@ def Command.from_args (args : List String) : Command :=
             else if cmd == "check" then
                 match Cli.take_flag "verbose" "v" rest {
                     Cli.FlagResult.flag_result verbose rest1 =>
-                        if List.is_empty rest1 then Command.help else Command.check rest1 verbose,
+                        // Same peeling order as `test` below, and for
+                        // the same reason: `--workspace` is a flag, not
+                        // a path, and left in the list it would be
+                        // handed to the path expander as a filename.
+                        // It is also what replaced the old
+                        // "no paths -> `Command.help`" arm: a bare
+                        // `monad check` is now the mote-containing-the-
+                        // CWD mode, so emptiness is `run_check`'s
+                        // question, not this one's.
+                        match Cli.take_flag "workspace" "w" rest1 {
+                            Cli.FlagResult.flag_result workspace rest2 =>
+                                Command.check rest2 verbose workspace,
+                        },
                 }
             else if cmd == "test" then
                 match Cli.take_flag "verbose" "v" rest {
@@ -1139,7 +1343,9 @@ def main (args : List String) : IO I64 {
     let cmd : Command := Command.from_args args;
     match cmd {
         compile file_path out_name verbose debug => do {
-            compile_file (Path.to_string file_path) default_output_dir out_name verbose debug
+            // A directory is a mote to build (`compile_target`); a file
+            // goes straight to `compile_file`, unchanged.
+            compile_target (Path.to_string file_path) (Path.to_string out_name) verbose debug
         },
         run file_path verbose debug => do {
             run_file (Path.to_string file_path) default_output_dir verbose debug
@@ -1176,8 +1382,8 @@ def main (args : List String) : IO I64 {
                 }
             }
         },
-        check files verbose => do {
-            run_check files verbose
+        check files verbose workspace => do {
+            run_check files workspace verbose
         },
         test files verbose workspace => do {
             run_test_paths files workspace (Path.to_string default_output_dir) verbose
@@ -1199,13 +1405,18 @@ def print_help : IO I64 {
     println "";
     println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]";
     println "         Parse and compile a .mo source file";
+    println "         <path> may be a mote DIRECTORY, in which case its [bin] target is built";
+    println "           (`monad compile cli` builds cli/src/main.mo as `monad`)";
     println "         --verbose/-v prints each module as it loads and one line per pipeline stage";
     println "         --debug/-g emits DWARF debug info (one source location per top-level def)";
     println "       monad run <path> [--verbose/-v] [--debug/-g] [--release]  Compile and execute a .mo source file";
     println "       monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
-    println "       monad check <path>... [--verbose/-v]  Parse and typecheck .mo source files (no execution)";
+    println "       monad check [<path>...] [--workspace/-w] [--verbose/-v]  Parse and typecheck .mo source files (no execution)";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
+    println "         With no <path>, checks the mote containing the working directory";
+    println "         --workspace/-w checks every mote in the enclosing workspace";
+    println "           (only directories that ARE motes: examples/ has no manifest)";
     println "         --verbose/-v prints a per-declaration progress trace while checking";
     println "       monad test [<path>...] [--workspace/-w] [--verbose/-v]  Compile and run each file's own #[test] defs as a native binary";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";

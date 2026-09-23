@@ -66,6 +66,10 @@ def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
 
 def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
 
+/// `std.test` -- the module path `test_elaborate_loaded_modules_...` below
+/// resolves to a file rather than naming one.
+def std_test_module_path : ModulePath := ModulePath.mp [Identifier.id "std", Identifier.id "test"]
+
 /// Parse all declarations from source text.
 ///
 /// Uses `decls_parser_located`, so every term carries its source position
@@ -251,12 +255,92 @@ pub def module_name_from_path (file_path : String) : String :=
 def path_join (a : String) (b : String) : String :=
     raw_path_join a b
 
+/// Collapse `.`/`..` segments and repeated separators: `a/../b` -> `b`,
+/// `./x` -> `x`, `a//b` -> `a/b`. Pure string work with no filesystem
+/// access, so it can never change WHICH file resolves -- only how the
+/// winner is spelled.
+///
+/// It exists so that ONE FILE HAS ONE SPELLING, because a resolved path is
+/// what `ModuleInfo.file_path` records and `qualify_modules`'s
+/// `dedup_modules_by_file` (`lang/codegen/qualify.mo`) collapses the same
+/// file registered under two module paths BY COMPARING THAT STRING.
+/// `init/src/number.mo` reaches the loader twice -- as the bare `number`
+/// that `init/src/lib.mo`'s `pub use number {*}` names relative to its own
+/// directory, and as the `init::number` a mote prefix reads off
+/// `mote_relative_file`. From the checkout root both spellings are the same
+/// literal, so the dedup catches them. From inside a mote only the manifest
+/// can answer one of them and `..` survives in the join, giving
+/// `../init/src/number.mo` and `../lang/../init/src/number.mo` for the SAME
+/// file: two strings, no dedup, so its declarations were owned by two
+/// modules at once and every reference to them read as `declared in
+/// number, init.number`. That flood is a qualify failure -- and from inside
+/// `cli/` it did not terminate at all: measured, 177 s of 100% CPU with not
+/// one syscall after the last resolution.
+#[partial]
+def normalize_path (p : String) : String :=
+    let joined : String := join_path_segments (normalize_segments_go (path_segments_go p 0 0 List.empty) List.empty) "" in
+    if String.starts_with "/" p
+    then String.concat "/" joined
+    else (if String.is_empty joined then "." else joined)
+
+/// `s` split on `/`, with empty segments dropped so a leading `/` and any
+/// `//` contribute nothing. `normalize_path` restores the leading slash
+/// from the original string, which is the only thing it can carry.
+#[partial]
+def path_segments_go (s : String) (i : I64) (start : I64) (acc : List String) : List String :=
+    if I64.lt i (String.length s)
+    then (if String.beq (String.slice s i 1) "/"
+          then path_segments_go s (I64.add i 1) (I64.add i 1)
+                   (path_push_segment (String.slice s start (I64.sub i start)) acc)
+          else path_segments_go s (I64.add i 1) start acc)
+    else List.reverse (path_push_segment (String.slice s start (I64.sub (String.length s) start)) acc)
+
+/// Accumulate one segment, skipping an empty one.
+def path_push_segment (seg : String) (acc : List String) : List String :=
+    if String.is_empty seg then acc else List.cons seg acc
+
+/// `path_segments_go`'s output with `.` dropped and each `..` cancelling
+/// the segment before it. A `..` with nothing to cancel is KEPT, and two
+/// leading `..`s keep both -- otherwise `../init/src` would normalize to
+/// `init/src` and stop naming the file it found.
+#[partial]
+def normalize_segments_go (segs : List String) (acc : List String) : List String :=
+    match segs {
+        List.empty => List.reverse acc,
+        List.cons s rest =>
+            if String.beq s "." then normalize_segments_go rest acc
+            else (if String.beq s ".."
+                  then (match acc {
+                          List.empty => normalize_segments_go rest (List.cons s acc),
+                          List.cons hd tl =>
+                              if String.beq hd ".."
+                              then normalize_segments_go rest (List.cons s acc)
+                              else normalize_segments_go rest tl
+                        })
+                  else normalize_segments_go rest (List.cons s acc))
+    }
+
+/// Re-join segments with a single `/` between them and none at either end.
+def join_path_segments (segs : List String) (acc : String) : String :=
+    match segs {
+        List.empty => acc,
+        List.cons s rest =>
+            if String.is_empty acc
+            then join_path_segments rest s
+            else join_path_segments rest (String.concat acc (String.concat "/" s))
+    }
+
 /// Return the first path in `candidates` that exists on disk (checked in
 /// order via `file_exists`), or `Option.none` if none do. Factored out of
 /// `resolve_module_file` below, which used to check its 7 candidate paths
 /// via a cascade of nested `if/else` `do` blocks, one level per candidate
 /// -- functionally a linear "first match wins" scan the whole time, just
 /// expressed as 7 levels of nesting instead of a flat walk over a list.
+///
+/// The winner comes back NORMALIZED, and this is the one place that
+/// happens: every resolved path in the compiler comes from here, so doing
+/// it at this choke point is what makes a file's spelling independent of
+/// whichever candidate happened to find it. See `normalize_path`.
 #[partial]
 def first_existing (candidates : List String) : IO (Option String) := do {
     match candidates {
@@ -269,7 +353,7 @@ def first_existing (candidates : List String) : IO (Option String) := do {
             // `Path.of`) is safe here.
             let exists : Bool <- file_exists (Path.path path);
             if exists
-            then do { return Option.some path }
+            then do { return Option.some (normalize_path path) }
             else first_existing rest
         }
     }
@@ -301,9 +385,36 @@ def mote_relative_file (mp : ModulePath) : String :=
             }
     }
 
+/// The ambient trio's (`prelude`/`init`/`std`) own resolution: its
+/// CWD-relative candidate first, then the manifest.
+///
+/// The fall-through is the whole point of the helper, and it is what makes
+/// resolution key off the MOTES rather than the working directory. `candidate`
+/// is spelled relative to the checkout root, so it is only the answer when the
+/// CWD *is* that root -- which is why `monad check src/main.mo` from inside
+/// `cli/` used to report a wall of "unknown variable '++'" rather than loading
+/// its own prelude: `first_existing` missed, the trio returned `none`, and no
+/// manifest was ever consulted. From the root nothing changes, because the
+/// first candidate always hits.
+///
+/// The manifest half reaches the same three files through each mote's OWN
+/// declared path (`lang/mote.toml` declares `init = { path = "../init" }`,
+/// say), so `lang/../init/src/prelude.mo` resolves wherever the CWD is.
+#[partial]
+def resolve_ambient_file (base_dir : String) (mp : ModulePath) (candidate : String) : IO (Option String) := do {
+    let r : Option String <- first_existing [candidate];
+    match r {
+        Option.some p => return (Option.some p),
+        Option.none => resolve_via_manifest base_dir mp
+    }
+}
+
 /// Resolve a module path to a file path, trying different directories
 /// First tries relative to base_dir, then the mote layout, then falls back to
-/// the stdlib/lang/examples roots for bare (un-mote-qualified) names.
+/// the stdlib/lang roots for bare (un-mote-qualified) names.
+///
+/// There is no `examples/` fallback: an example is a mote like any other
+/// now (`#![mote { ... }]`), so nothing resolves it by directory name.
 #[partial]
 def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option String) {
     let mp_str := module_path_to_file mp;
@@ -315,10 +426,9 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
     let init_path := String.concat "init/src/" with_extension;
     let std_path := String.concat "std/src/" with_extension;
     let lang_path := String.concat "lang/src/" with_extension;
-    let examples_path := String.concat "examples/" with_extension;
 
     if String.beq mp_str "prelude"
-    then first_existing [prelude_path]
+    then resolve_ambient_file base_dir mp prelude_path
     // Bare `init`/`std` are ambient re-export hubs (`init/src/lib.mo`/
     // `std/src/lib.mo`) -- their own module NAME no longer matches their
     // FILE name (unlike every other bare top-level module), so they
@@ -328,12 +438,20 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
     // "that mote's lib root" -- spelling it out keeps the ambient trio
     // together and independent of that rule.)
     else if String.beq mp_str "init"
-    then first_existing ["init/src/lib.mo"]
+    then resolve_ambient_file base_dir mp "init/src/lib.mo"
     else if String.beq mp_str "std"
-    then first_existing ["std/src/lib.mo"]
+    then resolve_ambient_file base_dir mp "std/src/lib.mo"
     else do {
+        // `examples/` used to be a candidate here (`examples/<stem>.mo`).
+        // It is gone: every example now carries a `#![mote { ... }]`
+        // annotation naming it and its `deps`, so examples are reached the
+        // way motes are -- by their own path, or as a declared dependency --
+        // rather than by a name-convention probe into their directory. The
+        // probe served nothing once that landed: an example referring to a
+        // SIBLING resolves through `relative_path` above, which is tried
+        // first and always hit for a file in the same directory.
         let found : Option String <- first_existing [
-            relative_path, direct_path, mote_path, init_path, std_path, lang_path, examples_path,
+            relative_path, direct_path, mote_path, init_path, std_path, lang_path,
         ];
         match found {
             Option.some p => return (Option.some p),
@@ -348,7 +466,25 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
             // on the miss, and never on the path everything else takes.
             Option.none => do {
                 let in_motes_cands <- motes_src_paths mp;
-                let in_motes : Option String <- first_existing in_motes_cands;
+                // The scan above is the BARE-name convention: the stem is
+                // probed under every `motes/*/src/`, which is how `use greet`
+                // finds `motes/example/src/greet.mo` without naming its mote.
+                // A QUALIFIED path (`use example::greet`) needs the other
+                // half: the head names the mote, so the rest is read within
+                // it. `mote_relative_file` is exactly that reading, and
+                // prefixing it with `motes/` is the Rust host's own route to
+                // the same file -- it pushes `cwd/motes` onto its search path
+                // and then tries `to_mote_file_path` under each root
+                // (`resolve_file_path`, core/src/term.rs), giving
+                // `motes/example/src/greet.mo`.
+                //
+                // Tried AFTER the scan, deliberately: for a one-segment path
+                // this candidate reads as `<name>/src/lib.mo` (`motes/greet/
+                // src/lib.mo`), a file that is never the answer, so letting it
+                // go first would only add a failing stat to every bare-name
+                // lookup.
+                let in_motes_qualified := String.concat "motes/" (mote_relative_file mp);
+                let in_motes : Option String <- first_existing (List.append in_motes_cands (List.cons in_motes_qualified List.empty));
                 match in_motes {
                     Option.some p => return (Option.some p),
                     Option.none => resolve_via_manifest base_dir mp
@@ -399,26 +535,86 @@ def motes_src_paths_go (entries : List String) (file_stem : String) : IO (List S
         }
     }
 
-/// Resolve `mp` against the importing file's OWN mote: if the first segment
-/// names that mote, the rest is a path under its `src/`.
+/// Resolve `mp` against the importing file's OWN mote manifest: the first
+/// segment names either the mote itself, or one of its DECLARED
+/// dependencies, whose `[dependencies.<name>] path` says where that mote
+/// lives.
 ///
-/// This is the self-reference case (`use demo.x` from inside mote `demo`),
-/// which is also what a `lib` alias becomes once rewritten. Dependencies on
-/// OTHER motes still go through the directory convention -- resolving those
-/// from the manifest is the mote table (package-system.md 5c), which needs
-/// the declared paths, not just the names.
+/// The self case (`use demo.x` from inside mote `demo`) is also what a
+/// `lib` alias becomes once rewritten, and `mote_path_within` answers it
+/// exactly, off the mote's identity.
+///
+/// The dependency case is what package-system.md 5c calls the mote table,
+/// and it is the half that makes resolution key off the MOTE ROOT rather
+/// than the working directory: `../std` from inside `lang` is
+/// `lang/../std/src/...` wherever the CWD is, whereas the name-convention
+/// candidates in the cascade above (`std/src/list.mo`, `mote_relative_file`)
+/// only hold when the CWD is the checkout root. Reached only on a cascade
+/// MISS, so the manifest read costs nothing on the path everything takes.
 #[partial]
 def resolve_via_manifest (base_dir : String) (mp : ModulePath) : IO (Option String) := do {
     let mote : Option MoteManifest <- Mote.discover base_dir;
     match mote {
         Option.none => return Option.none,
-        Option.some m =>
-            match mote_path_within m mp {
-                Option.none => return Option.none,
-                Option.some candidate => first_existing [candidate]
-            }
+        Option.some m => first_existing (manifest_candidates m mp)
     }
 }
+
+/// `mp`'s manifest-derived candidate files, self first: a mote may always
+/// refer to itself, so when the first segment IS this mote's name that is
+/// the answer, and the dependency list is tried only when it is not.
+def manifest_candidates (m : MoteManifest) (mp : ModulePath) : List String :=
+    match mote_path_within m mp {
+        Option.none => mote_dep_files m mp,
+        Option.some c => List.cons c (mote_dep_files m mp)
+    }
+
+/// The `src/` file a declared dependency's `mp` names -- `mote_path_within`'s
+/// mirror for a DEPENDENCY, using the manifest's `path` rather than the
+/// mote's name. `List.empty` when `mp`'s first segment is not a dependency
+/// the manifest located (undeclared, or declared without a `path`), which
+/// leaves the cascade's own answer to stand.
+def mote_dep_files (m : MoteManifest) (mp : ModulePath) : List String :=
+    match mp {
+        ModulePath.mp ids =>
+            match ids {
+                List.empty => List.empty,
+                List.cons hd rest =>
+                    // `prelude` is the one module whose NAME is not its FILE
+                    // name, and it belongs to `init` -- the same re-spelling
+                    // `resolve_module_file`'s own `prelude` special case
+                    // applies to the CWD-relative candidate. It is
+                    // one-segment by construction, so it never reaches the
+                    // `rest` cases below.
+                    if String.beq (identifier_to_string hd) "prelude"
+                    then mote_dep_file_of m "init" "prelude"
+                    // A one-segment path means "that mote's own library
+                    // root", the same rule `mote_path_within` applies.
+                    else if List.is_empty rest
+                    then mote_dep_file_of m (identifier_to_string hd) "lib"
+                    else mote_dep_file_of m (identifier_to_string hd)
+                             (module_path_to_file (ModulePath.mp rest))
+            }
+    }
+
+/// The one candidate file a declared dependency `dep` contributes for a
+/// module whose file stem is `stem`: `<dep dir>/src/<stem>.mo`.
+///
+/// `List.empty` when `dep` is undeclared or declared without a `path` --
+/// resolution then has nothing better to try, and the cascade's own answer
+/// stands.
+def mote_dep_file_of (m : MoteManifest) (dep : String) (stem : String) : List String :=
+    match MoteManifest.dep_dir_of m dep {
+        Option.none => List.empty,
+        Option.some dep_dir =>
+            List.cons (String.concat (mote_dep_src_root dep_dir) (String.concat stem ".mo")) List.empty
+    }
+
+/// `<dep dir>/src/`, kept trailing-slashed so `mote_dep_file_of` can append
+/// a stem. `raw_path_join` for the same reason `MoteManifest.src_root` uses
+/// it: a `dir` of `""` must not turn into a leading `/`.
+def mote_dep_src_root (dep_dir : String) : String :=
+    String.concat (raw_path_join dep_dir "src") "/"
 
 /// `<mote>.a.b` -> `<mote dir>/src/a/b.mo`, and a bare `<mote>` -> its
 /// `src/lib.mo`. `Option.none` when the path does not name this mote.
@@ -441,26 +637,42 @@ def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
             }
     }
 
-/// Try to read a module file from disk, relative to a base directory
+/// Load a module by its ModulePath, returning parsed declarations or none
+/// base_dir is the directory to resolve relative imports from
+///
+/// Resolves ONCE and hands the resolved path to `load_module_decls_at`,
+/// which does the reading. That split is the whole point: see that
+/// function's own note for the `prelude`-inside-a-mote defect that
+/// resolving twice caused.
 #[partial]
-def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option String) {
+def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List Decl)) {
     let resolved : Option String <- resolve_module_file base_dir mp;
     match resolved {
-        Option.some resolved_path => do {
-            // `resolved_path` was just confirmed to exist on disk by
-            // `resolve_module_file`/`first_existing` above -- always
-            // non-empty by construction.
-            let s : String <- IO.read_file (Path.path resolved_path);
-            return Option.some s
-        },
-        Option.none => do {
-            return Option.none
-        }
+        Option.some file_path => load_module_decls_at file_path mp,
+        Option.none => do { return Option.none }
     }
 }
 
-/// Load a module by its ModulePath, returning parsed declarations or none
-/// base_dir is the directory to resolve relative imports from
+/// Read and parse an ALREADY-RESOLVED module file.
+///
+/// This is the half of module loading that touches the disk, and it is
+/// PATH-driven on purpose: one resolution, one read. `load_module_with_info`
+/// resolves a module, records the resolved path as `ModuleInfo.file_path`,
+/// and used to hand the LOADER only that path's DIRECTORY -- so the module
+/// was resolved a SECOND time, from the resolved file's own directory, and
+/// the second answer is not always the first. Measured (strace): a
+/// `prelude` from inside `cli/` resolved correctly to
+/// `../init/src/prelude.mo` through `cli`'s manifest, and re-resolved from
+/// `../init/src` to nothing at all, because by then the only candidates
+/// left are `init`'s own manifest -- where `init` is not a dependency of
+/// itself (`MoteManifest.dep_dir_of`'s self arm is what closes that, but
+/// the second resolution should not exist in the first place). `prelude`
+/// therefore never loaded inside a mote, and a check there reported its
+/// names as `unknown variable` -- 23 of them for `cli/src/main.mo`, with
+/// the module trace showing the identical 74 modules as a clean root run,
+/// because the line is printed BEFORE the load that then failed. The same
+/// shape could also silently load a DIFFERENT file than the one
+/// `file_path` named.
 ///
 /// `decls_parser`/`parse_all_decls` are LENIENT by design (`decls_try`'s
 /// own doc comment, `lang/parser.mo`): any real parse failure partway
@@ -481,25 +693,23 @@ def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option Stri
 /// a genuinely fully-parsed file always leaves it empty; non-empty means
 /// real, un-parsed source content remains.
 #[partial]
-def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List Decl)) {
-    let file : Option String <- try_read_module_file base_dir mp;
-    match file {
-        Option.some content => do {
-            let result : ParseResult (List Decl) := parse_all_decls content;
-            match result {
-                ParseResult.success rem decl_list =>
-                    if String.is_empty rem
-                    then do { return Option.some decl_list }
-                    else do {
-                        println (String.concat "parse error: " (String.concat (module_path_to_string mp) " did not fully parse (stopped before end of file) -- remaining text starts:"));
-                        println (String.slice rem 0 (if I64.gt (String.length rem) 300 then 300 else String.length rem));
-                        return Option.none
-                    },
-                ParseResult.fail _ => do { return Option.none }
-            }
-        },
-        Option.none => do {
-            return Option.none
+def load_module_decls_at (file_path : String) (mp : ModulePath) : IO (Option (List Decl)) {
+    let present : Bool <- file_exists (Path.path file_path);
+    if Bool.not present
+    then do { return Option.none }
+    else do {
+        let content : String <- IO.read_file (Path.path file_path);
+        let result : ParseResult (List Decl) := parse_all_decls content;
+        match result {
+            ParseResult.success rem decl_list =>
+                if String.is_empty rem
+                then do { return Option.some decl_list }
+                else do {
+                    println (String.concat "parse error: " (String.concat (module_path_to_string mp) " did not fully parse (stopped before end of file) -- remaining text starts:"));
+                    println (String.slice rem 0 (if I64.gt (String.length rem) 300 then 300 else String.length rem));
+                    return Option.none
+                },
+            ParseResult.fail _ => do { return Option.none }
         }
     }
 }
@@ -729,9 +939,22 @@ def collect_dep_module_infos (to_visit : List PendingModule) (visiting : List Mo
                             List.append (pending_from dep_base_dir dep_deps) tail;
                         collect_dep_module_infos new_to_visit new_visiting (List.cons info visited) loaded.cache verbose
                     },
-                    Option.none =>
-                        // Module not found, skip but continue with tail
+                    Option.none => do {
+                        // A dependency that does not resolve is not a
+                        // warning: its declarations are now MISSING from
+                        // the loaded set, so every name it defined
+                        // resurfaces much later as an unrelated `unknown
+                        // variable` in whatever file first used it. That
+                        // is exactly how the second-resolution defect in
+                        // `load_module_decls_at`'s own note hid for a
+                        // whole session -- the module trace showed the
+                        // same 74 modules as a clean run, because the
+                        // line above prints BEFORE the load that then
+                        // failed. Named here so the next one is one line
+                        // instead of a bisection.
+                        println (String.concat "unresolved module: " (String.concat (module_path_to_string_colon head) (String.concat " (from " (String.concat pending.base_dir ") -- its declarations are missing from this run"))));
                         collect_dep_module_infos tail new_visiting visited loaded.cache verbose
+                    }
                 }
             }
     }
@@ -2215,12 +2438,25 @@ def resolve_open_aliases_in_modules_go (known_names : List String) (root_aliases
 def resolve_lib_alias_decls (base_dir : String) (decls : List Decl) : IO (List Decl) := do {
     if has_lib_use decls
     then do {
-        let mote : Option MoteManifest <- Mote.discover base_dir;
-        match mote {
+        // The inline `#![mote { ... }]` first, exactly as `mote_of_module`
+        // orders it: a file that declares its own mote IS a mote, and `lib`
+        // must name it the same way it names one shipping a `mote.toml`.
+        // (`mote_attr_position` has not been validated yet at this point in
+        // the load, so a MISPLACED annotation is read here too -- it is
+        // then reported by `validate_mote_attr` on the same load, which is
+        // why reading it early cannot hide the error.)
+        match inline_mote_of_decls base_dir decls {
             Option.some m => return (rewrite_lib_uses m.name decls),
-            // Outside any mote (script mode): `lib` names nothing, and the
-            // use is left alone to fail as an ordinary missing module.
-            Option.none => return decls
+            Option.none => do {
+                let mote : Option MoteManifest <- Mote.discover base_dir;
+                match mote {
+                    Option.some m => return (rewrite_lib_uses m.name decls),
+                    // Outside any mote (script mode): `lib` names nothing,
+                    // and the use is left alone to fail as an ordinary
+                    // missing module.
+                    Option.none => return decls
+                }
+            }
         }
     }
     else return decls
@@ -2288,37 +2524,39 @@ def resolve_lib_alias_decls_opt (base_dir : String) (decls : Option (List Decl))
 #[partial]
 pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option ModuleInfo) {
     let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
-    let actual_base_dir : String :=
-        match resolved_path_opt {
-            Option.some fp => extract_directory fp,
-            Option.none => base_dir
-        };
-    let raw_decls : Option (List Decl) <- load_module_decls actual_base_dir mp;
-    let decl_list : Option (List Decl) <- resolve_lib_alias_decls_opt actual_base_dir raw_decls;
-    return match decl_list {
-        Option.some decl_list =>
-            let file_path : String :=
-                match resolved_path_opt {
-                    Option.some fp => fp,
-                    Option.none => String.concat (module_path_to_file mp) ".mo"
-                } in
-            // Bound with an explicit annotation rather than written
-            // inline as `Option.some { path := ..., ... }`: a bare
-            // struct literal passed straight as a constructor ARGUMENT
-            // has no concrete expected type at that point, and the
-            // checker does not reliably desugar it to a real
-            // constructor there (AGENTS.md's "known pitfall when
-            // applying rule 1"). Under the REFERENCE interpreter the
-            // inline form happens to work; through the SELF-HOSTED
-            // codegen it silently compiled to a value whose fields were
-            // read at the wrong offsets, so `file_path` came back as a
-            // small integer that `String.length` then dereferenced as a
-            // `char*` -- a SIGSEGV in `__strlen_avx2` on the very first
-            // module load, which is every `check`/`compile` this
-            // compiler runs on itself.
-            let info : ModuleInfo := { path := mp, file_path := file_path, decl_list := decl_list } in
-            Option.some info,
-        Option.none => Option.none
+    match resolved_path_opt {
+        Option.none => do { return Option.none },
+        Option.some file_path => do {
+            // The resolved path is what gets READ and what gets recorded --
+            // `load_module_decls_at`, not `load_module_decls`, the latter
+            // resolving a second time from this file's own directory and
+            // free to disagree with the first answer. See that function's
+            // own note for the `prelude`-inside-a-mote defect this caused.
+            let actual_base_dir : String := extract_directory file_path;
+            let raw_decls : Option (List Decl) <- load_module_decls_at file_path mp;
+            let decl_list : Option (List Decl) <- resolve_lib_alias_decls_opt actual_base_dir raw_decls;
+            match decl_list {
+                Option.some decl_list => do {
+                    // Bound with an explicit annotation rather than written
+                    // inline as `Option.some { path := ..., ... }`: a bare
+                    // struct literal passed straight as a constructor ARGUMENT
+                    // has no concrete expected type at that point, and the
+                    // checker does not reliably desugar it to a real
+                    // constructor there (AGENTS.md's "known pitfall when
+                    // applying rule 1"). Under the REFERENCE interpreter the
+                    // inline form happens to work; through the SELF-HOSTED
+                    // codegen it silently compiled to a value whose fields were
+                    // read at the wrong offsets, so `file_path` came back as a
+                    // small integer that `String.length` then dereferenced as a
+                    // `char*` -- a SIGSEGV in `__strlen_avx2` on the very first
+                    // module load, which is every `check`/`compile` this
+                    // compiler runs on itself.
+                    let info : ModuleInfo := { path := mp, file_path := file_path, decl_list := decl_list };
+                    return (Option.some info)
+                },
+                Option.none => do { return Option.none }
+            }
+        }
     }
 }
 
@@ -2345,6 +2583,23 @@ def is_ambient_mote (name : String) : Bool :=
     else if String.beq name "init" then true
     else String.beq name "std"
 
+/// Does a mote actually go by `name`? Both places one can live are probed,
+/// because both are real resolution paths: beside the working directory
+/// under its own name (`mote_relative_file`'s convention, which is how
+/// every top-level mote here resolves), and one level down under `motes/`
+/// (`motes_src_paths`' convention, which is how `use example::greet`
+/// reaches `motes/example/src/greet.mo`).
+///
+/// Missing the second is not cosmetic: it is exactly the case where a `use`
+/// on a `motes/*` mote would go UNREPORTED when its `deps := [...]` entry
+/// is deleted, because the head would look like a plain module name.
+#[partial]
+def is_mote_named (name : String) : IO Bool := do {
+    let direct <- file_exists (Path.path (String.concat name "/mote.toml"));
+    if direct then return true
+    else file_exists (Path.path (String.concat "motes/" (String.concat name "/mote.toml")))
+}
+
 #[partial]
 def validate_declared_deps (infos : List ModuleInfo) : IO (List String) :=
     match infos {
@@ -2356,14 +2611,111 @@ def validate_declared_deps (infos : List ModuleInfo) : IO (List String) :=
         }
     }
 
+// ─── The inline `#![mote { ... }]` annotation ────────────────────────
+//
+// A file outside any mote can declare its own inline instead of shipping a
+// `mote.toml`: `#![mote { name := "structs", deps := [init, std] }]`. That
+// is what takes `examples/` out of script mode -- before it, `Mote.discover`
+// returned `none` for a directory with no `mote.toml`, so an example file
+// validated nothing at all.
+
+/// Does this declaration carry the file-level mote attribute?
+def is_mote_attr_decl (d : Decl) : Bool :=
+    match d { Decl.mote_d _ => true, _ => false }
+
+/// The inline mote a module declares, if its FIRST declaration is a
+/// `#![mote { ... }]`. `none` otherwise -- including when the attribute is
+/// present but misplaced, which `validate_mote_attr_position` reports
+/// separately rather than letting a misplaced attribute half-work (deps
+/// enforced, position not).
+def inline_mote_of_decls (dir : String) (decl_list : List Decl) : Option MoteManifest :=
+    match decl_list {
+        List.empty => Option.none,
+        List.cons first _rest =>
+            match first {
+                Decl.mote_d attr => Mote.manifest_of_attr dir attr,
+                _ => Option.none
+            }
+    }
+
+/// The mote a module belongs to: an inline `#![mote { ... }]` attribute
+/// wins when present, otherwise the enclosing `mote.toml`.
+def mote_of_module (info : ModuleInfo) : IO (Option MoteManifest) := do {
+    match inline_mote_of_decls (extract_directory info.file_path) info.decl_list {
+        Option.some m => return (Option.some m),
+        Option.none => Mote.discover (extract_directory info.file_path)
+    }
+}
+
+/// The file-level `#![mote { ... }]` is valid ONLY as the first declaration
+/// of a file.
+///
+/// The PARSER deliberately accepts it anywhere (`lang/src/parser.mo`'s
+/// `mote_attr_parser`): `decls_try` silently truncates on a parse failure --
+/// every declaration from the failure to EOF is discarded with no diagnostic
+/// at all (`decls_try`'s own KNOWN GAP comment) -- so rejecting a misplaced
+/// attribute there would report far less than it broke. The diagnostic
+/// therefore belongs here, on the lowered decl list, where every surrounding
+/// declaration is still present.
+///
+/// At most one error, matching `gate_declared_deps`'s one-message
+/// convention: the first misplaced attribute is the one to fix.
+def validate_mote_attr_position (info : ModuleInfo) : List String :=
+    match info.decl_list {
+        List.empty => List.empty,
+        List.cons first rest =>
+            if is_mote_attr_decl first
+            then List.empty
+            else misplaced_mote_attr info.file_path rest
+    }
+
+def misplaced_mote_attr (file : String) (decl_list : List Decl) : List String :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            if is_mote_attr_decl d
+            then [misplaced_mote_attr_error file]
+            else misplaced_mote_attr file rest
+    }
+
+def misplaced_mote_attr_error (file : String) : String :=
+    String.concat "error: `#![mote { ... }]` must be the first declaration in " (String.concat file
+    (String.concat "\n  it is a FILE-level annotation, so any declaration above it puts it in the wrong place"
+    "\n  hint: move it to the very top of the file, above every declaration"))
+
+/// Keys of an `#![mote { ... }]` that no reader consumes. Only the FIRST
+/// declaration is inspected, matching `validate_mote_attr_position`: a
+/// misplaced attribute gets the position error, not a pile of key errors
+/// about an annotation that does not work at all.
+def validate_mote_attr_keys (info : ModuleInfo) : List String :=
+    match info.decl_list {
+        List.empty => List.empty,
+        List.cons first _rest =>
+            match first {
+                Decl.mote_d attr => Mote.mote_attr_unknown_keys attr,
+                _ => List.empty
+            }
+    }
+
+/// Both halves of the inline attribute's own validation, empty when the file
+/// has no inline attribute.
+def validate_mote_attr (info : ModuleInfo) : List String :=
+    List.append (validate_mote_attr_position info) (validate_mote_attr_keys info)
+
 #[partial]
 def validate_module_deps (info : ModuleInfo) : IO (List String) := do {
-    let mote : Option MoteManifest <- Mote.discover (extract_directory info.file_path);
-    match mote {
-        // Script mode -- a file outside any mote (examples/, a one-off).
-        // Nothing declared anything, so nothing is undeclared.
-        Option.none => return List.empty,
-        Option.some m => check_uses_declared m info (extract_use_decls info.decl_list)
+    match validate_mote_attr info {
+        List.cons e _ => return [e],
+        List.empty => do {
+            let mote : Option MoteManifest <- mote_of_module info;
+            match mote {
+                // Script mode -- a file outside any mote and with no inline
+                // annotation (a one-off). Nothing declared anything, so
+                // nothing is undeclared.
+                Option.none => return List.empty,
+                Option.some m => check_uses_declared m info (extract_use_decls info.decl_list)
+            }
+        }
     }
 }
 
@@ -2390,7 +2742,7 @@ def check_one_use_declared (m : MoteManifest) (info : ModuleInfo) (u : ModulePat
                 // Only complain about names that really are motes -- a
                 // head segment naming nothing is an ordinary
                 // module-not-found, reported where it happens.
-                let is_mote <- IO.file_exists (Path.path (String.concat head "/mote.toml"));
+                let is_mote <- is_mote_named head;
                 if is_mote
                 then return [undeclared_mote_error m info u head]
                 else return List.empty
@@ -2475,7 +2827,10 @@ def link_libs_of_modules (infos : List ModuleInfo) : IO (List String) :=
 
 #[partial]
 def link_libs_of_module (info : ModuleInfo) : IO (List String) := do {
-    let mote : Option MoteManifest <- Mote.discover (extract_directory info.file_path);
+    // `mote_of_module`, not `Mote.discover`: an inline `#![mote { libs :=
+    // [...] }]` declares the same `[link] libs` a manifest does, so a file
+    // with no `mote.toml` must still reach the linker's flags through it.
+    let mote : Option MoteManifest <- mote_of_module info;
     match mote {
         Option.none => return List.empty,
         Option.some m => return m.link_libs
@@ -3741,19 +4096,308 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
 /// actually testing.
 #[test]
 def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := do {
-    // Annotated bind -- `em.scope`/`em.target_decls` below desugar to
-    // `{ .. }` field patterns, which need the matched value's own type.
-    let result : Result String ElaboratedModules <- elaborate_loaded_modules "std/src/test.mo" false false;
-    match result {
-        Result.err _ => return false,
-        Result.ok em => do {
-            let locals : LocalScope := { vars := List.empty, parent := Option.none };
-            let diags : List String <- check_module_with_scope em.scope em.target_decls locals Option.none false;
-            return (match diags {
-                List.empty => true,
-                List.cons _ _ => false,
-            })
-        },
+    // RESOLVED, not spelled out. `std/src/test.mo` is a CWD-relative
+    // literal, so it named a file only from the checkout root and this test
+    // failed when the file was tested from inside `lang/`. Going through the
+    // resolver keeps the point -- a file with no `use` declarations of its
+    // own still needs the modules its SIBLINGS provide -- and holds wherever
+    // the working directory is.
+    let resolved <- resolve_module_file "" std_test_module_path;
+    match resolved {
+        Option.none => return false,
+        Option.some test_file => do {
+            // Annotated bind -- `em.scope`/`em.target_decls` below desugar to
+            // `{ .. }` field patterns, which need the matched value's own type.
+            let result : Result String ElaboratedModules <- elaborate_loaded_modules test_file false false;
+            match result {
+                Result.err _ => return false,
+                Result.ok em => do {
+                    let locals : LocalScope := { vars := List.empty, parent := Option.none };
+                    let diags : List String <- check_module_with_scope em.scope em.target_decls locals Option.none false;
+                    return (match diags {
+                        List.empty => true,
+                        List.cons _ _ => false,
+                    })
+                },
+            }
+        }
     }
 }
+
+// ─── Mote-root resolution ───────────────────────────────────────────
+//
+// Two defects made `monad check`/`monad test` from INSIDE a mote report a
+// wall of "unknown variable" while the same file checked clean from the
+// checkout root. Both are pinned here by their pure halves; the whole-mote
+// case itself needs the CWD to change, which `std/src/io.mo` has no
+// `set_current_dir` for, so it is verified by hand (see the Phase 9 notes).
+
+/// A `mote.toml` body in this repo's own shape and spelling
+/// (sub-table headers, not inline tables -- `lang/src/toml.mo` reads the
+/// former).
+def lang_manifest_fixture : String :=
+  "[mote]\nname = \"lang\"\nversion = \"0.1.0\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n\n[dependencies.llvm]\npath = \"../llvm\"\n"
+
+/// One candidate, checked as a single-element list -- every
+/// `mote_dep_files` case below yields exactly one.
+def sole_candidate_is (xs : List String) (expected : String) : Bool :=
+    match xs {
+        List.cons x rest =>
+            match rest {
+                List.empty => String.beq x expected,
+                List.cons _ _ => false,
+            },
+        List.empty => false,
+    }
+
+/// The `dir = ""` case -- a mote whose `mote.toml` IS the working
+/// directory, which is every mote `Mote.discover` finds by walking up from
+/// a relative path. `String.concat m.dir "/src"` gives `/src` here: an
+/// ABSOLUTE path, so `mote_path_within` answers `use lang::x` with
+/// `/src/x.mo` and misses every time. `raw_path_join`'s empty-component
+/// rule is the fix, and it is the same rule the dependency paths already
+/// follow (`test_manifest_reads_dependency_paths`, `Mote`'s own tests).
+#[test]
+def test_src_root_of_a_mote_at_the_working_directory : Bool :=
+    match Mote.parse_manifest "" lang_manifest_fixture {
+        Option.none => false,
+        Option.some m => String.beq (MoteManifest.src_root m) "src"
+    }
+
+/// The named-directory case, which must not regress while fixing the above.
+#[test]
+def test_src_root_of_a_named_mote_dir : Bool :=
+    match Mote.parse_manifest "lang" lang_manifest_fixture {
+        Option.none => false,
+        Option.some m => String.beq (MoteManifest.src_root m) "lang/src"
+    }
+
+/// `prelude` is the one module whose NAME is not its FILE name, and it
+/// belongs to `init` -- which no mote declares as a dependency called
+/// `prelude`. Without the special case, `dep_dir_of m "prelude"` is `none`
+/// and the prelude is unreachable through the manifest at all, so a mote
+/// loaded from inside its own directory never gets its prelude.
+#[test]
+def test_mote_dep_files_reaches_prelude_through_init : Bool :=
+    match Mote.parse_manifest "" lang_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            sole_candidate_is (mote_dep_files m prelude_module_path) "../init/src/prelude.mo"
+    }
+
+/// A one-segment path means "that mote's own library root", the same rule
+/// `mote_path_within` applies to the mote's own name.
+#[test]
+def test_mote_dep_files_bare_name_is_that_motes_lib : Bool :=
+    match Mote.parse_manifest "" lang_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            sole_candidate_is (mote_dep_files m init_module_path) "../init/src/lib.mo"
+            && sole_candidate_is (mote_dep_files m std_module_path) "../std/src/lib.mo"
+    }
+
+/// A qualified path names a file inside the dependency's `src/`.
+#[test]
+def test_mote_dep_files_qualified_path_names_the_dep_file : Bool :=
+    match Mote.parse_manifest "" lang_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            sole_candidate_is
+                (mote_dep_files m (ModulePath.mp [Identifier.id "std", Identifier.id "list"]))
+                "../std/src/list.mo"
+            && sole_candidate_is
+                (mote_dep_files m (ModulePath.mp [Identifier.id "llvm", Identifier.id "ir"]))
+                "../llvm/src/ir.mo"
+    }
+
+/// An undeclared mote contributes NOTHING, so the cascade's own answer
+/// stands and the failure is the ordinary "module not found" rather than a
+/// bogus manifest path.
+#[test]
+def test_mote_dep_files_is_empty_for_an_undeclared_mote : Bool :=
+    match Mote.parse_manifest "" lang_manifest_fixture {
+        Option.none => false,
+        Option.some m => List.is_empty (mote_dep_files m (ModulePath.mp [Identifier.id "jsonschema", Identifier.id "schema"]))
+    }
+
+/// The prelude/init/std half: a CWD-relative candidate that MISSES must
+/// fall through to the manifest rather than returning `none`.
+///
+/// This used to be three early returns of `first_existing [<cwd-relative
+/// literal>]`, which never consulted `resolve_via_manifest` at all -- which
+/// is why `monad check src/main.mo` from inside `cli/` reported a wall of
+/// "unknown variable '++'" instead of loading its own prelude.
+///
+/// The candidate is deliberately bogus so the miss is forced; the manifest
+/// half then reads the real `lang/mote.toml` and answers with the real
+/// `init` path.
+///
+/// The answer is asserted to NAME `init`'s prelude and to be a file that
+/// exists -- deliberately not to be one fixed string, because which string
+/// it is is genuinely CWD-relative. From the checkout root the manifest's
+/// join is `lang/../init/src/prelude.mo`, and `normalize_path` cancels the
+/// `lang` segment, leaving `init/src/prelude.mo`: the very spelling the
+/// cascade's own candidate for the prelude uses, so the two agree and
+/// `dedup_modules_by_file` sees one file rather than two. From inside a
+/// mote the dependency path is relative to that mote, so its leading `..`
+/// survives (`../init/src/prelude.mo`). Pinning either spelling makes this
+/// test pass in one working directory and fail in the other -- and it did
+/// both, in that order. The property that has to hold everywhere is one
+/// NORMALIZED spelling per file, and that is pinned by `normalize_path`'s
+/// own tests below rather than by pinning a CWD's spelling here.
+#[test]
+def test_resolve_ambient_file_falls_through_to_the_manifest : IO Bool := do {
+    let r <- resolve_ambient_file "lang/src" prelude_module_path "init/src/__no_such_module__.mo";
+    match r {
+        Option.none => return false,
+        Option.some p => do {
+            let exists <- file_exists (Path.path p);
+            if exists then return (String.ends_with p "init/src/prelude.mo") else return false
+        }
+    }
+}
+
+/// ...and the fall-through must not invent an answer where there is none:
+/// a miss below a path that is no mote stops the walk-up
+/// (`Mote.discover_go` at `/`), so resolution reports the miss it had.
+///
+/// The directory is ABSOLUTE, and that is load-bearing rather than
+/// cosmetic. `parent_of` reads the empty parent of a name with no separator
+/// as the WORKING DIRECTORY, so a relative `__no_such_mote_dir__` walks up
+/// into whatever mote the test is being run from and finds one: run from
+/// inside `lang/`, this test answered with a path and failed for that
+/// reason alone. An absolute path outside every mote walks to `/` and
+/// stops, from any working directory.
+#[test]
+def test_resolve_ambient_file_miss_outside_any_mote_stays_a_miss : IO Bool := do {
+    let r <- resolve_ambient_file "/__no_such_mote_dir__" prelude_module_path "init/src/__no_such_module__.mo";
+    match r {
+        Option.none => return true,
+        Option.some _ => return false
+    }
+}
+
+/// `init`'s own manifest, in its real shape: `std` as a DEV-dependency
+/// and, being the pure core, nothing else -- least of all itself.
+def init_self_manifest_fixture : String :=
+  "[mote]\nname = \"init\"\nversion = \"0.1.0\"\n\n[dev-dependencies.std]\npath = \"../std\"\n"
+
+/// The self-reference arm of `dep_dir_of`, and why it is load-bearing
+/// rather than a convenience: `prelude` belongs to `init`
+/// (`mote_dep_files` routes it there, since `prelude` is the one module
+/// whose NAME is not its FILE name) and `init` is exactly the mote that
+/// cannot declare itself as a dependency. Without it the prelude of the
+/// mote `init` is unreachable from inside `init/` -- `dep_dir_of` is
+/// `none`, `mote_dep_files` is empty, `prelude` never loads, and every
+/// check reports its names as `unknown variable`.
+///
+/// The candidate is `src/prelude.mo`, for the mote whose `mote.toml` sits
+/// at the working directory (`dir` is `""`), which is the `raw_path_join`
+/// empty rule the rest of this section is already pinned on.
+#[test]
+def test_mote_dep_files_prelude_within_init_itself : Bool :=
+    match Mote.parse_manifest "" init_self_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            sole_candidate_is (mote_dep_files m prelude_module_path) "src/prelude.mo"
+    }
+
+/// The same arm reached by the mote's own NAME rather than through the
+/// `prelude` re-spelling: a bare `<mote>` means that mote's `src/lib.mo`,
+/// so from inside `init/` its own lib root resolves to `src/lib.mo`.
+#[test]
+def test_mote_dep_files_own_name_within_itself : Bool :=
+    match Mote.parse_manifest "" init_self_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            sole_candidate_is (mote_dep_files m init_module_path) "src/lib.mo"
+    }
+
+/// The loader is PATH-driven: hand it a file its module path could never
+/// resolve to, and it still reads THAT file. This is the invariant
+/// `load_module_with_info` relies on to resolve exactly once -- it records
+/// the resolved path and then reads exactly that, where the old shape
+/// handed the loader the resolved path's DIRECTORY and let it resolve a
+/// second time, free to disagree with the first answer (see
+/// `load_module_decls_at`'s own note for the `prelude`-inside-a-mote
+/// defect that cost).
+#[test]
+def test_load_module_decls_at_reads_the_path_it_is_given : IO Bool := do {
+    // Resolved rather than spelled out, for the plain reason that
+    // `init/src/prelude.mo` is the CWD-relative spelling and so names a
+    // file only from the checkout root. Resolving it first keeps the point
+    // -- the LOADER is path-driven -- and holds from inside a mote too.
+    let resolved <- resolve_module_file "" prelude_module_path;
+    match resolved {
+        Option.none => return false,
+        Option.some p => do {
+            let decls <- load_module_decls_at p (ModulePath.mp [Identifier.id "definitely_not_prelude"]);
+            match decls {
+                Option.none => return false,
+                Option.some ds => return (I64.gt (List.length ds) 0)
+            }
+        }
+    }
+}
+
+/// ...and the resolver-driven entry point still reads the prelude through
+/// the ordinary cascade from the worktree root, so the split above did not
+/// change the path everything already takes.
+#[test]
+def test_load_module_decls_still_resolves_then_reads : IO Bool := do {
+    let decls <- load_module_decls "" prelude_module_path;
+    match decls {
+        Option.none => return false,
+        Option.some ds => return (I64.gt (List.length ds) 0)
+    }
+}
+
+/// `normalize_path`'s whole job: the two spellings of one file that
+/// `dedup_modules_by_file` has to recognize as the same file. The first is
+/// what `resolve_via_manifest` builds from inside a mote (`../lang` +
+/// `../init` + `src/number.mo`), the second what the cascade answers from
+/// the checkout root -- and they must not differ, because the dedup
+/// compares them as strings.
+#[test]
+def test_normalize_path_collapses_the_manifest_join_to_the_cascade_spelling : Bool :=
+    String.beq (normalize_path "../lang/../init/src/number.mo") "../init/src/number.mo"
+
+/// The equality the qualification pass actually depends on, stated the way
+/// it uses it rather than against a literal.
+#[test]
+def test_normalize_path_makes_both_spellings_of_one_file_agree : Bool :=
+    String.beq (normalize_path "../lang/../init/src/number.mo")
+               (normalize_path "../init/src/number.mo")
+
+#[test]
+def test_normalize_path_drops_a_leading_dot_segment : Bool :=
+    String.beq (normalize_path "./src/main.mo") "src/main.mo"
+
+#[test]
+def test_normalize_path_collapses_repeated_separators : Bool :=
+    String.beq (normalize_path "src//tests///main.mo") "src/tests/main.mo"
+
+/// A leading `..` has nothing to cancel and must survive -- normalizing
+/// `../init/src` to `init/src` would stop naming the file that was found.
+#[test]
+def test_normalize_path_keeps_a_leading_parent : Bool :=
+    String.beq (normalize_path "../init/src") "../init/src"
+
+#[test]
+def test_normalize_path_keeps_every_leading_parent : Bool :=
+    String.beq (normalize_path "../../std/src/list.mo") "../../std/src/list.mo"
+
+/// `..` past the root of a relative path still cancels what precedes it,
+/// and leaves the surplus: `a/../../b` is `../b`, not `b`.
+#[test]
+def test_normalize_path_keeps_a_parent_that_overshoots : Bool :=
+    String.beq (normalize_path "a/../../b.mo") "../b.mo"
+
+#[test]
+def test_normalize_path_keeps_an_absolute_root : Bool :=
+    String.beq (normalize_path "/a/../b.mo") "/b.mo"
+
+#[test]
+def test_normalize_path_is_idempotent : Bool :=
+    String.beq (normalize_path (normalize_path "../lang/../init/src/number.mo")) "../init/src/number.mo"
 

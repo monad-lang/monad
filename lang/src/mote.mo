@@ -12,6 +12,7 @@
 /// serialize/deserialize class machinery.
 
 use lib::toml {}
+use lib::types {AttrArg, Attribute, show_identifier}
 use std::io {file_exists, read_file}
 use std::map {}
 use io {IO}
@@ -26,17 +27,88 @@ pub struct MoteManifest {
     name : String,
     dir : String,
     deps : List String,
+    /// Where each declared dependency LIVES: `(name, dir)` pairs, `dir`
+    /// being the `path` from `[dependencies.<name>]`/`[dev-dependencies].
+    /// <name>]` joined onto this mote's own `dir`, so it is usable as a
+    /// path exactly as stored. A dependency whose manifest declares no
+    /// `path` gets `""`, which resolution reads as "declared, but not
+    /// located" -- the name still satisfies `declares` (so a `use` on it
+    /// is legal), it just has no directory to resolve into.
+    ///
+    /// Without this, a dependency resolved purely by the NAME convention
+    /// (`mote_relative_file`: the mote's directory is its name, at the
+    /// working directory), which is only true from a checkout root. This
+    /// is what `resolve_module_file` consults on its miss path, and it is
+    /// what makes resolution key off the mote root rather than the CWD.
+    dep_dirs : List (Pair String String),
     /// C libraries this mote links against, from `[link] libs = [...]`.
     /// A LINK-time property of the package, not of any one declaration:
     /// which C functions a module calls is `#[extern "c"]`'s business,
     /// but what the linker is handed is the mote's, the same way Cargo
     /// keeps `-l` flags out of `extern "C"` blocks.
     link_libs : List String,
+    /// The `[bin]` target's declared source, from `[bin] path = "..."`,
+    /// joined onto `dir` the same way `dep_dirs` entries are -- what
+    /// `monad compile <mote dir>` builds. `none` for a mote with no binary
+    /// target (`lang`, `llvm`, `runtime`) or a manifest with no `[bin]`
+    /// table at all.
+    bin_path : Option String,
+    /// The `[bin]` target's output name, from `[bin] name = "..."`.
+    /// `none` when the manifest declares a `[bin] path` without a name;
+    /// the caller then falls back to the source file's own stem.
+    bin_name : Option String,
 }
 
 /// The mote's source root -- `<dir>/src`, always.
+///
+/// `raw_path_join`, not `++`, and the difference is load-bearing exactly
+/// when the mote's `dir` is `""` -- the mote whose `mote.toml` sits in the
+/// WORKING DIRECTORY, which is every mote found by walking up from a
+/// relative path (`Mote.discover`'s own `dir = ""` case). Concatenating
+/// gives `/src`, an ABSOLUTE path, so `mote_path_within` would answer
+/// `use <mote>::x` with `/src/x.mo` and miss every time. Same empty-
+/// component rule the dependency paths already follow
+/// (`test_manifest_reads_dependency_paths`).
 def MoteManifest.src_root (m : MoteManifest) : String :=
-    String.concat m.dir "/src"
+    raw_path_join m.dir "src"
+
+/// The directory a declared dependency lives in, or `none` when the mote
+/// does not declare `name` or its entry carries no `path`. A dependency
+/// with no path is DECLARED but not LOCATED, which is not an error here:
+/// the name-convention cascade above is still allowed to find it.
+///
+/// A mote's OWN name answers with its own `dir`, the same "a mote may
+/// always refer to itself" rule `MoteManifest.declares` already states --
+/// and here it is load-bearing rather than a convenience: `prelude`
+/// belongs to `init` (`mote_dep_files` routes it there, since `prelude` is
+/// the one module whose NAME is not its FILE name), and `init` is exactly
+/// the mote that cannot declare itself as a dependency. Without this arm
+/// the prelude of the mote `init` is unreachable from inside `init/`
+/// itself, which is why `monad check src/list.mo` from `init/` reported
+/// `unknown variable '==' in List.get`.
+///
+/// `Option.some ""` is a REAL answer here, unlike `dep_dir_in`'s: `dir` is
+/// `""` for the mote whose `mote.toml` sits in the working directory, and
+/// that is precisely the case this arm exists for.
+def MoteManifest.dep_dir_of (m : MoteManifest) (name : String) : Option String :=
+    if String.beq m.name name
+    then Option.some m.dir
+    else dep_dir_in m.dep_dirs name
+
+def dep_dir_in (entries : List (Pair String String)) (name : String) : Option String :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest =>
+            // A bare `Pair.pair` pattern, not `mk`: this file imports no
+            // `mk` from `lib::types`, so the unqualified constructor name
+            // would not resolve.
+            match e {
+                Pair.pair k v =>
+                    if String.beq k name
+                    then (if String.is_empty v then Option.none else Option.some v)
+                    else dep_dir_in rest name
+            }
+    }
 
 /// Does this mote declare `name` as a dependency (or is `name` the mote
 /// itself)? A mote may always refer to itself.
@@ -241,9 +313,74 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
             let deps := List.append
                 (Mote.table_keys (Toml.table_get "dependencies" root))
                 (Mote.table_keys (Toml.table_get "dev-dependencies" root)) in
+            let dep_dirs := List.append
+                (Mote.table_dep_dirs dir (Toml.table_get "dependencies" root))
+                (Mote.table_dep_dirs dir (Toml.table_get "dev-dependencies" root)) in
             let libs := Mote.table_string_array (Toml.table_get "link" root) "libs" in
-            let m : MoteManifest := { name := name, dir := dir, deps := deps, link_libs := libs } in
+            let bin := Toml.table_get "bin" root in
+            let bin_path := Mote.bin_target_path dir bin in
+            let bin_name := Mote.table_string bin "name" in
+            let m : MoteManifest := {
+                name := name,
+                dir := dir,
+                deps := deps,
+                dep_dirs := dep_dirs,
+                link_libs := libs,
+                bin_path := bin_path,
+                bin_name := bin_name,
+            } in
             Option.some m
+    }
+
+/// `[dependencies]`/`[dev-dependencies]` as `(name, dir)` pairs: the
+/// KEY is the mote name (exactly as `table_keys` reads it), and the
+/// value is that entry's own `path`, joined onto `mote_dir`.
+///
+/// Written with sub-table headers (`[dependencies.std] path = "../std"`),
+/// not inline tables (`std = { path = "../std" }`) -- `lang/src/toml.mo`
+/// supports the former and not the latter, which is the spelling every
+/// manifest in this repo already uses (`mote.toml`'s own header says so).
+///
+/// `raw_path_join`, not `++`: an empty `mote_dir` (the working directory
+/// IS the mote root) must join to the bare `path` and not to `/path`, and
+/// that empty-component rule lives in exactly one place. (`raw_path_join`
+/// itself is used bare, un-imported, exactly as `lang/module.mo`'s own
+/// `path_join` and `cli/src/main.mo`'s walk already do -- an explicit
+/// `use std::path {...}` for it is what makes the checker warn that a
+/// package-private name is crossing a mote boundary.)
+def Mote.table_dep_dirs (mote_dir : String) (found : Option Toml.Value) : List (Pair String String) :=
+    match found {
+        Option.none => List.empty,
+        Option.some v => match v {
+            Toml.Value.table sub => dep_dir_entries mote_dir sub,
+            _ => List.empty
+        }
+    }
+
+def dep_dir_entries (mote_dir : String) (sub : BTreeMap String Toml.Value) : List (Pair String String) :=
+    dep_dir_entries_go mote_dir (BTreeMap.to_list sub)
+
+/// `[bin] path`, joined onto the mote's own directory so the value is a
+/// path usable exactly as stored (see `MoteManifest.bin_path`).
+def Mote.bin_target_path (dir : String) (bin : Option Toml.Value) : Option String :=
+    match Mote.table_string bin "path" {
+        Option.none => Option.none,
+        Option.some p => Option.some (raw_path_join dir p)
+    }
+
+def dep_dir_entries_go (mote_dir : String) (entries : List (Pair String Toml.Value)) : List (Pair String String) :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest =>
+            match e {
+                Pair.pair k v =>
+                    let path := match Mote.table_string (Option.some v) "path" {
+                        Option.none => "",
+                        Option.some p => p
+                    } in
+                    List.cons (Pair.pair k (raw_path_join mote_dir path))
+                        (dep_dir_entries_go mote_dir rest)
+            }
     }
 
 /// A string-array field of a sub-table (`[link] libs = ["m", "pthread"]`),
@@ -310,6 +447,181 @@ def Mote.table_keys (found : Option Toml.Value) : List String :=
 
 def Pair.first (p : Pair String Toml.Value) : String :=
     match p { Pair.pair k _ => k }
+
+// ─── The inline `#![mote { ... }]` annotation ────────────────────────
+//
+// A file outside any mote can declare its own inline instead of shipping a
+// `mote.toml`. The spelling mirrors the manifest's own fields so a reader
+// who knows one knows the other:
+//
+//     #![mote { name := "structs", deps := [init, std], libs := [m] }]
+//
+// Only `name`, `deps` and `libs` are accepted, and an unknown key is a
+// DIAGNOSTIC rather than a silent drop (`mote_attr_unknown_keys`): the
+// whole point of moving `examples/` off the resolution cascade is that the
+// annotation is load-bearing, and a key no reader consumes would look
+// load-bearing while doing nothing.
+
+/// Flatten an attribute's arg list into a plain list of entries.
+///
+/// This is the load-bearing part of reading the attribute at all, because
+/// the two parsers spell a `{ ... }` block differently and NEITHER spelling
+/// is wrong: `lang/src/parser.mo`'s `attr_arg_named_close` wraps the
+/// block's entries in ONE `AttrArg.group`, while `core/src/parser.rs`'s
+/// `attr_arg_parser` returns a `Vec` per call and so flattens the very same
+/// entries straight onto `attr.args`. A reader that assumed either shape
+/// would silently find nothing under the other compiler — the same class of
+/// divergence that let the A2/A3 registry causes go stale for two commits.
+def mote_attr_flatten (args : List AttrArg) : List AttrArg :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            match a {
+                AttrArg.group items => List.append items (mote_attr_flatten rest),
+                _ => List.cons a (mote_attr_flatten rest)
+            }
+    }
+
+/// The value bound to `key` in the annotation's `{ ... }` block, or `none`.
+def Mote.mote_attr_named (attr : Attribute) (key : String) : Option AttrArg :=
+    mote_attr_named_in (mote_attr_flatten attr.args) key
+
+def mote_attr_named_in (entries : List AttrArg) (key : String) : Option AttrArg :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                AttrArg.named name value =>
+                    if String.beq (show_identifier name) key
+                    then Option.some value
+                    else mote_attr_named_in rest key,
+                _ => mote_attr_named_in rest key
+            }
+    }
+
+/// One entry rendered as a plain string: `init` and `"init"` name the same
+/// mote, so both spellings are accepted. `none` for a number or a nested
+/// block, which name nothing.
+def attr_arg_as_string (a : AttrArg) : Option String :=
+    match a {
+        AttrArg.ident i => Option.some (show_identifier i),
+        AttrArg.str s => Option.some s,
+        AttrArg.num _ => Option.none,
+        AttrArg.named _ _ => Option.none,
+        AttrArg.group _ => Option.none
+    }
+
+/// A `[a, b]` / `[a]` / `a` entry rendered as a list of names.
+///
+/// The single-element case is not politeness: the two parsers disagree
+/// about it. `deps := [init, std]` is an `AttrArg.group` under both, but
+/// `deps := [init]` is a group of one self-hosted and a BARE
+/// `AttrArg.ident` under the Rust reference, whose `wrap_args` collapses a
+/// one-element vector. (`deps := []` is empty self-hosted and a parse error
+/// in Rust, whose block grammar is `many1`; no real annotation writes one,
+/// and "absent" and "empty" mean the same thing here either way.)
+def attr_arg_as_string_list (a : AttrArg) : List String :=
+    match a {
+        AttrArg.group items =>
+            let as_string : AttrArg -> Option String := fn item => attr_arg_as_string item in
+            List.filter_map as_string items,
+        _ => match attr_arg_as_string a {
+            Option.none => List.empty,
+            Option.some s => List.cons s List.empty
+        }
+    }
+
+/// The `deps`/`libs` list field of the annotation, empty when absent.
+def Mote.mote_attr_list (attr : Attribute) (key : String) : List String :=
+    match Mote.mote_attr_named attr key {
+        Option.none => List.empty,
+        Option.some v => attr_arg_as_string_list v
+    }
+
+/// The single string field of the annotation, if it is a string and not a
+/// number or a block.
+def Mote.mote_attr_string (attr : Attribute) (key : String) : Option String :=
+    match Mote.mote_attr_named attr key {
+        Option.none => Option.none,
+        Option.some v => attr_arg_as_string v
+    }
+
+/// Every key the annotation's block sets, in source order.
+def Mote.mote_attr_keys (attr : Attribute) : List String :=
+    mote_attr_keys_of (mote_attr_flatten attr.args) List.empty
+
+def mote_attr_keys_of (entries : List AttrArg) (acc : List String) : List String :=
+    match entries {
+        List.empty => List.reverse acc,
+        List.cons e rest =>
+            match e {
+                AttrArg.named name _ => mote_attr_keys_of rest (List.cons (show_identifier name) acc),
+                _ => mote_attr_keys_of rest acc
+            }
+    }
+
+/// The keys the inline annotation understands.
+def mote_attr_known_keys : List String :=
+    List.cons "name" (List.cons "deps" (List.cons "libs" List.empty))
+
+/// Keys the annotation sets that no reader consumes — one error per key,
+/// each naming the accepted set.
+def Mote.mote_attr_unknown_keys (attr : Attribute) : List String :=
+    mote_attr_unknown_keys_of (Mote.mote_attr_keys attr) List.empty
+
+def mote_attr_unknown_keys_of (keys : List String) (acc : List String) : List String :=
+    match keys {
+        List.empty => List.reverse acc,
+        List.cons k rest =>
+            if list_contains_string k mote_attr_known_keys
+            then mote_attr_unknown_keys_of rest acc
+            else mote_attr_unknown_keys_of rest (List.cons (unknown_mote_key_error k) acc)
+    }
+
+def unknown_mote_key_error (key : String) : String :=
+    String.concat "error: unknown `#![mote { ... }]` key `" (String.concat key
+    (String.concat "`\n  accepted keys: " (join_with_commas mote_attr_known_keys)))
+
+def join_with_commas (xs : List String) : String :=
+    match xs {
+        List.empty => "",
+        List.cons x rest => match rest {
+            List.empty => x,
+            List.cons _ _ => String.concat x (String.concat ", " (join_with_commas rest))
+        }
+    }
+
+/// The inline manifest an `#![mote { ... }]` declares, or `none` when it
+/// does not name itself — a nameless mote has no identity for `declares`
+/// to match a `use` head against, so it cannot be one.
+///
+/// `dir` is the FILE's own directory. An inline mote has no `src/` tree, so
+/// `MoteManifest.src_root` is `<dir>/src` and means nothing for it; its
+/// siblings resolve relative to the file itself, which is why
+/// `resolve_module_file` (lang/module.mo) must not route an inline mote
+/// through the manifest's `src_root`.
+def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifest :=
+    match Mote.mote_attr_string attr "name" {
+        Option.none => Option.none,
+        Option.some name =>
+            let m : MoteManifest := {
+                name := name,
+                dir := dir,
+                deps := Mote.mote_attr_list attr "deps",
+                // No `[dependencies.<name>] path` spelling exists in the
+                // inline form: an inline mote's siblings sit beside it, so
+                // the only directory it could name is the one it already
+                // is in, and `dep_dir_of`'s empty case is exactly that
+                // ("declared, resolved by convention").
+                dep_dirs := List.empty,
+                link_libs := Mote.mote_attr_list attr "libs",
+                // An inline mote declares no `[bin]`: the annotation's own
+                // file IS the binary, and `compile` already takes a file.
+                bin_path := Option.none,
+                bin_name := Option.none,
+            } in
+            Option.some m
+    }
 
 // ─── Tests ───
 
@@ -383,6 +695,114 @@ def test_dev_dependencies_count_as_declared : Bool :=
     match Mote.parse_manifest "init" init_manifest_fixture {
         Option.none => false,
         Option.some m => MoteManifest.declares m "std"
+    }
+
+/// A declared dependency's `path` is READ, not dropped: this is the whole
+/// difference between "the mote's directory is its name" (a convention
+/// that only holds at a checkout root) and "the manifest says where it
+/// is" (which holds anywhere).
+///
+/// Parsed with `dir = ""` on purpose: the joined form is then the
+/// manifest's own spelling, so the assertion says what the manifest says
+/// rather than re-deriving the join.
+#[test]
+def test_manifest_reads_dependency_paths : Bool :=
+    match Mote.parse_manifest "" mote_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            match MoteManifest.dep_dir_of m "init" {
+                Option.none => false,
+                Option.some p => String.beq p "../init"
+            }
+    }
+
+/// The join is onto the MOTE's directory, so the stored value is a path
+/// from the working directory, not from the mote. (`raw_path_join`'s
+/// empty-component rule is why the `dir = ""` case above is not `/../init`.)
+#[test]
+def test_dependency_path_is_joined_onto_the_mote_dir : Bool :=
+    match Mote.parse_manifest "lang" mote_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            match MoteManifest.dep_dir_of m "std" {
+                Option.none => false,
+                Option.some p => String.beq p "lang/../std"
+            }
+    }
+
+/// `[dependencies.foo]` with no `path` is DECLARED but not LOCATED. The
+/// two are deliberately different answers: `declares` still says yes (so
+/// a `use foo::x` is legal), while resolution has no directory to try and
+/// falls through to the name convention.
+def no_path_manifest_fixture : String :=
+  "[mote]\nname = \"here\"\nversion = \"0.1.0\"\n\n[dependencies.there]\nversion = \"0.1.0\"\n"
+
+#[test]
+def test_dependency_without_a_path_is_declared_but_not_located : Bool :=
+    match Mote.parse_manifest "" no_path_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            if MoteManifest.declares m "there"
+            then match MoteManifest.dep_dir_of m "there" {
+                Option.none => true,
+                Option.some _ => false
+            }
+            else false
+    }
+
+#[test]
+def test_manifest_without_dependencies_has_no_dep_dir : Bool :=
+    match Mote.parse_manifest "" init_manifest_fixture {
+        Option.none => false,
+        Option.some m => match MoteManifest.dep_dir_of m "llvm" {
+            Option.none => true,
+            Option.some _ => false
+        }
+    }
+
+/// The `[bin]` target, which is what `monad compile <mote dir>` builds.
+/// Same shape as `cli/mote.toml`.
+def bin_manifest_fixture : String :=
+  "[mote]\nname = \"cli\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[bin]\nname = \"monad\"\npath = \"src/main.mo\"\n"
+
+#[test]
+def test_manifest_reads_the_bin_target : Bool :=
+    match Mote.parse_manifest "" bin_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            match m.bin_path {
+                Option.none => false,
+                Option.some p =>
+                    if String.beq p "src/main.mo"
+                    then match m.bin_name {
+                        Option.none => false,
+                        Option.some n => String.beq n "monad"
+                    }
+                    else false
+            }
+    }
+
+#[test]
+def test_manifest_without_a_bin_table_has_no_bin_target : Bool :=
+    match Mote.parse_manifest "" mote_manifest_fixture {
+        Option.none => false,
+        Option.some m => match m.bin_path {
+            Option.none => true,
+            Option.some _ => false
+        }
+    }
+
+/// `[bin] path` is joined like a dependency path, so `compile` needs no
+/// join of its own.
+#[test]
+def test_bin_path_is_joined_onto_the_mote_dir : Bool :=
+    match Mote.parse_manifest "cli" bin_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            match m.bin_path {
+                Option.none => false,
+                Option.some p => String.beq p "cli/src/main.mo"
+            }
     }
 
 /// The walk-up must keep an absolute path absolute. `raw_parent_dir` of a
@@ -473,3 +893,135 @@ def test_member_path_leaves_root_relative_names_alone : Bool :=
 #[test]
 def test_strings_of_values_drops_non_strings : Bool :=
     two_strings_are (Mote.strings_of_values [Toml.Value.string "a", Toml.Value.integer 1, Toml.Value.string "b"]) "a" "b"
+
+// ─── The inline annotation, both parser shapes ───────────────────────
+//
+// These pin the one thing that can silently break: `lang/src/parser.mo`
+// and `core/src/parser.rs` produce DIFFERENT `Attribute.args` shapes for
+// the same source. A reader that handles one shape reports "no deps" under
+// the other compiler, which looks exactly like a file that declared
+// nothing -- so both shapes are built by hand here rather than only the one
+// this compiler's own parser happens to produce.
+
+def attr_named (key : String) (v : AttrArg) : AttrArg :=
+    AttrArg.named (Identifier.id key) v
+
+/// What `#![mote { name := "structs", deps := [init, std] }]` lowers to
+/// under `lang/src/parser.mo`: ONE `AttrArg.group` wrapping the entries.
+def attr_mote_self_hosted : Attribute :=
+    Attribute.mk (Identifier.id "mote")
+        [AttrArg.group [
+            attr_named "name" (AttrArg.str "structs"),
+            attr_named "deps" (AttrArg.group [
+                AttrArg.ident (Identifier.id "init"),
+                AttrArg.ident (Identifier.id "std")]),
+        ]]
+
+/// The same source under `core/src/parser.rs`: the entries FLATTENED onto
+/// `args` directly, because its `attr_arg_parser` returns a `Vec` per call.
+def attr_mote_rust : Attribute :=
+    Attribute.mk (Identifier.id "mote")
+        [attr_named "name" (AttrArg.str "structs"),
+         attr_named "deps" (AttrArg.group [
+            AttrArg.ident (Identifier.id "init"),
+            AttrArg.ident (Identifier.id "std")])]
+
+#[test]
+def test_manifest_of_attr_reads_both_parser_shapes : Bool :=
+    match Mote.manifest_of_attr "examples" attr_mote_self_hosted {
+        Option.none => false,
+        Option.some ma =>
+            match Mote.manifest_of_attr "examples" attr_mote_rust {
+                Option.none => false,
+                Option.some mb =>
+                    String.beq ma.name "structs" &&
+                    MoteManifest.declares ma "init" &&
+                    MoteManifest.declares ma "std" &&
+                    MoteManifest.declares mb "init" &&
+                    MoteManifest.declares mb "std" &&
+                    MoteManifest.declares mb "structs"
+            }
+    }
+
+/// The single-element case, where the two parsers diverge in SHAPE rather
+/// than only in nesting: self-hosted keeps `[init]` a group of one, and the
+/// Rust reference's `wrap_args` collapses it to a bare `ident`.
+def attr_one_dep_self_hosted : Attribute :=
+    Attribute.mk (Identifier.id "mote")
+        [AttrArg.group [
+            attr_named "name" (AttrArg.str "solo"),
+            attr_named "deps" (AttrArg.group [AttrArg.ident (Identifier.id "init")]),
+        ]]
+
+def attr_one_dep_rust : Attribute :=
+    Attribute.mk (Identifier.id "mote")
+        [attr_named "name" (AttrArg.str "solo"),
+         attr_named "deps" (AttrArg.ident (Identifier.id "init"))]
+
+#[test]
+def test_manifest_of_attr_reads_one_element_deps_both_shapes : Bool :=
+    match Mote.manifest_of_attr "examples" attr_one_dep_self_hosted {
+        Option.none => false,
+        Option.some a =>
+            match Mote.manifest_of_attr "examples" attr_one_dep_rust {
+                Option.none => false,
+                Option.some b =>
+                    MoteManifest.declares a "init" &&
+                    MoteManifest.declares b "init" &&
+                    not (MoteManifest.declares b "std")
+            }
+    }
+
+#[test]
+def test_mote_attr_quoted_names_are_accepted : Bool :=
+    // `deps := ["init"]` names the same mote as `deps := [init]` -- the
+    // attribute is a manifest, and a manifest's names are strings.
+    let a := Attribute.mk (Identifier.id "mote")
+        [attr_named "name" (AttrArg.str "solo"),
+         attr_named "deps" (AttrArg.str "init")] in
+    match Mote.manifest_of_attr "examples" a {
+        Option.none => false,
+        Option.some m => MoteManifest.declares m "init"
+    }
+
+#[test]
+def test_mote_attr_without_a_name_is_not_a_manifest : Bool :=
+    let a := Attribute.mk (Identifier.id "mote")
+        [attr_named "deps" (AttrArg.group [AttrArg.ident (Identifier.id "init")])] in
+    match Mote.manifest_of_attr "examples" a {
+        Option.none => true,
+        Option.some _ => false
+    }
+
+#[test]
+def test_mote_attr_known_keys_are_not_reported : Bool :=
+    match Mote.mote_attr_unknown_keys attr_mote_self_hosted {
+        List.empty => true,
+        List.cons _ _ => false
+    }
+
+/// An unsupported key is REPORTED, not dropped -- the whole reason the
+/// annotation exists is to be load-bearing. `bin` is the concrete case:
+/// the plan's own example writes `bin := true`, and nothing in this
+/// compiler consumes a `bin` flag yet, so accepting it silently would be
+/// exactly the "looks load-bearing, does nothing" failure this plan keeps
+/// finding in the gap registries.
+#[test]
+def test_mote_attr_unsupported_key_is_reported : Bool :=
+    let a := Attribute.mk (Identifier.id "mote")
+        [attr_named "name" (AttrArg.str "solo"),
+         attr_named "bin" (AttrArg.ident (Identifier.id "true"))] in
+    match Mote.mote_attr_unknown_keys a {
+        List.empty => false,
+        List.cons _ rest => match rest { List.empty => true, List.cons _ _ => false }
+    }
+
+#[test]
+def test_mote_attr_unknown_key_error_names_the_key : Bool :=
+    let a := Attribute.mk (Identifier.id "mote")
+        [attr_named "name" (AttrArg.str "solo"),
+         attr_named "bin" (AttrArg.ident (Identifier.id "true"))] in
+    match Mote.mote_attr_unknown_keys a {
+        List.empty => false,
+        List.cons e _ => String.beq e (unknown_mote_key_error "bin")
+    }

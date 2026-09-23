@@ -51,6 +51,8 @@
 ///
 /// Keep it compiling in BOTH modes: the oracle SKIPs a file that fails
 /// either way, and a skipped case proves nothing.
+#![mote { name := "located_terms", deps := [init, std] }]
+
 use io {IO}
 open IO {println}
 use std::list {sum}

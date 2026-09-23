@@ -1,3 +1,5 @@
+#![mote { name := "hello", deps := [init] }]
+
 use io {IO}
 open IO {println}
 

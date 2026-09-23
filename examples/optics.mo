@@ -2,6 +2,8 @@
 ///
 /// Demonstrates creating lenses for struct fields, using view/set/over,
 /// and prisms for working with sum types.
+#![mote { name := "optics", deps := [init] }]
+
 
 use init::optics {Lens, Prism, lens, mkPrism, over, over_prism, preview, set, view}
 open Prism {mkPrism}
