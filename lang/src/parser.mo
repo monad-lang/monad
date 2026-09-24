@@ -6144,7 +6144,7 @@ def lambda_kw (r: ParseResult String) : ParseResult ParseTerm :=
     }
 
 /// `fn (a:T) (b:T) => body` (explicit per-param types) vs. `fn a b c =>
-/// body` (bare names, `Term.type_ 1` placeholder types, the pre-existing
+/// body` (bare names, `Term.hole` placeholder types, the pre-existing
 /// path below) -- dispatched on whether the token right after
 /// `fn`/`\`/`ꟛ` is `(` (can only start a typed param group; a bare
 /// identifier never does). The self-hosted parser previously had NO
@@ -6209,7 +6209,7 @@ def lambda_typed_body (r : ParseResult ParseTerm) (params : List ParseParam) : P
         // `lam_params` (already defined below, used by `def`'s own body
         // parsing) builds the SAME outermost-first `Term.lam` nesting
         // `build_nested_lambdas` does for the untyped path, just with
-        // each param's REAL declared type instead of the `Term.type_ 1`
+        // each param's REAL declared type instead of the `Term.hole`
         // placeholder.
         success rem body => success rem (lam_params params body),
         fail e => fail e,

@@ -60,6 +60,24 @@ def char_rejected (src : String) : Bool :=
         ParseResult.success _ _ => Bool.false,
     }
 
+/// The `String` a parsed string literal holds, or `<rejected>` for another
+/// shape. The string-side twin of `char_value`, and what lets the fixed
+/// escapes below be checked through the decoder rather than against
+/// themselves.
+def string_value (src : String) : String :=
+    match string_parse src {
+        ParseResult.fail _ => "<rejected>",
+        ParseResult.success _ t =>
+            match t.kind {
+                ParseTermKind.lit l =>
+                    match l {
+                        ParseLiteral.str s => s,
+                        _ => "<not-a-str>",
+                    },
+                _ => "<not-a-lit>",
+            },
+    }
+
 /// The `Char` a parsed char literal holds, or `'?'` for another shape.
 def char_value (src : String) : String :=
     match char_literal src {
@@ -96,8 +114,20 @@ def test_unicode_escape_six_digits : Bool :=
 def test_unicode_escape_one_byte_max : Bool :=
     I64.beq (String.length "\u{7F}") 1
 
+/// The 2-byte range's own minimum is `0x80`, not `0xE9` -- this test
+/// asserted a mid-range value under a `_min` name, so the boundary its
+/// name claims went untested (`0x7F`/`0x7FF` above and below pin the two
+/// ranges on either side; this pins this one's).
 #[test]
 def test_unicode_escape_two_byte_min : Bool :=
+    Bool.and
+        (I64.beq (String.length "\u{80}") 2)
+        (I64.beq (String.length "\u{81}") 2)
+
+/// ... and a mid-range 2-byte codepoint BY VALUE, which a length cannot
+/// check: the decoded text has to be the character itself.
+#[test]
+def test_unicode_escape_two_byte_value : Bool :=
     String.beq "\u{00e9}" "é"
 
 #[test]
@@ -190,22 +220,30 @@ def test_line_continuation_before_a_unicode_escape : Bool :=
 \u{41}" "aA"
 
 // ─── The nine fixed escapes are untouched by the two new branches ───
+//
+// These four go through `string_parse` on a source built at runtime, the
+// same entry point the rejection cases below use. Comparing a written
+// literal with itself -- which is what this block used to do, `String.beq
+// "\"" "\""` being true whatever the decoder does, since both sides are
+// the one token -- asserts only that the file parses. Here the decoded
+// side is independent of the `nl`/`bs`/`tab` defs, so the assertion fails
+// if EITHER the escape decoder or the lexer mangles the escape.
 
 #[test]
 def test_fixed_escape_newline : Bool :=
-    String.beq "a\nb" "a\nb"
+    String.beq (string_value (lit_src (String.concat bs "n"))) nl
 
 #[test]
 def test_fixed_escape_backslash : Bool :=
-    String.beq "\\" bs
+    String.beq (string_value (lit_src (String.concat bs bs))) bs
 
 #[test]
 def test_fixed_escape_quote : Bool :=
-    String.beq "\"" "\""
+    String.beq (string_value (lit_src (String.concat bs "\""))) "\""
 
 #[test]
 def test_fixed_escape_tab : Bool :=
-    String.beq "\t" tab
+    String.beq (string_value (lit_src (String.concat bs "t"))) tab
 
 // ─── The boundary cases, which can only be written programmatically ──
 
@@ -261,6 +299,22 @@ def test_char_literal_unicode_escape : Bool :=
 #[test]
 def test_char_literal_unicode_escape_multibyte : Bool :=
     String.beq (char_value (char_src (String.concat bs "u{00e9}"))) "é"
+
+/// The char path's width ladder stops at two bytes above it; a three-byte
+/// codepoint has to survive the same way (the payload is the codepoint's
+/// UTF-8 bytes, so what is asserted is the text, not the length).
+#[test]
+def test_char_literal_unicode_escape_three_byte : Bool :=
+    String.beq (char_value (char_src (String.concat bs "u{4E00}"))) "一"
+
+/// This is the literal `pretty_tests.mo`'s
+/// `test_show_literal_char_multibyte` cross-references by name -- it builds
+/// its `Char` from a raw `λ` and says `'\u{03BB}'` decodes to the same one.
+/// Nothing in this file covered `\u{03BB}` until this test, so the
+/// cross-reference pointed at a case that did not exist.
+#[test]
+def test_char_literal_unicode_escape_lambda : Bool :=
+    String.beq (char_value (char_src (String.concat bs "u{03BB}"))) "λ"
 
 #[test]
 def test_char_literal_fixed_escape : Bool :=
