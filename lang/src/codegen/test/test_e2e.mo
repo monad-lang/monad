@@ -17,7 +17,7 @@ def test_e2e_simple_literal : Bool :=
     let id := Identifier.id "myfunc" in
     let def_ := Def.mk
         (NamePath.npath (List.cons id empty_ids))
-        (Term.type_ 1)
+        (sort_n 1)
         (Term.lit (Literal.num 42 NumSuffix.i64))
         empty_cons
         empty_attrs
@@ -30,10 +30,10 @@ def test_e2e_simple_literal : Bool :=
 def test_e2e_function_with_param : Bool :=
     let id := Identifier.id "add5" in
     let body := Term.lit (Literal.num 99 NumSuffix.i64) in
-    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
         (NamePath.npath (List.cons id empty_ids))
-        (Term.type_ 1)
+        (sort_n 1)
         term_
         empty_cons
         empty_attrs
@@ -61,7 +61,7 @@ def test_e2e_calling_convention : Bool :=
     let id := Identifier.id "f" in
     let def_ := Def.mk
         (NamePath.npath (List.cons id empty_ids))
-        (Term.type_ 1)
+        (sort_n 1)
         (Term.lit (Literal.num 1 NumSuffix.i64))
         empty_cons
         empty_attrs
@@ -82,7 +82,7 @@ def test_e2e_calling_convention : Bool :=
 def test_e2e_io_main_unwraps_before_return : Bool :=
     let main_id := Identifier.id "main" in
     let io_type_id := DebugName.named (Identifier.id "IO") in
-    let io_typ := Term.app (Term.var sentinel_idx io_type_id) (Term.type_ 1) in
+    let io_typ := Term.app (Term.var sentinel_idx io_type_id) (sort_n 1) in
     let def_ := Def.mk
         (NamePath.npath (List.cons main_id empty_ids))
         io_typ
@@ -109,7 +109,7 @@ def test_e2e_non_io_main_does_not_unwrap : Bool :=
     let main_id := Identifier.id "main" in
     let def_ := Def.mk
         (NamePath.npath (List.cons main_id empty_ids))
-        (Term.type_ 1)
+        (sort_n 1)
         (Term.lit (Literal.num 5 NumSuffix.i64))
         empty_cons
         empty_attrs

@@ -624,28 +624,28 @@ def test_show_lam_named : Bool :=
     let id := Identifier.id "x" in
     let dbg := DebugName.named id in
     let body := Term.var 0 dbg in
-    let t := Term.lam dbg (Term.type_ 1) body in
+    let t := Term.lam dbg (Term.sort (SortLevel.concrete 1)) body in
     show_term t == "(fn x : Type => x)"
 
 #[test]
 def test_show_forall_named : Bool :=
     let id := Identifier.id "A" in
     let dbg := DebugName.named id in
-    let body := Term.type_ 1 in
-    let t := Term.forall dbg (Term.type_ 1) body in
+    let body := Term.sort (SortLevel.concrete 1) in
+    let t := Term.forall dbg (Term.sort (SortLevel.concrete 1)) body in
     show_term t == "{A : Type} -> Type"
 
 #[test]
 def test_show_forall_unnamed : Bool :=
     let dbg := DebugName.unnamed in
-    let body := Term.type_ 1 in
-    let t := Term.forall dbg (Term.type_ 1) body in
+    let body := Term.sort (SortLevel.concrete 1) in
+    let t := Term.forall dbg (Term.sort (SortLevel.concrete 1)) body in
     show_term t == "{_ : Type} -> Type"
 
 #[test]
 def test_show_pi : Bool :=
-    let arg := Term.type_ 1 in
-    let ret := Term.type_ 1 in
+    let arg := Term.sort (SortLevel.concrete 1) in
+    let ret := Term.sort (SortLevel.concrete 1) in
     let t := Term.pi arg ret in
     show_term t == "(Type -> Type)"
 
@@ -696,19 +696,19 @@ def test_show_con_no_args : Bool :=
 
 #[test]
 def test_show_type_prop : Bool :=
-    show_term (Term.type_ 0) == "Prop"
+    show_term (Term.sort (SortLevel.concrete 0)) == "Prop"
 
 #[test]
 def test_show_type_type : Bool :=
-    show_term (Term.type_ 1) == "Type"
+    show_term (Term.sort (SortLevel.concrete 1)) == "Type"
 
 #[test]
 def test_show_type_type1 : Bool :=
-    show_term (Term.type_ 2) == "Type 1"
+    show_term (Term.sort (SortLevel.concrete 2)) == "Type 1"
 
 #[test]
 def test_show_type_type2 : Bool :=
-    show_term (Term.type_ 3) == "Type 2"
+    show_term (Term.sort (SortLevel.concrete 3)) == "Type 2"
 
 #[test]
 def test_show_hole : Bool :=
@@ -783,22 +783,22 @@ def test_show_multiplicity_affine : Bool :=
 #[test]
 def test_show_param_simple : Bool :=
     let id := Identifier.id "x" in
-    let typ := Term.type_ 1 in
+    let typ := Term.sort (SortLevel.concrete 1) in
     let p := Param.mk id typ Multiplicity.many Option.none List.empty in
     show_param p == "x : Type"
 
 #[test]
 def test_show_param_with_default : Bool :=
     let id := Identifier.id "x" in
-    let typ := Term.type_ 1 in
-    let dflt := Term.type_ 1 in
+    let typ := Term.sort (SortLevel.concrete 1) in
+    let dflt := Term.sort (SortLevel.concrete 1) in
     let p := Param.mk id typ Multiplicity.many (Option.some dflt) List.empty in
     show_param p == "x : Type := Type"
 
 #[test]
 def test_show_param_linear : Bool :=
     let id := Identifier.id "x" in
-    let typ := Term.type_ 1 in
+    let typ := Term.sort (SortLevel.concrete 1) in
     let p := Param.mk id typ Multiplicity.linear Option.none List.empty in
     show_param p == "!x : Type"
 
@@ -865,8 +865,8 @@ def test_show_decl_def : Bool :=
     let name := NamePath.npath (List.cons (Identifier.id "id") List.empty) in
     let path := Identifier.id "x" in
     let var_t := Term.var 0 (DebugName.named path) in
-    let lam := Term.lam (DebugName.named path) (Term.type_ 1) var_t in
-    let d := Def.mk name (Term.type_ 1) lam List.empty List.empty Visibility.package_private List.empty in
+    let lam := Term.lam (DebugName.named path) (Term.sort (SortLevel.concrete 1)) var_t in
+    let d := Def.mk name (Term.sort (SortLevel.concrete 1)) lam List.empty List.empty Visibility.package_private List.empty in
     let decl := Decl.def_d d in
     show_decl decl == "def id : Type := (fn x : Type => x)"
 
@@ -874,7 +874,7 @@ def test_show_decl_def : Bool :=
 def test_show_decl_class : Bool :=
     let name := Identifier.id "Show" in
     let show_name := Identifier.id "show" in
-    let cd := ClassDef.mk show_name (Term.type_ 1) Option.none in
+    let cd := ClassDef.mk show_name (Term.sort (SortLevel.concrete 1)) Option.none in
     let methods := List.cons cd List.empty in
     let cls := Class.mk name List.empty List.empty methods Visibility.package_private in
     let decl := Decl.class_d cls in
@@ -890,9 +890,9 @@ def test_show_decl_struct : Bool :=
 #[test]
 def test_show_decl_inductive : Bool :=
     let name := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
-    let ct1 := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "true") List.empty)) List.empty (Term.type_ 1) in
-    let ct2 := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "false") List.empty)) List.empty (Term.type_ 1) in
-    let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.type_ 1) (List.cons ct1 (List.cons ct2 List.empty)) List.empty Visibility.package_private) in
+    let ct1 := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "true") List.empty)) List.empty (Term.sort (SortLevel.concrete 1)) in
+    let ct2 := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "false") List.empty)) List.empty (Term.sort (SortLevel.concrete 1)) in
+    let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.sort (SortLevel.concrete 1)) (List.cons ct1 (List.cons ct2 List.empty)) List.empty Visibility.package_private) in
     show_decl decl == "type Bool {\n  true,\n  false\n}"
 
 /// Simple fixture decl reused by the `show_decls` tests below (a single
@@ -900,7 +900,7 @@ def test_show_decl_inductive : Bool :=
 #[partial]
 def simple_def_decl (name_str : String) : Decl :=
     let name := NamePath.npath (List.cons (Identifier.id name_str) List.empty) in
-    let d := Def.mk name (Term.type_ 1) (Term.type_ 1) List.empty List.empty Visibility.package_private List.empty in
+    let d := Def.mk name (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 1)) List.empty List.empty Visibility.package_private List.empty in
     Decl.def_d d
 
 #[test]

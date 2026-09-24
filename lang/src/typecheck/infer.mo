@@ -642,7 +642,7 @@ def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (loc
 
 /// Type check an if expression.
 def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-    let bool_typ : Term := Term.type_ 1 in
+    let bool_typ : Term := Term.sort (SortLevel.concrete 1) in
     match type_check one bool_typ scope local_types locals {
         ok cond_tt =>
             let cond_term : Term := cond_tt.term in
@@ -2043,7 +2043,7 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                     },
             },
         DebugName.unnamed =>
-            ok (mk_typed (Term.var sentinel dbg) (Term.type_ 1)),
+            ok (mk_typed (Term.var sentinel dbg) (Term.sort (SortLevel.concrete 1))),
     }
 
 /// Look up a bound variable by de Bruijn index.
@@ -3890,11 +3890,11 @@ def box_ctor_path : NamePath := NamePath.npath (List.cons (Identifier.id "Box") 
 
 def box_ctor_full_path : NamePath := NamePath.npath (List.cons (Identifier.id "Box") (List.cons (Identifier.id "box") List.empty))
 
-def box_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none List.empty
+def box_param : Param := Param.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
-def box_constructor : InductConstructor := InductConstructor.mk box_ctor_full_path (List.cons box_param List.empty) (Term.type_ 3)
+def box_constructor : InductConstructor := InductConstructor.mk box_ctor_full_path (List.cons box_param List.empty) (Term.sort (SortLevel.concrete 3))
 
-def box_inductive : Inductive := Inductive.mk box_ctor_path List.empty (Term.type_ 3) (List.cons box_constructor List.empty) List.empty Visibility.package_private
+def box_inductive : Inductive := Inductive.mk box_ctor_path List.empty (Term.sort (SortLevel.concrete 3)) (List.cons box_constructor List.empty) List.empty Visibility.package_private
 
 def box_scope : Scope := {
     module_id := box_module_path,
@@ -3904,7 +3904,7 @@ def box_scope : Scope := {
 
 #[test]
 def test_type_check_con_valid_arg_ok : Bool :=
-    let arg : Term := Term.type_ 1 in
+    let arg : Term := Term.sort (SortLevel.concrete 1) in
     let c : Con := Con.mk (Identifier.id "box") box_ctor_path 1 (List.cons (Option.some arg) List.empty) in
     match type_check_con c Term.hole box_scope empty_local_types empty_locals {
         ok _ => true,
@@ -3916,7 +3916,7 @@ def test_type_check_con_wrong_arg_type_rejected : Bool :=
     // `x`'s declared param type is `Term.type_ 2` — a sort at level 5
     // is NOT a valid inhabitant (`type_check_sort_full`'s own
     // `expected_level < level` branch), so this must be rejected.
-    let bad_arg : Term := Term.type_ 5 in
+    let bad_arg : Term := Term.sort (SortLevel.concrete 5) in
     let c : Con := Con.mk (Identifier.id "box") box_ctor_path 1 (List.cons (Option.some bad_arg) List.empty) in
     match type_check_con c Term.hole box_scope empty_local_types empty_locals {
         ok _ => false,
@@ -3927,7 +3927,7 @@ def test_type_check_con_wrong_arg_type_rejected : Bool :=
 def test_type_check_con_wrong_arity_rejected : Bool :=
     // `box` declares exactly 1 param — claiming 2 must be rejected
     // regardless of `args`' own content.
-    let arg : Term := Term.type_ 1 in
+    let arg : Term := Term.sort (SortLevel.concrete 1) in
     let c : Con := Con.mk (Identifier.id "box") box_ctor_path 2 (List.cons (Option.some arg) (List.cons (Option.some arg) List.empty)) in
     match type_check_con c Term.hole box_scope empty_local_types empty_locals {
         ok _ => false,
@@ -3936,7 +3936,7 @@ def test_type_check_con_wrong_arity_rejected : Bool :=
 
 #[test]
 def test_type_check_con_unknown_constructor_rejected : Bool :=
-    let arg : Term := Term.type_ 1 in
+    let arg : Term := Term.sort (SortLevel.concrete 1) in
     let c : Con := Con.mk (Identifier.id "no_such_ctor") box_ctor_path 1 (List.cons (Option.some arg) List.empty) in
     match type_check_con c Term.hole box_scope empty_local_types empty_locals {
         ok _ => false,
@@ -3960,7 +3960,7 @@ def test_type_check_con_unregistered_inductive_falls_back : Bool :=
     // still individually checks present args (a bad one is still
     // caught), just without field-type correlation.
     let unknown_typ : NamePath := NamePath.npath (List.cons (Identifier.id "NoSuchType") List.empty) in
-    let good_arg : Term := Term.type_ 1 in
+    let good_arg : Term := Term.sort (SortLevel.concrete 1) in
     let c_ok : Con := Con.mk (Identifier.id "whatever") unknown_typ 1 (List.cons (Option.some good_arg) List.empty) in
     match type_check_con c_ok Term.hole box_scope empty_local_types empty_locals {
         ok _ => true,
@@ -3981,9 +3981,9 @@ def point_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Poin
 
 def point_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
 
-def point_x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none List.empty
+def point_x_param : Param := Param.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
-def point_y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 2) Multiplicity.many Option.none List.empty
+def point_y_param : Param := Param.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
 def point_params : List Param := List.cons point_x_param (List.cons point_y_param List.empty)
 
@@ -4001,8 +4001,8 @@ def point_type_ref : Term := Term.var sentinel (DebugName.named (Identifier.id "
 
 #[test]
 def test_type_check_struct_lit_self_annotated_ok : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
-    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 (List.cons f2 List.empty) in
     let type_name : Option Term := Option.some point_type_ref in
     match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
@@ -4012,8 +4012,8 @@ def test_type_check_struct_lit_self_annotated_ok : Bool :=
 
 #[test]
 def test_type_check_struct_lit_from_expected_type_ok : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
-    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 (List.cons f2 List.empty) in
     let no_annotation : Option Term := Option.none in
     match type_check_struct_lit fields no_annotation point_type_ref point_scope empty_local_types empty_locals {
@@ -4023,7 +4023,7 @@ def test_type_check_struct_lit_from_expected_type_ok : Bool :=
 
 #[test]
 def test_type_check_struct_lit_no_annotation_no_expected_rejected : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     let no_annotation : Option Term := Option.none in
     match type_check_struct_lit fields no_annotation Term.hole point_scope empty_local_types empty_locals {
@@ -4036,7 +4036,7 @@ def test_type_check_struct_lit_wrong_field_type_rejected : Bool :=
     // `x`'s declared param type is `Term.type_ 2` -- a sort at level 5
     // is not a valid inhabitant, same reasoning as
     // `test_type_check_con_wrong_arg_type_rejected` above.
-    let bad_f : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 5) in
+    let bad_f : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 5)) in
     let fields : List StructLitField := List.cons bad_f List.empty in
     let type_name : Option Term := Option.some point_type_ref in
     match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
@@ -4051,7 +4051,7 @@ def test_type_check_struct_lit_missing_field_ok : Bool :=
     // (`check_struct_fields`, core_check.rs: only fields PRESENT in the
     // literal are checked, absence isn't itself an error at this
     // layer).
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     let type_name : Option Term := Option.some point_type_ref in
     match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
@@ -4074,9 +4074,9 @@ def test_type_check_struct_lit_extra_unknown_field_ignored : Bool :=
     // A literal field with no matching declared param is silently
     // ignored, same leniency as the reference's own `check_struct_fields`
     // (which only ever walks the struct's OWN declared fields).
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
-    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
-    let extra : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 1)) in
+    let extra : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 (List.cons f2 (List.cons extra List.empty)) in
     let type_name : Option Term := Option.some point_type_ref in
     match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
@@ -4111,7 +4111,7 @@ def solo_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Solo"
 
 def solo_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
 
-def solo_n_param : Param := Param.mk (Identifier.id "n") (Term.type_ 2) Multiplicity.many Option.none List.empty
+def solo_n_param : Param := Param.mk (Identifier.id "n") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
 def solo_constructor : InductConstructor := InductConstructor.mk solo_mk_path (List.cons solo_n_param List.empty) Term.hole
 
@@ -4129,8 +4129,8 @@ def solo_mk_var : Term := Term.var sentinel (DebugName.named (Identifier.id "mk"
 def test_type_check_named_call_multi_field_reordered : Bool :=
     // Fields given in the OPPOSITE order from `point_params`' own
     // declaration (y then x) -- order-independence is the whole point.
-    let fy : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
-    let fx : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fy : StructLitField := StructLitField.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 1)) in
+    let fx : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons fy (List.cons fx List.empty) in
     match type_check_named_call point_mk_var fields Term.hole point_scope empty_local_types empty_locals {
         ok result => match result {
@@ -4142,7 +4142,7 @@ def test_type_check_named_call_multi_field_reordered : Bool :=
 
 #[test]
 def test_type_check_named_call_single_field_constructor : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "n") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "n") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_named_call solo_mk_var fields Term.hole solo_scope empty_local_types empty_locals {
         ok result => match result {
@@ -4154,9 +4154,9 @@ def test_type_check_named_call_single_field_constructor : Bool :=
 
 #[test]
 def test_type_check_named_call_unknown_field_is_an_error : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
-    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
-    let bad : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 1)) in
+    let bad : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 (List.cons f2 (List.cons bad List.empty)) in
     match type_check_named_call point_mk_var fields Term.hole point_scope empty_local_types empty_locals {
         err _ => true,
@@ -4170,7 +4170,7 @@ def test_type_check_named_call_missing_field_is_an_error : Bool :=
     // struct_lit`'s own leniency (`test_type_check_struct_lit_missing_
     // field_ok`, above) -- a positive, deliberate strictness difference
     // (see `named_call_validate_fields`'s own doc comment), not a gap.
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_named_call point_mk_var fields Term.hole point_scope empty_local_types empty_locals {
         err _ => true,
@@ -4199,8 +4199,8 @@ def test_type_check_app_resolves_named_call_end_to_end : Bool :=
     // directly): `mk { y := .., x := .. }` parses as `App(Var(mk),
     // StructLit)` -- confirms the fallback actually wires up inside
     // `type_check_app` itself, not just as a standalone function.
-    let fy : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
-    let fx : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fy : StructLitField := StructLitField.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 1)) in
+    let fx : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons fy (List.cons fx List.empty) in
     let arg : Term := Term.lit (Literal.struct_lit fields Option.none) in
     match type_check_app point_mk_var arg Term.hole point_scope empty_local_types empty_locals {
@@ -4226,8 +4226,8 @@ def scale_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "s
 def scale_def_name : NamePath := NamePath.npath (List.cons (Identifier.id "scale") List.empty)
 
 def scale_def_body : Term :=
-    Term.lam (DebugName.named (Identifier.id "factor")) (Term.type_ 2)
-        (Term.lam (DebugName.named (Identifier.id "p")) (Term.type_ 2) (Term.type_ 1))
+    Term.lam (DebugName.named (Identifier.id "factor")) (Term.sort (SortLevel.concrete 2))
+        (Term.lam (DebugName.named (Identifier.id "p")) (Term.sort (SortLevel.concrete 2)) (Term.sort (SortLevel.concrete 1)))
 
 def scale_def : Def := {
     name := scale_def_name,
@@ -4251,8 +4251,8 @@ def scale_var : Term := Term.var sentinel (DebugName.named (Identifier.id "scale
 def test_type_check_named_call_def_target_reordered : Bool :=
     // Fields given in the OPPOSITE order from `scale_def_body`'s own
     // declaration (p then factor).
-    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
-    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.sort (SortLevel.concrete 1)) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons fp (List.cons ff List.empty) in
     match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
         ok result => match result {
@@ -4267,8 +4267,8 @@ def test_type_check_named_call_def_target_wrong_field_type_rejected : Bool :=
     // `factor`'s declared param type is `Term.type_ 2` -- a sort at level
     // 5 is not a valid inhabitant, same reasoning as the constructor-
     // target `wrong_arg_type`/`wrong_field_type` tests above.
-    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
-    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 5) in
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.sort (SortLevel.concrete 1)) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.sort (SortLevel.concrete 5)) in
     let fields : List StructLitField := List.cons fp (List.cons ff List.empty) in
     match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
         err _ => true,
@@ -4277,9 +4277,9 @@ def test_type_check_named_call_def_target_wrong_field_type_rejected : Bool :=
 
 #[test]
 def test_type_check_named_call_def_target_unknown_field_is_an_error : Bool :=
-    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
-    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
-    let bad : StructLitField := StructLitField.mk (Identifier.id "not_a_param") (Term.type_ 1) in
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.sort (SortLevel.concrete 1)) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.sort (SortLevel.concrete 1)) in
+    let bad : StructLitField := StructLitField.mk (Identifier.id "not_a_param") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons fp (List.cons ff (List.cons bad List.empty)) in
     match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
         err _ => true,
@@ -4290,7 +4290,7 @@ def test_type_check_named_call_def_target_unknown_field_is_an_error : Bool :=
 def test_type_check_named_call_def_target_missing_field_is_an_error : Bool :=
     // No default mechanism exists for ordinary `lang/` def params --
     // omitting `p` must always be an error.
-    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons ff List.empty in
     match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
         err _ => true,
@@ -4301,8 +4301,8 @@ def test_type_check_named_call_def_target_missing_field_is_an_error : Bool :=
 def test_type_check_app_resolves_def_target_named_call_end_to_end : Bool :=
     // Full `type_check_app` dispatch: `scale { p := .., factor := .. }`
     // parses as `App(Var(scale), StructLit)`.
-    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
-    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.sort (SortLevel.concrete 1)) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons fp (List.cons ff List.empty) in
     let arg : Term := Term.lit (Literal.struct_lit fields Option.none) in
     match type_check_app scale_var arg Term.hole scale_scope empty_local_types empty_locals {
@@ -4320,7 +4320,7 @@ def point_var : Term := Term.var 0 (DebugName.named (Identifier.id "p"))
 
 #[test]
 def test_type_check_struct_update_ok : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
         ok _ => true,
@@ -4359,7 +4359,7 @@ def test_type_check_struct_update_bad_base_rejected : Bool :=
 /// produced the latter.
 #[test]
 def test_type_check_struct_update_desugars_to_con : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
         ok tt => match tt.term {
@@ -4375,7 +4375,7 @@ def test_type_check_struct_update_desugars_to_con : Bool :=
 /// out of `base`, not the override value and not left blank.
 #[test]
 def test_type_check_struct_update_unchanged_field_is_projection : Bool :=
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
         ok tt => match tt.term {
@@ -4475,7 +4475,7 @@ def test_type_check_struct_update_rejects_mismatched_field_type : Bool :=
     // must be REJECTED. Before this fix (`struct_update_check_fields`
     // checking every override against `Term.hole`, i.e. "anything
     // goes"), this incorrectly returned `ok`.
-    let f1 : StructLitField := StructLitField.mk (Identifier.id "v") (Term.type_ 1) in
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "v") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_struct_update wrap_var fields Term.hole wrap_scope wrap_local_types empty_locals {
         ok _ => false,
@@ -4598,7 +4598,7 @@ def test_extract_pi_ret_mismatched_shape_leaves_signature_alone : Bool :=
     // (`List A`) and the argument is not an application at all
     // (`Term.type_ 1`, a bare sort), so the walk stops without
     // recording and the return comes back untouched -- still `List A`.
-    let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret empty_promoted_sig (Term.type_ 1)) in
+    let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret empty_promoted_sig (Term.sort (SortLevel.concrete 1))) in
     head_is (app_arg_of typ) "A"
 
 // --- Tests for named-call field validation ---
@@ -4611,13 +4611,13 @@ def test_extract_pi_ret_mismatched_shape_leaves_signature_alone : Bool :=
 
 def rect_default_value : Term := Term.var sentinel (DebugName.named (Identifier.id "the_default"))
 
-def rect_w_param : Param := Param.mk (Identifier.id "w") (Term.type_ 2) Multiplicity.many Option.none List.empty
+def rect_w_param : Param := Param.mk (Identifier.id "w") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
-def rect_h_param : Param := Param.mk (Identifier.id "h") (Term.type_ 2) Multiplicity.many (Option.some rect_default_value) List.empty
+def rect_h_param : Param := Param.mk (Identifier.id "h") (Term.sort (SortLevel.concrete 2)) Multiplicity.many (Option.some rect_default_value) List.empty
 
 def rect_params : List Param := List.cons rect_w_param (List.cons rect_h_param List.empty)
 
-def rect_w_field : StructLitField := StructLitField.mk (Identifier.id "w") (Term.type_ 1)
+def rect_w_field : StructLitField := StructLitField.mk (Identifier.id "w") (Term.sort (SortLevel.concrete 1))
 
 def rect_w_only_fields : List StructLitField := List.cons rect_w_field List.empty
 

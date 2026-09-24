@@ -210,7 +210,7 @@ def test_term_shift_bound_var_under_lam_untouched : Bool :=
     // `Term.var 0` inside a `Term.lam`'s own body refers to that
     // lambda's own binder (cutoff becomes 1 there) -- it must NOT be
     // shifted, regardless of `d`.
-    let t : Term := Term.lam DebugName.unnamed (Term.type_ 1) (Term.var 0 DebugName.unnamed) in
+    let t : Term := Term.lam DebugName.unnamed (Term.sort (SortLevel.concrete 1)) (Term.var 0 DebugName.unnamed) in
     match term_shift 5 t {
         Term.lam _ _ body => I64.beq (term_var_idx body) 0,
         _ => false,
@@ -220,7 +220,7 @@ def test_term_shift_bound_var_under_lam_untouched : Bool :=
 def test_term_shift_free_var_under_lam_shifted : Bool :=
     // `Term.var 1` inside that same lambda's body refers to something
     // OUTSIDE it (cutoff 1, idx 1 >= cutoff) -- this one must shift.
-    let t : Term := Term.lam DebugName.unnamed (Term.type_ 1) (Term.var 1 DebugName.unnamed) in
+    let t : Term := Term.lam DebugName.unnamed (Term.sort (SortLevel.concrete 1)) (Term.var 1 DebugName.unnamed) in
     match term_shift 5 t {
         Term.lam _ _ body => I64.beq (term_var_idx body) 6,
         _ => false,
@@ -230,7 +230,7 @@ def test_term_shift_free_var_under_lam_shifted : Bool :=
 def test_term_subst_replaces_target_index : Bool :=
     // `term_subst 0 s t` on `t = Term.var 0` -- the exact target --
     // replaces wholesale with `s`.
-    let s : Term := Term.type_ 7 in
+    let s : Term := Term.sort (SortLevel.concrete 7) in
     let t : Term := Term.var 0 DebugName.unnamed in
     I64.beq (term_type_level (term_subst 0 s t)) 7
 
@@ -239,7 +239,7 @@ def test_term_subst_lower_index_untouched : Bool :=
     // `term_subst 1 s t` on `t = Term.var 0` -- refers to something
     // MORE local than the binder being substituted away -- must be
     // left completely alone.
-    let s : Term := Term.type_ 7 in
+    let s : Term := Term.sort (SortLevel.concrete 7) in
     let t : Term := Term.var 0 DebugName.unnamed in
     I64.beq (term_var_idx (term_subst 1 s t)) 0
 
@@ -248,7 +248,7 @@ def test_term_subst_closes_gap_for_higher_index : Bool :=
     // `term_subst 0 s t` on `t = Term.var 2` -- some OTHER free
     // variable further out than the one being substituted away --
     // must decrement by 1 to close the gap left by the removed binder.
-    let s : Term := Term.type_ 9 in
+    let s : Term := Term.sort (SortLevel.concrete 9) in
     let t : Term := Term.var 2 DebugName.unnamed in
     I64.beq (term_var_idx (term_subst 0 s t)) 1
 
@@ -260,7 +260,7 @@ def test_term_subst_shifts_replacement_under_binder : Bool :=
     // come out shifted by that same depth, so it stays correctly
     // scoped relative to the lambda it now sits inside.
     let s : Term := Term.var 0 DebugName.unnamed in
-    let t : Term := Term.lam DebugName.unnamed (Term.type_ 1) (Term.var 1 DebugName.unnamed) in
+    let t : Term := Term.lam DebugName.unnamed (Term.sort (SortLevel.concrete 1)) (Term.var 1 DebugName.unnamed) in
     match term_subst 0 s t {
         Term.lam _ _ body => I64.beq (term_var_idx body) 1,
         _ => false,
@@ -354,7 +354,7 @@ def test_beta_reduce_replaces_bound_occurrence : Bool :=
     // `beta_reduce body arg` where `body` is exactly `Term.var 0`
     // (the lambda's own bound occurrence, already peeled) must
     // replace it wholesale with `arg`.
-    let arg : Term := Term.type_ 3 in
+    let arg : Term := Term.sort (SortLevel.concrete 3) in
     I64.beq (term_type_level (beta_reduce (Term.var 0 DebugName.unnamed) arg)) 3
 
 #[test]
@@ -363,7 +363,7 @@ def test_beta_reduce_closes_gap_for_outer_reference : Bool :=
     // than the lambda's own param -- after beta-reducing away that
     // lambda, the reference must shift down by exactly 1 to still
     // point at the same outer binding.
-    let arg : Term := Term.type_ 3 in
+    let arg : Term := Term.sort (SortLevel.concrete 3) in
     I64.beq (term_var_idx (beta_reduce (Term.var 1 DebugName.unnamed) arg)) 0
 
 #[test]
@@ -378,9 +378,9 @@ def test_beta_reduce_curried_lam_partial_application : Bool :=
     // `arg` (correctly re-shifted for now sitting one binder deeper),
     // leave the still-bound `y` untouched, and leave the outer
     // `Term.lam` structure itself intact (ready for the next arg).
-    let arg : Term := Term.type_ 42 in
+    let arg : Term := Term.sort (SortLevel.concrete 42) in
     let peeled_body : Term :=
-        Term.lam DebugName.unnamed (Term.type_ 1) (Term.app (Term.var 1 DebugName.unnamed) (Term.var 0 DebugName.unnamed)) in
+        Term.lam DebugName.unnamed (Term.sort (SortLevel.concrete 1)) (Term.app (Term.var 1 DebugName.unnamed) (Term.var 0 DebugName.unnamed)) in
     match beta_reduce peeled_body arg {
         Term.lam _ _ inner =>
             match inner {

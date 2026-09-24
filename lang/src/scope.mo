@@ -2426,7 +2426,7 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
                     let method_decls := promote_methods prefix cls_name ins_args ins_constraints defs method_names in
                     let dict_name := mangle_instance_dict_name prefix cls_name ins_args in
                     let dict_con := Con.mk (Identifier.id "mk") dict_name (List.length field_terms) (options_of field_terms) in
-                    let dict_def := Def.mk dict_name (Term.type_ 1) (Term.con dict_con)
+                    let dict_def := Def.mk dict_name (Term.sort (SortLevel.concrete 1)) (Term.con dict_con)
                         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty in
                     Option.some (List.cons (Decl.def_d dict_def) method_decls),
                 Option.none => Option.none,
@@ -4408,7 +4408,7 @@ def params_of_ids (ids : List Identifier) : List Param :=
     match ids {
         List.empty => List.empty,
         List.cons id rest =>
-            List.cons (Param.mk id (Term.type_ 1) Multiplicity.many Option.none List.empty) (params_of_ids rest),
+            List.cons (Param.mk id (Term.sort (SortLevel.concrete 1)) Multiplicity.many Option.none List.empty) (params_of_ids rest),
     }
 
 #[partial]
@@ -7509,8 +7509,8 @@ def test_scope_data_empty_lookup_misses : Bool :=
 def test_find_all_inductives_by_constructor_matches_scope_data_arity : Bool :=
     let ind_name : NamePath := NamePath.npath (List.cons (Identifier.id "Pair2") List.empty) in
     let con_name : NamePath := NamePath.npath (List.cons (Identifier.id "both") List.empty) in
-    let cn : InductConstructor := InductConstructor.mk con_name List.empty (Term.type_ 1) in
-    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1)
+    let cn : InductConstructor := InductConstructor.mk con_name List.empty (Term.sort (SortLevel.concrete 1)) in
+    let ind : Inductive := Inductive.mk ind_name List.empty (Term.sort (SortLevel.concrete 1))
         (List.cons cn List.empty) List.empty Visibility.package_private in
     let sd : ScopeData := scope_data_add_inductive scope_data_empty ind in
     match scope_data_find_all_inductives_by_constructor sd con_name {
@@ -7725,7 +7725,7 @@ def test_resolve_infix_decls_rewrites_def_body : Bool :=
 /// Fixture: `class BEq A { def beq : A -> A -> Bool }`.
 #[partial]
 def dummy_beq_class : Class :=
-    let a_param := param_many (Identifier.id "A") (Term.type_ 1) in
+    let a_param := param_many (Identifier.id "A") (Term.sort (SortLevel.concrete 1)) in
     let beq_method := ClassDef.mk (Identifier.id "beq") Term.hole Option.none in
     Class.mk (Identifier.id "BEq") (List.cons a_param List.empty) List.empty
         (List.cons beq_method List.empty) Visibility.package_private
@@ -7833,7 +7833,7 @@ def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
     // def show_twice [Show A] (x : A) : String := Show.show x
     let show_call := Term.app (Term.var 1 (DebugName.named (Identifier.id "Show.show"))) (Term.var 0 (DebugName.named (Identifier.id "x"))) in
     let orig_term := Term.lam (DebugName.named (Identifier.id "x")) Term.hole show_call in
-    let orig_typ := Term.pi Term.hole (Term.type_ 1) in
+    let orig_typ := Term.pi Term.hole (Term.sort (SortLevel.concrete 1)) in
     let constraint := TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
     let d := Def.mk (NamePath.npath (List.cons (Identifier.id "show_twice") List.empty)) orig_typ orig_term
         (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
@@ -7856,12 +7856,12 @@ def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
     // -- no dict param should be added (a phantom/unused constraint).
     let unrelated_body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let constraint := TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
-    let d := Def.mk (NamePath.npath (List.cons (Identifier.id "unrelated") List.empty)) (Term.type_ 1) unrelated_body
+    let d := Def.mk (NamePath.npath (List.cons (Identifier.id "unrelated") List.empty)) (Term.sort (SortLevel.concrete 1)) unrelated_body
         (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
     let d2 := add_constraint_dict_params d in
     match d2 {
         Def.mk {typ := new_typ, term := new_term, ..} =>
-            Similar.similar new_typ (Term.type_ 1) && Similar.similar new_term unrelated_body,
+            Similar.similar new_typ (Term.sort (SortLevel.concrete 1)) && Similar.similar new_term unrelated_body,
     }
 
 #[test]
@@ -7951,44 +7951,42 @@ def test_infer_carrier_type_if_branch_none_falls_through_to_else : Bool :=
         Option.none => false,
     }
 
-// Both spellings of the universe placeholder are UNINFORMATIVE as a
-// carrier. The `Term.sort` half is a regression pin with a measured
-// history: W1.1's lowering flip made the parser emit
-// `Term.sort (concrete 1)` where it had emitted `Term.type_ 1`, and
-// because this function only rejected the old spelling, an un-annotated
-// lambda parameter started reading as a REAL carrier. `lam_binder_type`
-// then kept the placeholder instead of taking the callee's signature
-// hint, so `fn x acc => x + acc` resolved `+` against the class's own
-// parameter `A`, matched `instance [Add A] HAdd A A A` -- whose field is
-// the mutually-recursive `instance [HAdd A A A] Add A` -- and the driver
-// self-called until GC died (`driver exited -1` on both foldable files
-// and `examples/iteration_advanced.mo`). The pair is asserted together
-// because the two spellings must stay indistinguishable HERE; a test on
-// `Term.type_` alone is what let the regression through.
+// A universe placeholder is UNINFORMATIVE as a carrier. This is a
+// regression pin with a measured history: W1.1's lowering flip made the
+// parser emit `Term.sort (concrete 1)` where it had emitted
+// `Term.type_ 1`, and because this function only recognised the old
+// spelling, an un-annotated lambda parameter started reading as a REAL
+// carrier. `lam_binder_type` then kept the placeholder instead of taking
+// the callee's signature hint, so `fn x acc => x + acc` resolved `+`
+// against the class's own parameter `A`, matched
+// `instance [Add A] HAdd A A A` -- whose field is the mutually-recursive
+// `instance [HAdd A A A] Add A` -- and the driver self-called until GC
+// died (`driver exited -1` on both foldable files and
+// `examples/iteration_advanced.mo`).
+//
+// This pin used to assert BOTH spellings as a pair, because the
+// regression was precisely a test that covered one of them and not the
+// other. There is one spelling now, so the pair has collapsed into the
+// single assertion below. The history is kept because what has not
+// changed is the reason a pin has to be here at all.
 #[test]
-def test_expected_carrier_of_rejects_both_sort_spellings : Bool :=
-    let old_spelling : Option Term := expected_carrier_of (Term.type_ 1) in
-    let new_spelling : Option Term := expected_carrier_of (Term.sort (SortLevel.concrete 1)) in
-    match old_spelling {
-        Option.none => match new_spelling {
-            Option.none => true,
-            Option.some _ => false,
-        },
+def test_expected_carrier_of_rejects_a_sort : Bool :=
+    match expected_carrier_of (Term.sort (SortLevel.concrete 1)) {
+        Option.none => true,
         Option.some _ => false,
     }
 
-// `placeholder_carrier`'s own pair, for the same reason
-// `test_expected_carrier_of_rejects_both_sort_spellings` above asserts
-// its pair together: the two functions are mirrors, and the ONLY way
-// this one fell behind was that a test covered `Term.type_` alone.
+// `placeholder_carrier` is the mirror of `expected_carrier_of` above, and
+// this pin exists for the same reason: the ONLY way this one fell behind
+// was a test that covered one spelling and not the other.
 // `placeholder_carrier` gates two real dispatch decisions --
 // `demote_uninformative_carriers` and `find_constraint_bound_carrier_
 // any` -- so a spelling it does not recognise is a placeholder that
-// outranks every real carrier behind it in a first-that-wins search.
+// outranks every real carrier behind it in a first-that-wins search. The
+// pair has collapsed with the spelling, exactly as above.
 #[test]
-def test_placeholder_carrier_accepts_both_sort_spellings : Bool :=
-    placeholder_carrier (Term.type_ 1)
-        && placeholder_carrier (Term.sort (SortLevel.concrete 1))
+def test_placeholder_carrier_accepts_a_sort : Bool :=
+    placeholder_carrier (Term.sort (SortLevel.concrete 1))
         && placeholder_carrier Term.hole
 
 /// ...and still rejects a REAL carrier, so the arm above did not turn
@@ -8006,7 +8004,7 @@ def test_placeholder_carrier_rejects_a_real_carrier : Bool :=
 /// A term binder (`wrap_forall`'s `Term.type_ 1` marker) IS collected.
 #[test]
 def test_collect_forall_names_keeps_a_term_binder : Bool :=
-    let t : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) Term.hole in
+    let t : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.sort (SortLevel.concrete 1)) Term.hole in
     match collect_forall_names t {
         List.cons hd rest =>
             List.is_empty rest && Similar.similar hd (Identifier.id "A"),
@@ -8026,7 +8024,7 @@ def test_collect_forall_names_skips_a_level_binder : Bool :=
 /// single-binder pins above.
 #[test]
 def test_collect_forall_names_skips_a_level_binder_and_keeps_going : Bool :=
-    let inner : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) Term.hole in
+    let inner : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.sort (SortLevel.concrete 1)) Term.hole in
     let t : Term := Term.forall (DebugName.named (Identifier.id "u"))
                                 (Term.sort (SortLevel.concrete 0)) inner in
     match collect_forall_names t {

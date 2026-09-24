@@ -267,14 +267,14 @@ def term_type_level (t : Term) : I64 :=
 
 #[test]
 def test_name_subst_term_replaces_matching_named_var : Bool :=
-    let replacement : Term := Term.type_ 7 in
+    let replacement : Term := Term.sort (SortLevel.concrete 7) in
     I64.beq (term_type_level (name_subst_term t_ident replacement (named_ref t_ident))) 7
 
 #[test]
 def test_name_subst_term_leaves_other_named_var_untouched : Bool :=
     // `U` is a different identifier than the substitution target `T`
     // -- must come back completely unchanged.
-    let replacement : Term := Term.type_ 7 in
+    let replacement : Term := Term.sort (SortLevel.concrete 7) in
     match name_subst_term t_ident replacement (named_ref other_ident) {
         Term.var _ dbg => match dbg { DebugName.named id => id_eq id other_ident, DebugName.unnamed => false },
         _ => false,
@@ -285,7 +285,7 @@ def test_name_subst_term_leaves_bound_var_untouched : Bool :=
     // A real (non-`sentinel`, `DebugName.unnamed`) de Bruijn-bound
     // occurrence has no name to match against at all -- never a
     // substitution target, regardless of `target`/`replacement`.
-    let replacement : Term := Term.type_ 7 in
+    let replacement : Term := Term.sort (SortLevel.concrete 7) in
     let bound : Term := Term.var 0 DebugName.unnamed in
     match name_subst_term t_ident replacement bound {
         Term.var idx _ => I64.beq idx 0,
@@ -296,7 +296,7 @@ def test_name_subst_term_leaves_bound_var_untouched : Bool :=
 def test_name_subst_term_recurses_into_quote : Bool :=
     // Matches the reference's own `subst_macro`, which substitutes
     // INTO a `Quote` body before `resolve_quote` ever runs.
-    let replacement : Term := Term.type_ 9 in
+    let replacement : Term := Term.sort (SortLevel.concrete 9) in
     let quoted : Term := Term.quote_ (named_ref t_ident) in
     match name_subst_term t_ident replacement quoted {
         Term.quote_ inner => I64.beq (term_type_level inner) 9,
@@ -308,7 +308,7 @@ def test_name_subst_decl_macro_call_d_substitutes_args : Bool :=
     // Mirrors `std/derive.mo`'s real decl-gen template shape:
     // `reflect_type_info! T derive_lens_meta` inside a `decls { ... }`
     // body, with `T` the macro's own param.
-    let replacement : Term := Term.type_ 3 in
+    let replacement : Term := Term.sort (SortLevel.concrete 3) in
     let call : Decl :=
         Decl.macro_call_d (Identifier.id "reflect_type_info")
             (List.cons (named_ref t_ident) (List.cons (named_ref other_ident) List.empty)) in
@@ -329,7 +329,7 @@ def test_name_subst_decl_macro_call_d_substitutes_args : Bool :=
 
 #[test]
 def test_name_subst_decl_def_d_substitutes_typ_and_term : Bool :=
-    let replacement : Term := Term.type_ 5 in
+    let replacement : Term := Term.sort (SortLevel.concrete 5) in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let d : Decl :=
@@ -347,7 +347,7 @@ def test_name_subst_decl_decl_gen_d_recurses_into_nested_decls : Bool :=
     // The real `std/derive.mo` shape one level up: a `Decl.decl_gen_d`
     // template whose own `decl_list` list holds exactly one
     // `Decl.macro_call_d` referencing the template's own param.
-    let replacement : Term := Term.type_ 11 in
+    let replacement : Term := Term.sort (SortLevel.concrete 11) in
     let nested_call : Decl := Decl.macro_call_d (Identifier.id "reflect_type_info") (List.cons (named_ref t_ident) List.empty) in
     let template : Decl :=
         Decl.decl_gen_d (NamePath.npath (List.cons (Identifier.id "derive_lens") List.empty)) List.empty (List.cons nested_call List.empty) List.empty in
@@ -370,7 +370,7 @@ def test_name_subst_decl_use_d_passthrough_unchanged : Bool :=
     // `use`/`open`/`infix` decl_list carry no `Term` fields at all --
     // must pass through completely unchanged (mirrors the reference's
     // own `subst_decl_var` no-op arms for these same decl kinds).
-    let replacement : Term := Term.type_ 1 in
+    let replacement : Term := Term.sort (SortLevel.concrete 1) in
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "std") List.empty) in
     let d : Decl := Decl.use_d path UseFilter.use_bare true in
     match name_subst_decl t_ident replacement d {
@@ -380,7 +380,7 @@ def test_name_subst_decl_use_d_passthrough_unchanged : Bool :=
 
 #[test]
 def test_name_subst_decls_maps_over_list : Bool :=
-    let replacement : Term := Term.type_ 2 in
+    let replacement : Term := Term.sort (SortLevel.concrete 2) in
     let call1 : Decl := Decl.macro_call_d (Identifier.id "a") (List.cons (named_ref t_ident) List.empty) in
     let call2 : Decl := Decl.macro_call_d (Identifier.id "b") (List.cons (named_ref t_ident) List.empty) in
     let results : List Decl := name_subst_decls t_ident replacement (List.cons call1 (List.cons call2 List.empty)) in

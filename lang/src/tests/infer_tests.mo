@@ -35,35 +35,35 @@ def run_check (t : Term) (e : Term) : Result TypeError TypedTerm :=
 
 #[test]
 def test_sort_prop_is_type : Bool :=
-    match run_check (Term.type_ 0) (Term.type_ 1) {
+    match run_check (sort_n 0) (sort_n 1) {
         ok _ => true,
         err _ => false,
     }
 
 #[test]
 def test_sort_type_is_type1 : Bool :=
-    match run_check (Term.type_ 1) (Term.type_ 2) {
+    match run_check (sort_n 1) (sort_n 2) {
         ok _ => true,
         err _ => false,
     }
 
 #[test]
 def test_sort_cumulativity_prop_in_type : Bool :=
-    match run_check (Term.type_ 0) (Term.type_ 2) {
+    match run_check (sort_n 0) (sort_n 2) {
         ok _ => true,
         err _ => false,
     }
 
 #[test]
 def test_sort_cumulativity_type_in_type2 : Bool :=
-    match run_check (Term.type_ 1) (Term.type_ 3) {
+    match run_check (sort_n 1) (sort_n 3) {
         ok _ => true,
         err _ => false,
     }
 
 #[test]
 def test_sort_reject_too_small : Bool :=
-    match run_check (Term.type_ 2) (Term.type_ 1) {
+    match run_check (sort_n 2) (sort_n 1) {
         ok _ => false,
         err e => match e {
             not_a_type _ => true,
@@ -73,17 +73,17 @@ def test_sort_reject_too_small : Bool :=
 
 #[test]
 def test_sort_infer_prop : Bool :=
-    match run_check (Term.type_ 0) Term.hole {
+    match run_check (sort_n 0) Term.hole {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 1) },
         err _ => false,
     }
 
 #[test]
 def test_sort_infer_type : Bool :=
-    match run_check (Term.type_ 1) Term.hole {
+    match run_check (sort_n 1) Term.hole {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 2) },
         err _ => false,
     }
 
@@ -102,7 +102,7 @@ def test_sort_infer_type : Bool :=
 // step, which is why this fix lands first.
 #[test]
 def test_sort_not_its_own_type : Bool :=
-    match run_check (Term.type_ 1) (Term.type_ 1) {
+    match run_check (sort_n 1) (sort_n 1) {
         ok _ => false,
         err e => match e {
             not_a_type _ => true,
@@ -112,7 +112,7 @@ def test_sort_not_its_own_type : Bool :=
 
 #[test]
 def test_sort_prop_not_its_own_type : Bool :=
-    match run_check (Term.type_ 0) (Term.type_ 0) {
+    match run_check (sort_n 0) (sort_n 0) {
         ok _ => false,
         err e => match e {
             not_a_type _ => true,
@@ -125,10 +125,10 @@ def test_sort_prop_not_its_own_type : Bool :=
 #[test]
 def test_var_bound_simple : Bool :=
     let dbg : DebugName := DebugName.unnamed in
-    let types : List Term := List.cons (Term.type_ 1) List.empty in
+    let types : List Term := List.cons (sort_n 1) List.empty in
     match type_check (Term.var 0 dbg) Term.hole test_scope types empty_locals {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 1) },
         err _ => false,
     }
 
@@ -148,7 +148,7 @@ def test_var_free_unnamed : Bool :=
     let dbg : DebugName := DebugName.unnamed in
     match run_check (Term.var sentinel dbg) Term.hole {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 1) },
         err _ => false,
     }
 
@@ -178,18 +178,18 @@ def test_var_free_unknown : Bool :=
 
 #[test]
 def test_pi_simple : Bool :=
-    let t : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
+    let t : Term := Term.pi (sort_n 1) (sort_n 1) in
     match run_check t Term.hole {
         ok tt =>
             // Both components are `Type`, contributing 2 each.
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 2) },
         err _ => false,
     }
 
 #[test]
 def test_pi_dependent : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "A") in
-    let arg : Term := Term.type_ 1 in
+    let arg : Term := sort_n 1 in
     let ret : Term := Term.var 0 dbg in
     let t : Term := Term.pi arg ret in
     let types : List Term := List.cons arg List.empty in
@@ -198,7 +198,7 @@ def test_pi_dependent : Bool :=
             // The domain `Type` contributes 2; the body's type is
             // `A`'s own local type, `Type`, contributing 1 -- so the
             // `max` is still 2, and the domain is what decides it.
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 2) },
         err _ => false,
     }
 
@@ -207,7 +207,7 @@ def test_pi_arg_is_not_type : Bool :=
     let id : Identifier := Identifier.id "x" in
     let dbg : DebugName := DebugName.named id in
     let var_term : Term := Term.var sentinel dbg in
-    let t : Term := Term.pi var_term (Term.type_ 1) in
+    let t : Term := Term.pi var_term (sort_n 1) in
     match run_check t Term.hole {
         ok _ => false,
         err _ => true,
@@ -219,7 +219,7 @@ def test_pi_arg_is_not_type : Bool :=
 def test_lam_check_mode : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "x") in
     let body : Term := Term.var 0 dbg in
-    let arg_typ : Term := Term.type_ 1 in
+    let arg_typ : Term := sort_n 1 in
     let expected : Term := Term.pi arg_typ arg_typ in
     let lam : Term := Term.lam dbg arg_typ body in
     match run_check lam expected {
@@ -232,7 +232,7 @@ def test_lam_check_mode : Bool :=
 def test_lam_infer_mode : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "x") in
     let body : Term := Term.var 0 dbg in
-    let arg_typ : Term := Term.type_ 1 in
+    let arg_typ : Term := sort_n 1 in
     let lam : Term := Term.lam dbg arg_typ body in
     match run_check lam Term.hole {
         ok tt =>
@@ -248,7 +248,7 @@ def test_lam_infer_mode : Bool :=
 def test_lam_unnamed : Bool :=
     let dbg : DebugName := DebugName.unnamed in
     let body : Term := Term.var 0 dbg in
-    let arg_typ : Term := Term.type_ 1 in
+    let arg_typ : Term := sort_n 1 in
     let expected : Term := Term.pi arg_typ arg_typ in
     let lam : Term := Term.lam dbg arg_typ body in
     match run_check lam expected {
@@ -261,14 +261,14 @@ def test_lam_unnamed : Bool :=
 #[test]
 def test_app_id : Bool :=
     let x_dbg : DebugName := DebugName.named (Identifier.id "x") in
-    let arg_typ : Term := Term.type_ 1 in
+    let arg_typ : Term := sort_n 1 in
     let id_body : Term := Term.var 0 x_dbg in
     let id_lam : Term := Term.lam x_dbg arg_typ id_body in
     // The lambda is `Sort 1 -> Sort 1`, so its argument must have type
     // `Sort 1` -- which `Sort 0` does (`Sort 0 : Sort 1`). This used to
     // be applied to `Term.type_ 1`, which is `Sort 1 : Sort 1` -- true
     // only under the Type-in-Type hole `type_check_sort_full` had.
-    let result : Term := Term.app id_lam (Term.type_ 0) in
+    let result : Term := Term.app id_lam (sort_n 0) in
     match run_check result Term.hole {
         ok _ => true,
         err _ => false,
@@ -277,10 +277,10 @@ def test_app_id : Bool :=
 #[test]
 def test_app_with_hole_return : Bool :=
     let x_dbg : DebugName := DebugName.named (Identifier.id "x") in
-    let arg_typ : Term := Term.type_ 1 in
+    let arg_typ : Term := sort_n 1 in
     let id_body : Term := Term.var 0 x_dbg in
     let id_lam : Term := Term.lam x_dbg arg_typ id_body in
-    let result : Term := Term.app id_lam (Term.type_ 0) in
+    let result : Term := Term.app id_lam (sort_n 0) in
     match run_check result Term.hole {
         ok _ => true,
         err _ => false,
@@ -291,23 +291,23 @@ def test_app_with_hole_return : Bool :=
 #[test]
 def test_forall_infer : Bool :=
     let a_dbg : DebugName := DebugName.named (Identifier.id "A") in
-    let kind : Term := Term.type_ 1 in
-    let body : Term := Term.type_ 1 in
+    let kind : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
     let t : Term := Term.forall a_dbg kind body in
     match run_check t Term.hole {
         ok tt =>
             // Same rule on the `Forall` arm: both components are
             // `Type`, contributing 2 each (see the note above the Pi
             // tests).
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 2) },
         err _ => false,
     }
 
 #[test]
 def test_forall_unnamed : Bool :=
     let dbg : DebugName := DebugName.unnamed in
-    let kind : Term := Term.type_ 1 in
-    let body : Term := Term.type_ 1 in
+    let kind : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
     let t : Term := Term.forall dbg kind body in
     match run_check t Term.hole {
         ok _ => true,
@@ -319,10 +319,10 @@ def test_forall_unnamed : Bool :=
 #[test]
 def test_if_simple : Bool :=
     let cond : Term := Term.var 0 (DebugName.unnamed) in
-    let then_ : Term := Term.type_ 1 in
-    let else_ : Term := Term.type_ 1 in
+    let then_ : Term := sort_n 1 in
+    let else_ : Term := sort_n 1 in
     let if_t : Term := Term.lit (Literal.if_ cond then_ else_) in
-    let bool_typ : Term := Term.type_ 1 in
+    let bool_typ : Term := sort_n 1 in
     let types : List Term := List.cons bool_typ List.empty in
     match type_check if_t Term.hole test_scope types empty_locals {
         ok _ => true,
@@ -333,7 +333,7 @@ def test_if_simple : Bool :=
 
 #[test]
 def test_match_empty_cases : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
     let t : Term := Term.lit (Literal.match_ scrutinee List.empty) in
     match run_check t Term.hole {
         ok _ => true,
@@ -342,8 +342,8 @@ def test_match_empty_cases : Bool :=
 
 #[test]
 def test_match_single_case : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
     let case_ : MatchCase := MatchCase.mc (Identifier.id "x") List.empty body Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
@@ -358,9 +358,9 @@ def test_match_single_case : Bool :=
 // Two cases with both valid bodies: the match succeeds (but rest is ignored).
 #[test]
 def test_match_multi_case_bodies_ok : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body1 : Term := Term.type_ 1 in
-    let body2 : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
+    let body1 : Term := sort_n 1 in
+    let body2 : Term := sort_n 1 in
     let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
     let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
@@ -375,8 +375,8 @@ def test_match_multi_case_bodies_ok : Bool :=
 // All cases are now checked and their types unified.
 #[test]
 def test_match_multi_case_second_fails : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body1 : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
+    let body1 : Term := sort_n 1 in
     let bad_var : Term := Term.var sentinel (DebugName.named (Identifier.id "no_such")) in
     let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
     let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty bad_var Option.none in
@@ -394,7 +394,7 @@ def test_match_multi_case_second_fails : Bool :=
 // Term.hole type before type-checking the case body.
 #[test]
 def test_match_case_args_bound : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
     let arg_id : Identifier := Identifier.id "x" in
     let body : Term := Term.var sentinel (DebugName.named arg_id) in
     let case_ : MatchCase := MatchCase.mc
@@ -420,16 +420,16 @@ def maybe_scope : Scope :=
     let some_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "some") List.empty))
         List.empty
-        (Term.type_ 1) in
+        (sort_n 1) in
     let none_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "none") List.empty))
         List.empty
-        (Term.type_ 1) in
+        (sort_n 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
     let empty_params : List Param := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk
-        type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
+        type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private in
     let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     {
@@ -449,8 +449,8 @@ def test_match_inductive_in_scope : Bool :=
 // looks up the constructor in the inductive and verifies it exists.
 #[test]
 def test_match_valid_constructor : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "some")
         List.empty
@@ -474,8 +474,8 @@ def test_match_valid_constructor : Bool :=
 // then rejects "bogus" which is not in Maybe's constructors.
 #[test]
 def test_match_invalid_constructor : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
     let case_some : MatchCase := MatchCase.mc
         (Identifier.id "some")
         List.empty
@@ -499,8 +499,8 @@ def test_match_invalid_constructor : Bool :=
 // correctly: args verification and branch type accumulation are implemented.
 #[test]
 def test_match_wildcard : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "_")
         List.empty
@@ -518,8 +518,8 @@ def test_match_wildcard : Bool :=
 // an error if args is non-empty.
 #[test]
 def test_match_wildcard_rejects_args : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body : Term := Term.type_ 1 in
+    let scrutinee : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "_")
         (List.cons (Identifier.id "x") List.empty)
@@ -540,7 +540,7 @@ def test_match_wildcard_rejects_args : Bool :=
 #[test]
 def test_match_bound_scrutinee : Bool :=
     let scrutinee : Term := Term.var 0 (DebugName.unnamed) in
-    let body : Term := Term.type_ 1 in
+    let body : Term := sort_n 1 in
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "x")
         List.empty
@@ -548,7 +548,7 @@ def test_match_bound_scrutinee : Bool :=
         Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
-    let types : List Term := List.cons (Term.type_ 1) List.empty in
+    let types : List Term := List.cons (sort_n 1) List.empty in
     match type_check t Term.hole test_scope types empty_locals {
         ok _ => true,
         err _ => false,
@@ -562,9 +562,9 @@ def test_match_bound_scrutinee : Bool :=
 // mismatch is detected.
 #[test]
 def test_match_branch_type_conflict : Bool :=
-    let scrutinee : Term := Term.type_ 1 in
-    let body1 : Term := Term.type_ 1 in
-    let body2 : Term := Term.type_ 0 in
+    let scrutinee : Term := sort_n 1 in
+    let body1 : Term := sort_n 1 in
+    let body2 : Term := sort_n 0 in
     let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
     let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
@@ -583,16 +583,16 @@ def test_match_branch_type_conflict : Bool :=
 /// above has none) -- needed to exercise real field-pattern resolution.
 def point_ind : Inductive :=
     let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Point") List.empty) in
-    let x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 1) Multiplicity.many Option.none List.empty in
-    let y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let x_param : Param := Param.mk (Identifier.id "x") (sort_n 1) Multiplicity.many Option.none List.empty in
+    let y_param : Param := Param.mk (Identifier.id "y") (sort_n 1) Multiplicity.many Option.none List.empty in
     let mk_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
         (List.cons x_param (List.cons y_param List.empty))
-        (Term.type_ 1) in
+        (sort_n 1) in
     let cns : List InductConstructor := List.cons mk_cn List.empty in
     let empty_params : List Param := List.empty in
     let empty_attrs : List Attribute := List.empty in
-    Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private
+    Inductive.mk type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private
 
 def point_scope : Scope :=
     let mod_id : Identifier := Identifier.id "Test" in
@@ -656,7 +656,7 @@ def test_field_pattern_named_multi_constructor_via_named_form : Bool :=
     let body : Term := Term.var 0 DebugName.unnamed in
     let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") args body (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
-    let t : Term := Term.lit (Literal.match_ (Term.type_ 1) cases) in
+    let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
         ok _ => true,
         err _ => false,
@@ -673,20 +673,20 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Shape") List.empty) in
-    let r_param : Param := Param.mk (Identifier.id "r") (Term.type_ 1) Multiplicity.many Option.none List.empty in
-    let circle_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "circle") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
-    let square_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "square") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
+    let r_param : Param := Param.mk (Identifier.id "r") (sort_n 1) Multiplicity.many Option.none List.empty in
+    let circle_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "circle") List.empty)) (List.cons r_param List.empty) (sort_n 1) in
+    let square_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "square") List.empty)) (List.cons r_param List.empty) (sort_n 1) in
     let cns : List InductConstructor := List.cons circle_cn (List.cons square_cn List.empty) in
     let empty_params : List Param := List.empty in
     let empty_attrs : List Attribute := List.empty in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
+    let ind : Inductive := Inductive.mk type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private in
     let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     let shape_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none } in
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Shape"))) List.empty in
     let fp : FieldPattern := FieldPattern.mk List.empty true in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "") List.empty (Term.type_ 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "") List.empty (sort_n 1) (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole shape_scope types empty_locals {
@@ -697,9 +697,9 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
 #[test]
 def test_field_pattern_unknown_field_is_an_error : Bool :=
     let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "z") (Identifier.id "z")) List.empty) true in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") (List.cons (Identifier.id "z") List.empty) (Term.type_ 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") (List.cons (Identifier.id "z") List.empty) (sort_n 1) (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
-    let t : Term := Term.lit (Literal.match_ (Term.type_ 1) cases) in
+    let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
         ok _ => false,
         err _ => true,
@@ -709,9 +709,9 @@ def test_field_pattern_unknown_field_is_an_error : Bool :=
 def test_field_pattern_missing_field_without_rest_is_an_error : Bool :=
     // Only "x" is listed, no `..` -- "y" is uncovered.
     let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "x") (Identifier.id "x")) List.empty) false in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") (List.cons (Identifier.id "x") List.empty) (Term.type_ 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") (List.cons (Identifier.id "x") List.empty) (sort_n 1) (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
-    let t : Term := Term.lit (Literal.match_ (Term.type_ 1) cases) in
+    let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
         ok _ => false,
         err _ => true,
@@ -721,10 +721,10 @@ def test_field_pattern_missing_field_without_rest_is_an_error : Bool :=
 
 #[test]
 def test_if_branch_mismatch : Bool :=
-    let bool_typ : Term := Term.type_ 1 in
+    let bool_typ : Term := sort_n 1 in
     let cond : Term := Term.var 0 (DebugName.unnamed) in
-    let then_ : Term := Term.type_ 1 in
-    let else_ : Term := Term.type_ 3 in
+    let then_ : Term := sort_n 1 in
+    let else_ : Term := sort_n 3 in
     let if_t : Term := Term.lit (Literal.if_ cond then_ else_) in
     let types : List Term := List.cons bool_typ List.empty in
     match type_check if_t Term.hole test_scope types empty_locals {
@@ -736,7 +736,7 @@ def test_if_branch_mismatch : Bool :=
 
 #[test]
 def test_app_non_function : Bool :=
-    let t : Term := Term.app (Term.type_ 1) (Term.type_ 1) in
+    let t : Term := Term.app (sort_n 1) (sort_n 1) in
     match run_check t Term.hole {
         ok _ => false,
         err e => match e {
@@ -750,15 +750,15 @@ def test_app_non_function : Bool :=
 def test_lam_app_chain : Bool :=
     let x_dbg : DebugName := DebugName.named (Identifier.id "x") in
     let y_dbg : DebugName := DebugName.named (Identifier.id "y") in
-    let arg_a : Term := Term.type_ 1 in
-    let arg_b : Term := Term.type_ 1 in
-    let ret_typ : Term := Term.type_ 1 in
+    let arg_a : Term := sort_n 1 in
+    let arg_b : Term := sort_n 1 in
+    let ret_typ : Term := sort_n 1 in
     let inner_lam : Term := Term.lam y_dbg arg_b (Term.var 0 y_dbg) in
     let outer_lam : Term := Term.lam x_dbg arg_a inner_lam in
     // Both lambdas are `Sort 1 -> ...`, so both arguments must have type
     // `Sort 1` -- `Sort 0` does. See `test_app_id` above: passing
     // `Term.type_ 1` here asserted `Sort 1 : Sort 1`.
-    let applied : Term := Term.app (Term.app outer_lam (Term.type_ 0)) (Term.type_ 0) in
+    let applied : Term := Term.app (Term.app outer_lam (sort_n 0)) (sort_n 0) in
     match run_check applied Term.hole {
         ok _ => true,
         err _ => false,
@@ -769,7 +769,7 @@ def test_lam_app_chain : Bool :=
 #[test]
 def test_pi_of_pi : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "F") in
-    let arg : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
+    let arg : Term := Term.pi (sort_n 1) (sort_n 1) in
     let body : Term := Term.var 0 dbg in
     let types : List Term := List.cons arg List.empty in
     let t : Term := Term.pi arg body in
@@ -779,7 +779,7 @@ def test_pi_of_pi : Bool :=
             // body `F`'s own type IS that inner `Pi`, which is not a
             // sort, so it contributes `level_of_type`'s default of 1.
             // `max (2) (1)` is 2.
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 2) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 2) },
         err _ => false,
     }
 
@@ -794,7 +794,7 @@ def classdef_scope : Scope :=
         class_name := beq_class,
         full_name := beq_np,
         name := beq_id,
-        sig := Term.type_ 1,
+        sig := sort_n 1,
     } in
     let base_sd : ScopeData := test_sd in
     let sd_with_cd : ScopeData := { base_sd with class_defs := List.cons scd base_sd.class_defs } in
@@ -825,7 +825,7 @@ def test_class_method_type : Bool :=
     let t : Term := Term.var sentinel (DebugName.named (Identifier.id "beq")) in
     match type_check t Term.hole classdef_scope empty_local_types empty_locals {
         ok tt =>
-            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+            match tt { mk _ typ => Similar.similar typ (sort_n 1) },
         err _ => false,
     }
 
@@ -864,29 +864,29 @@ def dup_type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Dup") 
 /// A `Dup` whose constructors do NOT cover the match below -- stands in
 /// for `init/meta.mo`'s `Decl` (`d_def`/`d_instance`/`d_error`).
 def dup_other_ind : Inductive :=
-    let p : Param := Param.mk (Identifier.id "p") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let p : Param := Param.mk (Identifier.id "p") (sort_n 1) Multiplicity.many Option.none List.empty in
     let a_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "d_other_a") List.empty))
-        (List.cons p List.empty) (Term.type_ 1) in
+        (List.cons p List.empty) (sort_n 1) in
     let b_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "d_other_b") List.empty))
-        (List.cons p List.empty) (Term.type_ 1) in
+        (List.cons p List.empty) (sort_n 1) in
     let cns : List InductConstructor := List.cons a_cn (List.cons b_cn List.empty) in
     let empty_params : List Param := List.empty in
     let empty_attrs : List Attribute := List.empty in
-    Inductive.mk dup_type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private
+    Inductive.mk dup_type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private
 
 /// The `Dup` the match is actually about -- stands in for `lang/types.mo`'s
 /// `Decl` (the one carrying `infix_d`).
 def dup_wanted_ind : Inductive :=
-    let p : Param := Param.mk (Identifier.id "p") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let p : Param := Param.mk (Identifier.id "p") (sort_n 1) Multiplicity.many Option.none List.empty in
     let w_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "d_wanted") List.empty))
-        (List.cons p List.empty) (Term.type_ 1) in
+        (List.cons p List.empty) (sort_n 1) in
     let cns : List InductConstructor := List.cons w_cn List.empty in
     let empty_params : List Param := List.empty in
     let empty_attrs : List Attribute := List.empty in
-    Inductive.mk dup_type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private
+    Inductive.mk dup_type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private
 
 /// `match (v : Dup) { d_wanted p => Type }` against a scope holding both
 /// `Dup`s in the given order.
@@ -897,7 +897,7 @@ def dup_match_checks (decl_list : List Decl) : Bool :=
     let dup_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none } in
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Dup"))) List.empty in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "d_wanted") (List.cons (Identifier.id "p") List.empty) (Term.type_ 1) Option.none in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "d_wanted") (List.cons (Identifier.id "p") List.empty) (sort_n 1) Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole dup_scope types empty_locals {

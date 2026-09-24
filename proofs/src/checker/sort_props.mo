@@ -33,26 +33,26 @@ use lib::checker::harness {accepted, rejected, infers_sort_at}
 /// is term-level.
 #[test]
 def sort_is_not_its_own_type : Bool :=
-    rejected (Term.type_ 1) (Term.type_ 1)
+    rejected (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 1))
 
 /// The same hole one level down: `Prop : Prop` must be refused too.
 /// A fix that special-cased level 1 rather than correcting the relation
 /// would pass the pin above and fail this one.
 #[test]
 def prop_is_not_its_own_type : Bool :=
-    rejected (Term.type_ 0) (Term.type_ 0)
+    rejected (Term.sort (SortLevel.concrete 0)) (Term.sort (SortLevel.concrete 0))
 
 // --- The hierarchy is inhabited strictly upward ---
 
 /// `Prop : Type`.
 #[test]
 def prop_inhabits_type : Bool :=
-    accepted (Term.type_ 0) (Term.type_ 1)
+    accepted (Term.sort (SortLevel.concrete 0)) (Term.sort (SortLevel.concrete 1))
 
 /// `Type : Sort 2`.
 #[test]
 def type_inhabits_sort_2 : Bool :=
-    accepted (Term.type_ 1) (Term.type_ 2)
+    accepted (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 2))
 
 /// Strictness: a sort does not inhabit the level directly below it.
 /// Together with the two pins above this pins the relation at three
@@ -60,7 +60,7 @@ def type_inhabits_sort_2 : Bool :=
 /// to `n <= m + 1` survives.
 #[test]
 def sort_2_does_not_inhabit_type : Bool :=
-    rejected (Term.type_ 2) (Term.type_ 1)
+    rejected (Term.sort (SortLevel.concrete 2)) (Term.sort (SortLevel.concrete 1))
 
 // --- Inferring a sort's own type ---
 
@@ -68,7 +68,7 @@ def sort_2_does_not_inhabit_type : Bool :=
 /// `type_check_sort_full`'s `Term.hole` arm, `Sort (level + 1)`.
 #[test]
 def prop_infers_type_unprompted : Bool :=
-    accepted (Term.type_ 0) Term.hole
+    accepted (Term.sort (SortLevel.concrete 0)) Term.hole
 
 /// And `Type` infers `Sort 2`, the same arm one level up. Pinned
 /// separately because the arm's `+ 1` is the whole of the rule: an
@@ -76,7 +76,7 @@ def prop_infers_type_unprompted : Bool :=
 /// pass a concrete expectation) and only shows when nothing is expected.
 #[test]
 def type_infers_sort_2_unprompted : Bool :=
-    accepted (Term.type_ 1) Term.hole
+    accepted (Term.sort (SortLevel.concrete 1)) Term.hole
 
 // --- The second spelling: `Term.sort (SortLevel ...)` ---
 //
@@ -97,7 +97,7 @@ def type_infers_sort_2_unprompted : Bool :=
 /// `prop_inhabits_type`, reached through `level_lt (concrete 0)`.
 #[test]
 def sort_spelling_is_a_valid_inhabitant : Bool :=
-    accepted (Term.sort (SortLevel.concrete 0)) (Term.type_ 1)
+    accepted (Term.sort (SortLevel.concrete 0)) (Term.sort (SortLevel.concrete 1))
 
 /// The soundness pin again, one level up and in the structured spelling:
 /// `Sort 1 : Sort 1` must be refused, and it must be refused by the level
@@ -119,7 +119,7 @@ def sort_spelling_is_not_its_own_type : Bool :=
 /// cannot be passing through some unrelated path.
 #[test]
 def type_spelling_is_accepted_at_a_sort_spelling_expectation : Bool :=
-    accepted (Term.type_ 1) (Term.sort (SortLevel.concrete 2))
+    accepted (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 2))
 
 /// A level that is not a literal still compares: `succ (concrete 0)` IS
 /// `concrete 1`, so `Type : Sort 2` holds through it. Pins `level_const`'s
@@ -130,7 +130,7 @@ def type_spelling_is_accepted_at_a_sort_spelling_expectation : Bool :=
 /// absorption were one-directional.
 #[test]
 def sort_spelling_evaluates_a_succ_level : Bool :=
-    accepted (Term.sort (SortLevel.succ (SortLevel.concrete 0))) (Term.type_ 2)
+    accepted (Term.sort (SortLevel.succ (SortLevel.concrete 0))) (Term.sort (SortLevel.concrete 2))
 
 /// With nothing expected, a structured sort must reach the rule's
 /// `Term.hole` arm rather than be checked against some invented
@@ -163,21 +163,21 @@ def sort_spelling_is_accepted_with_no_expectation : Bool :=
 /// lives at 4, not at the domain's 2.
 #[test]
 def pi_universe_is_the_max_of_its_parts : Bool :=
-    infers_sort_at (Term.pi (Term.type_ 1) (Term.type_ 3)) 4
+    infers_sort_at (Term.pi (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 3))) 4
 
 /// The domain decides when IT is the higher one -- the mirror image, so
 /// neither "always the first" nor "always the second" survives both pins.
 /// `(Sort 3) -> Sort 2`: the domain contributes 4, the codomain 3.
 #[test]
 def pi_universe_is_the_max_not_the_last_part : Bool :=
-    infers_sort_at (Term.pi (Term.type_ 3) (Term.type_ 2)) 4
+    infers_sort_at (Term.pi (Term.sort (SortLevel.concrete 3)) (Term.sort (SortLevel.concrete 2))) 4
 
 /// `Forall` is the same rule, pinned separately because it is a separate
 /// arm -- a `max` added to one arm and not the other is exactly the shape
 /// of half-fix this file exists to catch.
 #[test]
 def forall_universe_is_the_max_of_its_parts : Bool :=
-    infers_sort_at (Term.forall (DebugName.named (Identifier.id "a")) (Term.type_ 1) (Term.type_ 3)) 4
+    infers_sort_at (Term.forall (DebugName.named (Identifier.id "a")) (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 3))) 4
 
 /// A component that is not a known sort contributes a flat 1, which is
 /// what both arms answered unconditionally before W1.2. This is the pin
@@ -192,4 +192,4 @@ def pi_universe_defaults_an_unknown_component_to_1 : Bool :=
 /// corpus today has components at exactly this level.
 #[test]
 def pi_universe_of_prop_components_stays_at_1 : Bool :=
-    infers_sort_at (Term.pi (Term.type_ 0) (Term.type_ 0)) 1
+    infers_sort_at (Term.pi (Term.sort (SortLevel.concrete 0)) (Term.sort (SortLevel.concrete 0))) 1

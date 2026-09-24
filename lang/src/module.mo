@@ -1239,7 +1239,7 @@ def bind_unresolved_as_local_typevars (names : List Identifier) (scope : Scope) 
             match scope_resolve_name nref scope locals {
                 Result.ok _ => bind_unresolved_as_local_typevars rest scope locals,
                 Result.err _ =>
-                    let lv : LocalVar := { name := n, typ := Term.type_ 0, multiplicity := Multiplicity.many } in
+                    let lv : LocalVar := { name := n, typ := Term.sort (SortLevel.concrete 0), multiplicity := Multiplicity.many } in
                     let extended : LocalScope := scope_push_local lv locals in
                     bind_unresolved_as_local_typevars rest scope extended
             }
@@ -2162,8 +2162,8 @@ def test_parse_all_decls_empty : Bool :=
 def test_merge_scope_data_preserves_def_sigs : Bool :=
     let name_a : NamePath := NamePath.npath [Identifier.id "a_def"] in
     let name_b : NamePath := NamePath.npath [Identifier.id "b_def"] in
-    let sig_a : Term := Term.pi Term.hole (Term.type_ 1) in
-    let sig_b : Term := Term.type_ 1 in
+    let sig_a : Term := Term.pi Term.hole (Term.sort (SortLevel.concrete 1)) in
+    let sig_b : Term := Term.sort (SortLevel.concrete 1) in
     let sd_a : ScopeData := scope_data_add_def_sig scope_data_empty name_a sig_a in
     let sd_b : ScopeData := scope_data_add_def_sig scope_data_empty name_b sig_b in
     let merged : ScopeData := merge_scope_data sd_a sd_b in

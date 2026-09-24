@@ -154,20 +154,20 @@ def test_show_term_hole : Bool :=
 
 #[test]
 def test_show_term_sort_prop : Bool :=
-    let term : Term := Term.type_ 0 in
+    let term : Term := sort_n 0 in
     let result : String := show_term term in
     String.beq result "Prop"
 
 #[test]
 def test_show_term_sort_type : Bool :=
-    let term : Term := Term.type_ 1 in
+    let term : Term := sort_n 1 in
     let result : String := show_term term in
     String.beq result "Type"
 
 #[test]
 def test_show_term_lam_simple : Bool :=
     let body : Term := Term.var 0 (DebugName.named test_id_x) in
-    let lam : Term := Term.lam (DebugName.named test_id_x) (Term.type_ 1) body in
+    let lam : Term := Term.lam (DebugName.named test_id_x) (sort_n 1) body in
     let result : String := show_term lam in
     String.beq result "(fn x : Type => x)"
 
@@ -181,15 +181,15 @@ def test_show_term_app_simple : Bool :=
 
 #[test]
 def test_show_term_pi_simple : Bool :=
-    let arg : Term := Term.type_ 1 in
-    let ret : Term := Term.type_ 1 in
+    let arg : Term := sort_n 1 in
+    let ret : Term := sort_n 1 in
     let pi : Term := Term.pi arg ret in
     let result : String := show_term pi in
     String.beq result "(Type -> Type)"
 
 #[test]
 def test_show_term_forall_simple : Bool :=
-    let kind : Term := Term.type_ 1 in
+    let kind : Term := sort_n 1 in
     let body : Term := Term.var 0 (DebugName.named test_id_A) in
     let forall : Term := Term.forall (DebugName.named test_id_A) kind body in
     let result : String := show_term forall in
@@ -300,7 +300,7 @@ def test_show_term_con_with_args : Bool :=
 #[test]
 def test_show_decl_def : Bool :=
     let name : NamePath := NamePath.npath (List.cons (Identifier.id "id") List.empty) in
-    let typ : Term := Term.pi (Term.type_ 1) (Term.pi (Term.var 2 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_A))) in
+    let typ : Term := Term.pi (sort_n 1) (Term.pi (Term.var 2 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_A))) in
     let body : Term := Term.lam (DebugName.named test_id_x) (Term.var 1 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_x)) in
     let def_ : Def := Def.mk name typ body empty_constraints empty_attrs Visibility.package_private List.empty in
     let decl : Decl := Decl.def_d def_ in
@@ -312,20 +312,20 @@ def test_show_decl_inductive : Bool :=
     let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
     let true_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "true") List.empty))
-        empty_params (Term.type_ 1) in
+        empty_params (sort_n 1) in
     let false_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "false") List.empty))
-        empty_params (Term.type_ 1) in
+        empty_params (sort_n 1) in
     let ctors : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) ctors empty_attrs Visibility.package_private in
+    let ind : Inductive := Inductive.mk type_name empty_params (sort_n 1) ctors empty_attrs Visibility.package_private in
     let decl : Decl := Decl.inductive_d ind in
     let result : String := show_decl decl in
     String.beq result "type Bool {\n  true,\n  false\n}"
 
 #[test]
 def test_show_decl_struct : Bool :=
-    let field_x : StructField := StructField.mk (Identifier.id "x") (Term.type_ 1) none_term Multiplicity.many in
-    let field_y : StructField := StructField.mk (Identifier.id "y") (Term.type_ 1) none_term Multiplicity.many in
+    let field_x : StructField := StructField.mk (Identifier.id "x") (sort_n 1) none_term Multiplicity.many in
+    let field_y : StructField := StructField.mk (Identifier.id "y") (sort_n 1) none_term Multiplicity.many in
     let fields : List StructField := List.cons field_x (List.cons field_y List.empty) in
     let s : Struct := Struct.mk (Identifier.id "Point") fields List.empty Visibility.package_private in
     let decl : Decl := Decl.struct_d s in
@@ -334,10 +334,10 @@ def test_show_decl_struct : Bool :=
 
 #[test]
 def test_show_decl_class_simple : Bool :=
-    let meth_typ : Term := Term.pi (Term.var 1 (DebugName.named test_id_A)) (Term.pi (Term.var 0 (DebugName.named test_id_A)) (Term.type_ 0)) in
+    let meth_typ : Term := Term.pi (Term.var 1 (DebugName.named test_id_A)) (Term.pi (Term.var 0 (DebugName.named test_id_A)) (sort_n 0)) in
     let meth : ClassDef := ClassDef.mk (Identifier.id "eq") meth_typ none_term in
     let no_attrs : List Attribute := List.empty in
-    let param_ : Param := Param.mk test_id_A (Term.type_ 1) Multiplicity.many none_term no_attrs in
+    let param_ : Param := Param.mk test_id_A (sort_n 1) Multiplicity.many none_term no_attrs in
     let params : List Param := List.cons param_ empty_params in
     let methods : List ClassDef := List.cons meth empty_class_defs in
     let cls : Class := Class.mk (Identifier.id "Eq") params empty_constraints methods Visibility.package_private in
@@ -372,7 +372,7 @@ def test_show_decl_open : Bool :=
 #[test]
 def test_show_instance : Bool :=
     let cls_path : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
-    let args : List Term := List.cons (Term.type_ 1) List.empty in
+    let args : List Term := List.cons (sort_n 1) List.empty in
     let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private List.empty List.empty in
     let result : String := show_instance ins in
     String.beq result "instance Show"

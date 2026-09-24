@@ -5024,12 +5024,12 @@ def test_empty_decls_module : Bool :=
 #[test]
 def test_compile_db_inductive_decls : Bool :=
     let some_name := NamePath.npath (List.cons (Identifier.id "Some") List.empty) in
-    let some_ctor := InductConstructor.mk some_name List.empty (Term.type_ 1) in
+    let some_ctor := InductConstructor.mk some_name List.empty (Term.sort (SortLevel.concrete 1)) in
     let none_name := NamePath.npath (List.cons (Identifier.id "None") List.empty) in
-    let none_ctor := InductConstructor.mk none_name List.empty (Term.type_ 1) in
+    let none_ctor := InductConstructor.mk none_name List.empty (Term.sort (SortLevel.concrete 1)) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
     let ind_name := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
-    let ind := Inductive.mk ind_name List.empty (Term.type_ 1) ctors empty_attrs Visibility.package_private in
+    let ind := Inductive.mk ind_name List.empty (Term.sort (SortLevel.concrete 1)) ctors empty_attrs Visibility.package_private in
     let funcs := compile_db_inductive_decls (List.cons ind List.empty) str_map_empty in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty in
     let text := emit_module mod_ in
@@ -5056,12 +5056,12 @@ def test_compile_db_inductive_decls : Bool :=
 #[test]
 def test_ctor_tag_map_qualified_name_lookup : Bool :=
     let some_name := NamePath.npath (List.cons (Identifier.id "Some") List.empty) in
-    let some_ctor := InductConstructor.mk some_name List.empty (Term.type_ 1) in
+    let some_ctor := InductConstructor.mk some_name List.empty (Term.sort (SortLevel.concrete 1)) in
     let none_name := NamePath.npath (List.cons (Identifier.id "None") List.empty) in
-    let none_ctor := InductConstructor.mk none_name List.empty (Term.type_ 1) in
+    let none_ctor := InductConstructor.mk none_name List.empty (Term.sort (SortLevel.concrete 1)) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
     let ind_name := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
-    let ind := Inductive.mk ind_name List.empty (Term.type_ 1) ctors empty_attrs Visibility.package_private in
+    let ind := Inductive.mk ind_name List.empty (Term.sort (SortLevel.concrete 1)) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
     let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty in
     is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
@@ -5071,14 +5071,14 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
 /// for the source of the pattern).
 #[partial]
 def unit_test_param (nm : String) : Param :=
-    Param.mk (Identifier.id nm) (Term.type_ 1) Multiplicity.many Option.none List.empty
+    Param.mk (Identifier.id nm) (Term.sort (SortLevel.concrete 1)) Multiplicity.many Option.none List.empty
 
 /// A `Struct` with one field per name given, as a decl-list-free value
 /// (`extract_structs` is what turns real decls into these).
 #[partial]
 def unit_test_struct (type_name : String) (field_names : List String) : Struct :=
     Struct.mk (Identifier.id type_name)
-        (List.map (fn n => StructField.mk (Identifier.id n) (Term.type_ 1) Option.none Multiplicity.many) field_names)
+        (List.map (fn n => StructField.mk (Identifier.id n) (Term.sort (SortLevel.concrete 1)) Option.none Multiplicity.many) field_names)
         List.empty Visibility.package_private
 
 /// A struct's implicit `mk` is ARITY-known to codegen even though it
@@ -5110,9 +5110,9 @@ def test_struct_ctor_reference_is_arity_known : Bool :=
 #[test]
 def test_struct_ctor_reference_shares_the_literals_tag : Bool :=
     let slim_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
-        (List.cons (unit_test_param "only") List.empty) (Term.type_ 1) in
+        (List.cons (unit_test_param "only") List.empty) (Term.sort (SortLevel.concrete 1)) in
     let slim := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Slim") List.empty))
-        List.empty (Term.type_ 1) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
+        List.empty (Term.sort (SortLevel.concrete 1)) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim List.empty) in
     let arity_map := build_constructor_arity_map_with_structs (List.cons slim List.empty) (List.cons (unit_test_struct "Point" ["x", "y"]) List.empty) in
     let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
@@ -5136,13 +5136,13 @@ def test_struct_ctor_reference_shares_the_literals_tag : Bool :=
 #[test]
 def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
     let slim_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
-        (List.cons (unit_test_param "only") List.empty) (Term.type_ 1) in
+        (List.cons (unit_test_param "only") List.empty) (Term.sort (SortLevel.concrete 1)) in
     let slim := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Slim") List.empty))
-        List.empty (Term.type_ 1) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
+        List.empty (Term.sort (SortLevel.concrete 1)) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
     let wide_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
-        (List.cons (unit_test_param "a") (List.cons (unit_test_param "b") (List.cons (unit_test_param "c") List.empty))) (Term.type_ 1) in
+        (List.cons (unit_test_param "a") (List.cons (unit_test_param "b") (List.cons (unit_test_param "c") List.empty))) (Term.sort (SortLevel.concrete 1)) in
     let wide := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Wide") List.empty))
-        List.empty (Term.type_ 1) (List.cons wide_mk List.empty) empty_attrs Visibility.package_private in
+        List.empty (Term.sort (SortLevel.concrete 1)) (List.cons wide_mk List.empty) empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim (List.cons wide List.empty)) in
     let arity_map := build_constructor_arity_map (List.cons slim (List.cons wide List.empty)) in
     let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
@@ -5318,7 +5318,7 @@ def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
 /// `compile_db_decls_ir_with_debug` tests below.
 #[partial]
 def debug_fixture_def : Def :=
-    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.sort (SortLevel.concrete 1))
         (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private List.empty
 
 /// A def with a source position on an INNER term, as
@@ -5340,7 +5340,7 @@ def debug_fixture_def : Def :=
 ///     constant is folded into a phi operand.
 #[partial]
 def located_fixture_def : Def :=
-    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.sort (SortLevel.concrete 1))
         (Term.ctx (Location.mk 40 9 7)
             (Term.lit (Literal.if_ (Term.lit (Literal.num 1 NumSuffix.i64))
                                    (Term.lit (Literal.num 2 NumSuffix.i64))
@@ -5351,7 +5351,7 @@ def located_fixture_def : Def :=
 /// body -- line 2, column 3, at offset 5.
 #[partial]
 def located_num_fixture_def : Def :=
-    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.sort (SortLevel.concrete 1))
         (Term.ctx (Location.mk 5 2 3) (Term.lit (Literal.num 42 NumSuffix.i64)))
         List.empty empty_attrs Visibility.package_private List.empty
 
@@ -5438,10 +5438,10 @@ def test_compile_db_decls_ir_default_has_no_debug_info : Bool :=
 /// (`materialize_branch_val`) never runs.
 #[partial]
 def native_bool_over_branching_fixture_def : Def :=
-    Def.mk (NamePath.npath (List.cons (Identifier.id "spbeq") List.empty)) (Term.type_ 1)
-        (Term.lam (DebugName.named (Identifier.id "b")) (Term.type_ 1)
-            (Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1)
-                (Term.lam (DebugName.named (Identifier.id "y")) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "spbeq") List.empty)) (Term.sort (SortLevel.concrete 1))
+        (Term.lam (DebugName.named (Identifier.id "b")) (Term.sort (SortLevel.concrete 1))
+            (Term.lam (DebugName.named (Identifier.id "x")) (Term.sort (SortLevel.concrete 1))
+                (Term.lam (DebugName.named (Identifier.id "y")) (Term.sort (SortLevel.concrete 1))
                     (Term.app
                         (Term.app (Term.var 3 (DebugName.named (Identifier.id "I64.beq")))
                             (Term.lit (Literal.if_

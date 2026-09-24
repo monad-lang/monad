@@ -229,7 +229,7 @@ def wrap_level_forall (typ : Term) (lvars : List Identifier) : Term :=
 def wrap_forall (typ : Term) (vars : List Identifier) : Term :=
     match vars {
         List.cons hd rest =>
-            let typ_ := Term.type_ 1 in
+            let typ_ := Term.sort (SortLevel.concrete 1) in
             let forall_term := Term.forall (DebugName.named hd) typ_ (wrap_forall typ rest) in
             forall_term,
         List.empty => typ,
@@ -572,7 +572,7 @@ def test_level_binder_is_marked_as_a_sort : Bool :=
 /// must not wrap every signature in the corpus.
 #[test]
 def test_concrete_type_gains_no_level_binder : Bool :=
-    match elaborate_type (Term.type_ 1) List.empty List.empty {
+    match elaborate_type (Term.sort (SortLevel.concrete 1)) List.empty List.empty {
         Term.forall _dbg _kind _body => false,
         _ => true,
     }
@@ -598,7 +598,7 @@ def test_elaborate_type_level_generalization_is_idempotent : Bool :=
 /// `elaborate_type` itself builds when a signature has both.
 #[test]
 def test_bound_level_var_names_finds_the_level_binder : Bool :=
-    let inner : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) Term.hole in
+    let inner : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.sort (SortLevel.concrete 1)) Term.hole in
     let t : Term := Term.forall (DebugName.named (Identifier.id "u"))
                                 (Term.sort (SortLevel.concrete 0)) inner in
     match bound_level_var_names t {

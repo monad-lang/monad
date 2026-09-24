@@ -258,14 +258,14 @@ def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List Decl)
 #[partial]
 def unit_test_struct_decl (type_name : String) : Struct :=
     Struct.mk (Identifier.id type_name)
-        (List.cons (StructField.mk (Identifier.id "x") (Term.type_ 1) Option.none Multiplicity.many) List.empty)
+        (List.cons (StructField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) Option.none Multiplicity.many) List.empty)
         List.empty Visibility.package_private
 
 /// A one-constructor `Inductive`, by hand -- the comparison case below.
 #[partial]
 def unit_test_inductive_decl (type_name : String) : Inductive :=
     Inductive.mk (NamePath.npath (List.cons (Identifier.id type_name) List.empty))
-        List.empty (Term.type_ 1) List.empty List.empty Visibility.package_private
+        List.empty (Term.sort (SortLevel.concrete 1)) List.empty List.empty Visibility.package_private
 
 /// `filter_reachable_decls` must carry STRUCT decls through, exactly as
 /// it carries inductives: the constructor-arity table codegen builds

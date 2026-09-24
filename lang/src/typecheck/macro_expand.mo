@@ -182,7 +182,7 @@ def double_lookup (id : Identifier) : Option Term :=
 
 #[test]
 def test_macro_call_head_recognizes_var_macro_spine : Bool :=
-    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.type_ 1) in
+    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.sort (SortLevel.concrete 1)) in
     match macro_call_head call {
         Option.some id => id_eq id double_ident,
         Option.none => false,
@@ -190,7 +190,7 @@ def test_macro_call_head_recognizes_var_macro_spine : Bool :=
 
 #[test]
 def test_macro_call_head_none_for_ordinary_app : Bool :=
-    let call : Term := Term.app (Term.var 0 DebugName.unnamed) (Term.type_ 1) in
+    let call : Term := Term.app (Term.var 0 DebugName.unnamed) (Term.sort (SortLevel.concrete 1)) in
     match macro_call_head call {
         Option.some _ => false,
         Option.none => true,
@@ -201,9 +201,9 @@ def test_spine_args_collects_left_to_right : Bool :=
     // `f a b c` == `App(App(App(f, a), b), c)` -- args must come back
     // in the order they were originally supplied, not reversed.
     let f : Term := Term.var_macro (0 - 1) (DebugName.named double_ident) in
-    let a : Term := Term.type_ 1 in
-    let b : Term := Term.type_ 2 in
-    let c : Term := Term.type_ 3 in
+    let a : Term := Term.sort (SortLevel.concrete 1) in
+    let b : Term := Term.sort (SortLevel.concrete 2) in
+    let c : Term := Term.sort (SortLevel.concrete 3) in
     let call : Term := Term.app (Term.app (Term.app f a) b) c in
     match spine_args call List.empty {
         List.cons x1 rest1 =>
@@ -222,7 +222,7 @@ def test_expand_term_expands_registered_macro_call : Bool :=
     // `double! 9` -- expands to `9` directly (beta-reduction result,
     // no `Quote` wrapper required, matching `apply_term_macro`'s own
     // documented contract).
-    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.type_ 9) in
+    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.sort (SortLevel.concrete 9)) in
     I64.beq (term_type_level (expand_term double_lookup call)) 9
 
 #[test]
@@ -231,7 +231,7 @@ def test_expand_term_passes_through_unknown_macro_name : Bool :=
     // recursed into (its own arg still gets expanded) and left as an
     // unexpanded `Term.app`/`Term.var_macro` call.
     let unknown : Identifier := Identifier.id "unknown_macro" in
-    let inner_call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.type_ 4) in
+    let inner_call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.sort (SortLevel.concrete 4)) in
     let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named unknown)) inner_call in
     match expand_term double_lookup call {
         Term.app callee arg =>
@@ -242,7 +242,7 @@ def test_expand_term_passes_through_unknown_macro_name : Bool :=
 
 #[test]
 def test_expand_term_recurses_under_lambda : Bool :=
-    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.type_ 6) in
+    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.sort (SortLevel.concrete 6)) in
     let t : Term := Term.lam DebugName.unnamed Term.hole call in
     match expand_term double_lookup t {
         Term.lam _ _ body => I64.beq (term_type_level body) 6,
@@ -251,7 +251,7 @@ def test_expand_term_recurses_under_lambda : Bool :=
 
 #[test]
 def test_expand_term_no_macro_calls_structural_noop : Bool :=
-    let t : Term := Term.app (Term.var 0 DebugName.unnamed) (Term.type_ 2) in
+    let t : Term := Term.app (Term.var 0 DebugName.unnamed) (Term.sort (SortLevel.concrete 2)) in
     match expand_term no_macros_lookup t {
         Term.app _ arg => I64.beq (term_type_level arg) 2,
         _ => false,
@@ -263,7 +263,7 @@ def test_resolve_quote_unwraps_unquote : Bool :=
     // `resolve_quote` on the quote's own inner term replaces the
     // `unquote(...)` call with that value directly.
     let unquote_ref : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "unquote")) in
-    let inner : Term := Term.app unquote_ref (Term.type_ 13) in
+    let inner : Term := Term.app unquote_ref (Term.sort (SortLevel.concrete 13)) in
     I64.beq (term_type_level (resolve_quote no_macros_lookup inner)) 13
 
 #[test]
@@ -271,12 +271,12 @@ def test_resolve_quote_expands_macro_call_inside_quote : Bool :=
     // A macro call written directly inside a quoted body (not wrapped
     // in `unquote`) is ALSO expanded right there -- matches the
     // reference exactly.
-    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.type_ 21) in
+    let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named double_ident)) (Term.sort (SortLevel.concrete 21)) in
     I64.beq (term_type_level (resolve_quote double_lookup call)) 21
 
 #[test]
 def test_resolve_quote_leaves_nested_quote_wrapped : Bool :=
-    let inner_quote : Term := Term.quote_ (Term.type_ 8) in
+    let inner_quote : Term := Term.quote_ (Term.sort (SortLevel.concrete 8)) in
     match resolve_quote no_macros_lookup inner_quote {
         Term.quote_ inner => I64.beq (term_type_level inner) 8,
         _ => false,
@@ -288,7 +288,7 @@ def test_expand_term_dispatches_quote_to_resolve_quote : Bool :=
     // `resolve_quote` (which knows about `unquote`) rather than
     // continuing `expand_term`'s own plain structural walk.
     let unquote_ref : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "unquote")) in
-    let quoted : Term := Term.quote_ (Term.app unquote_ref (Term.type_ 17)) in
+    let quoted : Term := Term.quote_ (Term.app unquote_ref (Term.sort (SortLevel.concrete 17))) in
     match expand_term no_macros_lookup quoted {
         Term.quote_ inner => I64.beq (term_type_level inner) 17,
         _ => false,

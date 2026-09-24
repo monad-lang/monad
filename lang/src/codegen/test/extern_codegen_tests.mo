@@ -184,7 +184,7 @@ def mk_plain_def : Def :=
     let x_id := id "x" in
     let body := Term.var 0 (named x_id) in
     Def.mk (NamePath.npath (List.cons (id "plain") List.empty))
-        (Term.type_ 1) body
+        (sort_n 1) body
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty
 
 #[test]

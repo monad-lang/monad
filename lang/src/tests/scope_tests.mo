@@ -52,13 +52,13 @@ def test_build_with_inductive : Bool :=
     let empty_params : List Param := List.empty in
     let true_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "true") List.empty))
-        empty_params (Term.type_ 1) in
+        empty_params (sort_n 1) in
     let false_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "false") List.empty))
-        empty_params (Term.type_ 1) in
+        empty_params (sort_n 1) in
     let cns : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let empty_attrs : List Attribute := List.empty in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
+    let ind : Inductive := Inductive.mk type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private in
     let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     true
@@ -88,10 +88,10 @@ def test_scope_find_inductive_found : Bool :=
     let empty_params : List Param := List.empty in
     let true_cn : InductConstructor := InductConstructor.mk
         (NamePath.npath (List.cons (Identifier.id "true") List.empty))
-        empty_params (Term.type_ 1) in
+        empty_params (sort_n 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
     let empty_attrs : List Attribute := List.empty in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
+    let ind : Inductive := Inductive.mk type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_inductive` on
     // top of `scope_data_empty` rather than a hand-written literal.
@@ -149,7 +149,7 @@ def test_scope_push_local : Bool :=
 def test_scope_find_local_found : Bool :=
     let lv : LocalVar := {
         name := Identifier.id "x",
-        typ := Term.type_ 1,
+        typ := sort_n 1,
         multiplicity := Multiplicity.many,
     } in
     let empty_parent : Option LocalScope := Option.none in
@@ -169,12 +169,12 @@ def test_scope_find_local_found : Bool :=
 def test_scope_find_local_parent : Bool :=
     let lv1 : LocalVar := {
         name := Identifier.id "x",
-        typ := Term.type_ 1,
+        typ := sort_n 1,
         multiplicity := Multiplicity.many,
     } in
     let lv2 : LocalVar := {
         name := Identifier.id "y",
-        typ := Term.type_ 1,
+        typ := sort_n 1,
         multiplicity := Multiplicity.many,
     } in
     let empty_parent : Option LocalScope := Option.none in
@@ -566,10 +566,10 @@ def test_build_scope_then_resolve_constructor : Bool :=
     let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
     let true_name : NamePath := NamePath.npath (List.cons (Identifier.id "true") List.empty) in
     let empty_params : List Param := List.empty in
-    let true_cn : InductConstructor := InductConstructor.mk true_name empty_params (Term.type_ 1) in
+    let true_cn : InductConstructor := InductConstructor.mk true_name empty_params (sort_n 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
     let empty_attrs : List Attribute := List.empty in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
+    let ind : Inductive := Inductive.mk type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private in
     let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     let s : Scope := {
@@ -597,8 +597,8 @@ def test_build_scope_then_resolve_constructor : Bool :=
 #[test]
 def test_instance_key_matches_type_args : Bool :=
     let cls_name : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
-    let i64_typ : Term := Term.type_ 1 in
-    let bool_typ : Term := Term.type_ 1 in
+    let i64_typ : Term := sort_n 1 in
+    let bool_typ : Term := sort_n 1 in
     let show_i64 : Instance := Instance.mk
         (Identifier.id "showI64")
         cls_name
@@ -645,8 +645,8 @@ def test_instance_key_matches_type_args : Bool :=
 #[test]
 def test_instance_key_matches_wrong_type_args : Bool :=
     let cls_name : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
-    let i64_typ : Term := Term.type_ 1 in
-    let string_typ : Term := Term.type_ 2 in  // different from type_1
+    let i64_typ : Term := sort_n 1 in
+    let string_typ : Term := sort_n 2 in  // different from type_1
     let show_i64 : Instance := Instance.mk
         (Identifier.id "showI64")
         cls_name
@@ -681,10 +681,10 @@ def test_find_inductive_by_constructor_found : Bool :=
     let ind_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
     let some_np : NamePath := NamePath.npath (List.cons (Identifier.id "some") List.empty) in
     let none_np : NamePath := NamePath.npath (List.cons (Identifier.id "none") List.empty) in
-    let some_cn : InductConstructor := InductConstructor.mk some_np List.empty (Term.type_ 1) in
-    let none_cn : InductConstructor := InductConstructor.mk none_np List.empty (Term.type_ 1) in
+    let some_cn : InductConstructor := InductConstructor.mk some_np List.empty (sort_n 1) in
+    let none_cn : InductConstructor := InductConstructor.mk none_np List.empty (sort_n 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
-    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) cns List.empty Visibility.package_private in
+    let ind : Inductive := Inductive.mk ind_name List.empty (sort_n 1) cns List.empty Visibility.package_private in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_inductive` on
     // top of `scope_data_empty` rather than a hand-written literal.
@@ -708,8 +708,8 @@ def test_find_inductive_by_constructor_found : Bool :=
 def test_find_inductive_by_constructor_not_found : Bool :=
     let ind_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
     let some_np : NamePath := NamePath.npath (List.cons (Identifier.id "some") List.empty) in
-    let some_cn : InductConstructor := InductConstructor.mk some_np List.empty (Term.type_ 1) in
-    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) (List.cons some_cn List.empty) List.empty Visibility.package_private in
+    let some_cn : InductConstructor := InductConstructor.mk some_np List.empty (sort_n 1) in
+    let ind : Inductive := Inductive.mk ind_name List.empty (sort_n 1) (List.cons some_cn List.empty) List.empty Visibility.package_private in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_inductive` on
     // top of `scope_data_empty` rather than a hand-written literal.
@@ -855,7 +855,7 @@ def test_scope_qualified_wrong_module_does_not_resolve : Bool :=
 
 #[test]
 def test_placeholder_carrier_sorts_and_holes : Bool :=
-    placeholder_carrier (Term.type_ 1) && placeholder_carrier (Term.type_ 0) &&
+    placeholder_carrier (sort_n 1) && placeholder_carrier (sort_n 0) &&
     placeholder_carrier Term.hole
 
 #[test]
@@ -874,7 +874,7 @@ def local_var (nm : Identifier) : Term :=
 /// would lose the `Foldable.foldr ... []` resolution above.
 #[test]
 def test_placeholder_local_yields_a_carrier : Bool :=
-    match infer_carrier_type (placeholder_env (Identifier.id "filtered") (Term.type_ 1)) List.empty str_map_empty List.empty (local_var (Identifier.id "filtered")) {
+    match infer_carrier_type (placeholder_env (Identifier.id "filtered") (sort_n 1)) List.empty str_map_empty List.empty (local_var (Identifier.id "filtered")) {
         Option.some _ => true,
         Option.none => false,
     }
@@ -922,7 +922,7 @@ def beq_list_instance : Instance :=
         (List.cons (TypeConstraint.mk beq_cls (List.cons (Identifier.id "A") List.empty)) List.empty)
         (List.cons (list_of (var_named "A")) List.empty)
         Visibility.package_private
-        (List.cons (param_many (Identifier.id "A") (Term.type_ 1)) List.empty)
+        (List.cons (param_many (Identifier.id "A") (sort_n 1)) List.empty)
         List.empty
 
 /// `instance [Show A] Show A` -- a candidate that binds `A` back to `A` is
@@ -933,7 +933,7 @@ def show_a_instance : Instance :=
         (List.cons (TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty)) List.empty)
         (List.cons (var_named "A") List.empty)
         Visibility.package_private
-        (List.cons (param_many (Identifier.id "A") (Term.type_ 1)) List.empty)
+        (List.cons (param_many (Identifier.id "A") (sort_n 1)) List.empty)
         List.empty
 
 def bound_carrier_slug (ins : Instance) (cls : NamePath) (vars : List Identifier) (c : Term) : String :=

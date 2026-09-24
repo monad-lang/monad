@@ -2067,15 +2067,15 @@ def test_term_forall : Bool :=
 
 #[test]
 def test_term_pi : Bool :=
-    let arg : Term := Term.type_ 1 in
-    let ret : Term := Term.type_ 1 in
+    let arg : Term := Term.sort (SortLevel.concrete 1) in
+    let ret : Term := Term.sort (SortLevel.concrete 1) in
     let p : Term := Term.pi arg ret in
     true
 
 #[test]
 def test_term_dep_pi : Bool :=
     // Dependent pi: pi Nat (var 0 "n") — ret references arg at index 0
-    let arg : Term := Term.type_ 0 in
+    let arg : Term := Term.sort (SortLevel.concrete 0) in
     let ret : Term := Term.var 0 (DebugName.named (Identifier.id "n")) in
     let p : Term := Term.pi arg ret in
     true
@@ -2115,7 +2115,7 @@ def test_term_con : Bool :=
 
 #[test]
 def test_term_type : Bool :=
-    let t : Term := Term.type_ 0 in
+    let t : Term := Term.sort (SortLevel.concrete 0) in
     true
 
 #[test]

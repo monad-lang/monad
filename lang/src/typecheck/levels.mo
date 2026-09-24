@@ -190,27 +190,27 @@ def test_subst_levels_term_reaches_under_a_binder : Bool :=
     let binds : List (Pair Identifier SortLevel) :=
         List.cons (Pair.pair (Identifier.id "u") (SortLevel.concrete 7)) List.empty in
     let inner : Term := Term.sort (SortLevel.var (Identifier.id "u")) in
-    let t : Term := Term.pi (Term.type_ 0) inner in
+    let t : Term := Term.pi (Term.sort (SortLevel.concrete 0)) inner in
     match subst_levels_term t binds {
         Term.pi _arg ret => sort_term_has_level ret 7,
         _ => false,
     }
 
-/// `Term.type_` is the concrete spelling and carries no variable, so a
-/// substitution must pass it through UNCHANGED rather than converting
-/// it into the `Term.sort` spelling -- the same spelling-preservation
-/// discipline `sort_term_of_level` implements in the other direction.
+/// A substitution must pass a concrete level through UNCHANGED: a
+/// concrete level holds no variable, so there is nothing to substitute.
+/// The test used to be named for "spelling" -- it asserted that
+/// `subst_levels_term` returned the SPELLING it was handed rather than
+/// converting to the other one. There is one spelling now, so what is
+/// left to pin is the level itself, read back through the local
+/// `sort_term_has_level`.
 #[test]
-def test_subst_levels_term_leaves_the_concrete_spelling_alone : Bool :=
+def test_subst_levels_term_leaves_a_concrete_level_alone : Bool :=
     let binds : List (Pair Identifier SortLevel) :=
-        List.cons (Pair.pair (Identifier.id "u") (SortLevel.concrete 4)) List.empty in
-    match subst_levels_term (Term.type_ 1) binds {
-        Term.type_ n => I64.beq n 1,
-        _ => false,
-    }
+        [(Pair.pair (Identifier.id "u") (SortLevel.concrete 4))] in
+    sort_term_has_level (subst_levels_term (Term.sort (SortLevel.concrete 1)) binds) 1
 
 #[test]
 def test_free_level_vars_reaches_under_a_binder : Bool :=
     let inner : Term := Term.sort (SortLevel.var (Identifier.id "u")) in
-    let t : Term := Term.forall DebugName.unnamed (Term.type_ 0) inner in
+    let t : Term := Term.forall DebugName.unnamed (Term.sort (SortLevel.concrete 0)) inner in
     ids_are_exactly_one (free_level_vars t) (Identifier.id "u")

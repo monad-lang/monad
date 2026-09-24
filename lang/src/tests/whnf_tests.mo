@@ -61,15 +61,15 @@ def idt_scope : Scope := scope_of "type P { p0 }\ndef idt (x : Type) : Type := x
 #[test]
 def test_whnf_beta_identity_lambda : Bool :=
     // `(fn x : Type => x) Prop` reduces to `Prop`.
-    let redex : Term := Term.app (Term.lam dbg_x (Term.type_ 1) (Term.var 0 dbg_x)) (Term.type_ 0) in
-    Similar.similar (whnf idt_scope empty_locals redex) (Term.type_ 0)
+    let redex : Term := Term.app (Term.lam dbg_x (sort_n 1) (Term.var 0 dbg_x)) (sort_n 0) in
+    Similar.similar (whnf idt_scope empty_locals redex) (sort_n 0)
 
 #[test]
 def test_whnf_beta_constant_lambda_drops_argument : Bool :=
     // `(fn x : Type => Type) Prop` reduces to `Type`, and the discarded
     // argument must not leak into the result.
-    let redex : Term := Term.app (Term.lam dbg_x (Term.type_ 1) (Term.type_ 1)) (Term.type_ 0) in
-    Similar.similar (whnf idt_scope empty_locals redex) (Term.type_ 1)
+    let redex : Term := Term.app (Term.lam dbg_x (sort_n 1) (sort_n 1)) (sort_n 0) in
+    Similar.similar (whnf idt_scope empty_locals redex) (sort_n 1)
 
 // --- delta ---
 
@@ -87,7 +87,7 @@ def test_whnf_delta_then_beta : Bool :=
     // FREE VARIABLE, so beta alone has nothing to fire on. Only after
     // delta unfolds `idt` into a lambda can beta substitute `Prop` for
     // its parameter.
-    Similar.similar (whnf idt_scope empty_locals (Term.app (free_var "idt") (Term.type_ 0))) (Term.type_ 0)
+    Similar.similar (whnf idt_scope empty_locals (Term.app (free_var "idt") (sort_n 0))) (sort_n 0)
 
 #[test]
 def test_whnf_delta_then_beta_constant_function : Bool :=
@@ -95,7 +95,7 @@ def test_whnf_delta_then_beta_constant_function : Bool :=
     // body ignores the argument entirely, so the result must be
     // `konst`'s body (the name `P`) with no trace of `Prop`, and must
     // no longer be an application.
-    let reduced : Term := whnf idt_scope empty_locals (Term.app (free_var "konst") (Term.type_ 0)) in
+    let reduced : Term := whnf idt_scope empty_locals (Term.app (free_var "konst") (sort_n 0)) in
     match reduced {
         Term.app _ _ => false,
         _ => Similar.similar reduced (free_var "P"),
@@ -116,7 +116,7 @@ def test_whnf_local_binding_shadows_global : Bool :=
     // unrelated body.
     let lv : LocalVar := {
         name := Identifier.id "idt",
-        typ := Term.type_ 1,
+        typ := sort_n 1,
         multiplicity := Multiplicity.many,
     } in
     let locals : LocalScope := {
@@ -130,13 +130,13 @@ def test_whnf_local_binding_shadows_global : Bool :=
 
 #[test]
 def test_whnf_sort_unchanged : Bool :=
-    Similar.similar (whnf idt_scope empty_locals (Term.type_ 1)) (Term.type_ 1)
+    Similar.similar (whnf idt_scope empty_locals (sort_n 1)) (sort_n 1)
 
 #[test]
 def test_whnf_pi_unchanged : Bool :=
     // A `pi` is rigid even though its parts contain a reducible term:
     // WHNF reduces the HEAD only, never inside.
-    let p : Term := Term.pi (Term.app (free_var "idt") (Term.type_ 0)) (Term.type_ 1) in
+    let p : Term := Term.pi (Term.app (free_var "idt") (sort_n 0)) (sort_n 1) in
     Similar.similar (whnf idt_scope empty_locals p) p
 
 #[test]
@@ -148,7 +148,7 @@ def test_whnf_bound_var_unchanged : Bool :=
 def test_whnf_stuck_application_keeps_reduced_head : Bool :=
     // Head is an unknown name, so the application cannot fire -- but it
     // must come back as an application, not collapse to something else.
-    match whnf idt_scope empty_locals (Term.app (free_var "no_such_def") (Term.type_ 0)) {
+    match whnf idt_scope empty_locals (Term.app (free_var "no_such_def") (sort_n 0)) {
         Term.app _ _ => true,
         _ => false,
     }
@@ -161,8 +161,8 @@ def test_whnf_peels_located_wrapper : Bool :=
     // silently stopped here would be the quiet kind of wrong: the
     // comparison would just report a mismatch as before.
     let loc : Location := { offset := 0, line := 1, column := 1 } in
-    let wrapped : Term := Term.ctx loc (Term.app (free_var "idt") (Term.type_ 0)) in
-    Similar.similar (whnf idt_scope empty_locals wrapped) (Term.type_ 0)
+    let wrapped : Term := Term.ctx loc (Term.app (free_var "idt") (sort_n 0)) in
+    Similar.similar (whnf idt_scope empty_locals wrapped) (sort_n 0)
 
 // --- divergence is bounded ---
 
@@ -173,7 +173,7 @@ def test_whnf_recursive_def_terminates_on_fuel : Bool :=
     // only thing standing between conversion checking and a hung
     // compiler. Reaching the assertion at all IS the assertion.
     let s : Scope := scope_of "def loop (x : Type) : Type := loop x" in
-    let t : Term := Term.app (free_var "loop") (Term.type_ 1) in
+    let t : Term := Term.app (free_var "loop") (sort_n 1) in
     let reduced : Term := whnf s empty_locals t in
     match reduced {
         Term.hole => false,
@@ -358,7 +358,7 @@ def test_whnf_iota_reduces_scrutinee_first : Bool :=
     // itself. (`konst` is `def konst (x : Type) : Type := P.p0`-shaped:
     // its body is the constructor reference the match fires on.)
     let s : Scope := scope_of "type P { p0 }\ndef konst (x : Type) : Type := P.p0" in
-    let scrut : Term := Term.app (free_var "konst") (Term.type_ 1) in
+    let scrut : Term := Term.app (free_var "konst") (sort_n 1) in
     let case_ : MatchCase := mc "p0" List.empty (free_var "P") in
     let m : Term := Term.lit (Literal.match_ scrut (List.cons case_ List.empty)) in
     Similar.similar (whnf s empty_locals m) (free_var "P")

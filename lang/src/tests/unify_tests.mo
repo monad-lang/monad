@@ -27,11 +27,11 @@ def run_unify (a : Term) (b : Term) : Bool :=
 
 #[test]
 def test_unify_hole_left : Bool :=
-    run_unify Term.hole (Term.type_ 1)
+    run_unify Term.hole (sort_n 1)
 
 #[test]
 def test_unify_hole_right : Bool :=
-    run_unify (Term.type_ 1) Term.hole
+    run_unify (sort_n 1) Term.hole
 
 #[test]
 def test_unify_hole_hole : Bool :=
@@ -41,59 +41,59 @@ def test_unify_hole_hole : Bool :=
 
 #[test]
 def test_unify_sort_same : Bool :=
-    run_unify (Term.type_ 1) (Term.type_ 1)
+    run_unify (sort_n 1) (sort_n 1)
 
 #[test]
 def test_unify_sort_cumulativity : Bool :=
-    run_unify (Term.type_ 0) (Term.type_ 1)
+    run_unify (sort_n 0) (sort_n 1)
 
 #[test]
 def test_unify_sort_too_small : Bool :=
-    let ok : Bool := run_unify (Term.type_ 1) (Term.type_ 0) in
+    let ok : Bool := run_unify (sort_n 1) (sort_n 0) in
     Bool.not ok
 
 // --- Pi tests ---
 
 #[test]
 def test_unify_pi_same : Bool :=
-    let p1 : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
-    let p2 : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
+    let p1 : Term := Term.pi (sort_n 1) (sort_n 1) in
+    let p2 : Term := Term.pi (sort_n 1) (sort_n 1) in
     run_unify p1 p2
 
 #[test]
 def test_unify_pi_arg_mismatch : Bool :=
-    let p1 : Term := Term.pi (Term.type_ 2) (Term.type_ 1) in
-    let p2 : Term := Term.pi (Term.type_ 0) (Term.type_ 1) in
+    let p1 : Term := Term.pi (sort_n 2) (sort_n 1) in
+    let p2 : Term := Term.pi (sort_n 0) (sort_n 1) in
     let ok : Bool := run_unify p1 p2 in
     Bool.not ok
 
 #[test]
 def test_unify_pi_ret_mismatch : Bool :=
-    let p1 : Term := Term.pi (Term.type_ 1) (Term.type_ 2) in
-    let p2 : Term := Term.pi (Term.type_ 1) (Term.type_ 0) in
+    let p1 : Term := Term.pi (sort_n 1) (sort_n 2) in
+    let p2 : Term := Term.pi (sort_n 1) (sort_n 0) in
     let ok : Bool := run_unify p1 p2 in
     Bool.not ok
 
 #[test]
 def test_unify_pi_vs_sort : Bool :=
-    let p : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
-    let ok : Bool := run_unify p (Term.type_ 1) in
+    let p : Term := Term.pi (sort_n 1) (sort_n 1) in
+    let ok : Bool := run_unify p (sort_n 1) in
     Bool.not ok
 
 // --- Forall tests ---
 
 #[test]
 def test_unify_forall_stripped : Bool :=
-    let body : Term := Term.type_ 1 in
-    let f : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) body in
-    run_unify f (Term.type_ 1)
+    let body : Term := sort_n 1 in
+    let f : Term := Term.forall (DebugName.named (Identifier.id "A")) (sort_n 1) body in
+    run_unify f (sort_n 1)
 
 #[test]
 def test_unify_forall_both_sides : Bool :=
-    let body_left : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
-    let f_left : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) body_left in
-    let body_right : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
-    let f_right : Term := Term.forall (DebugName.named (Identifier.id "B")) (Term.type_ 1) body_right in
+    let body_left : Term := Term.pi (sort_n 1) (sort_n 1) in
+    let f_left : Term := Term.forall (DebugName.named (Identifier.id "A")) (sort_n 1) body_left in
+    let body_right : Term := Term.pi (sort_n 1) (sort_n 1) in
+    let f_right : Term := Term.forall (DebugName.named (Identifier.id "B")) (sort_n 1) body_right in
     run_unify f_left f_right
 
 // --- Literal / structural mismatch ---
@@ -101,7 +101,7 @@ def test_unify_forall_both_sides : Bool :=
 #[test]
 def test_unify_lit_vs_type : Bool :=
     let lit : Term := Term.lit (Literal.str "hello") in
-    let ok : Bool := run_unify lit (Term.type_ 1) in
+    let ok : Bool := run_unify lit (sort_n 1) in
     Bool.not ok
 
 #[test]
@@ -115,8 +115,8 @@ def test_unify_var_vs_different_var : Bool :=
 
 #[test]
 def test_unify_nested_pi : Bool :=
-    let arg : Term := Term.type_ 1 in
-    let inner_ret : Term := Term.type_ 1 in
+    let arg : Term := sort_n 1 in
+    let inner_ret : Term := sort_n 1 in
     let outer_ret : Term := Term.pi arg inner_ret in
     let p1 : Term := Term.pi arg outer_ret in
     let p2 : Term := Term.pi arg outer_ret in
@@ -127,14 +127,14 @@ def test_unify_nested_pi : Bool :=
 #[test]
 def test_unify_app_same : Bool :=
     let f : Term := Term.var 0 (DebugName.unnamed) in
-    let a : Term := Term.type_ 1 in
+    let a : Term := sort_n 1 in
     let app1 : Term := Term.app f a in
     run_unify app1 app1
 
 #[test]
 def test_unify_app_different : Bool :=
-    let app1 : Term := Term.app (Term.type_ 1) (Term.type_ 1) in
-    let app2 : Term := Term.app (Term.type_ 0) (Term.type_ 1) in
+    let app1 : Term := Term.app (sort_n 1) (sort_n 1) in
+    let app2 : Term := Term.app (sort_n 0) (sort_n 1) in
     let ok : Bool := run_unify app1 app2 in
     Bool.not ok
 
@@ -171,11 +171,11 @@ def conv_free (nm : String) : Term := Term.var sentinel (DebugName.named (Identi
 def test_unify_reduces_application_to_match : Bool :=
     // `idt Prop` reduces to `Prop`; structurally they are an `app` and
     // a `type_`, which never matched before.
-    run_unify_conv (Term.app (conv_free "idt") (Term.type_ 0)) (Term.type_ 0)
+    run_unify_conv (Term.app (conv_free "idt") (sort_n 0)) (sort_n 0)
 
 #[test]
 def test_unify_reduces_application_on_either_side : Bool :=
-    run_unify_conv (Term.type_ 0) (Term.app (conv_free "idt") (Term.type_ 0))
+    run_unify_conv (sort_n 0) (Term.app (conv_free "idt") (sort_n 0))
 
 #[test]
 def test_unify_reduces_both_sides : Bool :=
@@ -183,14 +183,14 @@ def test_unify_reduces_both_sides : Bool :=
     // Prop` discards its argument and yields `P`, and `idt P` yields
     // its argument, also `P`. Neither side is structurally anything
     // like the other.
-    run_unify_conv (Term.app (conv_free "konst") (Term.type_ 0))
+    run_unify_conv (Term.app (conv_free "konst") (sort_n 0))
                    (Term.app (conv_free "idt") (conv_free "P"))
 
 #[test]
 def test_unify_still_rejects_when_reduction_disagrees : Bool :=
     // `idt Prop` reduces to `Prop` (sort 0), not `Type` (sort 1). The
     // retry must not turn every mismatch into a match.
-    not (run_unify_conv (Term.app (conv_free "idt") (Term.type_ 1)) (Term.type_ 0))
+    not (run_unify_conv (Term.app (conv_free "idt") (sort_n 1)) (sort_n 0))
 
 #[test]
 def test_unify_still_rejects_irreducible_mismatch : Bool :=

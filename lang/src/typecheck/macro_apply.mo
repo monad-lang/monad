@@ -120,13 +120,13 @@ def test_apply_term_macro_single_param_substitutes : Bool :=
     // shape) applied to one arg -- `Term.lam _ _ (Term.var 0 _)`
     // beta-reduces straight to the supplied arg.
     let body : Term := Term.lam DebugName.unnamed Term.hole (Term.var 0 DebugName.unnamed) in
-    let arg : Term := Term.type_ 5 in
+    let arg : Term := Term.sort (SortLevel.concrete 5) in
     I64.beq (term_type_level (apply_term_macro body (List.cons arg List.empty))) 5
 
 #[test]
 def test_apply_term_macro_no_params_passthrough : Bool :=
     // `defmacro answer := 42` -- no params, no args, body returned as-is.
-    let body : Term := Term.type_ 42 in
+    let body : Term := Term.sort (SortLevel.concrete 42) in
     let no_args : List Term := List.empty in
     I64.beq (term_type_level (apply_term_macro body no_args)) 42
 
@@ -139,8 +139,8 @@ def test_apply_term_macro_two_params_curried : Bool :=
     // the body never references it.
     let body : Term :=
         Term.lam DebugName.unnamed Term.hole (Term.lam DebugName.unnamed Term.hole (Term.var 1 DebugName.unnamed)) in
-    let arg1 : Term := Term.type_ 7 in
-    let arg2 : Term := Term.type_ 8 in
+    let arg1 : Term := Term.sort (SortLevel.concrete 7) in
+    let arg2 : Term := Term.sort (SortLevel.concrete 8) in
     I64.beq (term_type_level (apply_term_macro body (List.cons arg1 (List.cons arg2 List.empty)))) 7
 
 #[test]
@@ -149,8 +149,8 @@ def test_apply_term_macro_over_application_falls_back_to_app : Bool :=
     // becomes an ordinary `Term.app` on the (already fully-applied)
     // result, rather than being silently dropped.
     let body : Term := Term.lam DebugName.unnamed Term.hole (Term.var 0 DebugName.unnamed) in
-    let arg1 : Term := Term.type_ 3 in
-    let arg2 : Term := Term.type_ 4 in
+    let arg1 : Term := Term.sort (SortLevel.concrete 3) in
+    let arg2 : Term := Term.sort (SortLevel.concrete 4) in
     match apply_term_macro body (List.cons arg1 (List.cons arg2 List.empty)) {
         Term.app callee extra => I64.beq (term_type_level callee) 3 && I64.beq (term_type_level extra) 4,
         _ => false,
@@ -166,7 +166,7 @@ def test_expand_decl_gen_call_matches_std_derive_shape : Bool :=
     let meta_ref : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "derive_lens_meta")) in
     let template_decls : List Decl :=
         List.cons (Decl.macro_call_d (Identifier.id "reflect_type_info") (List.cons named_t (List.cons meta_ref List.empty))) List.empty in
-    let call_arg : Term := Term.type_ 9 in
+    let call_arg : Term := Term.sort (SortLevel.concrete 9) in
     match expand_decl_gen_call (List.cons t_param List.empty) template_decls (List.cons call_arg List.empty) {
         Option.some expanded =>
             match expanded {
@@ -198,8 +198,8 @@ def test_expand_decl_gen_call_two_params_both_substituted : Bool :=
     let y_ref : Term := Term.var (0 - 1) (DebugName.named y_ident) in
     let template_decls : List Decl :=
         List.cons (Decl.macro_call_d (Identifier.id "combine") (List.cons x_ref (List.cons y_ref List.empty))) List.empty in
-    let arg_x : Term := Term.type_ 1 in
-    let arg_y : Term := Term.type_ 2 in
+    let arg_x : Term := Term.sort (SortLevel.concrete 1) in
+    let arg_y : Term := Term.sort (SortLevel.concrete 2) in
     match expand_decl_gen_call (List.cons x_param (List.cons y_param List.empty)) template_decls (List.cons arg_x (List.cons arg_y List.empty)) {
         Option.some expanded =>
             match expanded {

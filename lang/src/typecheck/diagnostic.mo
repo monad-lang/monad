@@ -74,7 +74,7 @@ def render_type_error (context_name : String) (path : Option String) (e : TypeEr
 
 #[test]
 def test_type_error_message_mismatch : Bool :=
-	String.beq (type_error_message (TypeError.mismatch (Term.type_ 1) (Term.type_ 2))) "type mismatch: expected Type, found Type 1"
+	String.beq (type_error_message (TypeError.mismatch (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 2)))) "type mismatch: expected Type, found Type 1"
 
 #[test]
 def test_type_error_message_unknown_var : Bool :=

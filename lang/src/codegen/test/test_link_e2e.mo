@@ -20,7 +20,7 @@ def build_main42 : List Def :=
     let body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let def_ := Def.mk
         (NamePath.npath (List.cons id List.empty))
-        (Term.type_ 1)
+        (sort_n 1)
         body
         List.empty
         List.empty
