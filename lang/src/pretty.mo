@@ -444,9 +444,21 @@ def show_use_path (path : ModulePath) : String :=
 /// anywhere before the `mote_d` arm below needed one (`show_decl`'s own
 /// other arms only ever render `Term`s inside a decl's body, and no
 /// attribute reaches those).
+///
+/// A string is QUOTED, deliberately: unquoted, `#![mote { name := "x" }]`
+/// printed as `name := x`, which is an `AttrArg.ident` — so the output of
+/// `monad pretty` turned a string attribute into a different attribute.
+///
+/// One documented spelling still does not round-trip, and it is an AST
+/// limitation rather than a printer one: `AttrArg.group` is what BOTH the
+/// `[…]` list and the `{…}` named block parse into (`attr_arg_group_close`
+/// and `attr_arg_named_close` are two spellings of one variant), so
+/// `deps := [init, std]` prints as `deps := {init std}` and re-parsing it
+/// yields a group where a list was meant. Separating them needs a distinct
+/// `AttrArg` variant in both compilers, not a brace here.
 def show_attr_arg (a : AttrArg) : String := match a {
     AttrArg.ident i => show_identifier i,
-    AttrArg.str s => s,
+    AttrArg.str s => String.concat "\"" (String.concat s "\""),
     AttrArg.num n => I64.to_string n,
     AttrArg.named name value =>
         String.concat (String.concat (show_identifier name) " := ") (show_attr_arg value),
@@ -462,6 +474,17 @@ def show_attr_args (args : List AttrArg) (acc : String) : String := match args {
 def show_attribute (a : Attribute) : String := match a {
     Attribute.mk name args =>
         String.concat (show_identifier name) (String.concat (show_attr_args args "") " "),
+}
+
+/// `show_term` for each of `args`, space-separated — the argument list of a
+/// declaration-position macro call (`derive_beq! Point`). A local helper in
+/// the `show_attr_args` shape rather than a new member of the `show_*`
+/// family: `List Term` as a printed sequence appears in exactly that one
+/// arm below.
+#[partial]
+def show_term_args (args : List Term) (acc : String) : String := match args {
+    List.empty => acc,
+    List.cons t rest => show_term_args rest (String.concat acc (String.concat " " (show_term t))),
 }
 
 def show_decl (d : Decl) : String := match d {
@@ -484,6 +507,24 @@ def show_decl (d : Decl) : String := match d {
         let path_str := show_name_path path in
         let header := String.concat (String.concat "open " path_str) (show_open_filter filter) in
         String.concat (String.concat header " in ") (show_decl inner),
+    /// The macro family — the three `Decl` variants this match had no arm
+    /// for, which is a hard failure rather than a blank line, because the
+    /// match is exhaustive over an inductive: `monad pretty
+    /// std/src/derive_tests.mo` (whose first declaration is
+    /// `derive_beq! Point`) core-dumped on exactly this hole, and that file
+    /// is in the corpus.
+    ///
+    /// The rendering is deliberately shallow. `decl_gen_d` carries the
+    /// declarations it generates, and printing them would mean calling
+    /// `show_decls`, which makes these two functions mutually recursive —
+    /// for no gain in a dump that already promises no exact round trip. The
+    /// generated count is not rendered either: `List.length` would be a new
+    /// dependency for a cosmetic field.
+    def_macro_d def_ => String.concat "defmacro " (show_def def_),
+    decl_gen_d name params _decls _attrs =>
+        String.concat "declmacro " (String.concat (show_name_path name) (String.concat " " (show_params params))),
+    macro_call_d name args =>
+        String.concat (String.concat (show_identifier name) "!") (show_term_args args ""),
 }
 
 /// Pretty-print a whole decl_list, one `show_decl` per declaration
