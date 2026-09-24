@@ -93,7 +93,7 @@ For context on what "alpha" means here:
 |---|---|
 | Monad source (`.mo`) | ~81,500 lines, of which `lang/` is ~64,500 |
 | Rust source (bootstrap host) | ~56,400 lines |
-| Monad tests (`#[test]`) | 2,033 defined; **1,964** run by CI's sweep |
+| Monad tests (`#[test]`) | **2,002** run by CI's sweep — every one through the self-hosted runner |
 | Native functions | 137 declared in `init/`+`std/`; 3 unimplemented everywhere; the backend wires a subset |
 | Standard library | ~440 public defs, 35 classes, 132 instances (excluding test modules) |
 
