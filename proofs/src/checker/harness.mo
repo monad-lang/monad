@@ -26,8 +26,14 @@
 //     built no binder at all. It was widened deliberately (W1.2) so the
 //     `Forall` universe arm could be pinned: `type_check_pi` and
 //     `type_check_forall` are separate arms, and a `max` added to one and
-//     not the other is precisely the half-fix a pin has to catch. It is
-//     the only export widened so far.
+//     not the other is precisely the half-fix a pin has to catch.
+//   - `level_const` was the second widening (W1.4), and the reason is the
+//     same shape of argument: a sort's level is often a COMPUTED `max`, so
+//     a reader that matches only the concrete shape answers "not a sort"
+//     for exactly the `Pi`/`Forall` universes this harness exists to pin.
+//     Folding through `level_const` is what makes those pins mean anything.
+//     Two exports widened so far, each forced by one pin that cannot be
+//     written otherwise.
 //   - `Similar` (a class) is not `pub`, so no pin compares two arbitrary
 //     inferred types. What a pin CAN do is read a concrete sort level out
 //     of an inferred type (`inferred_sort_level`, pattern-matching the
@@ -39,7 +45,7 @@
 
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_local_types, empty_locals, type_check}
-use lang::types {ModulePath, Scope, ScopeData, Term}
+use lang::types {ModulePath, Scope, ScopeData, Term, level_const}
 
 // A scope with the builtins only (`add_builtins` registers `Type`,
 // `Prop`, `Sort`, `Pred`), which is all a leaf-rule pin needs: none of

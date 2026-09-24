@@ -1743,7 +1743,7 @@ def level_i64_max (a: I64) (b: I64) : I64 := if I64.gt a b then a else b
 /// the comparisons below all refuse it, which is the sound direction (an
 /// unresolved level costs completeness, never soundness), and W1.5's
 /// normalizing comparison is what resolves these structurally.
-def level_const (l: SortLevel) : Option I64 := match l {
+pub def level_const (l: SortLevel) : Option I64 := match l {
     SortLevel.concrete n => Option.some n,
     SortLevel.var _ => Option.none,
     SortLevel.succ inner => match level_const inner {
@@ -1863,6 +1863,22 @@ def sort_term_of_level (l: SortLevel) : Term := match level_const l {
     Option.some n => Term.type_ n,
     Option.none => Term.sort l,
 }
+
+/// A sort at a concrete level, in the one remaining spelling.
+///
+/// A FIXTURE SHORTHAND, not a layer. Every hand-written sort in the test
+/// suite used to say `Term.type_ n`; this is what that becomes, so ~640 sites
+/// do not each spell out `Term.sort (SortLevel.concrete n)`. Production code
+/// writes the constructor directly.
+///
+/// It is also what keeps `SortLevel` out of sixteen test files: a call site
+/// writes `sort_n 3` and never names the level type at all. Nothing about the
+/// level rules depends on the difference -- `level_const`/`sort_level_of` fold
+/// a `concrete` built either way to the same answer.
+///
+/// Deliberately NOT `pub`: `proofs/` writes the explicit constructor instead,
+/// so a test convenience never becomes part of `lang`'s public surface.
+def sort_n (n : I64) : Term := Term.sort (SortLevel.concrete n)
 
 /// The sort level of a term known to be a TYPE, for a caller that must answer
 /// with a level rather than an `Option`.
