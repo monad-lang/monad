@@ -88,10 +88,11 @@ dependency from-registry 1.0: registry deps not yet supported
 ```
 
 There are no `build`/`add`/`publish` commands. The self-hosted compiler reads
-manifests too — `check`, `test` and `compile` share one mode dispatch (explicit
-paths, `--workspace`, or the mote you are standing in) and resolve a module
-path from the mote doing the `use`, falling back to the directory conventions
-for script modules. See
+manifests too — `check` and `test` share one mode dispatch (explicit paths,
+`--workspace`, or the mote you are standing in; `compile` takes an explicit
+path, and a bare one prints its usage) and all three resolve a module path from
+the mote doing the `use`, falling back to the directory conventions for script
+modules. See
 [How Modules Are Found](./modules.md#how-modules-are-found). What remains
 host-only is everything beyond a manifest's declared paths: transitive walking,
 the `mote.lock` format, version-conflict detection, and the registry.
@@ -109,11 +110,21 @@ This section used to be a syntax table, and it is **empty now**. Everything that
 was in it has been implemented self-hosted: char literals, named instances, `_`
 holes, multi-binding `let`, brace-parameter declarations, multiplicity prefixes
 on parameters, `#[derive …]`, `\u{XXXX}` escapes and dotted instance names.
-There is no construct left that you can write for the host and not for the
-self-hosted compiler.
 
-Two *behavioural* differences remain — code both compilers accept, which they
-then read differently. Neither is a syntax gap.
+"Empty" means the entries that table held, not every construct either grammar
+can spell, and one family sits outside it. A lambda's **parameter** list:
+`fn (x) => x`, `fn (x := 5) => x` and `fn ({x, y} : P) => x` all parse under
+the host — its parameter annotation is optional, and a destructured group is
+accepted — and are a hard parse failure self-hosted, because the dispatch
+after `fn` sends every `(` to the typed-parameter path, which requires a `:`.
+The reverse holds in the same place: the host requires whitespace after `fn`,
+so `fn(x : I64) => x` parses only self-hosted. No file in the corpus writes a
+bare `fn (x)`, so this is latent rather than live, and it predates the rewrite
+above; it is named here because "no construct left" was read as covering it.
+
+One *behavioural* difference remains — code both compilers accept, which they
+then read differently. It is not a syntax gap. A second one, the un-inferable
+`_`, closed on this branch and is recorded below rather than deleted.
 
 **A missing `;` between `let` bindings.** Both parse it. Self-hosted, the
 binding's value expression is `atom (atom)*`, so it swallows the *next
@@ -134,14 +145,20 @@ what makes this one easy to write by accident: **write the `;`.** This is the
 same grammar difference as the atom-in-function-position entry below, seen from
 the other side.
 
-**A `_` whose type cannot be inferred.** `def h : I64 := _` is accepted by both,
-and by both it lowers to a value that is not what you wanted (`I64.beq h 0`
-fails under each). The divergence is only in the *un-inferable* shape: the host
-rejects a hole no expected type reaches — `def k : I64 := (fn x => x) _` is
-*"cannot infer the type of a hole"* — while self-hosted accepts it silently.
-That strictness is the host's, and matching it self-hosted is the metavariable
-work the checker-architecture plan owns, not a syntax feature. Either way: write
-the value.
+**A `_` whose type cannot be inferred — closed.** `def h : I64 := _` is accepted
+by both, and by both it lowers to a value that is not what you wanted
+(`I64.beq h 0` fails under each): write the value. The *un-inferable* shape used
+to be the divergence — the host rejects a hole no expected type reaches
+(`def k : I64 := (fn x => x) _` is *"cannot infer the type of a hole"*) while
+self-hosted accepted it silently — and it is not one any more. The reason it
+could not be closed by a predicate over the hole is worth keeping: the
+self-hosted parser wrote the sort `Type` onto every unannotated lambda
+parameter where the reference writes a hole, so a callee's own term shape
+(`fn x => x`, as opposed to an application) could not be read at all, and the
+argument side was checking against `Type` besides. Both halves were fixed
+together, and the port now rejects exactly the two rows of the probe matrix the
+host rejects (`(fn x => x) _` and `(fn (x : _) => x) _`) and accepts the other
+twelve.
 
 ## Syntax the self-hosted compiler accepts and the host rejects
 
@@ -201,8 +218,8 @@ branches, lambda argument, named-def-call argument, constructor argument,
 struct-literal field, class-method return — and enforces only the match-arm
 result, which it enforces correctly. `unify` itself is sound; the comparison is
 simply never invoked at those boundaries, so **a clean self-hosted `check` is
-not evidence of type soundness.** (The tenth position is the hole the host
-cannot give a type, under "A `_` whose type cannot be inferred" above.) The
+not evidence of type soundness.** (`def f : I64 := "s"` is the shortest way to
+see it: accepted self-hosted, one error under the host.) The
 self-hosted grammar is separately the more permissive one at the edges, in the
 four places listed above. Both directions are larger than the hole case this
 paragraph used to name, and the type-checking one is much the largest.

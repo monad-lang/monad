@@ -194,14 +194,16 @@ manifest, and why `monad check src/main.mo` from inside `cli/` now loads its own
 `init`/`std` and reports nothing. Run the compiler from the checkout root and
 nothing changes, because the first candidate always hits there.
 
-`check`, `test` and `compile` each take the same three modes: explicit paths,
+`check` and `test` each take the same three modes: explicit paths,
 `--workspace`/`-w` (every mote in the enclosing workspace), or bare — the mote
-containing the working directory:
+containing the working directory. `compile` is the exception: it takes an
+explicit path only, and a bare `monad compile` prints its usage rather than
+compiling the mote you are standing in:
 
 ```bash
 monad check --workspace
 monad test src/main.mo
-monad compile .            # builds the manifest's [bin] target
+monad compile cli/src/main.mo
 ```
 
 A file with no `mote.toml` above it is a **script module**: it declares the
@@ -269,7 +271,7 @@ def main (args : List String) : IO Unit :=
 - `init/` is pure and portable, `std/` is OS-specific
 - Only 12 modules are ambient — most of `std/` needs an explicit import
 - Resolution is mote-based: a mote's own root first, the directory cascade only as the script-mode fallback
-- `check`/`test`/`compile` each take explicit paths, `--workspace`, or the mote you are standing in
+- `check`/`test` each take explicit paths, `--workspace`, or the mote you are standing in; `compile` takes an explicit path
 - A script module names its mote with a leading `#![mote { name := …, deps := […] }]`
 - `pub`/`priv`/package-private control visibility
 
