@@ -70,9 +70,17 @@
   enterTest = "";
 
   # https://devenv.sh/tasks/
-  # Full "run everything" sweep for CI (see .github/workflows/ci.yml).
-  # `tasks."monad:bootstrap-compile"` below is the self-hosted
-  # self-compile, run from `.github/workflows/ci.yml` alongside this one.
+  # The "run everything" sweep for CI (see .github/workflows/ci.yml): the full
+  # .mo corpus, the self-hosted self-compile, the source-transparency oracle
+  # and the nightly, plus devenv's own task for the pre-commit suite.
+  #
+  # Every task here wraps a script under scripts/ because `showOutput` defaults
+  # to false: devenv-tasks captures a task's stdout and shows it only when the
+  # task FAILS, so a green CI job would show none of the evidence it collected.
+  # The CI jobs therefore call those scripts directly inside `nix develop -c`
+  # and these tasks stay as the local equivalent. The one exception --
+  # `devenv:git-hooks`, which CI still enters through a task -- says why in
+  # its own comment below.
   #
   # The script this calls now builds and uses the SELF-HOSTED binary
   # rather than `cargo run -- test` (the Rust evaluator). The self-hosted
@@ -111,117 +119,70 @@
       ${config.devenv.root}/scripts/nightly-release.sh
     '';
   };
-  # The self-hosted compiler compiles ITSELF, and then the binary that
-  # falls out has to do the job it was built for.
+  # The self-hosted compiler compiles ITSELF, and then the binary that falls
+  # out has to do the job it was built for -- twice, once `--release` and once
+  # in the default DWARF-emitting mode, each with its own fixpoint `cmp`.
   #
-  # The second step is the one with teeth. `compile` succeeding only says
-  # llc and clang were happy with the emitted IR; it says nothing about
-  # whether the binary works, and a compiler that builds but miscompiles
-  # is worse than one that fails to build. Running `check cli/src/main.mo`
-  # through it costs ~12s and exercises the whole front end -- parser,
-  # scope, elaboration, typechecker -- on the largest input in the tree.
+  # The body lives in scripts/bootstrap-compile.sh, which CI calls directly
+  # inside `nix develop -c` so that the --verbose per-module and per-stage
+  # trace is streamed to the job log: devenv-tasks captures a task's stdout
+  # and shows it only when the task FAILS, and a hang guard is only as useful
+  # as the trace that says which stage stalled. The script's own header carries
+  # the rest of the reasoning -- why the second step has teeth, why both turns
+  # of the fixpoint are asserted, and why `ulimit -s` is load-bearing.
   #
-  # What this deliberately does NOT check is the fixpoint: that the `.ll`
-  # this binary produces from the same source is byte-identical to the one
-  # the host produced (it is, and all three stages agree bit-for-bit), and
-  # that the same holds one more turn out. That is the stronger property
-  # and the one that would regress silently, but it costs another full
-  # self-compile per turn, which is more than this job should carry today.
-  # Verified by hand at 56e5e33; if this gets cheap enough, add it here.
-  #
-  # It got cheap enough (2026-09-19): the self-hosted compile is ~40s
-  # interpreted against ~320s when this comment was written, so both
-  # modes now cmp their second turn. The `ulimit -s` is load-bearing for
-  # exactly the turn this adds -- the second turn is the binary
-  # interpreting ITSELF, which is where the ladder's own rung-2 first hit
-  # the default 8MB stack (`|| true` keeps a runner whose HARD limit is
-  # lower at its own ceiling rather than failing the task).
+  # This task is the local equivalent: same script, same dev shell, just
+  # quieter on success (the pattern `monad:nightly` set above).
   tasks."monad:bootstrap-compile" = {
     exec = ''
-      set -euo pipefail
-      ulimit -s 131072 || true
-      out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
-      rm -rf "$out"; mkdir -p "$out"
-      # No timeout, by design: the interpreted self-compile measured ~320s
-      # (2026-09-09) but stretches 2-4x when the runner's other jobs and
-      # local sessions share this 8-core machine, and `cargo run`'s own
-      # build phase is ~10 min cold (fat-LTO profile; CI's ephemeral job
-      # containers never have a warm target/). A fixed `timeout` here was
-      # killing healthy runs. Progress is visible instead: --verbose
-      # streams a per-module and per-stage trace (std/src/log.mo), so a
-      # genuinely wedged run shows exactly which stage stalled.
-      # --release: debug info is on by default; DWARF emission costs ~30s
-      # on this workload and the binary this job tests does not need it.
-      cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --verbose --release
-      test -x "$out/monad"
-      "$out/monad" check cli/src/main.mo
-      # ... and the FIXPOINT, which is the property that would regress
-      # silently: the binary just built compiles the same source itself,
-      # and the `.ll` it emits (written beside its own `-o` output) must be
-      # byte-identical to the host's. Rung 1 ≡ rung 2, asserted rather than
-      # remembered. A binary that builds and checks but emits different IR
-      # for its own source is a miscompile the front-end tests cannot see.
-      "$out/monad" compile cli/src/main.mo -o "$out/monad2" --release
-      test -x "$out/monad2"
-      cmp "$out/monad.ll" "$out/monad2.ll"
-      # And again WITHOUT --release, which is the DEFAULT invocation and was
-      # broken for an unknown length of time precisely because nothing ran
-      # it: `monad compile cli/src/main.mo` died at `no instance found for
-      # `Append.append``, and the only signal was a self-compile nobody
-      # waited for (it took 7h48m before the located-parse fix).
-      #
-      # Both modes now share one term tree -- every term carries its source
-      # position on every path (`parse_all_decls`, lang/module.mo) -- so this
-      # run differs from the one above only in whether DWARF is EMITTED.
-      # That is exactly why it is worth running: it is the only gate for the
-      # carrier-inference shape probes in lang/scope.mo, which no
-      # small-file test can reach (see examples/located_terms.mo's own
-      # header for why, verified rather than assumed).
-      dbg="''${TMPDIR:-/tmp}/monad-bootstrap-ci-debug"
-      rm -rf "$dbg"; mkdir -p "$dbg"
-      cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$dbg/monad" --verbose
-      test -x "$dbg/monad"
-      "$dbg/monad" check cli/src/main.mo
-      # Same fixpoint in the default (DWARF-emitting) mode -- see the
-      # `--release` block above for why both turns are asserted.
-      "$dbg/monad" compile cli/src/main.mo -o "$dbg/monad2"
-      test -x "$dbg/monad2"
-      cmp "$dbg/monad.ll" "$dbg/monad2.ll"
+      ${config.devenv.root}/scripts/bootstrap-compile.sh
     '';
   };
 
-  # The `Term.ctx` transparency oracle (tools/debug_transparency_oracle.sh).
-  #
-  # Source positions ride the AST as `Term.ctx` wrappers on every path, and
-  # ~180 sites match on term SHAPE. A wrapper interposed where one of those
-  # looks does not crash -- it silently stops matching, and a call quietly
-  # fails to resolve. This asserts the property that makes wrappers safe:
+  # The `Term.ctx` transparency oracle (tools/debug_transparency_oracle.sh):
   # `--debug` may add `!dbg` annotations and nothing else, so stripping them
-  # must reproduce the `--release` build byte for byte.
+  # must reproduce the `--release` build byte for byte. It is the gate for the
+  # ~180 AST-shape match sites a `Term.ctx` wrapper can silently disarm.
   #
-  # It existed, unwired, while the bug it describes was live. Cheap: two
-  # compiles per example file, against the SELF-HOSTED BINARY rather than
-  # the Rust host interpreting cli/src/main.mo -- the binary is what ships,
-  # and it is ~40x faster per file besides.
+  # The body lives in scripts/debug-oracle.sh, which CI calls directly inside
+  # `nix develop -c` so the oracle's per-file verdicts reach the job log:
+  # devenv-tasks captures a task's stdout and shows it only when the task
+  # FAILS, and which file broke transparency is exactly what a failure report
+  # needs. It also carries the staleness guard for the binary
+  # `scripts/bootstrap-compile.sh` just built.
+  #
+  # This task is the local equivalent: same script, same dev shell, just
+  # quieter on success (the pattern `monad:nightly` set above).
   tasks."monad:debug-oracle" = {
     exec = ''
-      set -euo pipefail
-      out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
-      # Reuse the binary `monad:bootstrap-compile` just built -- in CI that
-      # is the step immediately before this one, in the same job. Rebuild
-      # when it is missing or older than any source compiled INTO it: a
-      # stale binary reports failures that are really its own age (one here
-      # predated two examples' syntax and could not parse them at all),
-      # which would be indistinguishable from the transparency break this
-      # looks for. All four motes, not just lang/ -- cli/ holds the compile
-      # target itself, and llvm/ and runtime/ hold the backend.
-      if [ ! -x "$out/monad" ] || [ -n "$(find ${config.devenv.root}/lang ${config.devenv.root}/cli ${config.devenv.root}/llvm ${config.devenv.root}/runtime -name '*.mo' -newer "$out/monad" -print -quit)" ]; then
-        mkdir -p "$out"
-        cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --release
-      fi
-      MONAD_BIN="$out/monad" ${config.devenv.root}/tools/debug_transparency_oracle.sh ${config.devenv.root}/examples/*.mo
+      ${config.devenv.root}/scripts/debug-oracle.sh
     '';
   };
+
+  # `devenv:git-hooks:run` is devenv's own task -- literally `prek run -a -c
+  # .pre-commit-config.yaml` -- and the CI `pre-commit-checks` job is the one
+  # step that stays a task rather than calling a script of its own.
+  #
+  # It is also the sweep every OTHER CI step already pays for. The devShell's
+  # shellHook ends in `devenv-tasks run devenv:enterShell --mode all`, and
+  # `--mode all` resolves the task graph in both directions from that root
+  # rather than only over its prerequisites -- so entering the dev shell runs
+  # `devenv:files` (which generates the gitignored .pre-commit-config.yaml),
+  # `devenv:git-hooks:install` and this task, the whole `prek run -a`, before
+  # any command in the step starts. A hook that fails there fails the shell
+  # (`nix develop` exits 1), so it decides the step: the pre-commit job's own
+  # command is never even reached when a hook has already failed at entry.
+  #
+  # What the setting below changes: devenv-tasks streams a task's output only
+  # for tasks with `showOutput` (its ui.rs: `VerbosityLevel::Normal =>
+  # state.show_output`), and a failing task is the one case that does not need
+  # it -- the failure report prints the captured stdout and stderr either way.
+  # So the case it buys is the GREEN run: which hooks ran and what they said,
+  # in the step log, instead of nothing at all. It has to be set here rather
+  # than on the CI command line because the entry-time run above is where the
+  # sweep actually happens. `devenv:git-hooks:install` and `devenv:files` stay
+  # quiet: their output is setup chatter rather than a result.
+  tasks."devenv:git-hooks:run".showOutput = true;
 
   # https://devenv.sh/git-hooks/
   git-hooks.hooks = {

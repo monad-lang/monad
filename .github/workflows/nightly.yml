@@ -29,9 +29,18 @@ jobs:
       #
       #   * a bare `run:` gets the RUNNER HOST's PATH, not the devenv's,
       #     which is how `file` went missing here while devenv.nix listed it;
-      #   * entering the shell re-runs devenv's shell-entry tasks (a full
-      #     `prek run -a` of the pre-commit suite), so the tag step's own
-      #     `nix develop` would cost minutes and add a second way to fail.
+      #   * the script writes those two step outputs itself, into
+      #     $GITHUB_OUTPUT, so splitting them into a second `nix develop`
+      #     entry would buy nothing and add a second way for the release job
+      #     to fail over something that has nothing to do with the release.
+      #     (Note it is the *outputs*, not the cost of a second entry, that
+      #     decide this. A dev-shell entry is not cheap: the flake devShell's
+      #     shellHook runs `devenv-tasks run devenv:enterShell --mode all`,
+      #     which resolves the whole task graph -- including
+      #     `devenv:git-hooks:run`, the full `prek run -a`, 75s warm and 291s
+      #     measured cold -- so hoisting these two outputs into a second
+      #     `nix develop -c` would buy a second sweep. Written here, they cost
+      #     nothing.)
       #
       # The script is called directly rather than through
       # `devenv tasks run monad:nightly` (which is the local equivalent):

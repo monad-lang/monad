@@ -22,7 +22,7 @@ jobs:
       # runs in its own ephemeral container on the self-hosted runner, so
       # every job cold-builds what it needs (the fat-LTO release profile
       # makes that ~10 min). That is expected wall time, not a failure:
-      # the bootstrap task deliberately has no compile deadline, only the
+      # the bootstrap job deliberately has no compile deadline, only the
       # job-level timeout-minutes hang guard below.
       - name: Build release binary
         run: nix develop --no-pure-eval --accept-flake-config -c cargo build --release --workspace
@@ -33,6 +33,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The one step that stays a devenv task rather than calling a script
+      # directly: `devenv:git-hooks:run` is `prek run -a` against
+      # .pre-commit-config.yaml, which is gitignored and generated at run time
+      # by devenv's own `devenv:files` task. Its output reaches this log because
+      # devenv.nix sets `showOutput` on that task; without it devenv-tasks
+      # would capture the per-hook output and print it only on failure.
+      #
+      # The sweep is not this job's alone. `nix develop -c` runs the whole task
+      # graph at shell entry in EVERY step of every job (the devShell's
+      # shellHook is `devenv-tasks run devenv:enterShell --mode all`, which
+      # resolves the graph in both directions, not just enterShell's
+      # prerequisites), and a hook failing there exits 1 from `nix develop`
+      # before this command is reached. So this job's verdict is really decided
+      # at shell entry; whether these two lines add to it is secondary. See the
+      # `showOutput` setting in devenv.nix for why that entry-time sweep now
+      # prints its per-hook results on a green run instead of staying captured.
       - name: Run pre commit checks
         run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run devenv:git-hooks
 
@@ -44,8 +60,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The script is called directly rather than through
+      # `devenv tasks run monad:test` (its local equivalent): devenv-tasks
+      # captures a task's stdout and shows it only on failure, which would
+      # swallow the per-file verdicts that say what failed.
       - name: Run tests
-        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:test
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c \
+            scripts/check-monad-tests.sh
 
   bootstrap:
     needs: build-rust
@@ -58,7 +80,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Bootstap compiler
-        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:bootstrap-compile
+      # Both steps call their script directly rather than through
+      # `devenv tasks run monad:bootstrap-compile` / `monad:debug-oracle` (the
+      # local equivalents): devenv-tasks captures a task's stdout and shows it
+      # only on failure, and here the output IS the diagnostic -- the compile's
+      # --verbose per-module stage trace, and the oracle's per-file verdicts.
+      #
+      # The two steps must stay in one job: the oracle reuses the binary the
+      # compile wrote to ${TMPDIR:-/tmp}/monad-bootstrap-ci/monad.
+      - name: Bootstrap compiler
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c \
+            scripts/bootstrap-compile.sh
       - name: Debug transparency oracle
-        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:debug-oracle
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c \
+            scripts/debug-oracle.sh

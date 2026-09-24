@@ -1,7 +1,9 @@
 # The `test` job from .github/workflows/ci.yml.
 #
-# One step, because the task already is one: `monad:test` runs
-# scripts/check-monad-tests.sh, which sweeps every mote plus slow_tests/.
+# One step: scripts/check-monad-tests.sh sweeps every mote plus slow_tests/.
+# Called directly rather than through `devenv tasks run monad:test` (its local
+# equivalent), as the GitHub job does, so the per-file verdicts reach this log
+# -- devenv-tasks captures a task's stdout and shows it only on failure.
 #
 # The GitHub job carries `timeout-minutes: 120` as a hang guard. Spindle has no
 # per-workflow timeout field -- the spindle operator sets one default
@@ -24,4 +26,4 @@ steps:
   - name: Run tests
     command: |
       nix develop --no-pure-eval --accept-flake-config -c \
-        devenv tasks run monad:test
+        scripts/check-monad-tests.sh

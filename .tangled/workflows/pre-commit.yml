@@ -5,18 +5,30 @@
 # examples` .mo sweep and `scripts/check-docs.sh` all come along for free and
 # stay defined in exactly one place (devenv.nix).
 #
-# Two things are worth knowing about the shape of this file on Spindle:
+# Three things are worth knowing about the shape of this file on Spindle:
 #
 #   * There is no `concurrency:` block to port. Actions cancelled in-progress
 #     runs per ref; Spindle queues workflows through its resource scheduler
 #     instead, and has no cancel-in-progress to configure.
 #
-#   * Entering the dev shell runs devenv's shell-entry tasks, which includes a
-#     full `prek run -a`. So every `nix develop -c` step anywhere in this
-#     directory pays for this sweep first, whether or not it asks for it. That
-#     is already true of the GitHub workflows (the same `nix develop -c`
-#     wrappers), and it is why `test.yml` and this file overlap more than their
-#     step names suggest.
+#   * Entering the dev shell DOES run this sweep, in every step of every
+#     workflow here. The devShell's shellHook ends in `devenv-tasks run
+#     devenv:enterShell --mode all`, and `--mode all` resolves the task graph
+#     in both directions from that root rather than only its prerequisites --
+#     so `devenv:files` (which generates .pre-commit-config.yaml) and
+#     `devenv:git-hooks:run` (the full `prek run -a`; 75s warm, 291s measured
+#     cold) run on every `nix develop -c`. `DEVENV_SKIP_TASKS=1` is the only
+#     way to suppress it. Nothing in a step can avoid that cost, so this one is
+#     not a duplicate of the other files so much as the only one that names it.
+#
+#   * This is the one CI job that stays a devenv task rather than calling a
+#     script directly: the hook set lives in `.pre-commit-config.yaml`, which
+#     is gitignored and generated at run time by devenv's own `devenv:files`
+#     task (`devenv:git-hooks:install` declares `after = ["devenv:files"]`,
+#     which is how the config comes to exist; it does exist by the time a step
+#     runs, because entry runs `devenv:files` too). devenv.nix sets
+#     `showOutput` on the task so prek's per-hook output is not captured and
+#     withheld on a green run.
 when:
   - event: ["push", "pull_request"]
     branch: ["main"]

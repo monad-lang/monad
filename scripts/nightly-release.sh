@@ -45,12 +45,22 @@ grep -qvE '^$|^unknown$' "$root/dist/commit.txt"
 "$bin" check cli/src/main.mo
 
 # The workflow's `tag`/`date` step outputs, for the release step. Written
-# here rather than in a second `nix develop` step of their own: entering the
-# dev shell runs devenv's git-hooks task (`prek run -a` -- the whole
-# pre-commit suite, minutes of it) every single time, so a second entry
-# would buy a second way for the release job to fail over something that has
-# nothing to do with the release. `date` here is the dev shell's coreutils,
-# like every other command in this script.
+# here rather than in a second `nix develop` step of their own: they are this
+# script's own output, so a second entry would buy nothing and add a second
+# way for the release job to fail over something that has nothing to do with
+# the release. `date` here is the dev shell's coreutils, like every other
+# command in this script.
+#
+# Nothing is saved by avoiding a shell entry either way, and that is the one
+# thing about the cost worth writing down: entering the dev shell DOES run the
+# pre-commit suite. The flake devShell's shellHook ends in `devenv-tasks run
+# devenv:enterShell --mode all`, and `--mode all` resolves the task graph in
+# both directions from that root rather than only its prerequisites -- which
+# pulls in `devenv:files` (generating .pre-commit-config.yaml) and
+# `devenv:git-hooks:run` (the full `prek run -a` -- 75s warm, 291s measured
+# cold), on every `nix develop -c` in this repo. `DEVENV_SKIP_TASKS=1` is the
+# only way to suppress it. So a second entry here would cost a second sweep,
+# not a `prek install`.
 # Unset outside Actions, which is the only place these outputs mean anything.
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   date_utc="$(date -u +%Y-%m-%d)"
