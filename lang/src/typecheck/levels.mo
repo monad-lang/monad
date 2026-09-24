@@ -22,7 +22,7 @@
 /// they reach a sort through their existing catch-alls.
 use lib::types {
   DebugName, Identifier, Similar, SortLevel, Term, free_level_vars_of,
-  level_const, level_subst, union_ids,
+  level_const, level_subst, sort_level_of, union_ids,
 }
 use lib::typecheck::traverse {term_map_children}
 

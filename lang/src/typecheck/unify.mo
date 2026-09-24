@@ -1,4 +1,7 @@
-use lib::types {LocalScope, Scope, Similar, Term, TypeError, forall, hole, mismatch, pi, sentinel, term_peel, type_}
+use lib::types {
+  LocalScope, Scope, Similar, SortLevel, Term, TypeError, forall, hole, level_le,
+  mismatch, pi, sentinel, sort_level_of, term_peel, type_,
+}
 use lib::typecheck::whnf {whnf}
 
 /// Structural type unification. Returns the unified type.
