@@ -1784,15 +1784,33 @@ def level_eq (l: SortLevel) (r: SortLevel) : Bool := match level_const l {
     },
 }
 
-/// `l <= r` -- cumulativity. Both sides must be concrete; an unresolved
-/// level answers FALSE (see `level_const`).
-def level_le (l: SortLevel) (r: SortLevel) : Bool := match level_const l {
-    Option.some a => match level_const r {
-        Option.some b => not (I64.gt a b),
+/// `l <= r` -- cumulativity.
+///
+/// Two ways to hold. A level is `<=` ITSELF whatever it evaluates to, so
+/// `level_eq` settles the reflexive case first: `u <= u` is true under every
+/// valuation of `u`, and it is not a guess. Without it `unify` was not
+/// reflexive on sorts -- `unify_sort` (`lang/typecheck/unify.mo`) routes both
+/// spellings here before the structural `Similar.similar` fallback ever runs,
+/// so `Sort u` failed to unify with `Sort u` and a universe-polymorphic
+/// signature could not be compared against itself.
+///
+/// Otherwise both sides must be concrete, and an unresolved level answers
+/// FALSE (see `level_const`) -- the sound direction, which costs
+/// completeness and never soundness. Two DIFFERENT variables still do not
+/// unify; W1.5's normalizing comparison is what resolves those structurally.
+///
+/// `level_lt` is unaffected by the reflexive arm, which is the point of
+/// spelling it `level_le (succ l) r`: `level_eq (succ u) u` is false (they
+/// are not the same level), so `Sort u : Sort u` stays rejected.
+def level_le (l: SortLevel) (r: SortLevel) : Bool :=
+    if level_eq l r then true
+    else match level_const l {
+        Option.some a => match level_const r {
+            Option.some b => not (I64.gt a b),
+            Option.none => false,
+        },
         Option.none => false,
-    },
-    Option.none => false,
-}
+    }
 
 /// `l < r` -- the sort rule, and exactly `succ l <= r`. Spelling it this way
 /// is not a shortcut: it is what makes `Sort n : Sort n` false by the same
@@ -1800,6 +1818,31 @@ def level_le (l: SortLevel) (r: SortLevel) : Bool := match level_const l {
 /// check had before W1.0's fix and the reason that fix was a one-line
 /// deletion rather than a special case.
 def level_lt (l: SortLevel) (r: SortLevel) : Bool := level_le (SortLevel.succ l) r
+
+/// `Sort n : Sort n` is Type-in-Type and must stay rejected -- the one
+/// thing `level_le`'s reflexive arm must NOT have loosened. `level_lt`
+/// is `level_le (succ l) r`, and `succ u` is not the same level as `u`,
+/// so the arm does not fire here.
+#[test]
+def test_level_lt_is_not_reflexive_on_a_level_var : Bool :=
+    let u : SortLevel := SortLevel.var (Identifier.id "u") in
+    Bool.not (level_lt u u)
+
+/// ...while `level_le` IS reflexive on the same variable. Asserted
+/// beside the test above because the two are one relation: a fix that
+/// made `level_le` reflexive by making `level_const` invent a number for
+/// a variable would pass this and fail that one.
+#[test]
+def test_level_le_is_reflexive_on_a_level_var : Bool :=
+    let u : SortLevel := SortLevel.var (Identifier.id "u") in
+    level_le u u
+
+/// And a variable is still not `<=` a DIFFERENT variable: nothing has
+/// determined the ordering, so refusing is the sound answer.
+#[test]
+def test_level_le_refuses_two_distinct_level_vars : Bool :=
+    Bool.not (level_le (SortLevel.var (Identifier.id "u"))
+                       (SortLevel.var (Identifier.id "v")))
 
 /// The sort level of a term, if that term is a sort -- in EITHER spelling.
 #[partial]

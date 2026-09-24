@@ -197,3 +197,38 @@ def test_unify_still_rejects_irreducible_mismatch : Bool :=
     // Neither side reduces at all -- the early-out path in
     // `unify_stuck`.
     not (run_unify_conv (conv_free "no_such_a") (conv_free "no_such_b"))
+
+// --- Level variables ---
+//
+// `unify` routes BOTH sort spellings to `unify_sort` before the
+// structural `Similar.similar` fallback ever runs, so a sort's
+// reflexivity is decided by `level_le` (`lang/types.mo`) and by nothing
+// else. These two pin the pair of answers that relation has to give.
+
+/// REFLEXIVITY. `Sort u` unifies with `Sort u` -- `u <= u` holds under
+/// every valuation, so this is not a guess. It failed before `level_le`
+/// grew its `level_eq` arm: `level_const` has no number for a variable,
+/// so the concrete comparison refused, and a universe-polymorphic
+/// signature could not be compared against itself.
+#[test]
+def test_unify_same_level_var_is_reflexive : Bool :=
+    run_unify (Term.sort (SortLevel.var (Identifier.id "u")))
+              (Term.sort (SortLevel.var (Identifier.id "u")))
+
+/// ...and two DIFFERENT level variables still do not, which is what
+/// keeps the arm above from being a blanket "any unresolved level
+/// matches". Nothing has determined that `u <= v`, so refusing is the
+/// sound direction; W1.5's normalizing comparison is what will resolve
+/// these structurally.
+#[test]
+def test_unify_distinct_level_vars_still_refuse : Bool :=
+    not (run_unify (Term.sort (SortLevel.var (Identifier.id "u")))
+                   (Term.sort (SortLevel.var (Identifier.id "v"))))
+
+/// Reflexivity reaches UNDER a binder too: `unify_go`'s `Term.pi` arm
+/// recurses through `unify`, so a Pi over a level variable is compared
+/// component-wise and each component meets the same relation.
+#[test]
+def test_unify_pi_over_a_level_var_is_reflexive : Bool :=
+    let s : Term := Term.sort (SortLevel.var (Identifier.id "u")) in
+    run_unify (Term.pi s s) (Term.pi s s)
