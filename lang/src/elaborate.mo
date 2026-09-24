@@ -1,7 +1,8 @@
-use lib::typecheck::levels {free_level_vars}
+use lib::typecheck::levels {free_level_vars, is_level_binder_kind}
 use lib::types {
-  Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive,
-  Instance, MatchCase, ModulePath, Param, Struct, Term, TypeConstraint,
+  Attribute, Class, ClassDef, Decl, Def, DebugName, Identifier, InductConstructor,
+  Inductive, Instance, MatchCase, ModulePath, Param, Similar, SortLevel, Struct,
+  Term, TypeConstraint,
   app, class_d, con, def_d, forall, hole, id, id_eq, id_member, if_, inductive_d,
   infix_d, instance_d, lam, lit, match_, mc, mk, mp, name, named, ntv, num, open_d,
   pi, scoped_open_d, sentinel, show_identifier, str, struct_d, type_, union_ids, unnamed,
@@ -152,8 +153,52 @@ def elaborate_type (typ : Term) (constraints : List TypeConstraint) (known_names
     // are name-keyed (see `lang/typecheck/levels.mo`'s header). A
     // signature mentioning `Sort u` gets a `u` binder here, so `u` is
     // bound by the def rather than dangling free.
-    let lv := free_level_vars typ in
+    //
+    // Minus what `typ` ALREADY binds. This function is run more than
+    // once over the same type -- `registered_def_type` (`lang/scope.mo`)
+    // elaborates an already-elaborated decl list, and passes
+    // `collect_forall_names typ` as `known_names` precisely so
+    // `wrap_forall` does not re-wrap the term variables. `free_level_vars`
+    // has no `known_names` of its own, so this subtraction is that same
+    // guard for the level half; without it the chain grows a duplicate
+    // `forall u` on every pass.
+    let lv := ids_without (free_level_vars typ) (bound_level_var_names typ) in
     wrap_level_forall (wrap_forall typ all_vars) lv
+
+/// The level-variable names `typ`'s own `Forall` binders already bind.
+/// The level half of what `known_names` does for term variables -- see
+/// `elaborate_type` above for why it is needed.
+///
+/// Keeps walking past a term binder rather than stopping at the first
+/// one: `wrap_level_forall` puts level binders outermost, so they lead
+/// today, but `collect_forall_names` (`lang/scope.mo`) walks the whole
+/// chain defensively for the same reason and this mirrors it.
+#[partial]
+def bound_level_var_names (typ : Term) : List Identifier :=
+    match typ {
+        Term.forall dbg kind body =>
+            if is_level_binder_kind kind
+            then match dbg {
+                DebugName.named id =>
+                    union_ids (List.cons id List.empty) (bound_level_var_names body),
+                DebugName.unnamed => bound_level_var_names body,
+            }
+            else bound_level_var_names body,
+        _ => List.empty,
+    }
+
+/// `a` less every member of `b`, order otherwise preserved. `union_ids`
+/// (`lang/types.mo`) is the other direction; there is no difference
+/// helper there, and this is the only caller.
+#[partial]
+def ids_without (a : List Identifier) (b : List Identifier) : List Identifier :=
+    match a {
+        List.cons hd rest =>
+            if id_member hd b
+            then ids_without rest b
+            else List.cons hd (ids_without rest b),
+        List.empty => List.empty,
+    }
 
 /// Wrap a type with a `Forall` binder for each free LEVEL variable.
 ///
@@ -530,4 +575,34 @@ def test_concrete_type_gains_no_level_binder : Bool :=
     match elaborate_type (Term.type_ 1) List.empty List.empty {
         Term.forall _dbg _kind _body => false,
         _ => true,
+    }
+
+/// Level generalization is IDEMPOTENT. `registered_def_type`
+/// (`lang/scope.mo`) runs `elaborate_def` over an already-elaborated
+/// decl list, so `elaborate_type` meets its own output; `known_names`
+/// keeps `wrap_forall` from re-wrapping the term variables, and
+/// `bound_level_var_names` is that same guard for the level half.
+/// Without it the chain grows one `forall u` per pass.
+///
+/// Asserted as "the second pass changes nothing", not as a binder count:
+/// what matters is the fixpoint, and a count would have to be restated
+/// whenever the marker or the ordering moved.
+#[test]
+def test_elaborate_type_level_generalization_is_idempotent : Bool :=
+    let typ : Term := Term.sort (SortLevel.var (Identifier.id "u")) in
+    let once : Term := elaborate_type typ List.empty List.empty in
+    Similar.similar (elaborate_type once List.empty List.empty) once
+
+/// The guard reads the binders' MARKER, not their position, so it still
+/// finds a level binder sitting outside a term binder -- the shape
+/// `elaborate_type` itself builds when a signature has both.
+#[test]
+def test_bound_level_var_names_finds_the_level_binder : Bool :=
+    let inner : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) Term.hole in
+    let t : Term := Term.forall (DebugName.named (Identifier.id "u"))
+                                (Term.sort (SortLevel.concrete 0)) inner in
+    match bound_level_var_names t {
+        List.cons hd rest =>
+            List.is_empty rest && Similar.similar hd (Identifier.id "u"),
+        List.empty => false,
     }
