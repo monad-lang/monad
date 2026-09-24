@@ -9,6 +9,10 @@ use lib::types {
   npath, nqn, open_d, scoped_open_d, show_name_path, struct_d, type_, use_d,
 }
 use lib::typecheck::traverse {con_map_children, native_map_children, term_map_children}
+// `collect_forall_names` has to tell a LEVEL binder from a type-variable
+// binder -- see its own doc comment. No new cycle: `lib::elaborate` below
+// already pulls this module in.
+use lib::typecheck::levels {is_level_binder_kind}
 // `collect_def_types` registers `elaborate_def`-wrapped types and needs the
 // same whole-graph known-name set the `check` path's `elaborate_def_typs`
 // uses -- see `registered_def_type`'s own doc comment for why.
@@ -3791,12 +3795,25 @@ def carrier_with_normalized_head (head_name : String) (typ : Term) : Term :=
 /// DEMOTED and never dropped.
 ///
 /// Mirrors `lang.typecheck.infer`'s `is_uninformative_carrier`, which
-/// screens exactly these two shapes; kept local rather than imported so
+/// screens exactly these shapes; kept local rather than imported so
 /// this file keeps its existing import set.
+///
+/// BOTH sort spellings, and the second one is not hypothetical: since
+/// `lower_parse_kind` (`lang/parser/lower_parse.mo`) started lowering
+/// every level the grammar produces to `Term.sort (concrete n)`, a
+/// param written `(A : Type)` arrives spelled that way and the
+/// `Term.type_` arm alone no longer sees it. That is the same missed arm
+/// `expected_carrier_of` below had -- found there by bisecting a
+/// segfault -- and the consequence here is the one this comment already
+/// describes: a placeholder that is not DEMOTED sits first in a
+/// first-that-wins search (`demote_uninformative_carriers`) and cannot
+/// fail against any instance, so it silently outranks every real carrier
+/// behind it.
 def placeholder_carrier (typ : Term) : Bool :=
     match term_peel typ {
         Term.hole => true,
         Term.type_ _ => true,
+        Term.sort _ => true,
         _ => false,
     }
 
@@ -4725,11 +4742,22 @@ def constraint_carriers (bindings : List (Pair Identifier Term)) (vars : List Id
 /// (`lang/elaborate.mo`) puts every free type variable at the FRONT, so
 /// this only ever needs to walk binders, but it keeps walking defensively
 /// rather than assuming.
+///
+/// A LEVEL binder is skipped: `wrap_level_forall` (`lang/elaborate.mo`)
+/// binds one per free level variable in the SAME chain, and a level
+/// variable is not a type variable -- binding `u` against a call
+/// argument's carrier would hand a universe level to a term-level
+/// unifier. This is the third of the three sites that open a `forall`
+/// chain and must tell the two apart, alongside
+/// `forall_chain_binder_names` (`lang/module.mo`) and `sig_tvars_go`
+/// (`lang/typecheck/infer.mo`).
 #[partial]
 def collect_forall_names (typ : Term) : List Identifier :=
     match term_peel typ {
-        Term.forall dbg _ body =>
-            match dbg {
+        Term.forall dbg kind body =>
+            if is_level_binder_kind kind
+            then collect_forall_names body
+            else match dbg {
                 DebugName.named id => List.cons id (collect_forall_names body),
                 DebugName.unnamed => collect_forall_names body,
             },
@@ -7947,6 +7975,64 @@ def test_expected_carrier_of_rejects_both_sort_spellings : Bool :=
             Option.some _ => false,
         },
         Option.some _ => false,
+    }
+
+// `placeholder_carrier`'s own pair, for the same reason
+// `test_expected_carrier_of_rejects_both_sort_spellings` above asserts
+// its pair together: the two functions are mirrors, and the ONLY way
+// this one fell behind was that a test covered `Term.type_` alone.
+// `placeholder_carrier` gates two real dispatch decisions --
+// `demote_uninformative_carriers` and `find_constraint_bound_carrier_
+// any` -- so a spelling it does not recognise is a placeholder that
+// outranks every real carrier behind it in a first-that-wins search.
+#[test]
+def test_placeholder_carrier_accepts_both_sort_spellings : Bool :=
+    placeholder_carrier (Term.type_ 1)
+        && placeholder_carrier (Term.sort (SortLevel.concrete 1))
+        && placeholder_carrier Term.hole
+
+/// ...and still rejects a REAL carrier, so the arm above did not turn
+/// the predicate into "everything is a placeholder".
+#[test]
+def test_placeholder_carrier_rejects_a_real_carrier : Bool :=
+    Bool.not (placeholder_carrier (carrier_var "List"))
+
+// `collect_forall_names` is the third site that opens a `forall` chain
+// and has to tell a LEVEL binder from a type-variable binder. The names
+// it returns are exactly what `bind_params_against_args` may bind
+// against a call's arguments, and a level variable must never be in
+// that set.
+
+/// A term binder (`wrap_forall`'s `Term.type_ 1` marker) IS collected.
+#[test]
+def test_collect_forall_names_keeps_a_term_binder : Bool :=
+    let t : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) Term.hole in
+    match collect_forall_names t {
+        List.cons hd rest =>
+            List.is_empty rest && Similar.similar hd (Identifier.id "A"),
+        List.empty => false,
+    }
+
+/// A level binder (`wrap_level_forall`'s sort-at-0 marker) is NOT.
+#[test]
+def test_collect_forall_names_skips_a_level_binder : Bool :=
+    let t : Term := Term.forall (DebugName.named (Identifier.id "u"))
+                                (Term.sort (SortLevel.concrete 0)) Term.hole in
+    List.is_empty (collect_forall_names t)
+
+/// The shape `elaborate_type` actually builds -- a level binder OUTSIDE
+/// a term binder. The walk has to skip the outer one and keep going
+/// rather than stop at it, which is what separates this from the two
+/// single-binder pins above.
+#[test]
+def test_collect_forall_names_skips_a_level_binder_and_keeps_going : Bool :=
+    let inner : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.type_ 1) Term.hole in
+    let t : Term := Term.forall (DebugName.named (Identifier.id "u"))
+                                (Term.sort (SortLevel.concrete 0)) inner in
+    match collect_forall_names t {
+        List.cons hd rest =>
+            List.is_empty rest && Similar.similar hd (Identifier.id "A"),
+        List.empty => false,
     }
 
 #[test]
