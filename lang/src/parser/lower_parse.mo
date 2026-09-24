@@ -386,7 +386,6 @@ def collect_kind_rems (k : ParseTermKind) (acc : List I64) : List I64 := match k
     ParseTermKind.var_macro _ => acc,
     ParseTermKind.con _ => acc,
     ParseTermKind.ntv _ => acc,
-    ParseTermKind.type_ _ => acc,
     // A level carries no `rem`: it is not a ParseTerm child.
     ParseTermKind.sort _ => acc,
     ParseTermKind.hole => acc,
@@ -462,7 +461,6 @@ def kind_wants_loc (k : ParseTermKind) : Bool := match k {
     ParseTermKind.lam _ _ _ => false,
     ParseTermKind.forall _ _ _ => false,
     ParseTermKind.pi _ _ _ => false,
-    ParseTermKind.type_ _ => false,
     ParseTermKind.sort _ => false,
     ParseTermKind.quote_ _ => false,
     ParseTermKind.hole => false,
@@ -570,23 +568,18 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),
         ParseTermKind.ntv n => Term.ntv (lower_parse_native ctx n),
         ParseTermKind.con c => Term.con (lower_parse_con ctx c),
-        // The one-line flip that makes `Term.sort` reachable corpus-wide:
-        // every level the grammar produces -- `Prop`/`Type`/`Sort n` in
+        // Every level the grammar produces -- `Prop`/`Type`/`Sort n` in
         // source, and the implicit-parameter and lambda defaults it
-        // hardcodes -- lowers through here. It is what makes the ~26 new
-        // `Term.sort` arms in the checker and codegen LIVE, which is the
-        // only thing that can catch a missed one (there is no
-        // exhaustiveness check, so a missing arm is a runtime crash).
+        // hardcodes -- lowers through here. A `ParseTermKind.sort` is
+        // already a `SortLevel`, so it carries straight across with no
+        // re-spelling, and `SortLevel.concrete` is just one of the shapes
+        // it can hold rather than a constructor of its own.
         //
-        // Verified corpus-neutral, not assumed: a HEAD-binary-vs-W1.1
-        // per-file diff over the whole 169-target sweep shows identical
-        // outcomes for every file (the `Term.sort` arms are behaviour
-        // -identical to their `Term.type_` siblings, so nothing observable
-        // moves). A real `Prop`/`Type`/`Sort N` SURFACE form is a separate,
-        // later change (W1.1b) -- `Sort n` today still parses as an
-        // application of the `Sort` global.
-        ParseTermKind.type_ u => Term.sort (SortLevel.concrete u),
-        // Already a `SortLevel`; carry it straight across.
+        // This is the single funnel that makes the checker's `Term.sort`
+        // arms reachable corpus-wide. Neither compiler has an exhaustiveness
+        // check, so an arm written against the old concrete-only spelling
+        // would fail at RUNTIME rather than at compile time -- which is why
+        // the spelling collapse is gated on this being the only arm left.
         ParseTermKind.sort level => Term.sort level,
         ParseTermKind.quote_ inner => Term.quote_ (lower_parse_term ctx inner),
         // Desugared HERE, not in the grammar -- this is the whole reason

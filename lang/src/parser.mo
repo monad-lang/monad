@@ -1369,7 +1369,7 @@ def type_params_loop (input : String) (name : Identifier) (params : List ParsePa
 #[partial]
 def type_params_try_bare (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem next => type_params_loop rem name (List.cons (parse_param_many (Identifier.id next) (pt_type_  1)) params) vis,
+		success rem next => type_params_loop rem name (List.cons (parse_param_many (Identifier.id next) (pt_sort (SortLevel.concrete 1))) params) vis,
 		fail _ => type_params_try_paren (tag "(" (skip_spaces orig)) orig name params vis
 	}
 
@@ -1420,7 +1420,7 @@ def type_try_kind (r : ParseResult String) (orig : String) (name : Identifier) (
 	match r {
 		success rem _ =>
 			type_kind_expr (type_expression rem) name params vis,
-		fail _ => type_brace (tag "{" (skip_spaces orig)) name params (pt_type_  1) vis
+		fail _ => type_brace (tag "{" (skip_spaces orig)) name params (pt_sort (SortLevel.concrete 1)) vis
 	}
 
 #[partial]
@@ -2664,7 +2664,7 @@ def class_params (input : String) (name : Identifier) (params : List ParseParam)
 def class_params_try_bare (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem next =>
-			class_params rem name (List.cons (parse_param_many (Identifier.id next) (pt_type_  1)) params) vis,
+			class_params rem name (List.cons (parse_param_many (Identifier.id next) (pt_sort (SortLevel.concrete 1))) params) vis,
 		fail _ => class_params_try_paren (tag "(" (skip_spaces orig)) orig name params vis
 	}
 
@@ -4907,7 +4907,7 @@ def sort_form_prop (input : String) : ParseResult ParseTerm :=
 #[partial]
 def sort_form_prop_kw (r : ParseResult String) : ParseResult ParseTerm :=
 	match r {
-		success rem _ => success rem (pt_type_ 0),
+		success rem _ => success rem (pt_sort (SortLevel.concrete 0)),
 		fail e => fail e
 	}
 
@@ -4920,7 +4920,7 @@ def sort_form_pred (input : String) : ParseResult ParseTerm :=
 #[partial]
 def sort_form_pred_kw (r : ParseResult String) : ParseResult ParseTerm :=
 	match r {
-		success rem _ => success rem (pt_type_ 0),
+		success rem _ => success rem (pt_sort (SortLevel.concrete 0)),
 		fail e => fail e
 	}
 
@@ -4931,7 +4931,7 @@ def sort_form_type (input : String) : ParseResult ParseTerm :=
 #[partial]
 def sort_form_type_kw (r : ParseResult String) : ParseResult ParseTerm :=
 	match r {
-		success rem _ => success rem (pt_type_ 1),
+		success rem _ => success rem (pt_sort (SortLevel.concrete 1)),
 		fail e => fail e
 	}
 
@@ -4962,7 +4962,7 @@ def sort_form_sort_level (rem : String) : ParseResult ParseTerm :=
 #[partial]
 def sort_form_sort_num (r : ParseResult I64) (rem : String) : ParseResult ParseTerm :=
 	match r {
-		success rest n => success rest (pt_type_ n),
+		success rest n => success rest (pt_sort (SortLevel.concrete n)),
 		fail _ => sort_form_sort_var (identifier rem)
 	}
 
@@ -7547,17 +7547,23 @@ def test_t_var_shadow : Bool :=
 
 // ─── `Sort u`: the level-variable form (W1.3) ─────────────────────────
 
-/// `Sort 1` must still take the NUMERAL path and lower to the concrete
-/// spelling. This is the regression guard for adding the variable arm:
-/// if the numeral arm stopped being tried first, every `Sort N` in the
-/// corpus would silently become a level variable named by its digits.
+/// `Sort 2` must still take the NUMERAL path and lower to a
+/// `SortLevel.concrete`. This is the regression guard for adding the
+/// variable arm: if the numeral arm stopped being tried first, every
+/// `Sort N` in the corpus would silently become a level variable named by
+/// its digits -- which is why this asserts the `concrete` SHAPE and not
+/// merely that some level survived.
 #[test]
 def test_sort_numeral_still_parses_concrete : Bool :=
 	match expression "Sort 2" {
 		success rem out =>
 			String.beq rem "" &&
 			match out.kind {
-				ParseTermKind.type_ u => I64.beq u 2,
+				ParseTermKind.sort level =>
+					match level {
+						SortLevel.concrete u => I64.beq u 2,
+						_ => false,
+					},
 				_ => false,
 			},
 		fail _ => false
@@ -7609,12 +7615,12 @@ def test_t_lambda_identity : Bool :=
 						ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
 						ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
 						ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
-						ParseTermKind.type_ _ => false, ParseTermKind.sort _ => false
+						ParseTermKind.sort _ => false
 					},
 				ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
 				ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,
 				ParseTermKind.lit _ => false, ParseTermKind.ntv _ => false,
-				ParseTermKind.con _ => false, ParseTermKind.type_ _ => false,
+				ParseTermKind.con _ => false,
 				ParseTermKind.sort _ => false, ParseTermKind.hole => false
 			},
 		fail _ => false
