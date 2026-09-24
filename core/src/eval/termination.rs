@@ -499,8 +499,9 @@ pub fn find_mutual_groups(
 /// Returns Ok if all self-calls use structural subterms on at least one
 /// parameter, or Err describing the first non-structural call found.
 pub fn check_termination(def: &Def) -> Result<(), TerminationError> {
-  // Skip if the definition has #[terminating] or #[partial] attribute
-  if def.has_terminating_attr() || def.has_partial_attr() {
+  // Skip if the definition carries a termination exemption: #[terminating],
+  // #[partial] or #[decreasing ...]. All three are assertions, none verified.
+  if def.has_terminating_attr() || def.has_partial_attr() || def.has_decreasing_attr() {
     return Ok(());
   }
 
@@ -529,7 +530,7 @@ pub fn check_termination_group(defs: &[&Def]) -> Result<(), TerminationError> {
 
   for def in defs {
     // Skip individual defs with escape attributes
-    if def.has_terminating_attr() || def.has_partial_attr() {
+    if def.has_terminating_attr() || def.has_partial_attr() || def.has_decreasing_attr() {
       continue;
     }
 
@@ -804,6 +805,41 @@ mod tests {
     assert!(
       result.is_ok(),
       "#[partial] should skip check: {}",
+      result.unwrap_err()
+    );
+  }
+
+  /// `#[decreasing <measure>]` is the third exemption. The body here is the
+  /// same bare self-call `test_infinite_loop_rejected` below rejects with no
+  /// attribute, so this pins the attribute doing the work rather than the
+  /// shape happening to pass — and pins that the named measure is NOT
+  /// verified: `x` is passed through unchanged, which is precisely the
+  /// non-decrease the check reports.
+  #[test]
+  fn test_decreasing_attr_skips_check() {
+    let name = test_def("walk");
+    let body = lam(
+      param(id("x"), Term::Hole),
+      crate::term::app(var("walk"), var("x")),
+    );
+
+    let def = Def {
+      name,
+      typ: Term::Hole,
+      term: body,
+      type_constraints: vec![],
+      attributes: vec![crate::term::Attribute {
+        source_location: Default::default(),
+        name: id("decreasing"),
+        args: vec![crate::term::AttrArg::Ident(id("x"))],
+      }],
+      vis: Default::default(),
+    };
+
+    let result = check_termination(&def);
+    assert!(
+      result.is_ok(),
+      "#[decreasing x] should skip check: {}",
       result.unwrap_err()
     );
   }

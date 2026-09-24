@@ -5,8 +5,8 @@
 /// pipeline: once a module's declarations have been checked, each of that
 /// module's own `def`s is verified to recurse only on a *structural subterm* of
 /// one of its formal parameters. A recursive call that cannot be shown to
-/// decrease something is an error unless the def carries `#[terminating]` or
-/// `#[partial]`.
+/// decrease something is an error unless the def carries `#[terminating]`,
+/// `#[partial]` or `#[decreasing ...]`.
 ///
 /// Before this module, both attributes parsed and were ignored self-hosted --
 /// `#[terminating] def loop (x : I64) : I64 := loop x` checked clean while the
@@ -73,8 +73,8 @@
 /// `plans/bootstrapping/check-deps-memory-blowup.md`.
 
 use lib::types {
-  Attribute, Decl, DebugName, Def, Identifier, MatchCase, Term,
-  def_d, has_attr, show_identifier, show_name_path,
+  AttrArg, Attribute, Decl, DebugName, Def, Identifier, MatchCase, Term,
+  attr_args, def_d, has_attr, show_identifier, show_name_path,
 }
 use lib::pretty {show_term}
 
@@ -502,12 +502,31 @@ def def_attrs (d : Def) : List Attribute :=
         Def.mk {attrs, ..} => attrs,
     }
 
-/// `#[terminating]` or `#[partial]` -- the two attributes that take a def out of
-/// the check. Both are real corpus usage (`std/src/map.mo`'s `insert` is
-/// `#[terminating]`), so recognising them is not a courtesy.
-def has_terminating_or_partial (attrs : List Attribute) : Bool :=
+/// The three attributes that take a def out of the check: `#[terminating]`,
+/// `#[partial]` and `#[decreasing ...]`. All three are real corpus usage
+/// (`std/src/map.mo`'s `insert` is `#[terminating]`), so recognising them is
+/// not a courtesy.
+///
+/// All three are ASSERTIONS, not proofs -- none of them is verified here, and
+/// `#[decreasing n]`'s named measure in particular is *not* checked against
+/// the def's parameters or its recursive calls. Writing it is a claim the
+/// author makes, exactly as `#[terminating]` is; what it buys over
+/// `#[terminating]` is only that the claim records WHICH argument is meant to
+/// be shrinking, for a reader and for a future check that verifies it.
+///
+/// Read with `attr_args` rather than `has_attr` (`lang/types.mo`) because the
+/// argument list is the point of this attribute: `Option.none` is "not
+/// written", and any `Option.some` -- including the argument-less
+/// `#[decreasing]` -- is written. The reference implementation
+/// (`core/src/eval/termination.rs`) recognises the same three, so the two
+/// compilers still accept and reject exactly the same defs.
+def has_termination_exemption (attrs : List Attribute) : Bool :=
     if has_attr (Identifier.id "terminating") attrs then true
-    else has_attr (Identifier.id "partial") attrs
+    else if has_attr (Identifier.id "partial") attrs then true
+    else match attr_args (Identifier.id "decreasing") attrs {
+        Option.some _ => true,
+        Option.none => false,
+    }
 
 def args_not_structural_msg (key : String) (call : Term) (args : List Term) (params : List String) : String :=
     let detail :=
@@ -538,7 +557,7 @@ def check_one_def (d : Def) (names : List String) (in_group : Bool) : List Strin
             Option.some msg => List.cons msg List.empty,
             Option.none => List.empty,
         } in
-    if has_terminating_or_partial (def_attrs d) then List.empty
+    if has_termination_exemption (def_attrs d) then List.empty
     else if List.is_empty params then
         if in_group then List.cons (no_params_msg key) List.empty else List.empty
     else body_diags
@@ -624,6 +643,14 @@ def t_def (name : String) (term : Term) (attrs : List Attribute) : Decl :=
 
 def t_partial_attr : Attribute := Attribute.mk (Identifier.id "partial") List.empty
 
+/// `#[decreasing n]` -- the argument-carrying exemption. Written with a real
+/// `AttrArg` rather than an empty list because the argument is the whole point
+/// of the attribute, and because reading it back is what `attr_args` (over
+/// `has_attr`) exists for.
+def t_decreasing_attr : Attribute :=
+    Attribute.mk (Identifier.id "decreasing")
+        (List.cons (AttrArg.ident (Identifier.id "n")) List.empty)
+
 #[test]
 def test_termination_rejects_a_self_call_that_does_not_decrease : Bool :=
     let d := t_def "spin" (t_lam "n" (t_app (t_var "spin") (t_var "n"))) List.empty in
@@ -692,6 +719,19 @@ def test_termination_accepts_a_decrease_at_a_later_position : Bool :=
 def test_termination_skips_a_def_marked_partial : Bool :=
     let d := t_def "loop" (t_lam "n" (t_app (t_var "loop") (t_var "n")))
         (List.cons t_partial_attr List.empty) in
+    List.is_empty (check_termination_all (List.cons d List.empty))
+
+/// The same non-decreasing def, exempted by `#[decreasing n]` instead. The
+/// measure it names is NOT verified -- `n` is passed to the recursive call
+/// unchanged here, which is exactly the shape
+/// `test_termination_rejects_a_self_call_that_does_not_decrease` reports --
+/// so this pins that the attribute is honoured as an assertion, which is what
+/// `has_termination_exemption`'s doc comment says it is. The reference
+/// (`core/src/eval/termination.rs`) skips the same def for the same reason.
+#[test]
+def test_termination_skips_a_def_marked_decreasing : Bool :=
+    let d := t_def "loop" (t_lam "n" (t_app (t_var "loop") (t_var "n")))
+        (List.cons t_decreasing_attr List.empty) in
     List.is_empty (check_termination_all (List.cons d List.empty))
 
 /// Each member of a group is reported, not just the first: the group as a whole

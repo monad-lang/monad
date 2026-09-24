@@ -88,8 +88,8 @@ the end tell you what it wanted.
 
 ## The Attributes
 
-Two attributes turn the check off for one definition, in both compilers. They
-are the only way to write recursion the structural rule cannot see.
+Three attributes turn the check off for one definition, in both compilers.
+They are the only way to write recursion the structural rule cannot see.
 
 ### `#[terminating]`
 
@@ -114,10 +114,27 @@ loops, and search that may not converge.
 def spin (n : I64) : I64 := spin n
 ```
 
-The difference is what you are telling the reader: `#[terminating]` is a claim
-about the code, `#[partial]` is an admission. Nothing verifies either one, so an
-incorrect `#[terminating]` passes both compilers — and a definition the host's
-checker unfolds while type-checking will hang it.
+### `#[decreasing <measure>]`
+
+`#[terminating]`, plus a note to the reader of *which* argument is meant to be
+shrinking. Use it where "it terminates" alone would leave the next reader
+guessing.
+
+```monad
+#[decreasing n]
+def fact_acc (n : I64) (acc : I64) : I64 :=
+    if n == 0 then acc else fact_acc (n - 1) (n * acc)
+```
+
+The named measure is **not checked** — not against the parameter list, not
+against the recursive calls. It is documentation the compiler agrees to accept,
+and it exempts the definition exactly as `#[terminating]` does.
+
+The difference between the three is what you are telling the reader:
+`#[terminating]` is a claim about the code, `#[decreasing x]` is the same claim
+with its reason named, and `#[partial]` is an admission. Nothing verifies any of
+them, so an incorrect `#[terminating]` passes both compilers — and a definition
+the host's checker unfolds while type-checking will hang it.
 
 ## Practical Guidance
 
@@ -129,7 +146,7 @@ The rule is narrow, so most recursion falls into one of three cases:
   case.
 - Converting the loop counter to `Nat` makes the recursion structural and removes
   the need for the attribute, at the cost of unary arithmetic.
-- The standard library uses both attributes freely; they are not a code smell.
+- The standard library uses these attributes freely; they are not a code smell.
 
 Code written this way is accepted by both compilers, and stays accepted if the
 checker ever grows stricter than the structural rule.

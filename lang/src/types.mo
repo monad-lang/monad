@@ -135,7 +135,7 @@ def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
 /// present, which is distinct from `Option.some List.empty` for an
 /// argument-less attribute like `#[partial]`.
 ///
-/// Exists for `#[decreasing x]` (`lang/typecheck/termination.mo`), the
+/// Exists for `#[decreasing x]` (`lang/termination.mo`), the
 /// one corpus attribute whose args carry meaning: the parser already
 /// produces `AttrArg.ident` for it (`attr_arg_parser`,
 /// lang/parser.mo), so what was missing was only a way to read them

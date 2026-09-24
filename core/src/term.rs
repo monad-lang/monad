@@ -2214,6 +2214,21 @@ impl Def {
   pub fn has_partial_attr(&self) -> bool {
     self.attributes.iter().any(|a| a.name.as_str() == "partial")
   }
+  /// `#[decreasing <measure>]` — the third termination exemption, alongside
+  /// `#[terminating]` and `#[partial]`.
+  ///
+  /// The named measure is deliberately NOT read here, and nothing verifies it:
+  /// like the other two, this is an assertion the author makes, and what it
+  /// buys over `#[terminating]` is only that it records *which* argument is
+  /// meant to be shrinking — for a reader, and for a future check that
+  /// verifies it. Matching on the name alone is therefore the whole test, and
+  /// an argument-less `#[decreasing]` exempts too.
+  pub fn has_decreasing_attr(&self) -> bool {
+    self
+      .attributes
+      .iter()
+      .any(|a| a.name.as_str() == "decreasing")
+  }
   pub fn name(&self) -> &NamePath {
     &self.name
   }
