@@ -36,6 +36,17 @@ typedef struct {
     uint16_t flags;
 } Header;
 
+/* Allocation-KIND values for `Header.tag` (offset 8) -- deliberately
+   distinct from a Constructor's own tag, which is a separate int64 field
+   at offset 16. 0 is a bare `monad_alloc` block, 1 Closure, 2 Constructor,
+   3 String, and the two handle kinds below. `monad_get_tag` is the one
+   reader that has to tell the two slots apart, because a Fiber/Scope
+   handle has no Constructor to read, so the handle kinds are named here --
+   above every user of them -- rather than in the fiber section where they
+   are described. */
+#define MONAD_FIBER_TAG 17
+#define MONAD_SCOPE_TAG 18
+
 typedef struct {
     Header header;
     void* entry;
@@ -369,8 +380,21 @@ void* alloc_string(char* data, int64_t length) {
    value at runtime — needed for match dispatch codegen (compile_match_ir,
    lang/codegen/emit.mo), which has no other way to inspect a value it
    didn't just construct itself. */
+/* A Fiber/Scope handle is not a Constructor, so `Constructor.tag` is the
+   wrong slot to read for one: at offset 16 a `Fiber` holds `action`, a
+   pointer, and reporting its low half would let a `match` on a handle
+   take an arbitrary arm. The allocation-KIND slot in `Header` is what
+   separates the two representations, so it is consulted first -- every
+   Constructor carries kind 2 there, so the comparison cannot misfire on a
+   real constructor tag no matter how large a program's tag numbering
+   runs, and a handle reports 17/18, which no constructor tag collides
+   with. See the HANDLES ARE NOT CONSTRUCTORS note above. */
 int64_t monad_get_tag(void* ptr) {
     if (!ptr) return -1;
+    Header* header = (Header*)ptr;
+    if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG) {
+        return header->tag;
+    }
     return ((Constructor*)ptr)->tag;
 }
 
@@ -506,11 +530,17 @@ void* monad_array_freeze(void* b) {
      on everything the language can currently express.
 
    HANDLES ARE NOT CONSTRUCTORS, deliberately. A `Fiber`/`Scope` value is
-   the raw struct pointer, tagged `MONAD_FIBER_TAG`/`MONAD_SCOPE_TAG` in
-   `Header.tag` so that `monad_get_tag` (which reads the SAME offset 8)
-   reports a value no constructor tag can collide with -- a `match` on a
-   handle therefore fails loudly instead of reading a heap address as a
-   tag. The Rust host takes the same route for these exact two types: its
+   the raw struct pointer, marked `MONAD_FIBER_TAG`/`MONAD_SCOPE_TAG` in
+   `Header.tag` -- the allocation-KIND slot at offset 8, as for every other
+   allocation here (1 Closure, 2 Constructor, 3 String). A Constructor's
+   own tag is a DIFFERENT slot, offset 16, and that is the one
+   `monad_get_tag` must not read blindly for a handle: at offset 16 a
+   `Fiber` holds its `action` pointer, so the read would hand match
+   dispatch the low half of a heap address. `monad_get_tag` therefore
+   consults the kind slot first and reports 17/18 for a handle -- a value
+   no constructor tag can collide with, so a `match` on a handle fails
+   loudly instead of taking an arbitrary arm. The Rust host takes the same
+   route for these exact two types: its
    `handle_value`/`extract_handle_id` are a non-`Con` representation
    precisely so a handle is never mistaken for a constructor.
 
@@ -524,9 +554,9 @@ void* monad_array_freeze(void* b) {
    whose result nobody wants, i.e. blocking `scope_drop` on work the
    program has explicitly walked away from. */
 
-#define MONAD_FIBER_TAG 17
-#define MONAD_SCOPE_TAG 18
-
+/* MONAD_FIBER_TAG / MONAD_SCOPE_TAG are defined with the other `Header.tag`
+   kind values at the head of this file; `monad_get_tag` needs them before
+   the fiber code does. */
 /* A fiber's stack is sized to mirror `raise_stack_limit`'s own 128 MB: a
    fiber body is compiled Monad code and can recurse exactly as deeply as
    `main` can, so the plan doc's original 8 KB ucontext stack would
@@ -544,6 +574,18 @@ typedef struct {
                           doc comment for why it cannot preempt */
     int64_t io_box;    /* the `IO.io` value the action produced */
     int64_t reaped;    /* 1 once the thread has been joined */
+    int64_t started;   /* 1 once a thread exists TO join: a refused
+                          pthread_create leaves `thread` unwritten, and
+                          pthread_join faults on that value, so the join is
+                          guarded on this rather than on the handle being
+                          non-NULL */
+    int64_t released;  /* 1 once the WORKER's retain (monad_fork_io) has been
+                          released. Held apart from `reaped` on purpose:
+                          monad_cancel_fiber consumes the reference without
+                          reaping, and a later `await` must still join the
+                          thread the cancel left running. The scope's own
+                          reference (monad_scope_fork) is a different one,
+                          released unconditionally by monad_scope_drop. */
     pthread_t thread;
     pthread_mutex_t lock;
     pthread_cond_t finished;
@@ -571,7 +613,13 @@ typedef struct {
    with atomic_fetch_add/sub. */
 static void fiber_mark_cancelled(Fiber* f) {
     pthread_mutex_lock(&f->lock);
-    f->cancelled = 1;
+    /* Only a fiber that has NOT finished. The host's `Fiber::cancel`
+       transitions Pending -> Cancelled and is a no-op otherwise, so
+       cancelling a completed fiber must not throw away a result that was
+       already in hand. `state` is published under this same lock by
+       fiber_main, so the test cannot race the completion it is testing
+       for. */
+    if (!f->state) f->cancelled = 1;
     pthread_mutex_unlock(&f->lock);
 }
 
@@ -601,6 +649,8 @@ void* monad_fork_io(void* closure) {
     f->cancelled = 0;
     f->io_box = 0;
     f->reaped = 0;
+    f->started = 0;
+    f->released = 0;
     pthread_mutex_init(&f->lock, NULL);
     pthread_cond_init(&f->finished, NULL);
     /* The worker's own reference, released by whoever consumes the
@@ -628,9 +678,15 @@ void* monad_fork_io(void* closure) {
         /* No thread at all. Publish an already-finished state rather than
            leaving a handle that can never become ready: a hang is
            strictly worse than a NULL payload, because nothing in this
-           backend can raise an error out of a native. */
+           backend can raise an error out of a native. `started` stays 0,
+           so the await does not try to join the thread that was never
+           created -- pthread_join faults on that value (it dereferences
+           the thread descriptor), which would turn this deliberately
+           degraded path into a crash of the whole process instead. */
         f->state = 1;
         f->io_box = 0;
+    } else {
+        f->started = 1;
     }
     return f;
 }
@@ -644,12 +700,19 @@ void* monad_await_fiber(void* handle) {
     int64_t box = f->io_box;
     int reap = !f->reaped;
     f->reaped = 1;
+    int release = !f->released;
+    f->released = 1;
     pthread_mutex_unlock(&f->lock);
-    /* Exactly one awaiter joins; a second `await` on the same handle still
-       reads the stored result rather than joining an already-joined
-       thread (pthread_join twice is undefined). */
-    if (reap) pthread_join(f->thread, NULL);
-    monad_release(f);
+    /* Exactly one awaiter joins, and only when fork_io actually created a
+       thread. A second `await` on the same handle still reads the stored
+       result rather than joining an already-joined thread (pthread_join
+       twice is undefined). */
+    if (reap && f->started) pthread_join(f->thread, NULL);
+    /* The worker's reference is released exactly once, by whichever of
+       await/cancel consumes the handle first: releasing once per await
+       would drive the count negative on a repeated await, which is
+       precisely the ownership the count exists to hand to M4. */
+    if (release) monad_release(f);
     if (cancelled) {
         /* The host's `await_fiber` is an eval ERROR here ("fiber {id} was
            cancelled"). This backend has no error channel out of a native,
@@ -673,7 +736,15 @@ void* monad_cancel_fiber(void* handle) {
     Fiber* f = (Fiber*)handle;
     if (f) {
         fiber_mark_cancelled(f);
-        monad_release(f);
+        /* Consuming the handle releases the worker's reference -- but only
+           once. A handle that was awaited before it was cancelled has
+           already released it, and `monad_scope_drop`'s release is the
+           scope's separate reference, not this one. */
+        pthread_mutex_lock(&f->lock);
+        int64_t consume = !f->released;
+        f->released = 1;
+        pthread_mutex_unlock(&f->lock);
+        if (consume) monad_release(f);
     }
     return alloc_constructor(0, 0);
 }
