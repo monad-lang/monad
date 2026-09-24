@@ -68,7 +68,7 @@
 /// time comes. Recorded here so it is a known, deliberate deferral
 /// rather than a surprise the next person to touch this file has to
 /// rediscover.
-use lib::types {Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, Native, StructLitField, Term}
+use lib::types {Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, NamePath, Native, StructLitField, Term}
 use lib::typecheck::usage {owning_at}
 use llvm::strmap {str_map_empty}
 use std::map {}
@@ -89,9 +89,30 @@ pub def drop_leaves (ctors : HashMap String Bool) (target : I64) (t : Term) : Li
         Term.ctx _loc inner => drop_leaves ctors target inner,
         Term.lit lit =>
             match lit {
-                Literal.if_ _cond then_ else_ =>
-                    List.append (drop_leaves ctors target then_) (drop_leaves ctors target else_),
-                Literal.match_ _scrut cases => drop_leaves_cases ctors target cases,
+                // The condition runs on EVERY path through this `if`,
+                // before either branch, so an owning use of `target`
+                // there (e.g. a constructor application built from the
+                // condition, `if (P x) then y else z`) already consumes
+                // it for both branches. Left unaccounted for, each
+                // branch's own `single_leaf` check independently sees
+                // zero owning uses of `target` and reports "needs
+                // drop" -- a double-drop, since `target` was already
+                // given away building the condition. `owning_at`'s own
+                // `Literal.if_` arm (usage.mo) folds this in the same
+                // way, via `UsePos.up_scrutinee`.
+                Literal.if_ cond then_ else_ =>
+                    let branch_leaves : List Bool :=
+                        List.append (drop_leaves ctors target then_) (drop_leaves ctors target else_) in
+                    if I64.gt (owning_at ctors UsePos.up_scrutinee target cond) 0
+                    then all_false branch_leaves
+                    else branch_leaves,
+                // Same reasoning for a `match`'s scrutinee, which also
+                // runs once before any arm.
+                Literal.match_ scrut cases =>
+                    let branch_leaves : List Bool := drop_leaves_cases ctors target cases in
+                    if I64.gt (owning_at ctors UsePos.up_scrutinee target scrut) 0
+                    then all_false branch_leaves
+                    else branch_leaves,
                 // Every other `Literal` (str/char/num/flt/struct_lit/
                 // struct_update) doesn't branch -- ONE leaf, the whole
                 // term as `owning_at` already sees it.
@@ -105,6 +126,17 @@ pub def drop_leaves (ctors : HashMap String Bool) (target : I64) (t : Term) : Li
 
 def single_leaf (ctors : HashMap String Bool) (target : I64) (t : Term) : List Bool :=
     List.cons (I64.beq (owning_at ctors UsePos.up_value target t) 0) List.empty
+
+/// Same length as `leaves`, every entry `false` -- used when `target`
+/// was already consumed ahead of a branch point (in an `if`'s condition
+/// or a `match`'s scrutinee), so none of the leaves below it need a
+/// release regardless of what each one's own, now-moot, per-branch
+/// count says.
+def all_false (leaves : List Bool) : List Bool :=
+    match leaves {
+        List.empty => List.empty,
+        List.cons _hd rest => List.cons false (all_false rest),
+    }
 
 #[partial]
 def drop_leaves_cases (ctors : HashMap String Bool) (target : I64) (cases : List MatchCase) : List Bool :=
@@ -414,3 +446,42 @@ def test_always_drop_requires_every_leaf : Bool :=
     let leaves : List Bool := drop_leaves empty_ctors 0 t in
     let info : DropInfo := { name := Identifier.id "x", leaves := bool_leaves leaves } in
     not (DropInfo.always_drop info) && not (DropInfo.never_drop info)
+
+/// A single-arg constructor application, `P <arg>` -- matches
+/// `usage.mo`'s own `con_of` helper, arity 1 instead of 2.
+def con_of_p (arg : Option Term) : Term :=
+    let nm : NamePath := NamePath.npath (List.cons (Identifier.id "P") List.empty) in
+    Term.con (Con.mk (Identifier.id "P") nm 1 (List.cons arg List.empty))
+
+#[test]
+def test_condition_owning_use_is_not_double_dropped : Bool :=
+    // `if (P x) then <hole> else <hole>` -- x is consumed INSIDE the
+    // condition, building the constructor `P x` (an owning use, per
+    // `owning_at`'s own `Term.con` arm). Neither branch references x at
+    // all. Before this was fixed, `drop_leaves` never looked at the
+    // condition, so each branch's own `single_leaf` independently saw
+    // zero owning uses of x and reported "needs drop" for BOTH -- a
+    // double-drop of a value already moved building the condition. Both
+    // leaves must now read `false`: x was already given away before
+    // either branch ran.
+    let cond : Term := con_of_p (Option.some t_var0) in
+    let t : Term := Term.lit (Literal.if_ cond Term.hole Term.hole) in
+    let leaves : List Bool := drop_leaves empty_ctors 0 t in
+    I64.beq (List.length leaves) 2
+        && not (any_leaf_true leaves)
+
+#[test]
+def test_scrutinee_owning_use_is_not_double_dropped : Bool :=
+    // Same property, for a `match` scrutinee instead of an `if`
+    // condition: `match (P x) { _ => <hole> }` (a single wildcard-style
+    // arm binding nothing new). x is consumed building the scrutinee;
+    // the arm's own body never references it, so its one leaf must read
+    // `false`, not `true`.
+    let cond : Term := con_of_p (Option.some t_var0) in
+    let arm : MatchCase := MatchCase.mc (Identifier.id "_") List.empty Term.hole Option.none in
+    let t : Term := Term.lit (Literal.match_ cond (List.cons arm List.empty)) in
+    let leaves : List Bool := drop_leaves empty_ctors 0 t in
+    match leaves {
+        List.cons b rest => not b && I64.beq (List.length rest) 0,
+        List.empty => false,
+    }
