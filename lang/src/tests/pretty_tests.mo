@@ -372,7 +372,7 @@ def test_show_decl_open : Bool :=
 #[test]
 def test_show_instance : Bool :=
     let cls_path : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
-    let args : List Term := List.cons (sort_n 1) List.empty in
+    let args : List Term := [sort_n 1] in
     let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private List.empty List.empty in
     let result : String := show_instance ins in
     String.beq result "instance Show"

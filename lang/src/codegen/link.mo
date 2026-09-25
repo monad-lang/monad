@@ -29,6 +29,6 @@ def test_link_compile_defs_to_ir : Bool :=
     let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
     let body := Term.app (Term.app add_var x_var) two in
     let term_ := Term.lam (DebugName.named x_id) (Term.sort (SortLevel.concrete 1)) body in
-    let def_ := Def.mk (NamePath.npath (List.cons id_val List.empty)) (Term.sort (SortLevel.concrete 1)) term_ List.empty List.empty Visibility.package_private List.empty in
+    let def_ := Def.mk (NamePath.npath [id_val]) (Term.sort (SortLevel.concrete 1)) term_ List.empty List.empty Visibility.package_private List.empty in
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"

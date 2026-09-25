@@ -135,7 +135,7 @@ def test_compile_multiarg_call : IO Bool := do {
     let sub_var := Term.var 0 (DebugName.named (Identifier.id "I64_sub"));
     let sub_body := Term.app (Term.app sub_var x_var) y_var;
     let subtract_term := Term.lam (DebugName.named x_id) (sort_n 1) (Term.lam (DebugName.named y_id) (sort_n 1) sub_body);
-    let subtract_def := Def.mk (NamePath.npath (List.cons (Identifier.id "subtract") List.empty)) (sort_n 1) subtract_term
+    let subtract_def := Def.mk (NamePath.npath [Identifier.id "subtract"]) (sort_n 1) subtract_term
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
     let subtract_ref := Term.var 0 (DebugName.named (Identifier.id "subtract"));
     let main_body := Term.app (Term.app subtract_ref (mk_i64 10)) (mk_i64 3);
@@ -194,7 +194,7 @@ def build_add5_def : Def :=
     let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
     let add5_body := Term.app (Term.app add_var a_var) b_var in
     let add5_term := Term.lam (DebugName.named a_id) (sort_n 1) (Term.lam (DebugName.named b_id) (sort_n 1) add5_body) in
-    Def.mk (NamePath.npath (List.cons (Identifier.id "add5") List.empty)) (sort_n 1) add5_term
+    Def.mk (NamePath.npath [Identifier.id "add5"]) (sort_n 1) add5_term
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty
 
 /// Phase 0 regression test (see
@@ -221,7 +221,7 @@ def test_compile_function_value_as_parameter : IO Bool := do {
     let apply_term := Term.lam (DebugName.named f_id) (sort_n 1)
         (Term.lam (DebugName.named x_id) (sort_n 1)
             (Term.lam (DebugName.named y_id) (sort_n 1) apply_body));
-    let apply_def := Def.mk (NamePath.npath (List.cons (Identifier.id "apply_binary") List.empty)) (sort_n 1) apply_term
+    let apply_def := Def.mk (NamePath.npath [Identifier.id "apply_binary"]) (sort_n 1) apply_term
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
 
     let add5_ref := Term.var 0 (DebugName.named (Identifier.id "add5"));
@@ -557,9 +557,9 @@ def test_resolve_class_calls_genuine_polymorphism : IO Bool := do {
     let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add"));
 
     // type MyBool { mytrue, myfalse }
-    let mytrue_ctor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mytrue") List.empty)) [] (sort_n 1);
-    let myfalse_ctor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "myfalse") List.empty)) [] (sort_n 1);
-    let mybool_ind := Inductive.mk (NamePath.npath (List.cons (Identifier.id "MyBool") List.empty)) [] (sort_n 1)
+    let mytrue_ctor := InductConstructor.mk (NamePath.npath [Identifier.id "mytrue"]) [] (sort_n 1);
+    let myfalse_ctor := InductConstructor.mk (NamePath.npath [Identifier.id "myfalse"]) [] (sort_n 1);
+    let mybool_ind := Inductive.mk (NamePath.npath [Identifier.id "MyBool"]) [] (sort_n 1)
         [mytrue_ctor, myfalse_ctor] ([] : List Attribute) Visibility.package_private;
 
     // instance MyShow3 I64 { def show3 (x : I64) : I64 := x + 100 }

@@ -709,7 +709,7 @@ def test_find_inductive_by_constructor_not_found : Bool :=
     let ind_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
     let some_np : NamePath := NamePath.npath (List.cons (Identifier.id "some") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk some_np List.empty (sort_n 1) in
-    let ind : Inductive := Inductive.mk ind_name List.empty (sort_n 1) (List.cons some_cn List.empty) List.empty Visibility.package_private in
+    let ind : Inductive := Inductive.mk ind_name List.empty (sort_n 1) [some_cn] List.empty Visibility.package_private in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_inductive` on
     // top of `scope_data_empty` rather than a hand-written literal.
@@ -922,7 +922,7 @@ def beq_list_instance : Instance :=
         (List.cons (TypeConstraint.mk beq_cls (List.cons (Identifier.id "A") List.empty)) List.empty)
         (List.cons (list_of (var_named "A")) List.empty)
         Visibility.package_private
-        (List.cons (param_many (Identifier.id "A") (sort_n 1)) List.empty)
+        [param_many (Identifier.id "A") (sort_n 1)]
         List.empty
 
 /// `instance [Show A] Show A` -- a candidate that binds `A` back to `A` is
@@ -933,7 +933,7 @@ def show_a_instance : Instance :=
         (List.cons (TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty)) List.empty)
         (List.cons (var_named "A") List.empty)
         Visibility.package_private
-        (List.cons (param_many (Identifier.id "A") (sort_n 1)) List.empty)
+        [param_many (Identifier.id "A") (sort_n 1)]
         List.empty
 
 def bound_carrier_slug (ins : Instance) (cls : NamePath) (vars : List Identifier) (c : Term) : String :=

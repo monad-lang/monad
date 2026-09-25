@@ -914,11 +914,11 @@ def test_compile_mutual_recursion : Bool :=
     // odd(n) = if n == 1 then true else even(n - 1)
     let even_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) zero) (Term.con (Con.mk (Identifier.id "true") (NamePath.npath (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named odd_id)) (Term.app (Term.app sub_var n_var) one))) in
     let even_term := Term.lam (DebugName.named n_id) (sort_n 1) even_body in
-    let even_def := Def.mk (NamePath.npath (List.cons even_id List.empty)) (sort_n 1) even_term List.empty List.empty Visibility.package_private List.empty in
+    let even_def := Def.mk (NamePath.npath [even_id]) (sort_n 1) even_term List.empty List.empty Visibility.package_private List.empty in
     
     let odd_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) one) (Term.con (Con.mk (Identifier.id "true") (NamePath.npath (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named even_id)) (Term.app (Term.app sub_var n_var) one))) in
     let odd_term := Term.lam (DebugName.named n_id) (sort_n 1) odd_body in
-    let odd_def := Def.mk (NamePath.npath (List.cons odd_id List.empty)) (sort_n 1) odd_term List.empty List.empty Visibility.package_private List.empty in
+    let odd_def := Def.mk (NamePath.npath [odd_id]) (sort_n 1) odd_term List.empty List.empty Visibility.package_private List.empty in
     
     let defs := List.cons even_def (List.cons odd_def List.empty) in
     let mod_ := compile_db_decls_ir defs in

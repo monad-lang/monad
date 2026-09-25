@@ -889,9 +889,9 @@ def test_show_decl_struct : Bool :=
 #[test]
 def test_show_decl_inductive : Bool :=
     let name := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
-    let ct1 := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "true") List.empty)) List.empty (Term.sort (SortLevel.concrete 1)) in
-    let ct2 := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "false") List.empty)) List.empty (Term.sort (SortLevel.concrete 1)) in
-    let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.sort (SortLevel.concrete 1)) (List.cons ct1 (List.cons ct2 List.empty)) List.empty Visibility.package_private) in
+    let ct1 := InductConstructor.mk (NamePath.npath [Identifier.id "true"]) List.empty (Term.sort (SortLevel.concrete 1)) in
+    let ct2 := InductConstructor.mk (NamePath.npath [Identifier.id "false"]) List.empty (Term.sort (SortLevel.concrete 1)) in
+    let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.sort (SortLevel.concrete 1)) [ct1, ct2] List.empty Visibility.package_private) in
     show_decl decl == "type Bool {\n  true,\n  false\n}"
 
 /// Simple fixture decl reused by the `show_decls` tests below (a single

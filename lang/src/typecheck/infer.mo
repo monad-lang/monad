@@ -3883,9 +3883,9 @@ def box_ctor_full_path : NamePath := NamePath.npath (List.cons (Identifier.id "B
 
 def box_param : Param := Param.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
-def box_constructor : InductConstructor := InductConstructor.mk box_ctor_full_path (List.cons box_param List.empty) (Term.sort (SortLevel.concrete 3))
+def box_constructor : InductConstructor := InductConstructor.mk box_ctor_full_path [box_param] (Term.sort (SortLevel.concrete 3))
 
-def box_inductive : Inductive := Inductive.mk box_ctor_path List.empty (Term.sort (SortLevel.concrete 3)) (List.cons box_constructor List.empty) List.empty Visibility.package_private
+def box_inductive : Inductive := Inductive.mk box_ctor_path List.empty (Term.sort (SortLevel.concrete 3)) [box_constructor] List.empty Visibility.package_private
 
 def box_scope : Scope := {
     module_id := box_module_path,

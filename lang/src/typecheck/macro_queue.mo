@@ -859,7 +859,7 @@ def test_derive_bridge_ignores_unattributed_and_non_type_decls : Bool :=
     // and an attributed `def` (whose attrs are `#[test]`/`#[arg]`-class,
     // not type-level) both generate nothing.
     let plain : Decl := bridge_struct List.empty in
-    let d : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.sort (SortLevel.concrete 1)) empty_constraints (List.cons bridge_derive_attr List.empty) Visibility.package_private List.empty) in
+    let d : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.sort (SortLevel.concrete 1)) empty_constraints [bridge_derive_attr] Visibility.package_private List.empty) in
     I64.beq (List.length (derive_bridge_decls List.empty plain)) 0 &&
     I64.beq (List.length (derive_bridge_decls List.empty d)) 0 &&
     not (has_derive_expansion List.empty (List.cons plain (List.cons d List.empty)))

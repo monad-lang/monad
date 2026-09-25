@@ -7850,7 +7850,7 @@ def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
     // -- no dict param should be added (a phantom/unused constraint).
     let unrelated_body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let constraint := TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
-    let d := Def.mk (NamePath.npath (List.cons (Identifier.id "unrelated") List.empty)) (Term.sort (SortLevel.concrete 1)) unrelated_body
+    let d := Def.mk (NamePath.npath [Identifier.id "unrelated"]) (Term.sort (SortLevel.concrete 1)) unrelated_body
         (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
     let d2 := add_constraint_dict_params d in
     match d2 {
