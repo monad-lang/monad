@@ -187,24 +187,26 @@ def carrier_from_pi_chain (t : Term) : Option Term :=
         _ => Option.none,
     }
 
-/// `is_hole` alone isn't enough: a bare literal checked in pure-infer
-/// mode (`type_check_lit`'s `Literal.str`/`Literal.num`/... arms) reports
-/// its OWN type as `Term.type_ 1` (a universe placeholder, not the
-/// literal's real type -- `String`/`I64`/...), confirmed via a direct
-/// repro: `"/" ++ rest`'s OUTER `++` carrier came back as literally
-/// `Type` instead of `String`, because `"/"`'s sibling operand `rest`'s
-/// own Pi-domain position was checked first and happened to be a nested
-/// `++` chain whose OWN innermost literal polluted an intermediate Pi
-/// arg with `Term.type_ 1`. Treating it the same as `Term.hole` here --
-/// skip to the next Pi domain rather than accepting it as a carrier --
-/// mirrors why the OLD syntactic pass (`lang.scope`'s `infer_carrier_
-/// type`) never trusted a type-checker-reported literal type either,
-/// matching on the literal VALUE directly instead (`literal_carrier_
-/// type`).
+/// `is_hole` alone isn't enough: a sort is equally uninformative -- a Pi
+/// domain holding one says no more about the value than a hole does.
+/// Treating it the same as `Term.hole` here -- skip to the next Pi domain
+/// rather than accepting it as a carrier -- mirrors why the OLD syntactic
+/// pass (`lang.scope`'s `infer_carrier_type`) never trusted a
+/// type-checker-reported literal type either, matching on the literal
+/// VALUE directly instead (`literal_carrier_type`).
+///
+/// MEASURED, and the reason this arm exists: `"/" ++ rest`'s OUTER `++`
+/// carrier came back as literally `Type` instead of `String`, because
+/// `"/"`'s sibling operand `rest`'s own Pi-domain position was checked
+/// first and happened to be a nested `++` chain whose OWN innermost
+/// literal polluted an intermediate Pi arg with a sort. `type_check_lit`
+/// now answers the literal's own REAL type (`String`/`I64`/...), so that
+/// route is closed; the arm stays because a sort reaching a Pi domain by
+/// any route is still uninformative.
 def is_uninformative_carrier (t : Term) : Bool :=
     match t {
         Term.hole => true,
-        // A sort is a universe placeholder in either spelling.
+        // A sort is a universe placeholder too.
         Term.sort _ => true,
         _ => false,
     }
@@ -266,11 +268,11 @@ def dict_env_from_locals (locals : LocalScope) : List DictBinding :=
 /// `resolve_class_method_d4`'s reported type must be the RESOLVED
 /// concrete def's own real signature (peeled by however many dict args
 /// got pre-applied), not `expected_type` verbatim -- `expected_type`
-/// itself can be partially uninformative (a literal operand elsewhere
-/// in the SAME `++` chain reports `Term.type_ 1` in pure-infer mode, not
-/// its real type -- see `is_uninformative_carrier`'s own doc comment),
-/// and reusing it verbatim as this call's reported type would cascade
-/// that uninformativeness upward into the NEXT enclosing `type_check_
+/// itself can be partially uninformative -- a bare sort rather than a real
+/// type can sit in one of its Pi domains (see `is_uninformative_carrier`'s
+/// own doc comment for the measurement) -- and reusing it verbatim as this
+/// call's reported type would cascade that uninformativeness upward into
+/// the NEXT enclosing `type_check_
 /// app`'s own carrier derivation -- confirmed as the actual root cause
 /// of a real repro (the self-hosted test driver's own synthesized
 /// summary line) via direct debugging.
@@ -597,23 +599,22 @@ def named_type_ref (s : String) : Term :=
 
 def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match value {
-        // `Term.type_ 1` (a KIND, not a real type) used to be returned
-        // here unconditionally regardless of what kind of literal this
-        // actually is -- harmless as long as the caller's `expected_
-        // type` was always `Term.hole` (`unify` accepts anything against
-        // a hole), which was true for every match-arm body reached from
-        // an ordinary top-level def until `check_def_with_scope` started
-        // passing the def's own real declared type through. Once a real
-        // expected type reaches here (e.g. an `I64`-returning def whose
-        // body is a match with an `n => 0` arm), `unify (Term.type_ 1)
-        // I64` correctly failed with "type mismatch: expected Type,
-        // found I64" -- confirmed via a minimal repro (`def f (n : Nat)
-        // : I64 := match n { zero => 0, succ m => 1 }`). Returning the
-        // literal's own REAL type (from its `NumSuffix`, or `String` for
-        // a string literal) fixes this at the source rather than
-        // special-casing `unify` to treat `Term.type_ 1` as a wildcard
-        // (which would also weaken genuine Sort/Type-as-value checks
-        // elsewhere, e.g. the Sort/Pred tests).
+        // A bare sort (a KIND, not a real type) used to be returned here
+        // unconditionally regardless of what kind of literal this actually
+        // is -- harmless as long as the caller's `expected_type` was always
+        // `Term.hole` (`unify` accepts anything against a hole), which was
+        // true for every match-arm body reached from an ordinary top-level
+        // def until `check_def_with_scope` started passing the def's own
+        // real declared type through. Once a real expected type reaches
+        // here (e.g. an `I64`-returning def whose body is a match with an
+        // `n => 0` arm), `unify` on that sort against `I64` correctly
+        // failed with "type mismatch: expected Type, found I64" --
+        // confirmed via a minimal repro (`def f (n : Nat) : I64 := match n
+        // { zero => 0, succ m => 1 }`). Returning the literal's own REAL
+        // type (from its `NumSuffix`, or `String` for a string literal)
+        // fixes this at the source rather than special-casing `unify` to
+        // treat a sort as a wildcard (which would also weaken genuine
+        // Sort/Type-as-value checks elsewhere, e.g. the Sort/Pred tests).
         Literal.str s =>
             ok (mk_typed (Term.lit value) (named_type_ref "String")),
         // Same shape as the `String` arm above -- a char literal's own
@@ -2739,18 +2740,15 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
 /// This arm is only HALF the port, and the other half is in the parser:
 /// the reference's bare-name lambda param IS `param(i, Hole)`
 /// (`core/src/parser.rs:464-466`), while the port's `build_nested_lambdas`
-/// wrote `Term.type_ 1` there -- the sort `Type`. That was not a collision
-/// with another spelling (a source `Type` never lowers to `Term.type_ 1`;
-/// this parser has no sort grammar rule, so `Type`/`Prop`/`Sort n` are
-/// ordinary globals), it was an assertion of a type no source had said,
-/// minted because `pt_type_ 1` is the port's marker for an OMITTED KIND at
-/// its three type-binder sites (`:1372`/`:1423`/`:2667`). Written onto a
-/// value's parameter it made the `param_typ` test above false for
-/// `fn x => x`, so the arm fired only for a written `_` and
+/// wrote a SORT there -- the port's marker for an OMITTED KIND at its
+/// three type-binder sites (`:1372`/`:1423`/`:2667`). That was not a
+/// spelling mix-up; it was an assertion of a type no source had said.
+/// Written onto a value's parameter it made the `param_typ` test above
+/// false for `fn x => x`, so the arm fired only for a written `_` and
 /// `(fn x => x) _` stayed accepted, with no source able to explain why.
 /// The assertion was visible from the other side too: `app_arg_expected_type`
 /// hands a lam's `param_typ` to its ARGUMENT as the expected type, so
-/// `(fn x => x) arg` was checking `arg` against `Type`. Both halves are
+/// `(fn x => x) arg` was checking `arg` against a sort. Both halves are
 /// needed and neither is sufficient, and the repair belongs in the producer
 /// -- the guard's premise was true of the reference and false of the port,
 /// so the value had to be made to match rather than a predicate taught which
@@ -2953,8 +2951,8 @@ def type_check_pi (arg : Term) (ret : Term) (scope : Scope) (local_types : List 
 /// which then fails `level+1 <= level`. Removed so the two agree.
 def type_check_sort_full (sort_term : Term) (level : SortLevel) (expected_type : Term) : Result TypeError TypedTerm :=
     // A sort's own type is the sort one level up, always as `succ` -- which
-    // folds to the plain numeral a concrete level always produced, without a
-    // case split that would have to name a second spelling to do it.
+    // folds (`level_const`) to the plain numeral a concrete level produced,
+    // so no case split is needed here.
     let inferred : Term := Term.sort (SortLevel.succ level) in
     match sort_level_of expected_type {
         Option.some expected_level =>
@@ -3867,11 +3865,11 @@ def type_check_ntv (n : Native) (expected_type : Term) (scope : Scope) (local_ty
 // Neither `Term.con` nor `Term.ntv` is ever produced by this codebase's
 // own parser, so no corpus `.mo` file's `check` run exercises
 // `type_check_con` — these tests are its only real coverage. Builds a
-// minimal single-constructor `Box` inductive (one param, declared type
-// `Term.type_ 2`) directly into a fresh `Scope`, mirroring
+// minimal single-constructor `Box` inductive (one param, declared at sort
+// level 2) directly into a fresh `Scope`, mirroring
 // `lang/tests/scope_tests.mo`/`types_tests.mo`'s own hand-built-fixture
-// convention. The param's argument uses `Term.type_ N` specifically
-// (not a literal/free-var) because `type_check_sort_full` is one of the
+// convention. The param's argument is a SORT specifically (not a
+// literal/free-var) because `type_check_sort_full` is one of the
 // few leaf checkers that actually compares against `expected_type`
 // (see `type_check_ntv`'s own doc comment above: most leaf cases here
 // just infer and return, ignoring `expected_type` — a literal argument
@@ -3906,7 +3904,7 @@ def test_type_check_con_valid_arg_ok : Bool :=
 
 #[test]
 def test_type_check_con_wrong_arg_type_rejected : Bool :=
-    // `x`'s declared param type is `Term.type_ 2` — a sort at level 5
+    // `x`'s declared param type is a sort at level 2 — a sort at level 5
     // is NOT a valid inhabitant (`type_check_sort_full`'s own
     // `expected_level < level` branch), so this must be rejected.
     let bad_arg : Term := Term.sort (SortLevel.concrete 5) in
@@ -4026,7 +4024,7 @@ def test_type_check_struct_lit_no_annotation_no_expected_rejected : Bool :=
 
 #[test]
 def test_type_check_struct_lit_wrong_field_type_rejected : Bool :=
-    // `x`'s declared param type is `Term.type_ 2` -- a sort at level 5
+    // `x`'s declared param type is a sort at level 2 -- a sort at level 5
     // is not a valid inhabitant, same reasoning as
     // `test_type_check_con_wrong_arg_type_rejected` above.
     let bad_f : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 5)) in
@@ -4204,10 +4202,10 @@ def test_type_check_app_resolves_named_call_end_to_end : Bool :=
 // --- Tests for type_check_named_call's def-target branch (Phase 6 of
 // plans/implementations/named-field-construction.md) ---
 //
-// Hand-built `Def` (name "scale", two params "factor"/"p" of type
-// `Term.type_ 2`, body `Term.type_ 1` -- same sort-level convention
+// Hand-built `Def` (name "scale", two params "factor"/"p" at sort level 2,
+// body a sort at level 1 -- same sort-level convention
 // `box_scope`/`point_scope` use above, and for the same reason: only a
-// `Term.type_ N` argument actually exercises `type_check_sort_full`'s
+// SORT argument actually exercises `type_check_sort_full`'s
 // own comparison against a declared param type, unlike a literal/
 // free-var argument which would trivially "pass" any type), registered
 // via the REAL `build_scope_def` (not a hand-assembled `ScopeData`
@@ -4257,8 +4255,8 @@ def test_type_check_named_call_def_target_reordered : Bool :=
 
 #[test]
 def test_type_check_named_call_def_target_wrong_field_type_rejected : Bool :=
-    // `factor`'s declared param type is `Term.type_ 2` -- a sort at level
-    // 5 is not a valid inhabitant, same reasoning as the constructor-
+    // `factor`'s declared param type is a sort at level 2 -- a sort at
+    // level 5 is not a valid inhabitant, same reasoning as the constructor-
     // target `wrong_arg_type`/`wrong_field_type` tests above.
     let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.sort (SortLevel.concrete 1)) in
     let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.sort (SortLevel.concrete 5)) in
@@ -4391,7 +4389,7 @@ def test_type_check_struct_update_unchanged_field_is_projection : Bool :=
 def is_type_arg (arg : Option Term) : Bool :=
     match arg {
         Option.some t => match t {
-            // A sort IS a type, in either spelling.
+            // A sort IS a type.
             Term.sort _ => true,
             _ => false,
         },
@@ -4429,13 +4427,13 @@ def test_type_check_struct_update_unresolvable_base_falls_back : Bool :=
 // struct's own DECLARED field type, not blindly accepted (`Term.hole`)
 // ---
 //
-// `point_scope`'s own `x`/`y` fields are typed `Term.type_ 2` (a bare
-// sort, deliberately permissive so the OTHER struct-update tests above
-// can freely use `Term.type_ 1` as a stand-in override value) -- too
-// permissive to demonstrate a real rejection via cumulativity. This
+// `point_scope`'s own `x`/`y` fields are typed as a bare sort at level 2
+// (deliberately permissive so the OTHER struct-update tests above can
+// freely use a bare sort as a stand-in override value) -- too permissive
+// to demonstrate a real rejection via cumulativity. This
 // fixture instead gives `Wrap`'s one field a CONCRETE, non-sort type
 // (`Point`, reusing `point_type_ref`), so an override of a different,
-// structurally-unrelated shape (`Term.type_ 1`) has somewhere real to
+// structurally-unrelated shape (a bare sort) has somewhere real to
 // conflict with.
 
 def wrap_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Wrap") List.empty)
@@ -4462,7 +4460,7 @@ def wrap_var : Term := Term.var 0 (DebugName.named (Identifier.id "w"))
 
 #[test]
 def test_type_check_struct_update_rejects_mismatched_field_type : Bool :=
-    // `v : Point`, overridden with `Term.type_ 1` (a bare sort) --
+    // `v : Point`, overridden with a bare sort --
     // structurally unrelated to a concrete `Point` reference, so this
     // must be REJECTED. Before this fix (`struct_update_check_fields`
     // checking every override against `Term.hole`, i.e. "anything
@@ -4587,9 +4585,9 @@ def test_extract_pi_ret_hole_argument_leaves_signature_alone : Bool :=
 #[test]
 def test_extract_pi_ret_mismatched_shape_leaves_signature_alone : Bool :=
     // Same gate from the other side: the parameter is an applied shape
-    // (`List A`) and the argument is not an application at all
-    // (`Term.type_ 1`, a bare sort), so the walk stops without
-    // recording and the return comes back untouched -- still `List A`.
+    // (`List A`) and the argument is not an application at all (a bare
+    // sort), so the walk stops without recording and the return comes
+    // back untouched -- still `List A`.
     let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret empty_promoted_sig (Term.sort (SortLevel.concrete 1))) in
     head_is (app_arg_of typ) "A"
 

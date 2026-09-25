@@ -965,7 +965,7 @@ pub struct MaterializedVal {
 /// instructions produced `v` (no `compose_seq`-style terminator-splicing
 /// needed): every real call site that produces `LLVMValue.void_val`
 /// (`Literal.struct_lit`/`struct_update`, `DebugName.unnamed`,
-/// `Term.forall`/`Term.pi`/`Term.type_`/`Term.hole`) pairs it with
+/// `Term.forall`/`Term.pi`/`Term.sort`/`Term.hole`) pairs it with
 /// `List.empty` -- there's never a pending terminator to splice around
 /// when `v` is actually `void_val`.
 #[partial]

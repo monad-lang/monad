@@ -3766,9 +3766,9 @@ def carrier_with_normalized_head (head_name : String) (typ : Term) : Term :=
     }
 
 /// Is `typ` a PLACEHOLDER -- a type that says nothing at all about what
-/// the value is, so it can never be a carrier? A universe (`Term.type_ n`,
-/// which is what an un-annotated `let`'s own desugared binder holds --
-/// `lang/parser.mo`'s placeholder) and a `Term.hole` both qualify.
+/// the value is, so it can never be a carrier? A sort (`Type`/`Sort n`
+/// written in source, or a type binder's omitted-kind default) and a
+/// `Term.hole` both qualify.
 ///
 /// Every OTHER uninformative shape at least CONSTRAINS something: a bare
 /// `List` still says the value is a list, a bare type variable still says
@@ -3796,17 +3796,18 @@ def carrier_with_normalized_head (head_name : String) (typ : Term) : Term :=
 /// screens exactly these shapes; kept local rather than imported so
 /// this file keeps its existing import set.
 ///
-/// BOTH sort spellings, and the second one is not hypothetical: since
-/// `lower_parse_kind` (`lang/parser/lower_parse.mo`) started lowering
-/// every level the grammar produces to `Term.sort (concrete n)`, a
-/// param written `(A : Type)` arrives spelled that way and the
-/// `Term.type_` arm alone no longer sees it. That is the same missed arm
-/// `expected_carrier_of` below had -- found there by bisecting a
-/// segfault -- and the consequence here is the one this comment already
-/// describes: a placeholder that is not DEMOTED sits first in a
-/// first-that-wins search (`demote_uninformative_carriers`) and cannot
-/// fail against any instance, so it silently outranks every real carrier
-/// behind it.
+/// The arm matches a SORT -- and having exactly one such arm is the whole
+/// of the W1.1 lesson recorded here. `lower_parse_kind`
+/// (`lang/parser/lower_parse.mo`) lowers every level the grammar produces
+/// to `Term.sort (concrete n)`, so a param written `(A : Type)` arrives
+/// that way; while a second spelling of a sort still existed, an arm
+/// matching only the other one stopped seeing it entirely, which is the
+/// same missed arm `expected_carrier_of` below had -- found there by
+/// bisecting a segfault. There is one spelling now, so one arm covers it.
+/// The consequence is still the one this comment already describes: a
+/// placeholder that is not DEMOTED sits first in a first-that-wins search
+/// (`demote_uninformative_carriers`) and cannot fail against any instance,
+/// so it silently outranks every real carrier behind it.
 def placeholder_carrier (typ : Term) : Bool :=
     match term_peel typ {
         Term.hole => true,
@@ -6067,22 +6068,20 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
 def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
     resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none t
 
-/// Is `t` unusable as an expected carrier? A hole, or a bare universe
-/// placeholder (`Term.type_ 1`, what a literal reports when it is checked
-/// in pure-infer mode) -- the same two shapes `is_uninformative_carrier`
-/// (`lang/typecheck/infer.mo`) rejects. An un-annotated binding's
+/// Is `t` unusable as an expected carrier? A hole, or a bare sort -- the
+/// same two shapes `is_uninformative_carrier` (`lang/typecheck/infer.mo`)
+/// rejects. An un-annotated binding's
 /// desugared lambda carries one of these as its parameter type and says
 /// nothing about the value's carrier, so it must not be handed down as if
 /// it did.
 def expected_carrier_of (t : Term) : Option Term :=
     match t {
         Term.hole => Option.none,
-        // Same placeholder in the other spelling. W1.1's lowering flip
-        // made the PARSER emit `Term.sort (concrete 1)` where it used to
-        // emit `Term.type_ 1`, so an un-annotated lambda parameter now
-        // arrives spelled this way -- and without this arm it reads as a
-        // real carrier, which is exactly the regression the measurement
-        // above describes.
+        // The same placeholder as the hole above. W1.1's lowering flip
+        // made the PARSER emit a sort where it had emitted the older
+        // spelling of one, so an un-annotated lambda parameter arrives
+        // this way -- and without this arm it reads as a real carrier,
+        // which is exactly the regression the measurement above describes.
         Term.sort _ => Option.none,
         _ => Option.some t,
     }
@@ -6091,7 +6090,7 @@ def expected_carrier_of (t : Term) : Option Term :=
 /// type when it has one, else the domain of whatever expected type the
 /// call site handed down. `fn x acc => x + acc` passed to
 /// `Foldable.foldr` writes nothing at all -- an unannotated parameter is
-/// the parser's `Term.type_ 1` placeholder, not a type -- so `x`'s type,
+/// a sort placeholder or a hole, not a type -- so `x`'s type,
 /// and with it the carrier every class call in the body resolves
 /// against, is recoverable only from the callee's instantiated
 /// signature, which is exactly what the hint channel already hands this
@@ -6131,7 +6130,7 @@ def lam_binder_type (written : Term) (expect : Option Term) : Term :=
 /// `let x := e in body` desugars to `Term.app (Term.lam x _ body) e` --
 /// `try_compile_let_beta_db`'s own comment describes that shape -- so the
 /// un-annotated spelling reaches the lambda arm with the parser's
-/// `Term.type_ 1` placeholder and binds the placeholder into the body's
+/// placeholder for an omitted type and binds the placeholder into the body's
 /// own `env`. Every class call in that body which reads `x`'s carrier
 /// (`infer_carrier_type`'s `Term.var` arm) then finds nothing usable and
 /// falls back to the class's DEFAULT carrier -- silently, since the
@@ -7996,7 +7995,7 @@ def test_placeholder_carrier_rejects_a_real_carrier : Bool :=
 // against a call's arguments, and a level variable must never be in
 // that set.
 
-/// A term binder (`wrap_forall`'s `Term.type_ 1` marker) IS collected.
+/// A term binder (`wrap_forall`'s sort-at-1 marker) IS collected.
 #[test]
 def test_collect_forall_names_keeps_a_term_binder : Bool :=
     let t : Term := Term.forall (DebugName.named (Identifier.id "A")) (Term.sort (SortLevel.concrete 1)) Term.hole in

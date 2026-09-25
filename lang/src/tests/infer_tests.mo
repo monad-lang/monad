@@ -93,8 +93,9 @@ def test_sort_infer_type : Bool :=
 // it — a Type-in-Type hole in the self-hosted checker (the Rust core
 // rejects it: it infers `Sort (n+1)` and then fails `n+1 <= n`).
 //
-// Note this hole was reachable only through `Term.type_ N` terms the
-// checker constructs itself, NOT through `Sort N` surface syntax:
+// Note this hole was reachable only through the sort TERMS the checker
+// (and these fixtures) construct themselves, NOT through `Sort N`
+// surface syntax:
 // `Sort` is registered as a `Term.hole`-signatured free variable
 // (`add_builtin_sort`, lang/scope.mo), so `Sort 1` in source lowers to
 // an ordinary application and goes through `type_check_app`. Real
@@ -167,7 +168,7 @@ def test_var_free_unknown : Bool :=
 // --- Pi tests ---
 //
 // The universe a `Pi`/`Forall` INFERS is the `max` of its components'
-// sorts (W1.2), not the flat `Term.type_ 1` these tests used to assert.
+// sorts (W1.2), not the flat level-1 universe these tests used to assert.
 // A component contributes the sort of its TYPE: `Type` is `Sort 1`, so
 // `Type : Sort 2` and `(A : Type) -> Type` is itself a `Sort 2`. Three
 // of the four affected tests are below; the fourth, `test_forall_infer`,
@@ -266,8 +267,8 @@ def test_app_id : Bool :=
     let id_lam : Term := Term.lam x_dbg arg_typ id_body in
     // The lambda is `Sort 1 -> Sort 1`, so its argument must have type
     // `Sort 1` -- which `Sort 0` does (`Sort 0 : Sort 1`). This used to
-    // be applied to `Term.type_ 1`, which is `Sort 1 : Sort 1` -- true
-    // only under the Type-in-Type hole `type_check_sort_full` had.
+    // be applied to `Sort 1`, which is `Sort 1 : Sort 1` -- true only
+    // under the Type-in-Type hole `type_check_sort_full` had.
     let result : Term := Term.app id_lam (sort_n 0) in
     match run_check result Term.hole {
         ok _ => true,
@@ -757,7 +758,7 @@ def test_lam_app_chain : Bool :=
     let outer_lam : Term := Term.lam x_dbg arg_a inner_lam in
     // Both lambdas are `Sort 1 -> ...`, so both arguments must have type
     // `Sort 1` -- `Sort 0` does. See `test_app_id` above: passing
-    // `Term.type_ 1` here asserted `Sort 1 : Sort 1`.
+    // `Sort 1` here asserted `Sort 1 : Sort 1`.
     let applied : Term := Term.app (Term.app outer_lam (sort_n 0)) (sort_n 0) in
     match run_check applied Term.hole {
         ok _ => true,

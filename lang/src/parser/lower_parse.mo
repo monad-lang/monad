@@ -577,9 +577,9 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         //
         // This is the single funnel that makes the checker's `Term.sort`
         // arms reachable corpus-wide. Neither compiler has an exhaustiveness
-        // check, so an arm written against the old concrete-only spelling
-        // would fail at RUNTIME rather than at compile time -- which is why
-        // the spelling collapse is gated on this being the only arm left.
+        // check, so an arm left over against the old concrete-only spelling
+        // failed at RUNTIME rather than at compile time -- which is why the
+        // spelling collapse was gated on this being the only arm left.
         ParseTermKind.sort level => Term.sort level,
         ParseTermKind.quote_ inner => Term.quote_ (lower_parse_term ctx inner),
         // Desugared HERE, not in the grammar -- this is the whole reason

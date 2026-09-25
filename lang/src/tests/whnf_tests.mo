@@ -50,8 +50,8 @@ def dbg_x : DebugName := DebugName.named (Identifier.id "x")
 ///
 /// `idt`'s body is deliberately the PARAMETER rather than a type name.
 /// `build_scope_from_decls` runs on raw, PRE-elaboration decls, so a
-/// body written `Type` is still an unresolved name there, not
-/// `Term.type_ 1` -- comparing against a hand-built sort would be
+/// body written `Type` is still an unresolved name there, not the sort it
+/// elaborates to -- comparing against a hand-built sort would be
 /// asserting something about elaboration, not about reduction. A bound
 /// variable substituted by beta is unambiguous.
 def idt_scope : Scope := scope_of "type P { p0 }\ndef idt (x : Type) : Type := x\ndef konst (x : Type) : Type := P"

@@ -99,7 +99,7 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
         },
     }
 
-/// The sort arm, shared by both spellings of a sort term.
+/// The sort arm.
 ///
 /// Cumulativity: `Sort l1 <= Sort l2` holds exactly when `l1 <= l2`, and the
 /// comparison is DIRECTIONAL — `a` is the actual, `b` the expected, so
@@ -107,10 +107,13 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
 /// succeeds. `unify` is the only place subsumption belongs; a call site
 /// instantiating a level is solving, not subsuming.
 ///
-/// `b` is read through `sort_level_of`, so `Term.type_ n` and
-/// `Term.sort (concrete n)` compare as the same sort. That is what lets the
-/// parser emit one spelling and the checker's own constructions use the
-/// other without every comparison between them turning into a mismatch.
+/// `b` is read through `sort_level_of` rather than shape-matched, so the
+/// comparison runs on LEVELS and folds `level_const` (`level_le`) instead
+/// of requiring a particular level shape. That is what lets a level the
+/// checker computed -- `type_check_sort_full`'s `succ`, `type_check_pi`'s
+/// `max` -- meet a numeral level without the comparison turning into a
+/// mismatch, and what keeps a `Prop`/`Type`/`Sort n` written in source
+/// comparable with the same sort built by the checker.
 /// `#[terminating]`: this def rejoins the `unify_go`/`unify_stuck` cycle
 /// through `unify_stuck`'s reduce-once path, and that bound is the cluster's
 /// existing one -- `unify_stuck` clears the `reduce` flag before it recurses,

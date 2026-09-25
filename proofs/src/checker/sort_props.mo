@@ -78,44 +78,41 @@ def prop_infers_type_unprompted : Bool :=
 def type_infers_sort_2_unprompted : Bool :=
     accepted (Term.sort (SortLevel.concrete 1)) Term.hole
 
-// --- The second spelling: `Term.sort (SortLevel ...)` ---
+// --- Sort levels: structure rather than a bare numeral ---
 //
-// Every pin above writes a sort as `Term.type_ n`, the concrete-level
-// spelling the checker itself builds. `Term.sort` carries the same level
-// as structure (`concrete`/`var`/`max`/`succ`), and the rules must agree
-// across the two -- `sort_level_of` is the one helper that absorbs the
-// difference, so a pin below that fails is that helper, not the sort rule.
+// A sort carries its level as STRUCTURE (`concrete`/`var`/`max`/`succ`),
+// and the rules must handle every shape, not just a numeral.
+// `sort_level_of` is what lets a shape-inspecting site read the level and
+// `level_const` is what folds a computed one, so a pin below that fails is
+// one of those two rather than the sort rule itself.
 //
-// The second spelling is reachable from source only once the parser lowers
-// a concrete level to it (deferred: the grammar still emits `Term.type_`,
-// so these are hand-built terms, exactly as the pins above are). Pinning
-// it NOW is the point: `level_const`/`level_lt` are exercised by the sweep
-// the moment the lowering flips, and a wrong `succ` there would otherwise
-// be found by a corpus-wide red sweep instead of by a named pin.
+// The grammar lowers a source `Type`/`Sort n`/`Sort u` to this shape
+// already, so these are reachable from source and exercised by the sweep
+// -- but pinning them by hand is still the point: a wrong `succ` in
+// `type_check_sort_full`, or a dropped arm in `sort_level_of`, would
+// otherwise be found by a corpus-wide red sweep instead of by a named pin.
 
-/// `Prop : Type` in the structured spelling -- the same claim as
+/// `Prop : Type` at explicit levels -- the same claim as
 /// `prop_inhabits_type`, reached through `level_lt (concrete 0)`.
 #[test]
 def sort_spelling_is_a_valid_inhabitant : Bool :=
     accepted (Term.sort (SortLevel.concrete 0)) (Term.sort (SortLevel.concrete 1))
 
-/// The soundness pin again, one level up and in the structured spelling:
-/// `Sort 1 : Sort 1` must be refused, and it must be refused by the level
-/// relation rather than by a spelling mismatch between the two sides.
+/// The soundness pin again, one level up: `Sort 1 : Sort 1` must be
+/// refused, and it must be refused by the LEVEL relation rather than by the
+/// two sides failing to match structurally.
 #[test]
 def sort_spelling_is_not_its_own_type : Bool :=
     rejected (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 1))
 
-/// The EXPECTED side in the structured spelling -- the one direction the
-/// pre-W1.1 checker could not have done, because it matched the expected
-/// term directly (`Term.type_ expected_level`) and so had no way to read
-/// a structured expectation at all. Reading both sides through
-/// `sort_level_of` is what makes the spellings interchangeable.
+/// The EXPECTED side -- the direction a checker that matched the expected
+/// term directly, numeral only, cannot do at all. Reading both sides
+/// through `sort_level_of` is what makes a computed expectation readable.
 ///
 /// The claim is checked rather than asserted: making `sort_level_of`
 /// answer `Option.none` for a `Term.sort` input -- i.e. dropping exactly
-/// the expected-side absorption -- fails THIS pin and no other one in
-/// this file (11/12). So the pin is sensitive to that rule alone and
+/// that absorption -- fails THIS pin and no other one in this file
+/// (11/12). So the pin is sensitive to that rule alone and
 /// cannot be passing through some unrelated path.
 #[test]
 def type_spelling_is_accepted_at_a_sort_spelling_expectation : Bool :=
@@ -124,22 +121,18 @@ def type_spelling_is_accepted_at_a_sort_spelling_expectation : Bool :=
 /// A level that is not a literal still compares: `succ (concrete 0)` IS
 /// `concrete 1`, so `Type : Sort 2` holds through it. Pins `level_const`'s
 /// `succ` evaluation -- an unresolved level deliberately has no `I64`, and
-/// this is the case that shows the evaluated one does. The expectation is
-/// written in the OTHER spelling on purpose: a `succ` level against a
-/// `Term.sort` expectation would leave this pin passing even if the
-/// absorption were one-directional.
+/// this is the case that shows the evaluated one does.
 #[test]
 def sort_spelling_evaluates_a_succ_level : Bool :=
     accepted (Term.sort (SortLevel.succ (SortLevel.concrete 0))) (Term.sort (SortLevel.concrete 2))
 
-/// With nothing expected, a structured sort must reach the rule's
-/// `Term.hole` arm rather than be checked against some invented
-/// expectation. It is a real pin on the ARM ORDER, not just on the level:
-/// were `sort_level_of (Term.hole)` ever to answer `some (concrete 0)`
-/// instead of `Option.none`, this exact term would be compared against
-/// `Prop` and refused, and the pin would fail. `Sort 1 : Sort 2` in the
-/// structured spelling is the same claim as `type_inhabits_sort_2`, so the
-/// two spellings are pinned at the same level.
+/// With nothing expected, a sort must reach the rule's `Term.hole` arm
+/// rather than be checked against some invented expectation. It is a real
+/// pin on the ARM ORDER, not just on the level: were `sort_level_of
+/// (Term.hole)` ever to answer `some (concrete 0)` instead of
+/// `Option.none`, this exact term would be compared against `Prop` and
+/// refused, and the pin would fail. This is the same claim as
+/// `type_inhabits_sort_2`.
 #[test]
 def sort_spelling_is_accepted_with_no_expectation : Bool :=
     accepted (Term.sort (SortLevel.concrete 1)) Term.hole
@@ -149,15 +142,15 @@ def sort_spelling_is_accepted_with_no_expectation : Bool :=
 // These pin W1.2. They cannot be written with `accepted`: `type_check`'s
 // `Term.pi`/`Term.forall` arms ignore the expectation completely and answer
 // the universe they computed, so every well-formed Pi is accepted against
-// EVERY expectation and no accept/reject pair can tell a `max` from a flat
-// `Term.type_ 1`. They read the inferred type instead, through the
+// EVERY expectation and no accept/reject pair can tell a `max` from a flat,
+// numeral-only universe. They read the inferred type instead, through the
 // harness's `inferred_sort_level`.
 //
 // Every level below is one higher than the level its component is written
 // at, and that is the rule rather than an off-by-one: a component's
 // contribution is the sort of its TYPE, and `Sort n : Sort (n+1)`. So
-// `Term.type_ 1` (Type) contributes 2, `Term.type_ 3` (Sort 3)
-// contributes 4, and the Pi over both lives at 4.
+// `Type` (written at level 1) contributes 2, `Sort 3` contributes 4, and
+// the Pi over both lives at 4.
 
 /// The codomain decides when it is the higher one: `(Type) -> Sort 3`
 /// lives at 4, not at the domain's 2.

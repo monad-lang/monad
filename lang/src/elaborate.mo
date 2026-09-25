@@ -208,8 +208,9 @@ def ids_without (a : List Identifier) (b : List Identifier) : List Identifier :=
 ///
 /// The binder's KIND is what distinguishes a level binder from a term
 /// binder downstream -- `Term.sort (SortLevel.concrete 0)` here versus
-/// `wrap_forall`'s `Term.type_ 1`. That marker is readable with
-/// `sort_level_of`, and it is safe because nothing inspects a `forall`
+/// `wrap_forall`'s `Term.sort (SortLevel.concrete 1)`. The two markers
+/// differ only in that level value, and it is readable with
+/// `sort_level_of`. Safe because nothing inspects a `forall`
 /// binder's kind SHAPE: `type_check_forall` type-checks the kind and
 /// pushes it into `local_types`, but never matches on it.
 ///
@@ -552,8 +553,8 @@ def test_elaborate_type_binds_a_free_level_var : Bool :=
     }
 
 /// ...and the binder is marked as a LEVEL binder, not a term binder.
-/// `wrap_forall` marks a term binder `Term.type_ 1`; this one must be a
-/// sort at level 0, which is what `is_level_binder_kind`
+/// `wrap_forall` marks a term binder `Term.sort (SortLevel.concrete 1)`;
+/// this one must be a sort at level 0, which is what `is_level_binder_kind`
 /// (`lang/typecheck/levels.mo`) reads to keep the two apart at the three
 /// sites that open a `forall` chain.
 #[test]

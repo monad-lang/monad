@@ -442,7 +442,7 @@ def test_keyword_prefix_is_not_hijacked : Bool :=
 /// claimed as fail-first: nothing validates an inductive's declared type
 /// (`lower_parse_inductive` only lowers it into `Inductive.typ`), so the
 /// pre-change reading of `Sort 1` here -- an APPLICATION of the
-/// hole-typed `Sort` global -- was accepted as well. Both spellings are
+/// hole-typed `Sort` global -- was accepted as well. Both readings are
 /// inert; what this catches is the kind position ceasing to parse.
 #[test]
 def test_type_decl_kind_position_accepts_the_sort_forms : Bool :=
@@ -450,8 +450,8 @@ def test_type_decl_kind_position_accepts_the_sort_forms : Bool :=
 
 // ─── Level variables: `Sort u` (W1.3) ─────────────────────────────────
 //
-// `Sort u` had no representation before this work: `pt_type_` carries an
-// `I64`, so a level VARIABLE could not be built by the parser at all,
+// `Sort u` had no representation before this work: the parse-level sort
+// carried a bare `I64`, so a level VARIABLE could not be built at all,
 // and `Sort u` parsed as an APPLICATION of the hole-typed `Sort` global
 // to the variable `u`. That is why the first pin below is fail-first and
 // the second is not -- measured against a clean-HEAD worktree, not

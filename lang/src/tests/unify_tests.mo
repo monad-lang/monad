@@ -200,7 +200,7 @@ def test_unify_still_rejects_irreducible_mismatch : Bool :=
 
 // --- Level variables ---
 //
-// `unify` routes BOTH sort spellings to `unify_sort` before the
+// `unify` routes every sort to `unify_sort` before the
 // structural `Similar.similar` fallback ever runs, so a sort's
 // reflexivity is decided by `level_le` (`lang/types.mo`) and by nothing
 // else. These two pin the pair of answers that relation has to give.

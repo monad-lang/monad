@@ -1442,7 +1442,7 @@ pub def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals 
 
 /// `promote_instance_defs`'s own `__Dict_ClassName_Args` value def
 /// (`lang/scope.mo`'s `promote_instance`, e.g. `__Dict_Speak_Dog`) is a
-/// pure codegen artifact -- declared `.typ := Term.type_ 1` but its
+/// pure codegen artifact -- its `.typ` is a bare sort but its
 /// `.term` is a `Term.con` record of the instance's own method
 /// references, a shape ordinary `type_check` was never meant to validate
 /// (it isn't real source, no user ever writes it) and can't: its field
@@ -4100,9 +4100,9 @@ def test_check_module_strict_pos_skips_structs : IO Bool := do {
 // rather than incidental, which is what three earlier candidate rules each
 // got wrong. It is also why the producer half matters: the reference's
 // bare-name lambda param is `param(i, Hole)` (`core/src/parser.rs:464-466`),
-// the port's was `Term.type_ 1` until this phase, and with that placeholder
-// `infer_position_hole` could tell neither p6 nor the written-`Type` row
-// apart.
+// the port's was a bare sort at level 1 until this phase, and with a bare
+// sort standing in for a placeholder, `infer_position_hole` could tell
+// neither p6 nor the written-`Type` row apart.
 //
 // Synthetic, and the corpus cannot cover it: the divergence's own rows are
 // programs the reference refuses, so no `.mo` file in the repo contains one.

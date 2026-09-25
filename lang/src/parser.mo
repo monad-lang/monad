@@ -4850,7 +4850,7 @@ def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
 		List.empty => false,
 	}
 
-// ─── Sort forms: `Prop`, `Pred`, `Type`, `Sort N` (W1.1b) ──────────────
+// ─── Sort forms: `Prop`, `Pred`, `Type`, `Sort N`, `Sort u` ────────────
 //
 // Before this, none of these were syntax: `Sort`/`Prop`/`Type`/`Pred` were
 // registered as `Term.hole`-signatured free variables (`add_builtin_*`,
@@ -4859,7 +4859,8 @@ def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
 // permissive by construction, because the callee's signature is
 // `Term.hole`. That made the Type-in-Type hole W1.0/W1.2 closed
 // UNREACHABLE from source: the same shape built internally as
-// `Term.type_ 1` is rejected, but `def bad : Sort 1 := Sort 1` in text was
+// `Term.sort (SortLevel.concrete 1)` is rejected, but
+// `def bad : Sort 1 := Sort 1` in text was
 // accepted. Measured fail-first, before this change:
 //   `def bad : Sort 1 := Sort 1`  -> ACCEPTED (must be refused)
 //   `def bad2 : Prop := Prop`     -> ACCEPTED (must be refused)
@@ -4871,12 +4872,10 @@ def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
 // about what `Type` denotes even though only the self-hosted one
 // implements the rest of universe polymorphism.
 //
-// `Sort N` requires the numeral; a bare `Sort` -- and `Sort u`, the level
-// variable -- FALLS THROUGH to the ordinary-variable path below and keeps
-// today's behaviour. That is deliberate rather than incomplete: `Sort u`
-// is exactly the form W1.3 needs, and it wants its own arm (a
-// `SortLevel.var` payload `pt_type_` cannot carry) rather than a
-// half-built one here.
+// `Sort N` and `Sort u` each have an arm of their own
+// (`sort_form_sort_num`, `sort_form_sort_var`); the level-variable arm is
+// what gives `SortLevel.var` a parse-level representation at all. The two
+// arms' own docs below carry the ordering and fall-through details.
 //
 // WHERE the hook sits is load-bearing. These parsers are deliberately NOT
 // entries in `atom_parsers` (whose own comment records that its
@@ -6435,21 +6434,16 @@ def lambda_body (r: ParseResult ParseTerm) (names: List Identifier) : ParseResul
 /// `[a, b, c]`, `body` → `fn a => (fn b => (fn c => body))` — mirrors
 /// the Rust reference's `lams()` fold exactly (first param outermost).
 ///
-/// The param type is `Term.hole`, not `Term.type_ 1` (`Type`/`Sort 1`):
-/// the reference's own bare-name lambda param is `param(i, Hole)`
+/// The param type is `Term.hole`, not a sort such as `Type`/`Sort 1`: the
+/// reference's own bare-name lambda param is `param(i, Hole)`
 /// (`core/src/parser.rs:464-466`'s `lam_param` first alternative, and
 /// `:1881` for macro params), so an ABSENT annotation and a WRITTEN `_`
 /// are the same construct there.
 ///
-/// `pt_type_ 1` was wrong here, and not because it collided with another
-/// spelling: a source `Type`/`Prop`/`Sort n` never lowers to
-/// `Term.type_ 1`, because this parser has no sort grammar rule at all.
-/// Those names are registered as ordinary globals (`lang/src/scope.mo`'s
-/// `"Type"`/`"Prop"`/`"Sort"` insertions) and reach codegen as
-/// `Term.var`/`App(Var "Sort", Lit n)`. `ParseTermKind.type_` is
-/// constructed at exactly three sites, all of them `pt_type_ 1`
-/// (`:1372`/`:1423`/`:2667`), and each of those marks an OMITTED KIND on a
-/// type binder -- a different question from an omitted annotation on a
+/// Writing a sort here was wrong, and not because it collided with another
+/// spelling of one. The three sites that DO write a sort for an omitted
+/// KIND (`:1372`/`:1423`/`:2667`, each `SortLevel.concrete 1`) mark a TYPE
+/// BINDER's default -- a different question from an omitted annotation on a
 /// value's parameter. Written here it ASSERTED a type no source had said.
 ///
 /// Two consequences, both real. It made the `param_typ` test in the
@@ -6462,16 +6456,16 @@ def lambda_body (r: ParseResult ParseTerm) (names: List Identifier) : ParseResul
 /// type of a hole; add a type annotation". And it gave the argument a
 /// nonsense expected type, since `app_arg_expected_type` hands a lam's
 /// `param_typ` straight to its argument: `(fn x => x) arg` was checking
-/// `arg` against the sort `Type`.
+/// `arg` against a sort.
 ///
 /// Which is why the repair belongs here rather than in the guard: the
 /// guard's premise was true of the reference and false of the port, so the
 /// honest fix is to make the value match, not to teach a predicate which
 /// wrong value to tolerate.
 ///
-/// `pt_type_ 1` remains correct at its other three sites
-/// (`:1372`/`:1423`/`:2667`) -- there the param IS a type binder whose
-/// kind defaults to `Type`, which is exactly what the reference writes.
+/// The sort at `:1372`/`:1423`/`:2667` stays: there the param IS a type
+/// binder whose kind defaults to `Type`, which is exactly what the
+/// reference writes.
 #[partial]
 def build_nested_lambdas (names : List Identifier) (body : ParseTerm) : ParseTerm :=
     match names {
@@ -7569,9 +7563,9 @@ def test_sort_numeral_still_parses_concrete : Bool :=
 		fail _ => false
 	}
 
-/// `Sort u` is the form that had NO representation before this change:
-/// `pt_type_` carries an `I64`, so a level variable could not be built
-/// at all.
+/// `Sort u` is the form that had NO representation before this change: the
+/// parse-level sort carried a bare `I64`, so a level variable could not be
+/// built at all.
 #[test]
 def test_sort_variable_parses_as_a_level_var : Bool :=
 	match expression "Sort u" {

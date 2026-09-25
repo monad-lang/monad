@@ -618,7 +618,7 @@ def test_instance_key_matches_type_args : Bool :=
     // (`show_bool` first, `show_i64` last) — `scope_data_add_instance`
     // prepends to its class's instance list, so this preserves the
     // original `[show_i64, show_bool]` order: `show_i64`/`show_bool`
-    // here deliberately share the same `Term.type_ 1` arg (see above),
+    // here deliberately share the same level-1 sort arg (see above),
     // so `first_matching_instance`'s scan needs this exact order to
     // still return `show_i64` first, matching this test's intent.
     let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty show_bool) show_i64 in
@@ -836,11 +836,11 @@ def test_scope_qualified_wrong_module_does_not_resolve : Bool :=
 // --- A placeholder is a WEAK carrier, never a dropped one ---
 //
 // `infer_carrier_type`'s `Term.var` arm reads a local's declared type out of
-// the env. An un-annotated `let`'s desugared binder holds the parser's
-// placeholder (`Term.type_ 1`), and a placeholder names no head -- so
-// `term_matches_carrier` cannot fail against one and it matches EVERY
-// instance, which makes it worse than useless whenever it outranks a real
-// carrier.
+// the env. An un-annotated binding's desugared binder holds a placeholder --
+// a hole, or the bare sort W1.1's lowering made of an un-annotated lambda
+// parameter -- and a placeholder names no head -- so `term_matches_carrier`
+// cannot fail against one and it matches EVERY instance, which makes it
+// worse than useless whenever it outranks a real carrier.
 //
 // It is still handed on, because it is sometimes the ONLY evidence a call
 // has. MEASURED: refusing it here (answering `Option.none` in that arm)
