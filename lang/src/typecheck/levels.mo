@@ -36,8 +36,6 @@ use lib::typecheck::traverse {term_map_children}
 #[partial]
 pub def subst_levels_term (t: Term) (binds: List (Pair Identifier SortLevel)) : Term := match t {
     Term.sort l => Term.sort (level_subst l binds),
-    // `Term.type_` is the concrete spelling and carries no variable, so
-    // it is deliberately NOT special-cased -- the catch-all rebuilds it.
     _ => term_map_children (fn c => subst_levels_term c binds) t,
 }
 
@@ -51,7 +49,6 @@ pub def subst_levels_term (t: Term) (binds: List (Pair Identifier SortLevel)) : 
 #[partial]
 pub def free_level_vars (t: Term) : List Identifier := match t {
     Term.sort l => free_level_vars_of l,
-    Term.type_ _ => List.empty,
     Term.lam _dbg typ body => union_ids (free_level_vars typ) (free_level_vars body),
     Term.forall _dbg kind body => union_ids (free_level_vars kind) (free_level_vars body),
     Term.pi arg ret => union_ids (free_level_vars arg) (free_level_vars ret),
@@ -64,11 +61,11 @@ pub def free_level_vars (t: Term) : List Identifier := match t {
 /// Is this `forall` binder a LEVEL binder rather than a type-variable
 /// binder? `wrap_level_forall` (`lang/elaborate.mo`) marks one by giving
 /// it a SORT as its kind, where `wrap_forall` gives a term binder
-/// `Term.type_ 1`.
+/// `Term.sort (SortLevel.concrete 1)`.
 ///
-/// Reading the marker with `sort_level_of` covers both spellings, and
-/// `Term.type_ 1` is NOT a level binder -- that is the term-binder
-/// marker -- so the test is "is a sort AND is at level 0". Nothing else
+/// Reading the marker with `sort_level_of` gives whichever level it
+/// carries; the term binder's marker sits at level 1 and is NOT a level
+/// binder, so the test is "is a sort AND is at level 0". Nothing else
 /// inspects a binder's kind shape, which is what makes this marker safe
 /// (see `wrap_level_forall`'s own comment).
 ///
@@ -88,6 +85,15 @@ pub def is_level_binder_kind (kind : Term) : Bool :=
         },
         Option.none => false,
     }
+
+/// The level/term binder split at the level values that carry it:
+/// `wrap_level_forall` writes level 0 and `wrap_forall` writes level 1, so
+/// this predicate is the entire discriminator. It is also the one thing
+/// standing between `collect_forall_names` and dropping a real
+/// type-variable name -- or binding an argument against a level variable.
+#[test]
+def test_level_binder_kind_is_a_sort_at_level_zero : Bool :=
+    is_level_binder_kind (sort_n 0) && Bool.not (is_level_binder_kind (sort_n 1))
 
 // ─── Test helpers ─────────────────────────────────────────────────────
 //

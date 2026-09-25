@@ -5,7 +5,7 @@ use lib::types {
   StructField, Term, TypeConstraint, affine, app, class_d, con, def_d, f64,
   forall, hole, i32, i64, i8, id, if_, inductive_d, infix_d, lam, linear, lit,
   many, match_, mc, mk, mp, name, named, ntv, num, open_all, open_d, operator, pi,
-  show_identifier, show_module_path, str, struct_d, type_, u32, unnamed, use_bare,
+  show_identifier, show_module_path, str, struct_d, u32, unnamed, use_bare,
   use_d, var, zero,
 }
 use lib::pretty {
@@ -13,7 +13,7 @@ use lib::pretty {
   show_term, show_universe,
 }
 
-open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
+open Term {app, con, forall, hole, lam, lit, ntv, pi, var}
 open Literal {if_, match_, num, str}
 open Decl {class_d, def_d, inductive_d, infix_d, open_d, struct_d, use_d}
 open DebugName {named, unnamed}

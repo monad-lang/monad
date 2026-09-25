@@ -2,14 +2,14 @@ use lib::types {
   Class, ClassDef, Decl, Def, Identifier, ModulePath, NamePath, Param, Term,
   TypeConstraint,
   class_d, def_d, forall, hole, id, id_eq, id_member, many, mk, mp, named, pi,
-  type_, unnamed, use_bare, use_d, var,
+  unnamed, use_bare, use_d, var,
 }
 use lib::elaborate {
   elaborate_class, elaborate_decls, elaborate_def, elaborate_type, free_vars,
   names_of_decl, names_of_decls, sentinel,
 }
 
-open Term {forall, hole, pi, type_, var}
+open Term {forall, hole, pi, var}
 open Decl {class_d, def_d, use_d}
 open DebugName {named, unnamed}
 open Identifier {id}

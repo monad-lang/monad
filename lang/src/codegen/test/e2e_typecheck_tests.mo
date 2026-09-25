@@ -1,11 +1,11 @@
 use lib::types {
   app, con, forall, hole, i64, id, if_, lam, lit, match_, mc, mk, named, num,
-  pi, str, type_, unnamed, var, zero,
+  pi, str, unnamed, var, zero,
 }
 use llvm::ir {emit_module, mk}
 use lib::codegen::emit {check_contains, compile_db_decls_ir, mk}
 
-open Term {app, con, forall, hole, lam, lit, pi, type_, var}
+open Term {app, con, forall, hole, lam, lit, pi, var}
 open Literal {if_, match_, num, str}
 open Identifier {id}
 open DebugName {named, unnamed}

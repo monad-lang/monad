@@ -5,7 +5,7 @@ use lib::types {
   Term, TypeConstraint,
   app, class_d, con, def_d, forall, hole, id, id_eq, id_member, if_, inductive_d,
   infix_d, instance_d, lam, lit, match_, mc, mk, mp, name, named, ntv, num, open_d,
-  pi, scoped_open_d, sentinel, show_identifier, str, struct_d, type_, union_ids, unnamed,
+  pi, scoped_open_d, sentinel, show_identifier, str, struct_d, union_ids, unnamed,
   use_d, var,
 }
 // `HashMap` stays available via the same always-on mechanism scope.mo's
@@ -71,7 +71,6 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
                 Con.mk _ _ _ args => free_vars_of_opt_terms args known_names,
             },
         Term.ntv _ => List.empty,
-        Term.type_ _ => List.empty,
         // A sort has no free vars.
         Term.sort _level => List.empty,
         Term.hole => List.empty,

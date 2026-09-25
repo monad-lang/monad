@@ -199,7 +199,6 @@ def term_has_struct_lit (t : Term) : Bool := match t {
     Term.ntv native => native_has_struct_lit native,
     Term.con con_ => con_has_struct_lit con_,
     Term.lit lit_ => lit_has_struct_lit lit_,
-    Term.type_ _universe => false,
     // A sort carries no struct literal.
     Term.sort _level => false,
     Term.hole => false,

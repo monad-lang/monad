@@ -5,7 +5,7 @@ use lib::types {
   NameRef,
   Param, Scope, ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Term,
   TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nnp, npath,
-  param_many, type_,
+  param_many,
 }
 use lib::scope {
   add_constraint_dict_params, build_scope_from_decls, build_scope_from_modules,

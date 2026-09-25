@@ -38,7 +38,6 @@ def term_map_children (f : Term -> Term) (t : Term) : Term :=
         Term.lit value => Term.lit (literal_map_children f value),
         Term.ntv n => Term.ntv (native_map_children f n),
         Term.con c => Term.con (con_map_children f c),
-        Term.type_ u => Term.type_ u,
         // A leaf: a level is data, not a child, so `f` is not applied to it.
         Term.sort level => Term.sort level,
         Term.hole => Term.hole,
@@ -142,7 +141,6 @@ def term_map_children_at_depth (f : I64 -> Term -> Term) (t : Term) : Term :=
         Term.lit value => Term.lit (literal_map_children_at_depth f value),
         Term.ntv n => Term.ntv (native_map_children (f 0) n),
         Term.con c => Term.con (con_map_children (f 0) c),
-        Term.type_ u => Term.type_ u,
         // A leaf: a level is data, not a child, so `f` is not applied to it.
         Term.sort level => Term.sort level,
         Term.hole => Term.hole,

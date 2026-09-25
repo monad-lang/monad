@@ -67,9 +67,9 @@ def proof_scope : Scope := {
 
 /// Does `term` typecheck against `expected_type`, per the checker's own
 /// `type_check`? `expected_type` is the TYPE the term is checked
-/// against, so `accepted (Term.type_ 0) (Term.type_ 1)` asks
-/// "`Prop : Type`?" and `rejected (Term.type_ 1) (Term.type_ 1)` asks
-/// "is `Type : Type`?" (no).
+/// against, so with `p := Term.sort (SortLevel.concrete 0)` and
+/// `t := Term.sort (SortLevel.concrete 1)`, `accepted p t` asks
+/// "`Prop : Type`?" and `rejected t t` asks "is `Type : Type`?" (no).
 def accepted (term : Term) (expected_type : Term) : Bool :=
     match type_check term expected_type proof_scope empty_local_types empty_locals {
         ok _ => true,
@@ -82,9 +82,17 @@ def rejected (term : Term) (expected_type : Term) : Bool := not (accepted term e
 
 /// The concrete sort level the checker INFERS for `term`, or `Option.none`
 /// when it infers something that is not a concrete sort (including an
-/// error, and including a level that is not a literal -- a `Term.sort`
-/// whose level is a variable has no `I64` to report, and `level_const` is
-/// not `pub` here to ask more precisely).
+/// error, and including a level holding an unresolved variable -- that has
+/// no `I64` to report, which is exactly what `level_const` answers with
+/// `Option.none`).
+///
+/// Folds through `level_const` rather than matching a `concrete` payload,
+/// and that is what keeps it working across the sort collapse:
+/// `type_check_pi`/`type_check_forall` answer a `SortLevel.max`, and
+/// `type_check_sort_full` answers a `succ` -- both perfectly concrete levels
+/// with no `concrete` shape to match. Shape-matching happened to be adequate
+/// only while `sort_term_of_level` re-rendered a computed level back into
+/// the old concrete spelling; with that gone, both shapes must fold.
 ///
 /// This exists because `accepted` structurally cannot see a `Pi`'s or a
 /// `Forall`'s universe: `type_check`'s `Term.pi`/`Term.forall` arms ignore
@@ -96,7 +104,7 @@ def rejected (term : Term) (expected_type : Term) : Bool := not (accepted term e
 def inferred_sort_level (term : Term) : Option I64 :=
     match type_check term Term.hole proof_scope empty_local_types empty_locals {
         ok tt => match tt.typ {
-            Term.type_ n => Option.some n,
+            Term.sort level => level_const level,
             _ => Option.none,
         },
         err _ => Option.none,

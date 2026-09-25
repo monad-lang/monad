@@ -5,7 +5,7 @@ use lib::types {
   StructLitField, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, id_eq, id_member, if_, lam, list_rev_loop,
   list_reverse, lit, many, match_, mc, mk, mp, name, named, nid, not_a_type,
-  ntv, num, pi, sentinel, show_identifier, show_name_path, str, term_peel, type_,
+  ntv, num, pi, sentinel, show_identifier, show_name_path, str, term_peel,
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lib::scope {
@@ -80,12 +80,9 @@ pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_t
         Term.pi arg ret => type_check_pi arg ret scope local_types locals,
         Term.con c => type_check_con c expected_type scope local_types locals,
         Term.ntv ntv => type_check_ntv ntv expected_type scope local_types locals,
-        // The two sort spellings, dispatched to the same rule: `Term.type_ n`
-        // is the concrete-level form the checker and every fixture still
-        // write, `Term.sort l` is what the parser produces for `Prop`/`Type`/
-        // `Sort n`. Each is handed back as what it is rather than normalized,
-        // so neither spelling's inferred type moves.
-        Term.type_ level => type_check_sort_full (Term.type_ level) (SortLevel.concrete level) expected_type,
+        // The sole sort form -- `Prop`/`Type`/`Sort n` all lower to it. The
+        // term is handed through as it is; `type_check_sort_full` computes the
+        // universe one level up from the level it carries.
         Term.sort level => type_check_sort_full (Term.sort level) level expected_type,
         // Struct literals in ctor-arg position must be bound to an
         // annotated local first (AGENTS.md): a bare `{ ... }` reaching
@@ -207,7 +204,6 @@ def carrier_from_pi_chain (t : Term) : Option Term :=
 def is_uninformative_carrier (t : Term) : Bool :=
     match t {
         Term.hole => true,
-        Term.type_ _ => true,
         // A sort is a universe placeholder in either spelling.
         Term.sort _ => true,
         _ => false,
@@ -2901,13 +2897,14 @@ def con_spine_result_typ (f_term : Term) (fallback : Term) (scope : Scope) : Ter
 /// Type check a forall binder.
 ///
 /// The universe is the `max` of the two components' sorts -- the standard rule,
-/// and previously a flat `Term.type_ 1` that discarded both. `level_of_type`
+/// and previously a flat level-1 sort that discarded both. `level_of_type`
 /// answers `concrete 1` for a component that is not a known sort, so anything
 /// outside the sort hierarchy contributes exactly what it contributed before;
 /// what changes is a component that IS a sort, which now contributes its own
-/// level instead of being ignored. `sort_term_of_level` renders the result, so
-/// a `max` that lands on a concrete level is spelled `Term.type_ n` exactly as
-/// before (see the note there).
+/// level instead of being ignored. The `max` is kept as structure rather than
+/// folded to a numeral, which would need a case split for a level holding an
+/// unresolved variable; every consumer that wants a numeral folds through
+/// `level_const` anyway, so nothing is lost by leaving it as `max`.
 def type_check_forall (dbg : DebugName) (kind : Term) (body : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check kind Term.hole scope local_types locals {
         ok kind_tt =>
@@ -2915,7 +2912,7 @@ def type_check_forall (dbg : DebugName) (kind : Term) (body : Term) (scope : Sco
             match type_check body Term.hole scope extended_types locals {
                 ok body_tt =>
                     let forall_term : Term := Term.forall dbg kind body in
-                    let universe : Term := sort_term_of_level (SortLevel.max (level_of_type kind_tt.typ) (level_of_type body_tt.typ)) in
+                    let universe : Term := Term.sort (SortLevel.max (level_of_type kind_tt.typ) (level_of_type body_tt.typ)) in
                     ok (mk_typed forall_term universe),
                 err e => err e,
             },
@@ -2930,7 +2927,7 @@ def type_check_pi (arg : Term) (ret : Term) (scope : Scope) (local_types : List 
             match type_check ret Term.hole scope extended_types locals {
                 ok ret_tt =>
                     let pi_term : Term := Term.pi arg ret in
-                    let universe : Term := sort_term_of_level (SortLevel.max (level_of_type arg_tt.typ) (level_of_type ret_tt.typ)) in
+                    let universe : Term := Term.sort (SortLevel.max (level_of_type arg_tt.typ) (level_of_type ret_tt.typ)) in
                     ok (mk_typed pi_term universe),
                 err e => err e,
             },
@@ -2943,26 +2940,22 @@ def type_check_pi (arg : Term) (ret : Term) (scope : Scope) (local_types : List 
 /// `succ level <= expected_level` — so those are one relation, and neither
 /// is a special case.
 ///
-/// The expected side is read through `sort_level_of`, so it is accepted in
-/// EITHER spelling and is seen past a location wrapper. That second part is
-/// a real fix, not a tidy-up: the old arm matched the expected term
-/// directly, so a `--debug` build's `Term.ctx`-wrapped expected sort fell
-/// through to the error arm while the non-debug build accepted it — exactly
-/// the kind of decision the debug-transparency oracle forbids.
+/// The expected side is read through `sort_level_of`, so it is seen past a
+/// location wrapper. That part is a real fix, not a tidy-up: the old arm
+/// matched the expected term directly, so a `--debug` build's
+/// `Term.ctx`-wrapped expected sort fell through to the error arm while the
+/// non-debug build accepted it — exactly the kind of decision the
+/// debug-transparency oracle forbids.
 ///
 /// There used to be an `I64.beq expected_level level` arm before the
 /// comparison, accepting `Sort n` against `Sort n` — a Type-in-Type hole.
 /// The Rust core never had it: `infer(Sort{level})` gives `Sort (level+1)`,
 /// which then fails `level+1 <= level`. Removed so the two agree.
 def type_check_sort_full (sort_term : Term) (level : SortLevel) (expected_type : Term) : Result TypeError TypedTerm :=
-    // A sort's own type is the sort one level up. For a concrete level that
-    // stays the `Term.type_` spelling it has always been, so no existing
-    // fixture's inferred type moves; only an unresolved level -- which has no
-    // `I64` to write -- needs the `Term.sort`/`succ` form.
-    let inferred : Term := match level_const level {
-        Option.some n => Term.type_ (n + 1),
-        Option.none => Term.sort (SortLevel.succ level),
-    } in
+    // A sort's own type is the sort one level up, always as `succ` -- which
+    // folds to the plain numeral a concrete level always produced, without a
+    // case split that would have to name a second spelling to do it.
+    let inferred : Term := Term.sort (SortLevel.succ level) in
     match sort_level_of expected_type {
         Option.some expected_level =>
             if level_lt level expected_level then
@@ -4398,7 +4391,6 @@ def test_type_check_struct_update_unchanged_field_is_projection : Bool :=
 def is_type_arg (arg : Option Term) : Bool :=
     match arg {
         Option.some t => match t {
-            Term.type_ _ => true,
             // A sort IS a type, in either spelling.
             Term.sort _ => true,
             _ => false,

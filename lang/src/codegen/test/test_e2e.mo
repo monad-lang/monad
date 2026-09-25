@@ -1,10 +1,10 @@
 use lib::types {
-  Def, Identifier, TypeConstraint, i64, id, lam, lit, mk, named, num, type_,
+  Def, Identifier, TypeConstraint, i64, id, lam, lit, mk, named, num,
 }
 use llvm::ir {emit_module, mk}
 use lib::codegen::emit {check_contains, compile_db_decls_ir, empty_attrs, mk}
 
-open Term {lam, lit, type_}
+open Term {lam, lit}
 open Literal {num}
 open Identifier {id}
 open DebugName {named}

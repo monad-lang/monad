@@ -4,7 +4,7 @@ use lib::types {
   Operator, Param,
   Scope, ScopeClassDef, ScopeConflict, ScopeData, ScopeDef, ScopeError,
   ScopeInstance, Similar, Term, hole, id, many, mk, mp,
-  name_not_found, nid, nop, operator, type_,
+  name_not_found, nid, nop, operator,
 }
 use lib::scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
 

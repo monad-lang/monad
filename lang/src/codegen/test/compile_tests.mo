@@ -1,6 +1,6 @@
 use std::process {exec_cmd, process_id}
 use lib::types {
-  Decl, Def, Term, TypeConstraint, i64, id, lit, mk, name, num, type_,
+  Decl, Def, Term, TypeConstraint, i64, id, lit, mk, name, num,
 }
 use llvm::ir {emit_module, mk}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
@@ -8,7 +8,7 @@ use runtime {}
 use lib::codegen::emit {compile_db_decls_ir, compile_db_module, mk}
 use lib::scope {add_constraint_dict_params_decls, collect_classes, promote_instance_defs, resolve_class_calls_decls, validate_no_unresolved_class_calls}
 
-open Term {lit, type_}
+open Term {lit}
 open Literal {num}
 open Identifier {id}
 open NumSuffix {i64}

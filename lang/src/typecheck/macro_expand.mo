@@ -161,7 +161,6 @@ def double_ident : Identifier := Identifier.id "double"
 #[partial]
 def term_type_level (t : Term) : I64 :=
     match t {
-        Term.type_ u => u,
         // A sort with an unresolved level (a `var`, or a `succ`/`max` over
         // one) has no I64 to report, so it answers the free-variable
         // sentinel rather than a guessed level.

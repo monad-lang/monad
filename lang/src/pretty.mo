@@ -10,13 +10,13 @@ use lib::types {
   level_const,
   linear, lit, many, match_, mc, mk, mp, name, named, ntv, num, open_all, open_d,
   open_only, operator, pi, scoped_open_d, show_identifier, show_module_path,
-  show_name_path, show_operator, str, struct_d, type_, u16, u32, u64, u8, unnamed, use_bare,
+  show_name_path, show_operator, str, struct_d, u16, u32, u64, u8, unnamed, use_bare,
   use_d, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename, var,
   zero,
 }
 use std::list {intercalate}
 
-open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
+open Term {app, con, forall, hole, lam, lit, ntv, pi, var}
 open Literal {char, flt, if_, match_, num, str}
 open Decl {
   class_d, def_d, inductive_d, infix_d, instance_d, mote_d, open_d, scoped_open_d,
@@ -121,7 +121,6 @@ def show_term (t : Term) : String := match t {
     lit value => show_literal value,
     ntv native => show_native native,
     con c => show_con c,
-    type_ universe => show_universe universe,
     sort level => show_sort_level level,
     hole => "_",
     // Transparent: a position is not part of what a term IS, and printing

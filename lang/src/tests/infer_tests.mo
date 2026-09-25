@@ -3,7 +3,7 @@ use lib::types {
   InductConstructor, Inductive, MatchCase, ModulePath, NamePath, Param,
   Scope, ScopeClassDef, ScopeData, Similar, Term, TypeError,
   app, forall, hole, id, if_, inductive_d, lam, lit, match_, mc, mk, mp, named,
-  not_a_type, pi, type_, unknown_var, unnamed, var,
+  not_a_type, pi, unknown_var, unnamed, var,
 }
 use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::typecheck::infer {
@@ -11,7 +11,7 @@ use lib::typecheck::infer {
   type_check_match_case,
 }
 
-open Term {app, forall, hole, lam, lit, pi, type_, var}
+open Term {app, forall, hole, lam, lit, pi, var}
 open DebugName {named, unnamed}
 open Identifier {id}
 open ModulePath {mp}

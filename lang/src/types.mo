@@ -1068,7 +1068,6 @@ pub type Term {
     lit (value: Literal),
     ntv (native: Native),
     con (c: Con),
-    type_ (universe: I64),
     hole,
     /// `quote { <term> }` -- syntax as data. Mirrors the Rust reference's
     /// `Term::Quote { term: Box<Term> }` (core/src/term.rs). Named
@@ -1128,17 +1127,20 @@ pub type Term {
     /// Constructed ONLY by the located parser entry point, so `check`,
     /// `test` and a non-debug `compile` never see one.
     ctx (loc: Location) (term: Term),
-    /// A sort whose level is not a plain literal. `Term.type_ n` remains the
-    /// concrete-level spelling -- the checker still builds it, and every
-    /// `#[test]` fixture in the tree writes it -- while this carries the
-    /// structure (`var`/`max`/`succ`) the universe rules need. `sort_level_of`
-    /// below absorbs the two, so no shape-inspecting site needs to know there
-    /// are two spellings.
+    /// A sort, at a level that may be a plain numeral or a level expression
+    /// (`var`/`max`/`succ`). The ONLY sort spelling at the canonical term
+    /// level: `Term.type_ n` was deleted in favour of it, so there is no
+    /// longer anything to reconcile. `sort_level_of` below is how a
+    /// shape-inspecting site asks "is this a sort, and at what level".
     ///
-    /// Declared LAST on purpose. Adding a variant leaves every existing
-    /// constructor tag where it is; putting it beside `Term.type_` would
-    /// shift `hole`, `quote_`, `var_macro` and `ctx`. A FIELD would be worse
-    /// still -- see `ctx` above for the arity breakage that causes.
+    /// Declared last, which no longer means anything. It was put here because
+    /// "adding a variant leaves every existing constructor tag where it is" --
+    /// an argument that was already wrong (a tag is assigned per compile from
+    /// declaration order, `build_constructor_tag_map` in `codegen/ctors.mo`,
+    /// and every consumer looks one up by NAME), and that this deletion
+    /// disproves: no numeric tag is read, assigned, compared or serialized
+    /// anywhere. A FIELD would still be wrong -- see `ctx` above for the
+    /// arity breakage that causes.
     sort (level: SortLevel),
 }
 
@@ -1837,32 +1839,25 @@ def test_level_le_refuses_two_distinct_level_vars : Bool :=
     Bool.not (level_le (SortLevel.var (Identifier.id "u"))
                        (SortLevel.var (Identifier.id "v")))
 
-/// The sort level of a term, if that term is a sort -- in EITHER spelling.
+/// The sort level of a term, if that term is a sort.
 #[partial]
 def sort_level_of (t: Term) : Option SortLevel := match term_peel t {
     Term.sort level => Option.some level,
-    Term.type_ n => Option.some (SortLevel.concrete n),
     _ => Option.none,
 }
 
-/// The INVERSE of `sort_level_of` where a spelling has to be chosen: a
-/// concrete level is rendered back as `Term.type_ n`, anything else as
-/// `Term.sort l`.
-///
-/// Preferring the concrete spelling is what keeps a computed level from
-/// changing the spelling of sorts that were concrete all along. `type_check_pi`
-/// now computes a `max` instead of answering a flat `Term.type_ 1`, and every
-/// `Pi`/`Forall` in the corpus today has components whose levels are all
-/// concrete -- so without this the whole corpus would spell its `Pi` universes
-/// as `Term.sort ...` and every downstream match would take the other path.
-/// Going through here, the diff is the levels that actually moved and nothing
-/// else. `similar`'s `type_`/`sort` arms absorb the difference either way, so
-/// no caller has to care which spelling comes out.
-#[partial]
-def sort_term_of_level (l: SortLevel) : Term := match level_const l {
-    Option.some n => Term.type_ n,
-    Option.none => Term.sort l,
-}
+/// A sort reads back its own level. The old spelling this used to be
+/// compared against is gone, so what is left to pin is that the sole
+/// constructor is reachable at all -- a `sort_level_of` that stopped
+/// matching `Term.sort` would answer `none` for every sort in the compiler
+/// and collapse `level_of_type`, `is_level_binder_kind` and `unify_sort`
+/// with it.
+#[test]
+def test_sort_level_of_reads_the_only_spelling : Bool :=
+    match sort_level_of (sort_n 3) {
+        Option.some l => level_eq l (SortLevel.concrete 3),
+        Option.none => false,
+    }
 
 /// A sort at a concrete level, in the one remaining spelling.
 ///
@@ -1883,9 +1878,9 @@ def sort_n (n : I64) : Term := Term.sort (SortLevel.concrete n)
 /// The sort level of a term known to be a TYPE, for a caller that must answer
 /// with a level rather than an `Option`.
 ///
-/// The default is `concrete 1`, i.e. `Term.type_ 1` -- exactly what the
-/// callers answered unconditionally before, so any component that is not a
-/// known sort keeps its old contribution. A component whose type IS a sort
+/// The default is `concrete 1` -- exactly what the callers answered
+/// unconditionally before, so any component that is not a known sort keeps
+/// its old contribution. A component whose type IS a sort
 /// contributes that sort's level, which is the standard rule: the sort of
 /// `Pi A B` is the max of the sorts of `A` and `B`.
 def level_of_type (t: Term) : SortLevel := match sort_level_of t {
@@ -1956,10 +1951,9 @@ instance Similar Term {
     /// `Term.sort` had to be added to EVERY inner match below, not just to a
     /// new outer arm: a sort compared against a non-sort lands in the other
     /// arm's inner match, and an unlisted variant there is a runtime
-    /// non-exhaustive-match crash, not a type error. Sorts also compare equal
-    /// ACROSS the two spellings -- `Term.sort (concrete 0)` is similar to
-    /// `Term.type_ 0` -- because that is the one thing `sort_level_of`
-    /// exists to absorb.
+    /// non-exhaustive-match crash, not a type error. Two sorts are similar
+    /// when their levels are -- `level_eq`, which folds a concrete level back
+    /// to the `I64.beq` this comparison always was.
     def similar (a : Term) (b : Term) : Bool :=
         similar_term_go (term_peel a) (term_peel b)
 }
@@ -1971,68 +1965,60 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 var i2 d2 => I64.beq i1 i2 && Similar.similar d1 d2,
                 lam _ _ _ => false, forall _ _ _ => false, pi _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false,
+                con _ => false, hole => false,
                 sort _ => false
             },
             lam d1 t1 bd1 => match b {
                 lam d2 t2 bd2 => Similar.similar d1 d2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
                 var _ _ => false, forall _ _ _ => false, pi _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false,
+                con _ => false, hole => false,
                 sort _ => false
             },
             forall d1 k1 bd1 => match b {
                 forall d2 k2 bd2 => Similar.similar d1 d2 && Similar.similar k1 k2 && Similar.similar bd1 bd2,
                 var _ _ => false, lam _ _ _ => false, pi _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false,
+                con _ => false, hole => false,
                 sort _ => false
             },
             pi a1 r1 => match b {
                 pi a2 r2 => Similar.similar a1 a2 && Similar.similar r1 r2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false,
+                con _ => false, hole => false,
                 sort _ => false
             },
             app f1 a1 => match b {
                 app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false,
+                con _ => false, hole => false,
                 sort _ => false
             },
             lit v1 => match b {
                 lit v2 => Similar.similar v1 v2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false,
+                con _ => false, hole => false,
                 sort _ => false
             },
             ntv n1 => match b {
                 ntv n2 => Similar.similar n1 n2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
-                con _ => false, type_ _ => false, hole => false,
+                con _ => false, hole => false,
                 sort _ => false
             },
             con c1 => match b {
                 con c2 => Similar.similar c1 c2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, type_ _ => false, hole => false,
+                ntv _ => false, hole => false,
                 sort _ => false
-            },
-            type_ u1 => match b {
-                type_ u2 => I64.beq u1 u2,
-                sort l2 => level_eq (SortLevel.concrete u1) l2,
-                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
-                pi _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, hole => false
             },
             sort l1 => match b {
                 sort l2 => level_eq l1 l2,
-                type_ u2 => level_eq l1 (SortLevel.concrete u2),
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false, hole => false
@@ -2041,10 +2027,19 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 hole => true,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, type_ _ => false,
+                ntv _ => false, con _ => false,
                 sort _ => false
             }
         }
+
+/// Two sorts are similar exactly when their levels are -- the property that
+/// replaced "similar across the two spellings". A `similar` answering `false`
+/// for two equal sorts would make `term_matches_carrier` (`lang/scope.mo`)
+/// reject a matching instance carrier: the silently-unresolved-instance
+/// failure the `Similar Term` instance's own doc warns about.
+#[test]
+def test_similar_matches_sorts_by_level : Bool :=
+    Similar.similar (sort_n 2) (sort_n 2) && Bool.not (Similar.similar (sort_n 2) (sort_n 3))
 
 // ─── Term construction tests (Phase 0) ─────────────────────────────
 

@@ -36,7 +36,6 @@ def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier :=
     Term.lit lit_ => free_names_of_lit bound lit_,
     Term.ntv native => free_names_of_native bound native,
     Term.con c => free_names_of_con bound c,
-    Term.type_ _universe => List.empty,
     // A sort has no free names.
     Term.sort _level => List.empty,
     Term.hole => List.empty,
@@ -161,7 +160,6 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     Term.ntv native => collect_referenced_names_native native acc,
     Term.con con_ => collect_referenced_names_con con_ acc,
     Term.lit lit_ => collect_referenced_names_lit lit_ acc,
-    Term.type_ _universe => acc,
     // A sort references no names.
     Term.sort _level => acc,
     Term.hole => acc,

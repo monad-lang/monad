@@ -8,7 +8,7 @@ use lib::types {
   mc, mk, mp, name, named, nid, nnp, npath, ntv, nqn, open_all, open_d, open_only,
   operator, parse_param_many, parse_param_with_mult, pi, ret_s, scoped_open_d,
   char_to_string, show_identifier, show_name_path,
-  struct_d, type_, use_bare, use_d, use_glob, use_items, use_name,
+  struct_d, use_bare, use_d, use_glob, use_items, use_name,
   use_rename, use_sub, use_sub_rename, var,
 }
 use std::list {filter, intercalate, length}
@@ -7506,7 +7506,7 @@ def test_t_var_bound : Bool :=
 				Term.lam _ _ _ => false, Term.forall _ _ _ => false,
 				Term.pi _ _ => false, Term.app _ _ => false,
 				Term.lit _ => false, Term.ntv _ => false,
-				Term.con _ => false, Term.type_ _ => false, Term.sort _ => false, Term.hole => false
+				Term.con _ => false, Term.sort _ => false, Term.hole => false
 			},
 		fail _ => false
 	}
@@ -7521,7 +7521,7 @@ def test_t_var_unbound : Bool :=
 				Term.lam _ _ _ => false, Term.forall _ _ _ => false,
 				Term.pi _ _ => false, Term.app _ _ => false,
 				Term.lit _ => false, Term.ntv _ => false,
-				Term.con _ => false, Term.type_ _ => false, Term.sort _ => false, Term.hole => false
+				Term.con _ => false, Term.sort _ => false, Term.hole => false
 			},
 		fail _ => false
 	}
@@ -7540,7 +7540,7 @@ def test_t_var_shadow : Bool :=
 				Term.lam _ _ _ => false, Term.forall _ _ _ => false,
 				Term.pi _ _ => false, Term.app _ _ => false,
 				Term.lit _ => false, Term.ntv _ => false,
-				Term.con _ => false, Term.type_ _ => false, Term.sort _ => false, Term.hole => false
+				Term.con _ => false, Term.sort _ => false, Term.hole => false
 			},
 		fail _ => false
 	}

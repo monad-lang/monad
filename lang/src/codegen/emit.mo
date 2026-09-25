@@ -19,7 +19,7 @@ use lib::types {
   char_to_string, show_identifier, show_module_path, term_peel,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
-  param_many, pi, str, type_, unnamed, var,
+  param_many, pi, str, unnamed, var,
 }
 use llvm::ir {
   DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
@@ -2403,8 +2403,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
     Term.con constr => compile_con_ir c constr,
     Term.forall dbg kind body => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.pi arg ret => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
-    Term.type_ universe => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
-    // A sort emits nothing, exactly like `Term.type_` above.
+    // A sort emits nothing: a type has no runtime representation.
     Term.sort _level => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.hole => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.ctx loc inner => compile_located_term_ir c loc inner,

@@ -1,6 +1,6 @@
 use lib::types {
   LocalScope, Scope, Similar, SortLevel, Term, TypeError, forall, hole, level_le,
-  mismatch, pi, sentinel, sort_level_of, term_peel, type_,
+  mismatch, pi, sentinel, sort_level_of, term_peel,
 }
 use lib::typecheck::whnf {whnf}
 
@@ -86,7 +86,6 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
             Term.forall _dbg _kind body2 => unify a body2 scope locals,
             _ => unify_stuck a b scope locals reduce,
         },
-        Term.type_ l1 => unify_sort a (SortLevel.concrete l1) b scope locals reduce,
         Term.sort l1 => unify_sort a l1 b scope locals reduce,
         Term.forall _dbg _kind body1 => unify body1 b scope locals,
         _ => match b {

@@ -1,6 +1,6 @@
 use lib::types {
   LocalScope, ModulePath, Scope, Term, app, forall, hole, id, lit, named, pi,
-  result_is_ok, sentinel, str, type_, unnamed, var,
+  result_is_ok, sentinel, str, unnamed, var,
 }
 use lib::typecheck::unify {unify}
 use lib::scope {build_scope_from_decls}

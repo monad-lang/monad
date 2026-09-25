@@ -716,8 +716,7 @@ def lower_term (ctx : LowerCtx) (t : Term) (acc : LowerAcc) : Pair (Result Lower
     Term.con c => lower_con ctx c acc,
     Term.forall _ _ _ => lower_err LowerError.le_type_level_term acc,
     Term.pi _ _ => lower_err LowerError.le_type_level_term acc,
-    Term.type_ _ => lower_err LowerError.le_type_level_term acc,
-    // A sort is a type-level term too.
+    // A sort is a type-level term, so it has no runtime lowering.
     Term.sort _level => lower_err LowerError.le_type_level_term acc,
     Term.hole => lower_err LowerError.le_type_level_term acc,
     // Transparent. This is the meta-eval lowering, not codegen; positions

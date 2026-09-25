@@ -6,7 +6,7 @@ use lib::types {
   ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, SortLevel, Struct, StructField, StructLitField,
   Term, class_d, class_not_found, def_d, hole, id, inductive_d, inductive_not_found, infix_d,
   instance_d, instance_not_found, mk, mp, name, name_not_found, name_path_similar, nid, nnp, nop,
-  npath, nqn, open_d, scoped_open_d, show_name_path, struct_d, type_, use_d,
+  npath, nqn, open_d, scoped_open_d, show_name_path, struct_d, use_d,
 }
 use lib::typecheck::traverse {con_map_children, native_map_children, term_map_children}
 // `collect_forall_names` has to tell a LEVEL binder from a type-variable
@@ -1989,7 +1989,6 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
         Term.lit value => Term.lit (resolve_open_alias_literal_scoped names bound value),
         Term.ntv n => Term.ntv (native_map_children (resolve_open_alias_term_scoped names bound) n),
         Term.con c => Term.con (con_map_children (resolve_open_alias_term_scoped names bound) c),
-        Term.type_ u => Term.type_ u,
         // Identity: a sort names nothing to resolve.
         Term.sort level => Term.sort level,
         Term.hole => Term.hole,
@@ -2661,7 +2660,6 @@ def def_references_class (cls_str : String) (t : Term) : Bool :=
             match c { Con.mk _ _ _ args => opt_terms_reference_class cls_str args },
         Term.ntv n =>
             match n { Native.mk _ _ args => opt_terms_reference_class cls_str args },
-        Term.type_ _ => false,
         // A sort references no class.
         Term.sort _level => false,
         Term.hole => false,
@@ -3812,7 +3810,6 @@ def carrier_with_normalized_head (head_name : String) (typ : Term) : Term :=
 def placeholder_carrier (typ : Term) : Bool :=
     match term_peel typ {
         Term.hole => true,
-        Term.type_ _ => true,
         Term.sort _ => true,
         _ => false,
     }
@@ -6080,7 +6077,6 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
 def expected_carrier_of (t : Term) : Option Term :=
     match t {
         Term.hole => Option.none,
-        Term.type_ _ => Option.none,
         // Same placeholder in the other spelling. W1.1's lowering flip
         // made the PARSER emit `Term.sort (concrete 1)` where it used to
         // emit `Term.type_ 1`, so an un-annotated lambda parameter now
@@ -7141,7 +7137,6 @@ def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : Li
     Term.ntv native => find_unresolved_class_calls_native classes native acc,
     Term.con con_ => find_unresolved_class_calls_con classes con_ acc,
     Term.lit lit_ => find_unresolved_class_calls_lit classes lit_ acc,
-    Term.type_ _universe => acc,
     // A sort holds no class call.
     Term.sort _level => acc,
     Term.hole => acc,
