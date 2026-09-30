@@ -194,24 +194,24 @@ def test_from_args_pretty : Bool :=
 #[test]
 def test_from_args_check : Bool :=
     match Command.from_args ["check", "a.mo", "b.mo", "-v"] {
-        Command.check files verbose workspace no_cache =>
-            files == ["a.mo", "b.mo"] && verbose == true && workspace == false,
+        Command.check files opts =>
+            files == ["a.mo", "b.mo"] && opts.verbose == true && opts.workspace == false && opts.no_cache == false && opts.affine == false,
         _ => false,
     }
 
 #[test]
 def test_from_args_check_workspace_flag : Bool :=
     match Command.from_args ["check", "--workspace"] {
-        Command.check files verbose workspace no_cache =>
-            List.is_empty files && workspace == true && verbose == false,
+        Command.check files opts =>
+            List.is_empty files && opts.workspace == true && opts.verbose == false && opts.no_cache == false && opts.affine == false,
         _ => false,
     }
 
 #[test]
 def test_from_args_check_workspace_short_flag : Bool :=
     match Command.from_args ["check", "-w", "-v"] {
-        Command.check files verbose workspace no_cache =>
-            List.is_empty files && workspace == true && verbose == true,
+        Command.check files opts =>
+            List.is_empty files && opts.workspace == true && opts.verbose == true && opts.no_cache == false && opts.affine == false,
         _ => false,
     }
 
@@ -220,8 +220,8 @@ def test_from_args_check_workspace_short_flag : Bool :=
 #[test]
 def test_from_args_check_workspace_flag_not_a_path : Bool :=
     match Command.from_args ["check", "--workspace", "a.mo"] {
-        Command.check files verbose workspace no_cache =>
-            files == ["a.mo"] && workspace == true,
+        Command.check files opts =>
+            files == ["a.mo"] && opts.workspace == true && opts.no_cache == false && opts.affine == false,
         _ => false,
     }
 
@@ -233,8 +233,8 @@ def test_from_args_check_workspace_flag_not_a_path : Bool :=
 #[test]
 def test_from_args_check_no_files_is_a_check_command : Bool :=
     match Command.from_args ["check"] {
-        Command.check files verbose workspace no_cache =>
-            List.is_empty files && workspace == false && verbose == false && no_cache == false,
+        Command.check files opts =>
+            List.is_empty files && opts.workspace == false && opts.verbose == false && opts.no_cache == false && opts.affine == false,
         _ => false,
     }
 
@@ -245,24 +245,35 @@ def test_from_args_check_no_files_is_a_check_command : Bool :=
 #[test]
 def test_from_args_check_no_cache_flag : Bool :=
     match Command.from_args ["check", "--no-cache", "a.mo"] {
-        Command.check files verbose workspace no_cache =>
-            files == ["a.mo"] && no_cache == true && workspace == false && verbose == false,
+        Command.check files opts =>
+            files == ["a.mo"] && opts.no_cache == true && opts.workspace == false && opts.verbose == false && opts.affine == false,
         _ => false,
     }
 
 #[test]
 def test_from_args_check_no_cache_flag_combines_with_workspace : Bool :=
     match Command.from_args ["check", "-w", "--no-cache", "a.mo", "b.mo"] {
-        Command.check files verbose workspace no_cache =>
-            files == ["a.mo", "b.mo"] && workspace == true && no_cache == true,
+        Command.check files opts =>
+            files == ["a.mo", "b.mo"] && opts.workspace == true && opts.no_cache == true && opts.affine == false,
         _ => false,
     }
 
 #[test]
 def test_from_args_check_without_no_cache_is_false : Bool :=
     match Command.from_args ["check", "a.mo"] {
-        Command.check files verbose workspace no_cache =>
-            files == ["a.mo"] && no_cache == false,
+        Command.check files opts =>
+            files == ["a.mo"] && opts.no_cache == false && opts.affine == false,
+        _ => false,
+    }
+
+// `--affine` must be PEELED (not handed to the path expander as a
+// filename) and must set its flag, mirroring the `--workspace` and
+// `--no-cache` peel tests just above.
+#[test]
+def test_from_args_check_affine_flag : Bool :=
+    match Command.from_args ["check", "--affine", "a.mo"] {
+        Command.check files opts =>
+            files == ["a.mo"] && opts.affine == true && opts.workspace == false && opts.verbose == false && opts.no_cache == false,
         _ => false,
     }
 

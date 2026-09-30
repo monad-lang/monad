@@ -10,7 +10,7 @@ use llvm::link {link_ir}
 use llvm::target {TargetSpec}
 use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
-use lang::module {ElaboratedAndCache, collect_link_libs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::module {ElaboratedAndCache, collect_link_libs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_file_cached_affine, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::scope {resolve_class_calls_decls}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
@@ -917,6 +917,16 @@ def print_diagnostics (diags : List String) : IO I64 :=
         }
     }
 
+/// The `check` verb's option flags in one bundle: threading (and later
+/// adding or removing) a flag is then a single `opts` parameter, not a
+/// positional at every call site along the check path.
+struct CheckOptions {
+    verbose : Bool,
+    workspace : Bool,
+    no_cache : Bool,
+    affine : Bool,
+}
+
 /// `checked`/`errors` accumulate across all files — errors are counted
 /// per-diagnostic (a file with 3 failing defs contributes 3), matching
 /// `monad-rs check`'s own error-tally convention. Every file gets an
@@ -941,7 +951,7 @@ def print_diagnostics (diags : List String) : IO I64 :=
 /// checked, nothing is recorded, and the output is byte-identical to what
 /// this command printed before any cache existed.
 #[partial]
-def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (verbose : Bool) (plan : CheckPlan) : IO I64 :=
+def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (opts : CheckOptions) (plan : CheckPlan) : IO I64 :=
     match files {
         List.empty => do {
             println (I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)");
@@ -950,7 +960,7 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
             // run, instead of re-reading and re-parsing the file from
             // disk -- the direct measure of the cross-file redundancy
             // `ModuleInfoCache` (lang/module.mo) exists to remove.
-            if verbose then
+            if opts.verbose then
                 match cache {
                     ModuleInfoCache.mk _ hits misses =>
                         println ("module cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es)")
@@ -962,7 +972,7 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
             match Build.check_plan_key plan f {
                 // No key for this file (the plan is inactive, or its
                 // digest failed): check it, and record nothing.
-                Option.none => run_check_file cache f rest checked errors verbose plan Option.none,
+                Option.none => run_check_file cache f rest checked errors opts plan Option.none,
                 Option.some key => do {
                     let stored <- Build.check_entry_read (Build.check_plan_root plan) key;
                     match stored {
@@ -973,10 +983,10 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
                             match p {
                                 Pair.pair counted block => do {
                                     println block;
-                                    run_check_loop cache rest (checked + 1) (errors + counted) verbose plan
+                                    run_check_loop cache rest (checked + 1) (errors + counted) opts plan
                                 }
                             },
-                        Option.none => run_check_file cache f rest checked errors verbose plan (Option.some key)
+                        Option.none => run_check_file cache f rest checked errors opts plan (Option.some key)
                     }
                 }
             }
@@ -992,9 +1002,18 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
 /// xs)` is `mapM_ println xs` -- and routing both the printing and the
 /// storing through one function is what keeps a replayed hit from
 /// drifting out of step with a fresh miss.
+///
+/// `--affine` swaps in the M2-rule variant of the same file checker
+/// (lang/module.mo's `check_file_cached_affine`): ordinary diagnostics
+/// plus the affine rule's, so an over-use fails `check` exactly the way
+/// a type error already does. The plan an affine run receives is
+/// always inactive (see `run_check`), so nothing affine is recorded and
+/// nothing recorded is replayed here.
 #[partial]
-def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (verbose : Bool) (plan : CheckPlan) (key : Option String) : IO I64 := do {
-    let checked_and_cache <- check_file_cached cache f verbose;
+def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (opts : CheckOptions) (plan : CheckPlan) (key : Option String) : IO I64 := do {
+    let checked_and_cache <- if opts.affine
+        then check_file_cached_affine cache f opts.verbose
+        else check_file_cached cache f opts.verbose;
     match checked_and_cache {
         FileCheckAndCache.mk result updated_cache =>
             match result {
@@ -1003,7 +1022,7 @@ def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (
                     let counted : I64 := List.length diags;
                     println block;
                     let _rec <- Build.check_maybe_write plan key counted block;
-                    run_check_loop updated_cache rest (checked + 1) (errors + counted) verbose plan
+                    run_check_loop updated_cache rest (checked + 1) (errors + counted) opts plan
                 }
             }
     }
@@ -1224,8 +1243,8 @@ def announce_check_cache (plan : CheckPlan) : IO I64 := do {
 }
 
 #[partial]
-def run_check (files : List String) (workspace : Bool) (verbose : Bool) (no_cache : Bool) : IO I64 := do {
-    let targets <- resolve_target_paths "Checking" "check" files workspace;
+def run_check (files : List String) (opts : CheckOptions) : IO I64 := do {
+    let targets <- resolve_target_paths "Checking" "check" files opts.workspace;
     match targets {
         // Empty only from `--workspace` with no workspace manifest --
         // see `resolve_target_paths`, which has already printed why.
@@ -1240,16 +1259,25 @@ def run_check (files : List String) (workspace : Bool) (verbose : Bool) (no_cach
             // once is what keeps a `--workspace` run over eleven motes
             // from writing eleven partial stores.
             let target_dir <- Build.target_dir_at "";
-            let requested <- cache_enabled no_cache;
+            let requested <- cache_enabled opts.no_cache;
             // `--verbose` disables the cache outright rather than
             // bypassing hits: its trace is a record of what the checker
             // DID, and a replayed entry has no trace to show. A cache
             // that silently suppressed the trace it was asked for would
             // be worse than a slow one.
-            let plan <- Build.check_plan expanded target_dir (requested && Bool.not verbose);
+            //
+            // `--affine` disables the cache outright, for the same
+            // kind of reason: a stored entry records the ORDINARY
+            // check's result, and replaying it under `--affine` would
+            // silently drop the very diagnostics the flag exists to
+            // fail on -- while an affine result recorded under an
+            // ordinary run's key would let the ordinary check pass
+            // files the affine rule rejects. Neither direction is
+            // safe, so neither reads nor writes happen.
+            let plan <- Build.check_plan expanded target_dir (requested && Bool.not opts.verbose && Bool.not opts.affine);
             let _prep <- announce_check_cache plan;
             let cache : ModuleInfoCache := module_info_cache_empty;
-            run_check_loop cache expanded 0 0 verbose plan
+            run_check_loop cache expanded 0 0 opts plan
         },
         // Nothing named, inside no mote: say why, and fail. `print_help`
         // with its exit 0 was the behaviour before any of this existed,
@@ -1735,7 +1763,7 @@ type Command {
     run (file: Path) (verbose: Bool) (debug: Bool),
     eval (file: Path) (verbose: Bool),
     pretty (file: String),
-    check (files: List String) (verbose: Bool) (workspace: Bool) (no_cache: Bool),
+    check (files: List String) (opts: CheckOptions),
     test (files: List String) (verbose: Bool) (workspace: Bool),
     /// `monad clean [--all] [--target-dir <dir>]`. Removes the output
     /// directories under `<target-dir>` -- the profile directories -- and
@@ -1917,7 +1945,21 @@ def Command.from_args (args : List String) : Command :=
                                 // a filename.
                                 match Cli.take_flag "no-cache" "" rest2 {
                                     Cli.FlagResult.flag_result no_cache rest3 =>
-                                        Command.check rest3 verbose workspace no_cache,
+                                        // `--affine`: promote the M2 usage
+                                        // rule's advisory diagnostics
+                                        // (copy_required /
+                                        // value_used_after_move /
+                                        // linear_unused,
+                                        // lang/typecheck/affine.mo) to hard
+                                        // failures — the same check, one
+                                        // more rule. No short form: it is
+                                        // a corpus-migration flag, not a
+                                        // daily one.
+                                        match Cli.take_flag "affine" "" rest3 {
+                                            Cli.FlagResult.flag_result affine rest4 =>
+                                                let opts : CheckOptions := { verbose := verbose, workspace := workspace, no_cache := no_cache, affine := affine } in
+                                                Command.check rest4 opts,
+                                        },
                                 },
                         },
                 }
@@ -2050,8 +2092,8 @@ def main (args : List String) : IO I64 {
                 }
             }
         },
-        check files verbose workspace no_cache => do {
-            run_check files workspace verbose no_cache
+        check files opts => do {
+            run_check files opts
         },
         test files verbose workspace => do {
             run_test_paths files workspace (Path.to_string default_output_dir) verbose
@@ -2114,7 +2156,7 @@ def print_help : IO I64 {
     println "       monad run <path> [--verbose/-v] [--debug/-g] [--release]  Compile and execute a .mo source file";
     println "       monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
-    println "       monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache]  Parse and typecheck .mo source files (no execution)";
+    println "       monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache] [--affine]  Parse and typecheck .mo source files (no execution)";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
     println "         With no <path>, checks the mote containing the working directory";
     println "         --workspace/-w checks every mote in the enclosing workspace";
@@ -2123,6 +2165,10 @@ def print_help : IO I64 {
     println "         Results are cached under <target-dir>/check for multi-file runs, keyed on";
     println "           the file, its mote's whole declared closure, and the running compiler";
     println "         --no-cache (or MONAD_NO_CACHE) skips the cache; a single-file run always does";
+    println "         --affine also fails on affine over-uses (used 2+ times without a";
+    println "           Copy instance) — the existing diagnostics, promoted to errors;";
+    println "           it also disables the check cache (a stored entry records the";
+    println "           ordinary check's result, which has no affine verdict in it)";
     println "       monad test [<path>...] [--workspace/-w] [--verbose/-v]  Compile and run each file's own #[test] defs as a native binary";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
     println "         With no <path>, tests the mote containing the working directory";

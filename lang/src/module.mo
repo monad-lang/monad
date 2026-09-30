@@ -57,6 +57,11 @@ use lib::scope {
 use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error}
 use lib::typecheck::infer {empty_local_types, empty_locals, type_check}
+// `--affine` (Phase 5 of the enforcement plan): the M2 usage rule as
+// real diagnostics. Built once per module by the affine walk below,
+// exactly how `affine.mo`'s own doc on `check_def` prescribes.
+use lib::typecheck::usage {borrow_of_name_set, ctor_name_set}
+use lib::typecheck::affine {check_def}
 // `--verbose` per-module/per-stage trace (see `std/src/log.mo`'s own header
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
@@ -2082,6 +2087,84 @@ pub def check_module_with_scope_ranged (scope : Scope) (decl_list : List Decl) (
     let no_range : Option SourceRange := Option.none;
     return (list_append diags (attach_range no_range (check_termination_all decl_list)))
 }
+// --- Affine checking (`--affine`): the M2 rule as real diagnostics ---
+//
+// `affine.mo`'s `check_def` has existed since M2 but nothing in the
+// real check driver ever called it — the only caller was
+// `bench/src/affine_report.mo`, which tallies but never fails. This
+// is the wiring that turns the advisory rule into checkable output:
+// every ordinary diagnostic `check_module_with_scope` produces, PLUS
+// the affine rule's, through the same `render_type_error` and the
+// same empty-list-means-clean gate.
+//
+// Shape note (and why a sibling, not a parameter): the flag is a NEW
+// `check_module_with_scope_affine` entry point that duplicates the
+// decl-walk's four-line shape, rather than an `affine_mode : Bool`
+// threaded through the existing chain. That threading would touch
+// every `check_module_with_scope` call site in this file and
+// `cli/src/main.mo` — a dozen-plus edit lines of pure conflict
+// surface in exactly the files the upcoming build-system rebase
+// restructures. The sibling touches none of them: existing
+// signatures, existing call sites stay byte-identical, and a rebase
+// either carries this whole block or drops it as a unit.
+
+/// The `--affine` counterpart of `check_module_with_scope`: same
+/// ordinary diagnostics plus the M2 affine rule's, with `ctors`/
+/// `borrows` built ONCE per module rather than per def
+/// (`affine.mo`'s own doc on `check_def`; per-node lookup would be a
+/// full scope scan at every application).
+pub def check_module_with_scope_affine (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) := do {
+    let ctors : HashMap String Bool := ctor_name_set scope;
+    let borrows : HashMap String Bool := borrow_of_name_set scope;
+    let diags <- check_module_decls_with_scope_affine ctors borrows scope decl_list locals path verbose;
+    return (list_append diags (check_termination_all decl_list))
+}
+
+#[partial]
+def check_module_decls_with_scope_affine (ctors : HashMap String Bool) (borrows : HashMap String Bool) (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match decl_list {
+        List.empty => do { return List.empty },
+        List.cons d rest => do {
+            let here : List String <- check_decl_with_scope_affine d ctors borrows scope locals path verbose;
+            let there : List String <- check_module_decls_with_scope_affine ctors borrows scope rest locals path verbose;
+            return (list_append here there)
+        }
+    }
+
+/// The affine variant of `check_decl_with_scope`: for everything with a
+/// term of its own, ordinary type diagnostics first (via the existing,
+/// untouched walk), then the affine rule's appended. Non-def decls
+/// have no affine content of their own and delegate wholesale.
+#[partial]
+def check_decl_with_scope_affine (d : Decl) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match d {
+        Decl.def_d df =>
+            // The gate mirrors `check_decl_with_scope`'s own arm exactly:
+            // a dict value def skips the ORDINARY check too (its body is
+            // a codegen artifact ordinary `type_check` can't validate --
+            // see `is_dict_value_def`), not just the affine extras.
+            if is_dict_value_def df then do { return List.empty }
+            else do {
+                let diags <- check_def_with_scope df scope locals path verbose;
+                let extra : List String :=
+                    render_affine_diags (check_def scope ctors borrows df) (show_name_path df.name) path;
+                return (list_append diags extra)
+            },
+        // A `scoped_open_d`'s inner decl is its own decl to check, same
+        // as the ordinary walk's deliberate recursion.
+        Decl.scoped_open_d _ _ inner => check_decl_with_scope_affine inner ctors borrows scope locals path verbose,
+        _ => check_decl_with_scope d scope locals path verbose,
+    }
+
+/// `affine.mo`'s `List TypeError` rendered through the same
+/// `render_type_error` every other diagnostic here uses, with the
+/// def's own name as the context.
+#[partial]
+def render_affine_diags (errs : List TypeError) (context_name : String) (path : Option String) : List String :=
+    match errs {
+        List.empty => List.empty,
+        List.cons e rest => List.cons (render_type_error context_name path e) (render_affine_diags rest context_name path),
+    }
 
 /// `promote_instance_defs`'s own `__Dict_ClassName_Args` value def
 /// (`lang/scope.mo`'s `promote_instance`, e.g. `__Dict_Speak_Dog`) is a
@@ -2683,7 +2766,7 @@ pub struct FileCheckAndCache {
 /// killed) — root cause under investigation, see
 /// `bootstrapping/check-deps-memory-blowup.md`.
 #[partial]
-pub def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
+def check_file_cached_mode (affine : Bool) (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists (Path.path file_path);
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
@@ -2692,7 +2775,12 @@ pub def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbos
         match ec.elaborated {
             Result.ok em => do {
                 let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-                let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
+                // The one line `affine` changes: the M2 rule's
+                // diagnostics appended to the ordinary ones
+                // (`check_module_with_scope_affine`'s own doc above).
+                let diags <- if affine
+                    then check_module_with_scope_affine em.scope em.target_decls empty_locs (Option.some file_path) verbose
+                    else check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
                 // Each level bound with an explicit annotation rather
                 // than nested inline -- see `load_module_with_info`'s
                 // own note. `out_cache`, not `cache`: the walk extended
@@ -2946,6 +3034,18 @@ pub def check_file_cached_from_source_ranged (cache : ModuleInfoCache) (file_pat
             then check_buffer_ranged cache file_path source located verbose
             else do { return (ranged_truncation cache file_path source located) },
     }
+/// The two pub faces of `check_file_cached_mode`: the signature every
+/// existing caller uses stays byte-identical (`check_file_cached`), and
+/// `--affine` gets a sibling rather than a threaded flag — the same
+/// rebase-surgical choice as `check_module_with_scope_affine` above.
+pub def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache :=
+    check_file_cached_mode false cache file_path verbose
+
+/// `check` with `--affine`: ordinary diagnostics plus the M2 affine
+/// rule's, so a corpus file with an over-use fails `check` the same way
+/// a type error already does.
+pub def check_file_cached_affine (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache :=
+    check_file_cached_mode true cache file_path verbose
 
 // --- Directory-recursive corpus collection (self-hosted `find *.mo`) ---
 //
@@ -5916,6 +6016,99 @@ def diags_contain (needle : String) (diags : List String) : Bool :=
 
 def diags_lack (needle : String) (diags : List String) : Bool :=
     if diags_contain needle diags then false else true
+
+// --- Tests: --affine (check_module_with_scope_affine) ---
+//
+// Phase 4 of the enforcement plan: the M2 rule's first END-TO-END
+// tests. Everything in `usage.mo`/`affine.mo` tests hand-built
+// `Term`/`BinderUse` values; these parse real source through the real
+// check driver and assert the RENDERED diagnostics, covering the
+// whole chain no unit test reaches (parse -> scope build -> ordinary
+// check -> affine::check_def -> render_type_error) — the same chain
+// `monad check --affine` runs.
+
+/// `check_diags_of_source`'s affine sibling, so a test can call BOTH
+/// and assert the flag's exact effect: ordinary clean, affine not.
+///
+/// Promotion first, like the real driver: `monad check --affine` runs the
+/// same elaborate order (`promote_instance_defs` before type-checking, so
+/// a source with an `instance` grows `__Dict_*` value defs the walk must
+/// gate). Without this the helper checks the raw decl list and the
+/// dict-value gate has nothing to gate.
+def check_affine_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
+    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty);
+    match parse_all_decls src {
+        ParseResult.success _ decl_list => do {
+            let promoted : List Decl := promote_instance_defs decl_list;
+            let sd : ScopeData := build_scope_from_decls path promoted;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            check_module_with_scope_affine scope promoted locals Option.none false
+        },
+        ParseResult.fail _ => do { return List.cons "PARSE FAILED" List.empty }
+    }
+}
+
+/// The corpus's dominant violation shape, end to end: an unannotated
+/// binder handed to a callee twice. Both uses are call arguments
+/// (non-owning, `usage.mo`'s `up_app_arg`), so the M2 rule's verdict
+/// is `copy_required` — the borrow-shaped fix — not
+/// `value_used_after_move`. The ordinary check passing is the flag's
+/// whole semantics in one assertion: same file, one more rule.
+#[test]
+def test_affine_check_rejects_a_twice_used_binder : IO Bool := do {
+    let src : String := "type T { mk }\ndef f (x : T) (y : T) : T := x\ndef twice (a : T) : T := f a a";
+    let ordinary : List String <- check_diags_of_source src "probe";
+    let affine : List String <- check_affine_diags_of_source src "probe";
+    return (I64.beq (List.length ordinary) 0
+        && diags_contain "is used 2 times but is affine" affine
+        && I64.beq (List.length affine) 1)
+}
+
+/// The rule's other verdict, end to end: two CONSTRUCTOR stores of one
+/// binder are two owning uses, so no borrow can help and the reported
+/// error is `value_used_after_move` with its own wording.
+#[test]
+def test_affine_check_rejects_a_double_store : IO Bool := do {
+    let src : String := "type T { mk }\ntype P { mkp (l : T) (r : T) }\ndef pair (a : T) : P := P.mkp a a";
+    let ordinary : List String <- check_diags_of_source src "probe";
+    let affine : List String <- check_affine_diags_of_source src "probe";
+    return (I64.beq (List.length ordinary) 0
+        && diags_contain "is moved 2 times; no borrow can fix this" affine
+        && I64.beq (List.length affine) 1)
+}
+
+/// The negative space: a binder used exactly once (moved out as the
+/// def's own result) is affine-legal, and the affine walk reports
+/// NOTHING for it — the gate is the same empty-list-means-clean shape
+/// the ordinary check uses, so this fails if the wiring ever confuses
+/// "appending more diagnostics" with "always reporting".
+#[test]
+def test_affine_check_accepts_a_single_use : IO Bool := do {
+    let src : String := "type T { mk }\ndef once (a : T) : T := a";
+    let affine : List String <- check_affine_diags_of_source src "probe";
+    return (I64.beq (List.length affine) 0)
+}
+
+/// An `instance`-bearing module synthesizes `__Dict_*` value defs (and the
+/// promoted method defs) into the checked decl list -- promotion is in
+/// `check_affine_diags_of_source` for exactly that reason, so this tests
+/// the walk against the same decl shapes the real `--affine` driver sees.
+/// Asserts both walks stay clean on them: the affine walk's `def_d` arm
+/// gates dict value defs the same way the ordinary walk's does
+/// (`is_dict_value_def` -- the synthetic bodies are codegen artifacts
+/// `type_check` can mis-validate; the ordinary walk's own doc comment
+/// records the `bound_var` failure that gate exists to prevent, which
+/// arises in the full elaborate pipeline rather than this unit path).
+#[test]
+def test_affine_check_accepts_an_instance_module : IO Bool := do {
+    let src : String := "type Pair (A : Type) (B : Type) { pair (l : A) (r : B) }\nclass Copy A {\n    def copy : A -> Pair A A\n}\ninstance Copy I64 {\n    def copy (x : I64) : Pair I64 I64 := Pair.pair x x\n}";
+    let ordinary : List String <- check_diags_of_source src "probe";
+    let affine : List String <- check_affine_diags_of_source src "probe";
+    return (I64.beq (List.length ordinary) 0
+        && Bool.not (diags_contain "bound_var" affine)
+        && I64.beq (List.length affine) 0)
+}
 
 /// The rule's own case: a constructor field whose type is a function FROM
 /// the type being declared. Rejected by the reference
