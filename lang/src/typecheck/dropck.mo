@@ -83,10 +83,15 @@ use std::list {length}
 /// path. `List.length` of the result is the number of distinct
 /// control-flow paths through `t` — 1 for anything that doesn't
 /// branch, more for nested `if`/`match`.
+///
+/// `borrows` is threaded for the same reason `usage.mo` threads it: a
+/// real `Borrow.of x` misread as a constructor store would count `x` as
+/// consumed here, and a consumed binder gets no release — a leak, not
+/// just a miscount.
 #[partial]
-pub def drop_leaves (ctors : HashMap String Bool) (target : I64) (t : Term) : List Bool :=
+pub def drop_leaves (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (t : Term) : List Bool :=
     match t {
-        Term.ctx _loc inner => drop_leaves ctors target inner,
+        Term.ctx _loc inner => drop_leaves ctors borrows target inner,
         Term.lit lit =>
             match lit {
                 // The condition runs on EVERY path through this `if`,
@@ -102,30 +107,30 @@ pub def drop_leaves (ctors : HashMap String Bool) (target : I64) (t : Term) : Li
                 // way, via `UsePos.up_scrutinee`.
                 Literal.if_ cond then_ else_ =>
                     let branch_leaves : List Bool :=
-                        List.append (drop_leaves ctors target then_) (drop_leaves ctors target else_) in
-                    if I64.gt (owning_at ctors UsePos.up_scrutinee target cond) 0
+                        List.append (drop_leaves ctors borrows target then_) (drop_leaves ctors borrows target else_) in
+                    if I64.gt (owning_at ctors borrows UsePos.up_scrutinee target cond) 0
                     then all_false branch_leaves
                     else branch_leaves,
                 // Same reasoning for a `match`'s scrutinee, which also
                 // runs once before any arm.
                 Literal.match_ scrut cases =>
-                    let branch_leaves : List Bool := drop_leaves_cases ctors target cases in
-                    if I64.gt (owning_at ctors UsePos.up_scrutinee target scrut) 0
+                    let branch_leaves : List Bool := drop_leaves_cases ctors borrows target cases in
+                    if I64.gt (owning_at ctors borrows UsePos.up_scrutinee target scrut) 0
                     then all_false branch_leaves
                     else branch_leaves,
                 // Every other `Literal` (str/char/num/flt/struct_lit/
                 // struct_update) doesn't branch -- ONE leaf, the whole
                 // term as `owning_at` already sees it.
-                _ => single_leaf ctors target t,
+                _ => single_leaf ctors borrows target t,
             },
         // Nothing else in `Term` branches control flow -- `app`, `con`,
         // `ntv`, a nested `lam`'s own body (a SEPARATE scope, not a
         // continuation of this one), etc. are all one leaf each.
-        _ => single_leaf ctors target t,
+        _ => single_leaf ctors borrows target t,
     }
 
-def single_leaf (ctors : HashMap String Bool) (target : I64) (t : Term) : List Bool :=
-    List.cons (I64.beq (owning_at ctors UsePos.up_value target t) 0) List.empty
+def single_leaf (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (t : Term) : List Bool :=
+    List.cons (I64.beq (owning_at ctors borrows UsePos.up_value target t) 0) List.empty
 
 /// Same length as `leaves`, every entry `false` -- used when `target`
 /// was already consumed ahead of a branch point (in an `if`'s condition
@@ -139,20 +144,20 @@ def all_false (leaves : List Bool) : List Bool :=
     }
 
 #[partial]
-def drop_leaves_cases (ctors : HashMap String Bool) (target : I64) (cases : List MatchCase) : List Bool :=
+def drop_leaves_cases (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (cases : List MatchCase) : List Bool :=
     match cases {
         List.empty => List.empty,
         List.cons c rest =>
-            List.append (drop_leaves_case ctors target c) (drop_leaves_cases ctors target rest),
+            List.append (drop_leaves_case ctors borrows target c) (drop_leaves_cases ctors borrows target rest),
     }
 
 /// A match arm's own pattern bindings sit `List.List.length args` binders
 /// deeper than the `match_` node — the same shift `usage.mo`'s
 /// `uses_of_case`/`owning_at_case` and `traverse.mo`'s depth-aware
 /// walkers all apply.
-def drop_leaves_case (ctors : HashMap String Bool) (target : I64) (c : MatchCase) : List Bool :=
+def drop_leaves_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (c : MatchCase) : List Bool :=
     match c {
-        MatchCase.mc _name args body _fp => drop_leaves ctors (target + List.length args) body,
+        MatchCase.mc _name args body _fp => drop_leaves ctors borrows (target + List.length args) body,
     }
 
 // ─── Per-binder collection ─────────────────────────────────────────
@@ -197,106 +202,106 @@ def any_leaf_true (bs : List Bool) : Bool :=
 /// which those files' own doc comments document as a real stack-depth
 /// hazard at whole-program scale.
 #[partial]
-pub def collect_drop_info (ctors : HashMap String Bool) (t : Term) : List DropInfo :=
-    List.reverse (collect_drop_term ctors t List.empty)
+pub def collect_drop_info (ctors : HashMap String Bool) (borrows : HashMap String Bool) (t : Term) : List DropInfo :=
+    List.reverse (collect_drop_term ctors borrows t List.empty)
 
 #[partial]
-def collect_drop_term (ctors : HashMap String Bool) (t : Term) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_term (ctors : HashMap String Bool) (borrows : HashMap String Bool) (t : Term) (acc : List DropInfo) : List DropInfo :=
     match t {
         Term.var _idx _dbg => acc,
         Term.var_macro _idx _dbg => acc,
         Term.lam dbg _typ body =>
-            let d : DropInfo := { name := binder_name dbg, leaves := drop_leaves ctors 0 body } in
-            collect_drop_term ctors body (List.cons d acc),
+            let d : DropInfo := { name := binder_name dbg, leaves := drop_leaves ctors borrows 0 body } in
+            collect_drop_term ctors borrows body (List.cons d acc),
         // A `forall` binds a compile-time type variable -- erased
         // before run time, never a runtime owner, so it is walked
         // through for nested binders but reports nothing of its own,
         // mirroring `usage.mo`'s `collect_uses_term` exactly.
-        Term.forall _dbg _kind body => collect_drop_term ctors body acc,
+        Term.forall _dbg _kind body => collect_drop_term ctors borrows body acc,
         Term.pi _arg _ret => acc,
-        Term.app callee arg => collect_drop_term ctors arg (collect_drop_term ctors callee acc),
-        Term.lit value => collect_drop_literal ctors value acc,
-        Term.ntv n => collect_drop_native ctors n acc,
-        Term.con c => collect_drop_con ctors c acc,
-        Term.type_ _u => acc,
+        Term.app callee arg => collect_drop_term ctors borrows arg (collect_drop_term ctors borrows callee acc),
+        Term.lit value => collect_drop_literal ctors borrows value acc,
+        Term.ntv n => collect_drop_native ctors borrows n acc,
+        Term.con c => collect_drop_con ctors borrows c acc,
+        Term.sort _level => acc,
         Term.hole => acc,
         Term.quote_ _inner => acc,
-        Term.ctx _loc inner => collect_drop_term ctors inner acc,
+        Term.ctx _loc inner => collect_drop_term ctors borrows inner acc,
     }
 
 #[partial]
-def collect_drop_literal (ctors : HashMap String Bool) (l : Literal) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_literal (ctors : HashMap String Bool) (borrows : HashMap String Bool) (l : Literal) (acc : List DropInfo) : List DropInfo :=
     match l {
         Literal.str _v => acc,
         Literal.char _v => acc,
         Literal.num _n _suf => acc,
         Literal.flt _t _suf => acc,
         Literal.if_ cond then_ else_ =>
-            collect_drop_term ctors else_ (collect_drop_term ctors then_ (collect_drop_term ctors cond acc)),
-        Literal.match_ scrut cases => collect_drop_cases ctors cases (collect_drop_term ctors scrut acc),
-        Literal.struct_lit fields _type_name => collect_drop_fields ctors fields acc,
-        Literal.struct_update base fields => collect_drop_fields ctors fields (collect_drop_term ctors base acc),
+            collect_drop_term ctors borrows else_ (collect_drop_term ctors borrows then_ (collect_drop_term ctors borrows cond acc)),
+        Literal.match_ scrut cases => collect_drop_cases ctors borrows cases (collect_drop_term ctors borrows scrut acc),
+        Literal.struct_lit fields _type_name => collect_drop_fields ctors borrows fields acc,
+        Literal.struct_update base fields => collect_drop_fields ctors borrows fields (collect_drop_term ctors borrows base acc),
     }
 
 #[partial]
-def collect_drop_cases (ctors : HashMap String Bool) (cases : List MatchCase) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_cases (ctors : HashMap String Bool) (borrows : HashMap String Bool) (cases : List MatchCase) (acc : List DropInfo) : List DropInfo :=
     match cases {
         List.empty => acc,
-        List.cons c rest => collect_drop_cases ctors rest (collect_drop_case ctors c acc),
+        List.cons c rest => collect_drop_cases ctors borrows rest (collect_drop_case ctors borrows c acc),
     }
 
 #[partial]
-def collect_drop_case (ctors : HashMap String Bool) (c : MatchCase) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (c : MatchCase) (acc : List DropInfo) : List DropInfo :=
     match c {
         MatchCase.mc _name args body _fp =>
             let n : I64 := List.length args in
-            let with_args : List DropInfo := collect_drop_case_args ctors args 0 n body acc in
-            collect_drop_term ctors body with_args,
+            let with_args : List DropInfo := collect_drop_case_args ctors borrows args 0 n body acc in
+            collect_drop_term ctors borrows body with_args,
     }
 
 /// Same written-order-vs-de-Bruijn-index reasoning as `usage.mo`'s own
 /// `collect_case_args`: pattern binders are pushed left to right, so
 /// the binder at written position `i` of `n` sits at index `n - 1 - i`.
 #[partial]
-def collect_drop_case_args (ctors : HashMap String Bool) (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_case_args (ctors : HashMap String Bool) (borrows : HashMap String Bool) (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List DropInfo) : List DropInfo :=
     match args {
         List.empty => acc,
         List.cons nm rest =>
             let idx : I64 := n - 1 - i in
-            let d : DropInfo := { name := nm, leaves := drop_leaves ctors idx body } in
-            collect_drop_case_args ctors rest (i + 1) n body (List.cons d acc),
+            let d : DropInfo := { name := nm, leaves := drop_leaves ctors borrows idx body } in
+            collect_drop_case_args ctors borrows rest (i + 1) n body (List.cons d acc),
     }
 
 #[partial]
-def collect_drop_fields (ctors : HashMap String Bool) (fields : List StructLitField) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_fields (ctors : HashMap String Bool) (borrows : HashMap String Bool) (fields : List StructLitField) (acc : List DropInfo) : List DropInfo :=
     match fields {
         List.empty => acc,
         List.cons f rest =>
             match f {
-                StructLitField.mk _name value => collect_drop_fields ctors rest (collect_drop_term ctors value acc),
+                StructLitField.mk _name value => collect_drop_fields ctors borrows rest (collect_drop_term ctors borrows value acc),
             },
     }
 
 #[partial]
-def collect_drop_con (ctors : HashMap String Bool) (c : Con) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_con (ctors : HashMap String Bool) (borrows : HashMap String Bool) (c : Con) (acc : List DropInfo) : List DropInfo :=
     match c {
-        Con.mk _name _typ_name _num_args args => collect_drop_opt_args ctors args acc,
+        Con.mk _name _typ_name _num_args args => collect_drop_opt_args ctors borrows args acc,
     }
 
 #[partial]
-def collect_drop_native (ctors : HashMap String Bool) (n : Native) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_native (ctors : HashMap String Bool) (borrows : HashMap String Bool) (n : Native) (acc : List DropInfo) : List DropInfo :=
     match n {
-        Native.mk _native_name _num_args args => collect_drop_opt_args ctors args acc,
+        Native.mk _native_name _num_args args => collect_drop_opt_args ctors borrows args acc,
     }
 
 #[partial]
-def collect_drop_opt_args (ctors : HashMap String Bool) (args : List (Option Term)) (acc : List DropInfo) : List DropInfo :=
+def collect_drop_opt_args (ctors : HashMap String Bool) (borrows : HashMap String Bool) (args : List (Option Term)) (acc : List DropInfo) : List DropInfo :=
     match args {
         List.empty => acc,
         List.cons a rest =>
             match a {
-                Option.some t => collect_drop_opt_args ctors rest (collect_drop_term ctors t acc),
-                Option.none => collect_drop_opt_args ctors rest acc,
+                Option.some t => collect_drop_opt_args ctors borrows rest (collect_drop_term ctors borrows t acc),
+                Option.none => collect_drop_opt_args ctors borrows rest acc,
             },
     }
 
@@ -328,7 +333,7 @@ def bool_leaves (bs : List Bool) : List Bool := bs
 def test_a_never_used_binder_is_dropped_once : Bool :=
     // `fn x => <hole>` -- one leaf (no branching), never consumed, so
     // the scope that bound it still owns it: needs releasing there.
-    let leaves : List Bool := drop_leaves empty_ctors 0 Term.hole in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 Term.hole in
     match leaves {
         List.cons b rest => b && I64.beq (List.length rest) 0,
         List.empty => false,
@@ -338,7 +343,7 @@ def test_a_never_used_binder_is_dropped_once : Bool :=
 def test_a_returned_binder_is_not_dropped : Bool :=
     // `fn x => x` -- the body's own tail value IS x: an OWNING use
     // (up_value), ownership transfers out via the return. No release.
-    let leaves : List Bool := drop_leaves empty_ctors 0 t_var0 in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 t_var0 in
     match leaves {
         List.cons b rest => not b && I64.beq (List.length rest) 0,
         List.empty => false,
@@ -350,7 +355,7 @@ def test_a_merely_read_binder_is_still_dropped : Bool :=
     // own return value. The scope still owns it after the call
     // returns, so it still needs releasing.
     let f : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "f")) in
-    let leaves : List Bool := drop_leaves empty_ctors 0 (Term.app f t_var0) in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 (Term.app f t_var0) in
     match leaves {
         List.cons b rest => b && I64.beq (List.length rest) 0,
         List.empty => false,
@@ -365,7 +370,7 @@ def test_branches_disagree_and_the_leaves_say_so : Bool :=
     // leaves must disagree.
     let cond : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "c")) in
     let t : Term := Term.lit (Literal.if_ cond t_var0 Term.hole) in
-    let leaves : List Bool := drop_leaves empty_ctors 0 t in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 t in
     match leaves {
         List.cons then_leaf rest =>
             match rest {
@@ -388,7 +393,7 @@ def test_leaves_are_in_left_to_right_order : Bool :=
     let c2 : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "c2")) in
     let inner : Term := Term.lit (Literal.if_ c2 t_var0 t_var0) in
     let outer : Term := Term.lit (Literal.if_ c1 inner t_var0) in
-    let leaves : List Bool := drop_leaves empty_ctors 0 outer in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 outer in
     I64.beq (List.length leaves) 3
         && not (any_leaf_true leaves)
 
@@ -410,7 +415,7 @@ def test_match_arm_binder_shifts_depth_correctly : Bool :=
     // Target 0 here is the OUTER binder -- after the match's own two
     // pattern binders are crossed, it sits at index 2, which `var 2`
     // matches. An owning use (up_value, the match's own leaf).
-    let leaves : List Bool := drop_leaves empty_ctors 0 t in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 t in
     match leaves {
         List.cons b rest => not b && I64.beq (List.length rest) 0,
         List.empty => false,
@@ -424,7 +429,7 @@ def test_collect_drop_info_finds_every_binder : Bool :=
     let inner_body : Term := Term.var 1 dbg_x in
     let inner : Term := Term.lam dbg_x Term.hole inner_body in
     let t : Term := Term.lam dbg_x Term.hole inner in
-    let infos : List DropInfo := collect_drop_info empty_ctors t in
+    let infos : List DropInfo := collect_drop_info empty_ctors str_map_empty t in
     match infos {
         List.cons outer rest =>
             match rest {
@@ -443,7 +448,7 @@ def test_always_drop_requires_every_leaf : Bool :=
     // never express and the whole reason `leaves` is a list.
     let cond : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "c")) in
     let t : Term := Term.lit (Literal.if_ cond t_var0 Term.hole) in
-    let leaves : List Bool := drop_leaves empty_ctors 0 t in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 t in
     let info : DropInfo := { name := Identifier.id "x", leaves := bool_leaves leaves } in
     not (DropInfo.always_drop info) && not (DropInfo.never_drop info)
 
@@ -466,7 +471,7 @@ def test_condition_owning_use_is_not_double_dropped : Bool :=
     // either branch ran.
     let cond : Term := con_of_p (Option.some t_var0) in
     let t : Term := Term.lit (Literal.if_ cond Term.hole Term.hole) in
-    let leaves : List Bool := drop_leaves empty_ctors 0 t in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 t in
     I64.beq (List.length leaves) 2
         && not (any_leaf_true leaves)
 
@@ -480,7 +485,7 @@ def test_scrutinee_owning_use_is_not_double_dropped : Bool :=
     let cond : Term := con_of_p (Option.some t_var0) in
     let arm : MatchCase := MatchCase.mc (Identifier.id "_") List.empty Term.hole Option.none in
     let t : Term := Term.lit (Literal.match_ cond (List.cons arm List.empty)) in
-    let leaves : List Bool := drop_leaves empty_ctors 0 t in
+    let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 t in
     match leaves {
         List.cons b rest => not b && I64.beq (List.length rest) 0,
         List.empty => false,

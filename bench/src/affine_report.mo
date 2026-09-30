@@ -52,9 +52,11 @@
 use std::io {println}
 open IO {println}
 use lang::module {ElaboratedModules, elaborate_loaded_modules}
-use lang::types {Decl, Def, Scope, Term, TypeError, show_identifier}
+use lang::types {Decl, Def, Scope, SortLevel, Term, TypeError, show_identifier}
 use lang::scope {scope_data_empty}
-use lang::typecheck::usage {BinderUse, attribute_binder_types, collect_binder_uses, ctor_name_set}
+use lang::typecheck::usage {
+  BinderUse, attribute_binder_types, borrow_of_name_set, collect_binder_uses, ctor_name_set,
+}
 use lang::typecheck::copy_class {copy_verdict}
 use lang::typecheck::affine {check_def}
 use lang::typecheck::diagnostic {type_error_message}
@@ -91,7 +93,13 @@ def type_head_name (t : Term) : String :=
             match n {
                 Native.mk name _num_args _args => show_identifier name,
             },
-        Term.type_ u => "Type" ++ I64.to_string u,
+        Term.sort level =>
+            match level {
+                SortLevel.concrete u => "Type" ++ I64.to_string u,
+                SortLevel.var _name => "Type?",
+                SortLevel.max _left _right => "Type?",
+                SortLevel.succ _inner => "Type?",
+            },
         // A binder whose type never got resolved. Common for match-arm
         // binders, whose type lives on the matched constructor and needs
         // a `Scope` `usage.mo` deliberately does not take.
@@ -178,6 +186,14 @@ pub struct Totals {
     /// one move plus any number of reads, which a borrow discipline
     /// serves without duplicating anything.
     borrowable : I64,
+    /// Total uses that are the direct argument of a real `Borrow.of`
+    /// call (`BinderUse.borrowed`, summed over every binder, not just
+    /// the 2+ set). Today it is near-zero by construction — B1
+    /// converted one call site — so what it measures is that the
+    /// borrow-aware budget is LIVE in this report path: if identity
+    /// resolution ever silently regressed to an empty borrow set,
+    /// this is the line that would drop to 0 and say so.
+    borrowed_uses : I64,
     /// Of the Σ ≥ 2 binders, those with **two or more owning uses** —
     /// the same value stored or returned twice. No borrow rescues
     /// these: they need `Copy`, `Clone`, or a rewrite. The irreducible
@@ -223,6 +239,8 @@ pub def Totals.unresolved (t : Totals) : List TypeTally := t.unresolved
 
 pub def Totals.borrowable (t : Totals) : I64 := t.borrowable
 
+pub def Totals.borrowed_uses (t : Totals) : I64 := t.borrowed_uses
+
 pub def Totals.needs_dup (t : Totals) : I64 := t.needs_dup
 
 pub def Totals.needs_dup_non_copy (t : Totals) : I64 := t.needs_dup_non_copy
@@ -244,7 +262,7 @@ pub def Totals.samples (t : Totals) : List String := t.samples
 def totals_empty : Totals :=
     { binders := 0, zero := 0, one := 0, many := 0, many_non_copy := 0,
       by_type := List.empty, unresolved := List.empty,
-      borrowable := 0, needs_dup := 0, needs_dup_non_copy := 0,
+      borrowable := 0, borrowed_uses := 0, needs_dup := 0, needs_dup_non_copy := 0,
       copy_granted := 0, copy_ambiguous := 0,
       diag_copy_required := 0, diag_used_after_move := 0, diag_linear_unused := 0,
       diag_other := 0, samples := List.empty }
@@ -272,6 +290,9 @@ def tally_binder (scope : Scope) (u : BinderUse) (acc : Totals) : Totals :=
     let n : I64 := BinderUse.count u in
     let tname : String := type_head_name (BinderUse.typ u) in
     let copyable : Bool := binder_is_copy scope (BinderUse.typ u) in
+    // Borrow-argument uses summed over ALL binders, not just the 2+
+    // set — see the field's doc comment for why the report needs this.
+    let acc : Totals := { acc with borrowed_uses := Totals.borrowed_uses acc + BinderUse.borrowed u } in
     if I64.beq n 0 then
         { acc with binders := Totals.binders acc + 1, zero := Totals.zero acc + 1 }
     else if I64.beq n 1 then
@@ -321,29 +342,29 @@ def def_term (d : Def) : Term := d.term
 /// the 2,419 over-used binders -- 30% of the number this whole report
 /// exists to produce.
 #[partial]
-def tally_decls (ctors : HashMap String Bool) (s : Scope) (ds : List Decl) (acc : Totals) : Totals :=
+def tally_decls (ctors : HashMap String Bool) (borrows : HashMap String Bool) (s : Scope) (ds : List Decl) (acc : Totals) : Totals :=
     match ds {
         List.empty => acc,
         List.cons d rest =>
             match d {
                 Decl.def_d def_ =>
-                    let raw : List BinderUse := collect_binder_uses ctors (def_term def_) in
+                    let raw : List BinderUse := collect_binder_uses ctors borrows (def_term def_) in
                     let counted : Totals := tally_binders s (attribute_binder_types s raw) acc in
                     // The Milestone 2 rule, run over the same def. Counted
                     // independently of the buckets above so the two can be
                     // cross-checked -- if the rule and the tally disagree,
                     // one of them is wrong, and silence would hide it.
-                    let diags : List TypeError := check_def s ctors def_ in
-                    tally_decls ctors s rest (tally_diags diags counted),
+                    let diags : List TypeError := check_def s ctors borrows def_ in
+                    tally_decls ctors borrows s rest (tally_diags diags counted),
                 // A macro body is a template, not code that runs; its
                 // binders are not runtime owners.
-                Decl.def_macro_d _def => tally_decls ctors s rest acc,
+                Decl.def_macro_d _def => tally_decls ctors borrows s rest acc,
                 // A scoped open wraps one real decl. Codegen ignores
                 // these today (`Decl.scoped_open_d`'s own doc comment),
                 // so the report does too rather than disagree with the
                 // backend it is sizing work for.
-                Decl.scoped_open_d _path _filter _inner => tally_decls ctors s rest acc,
-                _ => tally_decls ctors s rest acc,
+                Decl.scoped_open_d _path _filter _inner => tally_decls ctors borrows s rest acc,
+                _ => tally_decls ctors borrows s rest acc,
             },
     }
 
@@ -454,6 +475,7 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
     println "";
     println "  splitting the 2+ set by how the extra uses are spent:";
     println ("    borrowable (<=1 owning use) " ++ I64.to_string (Totals.borrowable t) ++ "  (" ++ pct (Totals.borrowable t) (Totals.many t) ++ "% of the 2+ set)");
+    println ("    borrow-argument uses (all binders) " ++ I64.to_string (Totals.borrowed_uses t) ++ "  (live iff Borrow.of identity resolution works)");
     println ("    needs duplication (2+ owning) " ++ I64.to_string (Totals.needs_dup t) ++ "  (" ++ pct (Totals.needs_dup t) (Totals.many t) ++ "%)");
     println ("    ... of those, non-Copy       " ++ I64.to_string (Totals.needs_dup_non_copy t) ++ "  (" ++ pct (Totals.needs_dup_non_copy t) n ++ "% of all binders)");
     println "  ^ OPTIMISTIC bound: assumes a callee never retains an argument.";
@@ -507,7 +529,8 @@ def report_on (path : String) : IO Bool := do {
             // full scan of the inductives map at every one of the
             // corpus's 44,609 application nodes.
             let ctors : HashMap String Bool := ctor_name_set em.scope;
-            let totals : Totals := tally_decls ctors em.scope em.elaborated_decls totals_empty;
+            let borrows : HashMap String Bool := borrow_of_name_set em.scope;
+            let totals : Totals := tally_decls ctors borrows em.scope em.elaborated_decls totals_empty;
             print_totals path totals
         }
     }

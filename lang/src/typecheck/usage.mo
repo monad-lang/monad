@@ -50,7 +50,7 @@
 use lib::types {
   Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive, Literal,
   Location, MatchCase, NamePath, Native, Param, Scope, ScopeData, StructLitField, Term,
-  show_name_path,
+  Visibility, show_name_path,
 }
 use lib::scope {
   find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
@@ -93,7 +93,7 @@ def uses_of (target : I64) (t : Term) : I64 :=
         Term.lit value => uses_of_literal target value,
         Term.ntv n => uses_of_native target n,
         Term.con c => uses_of_con target c,
-        Term.type_ _u => 0,
+        Term.sort _level => 0,
         Term.hole => 0,
         Term.quote_ _inner => 0,
         Term.ctx _loc inner => uses_of target inner,
@@ -223,8 +223,8 @@ pub type UsePos {
 /// Owning uses of `target` in `t` — the `up_con_field` and `up_value`
 /// ones. `0` or `1` means the binder is borrowable as written.
 #[partial]
-pub def owning_uses (ctors : HashMap String Bool) (target : I64) (t : Term) : I64 :=
-    owning_at ctors UsePos.up_value target t
+pub def owning_uses (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (t : Term) : I64 :=
+    owning_at ctors borrows UsePos.up_value target t
 
 /// The head of an application spine, peeled of `ctx` wrappers.
 ///
@@ -340,47 +340,192 @@ def name_is_ctor (ctors : HashMap String Bool) (nm : String) : Bool :=
             },
     }
 
-/// Is this spine head SPECIFICALLY `Borrow.of` (`init/src/borrow.mo`,
-/// B1 of the borrow design, `plans/type-system/quantitative-types.md`)?
-///
-/// A deliberately narrow, name-based check — matched by string, exactly
-/// like `head_is_ctor` above, and carrying the same small risk: a
-/// FUTURE type that also declares a bare `of` constructor would be
-/// misclassified as a borrow, undercounting its real owning uses. Two
-/// things make that acceptable for B1 specifically, where every other
-/// ambiguity in this module fails closed instead: (1) there is no such
-/// collision anywhere in the corpus today (checked before this landed);
-/// (2) this module produces WARNINGS, not rejections — B1 is
-/// measurement, not enforcement (`lang/typecheck/affine.mo`'s own
-/// header) — so a misclassification here costs an inflated
-/// `borrowable` count, never a memory-safety decision. B2's escape rule
-/// is where this stops being acceptable and needs a real fix (the
-/// dotted spelling only, or real constructor identity via a `Scope`
-/// this module deliberately does not take).
-def head_is_borrow_of (t : Term) : Bool :=
+/// Real identity for `Borrow.of` (`init/src/borrow.mo`, B1 of the borrow
+/// design), not a bare string
+/// match: `borrow_of_name_set` below resolves the ONE real `Borrow`
+/// inductive in scope, so a future type that also declares a bare `of`
+/// constructor is no longer misclassified as a borrow. Checked exactly
+/// like `head_is_ctor` above, against a set built once by the caller.
+def head_is_borrow_of (borrows : HashMap String Bool) (t : Term) : Bool :=
     match t {
         Term.var _idx dbg =>
             match dbg {
-                DebugName.named id =>
-                    let nm : String := show_identifier id in
-                    String.beq nm "of" || String.beq nm "Borrow.of",
+                DebugName.named id => name_is_ctor borrows (show_identifier id),
                 DebugName.unnamed => false,
             },
         _ => false,
     }
 
+/// The set `head_is_borrow_of` checks a spine head's rendered name
+/// against — like `ctor_name_set`, but scoped to exactly the inductive
+/// named `Borrow`, not every registered constructor. Built once per
+/// caller, same as `ctors`.
+///
+/// The dotted spelling (`"Borrow.of"`) is registered unconditionally: a
+/// two-segment name only collides with another type also literally named
+/// `Borrow`, already a whole-program name collision this checker doesn't
+/// otherwise tolerate anywhere else. The bare spelling (`"of"`) is
+/// registered ONLY when `Borrow` is the SOLE inductive in scope declaring
+/// a constructor by that name — failing closed on exactly the ambiguity
+/// `ctor_field_type` above already fails closed on, so a same-named `of`
+/// on some other type is no longer counted as a borrow.
+pub def borrow_of_name_set (s : Scope) : HashMap String Bool :=
+    let of_id : NamePath := NamePath.npath (List.cons (Identifier.id "of") List.empty) in
+    let dotted : HashMap String Bool := str_map_insert "Borrow.of" true str_map_empty in
+    match scope_find_all_inductives_by_constructor of_id s {
+        List.empty => dotted,
+        List.cons ind rest =>
+            match rest {
+                List.empty =>
+                    if inductive_named_borrow ind then str_map_insert "of" true dotted
+                    else dotted,
+                List.cons _ _ => dotted,
+            },
+    }
+
+def inductive_named_borrow (ind : Inductive) : Bool :=
+    match ind {
+        Inductive.mk name _params _typ _ctors _attrs _vis => String.beq (show_name_path name) "Borrow",
+    }
+
+// ─── Borrow-aware use counting ──────────────────────────────────────
+//
+// The B1 gap this closes: `f (Borrow.of x); g (Borrow.of x)` uses `x`
+// twice but consumes it ZERO times, so the raw `count` over-uses the
+// binder even though every use is genuinely free. The affine gate
+// (`affine.mo`'s `check_binder`) must compare against the uses that
+// count against Σ, not the uses that merely mention the name.
+
+/// Uses of `target` in `t` that count against the affine budget:
+/// `uses_of` minus the occurrences that are the DIRECT argument of a
+/// real `Borrow.of` call (per `head_is_borrow_of`).
+///
+/// `borrowed_here` says this subterm IS that direct argument, and only
+/// a `Term.var` under it is excused. Anything nested deeper resets:
+/// `Borrow.of (f x)` runs `f x` to produce the borrowed value, which is
+/// a real use of `x`, so excusing it would hide a genuine double-use.
+/// The asymmetry is deliberate in the same direction as everything else
+/// here — a missed borrow costs one advisory `copy_required` (fail
+/// closed); a wrongly excused use would be a false negative.
+///
+/// Combination rules are `uses_of`'s EXACTLY — same sums, same
+/// per-branch maxes — so `uses_of - borrow_aware_uses` is a
+/// branch-consistent borrowed count. That is why `BinderUse.borrowed`
+/// is computed as the difference rather than by a separate borrowed
+/// walk: two walks that each take their own max across match arms
+/// would subtract a borrow in one arm from a use in another, and the
+/// gate would let a binder through that one arm genuinely over-uses.
+#[partial]
+pub def borrow_aware_uses (borrows : HashMap String Bool) (target : I64) (t : Term) : I64 :=
+    borrow_aware_at borrows false target t
+
+#[partial]
+def borrow_aware_at (borrows : HashMap String Bool) (borrowed_here : Bool) (target : I64) (t : Term) : I64 :=
+    match t {
+        Term.var idx _dbg =>
+            if I64.beq idx target then (if borrowed_here then 0 else 1) else 0,
+        Term.var_macro _idx _dbg => 0,
+        // A lambda body is a closure the borrow may wrap but does not
+        // enter: occurrences inside are captured, which is a real use.
+        Term.lam _dbg _typ body => borrow_aware_at borrows false (target + 1) body,
+        Term.forall _dbg _kind body => borrow_aware_at borrows false (target + 1) body,
+        Term.pi _arg _ret => 0,
+        Term.app callee arg =>
+            let head : Term := app_spine_head callee in
+            borrow_aware_at borrows false target callee
+                + borrow_aware_at borrows (head_is_borrow_of borrows head) target arg,
+        Term.lit value => borrow_aware_literal borrows borrowed_here target value,
+        Term.ntv n =>
+            match n {
+                Native.mk _name _num_args args => borrow_aware_opt_args borrows target args,
+            },
+        Term.con c =>
+            match c {
+                Con.mk _name _typ_name _num_args args => borrow_aware_opt_args borrows target args,
+            },
+        Term.sort _level => 0,
+        Term.hole => 0,
+        Term.quote_ _inner => 0,
+        Term.ctx _loc inner => borrow_aware_at borrows borrowed_here target inner,
+    }
+
+#[partial]
+def borrow_aware_literal (borrows : HashMap String Bool) (borrowed_here : Bool) (target : I64) (l : Literal) : I64 :=
+    match l {
+        Literal.str _v => 0,
+        Literal.char _v => 0,
+        Literal.num _n _suf => 0,
+        Literal.flt _t _suf => 0,
+        // The condition runs to DECIDE, so it is a real use; the branch
+        // that runs IS the value being borrowed, so it inherits the
+        // flag — `Borrow.of (if c then x else y)` really does borrow
+        // `x`.
+        Literal.if_ cond then_ else_ =>
+            borrow_aware_at borrows false target cond
+                + i64_max (borrow_aware_at borrows borrowed_here target then_)
+                    (borrow_aware_at borrows borrowed_here target else_),
+        // Same split as `if_`: scrutinee to decide, arm body is the
+        // borrowed value.
+        Literal.match_ scrut cases =>
+            borrow_aware_at borrows false target scrut
+                + borrow_aware_cases borrows borrowed_here target cases,
+        // Field values are stored into a new value first; the borrow
+        // wraps the result, not the fields.
+        Literal.struct_lit fields _type_name => borrow_aware_fields borrows target fields,
+        Literal.struct_update base fields =>
+            borrow_aware_at borrows false target base + borrow_aware_fields borrows target fields,
+    }
+
+#[partial]
+def borrow_aware_cases (borrows : HashMap String Bool) (borrowed_here : Bool) (target : I64) (cases : List MatchCase) : I64 :=
+    match cases {
+        List.empty => 0,
+        List.cons c rest =>
+            i64_max (borrow_aware_case borrows borrowed_here target c)
+                (borrow_aware_cases borrows borrowed_here target rest),
+    }
+
+#[partial]
+def borrow_aware_case (borrows : HashMap String Bool) (borrowed_here : Bool) (target : I64) (c : MatchCase) : I64 :=
+    match c {
+        MatchCase.mc _name args body _fp =>
+            borrow_aware_at borrows borrowed_here (target + List.length args) body,
+    }
+
+#[partial]
+def borrow_aware_fields (borrows : HashMap String Bool) (target : I64) (fields : List StructLitField) : I64 :=
+    match fields {
+        List.empty => 0,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk _name value =>
+                    borrow_aware_at borrows false target value + borrow_aware_fields borrows target rest,
+            },
+    }
+
+#[partial]
+def borrow_aware_opt_args (borrows : HashMap String Bool) (target : I64) (args : List (Option Term)) : I64 :=
+    match args {
+        List.empty => 0,
+        List.cons a rest =>
+            match a {
+                Option.some t => borrow_aware_at borrows false target t + borrow_aware_opt_args borrows target rest,
+                Option.none => borrow_aware_opt_args borrows target rest,
+            },
+    }
+
 /// `ctx` is the position the CURRENT subterm occupies. A `Term.var`
 /// matching `target` contributes 1 when that position is an owning one.
 #[partial]
-def owning_at (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (t : Term) : I64 :=
+def owning_at (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx : UsePos) (target : I64) (t : Term) : I64 :=
     match t {
         Term.var idx _dbg =>
             if I64.beq idx target then (if pos_is_owning ctx then 1 else 0) else 0,
         Term.var_macro _idx _dbg => 0,
         // A binder resets the position: its body is the value the
         // closure produces, not whatever slot the closure itself fills.
-        Term.lam _dbg _typ body => owning_at ctors UsePos.up_value (target + 1) body,
-        Term.forall _dbg _kind body => owning_at ctors UsePos.up_value (target + 1) body,
+        Term.lam _dbg _typ body => owning_at ctors borrows UsePos.up_value (target + 1) body,
+        Term.forall _dbg _kind body => owning_at ctors borrows UsePos.up_value (target + 1) body,
         Term.pi _arg _ret => 0,
         Term.app callee arg =>
             let head : Term := app_spine_head callee in
@@ -390,24 +535,24 @@ def owning_at (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (t : T
                 // so this check must come first or `head_is_ctor` would
                 // shadow it and every borrow would count as an owning
                 // store -- the exact miscount B1 exists to prevent.
-                if head_is_borrow_of head then UsePos.up_app_arg
+                if head_is_borrow_of borrows head then UsePos.up_app_arg
                 else if head_is_ctor ctors head then UsePos.up_con_field
                 else UsePos.up_app_arg in
-            owning_at ctors UsePos.up_app_head target callee + owning_at ctors arg_pos target arg,
-        Term.lit value => owning_at_literal ctors ctx target value,
+            owning_at ctors borrows UsePos.up_app_head target callee + owning_at ctors borrows arg_pos target arg,
+        Term.lit value => owning_at_literal ctors borrows ctx target value,
         // A native's arguments are call arguments, not stores.
         Term.ntv n =>
             match n {
-                Native.mk _name _num_args args => owning_at_opt_args ctors UsePos.up_app_arg target args,
+                Native.mk _name _num_args args => owning_at_opt_args ctors borrows UsePos.up_app_arg target args,
             },
         Term.con c =>
             match c {
-                Con.mk _name _typ_name _num_args args => owning_at_opt_args ctors UsePos.up_con_field target args,
+                Con.mk _name _typ_name _num_args args => owning_at_opt_args ctors borrows UsePos.up_con_field target args,
             },
-        Term.type_ _u => 0,
+        Term.sort _level => 0,
         Term.hole => 0,
         Term.quote_ _inner => 0,
-        Term.ctx _loc inner => owning_at ctors ctx target inner,
+        Term.ctx _loc inner => owning_at ctors borrows ctx target inner,
     }
 
 def pos_is_owning (p : UsePos) : Bool :=
@@ -420,7 +565,7 @@ def pos_is_owning (p : UsePos) : Bool :=
     }
 
 #[partial]
-def owning_at_literal (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (l : Literal) : I64 :=
+def owning_at_literal (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx : UsePos) (target : I64) (l : Literal) : I64 :=
     match l {
         Literal.str _v => 0,
         Literal.char _v => 0,
@@ -430,49 +575,49 @@ def owning_at_literal (ctors : HashMap String Bool) (ctx : UsePos) (target : I64
         // combine by MAX for the same reason `uses_of` does -- only one
         // of them runs, so only one of them owns.
         Literal.if_ cond then_ else_ =>
-            owning_at ctors UsePos.up_scrutinee target cond
-                + i64_max (owning_at ctors ctx target then_) (owning_at ctors ctx target else_),
+            owning_at ctors borrows UsePos.up_scrutinee target cond
+                + i64_max (owning_at ctors borrows ctx target then_) (owning_at ctors borrows ctx target else_),
         Literal.match_ scrut cases =>
-            owning_at ctors UsePos.up_scrutinee target scrut + owning_at_cases ctors ctx target cases,
-        Literal.struct_lit fields _type_name => owning_at_fields ctors target fields,
+            owning_at ctors borrows UsePos.up_scrutinee target scrut + owning_at_cases ctors borrows ctx target cases,
+        Literal.struct_lit fields _type_name => owning_at_fields ctors borrows target fields,
         // The base of a struct update is consumed to build the new one.
         Literal.struct_update base fields =>
-            owning_at ctors UsePos.up_con_field target base + owning_at_fields ctors target fields,
+            owning_at ctors borrows UsePos.up_con_field target base + owning_at_fields ctors borrows target fields,
     }
 
 #[partial]
-def owning_at_cases (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (cases : List MatchCase) : I64 :=
+def owning_at_cases (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx : UsePos) (target : I64) (cases : List MatchCase) : I64 :=
     match cases {
         List.empty => 0,
         List.cons c rest =>
-            i64_max (owning_at_case ctors ctx target c) (owning_at_cases ctors ctx target rest),
+            i64_max (owning_at_case ctors borrows ctx target c) (owning_at_cases ctors borrows ctx target rest),
     }
 
 #[partial]
-def owning_at_case (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (c : MatchCase) : I64 :=
+def owning_at_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx : UsePos) (target : I64) (c : MatchCase) : I64 :=
     match c {
-        MatchCase.mc _name args body _fp => owning_at ctors ctx (target + List.length args) body,
+        MatchCase.mc _name args body _fp => owning_at ctors borrows ctx (target + List.length args) body,
     }
 
 #[partial]
-def owning_at_fields (ctors : HashMap String Bool) (target : I64) (fields : List StructLitField) : I64 :=
+def owning_at_fields (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (fields : List StructLitField) : I64 :=
     match fields {
         List.empty => 0,
         List.cons f rest =>
             match f {
                 StructLitField.mk _name value =>
-                    owning_at ctors UsePos.up_con_field target value + owning_at_fields ctors target rest,
+                    owning_at ctors borrows UsePos.up_con_field target value + owning_at_fields ctors borrows target rest,
             },
     }
 
 #[partial]
-def owning_at_opt_args (ctors : HashMap String Bool) (ctx : UsePos) (target : I64) (args : List (Option Term)) : I64 :=
+def owning_at_opt_args (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx : UsePos) (target : I64) (args : List (Option Term)) : I64 :=
     match args {
         List.empty => 0,
         List.cons a rest =>
             match a {
-                Option.some t => owning_at ctors ctx target t + owning_at_opt_args ctors ctx target rest,
-                Option.none => owning_at_opt_args ctors ctx target rest,
+                Option.some t => owning_at ctors borrows ctx target t + owning_at_opt_args ctors borrows ctx target rest,
+                Option.none => owning_at_opt_args ctors borrows ctx target rest,
             },
     }
 
@@ -510,6 +655,15 @@ pub struct BinderUse {
     /// `1` means it is borrowable as written (one move, the rest
     /// reads); `2` or more means it genuinely needs duplication.
     owning : I64 := 0,
+    /// Borrowed uses — `count` minus `borrow_aware_uses` on this
+    /// binder's body: the occurrences that are the direct argument of a
+    /// real `Borrow.of` call. Computed as a difference because the two
+    /// walks share branch-combination rules, which keeps it exact where
+    /// one match arm borrows what another arm consumes; a separately
+    /// borrowed-per-branch-maxed count would under-count there. The
+    /// affine gate in `affine.mo` compares `count - borrowed`, not
+    /// `count`.
+    borrowed : I64 := 0,
     /// Position of this binder within that constructor's arguments, in
     /// written order, 0-based. `-1` for a `bk_lam` binder.
     ///
@@ -542,6 +696,8 @@ pub def BinderUse.pos (u : BinderUse) : I64 := u.pos
 
 pub def BinderUse.owning (u : BinderUse) : I64 := u.owning
 
+pub def BinderUse.borrowed (u : BinderUse) : I64 := u.borrowed
+
 /// `DebugName` -> a printable identifier. An unnamed binder reports as
 /// `_`, matching how the corpus already spells a binder nobody reads.
 def binder_name (dbg : DebugName) : Identifier :=
@@ -564,69 +720,71 @@ def binder_name (dbg : DebugName) : Identifier :=
 /// Order is unspecified -- the accumulator reverses, and the report
 /// sorts by count anyway.
 #[partial]
-pub def collect_binder_uses (ctors : HashMap String Bool) (t : Term) : List BinderUse :=
-    collect_uses_term ctors t List.empty
+pub def collect_binder_uses (ctors : HashMap String Bool) (borrows : HashMap String Bool) (t : Term) : List BinderUse :=
+    collect_uses_term ctors borrows t List.empty
 
 #[partial]
-def collect_uses_term (ctors : HashMap String Bool) (t : Term) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bool) (t : Term) (acc : List BinderUse) : List BinderUse :=
     match t {
         Term.var _idx _dbg => acc,
         Term.var_macro _idx _dbg => acc,
         Term.lam dbg typ body =>
+            let raw : I64 := uses_of 0 body in
             let u : BinderUse :=
                 { name := binder_name dbg,
                   kind := BinderKind.bk_lam,
                   typ := typ,
-                  count := uses_of 0 body,
-                  owning := owning_uses ctors 0 body,
+                  count := raw,
+                  borrowed := raw - borrow_aware_uses borrows 0 body,
+                  owning := owning_uses ctors borrows 0 body,
                   ctor := Identifier.id "",
                   pos := 0 - 1 } in
-            collect_uses_term ctors body (List.cons u acc),
+            collect_uses_term ctors borrows body (List.cons u acc),
         // A `forall` binds a TYPE variable. It is erased before run time,
         // so it is not a runtime binder and never owns memory -- walk
         // through it for the binders nested inside, but do not report it.
-        Term.forall _dbg _kind body => collect_uses_term ctors body acc,
+        Term.forall _dbg _kind body => collect_uses_term ctors borrows body acc,
         // Entirely a type position (rule 2). Any `lam` nested inside a
         // type is likewise compile-time and reports nothing.
         Term.pi _arg _ret => acc,
-        Term.app callee arg => collect_uses_term ctors arg (collect_uses_term ctors callee acc),
-        Term.lit value => collect_uses_literal ctors value acc,
-        Term.ntv n => collect_uses_native ctors n acc,
-        Term.con c => collect_uses_con ctors c acc,
-        Term.type_ _u => acc,
+        Term.app callee arg => collect_uses_term ctors borrows arg (collect_uses_term ctors borrows callee acc),
+        Term.lit value => collect_uses_literal ctors borrows value acc,
+        Term.ntv n => collect_uses_native ctors borrows n acc,
+        Term.con c => collect_uses_con ctors borrows c acc,
+        Term.sort _level => acc,
         Term.hole => acc,
         Term.quote_ _inner => acc,
-        Term.ctx _loc inner => collect_uses_term ctors inner acc,
+        Term.ctx _loc inner => collect_uses_term ctors borrows inner acc,
     }
 
 #[partial]
-def collect_uses_literal (ctors : HashMap String Bool) (l : Literal) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_literal (ctors : HashMap String Bool) (borrows : HashMap String Bool) (l : Literal) (acc : List BinderUse) : List BinderUse :=
     match l {
         Literal.str _v => acc,
         Literal.char _v => acc,
         Literal.num _n _suf => acc,
         Literal.flt _t _suf => acc,
         Literal.if_ cond then_ else_ =>
-            collect_uses_term ctors else_ (collect_uses_term ctors then_ (collect_uses_term ctors cond acc)),
-        Literal.match_ scrut cases => collect_uses_cases ctors cases (collect_uses_term ctors scrut acc),
-        Literal.struct_lit fields _type_name => collect_uses_fields ctors fields acc,
-        Literal.struct_update base fields => collect_uses_fields ctors fields (collect_uses_term ctors base acc),
+            collect_uses_term ctors borrows else_ (collect_uses_term ctors borrows then_ (collect_uses_term ctors borrows cond acc)),
+        Literal.match_ scrut cases => collect_uses_cases ctors borrows cases (collect_uses_term ctors borrows scrut acc),
+        Literal.struct_lit fields _type_name => collect_uses_fields ctors borrows fields acc,
+        Literal.struct_update base fields => collect_uses_fields ctors borrows fields (collect_uses_term ctors borrows base acc),
     }
 
 #[partial]
-def collect_uses_cases (ctors : HashMap String Bool) (cases : List MatchCase) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_cases (ctors : HashMap String Bool) (borrows : HashMap String Bool) (cases : List MatchCase) (acc : List BinderUse) : List BinderUse :=
     match cases {
         List.empty => acc,
-        List.cons c rest => collect_uses_cases ctors rest (collect_uses_case ctors c acc),
+        List.cons c rest => collect_uses_cases ctors borrows rest (collect_uses_case ctors borrows c acc),
     }
 
 #[partial]
-def collect_uses_case (ctors : HashMap String Bool) (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
     match c {
         MatchCase.mc name args body _fp =>
             let n : I64 := List.length args in
-            let with_args : List BinderUse := collect_case_args ctors name args 0 n body acc in
-            collect_uses_term ctors body with_args,
+            let with_args : List BinderUse := collect_case_args ctors borrows name args 0 n body acc in
+            collect_uses_term ctors borrows body with_args,
     }
 
 /// Pattern binders are pushed onto the local context left to right
@@ -638,52 +796,54 @@ def collect_uses_case (ctors : HashMap String Bool) (c : MatchCase) (acc : List 
 /// binder's count to a different binder, which is why it is spelled out
 /// rather than inlined.
 #[partial]
-def collect_case_args (ctors : HashMap String Bool) (ctor : Identifier) (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List BinderUse) : List BinderUse :=
+def collect_case_args (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctor : Identifier) (args : List Identifier) (i : I64) (n : I64) (body : Term) (acc : List BinderUse) : List BinderUse :=
     match args {
         List.empty => acc,
         List.cons nm rest =>
             let idx : I64 := n - 1 - i in
+            let raw : I64 := uses_of idx body in
             let u : BinderUse :=
                 { name := nm,
                   kind := BinderKind.bk_match,
                   typ := Term.hole,
-                  count := uses_of idx body,
-                  owning := owning_uses ctors idx body,
+                  count := raw,
+                  borrowed := raw - borrow_aware_uses borrows idx body,
+                  owning := owning_uses ctors borrows idx body,
                   ctor := ctor,
                   pos := i } in
-            collect_case_args ctors ctor rest (i + 1) n body (List.cons u acc),
+            collect_case_args ctors borrows ctor rest (i + 1) n body (List.cons u acc),
     }
 
 #[partial]
-def collect_uses_fields (ctors : HashMap String Bool) (fields : List StructLitField) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_fields (ctors : HashMap String Bool) (borrows : HashMap String Bool) (fields : List StructLitField) (acc : List BinderUse) : List BinderUse :=
     match fields {
         List.empty => acc,
         List.cons f rest =>
             match f {
-                StructLitField.mk _name value => collect_uses_fields ctors rest (collect_uses_term ctors value acc),
+                StructLitField.mk _name value => collect_uses_fields ctors borrows rest (collect_uses_term ctors borrows value acc),
             },
     }
 
 #[partial]
-def collect_uses_con (ctors : HashMap String Bool) (c : Con) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_con (ctors : HashMap String Bool) (borrows : HashMap String Bool) (c : Con) (acc : List BinderUse) : List BinderUse :=
     match c {
-        Con.mk _name _typ_name _num_args args => collect_uses_opt_args ctors args acc,
+        Con.mk _name _typ_name _num_args args => collect_uses_opt_args ctors borrows args acc,
     }
 
 #[partial]
-def collect_uses_native (ctors : HashMap String Bool) (n : Native) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_native (ctors : HashMap String Bool) (borrows : HashMap String Bool) (n : Native) (acc : List BinderUse) : List BinderUse :=
     match n {
-        Native.mk _native_name _num_args args => collect_uses_opt_args ctors args acc,
+        Native.mk _native_name _num_args args => collect_uses_opt_args ctors borrows args acc,
     }
 
 #[partial]
-def collect_uses_opt_args (ctors : HashMap String Bool) (args : List (Option Term)) (acc : List BinderUse) : List BinderUse :=
+def collect_uses_opt_args (ctors : HashMap String Bool) (borrows : HashMap String Bool) (args : List (Option Term)) (acc : List BinderUse) : List BinderUse :=
     match args {
         List.empty => acc,
         List.cons a rest =>
             match a {
-                Option.some t => collect_uses_opt_args ctors rest (collect_uses_term ctors t acc),
-                Option.none => collect_uses_opt_args ctors rest acc,
+                Option.some t => collect_uses_opt_args ctors borrows rest (collect_uses_term ctors borrows t acc),
+                Option.none => collect_uses_opt_args ctors borrows rest acc,
             },
     }
 
@@ -905,14 +1065,14 @@ def test_collect_reports_one_binder_per_lambda : Bool :=
     // affine-by-default must free automatically.
     let inner : Term := Term.lam dbg_x Term.hole (Term.var 0 dbg_x) in
     let t : Term := Term.lam dbg_x Term.hole inner in
-    I64.beq (List.length (collect_binder_uses probe_ctors t)) 2
+    I64.beq (List.length (collect_binder_uses probe_ctors str_map_empty t)) 2
 
 #[test]
 def test_collect_records_an_unused_binder_as_zero : Bool :=
     // `fn x => <hole>` -- one binder, zero uses. Affine-legal (weakening
     // is admissible), and a release point under Milestone 3.
     let t : Term := Term.lam dbg_x Term.hole Term.hole in
-    match collect_binder_uses probe_ctors t {
+    match collect_binder_uses probe_ctors str_map_empty t {
         List.cons u _rest => I64.beq (BinderUse.count u) 0,
         List.empty => false,
     }
@@ -922,7 +1082,7 @@ def test_collect_records_an_overused_binder : Bool :=
     // `fn x => x x` -- two uses. This is the shape that needs `Copy`.
     let body : Term := Term.app (Term.var 0 dbg_x) (Term.var 0 dbg_x) in
     let t : Term := Term.lam dbg_x Term.hole body in
-    match collect_binder_uses probe_ctors t {
+    match collect_binder_uses probe_ctors str_map_empty t {
         List.cons u _rest => I64.beq (BinderUse.count u) 2,
         List.empty => false,
     }
@@ -932,8 +1092,8 @@ def test_collect_skips_forall_binders : Bool :=
     // A `forall` binds a type variable: erased, never a runtime owner.
     // The `lam` nested under it is still reported.
     let inner : Term := Term.lam dbg_x Term.hole Term.hole in
-    let t : Term := Term.forall dbg_x (Term.type_ 0) inner in
-    I64.beq (List.length (collect_binder_uses probe_ctors t)) 1
+    let t : Term := Term.forall dbg_x (Term.sort (SortLevel.concrete 0)) inner in
+    I64.beq (List.length (collect_binder_uses probe_ctors str_map_empty t)) 1
 
 // ─── Tests: type attribution ───────────────────────────────────────
 
@@ -1021,7 +1181,7 @@ def test_collect_records_the_constructor_and_position : Bool :=
     let arm : MatchCase := MatchCase.mc (Identifier.id "pair") args (Term.var 0 dbg_x) no_fp in
     let arms : List MatchCase := List.cons arm List.empty in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
-    match collect_binder_uses probe_ctors t {
+    match collect_binder_uses probe_ctors str_map_empty t {
         List.cons u _rest =>
             // The accumulator reverses, so `b` (written position 1)
             // comes back first, and it is the one the body uses.
@@ -1042,7 +1202,7 @@ def con_of (args : List (Option Term)) : Term :=
 #[test]
 def test_owning_a_bare_body_is_a_move : Bool :=
     // The value a scope produces is moved out. One owning use.
-    I64.beq (owning_uses probe_ctors 0 t_var0) 1
+    I64.beq (owning_uses probe_ctors str_map_empty 0 t_var0) 1
 
 #[test]
 def test_owning_ignores_a_call_argument : Bool :=
@@ -1050,7 +1210,7 @@ def test_owning_ignores_a_call_argument : Bool :=
     // borrow could serve. The head is a free var (idx sentinel), not
     // the target.
     let f : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "f")) in
-    I64.beq (owning_uses probe_ctors 0 (Term.app f t_var0)) 0
+    I64.beq (owning_uses probe_ctors str_map_empty 0 (Term.app f t_var0)) 0
 
 #[test]
 def test_owning_ignores_a_match_scrutinee : Bool :=
@@ -1058,13 +1218,13 @@ def test_owning_ignores_a_match_scrutinee : Bool :=
     let no_fp : Option FieldPattern := Option.none in
     let arm : MatchCase := MatchCase.mc (Identifier.id "a") List.empty Term.hole no_fp in
     let t : Term := Term.lit (Literal.match_ t_var0 (List.cons arm List.empty)) in
-    I64.beq (owning_uses probe_ctors 0 t) 0
+    I64.beq (owning_uses probe_ctors str_map_empty 0 t) 0
 
 #[test]
 def test_owning_counts_a_constructor_field : Bool :=
     // Stored into a constructor: the value outlives the expression.
     let args : List (Option Term) := List.cons (Option.some t_var0) List.empty in
-    I64.beq (owning_uses probe_ctors 0 (con_of args)) 1
+    I64.beq (owning_uses probe_ctors str_map_empty 0 (con_of args)) 1
 
 #[test]
 def test_owning_counts_both_constructor_fields : Bool :=
@@ -1072,7 +1232,7 @@ def test_owning_counts_both_constructor_fields : Bool :=
     // duplication -- no borrow discipline rescues it.
     let args : List (Option Term) :=
         List.cons (Option.some t_var0) (List.cons (Option.some t_var0) List.empty) in
-    I64.beq (owning_uses probe_ctors 0 (con_of args)) 2
+    I64.beq (owning_uses probe_ctors str_map_empty 0 (con_of args)) 2
 
 #[test]
 def test_owning_counts_a_curried_constructor_argument : Bool :=
@@ -1082,7 +1242,7 @@ def test_owning_counts_a_curried_constructor_argument : Bool :=
     // argument would count an owning store as a free read.
     let empty_args : List (Option Term) := List.empty in
     let head : Term := con_of empty_args in
-    I64.beq (owning_uses probe_ctors 0 (Term.app head t_var0)) 1
+    I64.beq (owning_uses probe_ctors str_map_empty 0 (Term.app head t_var0)) 1
 
 /// `probe_ctors` plus `"of"`, registered as a REAL constructor -- the
 /// shape the borrow tests need to prove the override actually wins
@@ -1091,6 +1251,25 @@ def test_owning_counts_a_curried_constructor_argument : Bool :=
 def probe_ctors_with_of : HashMap String Bool :=
     str_map_insert "of" true probe_ctors
 
+/// What `borrow_of_name_set` would compute for a scope where `Borrow`
+/// really is the only inductive declaring `of` -- built by hand here so
+/// the owning-count tests below don't need a real `Scope` walk just to
+/// exercise `head_is_borrow_of`'s consumer side.
+def probe_borrows_of : HashMap String Bool :=
+    str_map_insert "of" true (str_map_insert "Borrow.of" true str_map_empty)
+
+/// A `Scope` with a real `Borrow` inductive (one constructor, `of`)
+/// registered, for testing `borrow_of_name_set` itself end-to-end.
+def scope_with_borrow : Scope :=
+    let con : InductConstructor :=
+        InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "of") List.empty))
+            List.empty Term.hole in
+    let ind : Inductive :=
+        Inductive.mk (NamePath.npath (List.cons (Identifier.id "Borrow") List.empty))
+            List.empty Term.hole (List.cons con List.empty) List.empty Visibility.package_private in
+    let sd0 : ScopeData := scope_globals empty_scope in
+    { empty_scope with scope := { sd0 with inductives := str_map_insert "Borrow" ind sd0.inductives } }
+
 /// `Borrow.of <arg>`, spelled bare `of` -- the same spelling
 /// `head_is_borrow_of` checks first.
 def of_of (arg : Term) : Term :=
@@ -1098,11 +1277,27 @@ def of_of (arg : Term) : Term :=
     Term.app head arg
 
 #[test]
+def test_borrow_of_name_set_resolves_the_real_borrow_type : Bool :=
+    // `borrow_of_name_set` walks a real `Scope` and finds the ONE
+    // inductive actually named `Borrow` -- both spellings its own
+    // constructor could be written with come back registered.
+    let s : HashMap String Bool := borrow_of_name_set scope_with_borrow in
+    name_is_ctor s "of" && name_is_ctor s "Borrow.of"
+
+#[test]
+def test_borrow_of_name_set_is_empty_with_no_borrow_type_in_scope : Bool :=
+    // Nothing named `Borrow` is in scope, so nothing is a borrow --
+    // fail closed, the same direction every other ambiguity in this
+    // module fails.
+    let s : HashMap String Bool := borrow_of_name_set empty_scope in
+    not (name_is_ctor s "of")
+
+#[test]
 def test_owning_a_borrow_construction_is_a_read_not_a_store : Bool :=
     // `Borrow.of x` must NOT count as an owning use, even though `of`
     // is registered as a real constructor -- the whole point is that
     // the borrow override wins over "any constructor head is a store".
-    I64.beq (owning_uses probe_ctors_with_of 0 (of_of t_var0)) 0
+    I64.beq (owning_uses probe_ctors_with_of probe_borrows_of 0 (of_of t_var0)) 0
 
 #[test]
 def test_owning_a_value_borrowed_twice_is_still_free : Bool :=
@@ -1117,14 +1312,23 @@ def test_owning_a_value_borrowed_twice_is_still_free : Bool :=
     // does, with `of_of t_var0` in place of a bare `t_var0`.
     let args : List (Option Term) :=
         List.cons (Option.some (of_of t_var0)) (List.cons (Option.some (of_of t_var0)) List.empty) in
-    I64.beq (owning_uses probe_ctors_with_of 0 (con_of args)) 0
+    I64.beq (owning_uses probe_ctors_with_of probe_borrows_of 0 (con_of args)) 0
+
+#[test]
+def test_owning_an_unrelated_types_of_is_not_misclassified_as_borrow : Bool :=
+    // The false positive `head_is_borrow_of` used to have: some OTHER
+    // type also declares a bare `of` constructor (registered in `ctors`
+    // exactly like `Borrow.of` would be), but `Borrow` itself is not in
+    // scope here (`borrows` is empty). This must count as an ordinary
+    // owning constructor store, not a free borrow read.
+    I64.beq (owning_uses probe_ctors_with_of str_map_empty 0 (of_of t_var0)) 1
 
 #[test]
 def test_owning_takes_max_across_branches : Bool :=
     // Moved out on both arms, but only one arm runs. One owning use,
     // so this is still affine-legal.
     let t : Term := Term.lit (Literal.if_ Term.hole t_var0 t_var0) in
-    I64.beq (owning_uses probe_ctors 0 t) 1
+    I64.beq (owning_uses probe_ctors str_map_empty 0 t) 1
 
 #[test]
 def test_owning_separates_the_read_from_the_move : Bool :=
@@ -1132,7 +1336,7 @@ def test_owning_separates_the_read_from_the_move : Bool :=
     // one arm. One owning use: borrowable, one move. The distinction
     // the whole section exists to draw.
     let t : Term := Term.lit (Literal.if_ t_var0 t_var0 Term.hole) in
-    I64.beq (uses_of 0 t) 2 && I64.beq (owning_uses probe_ctors 0 t) 1
+    I64.beq (uses_of 0 t) 2 && I64.beq (owning_uses probe_ctors str_map_empty 0 t) 1
 
 #[test]
 def test_collect_records_owning_uses : Bool :=
@@ -1141,7 +1345,83 @@ def test_collect_records_owning_uses : Bool :=
     let head : Term := con_of empty_args in
     let body : Term := Term.app (Term.app head (Term.var 0 dbg_x)) (Term.var 0 dbg_x) in
     let t : Term := Term.lam dbg_x Term.hole body in
-    match collect_binder_uses probe_ctors t {
+    match collect_binder_uses probe_ctors str_map_empty t {
         List.cons u _rest => I64.beq (BinderUse.count u) 2 && I64.beq (BinderUse.owning u) 2,
+        List.empty => false,
+    }
+
+// ─── Tests: borrow-aware use counting ──────────────────────────────
+
+#[test]
+def test_borrow_aware_uses_excuses_a_direct_borrow : Bool :=
+    // `Borrow.of x` -- uses_of says 1, but the use is free.
+    I64.beq (borrow_aware_uses probe_borrows_of 0 (of_of t_var0)) 0
+        && I64.beq (uses_of 0 (of_of t_var0)) 1
+
+#[test]
+def test_borrow_aware_uses_counts_a_use_nested_in_a_borrow : Bool :=
+    // `Borrow.of (f x)` -- x is consumed to BUILD the borrowed value,
+    // so it still counts. Excusing it would hide a real double-use.
+    let f : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "f")) in
+    I64.beq (borrow_aware_uses probe_borrows_of 0 (of_of (Term.app f t_var0))) 1
+
+#[test]
+def test_borrow_aware_uses_counts_without_a_borrow_type : Bool :=
+    // No `Borrow` in scope, so a bare `of` head is an ordinary
+    // constructor call and the argument is a real use. Fail closed.
+    I64.beq (borrow_aware_uses str_map_empty 0 (of_of t_var0)) 1
+
+#[test]
+def test_the_branch_result_of_a_borrow_is_borrowed : Bool :=
+    // `Borrow.of (if c then x else x)` -- whichever arm runs IS the
+    // value being borrowed.
+    let inner : Term := Term.lit (Literal.if_ Term.hole t_var0 t_var0) in
+    I64.beq (borrow_aware_uses probe_borrows_of 0 (of_of inner)) 0
+
+#[test]
+def test_collect_records_borrowed_uses : Bool :=
+    // `f (Borrow.of x); g (Borrow.of x)` -- two uses, both borrows:
+    // count 2, borrowed 2, budget zero. The number the affine gate
+    // actually compares against.
+    let args : List (Option Term) :=
+        List.cons (Option.some (of_of t_var0)) (List.cons (Option.some (of_of t_var0)) List.empty) in
+    let t : Term := Term.lam dbg_x Term.hole (con_of args) in
+    match collect_binder_uses probe_ctors_with_of probe_borrows_of t {
+        List.cons u _rest =>
+            I64.beq (BinderUse.count u) 2
+                && I64.beq (BinderUse.borrowed u) 2
+                && I64.beq (BinderUse.owning u) 0,
+        List.empty => false,
+    }
+
+#[test]
+def test_collect_separates_a_borrow_from_a_real_use : Bool :=
+    // `f (Borrow.of x); P x` -- one borrow, one owning store. Borrowed
+    // 1 of 2 uses; budget 1, which is affine-legal.
+    let args : List (Option Term) :=
+        List.cons (Option.some (of_of t_var0)) (List.cons (Option.some t_var0) List.empty) in
+    let t : Term := Term.lam dbg_x Term.hole (con_of args) in
+    match collect_binder_uses probe_ctors_with_of probe_borrows_of t {
+        List.cons u _rest =>
+            I64.beq (BinderUse.count u) 2
+                && I64.beq (BinderUse.borrowed u) 1
+                && I64.beq (BinderUse.owning u) 1,
+        List.empty => false,
+    }
+
+#[test]
+def test_borrowed_is_branch_consistent : Bool :=
+    // One arm over-uses `x` for real (`x x`), the other only borrows
+    // it. The borrowed count must NOT offset the over-using arm:
+    // budget is max(2, 1-1) = 2, not max(2,1) - max(0,1) = 1. This is
+    // the difference-between-walks design earning its keep -- a
+    // separately per-branch-maxed borrowed count would let this
+    // binder through the affine gate.
+    let over : Term := Term.app (Term.var 0 dbg_x) (Term.var 0 dbg_x) in
+    let branches : Term := Term.lit (Literal.if_ Term.hole over (of_of t_var0)) in
+    let t : Term := Term.lam dbg_x Term.hole branches in
+    match collect_binder_uses probe_ctors_with_of probe_borrows_of t {
+        List.cons u _rest =>
+            I64.beq (BinderUse.count u) 2 && I64.beq (BinderUse.borrowed u) 0,
         List.empty => false,
     }

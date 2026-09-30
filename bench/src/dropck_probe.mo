@@ -20,7 +20,7 @@
 /// mote's #[test]s should not pay for a run-by-hand probe.
 use lang::module {ElaboratedModules, elaborate_loaded_modules}
 use lang::types {Decl, Def, Term}
-use lang::typecheck::usage {ctor_name_set}
+use lang::typecheck::usage {ctor_name_set, borrow_of_name_set}
 use lang::typecheck::dropck {DropInfo, collect_drop_info}
 use std::io {println}
 open IO {get_env, println}
@@ -60,13 +60,14 @@ def fold_infos (infos : List DropInfo) (acc : Stats) : Stats :=
     }
 
 #[partial]
-def walk_decls (ctors : HashMap String Bool) (ds : List Decl) (acc : Stats) : Stats :=
+def walk_decls (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ds : List Decl) (acc : Stats) : Stats :=
     match ds {
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Decl.def_d def_ => walk_decls ctors rest (fold_infos (collect_drop_info ctors (def_term def_)) acc),
-                _ => walk_decls ctors rest acc,
+                Decl.def_d def_ => walk_decls ctors borrows rest
+                    (fold_infos (collect_drop_info ctors borrows (def_term def_)) acc),
+                _ => walk_decls ctors borrows rest acc,
             },
     }
 
@@ -92,7 +93,8 @@ def probe_dropck_on_the_compiler_itself : IO Bool := do {
             Result.err e => do { println ("probe failed: " ++ e); return false },
             Result.ok em => do {
                 let ctors : HashMap String Bool := ctor_name_set em.scope;
-                let stats : Stats := walk_decls ctors em.elaborated_decls stats_empty;
+                let borrows : HashMap String Bool := borrow_of_name_set em.scope;
+                let stats : Stats := walk_decls ctors borrows em.elaborated_decls stats_empty;
                 let t1 : I64 <- Bench.now;
                 println ("dropck probe over lang/src/lib.mo's closure:");
                 println ("  binders        " ++ I64.to_string (Stats.binders stats));

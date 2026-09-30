@@ -107,9 +107,19 @@ pub def permits_sharing (m : Multiplicity) : Bool :=
 /// carries no multiplicity: annotations die at `pt_lam`
 /// (`lang/src/parser.mo`) and the corpus writes none. Every caller
 /// passes `Multiplicity.many` today.
+///
+/// The over-use gates compare the BORROW-AWARE budget `count -
+/// borrowed`, not the raw count: `f (Borrow.of x); g (Borrow.of x)`
+/// mentions `x` twice but consumes it zero times, and gating on the raw
+/// count there was the false positive B1 existed to remove. `borrowed`
+/// is computed per-branch consistently (`usage.mo`'s `BinderUse`
+/// doc comment says why a separately-maxed count would under-count),
+/// so the budget is exact across match arms too.
 pub def check_binder (scope : Scope) (declared : Multiplicity) (u : BinderUse) : Option TypeError :=
     let typ : Term := BinderUse.typ u in
     let uses : I64 := BinderUse.count u in
+    let borrowed : I64 := BinderUse.borrowed u in
+    let budget : I64 := uses - borrowed in
     let owning : I64 := BinderUse.owning u in
     let name : Identifier := BinderUse.name u in
     match effective_mult scope declared typ {
@@ -117,15 +127,17 @@ pub def check_binder (scope : Scope) (declared : Multiplicity) (u : BinderUse) :
         Multiplicity.many => Option.none,
         // Exactly once.
         Multiplicity.linear =>
-            if I64.beq uses 0 then Option.some (TypeError.linear_unused name typ)
-            else if I64.gt uses 1 then Option.some (over_use_error name typ uses owning)
+            if I64.beq budget 0 then Option.some (TypeError.linear_unused name typ)
+            else if I64.gt budget 1 then Option.some (over_use_error name typ budget owning)
             else Option.none,
         // At most once. Zero uses is fine -- weakening is admissible,
         // and that binder becomes a release at scope exit under M3.
         Multiplicity.affine =>
-            if I64.gt uses 1 then Option.some (over_use_error name typ uses owning)
+            if I64.gt budget 1 then Option.some (over_use_error name typ budget owning)
             else Option.none,
-        // Erased: must not appear in runtime position at all.
+        // Erased: must not appear in runtime position at all. A borrow
+        // still names the binder at run time, so this one counts RAW
+        // uses -- there is no budget to spend.
         Multiplicity.zero =>
             if I64.gt uses 0 then
                 Option.some (TypeError.custom
@@ -137,22 +149,25 @@ pub def check_binder (scope : Scope) (declared : Multiplicity) (u : BinderUse) :
 /// Split an over-use by whether a borrow could fix it. This is the
 /// distinction `usage.mo`'s `owning_uses` exists to draw: one owning
 /// use plus any number of reads is borrow-shaped; two owning uses is
-/// not.
-def over_use_error (name : Identifier) (typ : Term) (uses : I64) (owning : I64) : TypeError :=
+/// not. `budget` is the borrow-aware use count, so the diagnostic
+/// reports what the fix has to cover, not how often the name happens
+/// to appear.
+def over_use_error (name : Identifier) (typ : Term) (budget : I64) (owning : I64) : TypeError :=
     if I64.gt owning 1 then TypeError.value_used_after_move name typ owning
-    else TypeError.copy_required name typ uses
+    else TypeError.copy_required name typ budget
 
 // ─── Checking a definition ─────────────────────────────────────────
 
 /// Every affine diagnostic a def's body earns.
 ///
-/// Takes the constructor-name set rather than deriving it, because
-/// building one is a scan of every inductive in scope and a caller
-/// checking many defs must build it once. `ctor_name_set` is the
-/// builder.
+/// Takes the constructor-name set and the borrow-name set rather than
+/// deriving them, because building either is a scan of every inductive
+/// in scope and a caller checking many defs must build them once.
+/// `ctor_name_set`/`borrow_of_name_set` (`lang/typecheck/usage.mo`) are
+/// the builders.
 #[partial]
-pub def check_def (scope : Scope) (ctors : HashMap String Bool) (d : Def) : List TypeError :=
-    let raw : List BinderUse := collect_binder_uses ctors (def_body d) in
+pub def check_def (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (d : Def) : List TypeError :=
+    let raw : List BinderUse := collect_binder_uses ctors borrows (def_body d) in
     let attributed : List BinderUse := attribute_binder_types scope raw in
     List.reverse (check_binders_go scope attributed List.empty)
 
@@ -189,6 +204,12 @@ def a_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Term"))
 def binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
       count := uses, owning := owning, ctor := Identifier.id "", pos := 0 - 1 }
+
+/// A binder whose uses split between real and borrowed.
+def borrowable (uses : I64) (borrowed : I64) (owning : I64) : BinderUse :=
+    { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
+      count := uses, borrowed := borrowed, owning := owning,
+      ctor := Identifier.id "", pos := 0 - 1 }
 
 #[test]
 def test_unannotated_is_affine_not_many : Bool :=
@@ -294,3 +315,88 @@ def test_sharing_is_permitted_only_by_many : Bool :=
         && not (permits_sharing Multiplicity.affine)
         && not (permits_sharing Multiplicity.linear)
         && not (permits_sharing Multiplicity.zero)
+
+// ─── Tests: the borrow-aware budget ─────────────────────────────────
+
+/// `Borrow.of <arg>` as an elaborated application: head var `of`, the
+/// spelling `usage.mo`'s `head_is_borrow_of` checks first.
+def borrow_of (arg : Term) : Term :=
+    Term.app (Term.var (0 - 1) (DebugName.named (Identifier.id "of"))) arg
+
+/// The borrow set a scope where `Borrow` really is the sole inductive
+/// declaring `of` resolves to. Hand-built here; `borrow_of_name_set`
+/// end-to-end is `usage.mo`'s own test territory.
+def probe_borrows : HashMap String Bool :=
+    str_map_insert "of" true (str_map_insert "Borrow.of" true str_map_empty)
+
+#[test]
+def test_a_borrowed_use_does_not_spend_the_budget : Bool :=
+    // One real use, one borrow: `f (Borrow.of x); P x`. Budget 1, so
+    // no diagnostic where the raw count of 2 used to fire one.
+    match check_binder probe_scope Multiplicity.many (borrowable 2 1 0) {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_two_borrows_are_not_an_over_use : Bool :=
+    // `f (Borrow.of x); g (Borrow.of x)` — the exact case from the plan
+    // doc's B1 gap, exercised end-to-end through collection rather
+    // than a hand-built `BinderUse`: two uses, both direct borrow
+    // arguments, budget zero, clean pass.
+    let f : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "f")) in
+    let g : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "g")) in
+    let x : Term := Term.var 0 (DebugName.named (Identifier.id "x")) in
+    let body : Term := Term.app (Term.app f (borrow_of x)) (Term.app g (borrow_of x)) in
+    let lam : Term := Term.lam (DebugName.named (Identifier.id "x")) Term.hole body in
+    match collect_binder_uses str_map_empty probe_borrows lam {
+        List.cons u _rest =>
+            I64.beq (BinderUse.count u) 2
+                && I64.beq (BinderUse.borrowed u) 2
+                && (match check_binder probe_scope Multiplicity.many u {
+                        Option.none => true,
+                        Option.some _ => false,
+                    }),
+        List.empty => false,
+    }
+
+#[test]
+def test_a_borrow_does_not_hide_a_real_over_use : Bool :=
+    // `f (Borrow.of x); P x x` — one borrow, two real stores. The
+    // borrow buys nothing here; budget 2 is still an over-use, and one
+    // the diagnostic must not under-report.
+    match check_binder probe_scope Multiplicity.many (borrowable 3 1 2) {
+        Option.some e =>
+            match e {
+                TypeError.value_used_after_move _n _t owning => I64.beq owning 2,
+                _ => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_a_linear_binder_only_ever_borrowed_is_unused : Bool :=
+    // Linear means consumed EXACTLY once, and a borrow does not
+    // consume. Only ever borrowed is never consumed — the weakening
+    // affine allows is exactly what linear forbids.
+    match check_binder probe_scope Multiplicity.linear (borrowable 2 2 0) {
+        Option.some e =>
+            match e {
+                TypeError.linear_unused _n _t => true,
+                _ => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_a_borrow_still_cannot_name_an_erased_binder : Bool :=
+    // `Borrow.of x` still mentions `x` at run time, so the erased
+    // multiplicity counts RAW uses. There is no budget to spend.
+    match check_binder probe_scope Multiplicity.zero (borrowable 1 1 0) {
+        Option.some e =>
+            match e {
+                TypeError.custom _msg => true,
+                _ => false,
+            },
+        Option.none => false,
+    }

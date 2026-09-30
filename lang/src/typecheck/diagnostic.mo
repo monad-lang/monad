@@ -215,15 +215,15 @@ def test_plain_dotted_name_is_unchanged : Bool :=
 def test_type_error_message_copy_required : Bool :=
 	// The message must name the remedy, not just the count -- the
 	// whole point of splitting this from `value_used_after_move`.
-	let e : TypeError := TypeError.copy_required (Identifier.id "s") (Term.type_ 1) 3 in
+	let e : TypeError := TypeError.copy_required (Identifier.id "s") (Term.sort (SortLevel.concrete 1)) 3 in
 	String.contains (type_error_message e) "borrow it, or give its type a Copy instance"
 
 #[test]
 def test_type_error_message_value_used_after_move : Bool :=
-	let e : TypeError := TypeError.value_used_after_move (Identifier.id "t") (Term.type_ 1) 2 in
+	let e : TypeError := TypeError.value_used_after_move (Identifier.id "t") (Term.sort (SortLevel.concrete 1)) 2 in
 	String.contains (type_error_message e) "no borrow can fix this"
 
 #[test]
 def test_type_error_message_linear_unused : Bool :=
-	let e : TypeError := TypeError.linear_unused (Identifier.id "h") (Term.type_ 1) in
+	let e : TypeError := TypeError.linear_unused (Identifier.id "h") (Term.sort (SortLevel.concrete 1)) in
 	String.contains (type_error_message e) "never used"
