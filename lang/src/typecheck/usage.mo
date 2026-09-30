@@ -275,22 +275,33 @@ def ctor_names_from_inds (pairs : List (Pair String Inductive)) (acc : HashMap S
             match p {
                 Pair.pair _key ind =>
                     match ind {
-                        Inductive.mk _name _params _typ ctors _attrs _vis =>
-                            ctor_names_from_inds rest (ctor_names_from_ctors ctors acc),
+                        Inductive.mk name _params _typ ctors _attrs _vis =>
+                            ctor_names_from_inds rest (ctor_names_from_ctors (show_name_path name) ctors acc),
                     },
             },
     }
 
+/// Registers every spelling a real reference can render with: the ctor's
+/// own full path, its bare segment, and `<Inductive>.<ctor>` — the
+/// type-qualified form a dotted reference actually carries in an
+/// elaborated term (`Borrow.of`, `Pair.pair`). Registering the dotted
+/// spellings here is what lets `name_is_ctor` match EXACTLY (no
+/// last-segment fallback): `Path.of` — a def on std/path.mo's `Path`, not
+/// any inductive's ctor — then misses, instead of inheriting whatever
+/// unrelated type happens to declare a bare `of`.
 #[partial]
-def ctor_names_from_ctors (ctors : List InductConstructor) (acc : HashMap String Bool) : HashMap String Bool :=
+def ctor_names_from_ctors (ind_name : String) (ctors : List InductConstructor) (acc : HashMap String Bool) : HashMap String Bool :=
     match ctors {
         List.empty => acc,
         List.cons c rest =>
             match c {
                 InductConstructor.mk name _params _typ =>
                     let full : String := show_name_path name in
-                    let with_full : HashMap String Bool := str_map_insert full true acc in
-                    ctor_names_from_ctors rest (str_map_insert (last_dotted_segment full) true with_full),
+                    let bare : String := last_dotted_segment full in
+                    let with_full : HashMap String Bool :=
+                        str_map_insert (String.concat (String.concat ind_name ".") bare) true
+                            (str_map_insert full true acc) in
+                    ctor_names_from_ctors ind_name rest (str_map_insert bare true with_full),
             },
     }
 
@@ -317,8 +328,9 @@ def last_dotted_segment_go (s : String) (idx : I64) : String :=
         }
 
 /// Is this spine head a constructor, so its arguments are owning stores
-/// rather than call arguments? Checks the rendered `DebugName` and its
-/// last dotted segment against `ctors`.
+/// rather than call arguments? Checks the rendered `DebugName` against
+/// `ctors` exactly — the set holds the bare, full, and type-qualified
+/// spellings (`name_is_ctor`'s own doc comment says why exact).
 def head_is_ctor (ctors : HashMap String Bool) (t : Term) : Bool :=
     match t {
         Term.con _c => true,
@@ -330,27 +342,47 @@ def head_is_ctor (ctors : HashMap String Bool) (t : Term) : Bool :=
         _ => false,
     }
 
+/// Exact match against the ctor set, with NO last-dotted-segment
+/// fallback — the same discipline as `name_is_borrow` below. The set
+/// itself carries the dotted spellings a real qualified reference can
+/// render with (`Ind.ctor`, registered by `ctor_names_from_ctors` from
+/// the inductive's own name), so no fallback is needed to match those.
+/// Fail-open here classifies a non-constructor head as a store:
+/// `Path.of` (a def on `std/path.mo`'s `Path`) would strip to `of`,
+/// inherit `Borrow`'s bare `of`, and report a binder read once and
+/// handed to `Path.of` once as `value_used_after_move` — the one
+/// diagnostic that says a borrow cannot fix it, when a borrow is
+/// exactly the fix.
 def name_is_ctor (ctors : HashMap String Bool) (nm : String) : Bool :=
     match str_map_lookup nm ctors {
         Option.some _ => true,
-        Option.none =>
-            match str_map_lookup (last_dotted_segment nm) ctors {
-                Option.some _ => true,
-                Option.none => false,
-            },
+        Option.none => false,
+    }
+
+/// Exact match against the borrow set, with NO last-dotted-segment
+/// fallback. A dotted spelling the set does not hold verbatim is not a
+/// borrow: `Path.of` (a def on `std/path.mo`'s `Path`, not a constructor
+/// at all, so `borrow_of_name_set`'s sole-`of`-inductive guard never
+/// sees it) would strip to `of` and excuse a real over-use as a borrow
+/// read. Missing a real borrow costs one advisory `copy_required`, which
+/// is the cheap direction.
+def name_is_borrow (borrows : HashMap String Bool) (nm : String) : Bool :=
+    match str_map_lookup nm borrows {
+        Option.some _ => true,
+        Option.none => false,
     }
 
 /// Real identity for `Borrow.of` (`init/src/borrow.mo`, B1 of the borrow
 /// design), not a bare string
 /// match: `borrow_of_name_set` below resolves the ONE real `Borrow`
 /// inductive in scope, so a future type that also declares a bare `of`
-/// constructor is no longer misclassified as a borrow. Checked exactly
-/// like `head_is_ctor` above, against a set built once by the caller.
+/// constructor is no longer misclassified as a borrow. Matched exactly
+/// (see `name_is_borrow` above), against a set built once by the caller.
 def head_is_borrow_of (borrows : HashMap String Bool) (t : Term) : Bool :=
     match t {
         Term.var _idx dbg =>
             match dbg {
-                DebugName.named id => name_is_ctor borrows (show_identifier id),
+                DebugName.named id => name_is_borrow borrows (show_identifier id),
                 DebugName.unnamed => false,
             },
         _ => false,
@@ -1322,6 +1354,61 @@ def test_owning_an_unrelated_types_of_is_not_misclassified_as_borrow : Bool :=
     // scope here (`borrows` is empty). This must count as an ordinary
     // owning constructor store, not a free borrow read.
     I64.beq (owning_uses probe_ctors_with_of str_map_empty 0 (of_of t_var0)) 1
+
+/// `Path.of x` — a dotted `of` that is NOT Borrow's, as a DEF on
+/// another type (`std/path.mo`), so `borrow_of_name_set`'s sole-`of`
+/// guard cannot see it. Found for real in `cli/src/main.mo` (4 sites)
+/// by the Phase 3 corpus sweep: the last-dotted-segment fallback
+/// stripped `Path.of` to `of` and excused 4 real uses as borrow reads.
+def path_of_of (arg : Term) : Term :=
+    let head : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Path.of")) in
+    Term.app head arg
+
+#[test]
+def test_a_dotted_of_from_another_type_is_not_a_borrow : Bool :=
+    // The fail-open hole `name_is_borrow` closes: a dotted spelling the
+    // borrow set does not hold VERBATIM is not a borrow, even though
+    // its last dotted segment is `of`. `Path.of x` must count x.
+    name_is_borrow probe_borrows_of "of"
+        && name_is_borrow probe_borrows_of "Borrow.of"
+        && not (name_is_borrow probe_borrows_of "Path.of")
+        && I64.beq (borrow_aware_uses probe_borrows_of 0 (path_of_of t_var0)) 1
+        // Positive control in the same breath: the REAL bare spelling
+        // still excuses the use, so this test fails if the exact match
+        // ever over-corrects into missing genuine borrows.
+        && I64.beq (borrow_aware_uses probe_borrows_of 0 (of_of t_var0)) 0
+
+/// `Borrow.of <arg>` spelled type-qualified, the form a real dotted
+/// reference carries in an elaborated term — the spelling the ctor set
+/// must hold for `name_is_ctor`'s exact match to keep finding it.
+def borrow_of_dotted (arg : Term) : Term :=
+    let head : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Borrow.of")) in
+    Term.app head arg
+
+#[test]
+def test_a_dotted_of_from_another_type_is_not_a_ctor : Bool :=
+    // `name_is_ctor`'s own fail-open hole, closed the same way as the
+    // borrow one above: `Path.of` is a def on another type, so it must
+    // not inherit `Borrow`'s bare `of` — or a binder read once and
+    // handed to `Path.of` once reports `value_used_after_move`, the one
+    // diagnostic that says no borrow can fix it, when a borrow is
+    // exactly the fix.
+    //
+    // The set is built by the REAL `ctor_name_set` over a scope with a
+    // `Borrow` inductive, so the two positive assertions also pin the
+    // registration this fix relies on: bare `of` and type-qualified
+    // `Borrow.of` both present, `Path.of` absent.
+    let s : HashMap String Bool := ctor_name_set scope_with_borrow in
+    name_is_ctor s "of"
+        && name_is_ctor s "Borrow.of"
+        && not (name_is_ctor s "Path.of")
+        // End to end through the owning walk: `Path.of`'s argument is an
+        // ordinary call argument, not a constructor store.
+        && I64.beq (owning_uses s probe_borrows_of 0 (path_of_of t_var0)) 0
+        // Positive control: a REGISTERED dotted spelling still counts as
+        // a store, so exact matching has not over-corrected into missing
+        // the type-qualified references the registration exists for.
+        && I64.beq (owning_uses s str_map_empty 0 (borrow_of_dotted t_var0)) 1
 
 #[test]
 def test_owning_takes_max_across_branches : Bool :=
