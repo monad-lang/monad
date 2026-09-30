@@ -10,15 +10,16 @@
 /// A subcommand means rebuilding the self-hosted CLI — a bootstrap
 /// cycle — for a measurement that exists to decide whether the
 /// experiment is worth continuing at all. `bench/` is already the
-/// "`#[test]`-driven, run it by hand, not every commit" mote, and it is
-/// outside the pre-commit sweep (`devenv.nix` runs `test init std lang
-/// examples`), so a report that takes a minute over `lang/` gates
-/// nothing. Promote it to a subcommand if it earns one.
+/// "`#[test]`-driven, run it by hand, not every commit" mote — but
+/// `scripts/check-monad-tests.sh` sweeps it all the same, so the
+/// measurements below are gated behind `MONAD_AFFINE_REPORT` and
+/// early-return when it is unset: the sweep pays for the aggregation
+/// unit tests only. Promote it to a subcommand if it earns one.
 ///
-/// Run it with:
+/// Run the measurements with:
 ///
 /// ```text
-/// monad test bench/src/affine_report.mo
+/// MONAD_AFFINE_REPORT=1 monad test bench/src/affine_report.mo
 /// ```
 ///
 /// ## What the numbers mean
@@ -50,8 +51,11 @@
 /// is an **upper bound** on the real migration cost. It cannot flatter
 /// the design.
 use std::io {println}
-open IO {println}
-use lang::module {ElaboratedModules, elaborate_loaded_modules}
+open IO {get_env, println}
+use lang::module {
+  ElaboratedAndCache, ElaboratedModules, elaborate_loaded_modules, elaborate_loaded_modules_cached,
+  expand_check_paths, module_info_cache_empty,
+}
 use lang::types {Decl, Def, Scope, SortLevel, Term, TypeError, show_identifier}
 use lang::scope {scope_data_empty}
 use lang::typecheck::usage {
@@ -62,6 +66,25 @@ use lang::typecheck::affine {check_def}
 use lang::typecheck::diagnostic {type_error_message}
 use std::map {}
 use std::list {length}
+
+// ─── Run-by-hand gating ─────────────────────────────────────────────
+//
+// The measurements below elaborate whole dependency closures — minutes
+// each. The sweep runs every #[test] in this mote, so each heavy one
+// starts with this gate and returns true when MONAD_AFFINE_REPORT is
+// unset (the `std/ansi.mo` NO_COLOR pattern), leaving the sweep to pay
+// for the aggregation unit tests only.
+
+def env_flag_set (v : Option String) : Bool :=
+    match v {
+        some _ => true,
+        none => false
+    }
+
+def report_enabled : IO Bool := do {
+    let v <- get_env "MONAD_AFFINE_REPORT";
+    return (env_flag_set v)
+}
 
 // ─── Reading a binder's type ───────────────────────────────────────
 
@@ -518,20 +541,24 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
 /// the target file's own decls, which is what makes one invocation over
 /// `lang/src/lib.mo` a corpus-wide measurement.
 def report_on (path : String) : IO Bool := do {
-    let r : Result String ElaboratedModules <- elaborate_loaded_modules path false false;
-    match r {
-        Result.err e => do {
-            println ("affine report: could not elaborate " ++ path ++ ": " ++ e);
-            return false
-        },
-        Result.ok em => do {
-            // Built once per run: a per-node scope lookup would be a
-            // full scan of the inductives map at every one of the
-            // corpus's 44,609 application nodes.
-            let ctors : HashMap String Bool := ctor_name_set em.scope;
-            let borrows : HashMap String Bool := borrow_of_name_set em.scope;
-            let totals : Totals := tally_decls ctors borrows em.scope em.elaborated_decls totals_empty;
-            print_totals path totals
+    let on <- report_enabled;
+    if Bool.not on then return true
+    else do {
+        let r : Result String ElaboratedModules <- elaborate_loaded_modules path false false;
+        match r {
+            Result.err e => do {
+                println ("affine report: could not elaborate " ++ path ++ ": " ++ e);
+                return false
+            },
+            Result.ok em => do {
+                // Built once per run: a per-node scope lookup would be a
+                // full scan of the inductives map at every one of the
+                // corpus's 44,609 application nodes.
+                let ctors : HashMap String Bool := ctor_name_set em.scope;
+                let borrows : HashMap String Bool := borrow_of_name_set em.scope;
+                let totals : Totals := tally_decls ctors borrows em.scope em.elaborated_decls totals_empty;
+                print_totals path totals
+            }
         }
     }
 }
@@ -550,6 +577,211 @@ def report_affine_usage_lang : IO Bool := report_on "lang/src/typecheck/traverse
 /// `Copy` moved into `init`, and for the shortcut that did not work.
 #[test]
 def report_affine_usage_compiler : IO Bool := report_on "bench/src/affine_target.mo"
+
+// ─── Corpus-wide sweep ─────────────────────────────────────────────
+//
+// The reports above measure CLOSURES: elaborate one entry file, tally
+// every decl the elaboration produced. That was the right shape while
+// `lang` was the only mote being measured, but Phase 3 of the
+// enforcement plan asks for every mote `scripts/check-monad-tests.sh`
+// grades, and closure reports cannot be summed: every mote's closure
+// re-includes `init`/`std`/`lang`, so summing counts each shared module
+// once per mote that depends on it. De-duping summed decls by NAME is
+// also wrong, for a reason worth spelling out: names are NOT unique
+// across modules. Every examples file has its own `main`, test names
+// collide freely across files, and a name-keyed merge would silently
+// merge those and under-count.
+//
+// So the sweep measures FILES instead. Elaborate every corpus file and
+// tally only its OWN decls (`ElaboratedModules.target_decls`): each
+// file is the target of exactly one elaboration, so the corpus total
+// counts every decl exactly once — de-dup by construction, no
+// (module_id, name) key needed. This also COVERS MORE than any
+// closure report can: files no lib.mo re-exports (`lang`'s own
+// typecheck/parser modules are not in `lang/src/lib.mo`'s closure, for
+// one) still get measured, because they are the target of their own
+// elaboration.
+//
+// Cost is bounded by `ModuleInfoCache`: one `elaborate_loaded_modules_
+// cached` per file threads the cache to the next, so each module is
+// parsed once per sweep rather than once per importer.
+
+/// The sweep set — `scripts/check-monad-tests.sh`'s `corpus_dirs`
+/// (line 458), the same eleven directories CI grades.
+def corpus_dirs : List String :=
+    ["init", "std", "examples", "lang", "cli", "llvm", "runtime", "motes",
+     "slow_tests", "bench", "proofs"]
+
+/// One corpus directory's measured totals, accumulated across the
+/// files expand_check_paths found under it.
+pub struct MoteTotal {
+    label : String,
+    files : I64,
+    totals : Totals,
+}
+
+/// The threaded state of the whole sweep: the elaboration cache, the
+/// combined (all-corpus) totals, the per-directory blocks pushed in
+/// sweep order, and the in-progress directory block.
+pub struct Sweep {
+    cache : ModuleInfoCache,
+    grand : Totals,
+    motes : List MoteTotal,
+    label : String,
+    dir : Totals,
+    dir_files : I64,
+    failed : List String,
+}
+
+pub def Sweep.cache (s : Sweep) : ModuleInfoCache := s.cache
+
+pub def Sweep.grand (s : Sweep) : Totals := s.grand
+
+pub def Sweep.motes (s : Sweep) : List MoteTotal := s.motes
+
+pub def Sweep.label (s : Sweep) : String := s.label
+
+pub def Sweep.dir (s : Sweep) : Totals := s.dir
+
+pub def Sweep.dir_files (s : Sweep) : I64 := s.dir_files
+
+pub def Sweep.failed (s : Sweep) : List String := s.failed
+
+pub def MoteTotal.label (m : MoteTotal) : String := m.label
+
+pub def MoteTotal.files (m : MoteTotal) : I64 := m.files
+
+pub def MoteTotal.totals (m : MoteTotal) : Totals := m.totals
+
+def sweep_empty : Sweep :=
+    { cache := module_info_cache_empty, grand := totals_empty, motes := List.empty,
+      label := "", dir := totals_empty, dir_files := 0, failed := List.empty }
+
+/// The sweep's own file, skipped: this test runs INSIDE
+/// affine_report.mo, and elaborating the very module whose test is
+/// executing hands the registry a second copy of it. Every other
+/// re-elaboration is fine — the closure reports above already
+/// re-elaborate `lang` while the harness holds its own copy — but the
+/// self case is untested and buys nothing: this file's own #[test]s
+/// contribute no corpus binders worth counting.
+#[partial]
+def sweep_file (f : String) (st : Sweep) : IO Sweep := do {
+    if String.beq f "bench/src/affine_report.mo" then do { return st }
+    else do { sweep_target f st }
+}
+
+/// The non-self case, hoisted out of the `else` arm: a `match` nested
+/// inside an `if` arm inside a do-block trips the nested-match parse
+/// trap, so each arm of the decision lives in its own def.
+#[partial]
+def sweep_target (f : String) (st : Sweep) : IO Sweep := do {
+    let r : ElaboratedAndCache <- elaborate_loaded_modules_cached f false (Sweep.cache st) false;
+    match r.elaborated {
+        Result.err e => do {
+            println ("  could not elaborate " ++ f ++ ": " ++ e);
+            let out : Sweep := { st with cache := r.cache, failed := List.cons f (Sweep.failed st) };
+            return out
+        },
+        Result.ok em => do {
+            // Per-file, not per-run: each elaboration's scope is
+            // that file's own view of the corpus.
+            let ctors : HashMap String Bool := ctor_name_set em.scope;
+            let borrows : HashMap String Bool := borrow_of_name_set em.scope;
+            let dir : Totals := tally_decls ctors borrows em.scope em.target_decls (Sweep.dir st);
+            let grand : Totals := tally_decls ctors borrows em.scope em.target_decls (Sweep.grand st);
+            let out : Sweep :=
+                { st with cache := r.cache, dir := dir, grand := grand,
+                  dir_files := Sweep.dir_files st + 1 };
+            return out
+        },
+    }
+}
+
+#[partial]
+def sweep_files (files : List String) (st : Sweep) : IO Sweep := do {
+    match files {
+        List.empty => do { return st },
+        List.cons f rest => do {
+            let walked : Sweep <- sweep_file f st;
+            sweep_files rest walked
+        },
+    }
+}
+
+#[partial]
+def sweep_dir (d : String) (st : Sweep) : IO Sweep := do {
+    // Annotated local, not a bare literal argument: `expand_check_paths
+    // [d]` is exactly the argument-position literal that miscompiles.
+    let one : List String := [d];
+    let files : List String <- expand_check_paths one;
+    let started : Sweep := { st with label := d, dir := totals_empty, dir_files := 0 };
+    let finished : Sweep <- sweep_files files started;
+    let mt : MoteTotal := { label := d, files := Sweep.dir_files finished, totals := Sweep.dir finished };
+    let out : Sweep := { finished with motes := List.cons mt (Sweep.motes finished) };
+    return out
+}
+
+#[partial]
+def sweep_dirs (dirs : List String) (st : Sweep) : IO Sweep := do {
+    match dirs {
+        List.empty => do { return st },
+        List.cons d rest => do {
+            let walked : Sweep <- sweep_dir d st;
+            sweep_dirs rest walked
+        },
+    }
+}
+
+/// One compact line per corpus directory — the full per-type breakdown
+/// prints only for the combined total.
+def print_mote_line (m : MoteTotal) : IO Unit := do {
+    let t : Totals := MoteTotal.totals m;
+    println ("  " ++ MoteTotal.label m
+        ++ "  " ++ I64.to_string (MoteTotal.files m) ++ " files"
+        ++ ", binders " ++ I64.to_string (Totals.binders t)
+        ++ ", copy_required " ++ I64.to_string (Totals.diag_copy_required t)
+        ++ ", value_used_after_move " ++ I64.to_string (Totals.diag_used_after_move t)
+        ++ ", linear_unused " ++ I64.to_string (Totals.diag_linear_unused t)
+        ++ ", borrowed " ++ I64.to_string (Totals.borrowed_uses t));
+}
+
+#[partial]
+def print_mote_lines (ms : List MoteTotal) : IO Unit := do {
+    match ms {
+        List.empty => do { return Unit.unit },
+        List.cons m rest => do {
+            let _u : Unit <- print_mote_line m;
+            print_mote_lines rest
+        },
+    }
+}
+
+/// The Phase 3 re-baseline: every `.mo` file under CI's `corpus_dirs`,
+/// each counted exactly once (see the section header for why per-file
+/// `target_decls` and not summed closures). Fails if any corpus file
+/// fails to elaborate — the sweep script itself would be failing on the
+/// same file, so hiding it here would only misreport the corpus as
+/// cleaner than it is.
+#[test]
+def report_affine_usage_corpus : IO Bool := do {
+    let on <- report_enabled;
+    if Bool.not on then return true
+    else do {
+        let st : Sweep <- sweep_dirs corpus_dirs sweep_empty;
+        println "";
+        println "affine corpus sweep (per-file target_decls, de-duped by construction):";
+        let _shown : Unit <- print_mote_lines (List.reverse (Sweep.motes st));
+        let _grand : Bool <- print_totals "corpus (all corpus_dirs)" (Sweep.grand st);
+        match Sweep.failed st {
+            List.empty => do { return true },
+            List.cons f rest => do {
+                println ("  SWEEP FAILED to elaborate: " ++ f);
+                let _rest : List String := rest;
+                return false
+            },
+        }
+    }
+}
 
 // ─── Tests for the aggregation itself ──────────────────────────────
 
