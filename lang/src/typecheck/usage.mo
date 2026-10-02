@@ -58,7 +58,7 @@ use lib::scope {
 }
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {}
-use std::list {length}
+use std::list {List.length}
 
 // ─── Use counting ──────────────────────────────────────────────────
 

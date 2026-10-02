@@ -22,11 +22,11 @@ use lang::module {ElaboratedModules, elaborate_loaded_modules}
 use lang::types {Decl, Def, Term}
 use lang::typecheck::usage {ctor_name_set, borrow_of_name_set}
 use lang::typecheck::dropck {DropInfo, collect_drop_info}
-use std::io {println}
+use std::io {IO.println}
 open IO {get_env, println}
-use std::map {}
-use std::bench {now}
-use std::list {length}
+use std::map {HashMap}
+use std::bench {Bench.now}
+use std::list {List.length}
 
 def def_term (d : Def) : Term := d.term
 

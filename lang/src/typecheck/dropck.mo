@@ -72,7 +72,7 @@ use lib::types {Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, Na
 use lib::typecheck::usage {owning_at}
 use llvm::strmap {str_map_empty}
 use std::map {}
-use std::list {length}
+use std::list {List.length}
 
 // ─── Per-leaf drop decision ────────────────────────────────────────
 

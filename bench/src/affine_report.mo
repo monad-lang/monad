@@ -50,22 +50,26 @@
 /// here as non-Copy. So the "needs Copy, a borrow, or a rewrite" figure
 /// is an **upper bound** on the real migration cost. It cannot flatter
 /// the design.
-use std::io {println}
+use std::io {IO.println}
 open IO {get_env, println}
 use lang::module {
-  ElaboratedAndCache, ElaboratedModules, elaborate_loaded_modules, elaborate_loaded_modules_cached,
-  expand_check_paths, module_info_cache_empty,
+  ElaboratedAndCache, ElaboratedModules, ModuleInfoCache, elaborate_loaded_modules,
+  elaborate_loaded_modules_cached, expand_check_paths, module_info_cache_empty,
 }
-use lang::types {Decl, Def, Scope, SortLevel, Term, TypeError, show_identifier}
+use lang::types {
+  DebugName, Decl, Def, Identifier, ModulePath, Scope, SortLevel, Term,
+  TypeError, binder_is_explicit, show_identifier,
+}
 use lang::scope {scope_data_empty}
 use lang::typecheck::usage {
-  BinderUse, attribute_binder_types, borrow_of_name_set, collect_binder_uses, ctor_name_set,
+  BinderKind, BinderUse, attribute_binder_types, borrow_of_name_set, collect_binder_uses,
+  ctor_name_set,
 }
-use lang::typecheck::copy_class {copy_verdict}
+use lang::typecheck::copy_class {CopyVerdict, copy_verdict}
 use lang::typecheck::affine {check_def}
 use lang::typecheck::diagnostic {type_error_message}
-use std::map {}
-use std::list {length}
+use std::map {HashMap}
+use std::list {List.length}
 
 // ─── Run-by-hand gating ─────────────────────────────────────────────
 //
@@ -127,9 +131,11 @@ def type_head_name (t : Term) : String :=
         // binders, whose type lives on the matched constructor and needs
         // a `Scope` `usage.mo` deliberately does not take.
         Term.hole => "?",
-        Term.pi _arg _ret => "->",
-        Term.forall _dbg _kind body => type_head_name body,
-        Term.lam _dbg _typ body => type_head_name body,
+        // An explicit-binder `pi` is a function type; a non-explicit one
+        // (the former `forall`) binds, so its body's head is the name.
+        Term.pi b _arg ret =>
+            if binder_is_explicit b then "->" else type_head_name ret,
+        Term.lam _b _typ body => type_head_name body,
         Term.lit _v => "?",
         Term.quote_ _inner => "?",
         Term.var_macro _idx _dbg => "?",
@@ -607,10 +613,11 @@ def report_affine_usage_compiler : IO Bool := report_on "bench/src/affine_target
 // parsed once per sweep rather than once per importer.
 
 /// The sweep set — `scripts/check-monad-tests.sh`'s `corpus_dirs`
-/// (line 458), the same eleven directories CI grades.
+/// (line 504), the same twelve directories CI grades (`build` joined
+/// with the new build system).
 def corpus_dirs : List String :=
-    ["init", "std", "examples", "lang", "cli", "llvm", "runtime", "motes",
-     "slow_tests", "bench", "proofs"]
+    ["init", "std", "examples", "lang", "cli", "llvm", "runtime", "build",
+     "motes", "slow_tests", "bench", "proofs"]
 
 /// One corpus directory's measured totals, accumulated across the
 /// files expand_check_paths found under it.
@@ -811,7 +818,8 @@ def test_type_head_name_reports_unknown_as_question : Bool :=
 def probe_scope : Scope :=
     { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
       scope := scope_data_empty,
-      parent := Option.none }
+      parent := Option.none,
+      incomplete_match_ok := false }
 
 #[test]
 def test_empty_scope_grants_no_copy : Bool :=

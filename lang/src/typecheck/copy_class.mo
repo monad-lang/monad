@@ -48,10 +48,10 @@
 /// collisions are endemic here — `lang/src/typecheck/usage.mo`'s own
 /// attribution had to fail closed on exactly this — and a wrong pick in
 /// *this* predicate frees memory that is still live.
-use lib::types {Identifier, Instance, NamePath, Scope, Term}
+use lib::types {Identifier, Instance, NamePath, Scope, Term, term_peel}
 use lib::scope {
   instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
-  scope_globals, scope_instance_candidates, term_is_wildcard, term_peel,
+  scope_globals, scope_instance_candidates, term_is_wildcard,
 }
 
 /// The gate's verdict. Three outcomes, not two, because "I could not
