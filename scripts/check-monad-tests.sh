@@ -749,6 +749,32 @@ if [ "$sweep_fails" != 0 ]; then
   self_hosted_rc=1
 fi
 
+# Per-mote affine gate (Phase 6 of the affine-by-default experiment):
+# `--affine` promotes a mote's M2 diagnostics (copy_required /
+# value_used_after_move / linear_unused) from advisory to hard errors, so a
+# mote joins this list only once its violation count has reached zero --
+# measured, not guessed, via the bench/src/affine_report.mo corpus sweep and
+# the per-file probe in bench/src/affine_probe.mo. `monad check --affine`
+# disables the check cache (an affine result must never be replayed as an
+# ordinary one and vice versa -- cli/src/main.mo:1106), so each entry here is
+# a full elaboration of that mote's files; keep the list to motes that are
+# cheap for that reason. A mote with a nonzero count stays warn-only, which
+# here means absent: nothing outside this list runs with --affine.
+# Like the sweep above, a red gate folds into `self_hosted_rc` rather than
+# aborting -- one red run reports everything it can -- and the offending
+# mote's own diagnostics are printed so the failure names its binders.
+affine_promoted_motes=(proofs runtime)
+for m in "${affine_promoted_motes[@]}"; do
+  affine_log="$shard_dir/affine-$m.log"
+  if "$monad" check --affine "$m" > "$affine_log" 2>&1; then
+    echo "affine gate: $m -- 0 violations"
+  else
+    echo "affine gate: $m FAILED -- M2 diagnostics are hard errors for this mote:" >&2
+    cat "$affine_log" >&2
+    self_hosted_rc=1
+  fi
+done
+
 # The corpus-wide self-hosted `check` phase used to run HERE, over the same
 # shard lists the sweep above uses, and it was deleted because it was the
 # sweep's own per-file gate repeated call for call:
