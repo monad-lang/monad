@@ -68,10 +68,10 @@
 /// time comes. Recorded here so it is a known, deliberate deferral
 /// rather than a surprise the next person to touch this file has to
 /// rediscover.
-use lib::types {Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, NamePath, Native, StructLitField, Term}
-use lib::typecheck::usage {owning_at}
+use lib::types {Binder, Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, NamePath, Native, StructLitField, Term, binder_explicit, binder_is_explicit, binder_name}
+use lib::typecheck::usage {UsePos, owning_at}
 use llvm::strmap {str_map_empty}
-use std::map {}
+use std::map {HashMap}
 use std::list {List.length}
 
 // ─── Per-leaf drop decision ────────────────────────────────────────
@@ -210,15 +210,18 @@ def collect_drop_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
     match t {
         Term.var _idx _dbg => acc,
         Term.var_macro _idx _dbg => acc,
-        Term.lam dbg _typ body =>
-            let d : DropInfo := { name := binder_name dbg, leaves := drop_leaves ctors borrows 0 body } in
+        Term.lam b _typ body =>
+            let d : DropInfo := { name := binder_ident b, leaves := drop_leaves ctors borrows 0 body } in
             collect_drop_term ctors borrows body (List.cons d acc),
-        // A `forall` binds a compile-time type variable -- erased
-        // before run time, never a runtime owner, so it is walked
-        // through for nested binders but reports nothing of its own,
-        // mirroring `usage.mo`'s `collect_uses_term` exactly.
-        Term.forall _dbg _kind body => collect_drop_term ctors borrows body acc,
-        Term.pi _arg _ret => acc,
+        // A non-explicit `pi` (the former `forall`) binds a compile-time
+        // type variable -- erased before run time, never a runtime
+        // owner, so it is walked through for nested binders but reports
+        // nothing of its own, mirroring `usage.mo`'s `collect_uses_term`
+        // exactly. An explicit `pi` is entirely a type position.
+        Term.pi b _arg ret =>
+            if Bool.not (binder_is_explicit b)
+            then collect_drop_term ctors borrows ret acc
+            else acc,
         Term.app callee arg => collect_drop_term ctors borrows arg (collect_drop_term ctors borrows callee acc),
         Term.lit value => collect_drop_literal ctors borrows value acc,
         Term.ntv n => collect_drop_native ctors borrows n acc,
@@ -305,11 +308,11 @@ def collect_drop_opt_args (ctors : HashMap String Bool) (borrows : HashMap Strin
             },
     }
 
-/// `DebugName` -> a printable identifier, matching `usage.mo`'s own
-/// `binder_name` (not imported — a four-line helper isn't worth
+/// `Binder` -> a printable identifier, matching `usage.mo`'s own
+/// `binder_ident` (not imported — a four-line helper isn't worth
 /// coupling this module to that one's internals for).
-def binder_name (dbg : DebugName) : Identifier :=
-    match dbg {
+def binder_ident (b : Binder) : Identifier :=
+    match binder_name b {
         DebugName.named id => id,
         DebugName.unnamed => Identifier.id "_",
     }
@@ -324,6 +327,10 @@ def binder_name (dbg : DebugName) : Identifier :=
 def empty_ctors : HashMap String Bool := str_map_empty
 
 def dbg_x : DebugName := DebugName.named (Identifier.id "x")
+
+/// The `Binder` this file's tests build `Term.lam`s out of (pre-R2b the
+/// constructor took the `DebugName` directly).
+def b_x : Binder := binder_explicit dbg_x
 
 def t_var0 : Term := Term.var 0 dbg_x
 
@@ -427,8 +434,8 @@ def test_collect_drop_info_finds_every_binder : Bool :=
     // used: always_drop. The outer one (x) is the final return value:
     // never_drop.
     let inner_body : Term := Term.var 1 dbg_x in
-    let inner : Term := Term.lam dbg_x Term.hole inner_body in
-    let t : Term := Term.lam dbg_x Term.hole inner in
+    let inner : Term := Term.lam b_x Term.hole inner_body in
+    let t : Term := Term.lam b_x Term.hole inner in
     let infos : List DropInfo := collect_drop_info empty_ctors str_map_empty t in
     match infos {
         List.cons outer rest =>

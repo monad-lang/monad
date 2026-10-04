@@ -60,11 +60,12 @@
 /// `TypeError.custom`: it is real but has no corpus instances at all
 /// (the whole corpus carries zero multiplicity annotations), so it does
 /// not earn a fourth variant yet.
-use lib::types {Def, Identifier, Multiplicity, Scope, Term, TypeError, show_identifier}
+use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeError, binder_named, show_identifier}
 use lib::scope {scope_data_empty}
-use lib::typecheck::usage {BinderUse, attribute_binder_types, collect_binder_uses}
+use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses}
 use lib::typecheck::copy_class {is_copy}
-use std::map {}
+use std::map {HashMap}
+use llvm::strmap {str_map_empty, str_map_insert}
 
 // ─── The rule ──────────────────────────────────────────────────────
 
@@ -196,7 +197,8 @@ def check_binders_go (scope : Scope) (us : List BinderUse) (acc : List TypeError
 def probe_scope : Scope :=
     { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
       scope := scope_data_empty,
-      parent := Option.none }
+      parent := Option.none,
+      incomplete_match_ok := false }
 
 def a_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Term"))
 
@@ -348,7 +350,7 @@ def test_two_borrows_are_not_an_over_use : Bool :=
     let g : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "g")) in
     let x : Term := Term.var 0 (DebugName.named (Identifier.id "x")) in
     let body : Term := Term.app (Term.app f (borrow_of x)) (Term.app g (borrow_of x)) in
-    let lam : Term := Term.lam (DebugName.named (Identifier.id "x")) Term.hole body in
+    let lam : Term := Term.lam (binder_named (Identifier.id "x")) Term.hole body in
     match collect_binder_uses str_map_empty probe_borrows lam {
         List.cons u _rest =>
             I64.beq (BinderUse.count u) 2

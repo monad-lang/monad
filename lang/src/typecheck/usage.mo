@@ -16,10 +16,9 @@
 ///    uses it once. Summing them would report every well-formed
 ///    two-armed match as a double use and make the whole measurement
 ///    meaningless.
-/// 2. **Type positions count 0.** A `Term.pi`'s argument, a
-///    `Term.forall`'s kind and a `Term.lam`'s own annotation are
-///    compile-time positions. A variable mentioned there is erased
-///    before run time and consumes nothing.
+/// 2. **Type positions count 0.** A `Term.pi`'s argument and a
+///    `Term.lam`'s own annotation are compile-time positions. A variable
+///    mentioned there is erased before run time and consumes nothing.
 /// 3. **Binder depth must match the tree.** Crossing `lam`/`forall`/`pi`
 ///    adds one to the body; a `MatchCase` adds `List.length args`. Both
 ///    conventions are spelled out and tested in
@@ -48,16 +47,17 @@
 /// 3 (drop points), and it is noted here because this module is where
 /// someone will look for it first.
 use lib::types {
-  Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive, Literal,
-  Location, MatchCase, NamePath, Native, Param, Scope, ScopeData, StructLitField, Term,
-  Visibility, show_name_path,
+  Binder, Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive, Literal,
+  Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope, ScopeData,
+  SortLevel, StructLitField, Term, Visibility, binder_anon, binder_binder, binder_explicit,
+  binder_is_explicit, binder_name, show_identifier, show_name_path,
 }
 use lib::scope {
   find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
   scope_globals,
 }
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use std::map {}
+use std::map {HashMap}
 use std::list {List.length}
 
 // ─── Use counting ──────────────────────────────────────────────────
@@ -84,11 +84,15 @@ def uses_of (target : I64) (t : Term) : I64 :=
         Term.var_macro _idx _dbg => 0,
         // The annotation is a type position (rule 2); only the body is
         // run-time, and it sits one binder deeper (rule 3).
-        Term.lam _dbg _typ body => uses_of (target + 1) body,
-        Term.forall _dbg _kind body => uses_of (target + 1) body,
-        // A `pi` is a function TYPE, entirely compile-time. Both halves
-        // are type positions, so the whole node contributes nothing.
-        Term.pi _arg _ret => 0,
+        Term.lam _b _typ body => uses_of (target + 1) body,
+        // An implicit-binder `pi` (the former `forall`) still binds a
+        // variable its body may mention at run time (macro/level
+        // machinery aside, the body of a `binder`-info pi is walked like
+        // the old forall's body was). An explicit-binder `pi` is a
+        // function TYPE, entirely compile-time: both halves are type
+        // positions, so the whole node contributes nothing.
+        Term.pi b _arg ret =>
+            if Bool.not (binder_is_explicit b) then uses_of (target + 1) ret else 0,
         Term.app callee arg => uses_of target callee + uses_of target arg,
         Term.lit value => uses_of_literal target value,
         Term.ntv n => uses_of_native target n,
@@ -459,9 +463,13 @@ def borrow_aware_at (borrows : HashMap String Bool) (borrowed_here : Bool) (targ
         Term.var_macro _idx _dbg => 0,
         // A lambda body is a closure the borrow may wrap but does not
         // enter: occurrences inside are captured, which is a real use.
-        Term.lam _dbg _typ body => borrow_aware_at borrows false (target + 1) body,
-        Term.forall _dbg _kind body => borrow_aware_at borrows false (target + 1) body,
-        Term.pi _arg _ret => 0,
+        Term.lam _b _typ body => borrow_aware_at borrows false (target + 1) body,
+        // Non-explicit `pi` (the former `forall`) still binds; explicit
+        // `pi` is a compile-time function type and contributes nothing.
+        Term.pi b _arg ret =>
+            if Bool.not (binder_is_explicit b)
+            then borrow_aware_at borrows false (target + 1) ret
+            else 0,
         Term.app callee arg =>
             let head : Term := app_spine_head callee in
             borrow_aware_at borrows false target callee
@@ -556,9 +564,13 @@ def owning_at (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx
         Term.var_macro _idx _dbg => 0,
         // A binder resets the position: its body is the value the
         // closure produces, not whatever slot the closure itself fills.
-        Term.lam _dbg _typ body => owning_at ctors borrows UsePos.up_value (target + 1) body,
-        Term.forall _dbg _kind body => owning_at ctors borrows UsePos.up_value (target + 1) body,
-        Term.pi _arg _ret => 0,
+        Term.lam _b _typ body => owning_at ctors borrows UsePos.up_value (target + 1) body,
+        // Non-explicit `pi` (the former `forall`) still binds; explicit
+        // `pi` is a compile-time function type and contributes nothing.
+        Term.pi b _arg ret =>
+            if Bool.not (binder_is_explicit b)
+            then owning_at ctors borrows UsePos.up_value (target + 1) ret
+            else 0,
         Term.app callee arg =>
             let head : Term := app_spine_head callee in
             let arg_pos : UsePos :=
@@ -730,10 +742,10 @@ pub def BinderUse.owning (u : BinderUse) : I64 := u.owning
 
 pub def BinderUse.borrowed (u : BinderUse) : I64 := u.borrowed
 
-/// `DebugName` -> a printable identifier. An unnamed binder reports as
+/// `Binder` -> a printable identifier. An unnamed binder reports as
 /// `_`, matching how the corpus already spells a binder nobody reads.
-def binder_name (dbg : DebugName) : Identifier :=
-    match dbg {
+def binder_ident (b : Binder) : Identifier :=
+    match binder_name b {
         DebugName.named id => id,
         DebugName.unnamed => Identifier.id "_",
     }
@@ -760,10 +772,10 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
     match t {
         Term.var _idx _dbg => acc,
         Term.var_macro _idx _dbg => acc,
-        Term.lam dbg typ body =>
+        Term.lam b typ body =>
             let raw : I64 := uses_of 0 body in
             let u : BinderUse :=
-                { name := binder_name dbg,
+                { name := binder_ident b,
                   kind := BinderKind.bk_lam,
                   typ := typ,
                   count := raw,
@@ -772,13 +784,16 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
                   ctor := Identifier.id "",
                   pos := 0 - 1 } in
             collect_uses_term ctors borrows body (List.cons u acc),
-        // A `forall` binds a TYPE variable. It is erased before run time,
-        // so it is not a runtime binder and never owns memory -- walk
-        // through it for the binders nested inside, but do not report it.
-        Term.forall _dbg _kind body => collect_uses_term ctors borrows body acc,
-        // Entirely a type position (rule 2). Any `lam` nested inside a
-        // type is likewise compile-time and reports nothing.
-        Term.pi _arg _ret => acc,
+        // A non-explicit `pi` (the former `forall`) binds a TYPE variable.
+        // It is erased before run time, so it is not a runtime binder and
+        // never owns memory -- walk through it for the binders nested
+        // inside, but do not report it. An explicit `pi` is entirely a
+        // type position (rule 2): any `lam` nested inside a type is
+        // likewise compile-time and reports nothing.
+        Term.pi b _arg ret =>
+            if Bool.not (binder_is_explicit b)
+            then collect_uses_term ctors borrows ret acc
+            else acc,
         Term.app callee arg => collect_uses_term ctors borrows arg (collect_uses_term ctors borrows callee acc),
         Term.lit value => collect_uses_literal ctors borrows value acc,
         Term.ntv n => collect_uses_native ctors borrows n acc,
@@ -982,6 +997,10 @@ def nth_param_type (params : List Param) (n : I64) : Option Term :=
 
 def dbg_x : DebugName := DebugName.named (Identifier.id "x")
 
+/// The `Binder` the tests build `Term.lam`s out of. Pre-R2b `Term.lam`
+/// took the `DebugName` directly; now it takes a `Binder`.
+def b_x : Binder := binder_explicit dbg_x
+
 /// The constructor set the tests below resolve against: just `P`, the
 /// one constructor they build terms out of. Real runs get this from
 /// `ctor_name_set`.
@@ -1046,20 +1065,20 @@ def test_uses_of_shifts_past_match_arm_binders : Bool :=
 def test_uses_of_shifts_past_lambda : Bool :=
     // `fn _ => var 1` -- one binder crossed, so index 1 inside is index
     // 0 outside.
-    let t : Term := Term.lam DebugName.unnamed Term.hole (Term.var 1 dbg_x) in
+    let t : Term := Term.lam binder_anon Term.hole (Term.var 1 dbg_x) in
     I64.beq (uses_of 0 t) 1
 
 #[test]
 def test_uses_of_ignores_lambda_annotation : Bool :=
     // The annotation mentions the binder, the body does not. A type
     // position consumes nothing. Rule 2.
-    let t : Term := Term.lam DebugName.unnamed t_var0 Term.hole in
+    let t : Term := Term.lam binder_anon t_var0 Term.hole in
     I64.beq (uses_of 0 t) 0
 
 #[test]
 def test_uses_of_ignores_pi_entirely : Bool :=
     // A function type is compile-time on both sides. Rule 2.
-    let t : Term := Term.pi t_var0 t_var0 in
+    let t : Term := Term.pi binder_anon t_var0 t_var0 in
     I64.beq (uses_of 0 t) 0
 
 #[test]
@@ -1095,15 +1114,15 @@ def test_collect_reports_one_binder_per_lambda : Bool :=
     // `fn x => fn y => var 0` -- two binders. The inner one is used
     // once; the outer one is never used, which is exactly the shape
     // affine-by-default must free automatically.
-    let inner : Term := Term.lam dbg_x Term.hole (Term.var 0 dbg_x) in
-    let t : Term := Term.lam dbg_x Term.hole inner in
+    let inner : Term := Term.lam b_x Term.hole (Term.var 0 dbg_x) in
+    let t : Term := Term.lam b_x Term.hole inner in
     I64.beq (List.length (collect_binder_uses probe_ctors str_map_empty t)) 2
 
 #[test]
 def test_collect_records_an_unused_binder_as_zero : Bool :=
     // `fn x => <hole>` -- one binder, zero uses. Affine-legal (weakening
     // is admissible), and a release point under Milestone 3.
-    let t : Term := Term.lam dbg_x Term.hole Term.hole in
+    let t : Term := Term.lam b_x Term.hole Term.hole in
     match collect_binder_uses probe_ctors str_map_empty t {
         List.cons u _rest => I64.beq (BinderUse.count u) 0,
         List.empty => false,
@@ -1113,18 +1132,19 @@ def test_collect_records_an_unused_binder_as_zero : Bool :=
 def test_collect_records_an_overused_binder : Bool :=
     // `fn x => x x` -- two uses. This is the shape that needs `Copy`.
     let body : Term := Term.app (Term.var 0 dbg_x) (Term.var 0 dbg_x) in
-    let t : Term := Term.lam dbg_x Term.hole body in
+    let t : Term := Term.lam b_x Term.hole body in
     match collect_binder_uses probe_ctors str_map_empty t {
         List.cons u _rest => I64.beq (BinderUse.count u) 2,
         List.empty => false,
     }
 
 #[test]
-def test_collect_skips_forall_binders : Bool :=
-    // A `forall` binds a type variable: erased, never a runtime owner.
-    // The `lam` nested under it is still reported.
-    let inner : Term := Term.lam dbg_x Term.hole Term.hole in
-    let t : Term := Term.forall dbg_x (Term.sort (SortLevel.concrete 0)) inner in
+def test_collect_skips_implicit_pi_binders : Bool :=
+    // An implicit-binder `pi` (the former `forall`) binds a type
+    // variable: erased, never a runtime owner. The `lam` nested under it
+    // is still reported.
+    let inner : Term := Term.lam b_x Term.hole Term.hole in
+    let t : Term := Term.pi (binder_binder (Identifier.id "x")) (Term.sort (SortLevel.concrete 0)) inner in
     I64.beq (List.length (collect_binder_uses probe_ctors str_map_empty t)) 1
 
 // ─── Tests: type attribution ───────────────────────────────────────
@@ -1132,7 +1152,8 @@ def test_collect_skips_forall_binders : Bool :=
 def empty_scope : Scope :=
     { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
       scope := scope_data_empty,
-      parent := Option.none }
+      parent := Option.none,
+      incomplete_match_ok := false }
 
 def probe_param (name : String) (ty : String) : Param :=
     let ty_term : Term := Term.var (0 - 1) (DebugName.named (Identifier.id ty)) in
@@ -1431,7 +1452,7 @@ def test_collect_records_owning_uses : Bool :=
     let empty_args : List (Option Term) := List.empty in
     let head : Term := con_of empty_args in
     let body : Term := Term.app (Term.app head (Term.var 0 dbg_x)) (Term.var 0 dbg_x) in
-    let t : Term := Term.lam dbg_x Term.hole body in
+    let t : Term := Term.lam b_x Term.hole body in
     match collect_binder_uses probe_ctors str_map_empty t {
         List.cons u _rest => I64.beq (BinderUse.count u) 2 && I64.beq (BinderUse.owning u) 2,
         List.empty => false,
@@ -1472,7 +1493,7 @@ def test_collect_records_borrowed_uses : Bool :=
     // actually compares against.
     let args : List (Option Term) :=
         List.cons (Option.some (of_of t_var0)) (List.cons (Option.some (of_of t_var0)) List.empty) in
-    let t : Term := Term.lam dbg_x Term.hole (con_of args) in
+    let t : Term := Term.lam b_x Term.hole (con_of args) in
     match collect_binder_uses probe_ctors_with_of probe_borrows_of t {
         List.cons u _rest =>
             I64.beq (BinderUse.count u) 2
@@ -1487,7 +1508,7 @@ def test_collect_separates_a_borrow_from_a_real_use : Bool :=
     // 1 of 2 uses; budget 1, which is affine-legal.
     let args : List (Option Term) :=
         List.cons (Option.some (of_of t_var0)) (List.cons (Option.some t_var0) List.empty) in
-    let t : Term := Term.lam dbg_x Term.hole (con_of args) in
+    let t : Term := Term.lam b_x Term.hole (con_of args) in
     match collect_binder_uses probe_ctors_with_of probe_borrows_of t {
         List.cons u _rest =>
             I64.beq (BinderUse.count u) 2
@@ -1506,7 +1527,7 @@ def test_borrowed_is_branch_consistent : Bool :=
     // binder through the affine gate.
     let over : Term := Term.app (Term.var 0 dbg_x) (Term.var 0 dbg_x) in
     let branches : Term := Term.lit (Literal.if_ Term.hole over (of_of t_var0)) in
-    let t : Term := Term.lam dbg_x Term.hole branches in
+    let t : Term := Term.lam b_x Term.hole branches in
     match collect_binder_uses probe_ctors_with_of probe_borrows_of t {
         List.cons u _rest =>
             I64.beq (BinderUse.count u) 2 && I64.beq (BinderUse.borrowed u) 0,

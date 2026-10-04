@@ -48,7 +48,7 @@
 /// collisions are endemic here — `lang/src/typecheck/usage.mo`'s own
 /// attribution had to fail closed on exactly this — and a wrong pick in
 /// *this* predicate frees memory that is still live.
-use lib::types {Identifier, Instance, NamePath, Scope, Term, term_peel}
+use lib::types {DebugName, Identifier, Instance, NamePath, Scope, Term, binder_anon, term_peel}
 use lib::scope {
   instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
   scope_globals, scope_instance_candidates, term_is_wildcard,
@@ -138,9 +138,8 @@ def carrier_is_resolvable (t : Term) : Bool :=
         Term.ntv _n => true,
         // A function type is never Copy under Design B, and a hole or a
         // universe names nothing. All affine.
-        Term.pi _arg _ret => false,
-        Term.forall _dbg _kind _body => false,
-        Term.lam _dbg _typ _body => false,
+        Term.pi _b _arg _ret => false,
+        Term.lam _b _typ _body => false,
         Term.hole => false,
         Term.sort _level => false,
         Term.lit _v => false,
@@ -263,7 +262,7 @@ def test_a_hole_is_not_resolvable : Bool :=
 #[test]
 def test_a_function_type_is_never_copy : Bool :=
     // Design B: function/Pi types are never Copy.
-    not (carrier_is_resolvable (Term.pi (named_type "I64") (named_type "I64")))
+    not (carrier_is_resolvable (Term.pi binder_anon (named_type "I64") (named_type "I64")))
 
 #[test]
 def test_an_unnamed_variable_is_not_resolvable : Bool :=
