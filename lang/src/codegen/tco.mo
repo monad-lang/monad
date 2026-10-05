@@ -568,6 +568,12 @@ def remove_assign_of (instrs : List LLVMInstruction) (target : String) : List LL
             LLVMInstruction.ret _v => List.cons i (remove_assign_of rest target),
             LLVMInstruction.store _val _pty _ptr => List.cons i (remove_assign_of rest target),
             LLVMInstruction.comment _t => List.cons i (remove_assign_of rest target),
+            // A void call (the shape M3's drop calls take) is a
+            // statement like the rest, so it passes through. Required,
+            // not optional: neither compiler checks arm exhaustiveness,
+            // so a missing arm silently mishandles the instruction
+            // rather than failing the build.
+            LLVMInstruction.call_void _v => List.cons i (remove_assign_of rest target),
             LLVMInstruction.loc_marker _loc => List.cons i (remove_assign_of rest target),
         },
 }
@@ -661,6 +667,8 @@ def prune_phi_in_instrs (instrs : List LLVMInstruction) (stale_label : String) :
             LLVMInstruction.ret _v => prune_phi_in_instrs_rest i rest stale_label,
             LLVMInstruction.store _val _pty _ptr => prune_phi_in_instrs_rest i rest stale_label,
             LLVMInstruction.comment _t => prune_phi_in_instrs_rest i rest stale_label,
+            // Same missing-arm hazard as `remove_assign_of` above.
+            LLVMInstruction.call_void _v => prune_phi_in_instrs_rest i rest stale_label,
             LLVMInstruction.loc_marker _loc => prune_phi_in_instrs_rest i rest stale_label,
         },
 }
