@@ -15,6 +15,12 @@ Theory (QTT).
 > its own AST and no further. This chapter documents the intended design; see
 > [Where this actually stands](#where-this-actually-stands) for the state of the
 > implementation.
+>
+> One opt-in exception exists and is **off by default**: `monad check --affine`
+> runs an experimental *affine-by-default* rule alongside the ordinary
+> diagnostics. It is not an enforcement of the table below — it reads an
+> unannotated binder as `Affine`, not `Many` — so it lives on the experiment's
+> own terms, described in [The affine experiment](#the-affine-experiment).
 
 ## Overview
 
@@ -82,7 +88,14 @@ def affine_ok (?x : I64) : I64 := 42   // intended: passes
 def many_ok (x : I64) : I64 := x + x   // passes
 ```
 
-Today **all five compile**, in both implementations.
+Today **all five compile**, in both implementations — unless `--affine` is
+passed, in which case exactly one row changes: the *unannotated* one.
+`many_ok`'s `x + x` becomes a `copy_required` error unless `Copy I64`
+resolves in that file's closure, because under the flag an unannotated
+binder is affine, not `Many`. The annotated rows are untouched by the
+flag — the annotation is dropped at `pt_lam` before the rule ever sees
+it (see [The affine experiment](#the-affine-experiment)), so `unused`
+and `overused` compile there too.
 
 ## Where This Actually Stands
 
@@ -94,11 +107,64 @@ Parsing is done. What is left is everything after it:
 2. **Usage checking**, in both implementations. Counting machinery was written
    against an earlier version of the host's type checker. That checker has been
    replaced and the current one does not call it — every function type it builds
-   uses `Many`.
+   uses `Many`. (An opt-in replacement exists —
+   [the affine experiment](#the-affine-experiment); it is off by default,
+   so this is still the state of the default path.)
 3. **Codegen use**, in the self-hosted backend. Nothing consumes multiplicities.
 
 So the annotations are documentation that the compiler carries as far as its own
 parse tree.
+
+## The affine experiment
+
+The design above has a staged implementation in this tree. It is deliberately
+**not** wired into the default path; it is reachable
+through a flag, and only on the self-hosted CLI — the bootstrap host rejects
+`--affine` as an unknown argument.
+
+```text
+monad check --affine <path>...
+```
+
+A rejection from the rule is an ordinary type error: it renders through the same
+renderer and fails `check` the same way, so the flag *is* the switch between
+"these annotations are documentation" and "these annotations are enforced".
+Nothing fires without it.
+
+What the flag turns on:
+
+- **`Copy`** (`lang/src/typecheck/copy_class.mo`, with the class itself in
+  `init/src/copy.mo`) decides which types may still be shared. Resolution is
+  *fail-closed*: where it cannot tell, it denies sharing rather than granting it,
+  because the opposite default would quietly disable the whole check. Instances
+  are unconstrained — `Copy (Borrow A)` resolves, `Copy (Pair A B)` does not.
+- **Usage counting** (`lang/src/typecheck/usage.mo`) counts each binder's uses,
+  distinguishing one that takes ownership from one that only reads.
+- **The affine rule** (`lang/src/typecheck/affine.mo`) combines the two into the
+  *effective multiplicity* of a binder: `1` if annotated `!x` or the type is
+  `#[linear]`, `0` if annotated `%x`, `ω` if `Copy A` resolves, and `≤1`
+  otherwise. The last case is the departure from the table above, and it is the
+  whole experiment: **an unannotated binder is affine, not `Many`**, so a second
+  use of an ordinary parameter is an error under this flag. That reading is
+  guarded by a test, because reading the parser's `Many` default as ω would pass
+  every program while still looking like it worked.
+- **Drop points** (`lang/src/typecheck/dropck.mo`) computes *where* a release
+  would go. It is pure and unwired, and its per-branch walk measures ~90 s over
+  the compiler's own closure — a recorded deferral, not a live path.
+
+Three diagnostics come out of it, named for the fix rather than the count: a
+binder used more than once but *owned* at most once wants a borrow or a `Copy`
+instance; a binder owned twice really is moved twice and wants a rewrite; a
+`!x` never used is the one case affine's weakening does not excuse.
+
+Two caveats matter for reading anything the experiment reports. **Nothing frees
+memory yet.** Codegen still emits no `monad_release`, `Borrow` is boxed rather
+than erased, and `String` cannot be owned, so the GC described in
+[Compiling and Running](./compiling.md#memory) is not going anywhere on this
+branch. And the rule only sees the binders it can see: `!` and `%` are dropped
+at `pt_lam` in some positions and macro-synthesized parameters are hardcoded to
+`Many`, so the `Linear` and `Zero` rows of the table have no real-code coverage
+at all — every number the experiment reports is about the affine row.
 
 ## Why It Matters Beyond Correctness
 
@@ -137,5 +203,12 @@ Roughly in order:
 - Subsumption: `Many` should subsume `Linear` and `Affine`
 - Drive codegen's memory reclamation from multiplicities, replacing the GC
 - `noalias` attributes on linear parameters in the emitted LLVM IR
+
+[The affine experiment](#the-affine-experiment) covers part of this list and
+none of the last two entries. It counts uses and it resolves sharing
+(`Copy` plays the part of subsumption, from the other side: everything is
+affine unless `Copy` says otherwise), but it never touches lowering — it reads
+the multiplicity off the parse tree as it stands — and it computes drop points
+without emitting anything from them.
 
 Next, we'll explore **concurrency**.
