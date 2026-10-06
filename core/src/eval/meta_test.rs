@@ -20,7 +20,7 @@ use crate::term::{Decl, Identifier, ModulePath, NamePath, SearchPaths};
 /// would resolve it (same convention as `init/optics.mo`: living in
 /// `init/` doesn't make it part of the fixed, always-loaded default
 /// package — `init_package_sources()`'s own path list is `prelude`/`id`/
-/// `io`/`number`/`math`/`string`/`list`/`copy`/`init`/`process` only — so
+/// `io`/`number`/`math`/`string`/`list`/`init`/`process` only — so
 /// it's an
 /// ordinary two-segment `init.meta` module a file `use`s explicitly, just
 /// like `std.meta` was before the move). Also sets `loaded`'s search

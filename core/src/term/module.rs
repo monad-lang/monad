@@ -3410,7 +3410,7 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
     // depends on. ABSOLUTE, via CARGO_MANIFEST_DIR -- a repo-relative path
     // resolves against the CWD, and a test binary's CWD is its own package
     // directory, where `init/mote.toml` is not.
-    let entries: [(ModulePath, &str, &str); 13] = [
+    let entries: [(ModulePath, &str, &str); 12] = [
       (
         mpt("'prelude"),
         concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/prelude.mo"),
@@ -3445,18 +3445,6 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
         ModulePath::new(vec![id("init"), id("list")]),
         concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/list.mo"),
         include_str!("../../../init/src/list.mo"),
-      ),
-      // `copy.mo` joined the default set when `init/src/lib.mo` began
-      // re-exporting it: the hub's `pub use lib::copy {*}` makes
-      // `init.copy` a use of the ALWAYS-LOADED hub, so a `loaded` set
-      // without it panicked `load_modules` ("uses unloaded module:
-      // init.copy") the moment any meta-eval built a scope over the
-      // hub's uses. The default set IS the hub plus what it re-exports
-      // -- keep the two in lockstep when the hub changes.
-      (
-        ModulePath::new(vec![id("init"), id("copy")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/copy.mo"),
-        include_str!("../../../init/src/copy.mo"),
       ),
       (
         mpt("init"),
@@ -3496,7 +3484,7 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
   {
     let init_dir = stdlib_dir();
     let std_dir = std_dir();
-    let entries: [(ModulePath, std::path::PathBuf); 13] = [
+    let entries: [(ModulePath, std::path::PathBuf); 12] = [
       (mpt("'prelude"), init_dir.join("prelude.mo")),
       (
         ModulePath::new(vec![id("init"), id("id")]),
@@ -3521,13 +3509,6 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
       (
         ModulePath::new(vec![id("init"), id("list")]),
         init_dir.join("list.mo"),
-      ),
-      // Lockstep with the hub: `init/src/lib.mo` re-exports
-      // `lib::copy`, so `init.copy` must be as loadable as
-      // `init.list`. See the embed branch's comment above.
-      (
-        ModulePath::new(vec![id("init"), id("copy")]),
-        init_dir.join("copy.mo"),
       ),
       (mpt("init"), init_dir.join("lib.mo")),
       (
@@ -3588,7 +3569,6 @@ pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
     "math.mo",
     "string.mo",
     "list.mo",
-    "copy.mo",
     "lib.mo",
   ];
   let std_files = ["path.mo", "io.mo", "process.mo", "lib.mo"];

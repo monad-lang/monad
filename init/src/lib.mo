@@ -7,17 +7,9 @@ pub use lib::number {*}
 pub use lib::math {*}
 pub use lib::string {*}
 pub use lib::list {*}
-// `Copy` is re-exported alongside the rest because under Design B
-// (branch `experiment/qtt-affine`) its instances are the only route to
-// unrestricted use, so they must be ambient: a file that never
-// declares `use init::copy` still has I64 binders, and the affine
-// gate consults the file's own scope. Without this line the gate
-// fail-closed every binder in every module outside init's closure
-// that didn't import copy.mo by hand (measured: 0 candidates).
-pub use lib::copy {*}
-// `Borrow` is deliberately NOT re-exported: a file that uses
-// `Borrow.of` must name it, and one that never does holds no borrow
-// for the gate to recognise either way.
+// `copy`/`borrow` are not re-exported. Ambience is how the affine gate
+// sees a `Copy` in each file's own scope, but it also puts copy.mo in
+// every module's closure -- a cost every self-hosted sweep pays.
 
 infix (+) := I64.add
 
