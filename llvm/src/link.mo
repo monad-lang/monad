@@ -13,7 +13,7 @@
 /// the file moved.
 
 open IO {println}
-use std::process {exec_cmd}
+use std::process {exec_cmd, Proc.capture}
 use std::bench {Bench.now, Bench.report_since}
 use std::log {fail_line, ok_line, stage}
 use lib::target {TargetSpec}
@@ -53,18 +53,69 @@ pub def compile_ir_to_obj_with (target : TargetSpec) (ir_path : String) (obj_pat
 /// succeed without it, which is exactly why it is spelled out.
 #[partial]
 pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (obj_path : String) : IO I64 := do {
-    exec_cmd "clang" (List.append ["-pthread", "-c", runtime_c] (List.append extra_flags ["-o", obj_path]))
+    let inc <- darwin_gc_flag "-I" "includedir";
+    exec_cmd "clang" (List.append ["-pthread", "-c", runtime_c] (List.append inc (List.append extra_flags ["-o", obj_path])))
 }
 
 /// Link objects into an executable. `-lgc`: the generated runtime's heap is
 /// collected (see `monad_alloc` in runtime/src/runtime.c, and
 /// plans/bootstrapping/linear-types-memory.md for why that is temporary).
 /// The include and library search paths come from the nix cc-wrapper via
-/// `boehmgc` in devenv.nix, so nothing here hardcodes a store path.
+/// `boehmgc` in devenv.nix, so nothing here hardcodes a store path; on
+/// macOS, from pkg-config (`darwin_gc_flag`).
 /// `-pthread` here for the same reason as `compile_runtime_obj` above.
 #[partial]
 pub def link_objects (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
-    exec_cmd "clang" (List.append ["-pthread"] (List.append objs (List.append ["-lgc"] (List.append extra_flags ["-o", output]))))
+    let lib <- darwin_gc_flag "-L" "libdir";
+    exec_cmd "clang" (List.append ["-pthread"] (List.append objs (List.append lib (List.append ["-lgc"] (List.append extra_flags ["-o", output])))))
+}
+
+/// `<flag><dir>` for Boehm GC's `var` directory (`includedir`, `libdir`)
+/// as `pkg-config` reports it -- macOS only, and nothing when pkg-config
+/// is absent or does not know `bdw-gc`.
+///
+/// On Linux the toolchain already finds libgc (the nix cc-wrapper via
+/// `boehmgc` in devenv.nix, or the distro's default paths), so the argv
+/// there stays exactly what it was. On macOS outside nix, nothing puts a
+/// package manager's prefix on clang's search path. Asking pkg-config
+/// rather than naming one keeps this neutral between Homebrew, MacPorts
+/// and nix: each ships `bdw-gc.pc`, and `PKG_CONFIG_PATH` picks between
+/// them. Temporary along with libgc itself (see `link_objects`).
+#[partial]
+def darwin_gc_flag (flag : String) (var : String) : IO (List String) := do {
+    let darwin <- os_is_darwin;
+    if darwin then do {
+        let dir <- capture_line "pkg-config" ["--variable=" ++ var, "bdw-gc"];
+        return (dir_flag flag dir)
+    } else return List.empty
+}
+
+/// Whether this compiler is running on macOS, by `uname -s`.
+#[partial]
+def os_is_darwin : IO Bool := do {
+    let os <- capture_line "uname" ["-s"];
+    return (match os {
+        Option.some s => String.beq s "Darwin",
+        Option.none => false,
+    })
+}
+
+def dir_flag (flag : String) (dir : Option String) : List String := match dir {
+    Option.some d => [flag ++ d],
+    Option.none => List.empty,
+}
+
+/// A command's trimmed output, or `none` when it fails (including when it
+/// is not installed) or prints nothing.
+#[partial]
+def capture_line (cmd : String) (args : List String) : IO (Option String) := do {
+    let r <- Proc.capture cmd args;
+    match r {
+        Pair.pair code out =>
+            if code == 0 && Bool.not (String.is_empty (String.trim out))
+            then return (Option.some (String.trim out))
+            else return Option.none
+    }
 }
 
 /// Maps library names (e.g. `["m"]` from a mote's `[link] libs`) to the
