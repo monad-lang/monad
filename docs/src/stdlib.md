@@ -36,6 +36,13 @@ the core classes (`Functor`, `Applicative`, `Monad`, `MonadState`, `MonadLift`,
 `FromListLiteral`, `HAdd`, `Add`, `Sub`, `HMul`, `Div`, `Append`, `BEq`, `BOrd`,
 `ToString`, `Hashable`).
 
+`Ptr` lives here too: an opaque machine word for `#[extern "c"]` functions that
+take or return a pointer (an `SSL*` from OpenSSL, a `FILE*`). The only value
+constructible in pure code is `Ptr.null` — the NULL a C API's unused callback
+slot wants. A `Ptr` is untyped: passing an `SSL_CTX*` where an `SSL*` belongs
+type-checks and segfaults, so wrap handles in a newtype (`motes/tls`'s
+`Tls.Stream` is the worked example).
+
 `MonadState` and `IndexedMonadState` take the monad as their only parameter —
 the state type is an implicit forall — so that instance resolution can key on a
 concrete monad head. `examples/state_monad.mo` and `examples/indexed_monads.mo`
@@ -107,8 +114,11 @@ is not for call sites and is meant to become an implementation detail.
 `IO.current_time` (monotonic milliseconds — only differences are meaningful).
 
 It also holds the entire TCP surface: the opaque `Socket` and `Listener` types
-and eight blocking natives — `tcp_connect`, `tcp_listen`, `tcp_accept`,
-`tcp_read`, `tcp_write`, `tcp_close`, `tcp_close_listener`, `tcp_local_port`.
+and nine blocking natives — `tcp_connect`, `tcp_listen`, `tcp_accept`,
+`tcp_read`, `tcp_write`, `tcp_close`, `tcp_close_listener`, `tcp_local_port`,
+and `tcp_fd` (the raw descriptor behind a `Socket`, typed extraction rather
+than a lookup — the thing an FFI consumer such as `motes/tls` hands to
+`SSL_set_fd`).
 These are implemented **only** by the self-hosted backend; the Rust bootstrap
 host has no TCP at all, so a socket test cannot run under `cargo run -- test`.
 [The IO Monad](./io-monad.md#sockets-and-tcp) has the signatures, the two worked
@@ -196,6 +206,27 @@ copies, so writing to the builder afterwards cannot disturb the frozen array.
 
 `Array` implements **no classes at all** — `Array.map` and `Array.foldl` are
 ordinary functions, not `Functor`/`Foldable` methods.
+
+### `std.bytebuf` — **not ambient**
+
+`ByteBuf`, a flat byte buffer the C FFI can address — the thing a
+`#[extern "c"]` function that takes a `void*` plus a length wants
+(`SSL_read`/`SSL_write` in `motes/tls` are the first consumers; an `Array U8`
+exposes no backing store). Values are opaque like `Socket`: never
+pattern-match, compare or print one, and a buffer records **no length** —
+`to_list`'s `len` is the count the caller knows (the FFI call's return).
+
+| Function | Notes |
+|----------|-------|
+| `ByteBuf.alloc n` | `n` zeroed bytes |
+| `ByteBuf.of_list xs` | copy into a fresh buffer |
+| `ByteBuf.to_list b len` | the first `len` bytes |
+| `ByteBuf.ptr b` | the raw address, a `Ptr` — **compiled backend only** |
+| `ByteBuf.free b` | a no-op compiled (Boehm reclaims); a real drop interpreted |
+
+The two backends hold different words and a value never crosses between
+them: compiled it is the raw pointer, interpreted a registry id (the
+`Fiber`/`Scope` convention).
 
 ### `std.ansi` — **not ambient**
 

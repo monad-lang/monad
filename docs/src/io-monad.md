@@ -80,7 +80,7 @@ There is no `getLine` — reading stdin is not implemented yet.
 
 ## Sockets and TCP
 
-`std.io` also holds the whole TCP surface — two opaque types and eight blocking
+`std.io` also holds the whole TCP surface — two opaque types and nine blocking
 natives:
 
 | Function | Type |
@@ -93,6 +93,11 @@ natives:
 | `IO.tcp_close` | `Socket -> IO Unit` |
 | `IO.tcp_close_listener` | `Listener -> IO Unit` |
 | `IO.tcp_local_port` | `Listener -> IO U16` |
+| `IO.tcp_fd` | `Socket -> IO I32` |
+
+`IO.tcp_fd` extracts the raw descriptor behind a `Socket` — typed extraction,
+not a lookup (a `Socket` IS the fd), for handing to an FFI function such as
+OpenSSL's `SSL_set_fd`.
 
 `Socket` and `Listener` are opaque. Each has a single zero-arity constructor so
 that the type checker has a name for the type; the runtime value is never one of
