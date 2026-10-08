@@ -1055,7 +1055,12 @@ def con_owner_name (t : Term) : Option NamePath :=
 /// `lang/scope.mo`, for the confirmed-live silent-wrong-value repro this
 /// closes). A single, unambiguous match still resolves exactly as
 /// before.
-def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Scope) : Result TypeError (Option Inductive) :=
+///
+/// Pub because the check path's coverage-warning collector
+/// (`lang/module.mo`) resolves a match's inductive exactly this way --
+/// same fallback, same ambiguity behavior -- so the two cannot drift
+/// about which match a gap is reported for.
+pub def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Scope) : Result TypeError (Option Inductive) :=
     match cases {
         List.empty => ok Option.none,
         List.cons hd rest =>

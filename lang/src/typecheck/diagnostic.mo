@@ -96,14 +96,19 @@ pub def type_error_message (e : TypeError) : String :=
 pub def render_type_error (context_name : String) (path : Option String) (e : TypeError) : String :=
 	render_type_diagnostic "error: " context_name path e
 
+/// The warning sibling -- same header/arrow shape, severity word
+/// `warning`. `e` is usually a `TypeError.custom`: a warning is rendered
+/// message text the check path reports without rejecting (today, a
+/// non-exhaustive match's gap), not a demoted error.
+#[partial]
+pub def render_type_warning (context_name : String) (path : Option String) (e : TypeError) : String :=
+	render_type_diagnostic "warning: " context_name path e
+
 /// The shared body. `severity` is the whole prefix, trailing space included.
 ///
-/// Split out, with the severity word coming from the CALLER, for the warning
-/// renderer the self-hosted checker does not have yet: `type_error_message` is
-/// prefix-free, so a demoted diagnostic can never read `warning: error: ...`.
-/// Adding that sibling is part of the severity-aware `check` loop
-/// `lang/module.mo`'s `Diagnostic` note describes -- not something to land
-/// alone, because nothing can route a warning to a printer today.
+/// Split out, with the severity word coming from the CALLER, because
+/// `type_error_message` is prefix-free -- so a demoted diagnostic can
+/// never read `warning: error: ...`.
 #[partial]
 def render_type_diagnostic (severity : String) (context_name : String) (path : Option String) (e : TypeError) : String :=
 	let msg : String := type_error_message e in
@@ -147,6 +152,16 @@ def test_render_type_error_no_path : Bool :=
 	let rendered : String := render_type_error "my_def" Option.none (TypeError.custom "bad thing") in
 	String.contains rendered "error: bad thing in my_def"
 		&& String.contains rendered "-->"
+
+/// The warning sibling: same body, severity word swapped. `warning:` and
+/// never `warning: error:` -- the prefix-free message is what makes that
+/// impossible, which is the reason the severity word comes from the
+/// caller at all.
+#[test]
+def test_render_type_warning_includes_context_and_path : Bool :=
+	let rendered : String := render_type_warning "my_def" (Option.some "examples/foo.mo") (TypeError.custom "gap here") in
+	String.contains rendered "warning: gap here in my_def"
+		&& String.contains rendered "--> examples/foo.mo"
 
 
 /// An identifier as the user would have written it. Only a flattened

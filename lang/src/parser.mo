@@ -642,29 +642,53 @@ def attr_arg_try_bare (input : String) : ParseResult AttrArg :=
 #[partial]
 def attr_arg_try_str (r : ParseResult ParseTerm) (orig : String) : ParseResult AttrArg :=
 	match r {
-		success rem t => success rem (term_lit_to_attr_str t),
+		success rem t =>
+			match term_lit_to_attr_str t {
+				Option.some a => success rem a,
+				Option.none => attr_arg_try_num (numeric_literal orig) orig,
+			},
 		fail _ => attr_arg_try_num (numeric_literal orig) orig
 	}
 
 /// `string_parse` only ever succeeds with a `Term.lit (Literal.str _)`
-/// shape — this is a total function over that guaranteed shape, not a
-/// general `Term -> AttrArg` conversion.
-#[partial]
-def term_lit_to_attr_str (t : ParseTerm) : AttrArg :=
-	match t.kind { ParseTermKind.lit l => match l { ParseLiteral.str s => AttrArg.str s } }
+/// shape — but "only ever" is an invariant, not a type, and this is the
+/// function `#[allow_incomplete_match "..."]`'s own exemption string is
+/// built from: a silent misbind here would exempt the wrong def. So the
+/// non-string shapes are real `Option.none` arms and the caller falls
+/// through the parse chain, which fails loudly, rather than converting
+/// something that is not a string.
+def term_lit_to_attr_str (t : ParseTerm) : Option AttrArg :=
+	match t.kind {
+		ParseTermKind.lit l =>
+			match l {
+				ParseLiteral.str s => Option.some (AttrArg.str s),
+				_ => Option.none,
+			},
+		_ => Option.none,
+	}
 
 #[partial]
 def attr_arg_try_num (r : ParseResult ParseTerm) (orig : String) : ParseResult AttrArg :=
 	match r {
-		success rem t => success rem (term_lit_to_attr_num t),
+		success rem t =>
+			match term_lit_to_attr_num t {
+				Option.some a => success rem a,
+				Option.none => attr_arg_try_ident (identifier orig),
+			},
 		fail _ => attr_arg_try_ident (identifier orig)
 	}
 
 /// `numeric_literal` only ever succeeds with a `Term.lit (Literal.num _
 /// _)` shape here — see `term_lit_to_attr_str`'s own doc comment.
-#[partial]
-def term_lit_to_attr_num (t : ParseTerm) : AttrArg :=
-	match t.kind { ParseTermKind.lit l => match l { ParseLiteral.num n _ => AttrArg.num n } }
+def term_lit_to_attr_num (t : ParseTerm) : Option AttrArg :=
+	match t.kind {
+		ParseTermKind.lit l =>
+			match l {
+				ParseLiteral.num n _ => Option.some (AttrArg.num n),
+				_ => Option.none,
+			},
+		_ => Option.none,
+	}
 
 #[partial]
 def attr_arg_try_ident (r : ParseResult String) : ParseResult AttrArg :=

@@ -202,3 +202,80 @@ def match_cases_map_children_at_depth (f : I64 -> Term -> Term) (cases : List Ma
 #[partial]
 def match_case_map_children_at_depth (f : I64 -> Term -> Term) (c : MatchCase) : MatchCase :=
     match c { MatchCase.mc name args body fp => MatchCase.mc name args (f (List.length args) body) fp }
+
+// ─── Read-only one-level children ──────────────────────────────────
+//
+// The observing sibling of `term_map_children`: the same walk, but it
+// RETURNS the child terms instead of rebuilding the node around them.
+// A pass that folds over a term without producing one -- a collector of
+// diagnostics -- cannot express itself through `Term -> Term` without
+// rebuilding a tree nobody reads. Kept beside the map family so a new
+// `Term` variant updates both walks in this one file, and every
+// collector built on the children view inherits the arm.
+
+pub def term_children (t : Term) : List Term :=
+    match t {
+        Term.var _idx _dbg => List.empty,
+        Term.var_macro _idx _dbg => List.empty,
+        Term.lam _dbg typ body => [typ, body],
+        Term.pi _b arg ret => [arg, ret],
+        Term.app callee arg => [callee, arg],
+        Term.lit value => literal_children value,
+        Term.ntv n => native_children n,
+        Term.con c => con_children c,
+        Term.sort _level => List.empty,
+        Term.hole => List.empty,
+        Term.quote_ inner => [inner],
+        Term.ctx _loc inner => [inner],
+        Term.cubical c => cubical_children c,
+    }
+
+def cubical_children (c : Cubical) : List Term := c.args
+
+def literal_children (l : Literal) : List Term :=
+    match l {
+        Literal.str _v => List.empty,
+        Literal.char _v => List.empty,
+        Literal.num _n _suf => List.empty,
+        Literal.flt _t _suf => List.empty,
+        Literal.if_ a b c => [a, b, c],
+        Literal.match_ scrut cases => List.cons scrut (match_cases_children cases),
+        Literal.struct_lit fields type_name => List.append (struct_fields_children fields) (opt_term_children type_name),
+        Literal.struct_update base fields => List.cons base (struct_fields_children fields),
+    }
+
+def match_cases_children (cases : List MatchCase) : List Term :=
+    match cases {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                MatchCase.mc _name _args body _fp => List.cons body (match_cases_children rest),
+            },
+    }
+
+def struct_fields_children (fields : List StructLitField) : List Term :=
+    match fields {
+        List.empty => List.empty,
+        List.cons fld rest =>
+            match fld {
+                StructLitField.mk _name value => List.cons value (struct_fields_children rest),
+            },
+    }
+
+def opt_term_children (t : Option Term) : List Term :=
+    match t {
+        Option.none => List.empty,
+        Option.some x => [x],
+    }
+
+def con_children (c : Con) : List Term :=
+    match c { Con.mk _name _typ_name _num_args args => opt_terms_children args }
+
+def native_children (n : Native) : List Term :=
+    match n { Native.mk _name _num_args args => opt_terms_children args }
+
+def opt_terms_children (ts : List (Option Term)) : List Term :=
+    match ts {
+        List.empty => List.empty,
+        List.cons x rest => List.append (opt_term_children x) (opt_terms_children rest),
+    }

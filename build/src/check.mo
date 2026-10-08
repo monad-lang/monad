@@ -368,10 +368,28 @@ pub def Build.check_entry_leaf (root : String) (key : String) (leaf : String) : 
 /// string. The loop prints it with one `println` where it used to print
 /// the header and then each diagnostic on its own line, which is the same
 /// bytes -- `println (intercalate "\n" xs)` is `mapM_ println xs`.
-pub def Build.check_block (path : String) (diags : List String) : String :=
+pub def Build.check_block (path : String) (diags : List String) (warnings : List String) : String :=
     if List.is_empty diags
-    then String.concat "ok    " path
-    else List.intercalate "\n" (List.cons (Build.fail_header path (List.length diags)) diags)
+    then
+        if List.is_empty warnings
+        then String.concat "ok    " path
+        else List.intercalate "\n" (List.cons (Build.warn_header path (List.length warnings)) warnings)
+    else List.intercalate "\n" (List.cons (Build.fail_header path (List.length diags)) (List.append diags warnings))
+
+/// The warning counterpart of `fail_header`, for a file that checked
+/// clean but still has something to say -- the same column shape, so
+/// the three verdicts read as one column of statuses.
+def Build.warn_header (path : String) (n : I64) : String :=
+    String.concat "WARN  " (String.concat path (String.concat " (" (String.concat (I64.to_string n) " warning(s))")))
+
+/// The two counts a replay needs to re-derive the summary line:
+/// errors, which the entry has always stored, and warnings, which ride
+/// the stored block but also get a leaf of their own so the summary's
+/// warning total survives a cache hit.
+pub struct Build.CheckTally {
+    errors : I64,
+    warnings : I64,
+}
 
 /// The `FAIL` header, character for character what the loop printed before
 /// this module existed. `check_block` is the only producer, so a change
@@ -387,7 +405,7 @@ def Build.fail_header (path : String) (n : I64) : String :=
 /// That is also what makes a damaged entry harmless rather than
 /// poisonous, which is the property a cache most needs.
 #[partial]
-pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair I64 String)) := do {
+pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair Build.CheckTally String)) := do {
     let out_path : String := Build.check_entry_leaf root key "out";
     let there <- IO.file_exists (Path.path out_path);
     if Bool.not there
@@ -403,9 +421,29 @@ pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair
                 Option.none => return Option.none,
                 Option.some n => do {
                     let block <- IO.read_file (Path.path out_path);
-                    return (Option.some (Pair.pair n block))
+                    let warns <- Build.check_entry_warn_count root key;
+                    return (Option.some (Pair.pair (Build.CheckTally.mk n warns) block))
                 }
             }
+        }
+    }
+}
+
+/// The warnings half of a stored tally: `0` when the leaf is absent or
+/// not a number, and NOT a miss. An entry written before warnings
+/// existed is still a valid hit -- it was written by a checker that
+/// could not produce warning text, so a zero count is the honest
+/// replay of what it recorded.
+#[partial]
+def Build.check_entry_warn_count (root : String) (key : String) : IO I64 := do {
+    let warn_path : String := Build.check_entry_leaf root key "warnings";
+    let there <- IO.file_exists (Path.path warn_path);
+    if Bool.not there then return 0
+    else do {
+        let raw <- IO.read_file (Path.path warn_path);
+        match parse_i64 raw {
+            Option.none => return 0,
+            Option.some n => return n,
         }
     }
 }
@@ -415,10 +453,11 @@ pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair
 /// having tried. Reported nowhere, because there is nothing a user could
 /// do about it and nothing that would be wrong because of it.
 #[partial]
-pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (block : String) : IO I64 := do {
+pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (warnings : I64) (block : String) : IO I64 := do {
     let d : String := Build.check_entry_dir root key;
     let _mk <- Build.ensure_dir d;
     let _c <- IO.write_file (Path.path (Build.check_entry_leaf root key "errors")) (I64.to_string errors);
+    let _w <- IO.write_file (Path.path (Build.check_entry_leaf root key "warnings")) (I64.to_string warnings);
     let _o <- IO.write_file (Path.path (Build.check_entry_leaf root key "out")) block;
     return 0
 }
@@ -426,8 +465,8 @@ pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (b
 /// Record a result when the plan gives the file a key, and do nothing when
 /// it does not -- the one place the loop has to know about either.
 #[partial]
-pub def Build.check_maybe_write (p : CheckPlan) (key : Option String) (errors : I64) (block : String) : IO I64 :=
+pub def Build.check_maybe_write (p : CheckPlan) (key : Option String) (errors : I64) (warnings : I64) (block : String) : IO I64 :=
     match key {
         Option.none => return 0,
-        Option.some k => Build.check_entry_write (Build.check_plan_root p) k errors block
+        Option.some k => Build.check_entry_write (Build.check_plan_root p) k errors warnings block
     }

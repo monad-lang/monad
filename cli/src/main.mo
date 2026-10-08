@@ -951,10 +951,17 @@ struct CheckOptions {
 /// checked, nothing is recorded, and the output is byte-identical to what
 /// this command printed before any cache existed.
 #[partial]
-def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (opts : CheckOptions) (plan : CheckPlan) : IO I64 :=
+def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CheckPlan) : IO I64 :=
     match files {
         List.empty => do {
-            println (I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)");
+            let summary : String := I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)";
+            // The warning total rides the same line only when nonzero:
+            // the clean-corpus line stays byte-identical to what it
+            // always printed, which is also what pins and muscle memory
+            // grep for.
+            if I64.gt warns 0
+            then println (summary ++ ", " ++ I64.to_string warns ++ " warning(s)")
+            else println summary;
             // Whole-run module cache visibility: `hits` counts dependency
             // loads served from an EARLIER file's own load in this same
             // run, instead of re-reading and re-parsing the file from
@@ -972,7 +979,7 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
             match Build.check_plan_key plan f {
                 // No key for this file (the plan is inactive, or its
                 // digest failed): check it, and record nothing.
-                Option.none => run_check_file cache f rest checked errors opts plan Option.none,
+                Option.none => run_check_file cache f rest checked errors warns opts plan Option.none,
                 Option.some key => do {
                     let stored <- Build.check_entry_read (Build.check_plan_root plan) key;
                     match stored {
@@ -981,12 +988,12 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
                         // it. No `check_file_cached` call at all.
                         Option.some p =>
                             match p {
-                                Pair.pair counted block => do {
+                                Pair.pair tally block => do {
                                     println block;
-                                    run_check_loop cache rest (checked + 1) (errors + counted) opts plan
+                                    run_check_loop cache rest (checked + 1) (errors + tally.errors) (warns + tally.warnings) opts plan
                                 }
                             },
-                        Option.none => run_check_file cache f rest checked errors opts plan (Option.some key)
+                        Option.none => run_check_file cache f rest checked errors warns opts plan (Option.some key)
                     }
                 }
             }
@@ -1010,19 +1017,24 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
 /// always inactive (see `run_check`), so nothing affine is recorded and
 /// nothing recorded is replayed here.
 #[partial]
-def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (opts : CheckOptions) (plan : CheckPlan) (key : Option String) : IO I64 := do {
+def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CheckPlan) (key : Option String) : IO I64 := do {
     let checked_and_cache <- if opts.affine
         then check_file_cached_affine cache f opts.verbose
         else check_file_cached cache f opts.verbose;
     match checked_and_cache {
         FileCheckAndCache.mk result updated_cache =>
             match result {
-                FileCheckResult.mk path diags => do {
-                    let block : String := Build.check_block path diags;
+                FileCheckResult.mk path diags warnings => do {
+                    let block : String := Build.check_block path diags warnings;
+                    // `counted` is ERRORS ONLY -- warnings neither fail
+                    // the file nor feed the error total, so a replayed
+                    // hit and a fresh miss count the same file the same
+                    // way. The warning count is stored beside it so the
+                    // summary's total survives the hit.
                     let counted : I64 := List.length diags;
                     println block;
-                    let _rec <- Build.check_maybe_write plan key counted block;
-                    run_check_loop updated_cache rest (checked + 1) (errors + counted) opts plan
+                    let _rec <- Build.check_maybe_write plan key counted (List.length warnings) block;
+                    run_check_loop updated_cache rest (checked + 1) (errors + counted) (warns + List.length warnings) opts plan
                 }
             }
     }
@@ -1277,7 +1289,7 @@ def run_check (files : List String) (opts : CheckOptions) : IO I64 := do {
             let plan <- Build.check_plan expanded target_dir (requested && Bool.not opts.verbose && Bool.not opts.affine);
             let _prep <- announce_check_cache plan;
             let cache : ModuleInfoCache := module_info_cache_empty;
-            run_check_loop cache expanded 0 0 opts plan
+            run_check_loop cache expanded 0 0 0 opts plan
         },
         // Nothing named, inside no mote: say why, and fail. `print_help`
         // with its exit 0 was the behaviour before any of this existed,

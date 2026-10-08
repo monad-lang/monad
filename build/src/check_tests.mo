@@ -84,7 +84,7 @@ def Build.plan_over (keys : List (Pair String String)) : CheckPlan :=
 
 #[test]
 def test_check_block_of_no_diagnostics_is_ok : Bool :=
-    String.beq (Build.check_block "a.mo" List.empty) "ok    a.mo"
+    String.beq (Build.check_block "a.mo" List.empty List.empty) "ok    a.mo"
 
 /// The header, then every diagnostic on its own line. `check_block` is
 /// `intercalate "\n"`, which is what the loop's old
@@ -92,11 +92,24 @@ def test_check_block_of_no_diagnostics_is_ok : Bool :=
 /// supplies that at the call site.
 #[test]
 def test_check_block_of_diagnostics_is_header_then_lines : Bool :=
-    String.beq (Build.check_block "a.mo" ["one", "two"]) "FAIL  a.mo (2 error(s))\none\ntwo"
+    String.beq (Build.check_block "a.mo" ["one", "two"] List.empty) "FAIL  a.mo (2 error(s))\none\ntwo"
 
 #[test]
 def test_check_block_of_one_diagnostic_has_no_trailing_newline : Bool :=
-    String.beq (Build.check_block "a.mo" ["only"]) "FAIL  a.mo (1 error(s))\nonly"
+    String.beq (Build.check_block "a.mo" ["only"] List.empty) "FAIL  a.mo (1 error(s))\nonly"
+
+/// A clean file with warnings: not `ok` (something is reported), not
+/// `FAIL` (nothing failed) -- a third status with the same column shape.
+#[test]
+def test_check_block_of_warnings_only_is_warn_header_then_lines : Bool :=
+    String.beq (Build.check_block "a.mo" List.empty ["w1", "w2"]) "WARN  a.mo (2 warning(s))\nw1\nw2"
+
+/// When both kinds are present the errors own the header -- the file
+/// fails -- and the warnings follow the errors, so the failure is read
+/// first and the warnings never push it off the first lines.
+#[test]
+def test_check_block_of_errors_and_warnings_prints_errors_first : Bool :=
+    String.beq (Build.check_block "a.mo" ["boom"] ["w"]) "FAIL  a.mo (1 error(s))\nboom\nw"
 
 // ─── check_worth_caching: the "expensive" half of the rule ───
 
@@ -222,14 +235,14 @@ def test_entry_dir_is_root_slash_key : Bool :=
 #[test]
 def test_entry_round_trips : IO Bool := do {
     let d <- Build.check_fresh_fixture "round";
-    let _w <- Build.check_entry_write d "k1" 3 "FAIL  a.mo (3 error(s))\nx\ny\nz";
+    let _w <- Build.check_entry_write d "k1" 3 2 "FAIL  a.mo (3 error(s))\nx\ny\nz";
     let r <- Build.check_entry_read d "k1";
     let _c <- Build.check_drop_fixture d;
     match r {
         Option.none => return false,
         Option.some p => match p {
-            Pair.pair n block =>
-                return (n == 3) && String.beq block "FAIL  a.mo (3 error(s))\nx\ny\nz",
+            Pair.pair tally block =>
+                return (tally.errors == 3) && (tally.warnings == 2) && String.beq block "FAIL  a.mo (3 error(s))\nx\ny\nz",
         }
     }
 }
@@ -239,13 +252,13 @@ def test_entry_round_trips : IO Bool := do {
 #[test]
 def test_entry_round_trips_a_zero_error_result : IO Bool := do {
     let d <- Build.check_fresh_fixture "zero";
-    let _w <- Build.check_entry_write d "k0" 0 "ok    a.mo";
+    let _w <- Build.check_entry_write d "k0" 0 0 "ok    a.mo";
     let r <- Build.check_entry_read d "k0";
     let _c <- Build.check_drop_fixture d;
     match r {
         Option.none => return false,
         Option.some p => match p {
-            Pair.pair n block => return (n == 0) && String.beq block "ok    a.mo",
+            Pair.pair tally block => return (tally.errors == 0) && String.beq block "ok    a.mo",
         }
     }
 }
@@ -257,12 +270,32 @@ def test_entry_round_trips_a_zero_error_result : IO Bool := do {
 def test_entry_round_trips_a_multiline_block : IO Bool := do {
     let d <- Build.check_fresh_fixture "multi";
     let block : String := "FAIL  a.mo (2 error(s))\nfirst error\nsecond error";
-    let _w <- Build.check_entry_write d "km" 2 block;
+    let _w <- Build.check_entry_write d "km" 2 0 block;
     let r <- Build.check_entry_read d "km";
     let _c <- Build.check_drop_fixture d;
     match r {
         Option.none => return false,
-        Option.some p => match p { Pair.pair n b => return (n == 2) && String.beq b block },
+        Option.some p => match p { Pair.pair tally b => return (tally.errors == 2) && String.beq b block },
+    }
+}
+
+/// An entry written before warnings existed has no `warnings` leaf. It
+/// must stay a HIT -- the checker that wrote it could not produce
+/// warning text -- and replay an honest zero warning count.
+#[test]
+def test_entry_without_a_warnings_leaf_is_a_hit_with_zero_warnings : IO Bool := do {
+    let d <- Build.check_fresh_fixture "oldfmt";
+    let dir : String := Build.check_entry_dir d "k";
+    let _m <- Build.ensure_dir dir;
+    let _w1 <- IO.write_file (Path.path (String.concat dir "/errors")) "0";
+    let _w2 <- IO.write_file (Path.path (String.concat dir "/out")) "ok    a.mo";
+    let r <- Build.check_entry_read d "k";
+    let _c <- Build.check_drop_fixture d;
+    match r {
+        Option.none => return false,
+        Option.some p => match p {
+            Pair.pair tally block => return (tally.errors == 0) && (tally.warnings == 0) && String.beq block "ok    a.mo",
+        }
     }
 }
 
@@ -346,7 +379,7 @@ def test_entry_read_of_an_empty_count_is_none : IO Bool := do {
 #[test]
 def test_entry_read_does_not_prefix_match : IO Bool := do {
     let d <- Build.check_fresh_fixture "prefix";
-    let _w <- Build.check_entry_write d "abcdef" 1 "FAIL  a.mo (1 error(s))\nboom";
+    let _w <- Build.check_entry_write d "abcdef" 1 0 "FAIL  a.mo (1 error(s))\nboom";
     let r <- Build.check_entry_read d "abc";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }

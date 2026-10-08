@@ -7,8 +7,8 @@ use std::process {exec_cmd, process_id}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lang::types {
   Attribute, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
-  InductConstructor, Inductive, Infix, Instance, LocalScope, LocalVar, Location,
-  ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
+  InductConstructor, Inductive, Infix, Instance, Literal, LocalScope, LocalVar, Location,
+  MatchCase, ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
   Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
   binder_anon, binder_is_explicit, binder_is_level, binder_name, concrete,
   has_incomplete_match_exemption, id_eq,
@@ -55,8 +55,9 @@ use lib::scope {
   scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lib::termination {check_termination_all}
-use lib::typecheck::diagnostic {render_type_error}
-use lib::typecheck::infer {empty_local_types, empty_locals, type_check}
+use lib::typecheck::diagnostic {render_type_error, render_type_warning}
+use lib::typecheck::infer {empty_local_types, empty_locals, find_inductive_for_cases_by_constructor, match_coverage_warning, type_check}
+use lib::typecheck::traverse {term_children}
 // `--affine` (Phase 5 of the enforcement plan): the M2 usage rule as
 // real diagnostics. Built once per module by the affine walk below,
 // exactly how `affine.mo`'s own doc on `check_def` prescribes.
@@ -1959,6 +1960,100 @@ pub def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals 
     return (list_append diags (check_termination_all decl_list))
 }
 
+// --- Check-path warnings (the non-error diagnostic channel) ---
+//
+// Everything above returns ERRORS: a non-empty list fails the file and
+// the run. The first warning the checker reports is a match-coverage
+// gap (`strict-exhaustiveness.md`: the rule lives in `match_coverage_gap`
+// and `validate_match_coverage` answers `ok` either way until the
+// corpus sweep flips it), so the channel it rides is built around that
+// one producer. The collector is a WALKER, not an inference pass: it
+// never needs the scrutinee's resolved type, because the arm
+// constructor names identify the inductive exactly the way the
+// checker's own last-resort lookup does. A match whose arms are all
+// wildcards, or whose constructor name is ambiguous (any two structs'
+// `mk`), reports nothing here -- a skip is never a false pass, because
+// the arm-level rule, once it errors, is the authority. When Phase 4
+// flips that rule, this collector's gap rule goes away rather than
+// double-reporting; the severity channel stays.
+
+/// Every coverage warning in a module, one per uncovered match, in
+/// declaration order. Pure: the scope is read, never extended.
+def coverage_warnings_of_decls (scope : Scope) (path : Option String) (decls : List Decl) : List String :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest =>
+            list_append (coverage_warnings_of_decl scope path d) (coverage_warnings_of_decls scope path rest),
+    }
+
+/// One declaration's coverage warnings. Walks exactly the declarations
+/// `check_decl_with_scope` checks -- `def` bodies (including the
+/// promoted and macro-expanded ones, which is what `target_decls`
+/// holds) and a scoped `open`'s inner decl -- and skips the synthesized
+/// dict values the check walk skips. The exemption attribute is
+/// honored through `scope_for_def_body`, the same scope the check path
+/// reads, so a def exempted from the rule is exempted from the warning.
+#[partial]
+def coverage_warnings_of_decl (scope : Scope) (path : Option String) (d : Decl) : List String :=
+    match d {
+        Decl.def_d df =>
+            if is_dict_value_def df then List.empty
+            else
+                match df {
+                    Def.mk { name, typ, term := body, attrs, .. } =>
+                        let body_scope : Scope := scope_for_def_body attrs scope in
+                        let context : String := show_name_path name in
+                        // The type too: a type expression cannot hold a
+                        // match today, but walking it is one line and
+                        // keeps that true by construction rather than by
+                        // omission.
+                        list_append (coverage_warnings_in_term body_scope context path typ)
+                            (coverage_warnings_in_term body_scope context path body),
+                },
+        Decl.scoped_open_d _alias _inner_path inner => coverage_warnings_of_decl scope path inner,
+        _ => List.empty,
+    }
+
+/// A term's coverage warnings: this node's match gap, if any, then every
+/// child's, depth-first. `term_children` is the one-level walk, so a new
+/// `Term` variant is picked up here only by updating that one function.
+#[partial]
+def coverage_warnings_in_term (scope : Scope) (context : String) (path : Option String) (t : Term) : List String :=
+    match t {
+        Term.lit lit =>
+            match lit {
+                Literal.match_ _scrut cases =>
+                    list_append (coverage_warning_of_match scope context path cases)
+                        (coverage_warnings_in_children scope context path (term_children t)),
+                _ => coverage_warnings_in_children scope context path (term_children t),
+            },
+        _ => coverage_warnings_in_children scope context path (term_children t),
+    }
+
+#[partial]
+def coverage_warnings_in_children (scope : Scope) (context : String) (path : Option String) (ts : List Term) : List String :=
+    match ts {
+        List.empty => List.empty,
+        List.cons x rest =>
+            list_append (coverage_warnings_in_term scope context path x)
+                (coverage_warnings_in_children scope context path rest),
+    }
+
+/// One match's gap as a rendered warning, or nothing. `match_coverage_gap`
+/// is the single query -- this only supplies the inductive its caller
+/// on the inference path knows and renders the result.
+def coverage_warning_of_match (scope : Scope) (context : String) (path : Option String) (cases : List MatchCase) : List String :=
+    match find_inductive_for_cases_by_constructor cases scope {
+        // An ambiguity or unresolvable match: skip. The checker's own
+        // resolution is what errors there, when there is an error.
+        Result.err _ => List.empty,
+        Result.ok maybe_ind =>
+            match match_coverage_warning cases maybe_ind scope {
+                Option.none => List.empty,
+                Option.some msg => [render_type_warning context path (TypeError.custom msg)],
+            },
+    }
+
 // --- Ranged diagnostics (the language server's view) ---
 //
 // Everything above returns rendered strings -- what a terminal wants, and
@@ -1974,16 +2069,14 @@ pub def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals 
 /// `Option.none` is that case, stated rather than filled in with an
 /// invented range.
 ///
-/// THERE IS DELIBERATELY NO SEVERITY FIELD YET, and the reason binds
-/// whoever adds one. `cli/src/main.mo`'s `run_check_loop` counts EVERY
-/// diagnostic as an error and prints `FAIL` for any non-empty list, and it
-/// reads `FileCheckResult.diagnostics : List String`, which has no severity
-/// to consult. So the first non-error diagnostic -- the self-hosted
-/// checker's warning passes, explicitly not in this cut -- has to land
-/// TOGETHER with a severity-aware `run_check_loop` and a `FileCheckResult`
-/// that carries severity, or self-hosted `check` starts failing on warnings
-/// and takes CI with it. Adding the field now, when nothing can produce a
-/// warning, would be an untestable channel.
+/// NO SEVERITY FIELD, and the reason binds whoever adds one. The string
+/// channel now carries severity -- `FileCheckResult.warnings` beside
+/// `diagnostics`, counted separately by `run_check_loop` -- but this
+/// struct is the RANGED walk's, and the ranged walk carries only what
+/// `check_decl_with_scope` already returns, all errors. When a warning
+/// must reach the editor, the field lands here together with the ranged
+/// walk's own warning producer; adding it before that producer exists
+/// would be an untestable channel.
 ///
 /// `message` IS THE RENDERED MULTI-LINE STRING, not a one-line summary, and
 /// that is a binding note on the wire layer rather than a defect. The ranged
@@ -2727,9 +2820,19 @@ def check_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals
         }
     }
 
+/// One file's check outcome, severity-split. `diagnostics` are ERRORS --
+/// a non-empty list fails the file and the run -- while `warnings` ride
+/// alongside without counting toward that verdict: the first warning
+/// channel is match coverage (`coverage_warnings_of_decls` above), a
+/// rule that is deliberately not fatal until the corpus sweep in
+/// `strict-exhaustiveness.md` lands its fixes. Rendered warnings still
+/// appear in the block `Build.check_block` prints and stores, so a
+/// cache HIT replays them verbatim; only the error count decides the
+/// exit code.
 pub struct FileCheckResult {
     path : String,
     diagnostics : List String,
+    warnings : List String,
 }
 
 /// `check_file_cached`'s own result bundled with the (possibly updated)
@@ -2781,22 +2884,25 @@ def check_file_cached_mode (affine : Bool) (cache : ModuleInfoCache) (file_path 
                 let diags <- if affine
                     then check_module_with_scope_affine em.scope em.target_decls empty_locs (Option.some file_path) verbose
                     else check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
+                // Warnings are a pure read of the same scope the error
+                // walk just used -- no second elaboration, no IO.
+                let warns : List String := coverage_warnings_of_decls em.scope (Option.some file_path) em.target_decls;
                 // Each level bound with an explicit annotation rather
                 // than nested inline -- see `load_module_with_info`'s
                 // own note. `out_cache`, not `cache`: the walk extended
                 // it, and the caller needs the extended one.
-                let ok_result : FileCheckResult := { path := file_path, diagnostics := diags };
+                let ok_result : FileCheckResult := { path := file_path, diagnostics := diags, warnings := warns };
                 let ok_bundle : FileCheckAndCache := { result := ok_result, cache := out_cache };
                 return ok_bundle
             },
             Result.err e => do {
-                let err_result : FileCheckResult := { path := file_path, diagnostics := [e] };
+                let err_result : FileCheckResult := { path := file_path, diagnostics := [e], warnings := List.empty };
                 let err_bundle : FileCheckAndCache := { result := err_result, cache := out_cache };
                 return err_bundle
             },
         }
     } else do {
-        let missing_result : FileCheckResult := { path := file_path, diagnostics := ["error: file not found: " ++ file_path] };
+        let missing_result : FileCheckResult := { path := file_path, diagnostics := ["error: file not found: " ++ file_path], warnings := List.empty };
         let missing_bundle : FileCheckAndCache := { result := missing_result, cache := cache };
         return missing_bundle
     }
@@ -2820,12 +2926,13 @@ pub def check_file_cached_from_source (cache : ModuleInfoCache) (file_path : Str
         Result.ok em => do {
             let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
             let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
-            let ok_result : FileCheckResult := { path := file_path, diagnostics := diags };
+            let warns : List String := coverage_warnings_of_decls em.scope (Option.some file_path) em.target_decls;
+            let ok_result : FileCheckResult := { path := file_path, diagnostics := diags, warnings := warns };
             let ok_bundle : FileCheckAndCache := { result := ok_result, cache := out_cache };
             return ok_bundle
         },
         Result.err e => do {
-            let err_result : FileCheckResult := { path := file_path, diagnostics := [e] };
+            let err_result : FileCheckResult := { path := file_path, diagnostics := [e], warnings := List.empty };
             let err_bundle : FileCheckAndCache := { result := err_result, cache := out_cache };
             return err_bundle
         },
@@ -6849,7 +6956,7 @@ def reports_missing_file (result : FileCheckAndCache) : Bool :=
     match result {
         FileCheckAndCache.mk fc_result _cache =>
             match fc_result {
-                FileCheckResult.mk _path diags =>
+                FileCheckResult.mk _path diags _warnings =>
                     match diags {
                         List.cons msg rest =>
                             String.contains msg "file not found" &&
