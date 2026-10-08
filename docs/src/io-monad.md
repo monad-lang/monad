@@ -180,7 +180,7 @@ is no write loop to write.
 
 ### What is not there
 
-- **TCP is self-hosted only.** The eight natives are implemented by
+- **TCP is self-hosted only.** The nine natives are implemented by
   `runtime/src/runtime.c`, which the self-hosted backend compiles; the Rust
   bootstrap host deliberately has no TCP implementation at all, so under it any
   of these fails at run time with `unknown native: tcp_listen` (or whichever was
@@ -281,10 +281,10 @@ and such a definition has no body. The name in the attribute is the runtime's
 identifier for the operation, which is not always the Monad-side name — the
 native behind `IO.println` is `print_str`.
 
-There are 146 natives declared across `init/` and `std/`. Three — `eq_rec`, `string_to_chars`, and
+There are 165 natives declared across `init/` and `std/`. Three — `eq_rec`, `string_to_chars`, and
 `string_from_chars` — are declared but not implemented anywhere, and calling one
 fails at run time with `unknown native`. The compiler backend wires a subset of
-the rest; see [Compiling and Running](./compiling.md#native-coverage). The eight
+the rest; see [Compiling and Running](./compiling.md#native-coverage). The nine
 `tcp_*` natives above are among the wired ones, but only in the self-hosted
 backend — the Rust host has no TCP implementation at all.
 

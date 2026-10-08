@@ -54,6 +54,16 @@ typedef struct {
    value. 16 is `Array.mk` and 17/18 are the handle kinds above, so 19 is
    the next free slot -- the two tables have to be changed together. */
 #define MONAD_IO_MK_TAG 19
+/* A `ByteBuf`'s block (see the ByteBuf section below) -- the fourth
+   allocation kind, and the shape `plans/bootstrapping/mlir-codegen.md`'s
+   `Buf E` generalises into a typed `Buf`. 20 is the next free slot after
+   16/17/18/19 above; unlike `IO.mk` and `Array.mk` it needs NO entry in
+   `lang/src/codegen/ctors.mo`'s `builtin_ctor_tags`, because nothing ever
+   CONSTRUCTS one -- every `ByteBuf` comes from a native, and its
+   `bytebuf` constructor is never built at run time. `monad_get_tag`
+   therefore has to name this kind for the same reason it names 17/18: a
+   `BufObj` has no Constructor slot to read. */
+#define MONAD_BUF_TAG 20
 
 typedef struct {
     Header header;
@@ -388,19 +398,21 @@ void* alloc_string(char* data, int64_t length) {
    value at runtime — needed for match dispatch codegen (compile_match_ir,
    lang/codegen/emit.mo), which has no other way to inspect a value it
    didn't just construct itself. */
-/* A Fiber/Scope handle is not a Constructor, so `Constructor.tag` is the
-   wrong slot to read for one: at offset 16 a `Fiber` holds `action`, a
-   pointer, and reporting its low half would let a `match` on a handle
-   take an arbitrary arm. The allocation-KIND slot in `Header` is what
-   separates the two representations, so it is consulted first -- every
-   Constructor carries kind 2 there, so the comparison cannot misfire on a
-   real constructor tag no matter how large a program's tag numbering
-   runs, and a handle reports 17/18, which no constructor tag collides
-   with. See the HANDLES ARE NOT CONSTRUCTORS note above. */
+/* A Fiber/Scope handle or a `BufObj` is not a Constructor, so
+   `Constructor.tag` is the wrong slot to read for one: at offset 16 a
+   `Fiber` holds `action`, a pointer, a `ByteBuf` holds `elem_kind`, and
+   reporting either low half would let a `match` on one take an arbitrary
+   arm. The allocation-KIND slot in `Header` is what separates the two
+   representations, so it is consulted first -- every Constructor carries
+   kind 2 there, so the comparison cannot misfire on a real constructor
+   tag no matter how large a program's tag numbering runs, and a handle
+   reports 17/18 and a buffer 20, which no constructor tag collides with.
+   See the HANDLES ARE NOT CONSTRUCTORS note above. */
 int64_t monad_get_tag(void* ptr) {
     if (!ptr) return -1;
     Header* header = (Header*)ptr;
-    if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG) {
+    if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG
+        || header->tag == MONAD_BUF_TAG) {
         return header->tag;
     }
     return ((Constructor*)ptr)->tag;
@@ -1930,48 +1942,87 @@ int64_t monad_ptr_null(void) {
    (motes/tls) take a `void*` plus a length, and no other `std/` type
    exposes one.
 
-   A `ByteBuf` value is the raw pointer to a GC-ALLOCATED buffer (the
-   `Socket`-as-fd shape: the value is never a constructor). GC
-   allocation is why `monad_bytebuf_free` is a deliberate no-op: a
+   A `ByteBuf` value is a pointer to a `BufObj`: a GC-ALLOCATED block
+   with its own `Header` kind (`MONAD_BUF_TAG`), an element kind, the
+   element count, and the address of a 64-byte-aligned payload inside the
+   same allocation. It is the u8 case (elem_kind 4) of the heap kind
+   `plans/bootstrapping/mlir-codegen.md`'s `Buf E` generalises -- one
+   `elem_kind` field apart -- so a kernel's `memref<Nxu8>` ABI and this
+   buffer's `void*`-plus-length ABI are the same bytes.
+
+   GC allocation is why `monad_bytebuf_free` is a deliberate no-op: a
    forgotten buffer is reclaimed, and a real `GC_free` on a word another
-   live value still holds would be a use-after-free. The buffer records
-   no length; `to_list`'s `len` is the count the CALLER knows
-   (`SSL_read`'s return), and `alloc` zero-fills so a round-trip test
-   never depends on malloc's spare bytes. The list walks are
-   `monad_tcp_write`/`monad_tcp_read`'s, reusing the same cons-chain
-   conventions (tags 5/6). */
+   live value still holds would be a use-after-free. The payload is
+   allocated ATOMIC (it holds no pointers, exactly like every string
+   buffer here), which is also what keeps the collector from scanning
+   arbitrary bytes as addresses. `len` is recorded at construction and
+   `to_list` CLAMPS to it, so nothing reads past what `alloc` reserved;
+   `alloc` zero-fills so a round-trip test never depends on malloc's
+   spare bytes. The list walks are `monad_tcp_write`/`monad_tcp_read`'s,
+   reusing the same cons-chain conventions (tags 5/6). */
+
+typedef struct {
+    Header         header;    /* refcount 1, tag MONAD_BUF_TAG */
+    int64_t        elem_kind; /* 0=i64 1=f64 2=f32 3=i32 4=u8 */
+    int64_t        len;       /* element count */
+    unsigned char* payload;   /* 64-byte aligned; the round-up varies the
+                                 offset, so it is stored, not recomputed */
+} BufObj;
+
+/* The payload begins at the first 64-byte boundary at or after the
+   struct, inside ONE atomic allocation with `MONAD_BUF_ALIGN - 1` bytes
+   of slack for the round-up. 64 is what a vectorised or coalesced load
+   wants, and it makes "the allocated address is the aligned address"
+   true by construction (mlir-codegen Decision 3); Boehm guarantees far
+   less, hence the manual round-up rather than an aligned allocator. */
+#define MONAD_BUF_ALIGN 64
+
+static BufObj* bytebuf_new(int64_t n) {
+    size_t len = n > 0 ? (size_t)n : 0;
+    BufObj* obj = (BufObj*)monad_alloc_atomic(sizeof(BufObj) + MONAD_BUF_ALIGN - 1 + len);
+    if (!obj) return NULL;
+    obj->header.refcount = 1;
+    obj->header.tag = MONAD_BUF_TAG;
+    obj->header.flags = 0;
+    obj->elem_kind = 4;                 /* u8 */
+    obj->len = (int64_t)len;
+    obj->payload = (unsigned char*)(((uintptr_t)obj + sizeof(BufObj) + MONAD_BUF_ALIGN - 1)
+                                    & ~(uintptr_t)(MONAD_BUF_ALIGN - 1));
+    if (len) memset(obj->payload, 0, len);
+    return obj;
+}
 
 /* `IO.ByteBuf.alloc (n : I64) : IO ByteBuf` -- n zeroed bytes. A
    negative n clamps to 0 rather than allocating a huge size. */
 void* monad_bytebuf_alloc(int64_t n) {
-    size_t len = n > 0 ? (size_t)n : 0;
-    unsigned char* buf = (unsigned char*)monad_alloc_atomic(len);
-    if (buf && len) memset(buf, 0, len);
-    return buf;
+    return bytebuf_new(n);
 }
 
 /* `IO.ByteBuf.of_list (xs : List U8) : IO ByteBuf` -- the same copy walk
-   `monad_tcp_write` uses, into a GC buffer. */
+   `monad_tcp_write` uses, into a freshly sized buffer. */
 void* monad_bytebuf_of_list(void* list) {
     int64_t n = tcp_list_len(list);
-    unsigned char* buf = (unsigned char*)monad_alloc_atomic(n > 0 ? (size_t)n : 0);
-    if (!buf) return buf;
+    BufObj* obj = bytebuf_new(n);
+    if (!obj) return obj;
     int64_t i = 0;
     for (void* cur = list; cur && monad_get_tag(cur) == 6 && i < n; ) {
-        buf[i++] = (unsigned char)((int64_t)monad_get_field(cur, 0) & 0xFF);
+        obj->payload[i++] = (unsigned char)((int64_t)monad_get_field(cur, 0) & 0xFF);
         cur = monad_get_field(cur, 1);
     }
-    return buf;
+    return obj;
 }
 
 /* `IO.ByteBuf.to_list (b : ByteBuf) (len : I64) : IO (List U8)` -- the
    first `len` bytes, built back-to-front exactly `monad_tcp_read` builds
    its list so it reads in memory order. A non-positive `len` yields
-   `List.empty`; a `len` past what was allocated reads out of bounds
-   (the module doc makes the caller the length's owner). */
+   `List.empty`; a `len` past what the buffer HOLDS clamps to it, so
+   nothing reads out of bounds (the interpreter clamps identically --
+   core_native.rs). */
 void* monad_bytebuf_to_list(void* buf, int64_t len) {
-    if (len <= 0) return alloc_constructor(5, 0);  /* List.empty */
-    unsigned char* bytes = (unsigned char*)buf;
+    if (!buf || len <= 0) return alloc_constructor(5, 0);  /* List.empty */
+    BufObj* obj = (BufObj*)buf;
+    if (len > obj->len) len = obj->len;
+    unsigned char* bytes = obj->payload;
     void* list = alloc_constructor(5, 0);
     for (int64_t i = len - 1; i >= 0; i--) {
         Constructor* cons = (Constructor*)alloc_constructor(6, 2);
@@ -1990,10 +2041,16 @@ void* monad_bytebuf_free(void* buf) {
     return tcp_unit();
 }
 
-/* `ByteBuf.ptr (b : ByteBuf) : Ptr` -- identity: the representation IS
-   the raw pointer the FFI wants. */
+/* `ByteBuf.ptr (b : ByteBuf) : Ptr` -- the payload address, which is
+   what the FFI wants: the C function sees the bytes, not the object's
+   header. */
 int64_t monad_bytebuf_ptr(int64_t b) {
-    return b;
+    return b ? (int64_t)((BufObj*)b)->payload : 0;
+}
+
+/* `ByteBuf.length (b : ByteBuf) : I64` -- the recorded element count. */
+int64_t monad_bytebuf_len(int64_t b) {
+    return b ? ((BufObj*)b)->len : 0;
 }
 
 /* ─── Raw stdio (`std/io.mo`'s raw-stdio group) ──────────────────────

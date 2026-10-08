@@ -420,10 +420,10 @@ naming the reference exactly as written (`unknown variable 'Map.get'`).
 
 ## Native Coverage
 
-There are 146 natives declared across `init/` and `std/`. The backend wires `I64` arithmetic and
+There are 165 natives declared across `init/` and `std/`. The backend wires `I64` arithmetic and
 comparison, string operations, `print_str`, the file and directory natives,
-`get_env`, `current_time`, `process_id`, `exec_cmd`, and the eight `tcp_*` socket
-natives.
+`get_env`, `current_time`, `process_id`, `exec_cmd`, the nine `tcp_*` socket
+natives, and `std.bytebuf`'s `ByteBuf`.
 
 Not wired: the entire concurrency surface — see
 [Concurrency](./concurrency.md). A program that reaches one of those fails to

@@ -18,7 +18,7 @@
 // walk, never a `BEq` dispatch.
 
 use lib::libc {memcpy, memset, strlen_ptr}
-use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.of_list, ByteBuf.ptr, ByteBuf.to_list}
+use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.ptr, ByteBuf.to_list}
 
 def memset_filled : List U8 := [65u8, 65u8, 65u8, 65u8]
 
@@ -43,14 +43,17 @@ def bytes_eq (xs ys : List U8) : Bool :=
     }
 
 /// memset WRITES through `ByteBuf.ptr` — C at the far end of the
-/// address, `ByteBuf.to_list` reading it back.
+/// address, `ByteBuf.to_list` reading it back. The recorded length is
+/// asserted here too, since `ptr` now hands out the payload of the very
+/// object that carries it.
 #[test]
 def test_memset_writes_through_ptr : IO Bool := do {
     let buf <- ByteBuf.alloc 4;
     let _ := memset (ByteBuf.ptr buf) (I64.to_i32 65) 4u64;
     let xs <- ByteBuf.to_list buf 4;
+    let n := ByteBuf.length buf;
     ByteBuf.free buf;
-    return (bytes_eq xs memset_filled)
+    return (bytes_eq xs memset_filled && I64.beq n 4)
 }
 
 /// strlen READS through `ByteBuf.ptr` — the buffer's last byte is

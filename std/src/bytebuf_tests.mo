@@ -15,7 +15,7 @@
 /// instance at run time, and constrained instance dispatch is exactly
 /// what this backend does not honor (`unresolved global: BEq.beq`).
 
-use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.of_list, ByteBuf.to_list}
+use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.to_list}
 use std::list {List.length}
 
 def empty_bytes : List U8 := List.empty
@@ -104,6 +104,39 @@ def test_to_list_zero_len_is_empty : IO Bool := do {
     let b <- ByteBuf.of_list three_bytes;
     let xs <- ByteBuf.to_list b 0;
     return (bytes_eq xs empty_bytes)
+}
+
+/// The recorded length is what the buffer was created with -- `alloc`'s
+/// `n` on one side, the list's length on the other.
+#[test]
+def test_length_after_alloc : IO Bool := do {
+    let b <- ByteBuf.alloc 16;
+    return (I64.beq (ByteBuf.length b) 16)
+}
+
+#[test]
+def test_length_after_of_list : IO Bool := do {
+    let b <- ByteBuf.of_list interior_zero;
+    return (I64.beq (ByteBuf.length b) 5)
+}
+
+/// A negative `n` clamps to 0, and the recorded length follows the
+/// clamp rather than the argument.
+#[test]
+def test_alloc_negative_length_is_zero : IO Bool := do {
+    let b <- ByteBuf.alloc (-1);
+    return (I64.beq (ByteBuf.length b) 0)
+}
+
+/// `to_list` clamps `len` to the recorded length, so over-asking returns
+/// the whole buffer rather than reading past it. Both backends must agree
+/// here: the compiled side over-read out of contract before the `BufObj`
+/// carried a length, while the interpreter always clamped.
+#[test]
+def test_to_list_clamps_to_recorded_length : IO Bool := do {
+    let b <- ByteBuf.of_list three_bytes;
+    let xs <- ByteBuf.to_list b 99;
+    return (bytes_eq xs three_bytes)
 }
 
 #[test]

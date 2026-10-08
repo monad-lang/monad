@@ -158,6 +158,8 @@ const PURE_NATIVES: &[&str] = &[
   "array_with",
   // `Ptr.null` (init/prelude.mo): the NULL word, a constant.
   "ptr_null",
+  // `ByteBuf.length` (std/bytebuf.mo): a registry lookup, no effect.
+  "bytebuf_len",
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
@@ -343,12 +345,13 @@ pub fn exec_native(
     "ptr_null" => Ok(Value::Lit(IrLit::Num(0, NumSuffix::I64))),
     // `std/bytebuf.mo`. Registry-id handles — see `bytebuf_alloc`'s own
     // doc comment. No `bytebuf_ptr` arm (this evaluator has no raw
-    // address to hand out); none of the four are in `PURE_NATIVES`
-    // (all `IO`-typed, like `read_file`).
+    // address to hand out); the four `IO`-typed ones are not in
+    // `PURE_NATIVES` (like `read_file`), while `bytebuf_len` is.
     "bytebuf_alloc" => bytebuf_alloc(args, natives),
     "bytebuf_of_list" => bytebuf_of_list(args, natives),
     "bytebuf_to_list" => bytebuf_to_list(args, natives),
     "bytebuf_free" => bytebuf_free(args, natives),
+    "bytebuf_len" => bytebuf_len(args),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -1573,21 +1576,19 @@ fn string_from_list(args: &[Value], natives: &NativeTable) -> Result<Value, Core
   Ok(Value::Lit(IrLit::Str(s.into())))
 }
 
-/// `std/bytebuf.mo`'s four interpreter-backed natives. A `ByteBuf` under
+/// `std/bytebuf.mo`'s five interpreter-backed natives. A `ByteBuf` under
 /// this evaluator is a REGISTRY id (`runtime::global::register`), the
 /// same opaque-handle convention `fork_io`/`scope_new` use; the compiled
-/// backend instead carries the raw buffer pointer (bytebuf.mo's module
+/// backend instead carries a pointer to a `BufObj` (bytebuf.mo's module
 /// doc is the cross-backend contract, and values never cross backends).
 /// `bytebuf_ptr` deliberately has no arm — this evaluator has no raw
 /// address to hand out, so forcing it reports
 /// `unknown native: bytebuf_ptr`.
 ///
-/// `bytebuf_to_list` clamps `len` to the buffer's allocated size: the C
-/// side stores no length either and TRUSTS the caller (its doc says an
-/// over-read is out of contract), and this side cannot faithfully
-/// misbehave the same way — reading past a `Vec` is a Rust panic, not
-/// an OOB read — so it truncates instead. Nothing correct notices the
-/// difference.
+/// The recorded length is this side's `Vec` length (`bytebuf_len`),
+/// which is also what `bytebuf_to_list` clamps `len` to — matching the
+/// compiled `BufObj.len` clamp exactly, so the two backends read back
+/// the same bytes for every argument, in-contract or not.
 fn bytebuf_alloc(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let n = match args.first() {
     Some(v) => extract_int(v)?,
@@ -1650,7 +1651,8 @@ fn bytebuf_to_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
     CoreEvalError::NativeArgError(format!("bytebuf_to_list: no buffer for handle {id}"))
   })?;
   // Same clamping `string_to_list` does for its byte source: a
-  // non-positive length is an empty list, never an error.
+  // non-positive length is an empty list, never an error. The `min` is
+  // the recorded-length clamp the compiled `BufObj` also applies.
   let take = if len <= 0 {
     0
   } else {
@@ -1671,6 +1673,25 @@ fn bytebuf_to_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
     };
   }
   io_wrap(natives, result)
+}
+
+/// `ByteBuf.length (b : ByteBuf) : I64` — the recorded element count.
+/// Pure (no `IO`) and so in `PURE_NATIVES`; the registry entry holds the
+/// bytes, so their count IS the recorded length, exactly as the compiled
+/// `BufObj`'s `len` field is.
+fn bytebuf_len(args: &[Value]) -> Result<Value, CoreEvalError> {
+  let id = match args.first() {
+    Some(v) => extract_handle_id(v)?,
+    None => {
+      return Err(CoreEvalError::NativeArgError(
+        "bytebuf_len needs 1 arg".into(),
+      ));
+    }
+  };
+  let len = crate::runtime::global::with::<Vec<u8>, _>(id, |v| v.len()).ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("bytebuf_len: no buffer for handle {id}"))
+  })?;
+  Ok(Value::Lit(IrLit::Num(len as i64, NumSuffix::I64)))
 }
 
 fn bytebuf_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {

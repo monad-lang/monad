@@ -213,20 +213,25 @@ ordinary functions, not `Functor`/`Foldable` methods.
 `#[extern "c"]` function that takes a `void*` plus a length wants
 (`SSL_read`/`SSL_write` in `motes/tls` are the first consumers; an `Array U8`
 exposes no backing store). Values are opaque like `Socket`: never
-pattern-match, compare or print one, and a buffer records **no length** —
-`to_list`'s `len` is the count the caller knows (the FFI call's return).
+pattern-match, compare or print one. A buffer **records its length** —
+`length` is what it was created with, and `to_list`'s `len` is clamped to it,
+so an over-large `len` cannot read past the allocation (pass `SSL_read`'s
+return to read only what came back).
 
 | Function | Notes |
 |----------|-------|
 | `ByteBuf.alloc n` | `n` zeroed bytes |
 | `ByteBuf.of_list xs` | copy into a fresh buffer |
-| `ByteBuf.to_list b len` | the first `len` bytes |
-| `ByteBuf.ptr b` | the raw address, a `Ptr` — **compiled backend only** |
+| `ByteBuf.to_list b len` | the first `len` bytes, clamped to `length` |
+| `ByteBuf.length b` | how many bytes the buffer was created with |
+| `ByteBuf.ptr b` | the raw payload address, a `Ptr` — **compiled backend only** |
 | `ByteBuf.free b` | a no-op compiled (Boehm reclaims); a real drop interpreted |
 
 The two backends hold different words and a value never crosses between
-them: compiled it is the raw pointer, interpreted a registry id (the
-`Fiber`/`Scope` convention).
+them: compiled it is a pointer to the heap kind the MLIR plan's `Buf E`
+generalises (element kind, recorded length, 64-byte-aligned atomic
+payload), interpreted a registry id (the `Fiber`/`Scope` convention) whose
+length is its `Vec`'s.
 
 ### `std.ansi` — **not ambient**
 
