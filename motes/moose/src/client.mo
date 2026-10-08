@@ -17,13 +17,18 @@
 /// the request except the ones describing a dropped body, and credentials are
 /// dropped when the redirect leaves the origin.
 ///
-/// No TLS — HTTPS URLs return an error.
+/// HTTPS goes through `motes/tls`: the connection's transport is
+/// `Transport.secure` carrying `Tls.read`/`write`/`close` over a
+/// verified handshake (certificate chain AND hostname), and everything
+/// below `Client.connect` speaks `Transport`, not `Socket`, so the two
+/// schemes share one request/response path.
 
 use http::types {
   Body, Headers, Method, Request, Response, Status.found,
   Status.moved_permanently, Status.permanent_redirect, Status.see_other,
-  Status.temporary_redirect, Uri, http1_1,
+  Status.temporary_redirect, Transport, Uri, http1_1,
 }
+use tls::stream {Tls.Stream, Tls.close, Tls.connect, Tls.read, Tls.write}
 use http::wire {
   Wire.format_request, Wire.frame_response, Wire.parse_response_with_method,
   Wire.take_bytes,
@@ -34,7 +39,7 @@ use http::uri {Uri.format, Uri.parse, Uri.resolve, Uri.same_origin}
 // ── Connection handle ───────────────────────────────────────────────────
 
 struct Connection {
-  socket : Socket,
+  socket : Transport,
   host : String,
   port : U16
 }
@@ -43,20 +48,29 @@ struct Connection {
 
 // ── URI → host/port ─────────────────────────────────────────────────────
 
-/// Extract host and port from a URI. Defaults to port 80 when absent.
+/// The port a scheme connects on when the URI names none: 443 for
+/// `https`, 80 for everything else.
+def Client.default_port (scheme : String) : U16 :=
+  if String.beq scheme "https"
+  then 443u16
+  else 80u16
+
+/// Extract host and port from a URI. Defaults to the scheme's port
+/// (443 for `https`, 80 otherwise) when absent.
 def Client.host_port (u : Uri) : Pair String U16 :=
   match u.port {
     Option.some p => Pair.pair u.host p,
-    Option.none => Pair.pair u.host 80u16
+    Option.none => Pair.pair u.host (Client.default_port u.scheme)
   }
 
-/// Build the `Host` header value: `host:port` when the port is non-default,
-/// just `host` otherwise.
+/// Build the `Host` header value: `host:port` when the port is non-default
+/// for the scheme, just `host` otherwise (an explicit `:443` on an
+/// `https` URL is as default as `:80` on `http`).
 def Client.host_header_value (u : Uri) : String :=
   match u.port {
     Option.none => u.host,
     Option.some p =>
-      if U16.beq p 80u16
+      if U16.beq p (Client.default_port u.scheme)
       then u.host
       else String.concat u.host (String.concat ":" (U16.to_string p))
   }
@@ -82,7 +96,7 @@ def Client.prepare_request (req : Request) : Request :=
 
 /// Read one whole response to `method`, buffering until it frames.
 #[terminating]
-def Client.read_message (method : Method) (sock : Socket) (carry : List U8) : IO (Result String Response) := do {
+def Client.read_message (method : Method) (t : Transport) (carry : List U8) : IO (Result String Response) := do {
   let frame : Result String (Option I64) := Wire.frame_response carry method;
   match frame {
     Result.err e => return (Result.err e),
@@ -90,22 +104,22 @@ def Client.read_message (method : Method) (sock : Socket) (carry : List U8) : IO
       match opt {
         Option.some n => return (Client.parse_framed method (Wire.take_bytes n carry)),
         Option.none => do {
-          let read_res <- IO.tcp_read sock 4096u64;
-          Client.read_message_step method sock carry read_res
+          let read_res <- Transport.read t 4096u64;
+          Client.read_message_step method t carry read_res
         }
       }
   }
 }
 
-/// One `tcp_read` result, while the response is still incomplete.
+/// One `Transport.read` result, while the response is still incomplete.
 #[terminating]
-def Client.read_message_step (method : Method) (sock : Socket) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String Response) :=
+def Client.read_message_step (method : Method) (t : Transport) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String Response) :=
   match read_res {
     Result.err e => return (Result.err e),
     Result.ok chunk =>
       if List.is_empty chunk
       then return (Client.parse_framed method carry)
-      else Client.read_message method sock (List.append carry chunk)
+      else Client.read_message method t (List.append carry chunk)
   }
 
 /// Parse a buffered response. A frame that completed and a buffer that ended
@@ -121,18 +135,19 @@ def Client.parse_framed (method : Method) (bytes : List U8) : Result String Resp
 /// The remainder after the frame is dropped rather than carried, unlike the
 /// server's reader: a client that asks for one response at a time is not sent
 /// a second one ahead of its request.
-def Client.read_response (sock : Socket) (method : Method) : IO (Result String Response) :=
-  Client.read_message method sock List.empty
+def Client.read_response (t : Transport) (method : Method) : IO (Result String Response) :=
+  Client.read_message method t List.empty
 
 // ── connection-handle API (keep-alive) ───────────────────────────────────
 
-/// Open a TCP connection to the host:port in `url`.
+/// Open a connection to the host:port in `url` — TLS for `https`, TCP for
+/// everything else.
 def Client.connect (url : String) : IO (Result String Connection) :=
   match Uri.parse url {
     Result.err e => return (Result.err e),
     Result.ok u =>
       if String.beq u.scheme "https"
-      then return (Result.err "HTTPS not supported (no TLS)")
+      then Client.connect_tls u
       else Client.connect_tcp u
   }
 
@@ -152,7 +167,25 @@ def Client.connect_done (hp : Pair String U16) (connect_res : Result String Sock
       // unsubstituted, which a literal's field position cannot absorb.
       let host := hp.first in
       let port := hp.second in
-      return (Result.ok ({ socket := sock, host := host, port := port } : Connection))
+      return (Result.ok ({ socket := Transport.plain sock, host := host, port := port } : Connection))
+  }
+
+/// Hand `host:port` to `Tls.connect`, whose handshake verifies the
+/// certificate chain AND the hostname before it returns.
+def Client.connect_tls (u : Uri) : IO (Result String Connection) :=
+  let hp := Client.host_port u in
+  Monad.bind (Tls.connect hp.first hp.second) (fn tls_res =>
+    Client.connect_tls_done hp tls_res)
+
+/// Wrap a verified `Tls.Stream` in a `Connection` carrying `Transport.secure`
+/// — the one place http's transport closures and the tls mote are joined.
+def Client.connect_tls_done (hp : Pair String U16) (tls_res : Result String Tls.Stream) : IO (Result String Connection) :=
+  match tls_res {
+    Result.err e => return (Result.err e),
+    Result.ok s =>
+      let host := hp.first in
+      let port := hp.second in
+      return (Result.ok ({ socket := Transport.secure (Tls.read s) (Tls.write s) (Tls.close s), host := host, port := port } : Connection))
   }
 
 /// Write a request to the connection's socket (no read). Exposed so callers
@@ -164,7 +197,7 @@ def Client.connect_done (hp : Pair String U16) (connect_res : Result String Sock
 def Client.write_request (conn : Connection) (req : Request) : IO (Result String U64) :=
   match Wire.format_request (Client.prepare_request req) {
     Result.err e => return (Result.err e),
-    Result.ok bytes => IO.tcp_write conn.socket bytes
+    Result.ok bytes => Transport.write conn.socket bytes
   }
 
 /// Send a request on an existing connection and read the response.
@@ -177,20 +210,22 @@ def Client.send (conn : Connection) (req : Request) : IO (Result String Response
   match Wire.format_request (Client.prepare_request req) {
     Result.err e => return (Result.err e),
     Result.ok bytes =>
-      Monad.bind (IO.tcp_write conn.socket bytes) (fn write_res =>
+      Monad.bind (Transport.write conn.socket bytes) (fn write_res =>
         Client.send_after_write conn.socket req.method write_res)
   }
 
 /// After writing the request, read the response and parse it.
-def Client.send_after_write (sock : Socket) (method : Method) (write_res : Result String U64) : IO (Result String Response) :=
+def Client.send_after_write (t : Transport) (method : Method) (write_res : Result String U64) : IO (Result String Response) :=
   match write_res {
     Result.err e => return (Result.err e),
-    Result.ok _ => Client.read_response sock method
+    Result.ok _ => Client.read_response t method
   }
 
-/// Close a connection.
+/// Close a connection (and, under `Transport.secure`, everything the TLS
+/// session held: ssl, ctx, socket — `Tls.close` frees in reverse
+/// construction order).
 def Client.close (conn : Connection) : IO Unit :=
-  IO.tcp_close conn.socket
+  Transport.close conn.socket
 
 // ── one-shot API ────────────────────────────────────────────────────────
 

@@ -10,3 +10,9 @@ edition = "2026"
 # failing. See the note in the repo root's mote.toml.
 [dependencies.http]
 path = "../http"
+
+# `moose` is where http's closure-carrying `Transport.secure` and the
+# tls mote are joined, so this is the dependency that puts `-lssl` on a
+# moose link line -- and the only one that does.
+[dependencies.tls]
+path = "../tls"

@@ -194,6 +194,41 @@ def Body.is_text (b : Body) (s : String) : Bool :=
     Body.form _ => false
   }
 
+// ── Transport ───────────────────────────────────────────────────────────
+// A tagged union of byte-level transports, so `moose` (and later `moon`)
+// can speak either scheme without this mote learning what TLS is: the
+// `secure` arm carries read/write/close CLOSURES rather than a
+// `Tls.Stream`, which keeps the dependency (and the `-lssl` link flag)
+// opt-in at the mote level -- `http` depends on neither, and `moose` is
+// where the two are joined, at connect time. `Body.stream` above is the
+// precedent for a closure-carrying constructor field.
+
+type Transport {
+  plain (sock : Socket),
+  secure (read : U64 -> IO (Result String (List U8)))
+         (write : List U8 -> IO (Result String U64))
+         (close : IO Unit)
+}
+open Transport { plain, secure }
+
+def Transport.read (t : Transport) (max : U64) : IO (Result String (List U8)) :=
+  match t {
+    Transport.plain sock => IO.tcp_read sock max,
+    Transport.secure read _ _ => read max
+  }
+
+def Transport.write (t : Transport) (data : List U8) : IO (Result String U64) :=
+  match t {
+    Transport.plain sock => IO.tcp_write sock data,
+    Transport.secure _ write _ => write data
+  }
+
+def Transport.close (t : Transport) : IO Unit :=
+  match t {
+    Transport.plain sock => IO.tcp_close sock,
+    Transport.secure _ _ close => close
+  }
+
 // ── Framing ─────────────────────────────────────────────────────────────
 // How a message's body is delimited (RFC 9110 §6.3). `no_body` is not the
 // same as a length of zero: a HEAD response and a 204 both carry a
