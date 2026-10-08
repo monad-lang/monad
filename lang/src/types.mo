@@ -1030,6 +1030,19 @@ pub type ParseDeclKind {
     def_macro_d (ParseDef),
     decl_gen_d (name: NamePath) (params: List ParseParam) (decl_list: List ParseDecl) (attrs: List Attribute),
     macro_call_d (name: Identifier) (args: List ParseTerm),
+    /// `with Dotted.Name { <decls> }` — a flat name-prefixing block:
+    /// every named declaration inside gets `Dotted.Name.` prepended to
+    /// its name (`with Cubical { def i0 : I }` declares `Cubical.i0`).
+    /// Pure sugar — the ONLY thing the prefix changes is the inner
+    /// decls' names, at lowering (`lower_parse_decls` splices the
+    /// prefixed decls out flat; `lower_parse.mo`'s prefix helpers). No
+    /// implicit open, no namespace semantics: a reference inside the
+    /// block writes the prefixed name the decl gets (`Cubical.I`), the
+    /// same spelling any reference outside would. `prefix` is the
+    /// header's dotted name as one identifier ("Dotted.Name"), the same
+    /// `join_dotted_identifiers` shape `dotted_def_name` gives a def's
+    /// own dotted name (`lang/parser.mo`).
+    with_d (prefix: Identifier) (decl_list: List ParseDecl),
     /// `#![mote { ... }]` — the file-level INNER attribute, carried until
     /// lowering as `Decl.mote_d`. Appended LAST deliberately: these are
     /// constructor-named variants, so nothing is positional, but a
@@ -1099,6 +1112,10 @@ def pd_decl_gen_d (name : NamePath) (params : List ParseParam) (decl_list : List
 #[partial]
 def pd_macro_call_d (name : Identifier) (args : List ParseTerm) : ParseDecl :=
     pd_ (ParseDeclKind.macro_call_d name args)
+
+#[partial]
+def pd_with_d (prefix : Identifier) (decl_list : List ParseDecl) : ParseDecl :=
+    pd_ (ParseDeclKind.with_d prefix decl_list)
 
 /// `#![mote { ... }]`. Takes the already-parsed `Attribute` (the `#![]`
 /// spelling is the parser's business, not this constructor's) so it can

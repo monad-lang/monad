@@ -1735,9 +1735,17 @@ fn def_parser(input: Span) -> Res<Def> {
   // emits `extern_attr_warnings` for each one at load time), while
   // actually evaluating such a def fails with `unknown native: <name>`
   // from `exec_native`'s fallback arm.
-  let is_codegen_attr = attrs
-    .iter()
-    .any(|a| a.name.as_str() == "export" || a.name.as_str() == "extern");
+  //
+  // `#[cubical "..."]` takes the same body-less shape for the same
+  // reason at one remove: the cubical primitives (the `with Cubical`
+  // block in init/src/prelude.mo) are BODY-LESS marker defs, and the
+  // Rust host has no cubical checker — it only needs the declaration to
+  // load and type-check as an opaque signature. The marker's string is
+  // the self-hosted checker's binding key (`build_scope_def`,
+  // lang/src/scope.mo); the host never reads it.
+  let is_codegen_attr = attrs.iter().any(|a| {
+    a.name.as_str() == "export" || a.name.as_str() == "extern" || a.name.as_str() == "cubical"
+  });
   if is_codegen_attr {
     let plain_params: Vec<Param> = params.iter().map(parsed_param_as_param).collect();
     let native_name = name.last().clone();
@@ -2653,6 +2661,40 @@ fn open_parser(input: Span) -> Res<Decl> {
     )),
   }
 }
+
+/// `with Dotted.Name { ... }` — a flat name-prefixing declaration block:
+/// every named declaration inside gets `Dotted.Name.` prepended to its
+/// name, and nothing else changes (no implicit open, no namespace
+/// semantics — a reference inside the block writes the same prefixed
+/// spelling an outside one would). Mirrors the self-hosted `with_parser`
+/// (`lang/src/parser.mo`), which lowers to `ParseDeclKind.with_d` and
+/// splices the prefixed decls flat at parse lowering; here the block
+/// wraps the prefixed decls in `Decl::Generated`, the variant every
+/// consumer (`Module::add_decl`, the checker's `Generated` arm) already
+/// flattens recursively.
+///
+/// `terminated(tag("with"), ws1)` for the keyword boundary — plain
+/// `tag("with")` would misbind `withdraw ...` as a block.
+fn with_decl_parser(input: Span) -> Res<Decl> {
+  let (input, _) = terminated(tag("with"), ws1).parse(input)?;
+  let (input, prefix) = def_name(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = char('{')(input)?;
+  let (input, _) = ws0(input)?;
+  let (decls, remaining) = decls_until_end(input);
+  let (remaining, _) = ws0(remaining)?;
+  let (remaining, _) = context("closing brace for with block", char('}')).parse(remaining)?;
+  Ok((
+    remaining,
+    Decl::Generated(
+      decls
+        .into_iter()
+        .map(|d| Decl::prefixed(&prefix, d))
+        .collect(),
+    ),
+  ))
+}
+
 /// Same declaration grammar `decl_parser` uses, minus its own leading
 /// doc-comment/location bookkeeping — used for `decls { ... }` decl-gen
 /// macro template bodies (`defs_block_parser`). Despite the name (kept for
@@ -2677,6 +2719,7 @@ fn decl_parser_no_macro(input: Span) -> Res<Decl> {
     map(struct_parser, Decl::Type),
     map(inductive_parser, Decl::Type),
     map(infix_parser, Decl::Infix),
+    with_decl_parser,
     macro_call_decl_parser,
   ))
   .parse(input)?;
@@ -2699,6 +2742,7 @@ fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
     map(struct_parser, Decl::Type),
     map(inductive_parser, Decl::Type),
     map(infix_parser, Decl::Infix),
+    with_decl_parser,
     macro_call_decl_parser,
   ))
   .parse(input)?;

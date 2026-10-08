@@ -12,7 +12,7 @@ use lang::types {
   named, num, operator, package_private, parse_param_many, parse_param_with_mult,
   pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
   pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
-  pd_scoped_open_d, pd_struct_d, pd_use_d, pi, plain, priv_, pt_app, pt_at, pt_do,
+  pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_do,
   pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
   pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
   struct_update, term_loc, u32, u64, var, zero,
@@ -3764,6 +3764,226 @@ def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : 
 		fail e => fail (ParseError.custom "expected } to close decl_list block" "")
 	}
 
+// ─── `with Dotted.Name { ... }` — a flat name-prefixing decl block ──────
+//
+// The block's ONLY semantics is name prefixing: each inner decl's name
+// comes out `Dotted.Name.<own name>` (applied at lowering, not here --
+// see `ParseDeclKind.with_d`'s own doc in `lang/types.mo` and the
+// prefix helpers in `lang/parser/lower_parse.mo`). The inner decl list
+// is parsed by the SAME `decls_skip` truncate-on-fail loop the module
+// level uses -- the closing `}` is simply the first thing that fails
+// `decl_parser`, exactly how `defmacro`'s `decls { ... }` block works
+// directly above. The header is one dotted name (`dotted_def_name`,
+// the same parser a def's own dotted name uses), held as one identifier
+// ("Dotted.Name").
+
+#[partial]
+def with_parser (input : String) : ParseResult ParseDecl :=
+	with_kw (tag_keyword "with" input) input
+
+#[partial]
+def with_kw (r : ParseResult String) (input : String) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => with_name (dotted_def_name (skip_spaces rem)),
+		fail e => fail e
+	}
+
+#[partial]
+def with_name (r : ParseResult String) : ParseResult ParseDecl :=
+	match r {
+		success rem name => with_open (tag "{" (skip_spaces rem)) (Identifier.id name),
+		fail e => fail e
+	}
+
+#[partial]
+def with_open (r : ParseResult String) (prefix : Identifier) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => with_decls (decls_skip (skip_spaces rem) List.empty) prefix,
+		fail e => fail e
+	}
+
+#[partial]
+def with_decls (r : ParseResult (List ParseDecl)) (prefix : Identifier) : ParseResult ParseDecl :=
+	match r {
+		success rem decl_list => with_close (tag "}" (skip_spaces rem)) prefix decl_list,
+		fail e => fail e
+	}
+
+#[partial]
+def with_close (r : ParseResult String) (prefix : Identifier) (decl_list : List ParseDecl) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => success rem (pd_with_d prefix decl_list),
+		fail _ => fail (ParseError.custom "expected } to close with block" "")
+	}
+
+#[test]
+def test_with_block_prefixes_def_name : Bool :=
+	match decls_parser "with Cubical { def i0 : Cubical.I }" {
+		success rem ds =>
+			String.beq rem ""
+				&& I64.beq (debug_decl_count ds) 1
+				&& match ds {
+					List.cons d _ =>
+						match d {
+							Decl.def_d def_ =>
+								String.beq (show_name_path def_.name) "Cubical.i0",
+							_ => false,
+						},
+					List.empty => false,
+				},
+		fail _ => false
+	}
+
+/// Two decls in one block splice out flat AND a decl after the block
+/// still parses -- the block contributes its inner decls directly to
+/// the stream, not as one wrapped declaration.
+#[test]
+def test_with_block_splices_inner_decls_flat : Bool :=
+	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := 2 }\ndef c : I64 := 3" {
+		success rem ds =>
+			String.beq rem ""
+				&& I64.beq (debug_decl_count ds) 3
+				&& match ds {
+					List.cons a rest =>
+						match a {
+							Decl.def_d da =>
+								match rest {
+									List.cons b rest2 =>
+										match b {
+											Decl.def_d db =>
+												match rest2 {
+													List.cons c _ =>
+														match c {
+															Decl.def_d dc =>
+																String.beq (show_name_path da.name) "Ns.a"
+																	&& String.beq (show_name_path db.name) "Ns.b"
+																	&& String.beq (show_name_path dc.name) "c",
+															_ => false,
+														},
+													List.empty => false,
+												},
+											_ => false,
+										},
+									List.empty => false,
+								},
+							_ => false,
+						},
+					List.empty => false,
+				},
+		fail _ => false
+	}
+
+/// A multi-segment header prefixes with the WHOLE dotted name, not just
+/// the last segment.
+#[test]
+def test_with_block_dotted_prefix : Bool :=
+	match decls_parser "with Dotted.Name { def a : I64 := 1 }" {
+		success _ ds =>
+			match ds {
+				List.cons d _ =>
+					match d {
+						Decl.def_d def_ =>
+							String.beq (show_name_path def_.name) "Dotted.Name.a",
+						_ => false,
+					},
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// Every NAMED declaration form gets prefixed -- the block is not
+/// def-only sugar. Classes, structs and instances carry `Identifier`
+/// names; the prefix applies to them through the same one-string concat
+/// (`prefix_ident`, `lang/parser/lower_parse.mo`).
+#[test]
+def test_with_block_prefixes_class_struct_instance : Bool :=
+	match decls_parser "with Ns { class K A { def m : A -> A }\nstruct S { f : I64 }\ninstance Inst : K I64 { def m (x : I64) : I64 := x } }" {
+		success _ ds =>
+			match ds {
+				List.cons c rest =>
+					match c {
+						Decl.class_d k =>
+							match rest {
+								List.cons s rest2 =>
+									match s {
+										Decl.struct_d st =>
+											match rest2 {
+												List.cons i _ =>
+													match i {
+														Decl.instance_d ins =>
+															String.beq (show_identifier k.name) "Ns.K"
+																&& String.beq (show_identifier st.name) "Ns.S"
+																&& String.beq (show_identifier ins.name) "Ns.Inst",
+														_ => false,
+													},
+												List.empty => false,
+											},
+										_ => false,
+									},
+								List.empty => false,
+							},
+						_ => false,
+					},
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// A nested block composes its prefixes -- `with A { with B { def c } }`
+/// declares `A.B.c`. The composition happens on the INNER prefix at the
+/// outer pass (`prefix_parse_decl_kind`'s `with_d` arm), so the inner
+/// block's own lowering needs no outer knowledge.
+#[test]
+def test_nested_with_composes_prefixes : Bool :=
+	match decls_parser "with A { with B { def c : I64 := 1 } }" {
+		success _ ds =>
+			match ds {
+				List.cons d _ =>
+					match d {
+						Decl.def_d def_ =>
+							String.beq (show_name_path def_.name) "A.B.c",
+						_ => false,
+					},
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// The one expansion in `lower_parse_decls` must stay invisible to the
+/// span/decl zip: one span per lowered decl, counting the block's inner
+/// decls individually (`collect_decl_spans` splices the same way the
+/// lowering does -- see its own doc comment in `lang/parser/lower_parse.mo`).
+#[test]
+def test_with_block_keeps_span_count_aligned : Bool :=
+	match decls_skip (skip_docstrings (skip_spaces "with Ns { def a : I64 := 1\ndef b : I64 := 2 }\ndef c : I64 := 3")) List.empty {
+		success _ ds =>
+			I64.beq (List.length (collect_decl_spans ds List.empty))
+				(debug_decl_count (lower_parse_decls lower_ctx_bare ds)),
+		fail _ => false
+	}
+
+/// The strict parser reports an unclosed block at the block, with the
+/// block-specific message -- not silently truncating the way the lenient
+/// loop's documented gap does, and not relabeled to "unknown
+/// declaration" (the `with` keyword DID match, so `decl_fail_to_unknown`
+/// keeps the specific error).
+#[test]
+def test_with_block_unclosed_fails_strict : Bool :=
+	match decls_parser_strict "with Ns { def a : I64 := 1" {
+		success _ _ => false,
+		fail e => String.contains (render_parse_error "with Ns { def a : I64 := 1" Option.none e) "expected } to close with block",
+	}
+
+/// `tag_keyword`'s boundary check: `withdraw` is an ordinary identifier,
+/// not a `with` block. A bare unknown decl like this fails strict
+/// parsing outright rather than misbinding `draw` as a block prefix.
+#[test]
+def test_with_keyword_requires_word_boundary : Bool :=
+	match decls_parser_strict "withdraw" {
+		success _ _ => false,
+		fail e => Bool.not (String.contains (render_parse_error "withdraw" Option.none e) "close with block"),
+	}
+
 // ─── Declaration-position `name! args...` ───────────────────────────────
 //
 // Mirrors the reference's `macro_call_decl_parser`/`macro_call_decl_arg`
@@ -3854,7 +4074,7 @@ def macro_call_decl_args (input : String) (name : Identifier) (acc : List ParseT
 #[partial]
 def decl_parsers : List (String -> ParseResult ParseDecl) :=
 	[mote_attr_parser, use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
-	 struct_parser, type_parser, class_parser, instance_parser, macro_call_decl_parser]
+	 struct_parser, type_parser, class_parser, instance_parser, with_parser, macro_call_decl_parser]
 
 /// `input` is the exact text the declaration starts at -- `decls_skip`
 /// has already skipped the whitespace and docstrings ahead of it -- so

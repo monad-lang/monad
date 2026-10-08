@@ -307,20 +307,26 @@ pub def collect_decl_rems (ds : List ParseDecl) (acc : List I64) : List I64 := m
 /// declaration-granular diagnostic wants -- is dropped on the floor. This
 /// collects exactly that dropped piece and nothing else.
 ///
-/// THE ORDER IS THE CONTRACT. `lower_parse_decls` is a strict 1:1
-/// `List.cons`-map over `List ParseDecl`: no filtering, no desugaring, no
-/// length change. So the nth span here belongs to the nth lowered `Decl`,
-/// and a caller may zip the two lists. That is load-bearing and it is not
-/// enforced by any type -- a later change that filters or expands a
-/// declaration inside that map would shift every range from that point on,
-/// silently and only in the presence of a diagnostic. `lang/src/tests/
-/// decl_range_tests.mo` therefore pins the COUNT equality rather than
-/// trusting this paragraph.
+/// THE ORDER IS THE CONTRACT. `lower_parse_decls` maps each `ParseDecl`
+/// to exactly one `Decl` -- no filtering, no desugaring, no length change
+/// -- EXCEPT the one documented `with_d` splice below. So the nth span
+/// here belongs to the nth lowered `Decl`, and a caller may zip the two
+/// lists. That is load-bearing and it is not enforced by any type -- a
+/// later change that filters or expands a declaration inside that map
+/// would shift every range from that point on, silently and only in the
+/// presence of a diagnostic. `lang/src/tests/decl_range_tests.mo`
+/// therefore pins the COUNT equality rather than trusting this paragraph.
 ///
 /// Unlike `collect_decl_kind_rems`, this does NOT recurse into a
 /// `scoped_open_d`/`decl_gen_d`'s inner declarations. Those are still one
 /// element of the list `lower_parse_decls` maps over, so descending would
 /// break the alignment this exists to provide.
+///
+/// `with_d` is the ONE exception, on both sides of that contract: a
+/// `with` block is the one declaration form `lower_parse_decls`
+/// EXPANDS rather than maps 1:1 (its lowered form is its inner decls,
+/// name-prefixed), so this splices the inner decls' own spans the same
+/// way, keeping the two lists element-for-element.
 ///
 /// A reversed accumulator, like `collect_decl_rems`: callers reverse once.
 #[partial]
@@ -328,7 +334,10 @@ pub def collect_decl_spans (ds : List ParseDecl) (acc : List (Pair I64 I64)) : L
     match ds {
         List.empty => acc,
         List.cons d rest =>
-            collect_decl_spans rest (List.cons (Pair.pair d.span.start_rem d.span.end_rem) acc),
+            match d.kind {
+                ParseDeclKind.with_d _ inner => collect_decl_spans rest (collect_decl_spans inner acc),
+                _ => collect_decl_spans rest (List.cons (Pair.pair d.span.start_rem d.span.end_rem) acc),
+            },
     }
 
 #[partial]
@@ -349,6 +358,7 @@ def collect_decl_kind_rems (k : ParseDeclKind) (acc : List I64) : List I64 := ma
     ParseDeclKind.infix_d _o _p _v => acc,
     ParseDeclKind.use_d _p _f _pub => acc,
     ParseDeclKind.open_d _p _f => acc,
+    ParseDeclKind.with_d _p decls => collect_decl_rems decls acc,
 }
 
 #[partial]
@@ -1016,11 +1026,76 @@ def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
     }
 
 
+/// `with Dotted.Name { ... }`'s whole semantics, applied here rather
+/// than in the grammar: prepend `Dotted.Name.` to each inner decl's own
+/// name. Nothing else changes -- no implicit open, no namespace: a
+/// reference inside the block writes the same prefixed spelling
+/// (`Cubical.I`) a reference outside would, and the prefixed names are
+/// exactly what the equivalent hand-written `def Cubical.i0 : ...` list
+/// would produce (one identifier with embedded dots, the
+/// `dotted_def_name`/`join_dotted_identifiers` convention,
+/// `lang/parser.mo`). Unnamed forms (`use`/`open`/macro call/mote attr)
+/// pass through unchanged: they name no declaration to prefix.
+#[partial]
+def prefix_parse_decl (prefix : Identifier) (d : ParseDecl) : ParseDecl :=
+    { d with kind := prefix_parse_decl_kind prefix d.kind }
+
+#[partial]
+def prefix_parse_decl_kind (prefix : Identifier) (k : ParseDeclKind) : ParseDeclKind :=
+    match k {
+        ParseDeclKind.def_d d => ParseDeclKind.def_d { d with name := prefix_npath prefix d.name },
+        ParseDeclKind.def_macro_d d => ParseDeclKind.def_macro_d { d with name := prefix_npath prefix d.name },
+        ParseDeclKind.inductive_d i => ParseDeclKind.inductive_d { i with name := prefix_npath prefix i.name },
+        ParseDeclKind.struct_d s => ParseDeclKind.struct_d { s with name := prefix_ident prefix s.name },
+        ParseDeclKind.class_d c => ParseDeclKind.class_d { c with name := prefix_ident prefix c.name },
+        ParseDeclKind.instance_d i => ParseDeclKind.instance_d { i with name := prefix_ident prefix i.name },
+        ParseDeclKind.infix_d op path vis => ParseDeclKind.infix_d op (prefix_npath prefix path) vis,
+        // A nested block composes prefixes: `with A { with B { def c } }`
+        // declares `A.B.c`, and the inner block is lowered by this same
+        // arm knowing nothing of the outer one, so the composition has
+        // to happen here -- on the inner prefix, once, at the outer pass.
+        ParseDeclKind.with_d inner ds => ParseDeclKind.with_d (prefix_ident prefix inner) ds,
+        // `open M in <decl>` wraps ONE named declaration -- prefix the
+        // wrappee, not the module path.
+        ParseDeclKind.scoped_open_d p f inner => ParseDeclKind.scoped_open_d p f (prefix_parse_decl prefix inner),
+        // `defmacro name ... := decls { ... }` both names a decl and
+        // generates them -- prefix the macro AND its template decls, so
+        // generated declarations land in the same prefixed namespace.
+        ParseDeclKind.decl_gen_d n params ds attrs =>
+            ParseDeclKind.decl_gen_d (prefix_npath prefix n) params
+                                    (List.map (prefix_parse_decl prefix) ds) attrs,
+        // `use`/`open` name modules; a macro call names a macro; a mote
+        // attr names the file. None of these is a prefixed declaration.
+        _ => k,
+    }
+
+#[partial]
+def prefix_ident (prefix : Identifier) (n : Identifier) : Identifier :=
+    Identifier.id (String.concat (show_identifier prefix) (String.concat "." (show_identifier n)))
+
+#[partial]
+def prefix_npath (prefix : Identifier) (np : NamePath) : NamePath :=
+    NamePath.npath (List.cons
+        (Identifier.id (String.concat (show_identifier prefix) (String.concat "." (show_name_path np))))
+        List.empty)
+
 /// The single entry point. The grammar's three top-level parsers call
 /// this with an empty context; everything downstream keeps seeing `Decl`.
+///
+/// Not a strict 1:1 map: `with Dotted.Name { ... }` is the one form that
+/// expands -- its lowered form is its inner decls, name-prefixed by
+/// `prefix_parse_decl` and spliced out flat. `collect_decl_spans` splices
+/// the same way, keeping the two lists element-for-element (see its own
+/// doc comment).
 #[partial]
 pub def lower_parse_decls (ctx : ParseLowerCtx) (ds : List ParseDecl) : List Decl :=
     match ds {
         List.empty => List.empty,
-        List.cons d rest => List.cons (lower_parse_decl ctx d) (lower_parse_decls ctx rest),
+        List.cons d rest =>
+            match d.kind {
+                ParseDeclKind.with_d prefix inner =>
+                    List.append (lower_parse_decls ctx (List.map (prefix_parse_decl prefix) inner))
+                                (lower_parse_decls ctx rest),
+                _ => List.cons (lower_parse_decl ctx d) (lower_parse_decls ctx rest),
+            },
     }

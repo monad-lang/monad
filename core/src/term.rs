@@ -3490,4 +3490,67 @@ impl Decl {
       }
     }
   }
+
+  /// `with Dotted.Name { ... }`'s whole semantics: prepend `Dotted.Name.`
+  /// to a declaration's own name, and change nothing else. The
+  /// `with_decl_parser` (`core/src/parser.rs`) maps this over a block's
+  /// inner declarations; segment-wise prepend matches the dotted
+  /// declaration names `def_name` already parses (`def List.map` is
+  /// `[List, map]`, so `with Foo { def map }` is `[Foo, map]`). Mirrors
+  /// the self-hosted `prefix_parse_decl`
+  /// (`lang/src/parser/lower_parse.mo`) -- there the prefixing happens
+  /// on the parse tree's single-joined-dotted-identifier spelling, the
+  /// two agree exactly on every rendering.
+  ///
+  /// Unnamed forms pass through: `Use`/`Open` name modules, `MacroCall`
+  /// names a macro, `MoteAttr` names the file. `ScopedOpen` wraps ONE
+  /// named declaration, so the wrappee is prefixed, and `Generated`
+  /// (which is how a NESTED `with` block arrives) is descended so
+  /// `with A { with B { def c } }` declares `A.B.c`.
+  pub fn prefixed(prefix: &NamePath, decl: Decl) -> Decl {
+    match decl {
+      Decl::Def(mut def) => {
+        def.name = prefix.extend_borrowed(&def.name);
+        Decl::Def(def)
+      }
+      Decl::DefMacro(mut def) => {
+        def.name = prefix.extend_borrowed(&def.name);
+        Decl::DefMacro(def)
+      }
+      Decl::Type(mut ind) => {
+        ind.name = prefix.extend_borrowed(&ind.name);
+        Decl::Type(ind)
+      }
+      Decl::Ins(mut ins) => {
+        ins.name = prefix.extend_borrowed(&ins.name);
+        Decl::Ins(ins)
+      }
+      Decl::Infix(mut inf) => {
+        inf.name = prefix.extend_borrowed(&inf.name);
+        Decl::Infix(inf)
+      }
+      Decl::DeclGen(mut gd) => {
+        gd.name = prefix.extend_borrowed(&gd.name);
+        Decl::DeclGen(gd)
+      }
+      Decl::ScopedOpen {
+        path,
+        filter,
+        attributes,
+        decl,
+      } => Decl::ScopedOpen {
+        path,
+        filter,
+        attributes,
+        decl: Box::new(Decl::prefixed(prefix, *decl)),
+      },
+      Decl::Generated(inner) => Decl::Generated(
+        inner
+          .into_iter()
+          .map(|d| Decl::prefixed(prefix, d))
+          .collect(),
+      ),
+      other => other,
+    }
+  }
 }
