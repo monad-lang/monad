@@ -573,6 +573,18 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // FFI's callback arguments. `passthrough` with zero params:
             // the call's result IS the def's value, the raw word 0.
             else if String.beq target "ptr_null" then Option.some (NativeWrapKind.passthrough "monad_ptr_null")
+            // `std/bytebuf.mo`'s five `#[native "bytebuf_*"]` defs -- a
+            // flat byte buffer the FFI can address (motes/tls's
+            // `SSL_read`/`SSL_write`). Compiled, a `ByteBuf` is the raw
+            // pointer to a GC-allocated buffer (the `Socket`-as-fd
+            // shape); the four `IO`-typed ones are `io_passthrough`
+            // like the TCP family, while `ptr`'s result is the address
+            // itself and stays a bare `passthrough`.
+            else if String.beq target "bytebuf_alloc" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_alloc")
+            else if String.beq target "bytebuf_of_list" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_of_list")
+            else if String.beq target "bytebuf_to_list" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_to_list")
+            else if String.beq target "bytebuf_free" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_free")
+            else if String.beq target "bytebuf_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_ptr")
             else Option.none,
     }
 
@@ -826,13 +838,22 @@ def runtime_declarations : List LLVMDeclaration :=
     // `monad_ptr_null` (runtime.c) -- `Ptr.null`'s backing function. No
     // parameters; the i64 result is the NULL word itself.
     let d80 := mk_decl "monad_ptr_null" List.empty "i64" in
+    // `std/bytebuf.mo`'s five (runtime.c) -- every arg and result i64
+    // under the head-of-list convention: a `ByteBuf` is the raw buffer
+    // pointer, and `of_list`/`to_list`'s `List U8` is one i64 pointer to
+    // the list's head (exactly `tcp_write`/`tcp_read`'s shape, d68/d69).
+    let d81 := mk_decl "monad_bytebuf_alloc" (List.cons "i64" List.empty) "i64" in
+    let d82 := mk_decl "monad_bytebuf_of_list" (List.cons "i64" List.empty) "i64" in
+    let d83 := mk_decl "monad_bytebuf_to_list" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d84 := mk_decl "monad_bytebuf_free" (List.cons "i64" List.empty) "i64" in
+    let d85 := mk_decl "monad_bytebuf_ptr" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d68, d69, d70, d71, d72,
-     d73, d74, d75, d76, d77, d78, d79, d80]
+     d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

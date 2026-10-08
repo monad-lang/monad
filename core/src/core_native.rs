@@ -334,6 +334,14 @@ pub fn exec_native(
     // motes/tls is the first caller). A `Ptr` value is its raw machine
     // word under every backend, so 0 is the whole implementation.
     "ptr_null" => Ok(Value::Lit(IrLit::Num(0, NumSuffix::I64))),
+    // `std/bytebuf.mo`. Registry-id handles — see `bytebuf_alloc`'s own
+    // doc comment. No `bytebuf_ptr` arm (this evaluator has no raw
+    // address to hand out); none of the four are in `PURE_NATIVES`
+    // (all `IO`-typed, like `read_file`).
+    "bytebuf_alloc" => bytebuf_alloc(args, natives),
+    "bytebuf_of_list" => bytebuf_of_list(args, natives),
+    "bytebuf_to_list" => bytebuf_to_list(args, natives),
+    "bytebuf_free" => bytebuf_free(args, natives),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -1556,6 +1564,119 @@ fn string_from_list(args: &[Value], natives: &NativeTable) -> Result<Value, Core
     CoreEvalError::NativeArgError(format!("invalid UTF-8 in string_from_list: {e}"))
   })?;
   Ok(Value::Lit(IrLit::Str(s.into())))
+}
+
+/// `std/bytebuf.mo`'s four interpreter-backed natives. A `ByteBuf` under
+/// this evaluator is a REGISTRY id (`runtime::global::register`), the
+/// same opaque-handle convention `fork_io`/`scope_new` use; the compiled
+/// backend instead carries the raw buffer pointer (bytebuf.mo's module
+/// doc is the cross-backend contract, and values never cross backends).
+/// `bytebuf_ptr` deliberately has no arm — this evaluator has no raw
+/// address to hand out, so forcing it reports
+/// `unknown native: bytebuf_ptr`.
+///
+/// `bytebuf_to_list` clamps `len` to the buffer's allocated size: the C
+/// side stores no length either and TRUSTS the caller (its doc says an
+/// over-read is out of contract), and this side cannot faithfully
+/// misbehave the same way — reading past a `Vec` is a Rust panic, not
+/// an OOB read — so it truncates instead. Nothing correct notices the
+/// difference.
+fn bytebuf_alloc(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let n = match args.first() {
+    Some(v) => extract_int(v)?,
+    None => {
+      return Err(CoreEvalError::NativeArgError(
+        "bytebuf_alloc needs 1 arg".into(),
+      ));
+    }
+  };
+  let len = if n < 0 { 0 } else { n as usize };
+  let id = crate::runtime::global::register(vec![0u8; len]);
+  io_wrap(natives, handle_value(id))
+}
+
+fn bytebuf_of_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "bytebuf_of_list needs 1 arg".into(),
+    ));
+  }
+  let bytes = byte_list_bytes(&args[0], natives)?;
+  let id = crate::runtime::global::register(bytes);
+  io_wrap(natives, handle_value(id))
+}
+
+/// Walk a `List U8` value into owned bytes — `string_from_list`'s own
+/// cons/empty walk, minus the UTF-8 check a byte buffer must not have
+/// (a buffer may legitimately hold any bytes; a String may not).
+fn byte_list_bytes(v: &Value, natives: &NativeTable) -> Result<Vec<u8>, CoreEvalError> {
+  let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
+  let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
+  let mut bytes = Vec::new();
+  let mut cur = v;
+  loop {
+    match cur {
+      Value::Con { tag, args } if *tag == empty.tag && args.is_empty() => break,
+      Value::Con { tag, args: cargs } if *tag == cons.tag && cargs.len() == cons.arity as usize => {
+        bytes.push(extract_int(&cargs[0])? as u8);
+        cur = &cargs[1];
+      }
+      other => {
+        return Err(CoreEvalError::NativeArgError(format!(
+          "expected a List U8 value, got {other:?}"
+        )));
+      }
+    }
+  }
+  Ok(bytes)
+}
+
+fn bytebuf_to_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "bytebuf_to_list needs 2 args".into(),
+    ));
+  }
+  let id = extract_handle_id(&args[0])?;
+  let len = extract_int(&args[1])?;
+  let bytes = crate::runtime::global::with::<Vec<u8>, _>(id, |v| v.clone()).ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("bytebuf_to_list: no buffer for handle {id}"))
+  })?;
+  // Same clamping `string_to_list` does for its byte source: a
+  // non-positive length is an empty list, never an error.
+  let take = if len <= 0 {
+    0
+  } else {
+    (len as usize).min(bytes.len())
+  };
+  let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
+  let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
+  let mut result = Value::Con {
+    tag: empty.tag,
+    args: std::sync::Arc::new(Vec::new().into()),
+  };
+  for &byte in bytes[..take].iter().rev() {
+    result = Value::Con {
+      tag: cons.tag,
+      args: std::sync::Arc::new(
+        vec![Value::Lit(IrLit::Num(byte as i64, NumSuffix::U8)), result].into(),
+      ),
+    };
+  }
+  io_wrap(natives, result)
+}
+
+fn bytebuf_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let id = match args.first() {
+    Some(v) => extract_handle_id(v)?,
+    None => {
+      return Err(CoreEvalError::NativeArgError(
+        "bytebuf_free needs 1 arg".into(),
+      ));
+    }
+  };
+  crate::runtime::global::drop_handle(id);
+  io_wrap(natives, unit_value())
 }
 
 /// Reads a `List String` value into an owned `Vec<String>` — the

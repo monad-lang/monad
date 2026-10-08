@@ -1917,6 +1917,77 @@ int64_t monad_ptr_null(void) {
     return 0;
 }
 
+/* ─── ByteBuf (`std/bytebuf.mo`) ─────────────────────────────────────
+   A flat byte buffer the C FFI can address: `SSL_read`/`SSL_write`
+   (motes/tls) take a `void*` plus a length, and no other `std/` type
+   exposes one.
+
+   A `ByteBuf` value is the raw pointer to a GC-ALLOCATED buffer (the
+   `Socket`-as-fd shape: the value is never a constructor). GC
+   allocation is why `monad_bytebuf_free` is a deliberate no-op: a
+   forgotten buffer is reclaimed, and a real `GC_free` on a word another
+   live value still holds would be a use-after-free. The buffer records
+   no length; `to_list`'s `len` is the count the CALLER knows
+   (`SSL_read`'s return), and `alloc` zero-fills so a round-trip test
+   never depends on malloc's spare bytes. The list walks are
+   `monad_tcp_write`/`monad_tcp_read`'s, reusing the same cons-chain
+   conventions (tags 5/6). */
+
+/* `IO.ByteBuf.alloc (n : I64) : IO ByteBuf` -- n zeroed bytes. A
+   negative n clamps to 0 rather than allocating a huge size. */
+void* monad_bytebuf_alloc(int64_t n) {
+    size_t len = n > 0 ? (size_t)n : 0;
+    unsigned char* buf = (unsigned char*)monad_alloc_atomic(len);
+    if (buf && len) memset(buf, 0, len);
+    return buf;
+}
+
+/* `IO.ByteBuf.of_list (xs : List U8) : IO ByteBuf` -- the same copy walk
+   `monad_tcp_write` uses, into a GC buffer. */
+void* monad_bytebuf_of_list(void* list) {
+    int64_t n = tcp_list_len(list);
+    unsigned char* buf = (unsigned char*)monad_alloc_atomic(n > 0 ? (size_t)n : 0);
+    if (!buf) return buf;
+    int64_t i = 0;
+    for (void* cur = list; cur && monad_get_tag(cur) == 6 && i < n; ) {
+        buf[i++] = (unsigned char)((int64_t)monad_get_field(cur, 0) & 0xFF);
+        cur = monad_get_field(cur, 1);
+    }
+    return buf;
+}
+
+/* `IO.ByteBuf.to_list (b : ByteBuf) (len : I64) : IO (List U8)` -- the
+   first `len` bytes, built back-to-front exactly `monad_tcp_read` builds
+   its list so it reads in memory order. A non-positive `len` yields
+   `List.empty`; a `len` past what was allocated reads out of bounds
+   (the module doc makes the caller the length's owner). */
+void* monad_bytebuf_to_list(void* buf, int64_t len) {
+    if (len <= 0) return alloc_constructor(5, 0);  /* List.empty */
+    unsigned char* bytes = (unsigned char*)buf;
+    void* list = alloc_constructor(5, 0);
+    for (int64_t i = len - 1; i >= 0; i--) {
+        Constructor* cons = (Constructor*)alloc_constructor(6, 2);
+        if (!cons) break;
+        cons->fields[0] = (void*)(int64_t)bytes[i];
+        cons->fields[1] = list;
+        list = cons;
+    }
+    return list;
+}
+
+/* `IO.ByteBuf.free (b : ByteBuf) : IO Unit` -- no-op (see the section
+   comment); returns the Unit ctor like every `IO Unit` native. */
+void* monad_bytebuf_free(void* buf) {
+    (void)buf;
+    return tcp_unit();
+}
+
+/* `ByteBuf.ptr (b : ByteBuf) : Ptr` -- identity: the representation IS
+   the raw pointer the FFI wants. */
+int64_t monad_bytebuf_ptr(int64_t b) {
+    return b;
+}
+
 /* ─── Raw stdio (`std/io.mo`'s raw-stdio group) ──────────────────────
    The byte-level half of stdio, added for the language server (`lsp`):
    it writes LSP frames to stdout with no extra newline, logs to stderr
