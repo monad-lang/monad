@@ -1,0 +1,17 @@
+# The TLS mote: an OpenSSL client binding over `#[extern "c"]`, plus the
+# `Tls.Stream` handshake/read/write/close surface `moose` consumes.
+[mote]
+name = "tls"
+version = "0.1.0"
+edition = "2026"
+
+# The C libraries this mote links against, a build property of the
+# PACKAGE (`ffi_example`'s `[link] libs = ["m"]` convention). `collect_link_libs`
+# unions these into every program that declares a dependency on this mote,
+# and nothing else: a program that does not depend on `motes/tls` links no
+# `-lssl`. devenv.nix's `openssl` puts the include/lib paths on clang's
+# search path, so no store paths appear here.
+#
+# No `[dependencies]` entry: `prelude`/`init`/`std` are ambient.
+[link]
+libs = ["ssl", "crypto"]

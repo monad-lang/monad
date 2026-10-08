@@ -25,6 +25,10 @@
     # DELIBERATELY TEMPORARY -- see
     # plans/bootstrapping/linear-types-memory.md.
     boehmgc
+    # OpenSSL for `motes/tls`'s `#[extern "c"]` binding. Same cc-wrapper
+    # story as boehmgc: include/lib paths land on clang's search path, so
+    # the mote's `[link] libs = ["ssl", "crypto"]` needs no store paths.
+    openssl
 
     # The docs/ book. `.github/workflows/mdbook.yml` installs its own copy
     # to publish monad-lang.org; this is so a docs change can be previewed
