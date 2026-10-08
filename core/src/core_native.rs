@@ -154,6 +154,8 @@ const PURE_NATIVES: &[&str] = &[
   "array_len",
   "array_get",
   "array_with",
+  // `Ptr.null` (init/prelude.mo): the NULL word, a constant.
+  "ptr_null",
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
@@ -327,6 +329,11 @@ pub fn exec_native(
     "scope_drop" => scope_drop(args, natives),
     "process_id" => process_id(),
     "build_commit" => build_commit(),
+    // `Ptr.null : Ptr` (init/prelude.mo) — the NULL pointer, for C
+    // functions whose callback argument is NULL (`SSL_set_verify` in
+    // motes/tls is the first caller). A `Ptr` value is its raw machine
+    // word under every backend, so 0 is the whole implementation.
+    "ptr_null" => Ok(Value::Lit(IrLit::Num(0, NumSuffix::I64))),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the

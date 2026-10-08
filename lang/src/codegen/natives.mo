@@ -569,6 +569,10 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "tcp_close" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_close")
             else if String.beq target "tcp_close_listener" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_close_listener")
             else if String.beq target "tcp_local_port" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_local_port")
+            // `Ptr.null` (init/prelude.mo) -- the NULL pointer for the C
+            // FFI's callback arguments. `passthrough` with zero params:
+            // the call's result IS the def's value, the raw word 0.
+            else if String.beq target "ptr_null" then Option.some (NativeWrapKind.passthrough "monad_ptr_null")
             else Option.none,
     }
 
@@ -819,13 +823,16 @@ def runtime_declarations : List LLVMDeclaration :=
     // above.
     let d78 := mk_decl "monad_io_pure" (List.cons "i64" List.empty) "i64" in
     let d79 := mk_decl "monad_io_bind" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    // `monad_ptr_null` (runtime.c) -- `Ptr.null`'s backing function. No
+    // parameters; the i64 result is the NULL word itself.
+    let d80 := mk_decl "monad_ptr_null" List.empty "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d68, d69, d70, d71, d72,
-     d73, d74, d75, d76, d77, d78, d79]
+     d73, d74, d75, d76, d77, d78, d79, d80]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

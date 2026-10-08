@@ -195,3 +195,33 @@ def mk_plain_def : Def :=
 def test_no_extern_attr_no_c_declare : Bool :=
     let ir := emit_module (compile_db_decls_ir (List.cons mk_plain_def List.empty)) in
     not (String.contains ir "declare i64 @plain")
+
+/// `ctx_new_ffi : Ptr -> Ptr` — the opaque-pointer shape every OpenSSL
+/// handle crosses the FFI in (`SSL_CTX_new : SSL_CTX* -> SSL_CTX*`, and
+/// `SSL_CTX_new : Ptr -> Ptr` in motes/tls). `term_to_llvm_type`'s `Ptr`
+/// arm maps the name to `ptr i8`, which is what makes the declared
+/// return `i8*` here — an `i64` means the arm did not fire and the
+/// fallback swallowed the pointer.
+#[partial]
+def mk_ctx_new_def : Def :=
+    let m_id := id "m" in
+    let ptr_term : Term := Term.var 0 (named (id "Ptr")) in
+    let c_arg := AttrArg.str "c" in
+    let ext_args := List.cons c_arg List.empty in
+    let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
+    Def.mk (NamePath.npath (List.cons (id "ctx_new_ffi") List.empty))
+        ptr_term
+        (Term.lam (binder_named m_id) ptr_term Term.hole)
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+
+#[test]
+def test_extern_ptr_return_declares_i8ptr : Bool :=
+    let ir := emit_module (compile_db_decls_ir (List.cons mk_ctx_new_def List.empty)) in
+    String.contains ir "declare i8* @ctx_new_ffi"
+
+/// The `Ptr` result must come back as `ptrtoint` — the raw pointer word
+/// reboxed into the uniform `i64` the wrapper returns.
+#[test]
+def test_extern_ptr_return_ptrtoint : Bool :=
+    let ir := emit_module (compile_db_decls_ir (List.cons mk_ctx_new_def List.empty)) in
+    String.contains ir "ptrtoint i8*"

@@ -140,6 +140,16 @@ type U8 {}
 type F64 {}
 type F32 {}
 
+/// Opaque C pointer for the `#[extern "c"]` FFI. A `Ptr` value is the
+/// raw machine word under every backend; never match, compare or print
+/// one (the `Socket` convention, std/src/io.mo).
+type Ptr {}
+
+/// The NULL pointer — `SSL_set_verify`'s callback argument is the first
+/// caller (motes/tls).
+#[native "ptr_null"]
+def Ptr.null : Ptr
+
 type Unit {
 	unit
 }

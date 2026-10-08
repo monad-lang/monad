@@ -3837,6 +3837,7 @@ def term_to_llvm_type (t : Term) : LLVMType := match term_peel t {
             DebugName.named id =>
                 let s := show_identifier id in
                 if String.beq s "String" then LLVMType.ptr LLVMType.i8_
+                else if String.beq s "Ptr" then LLVMType.ptr LLVMType.i8_
                 else if String.beq s "I32" then LLVMType.i32_
                 else if String.beq s "F32" then LLVMType.f32_
                 else if String.beq s "F64" then LLVMType.f64_

@@ -1907,6 +1907,16 @@ int64_t monad_tcp_local_port(int64_t listener) {
     return (int64_t)ntohs(addr.sin_port);
 }
 
+/* ─── Pointer FFI (`init/prelude.mo`'s `Ptr`) ──────────────────────── */
+
+/* `Ptr.null : Ptr` -- the NULL pointer, for C functions whose callback
+   argument is NULL (`SSL_set_verify` in motes/tls is the first caller). A
+   `Ptr` value is its raw machine word, so the NULL word is the whole
+   implementation. */
+int64_t monad_ptr_null(void) {
+    return 0;
+}
+
 /* ─── Raw stdio (`std/io.mo`'s raw-stdio group) ──────────────────────
    The byte-level half of stdio, added for the language server (`lsp`):
    it writes LSP frames to stdout with no extra newline, logs to stderr
