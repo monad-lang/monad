@@ -8,12 +8,7 @@
 // `lang` closure in with it -- turning the cheap half of this mote into
 // the expensive half.
 //
-// The mathematical proof modules (`cubical` has landed; `paths`, `nat`,
-// `list`, `vec` follow) get re-exported here as they land.
-//
-// `cubical` is the interval's own module: body-less `#[cubical "..."]`
-// declarations that the checker binds to `Term.cubical` (see its own
-// doc comment). It depends on nothing beyond the prelude, so re-exporting
-// it keeps a `use lib` in a proof file cheap.
-
-pub use lib::cubical {*}
+// The cubical primitives' declarations moved to the prelude
+// (`with Cubical { ... }` in init/src/prelude.mo); nothing under proofs/
+// declares them any more. The mathematical proof modules (`paths`,
+// `nat`, `list`, `vec` follow) get re-exported here as they land.

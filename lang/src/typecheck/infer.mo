@@ -2552,7 +2552,8 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                     mk resolved_name _ sig _ _ =>
                         match scope_find_cubical_prim resolved_name scope {
                             // A cubical primitive bound by `#[cubical "..."]`
-                            // (`proofs/src/cubical.mo`) referenced BARE. For
+                            // (the `with Cubical` block in
+                            // `init/src/prelude.mo`) referenced BARE. For
                             // an arity-0 primitive (`I`, `i0`, `i1`) the
                             // reference IS the term: rewrite it to the
                             // `Term.cubical` it stands for, typed by the
@@ -3565,7 +3566,7 @@ def subst_has_id (subst : List (Pair Identifier Term)) (target : Identifier) : B
 /// `{ prim := ineg, args := [i0] }`. FIRST probe in `type_check_app`,
 /// ahead of `try_type_check_def_call`, and the order is forced, not
 /// stylistic: `def_sigs` holds the primitive's own declared signature
-/// (`I -> I` for `ineg`, `proofs/src/cubical.mo`), so the def-call probe
+/// (`I -> I` for `ineg`, the prelude's `with Cubical` block), so the def-call probe
 /// would type the call fine against it and the rewrite would silently
 /// never happen -- the term would stay `Term.app (var ineg) i0`,
 /// invisible to every cubical rule downstream.
@@ -4340,7 +4341,7 @@ def type_check_pi (b : Binder) (dom : Term) (cod : Term) (scope : Scope) (local_
 /// that peels to the bare interval contributes `concrete 0`, because the
 /// interval is a primitive KIND, not a resident of the universe
 /// hierarchy: its checker-reported type is `Sort 1` (so `I : Type` holds,
-/// matching the declared signature in `proofs/src/cubical.mo`), and
+/// matching the declared signature in the prelude's `with Cubical` block), and
 /// `level_of_type` defaults a non-sort to `concrete 1` -- so without
 /// this arm every `I -> A` lands one universe too high, bumping a
 /// `Prop`-valued path family out of `Prop` and making Stage 2's

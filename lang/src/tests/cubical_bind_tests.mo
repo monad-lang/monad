@@ -28,11 +28,14 @@ use std::list {List.length}
 
 def synthetic_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "synthetic") List.empty)
 
-/// The twelve Stage 1+2+3+4+5 declarations, spelled exactly as they are
-/// in `proofs/src/cubical.mo`. One literal per decl, concatenated: a
-/// single spanning literal would need line continuations the string
-/// lexer does not have, and one literal per line keeps each under the
-/// width the style ratchet measures.
+/// The twelve Stage 1+2+3+4+5 declarations, spelled the way the real ones
+/// are declared (the `with Cubical` block in `init/src/prelude.mo`), minus
+/// the block wrapper and `Cubical.` prefixes: the binding pipeline under
+/// test is spelling-independent, and the block-form interaction has its
+/// own pin below. One literal per decl, concatenated: a single spanning
+/// literal would need line continuations the string lexer does not have,
+/// and one literal per line keeps each under the width the style ratchet
+/// measures.
 def cubical_source : String :=
     String.concat "#[cubical \"interval\"] def I : Type\n"
     (String.concat "#[cubical \"i0\"] def i0 : I\n"
@@ -106,6 +109,17 @@ def test_cubical_names_bind : Bool :=
         && binds s "face_eq1" CubicalPrim.face_eq1
         && binds s "is_one" CubicalPrim.is_one
         && binds s "hcomp" CubicalPrim.hcomp
+
+#[test]
+def test_with_block_cubical_names_bind : Bool :=
+    // The real prelude spelling: inside `with Cubical { ... }` the
+    // primitive's REGISTERED name is the prefixed `Cubical.i0` (the
+    // block's whole semantics is the name prefix), which is what
+    // `scope_find_cubical_prim` must answer for -- and the bare
+    // spelling binds nothing, because no def of that name exists.
+    let s : Scope := scope_of "with Cubical { #[cubical \"interval\"] def I : Type\n#[cubical \"i0\"] def i0 : Cubical.I }" in
+    binds s "Cubical.i0" CubicalPrim.i0
+        && binds_nothing s "i0"
 
 #[test]
 def test_unmarked_def_of_the_same_name_binds_nothing : Bool :=

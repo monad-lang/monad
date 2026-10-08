@@ -139,7 +139,7 @@ def test_whnf_bodyless_decl_does_not_unfold_to_hole : Bool :=
     // `whnf_delta` finds nothing and the name stays a rigid free
     // variable. Before that fix this reduced to `Term.hole`, which
     // `unify_go` treats as matching ANY type. Body-less is how the
-    // cubical primitives (`proofs/src/cubical.mo`) are declared, so
+    // cubical primitives (the prelude's `with Cubical` block) are declared, so
     // rigidity is load-bearing, not cosmetic.
     let scope : Scope := scope_of "type P { p0 }\ndef ax : P" in
     match whnf scope empty_locals (free_var "ax") {

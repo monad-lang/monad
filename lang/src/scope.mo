@@ -522,7 +522,8 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // declared types and solve the signature's type variables.
             let with_sig : ScopeData := scope_data_add_def_sig with_ret defname typ in
             // ... and the CUBICAL MARKER, if there is one: a def carrying
-            // `#[cubical "..."]` (`proofs/src/cubical.mo`) gets its name
+            // `#[cubical "..."]` (the `with Cubical` block in
+            // `init/src/prelude.mo`) gets its name
             // entered into `ScopeData.cubical_prims`, which is what the
             // checker consults to rewrite a resolved reference to that
             // name into the `Term.cubical` it is (`lang/typecheck/
@@ -547,7 +548,8 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // `unify_go` treats as matching anything -- so a body-less
             // declaration would convert against every type instead of
             // staying rigid. Rigidity is load-bearing for the cubical
-            // primitives (body-less by design, `proofs/src/cubical.mo`)
+            // primitives (body-less by design, the prelude's
+            // `with Cubical` block)
             // and was a latent hole for `#[native "eq_rec"]` before
             // them. Skipping registration is strictly stricter: the
             // only programs newly rejected are the ones that were being

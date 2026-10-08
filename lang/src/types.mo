@@ -3010,7 +3010,8 @@ pub struct ScopeData {
     // parameters, which is exactly what beta reduction then consumes
     // one argument at a time.
     def_bodies : HashMap String Term := HashMap.map HashMap.empty_buckets,
-    // A def marked `#[cubical "..."]` (`proofs/src/cubical.mo`) bound to
+    // A def marked `#[cubical "..."]` (the `with Cubical` block in
+    // `init/src/prelude.mo`) bound to
     // the `CubicalPrim` the marker names -- the name-binding half of the
     // cubical design (the checker rewrite is in `lang/typecheck/infer.mo`:
     // `type_check_free_var` for bare primitives, `type_check_app`'s

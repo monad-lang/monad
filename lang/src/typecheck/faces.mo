@@ -23,7 +23,7 @@
 // `ijoin` inside a meet is not distributed, and a malformed arity
 // never decides.
 //
-// Deliberately free of checker state, like `cubical.mo`: everything
+// Deliberately free of checker state, like `lang/typecheck/cubical.mo`: everything
 // here is a `Term` -> `Option Bool` question over the same shapes.
 
 use lib::types {

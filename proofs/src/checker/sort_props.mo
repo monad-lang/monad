@@ -202,7 +202,7 @@ def pi_universe_of_prop_components_stays_at_1 : Bool :=
 //
 // Stage 1 step 4: `Π(i : I) A` with `A : Prop` must stay in `Prop`. The
 // interval's checker-reported type is `Sort 1` (`I : Type`, matching the
-// declared signature in `proofs/src/cubical.mo`), and `level_of_type`
+// declared signature in the prelude's `with Cubical` block), and `level_of_type`
 // defaults a non-sort to `concrete 1`, so without `pi_domain_level`'s
 // bare-interval arm every `I -> A` lands one universe too high -- a
 // `Prop`-valued path family bumped out of `Prop`, and Stage 2's

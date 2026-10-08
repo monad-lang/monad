@@ -16,12 +16,13 @@
 // and its `.term` field is readable, so no export widening is needed.
 //
 // The scope is built by the REAL parse + scope-build pipeline
-// (`try_parse_decls` + `build_scope_from_decls`) over the exact
-// twelve-declaration source of `proofs/src/cubical.mo`, because what is
-// under test includes the marker's survival from source text to
-// `ScopeData.cubical_prims`. The same string is pinned from the scope
-// side in `lang/src/tests/cubical_bind_tests.mo`; if the declaration
-// list ever changes, both copies change with it.
+// (`try_parse_decls` + `build_scope_from_decls`) over the twelve
+// declarations as the prelude's `with Cubical` block spells them
+// (`init/src/prelude.mo`), minus the block wrapper and `Cubical.`
+// prefixes, because what is under test includes the marker's survival
+// from source text to `ScopeData.cubical_prims`. The same string is
+// pinned from the scope side in `lang/src/tests/cubical_bind_tests.mo`;
+// if the declaration list ever changes, both copies change with it.
 
 use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
@@ -39,8 +40,8 @@ use init::borrow {Borrow}
 def checker_synthetic_path : ModulePath :=
     ModulePath.mp (List.cons (Identifier.id "proofs_checker") List.empty)
 
-/// The twelve Stage 1+2+3+4+5 declarations, spelled exactly as they are
-/// in `proofs/src/cubical.mo`.
+/// The twelve Stage 1+2+3+4+5 declarations, spelled as the prelude's
+/// `with Cubical` block declares them (minus the wrapper and prefixes).
 def cubical_decls_source : String :=
     String.concat "#[cubical \"interval\"] def I : Type\n"
     (String.concat "#[cubical \"i0\"] def i0 : I\n"
@@ -55,7 +56,7 @@ def cubical_decls_source : String :=
     (String.concat "#[cubical \"is_one\"] def is_one (i : I) : Type\n"
     "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"))))))))))
 
-/// The scope the checker sees when `proofs/src/cubical.mo` is loaded.
+/// The scope the checker sees when the prelude's cubical block is loaded.
 /// A parse failure yields an empty scope, which makes every pin below
 /// fail rather than silently pass against a scope with nothing bound.
 def cubical_scope : Scope :=

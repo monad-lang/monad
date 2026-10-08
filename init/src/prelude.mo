@@ -531,3 +531,28 @@ pub class IndexedMonadState (M : Type -> Type -> Type -> Type) {
 class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type -> Type -> Type) {
     def monad_lift (a : m I J A) : n I J A
 }
+
+// The cubical interval and its operations (univalence.md Stages 1-5),
+// as BODY-LESS marker defs inside a `with Cubical` block. The
+// `#[cubical "..."]` MARKER, never the bare spelling, is what binds:
+// `build_scope_def` (lang/src/scope.mo) enters the def's prefixed name
+// into `ScopeData.cubical_prims`, and the checker rewrites a resolved
+// reference to that name into the `Term.cubical` it stands for. The
+// signatures carry name resolution and type the UNDER-APPLIED case;
+// the checker's cubical probe handles every saturated one. `I` is
+// NEVER an inductive: one case split on a dimension destroys
+// univalence.
+with Cubical {
+	#[cubical "interval"] def I : Type
+	#[cubical "i0"] def i0 : Cubical.I
+	#[cubical "i1"] def i1 : Cubical.I
+	#[cubical "ineg"] def ineg (i : Cubical.I) : Cubical.I
+	#[cubical "imeet"] def imeet (i : Cubical.I) (j : Cubical.I) : Cubical.I
+	#[cubical "ijoin"] def ijoin (i : Cubical.I) (j : Cubical.I) : Cubical.I
+	#[cubical "pathp"] def PathP (A : Cubical.I -> Type) (a : A Cubical.i0) (b : A Cubical.i1) : Type
+	#[cubical "transp"] def transp (A : Cubical.I -> Type) (a : A Cubical.i0) : A Cubical.i1
+	#[cubical "face_eq0"] def face_eq0 (i : Cubical.I) : Cubical.I
+	#[cubical "face_eq1"] def face_eq1 (i : Cubical.I) : Cubical.I
+	#[cubical "is_one"] def is_one (i : Cubical.I) : Type
+	#[cubical "hcomp"] def hcomp (A : Type) (phi : Cubical.I) (u : Cubical.I -> Cubical.is_one phi -> A) (u0 : A) : A
+}
