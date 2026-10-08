@@ -25,14 +25,20 @@ use std::map {HashMap}
 /// One detected self-recursive tail-call site: `site_block` is the label
 /// of the block containing the `assign ret_temp (call <this Def's own
 /// name> args false)` instruction that needs rewriting into a loop
-/// back-edge instead. `merge_label` is `Option.some <phi-owning block's
-/// label>` when this site was found by tracing back through a match/if's
-/// own merge `phi` (the overwhelming common case -- every confirmed real
-/// repro is match-shaped) -- that block's phi needs `site_block`'s own
-/// incoming pair pruned once `site_block`'s terminator is retargeted away
-/// from it. `Option.none` when the site was found directly (the Def's
-/// WHOLE body is nothing but its own tail call, no branching at all) --
-/// there, `site_block` IS the block whose own `ret` is being eliminated,
+/// back-edge instead -- the site finder only records a site when that
+/// `assign` lives in the same block as the `ret`/phi pair consuming
+/// it, so the call is always genuinely in tail position (a call
+/// `assign`ed in a dominating block already ran; its value is
+/// returned as-is, never looped). `merge_label` is `Option.some
+/// <phi-owning block's label>` when this site was found by tracing
+/// back through a match/if's own merge `phi` (the overwhelming common
+/// case -- every confirmed real repro is match-shaped) -- that
+/// block's phi needs `site_block`'s own incoming pair pruned once
+/// `site_block`'s terminator is retargeted away from it.
+/// `Option.none` when the site was found directly (a block whose own
+/// `ret` consumes a same-block self-call -- the no-branching whole-
+/// body case, or an arm block ending in its own `ret`) -- there,
+/// `site_block` IS the block whose own `ret` is being eliminated,
 /// so there's no separate phi to prune. `args` are this call's own
 /// argument values (always atomic -- `var_`/`parm_`/a literal/`global_` --
 /// per how every call-argument list in this backend is built), captured
@@ -109,46 +115,57 @@ def find_self_tail_call_sites (fn_name : String) (arity : I64) (blocks : List LL
     let defs := build_ssa_def_map blocks in
     find_sites_in_blocks fn_name arity defs blocks
 
-/// Maps every SSA temp name to the `LLVMValue` it was `assign`ed from --
-/// every OTHER instruction shape (`branch`/`jump`/`ret`/`comment`)
-/// contributes nothing, since only `assign` ever introduces a new SSA
-/// name.
+/// One SSA temp's definition: the assigned value plus the label of the
+/// block holding the `assign`. A self-call `assign`ed in a block OTHER
+/// than the one whose `ret` consumes it already ran before that block
+/// was entered -- the value is free to return, and looping instead
+/// would re-run the whole suffix once per element (O(2^n) for the
+/// `let tail := f rest in match ... { arm => tail }` shape).
+struct SsaDefSite {
+    val : LLVMValue,
+    block : String,
+}
+
+/// Maps every SSA temp name to where it was `assign`ed -- every OTHER
+/// instruction shape (`branch`/`jump`/`ret`/`comment`) contributes
+/// nothing, since only `assign` ever introduces a new SSA name.
 #[partial]
-def build_ssa_def_map (blocks : List LLVMBasicBlock) : HashMap String LLVMValue :=
+def build_ssa_def_map (blocks : List LLVMBasicBlock) : HashMap String SsaDefSite :=
     build_ssa_def_map_blocks blocks str_map_empty
 
 #[partial]
-def build_ssa_def_map_blocks (blocks : List LLVMBasicBlock) (acc : HashMap String LLVMValue) : HashMap String LLVMValue := match blocks {
+def build_ssa_def_map_blocks (blocks : List LLVMBasicBlock) (acc : HashMap String SsaDefSite) : HashMap String SsaDefSite := match blocks {
     List.empty => acc,
     List.cons b rest =>
         match b {
-            LLVMBasicBlock.mk _label instrs =>
-                build_ssa_def_map_blocks rest (build_ssa_def_map_instrs instrs acc),
+            LLVMBasicBlock.mk label instrs =>
+                build_ssa_def_map_blocks rest (build_ssa_def_map_instrs label instrs acc),
         },
 }
 
 #[partial]
-def build_ssa_def_map_instrs (instrs : List LLVMInstruction) (acc : HashMap String LLVMValue) : HashMap String LLVMValue := match instrs {
+def build_ssa_def_map_instrs (block : String) (instrs : List LLVMInstruction) (acc : HashMap String SsaDefSite) : HashMap String SsaDefSite := match instrs {
     List.empty => acc,
     List.cons i rest =>
         match i {
             LLVMInstruction.assign target value =>
-                build_ssa_def_map_instrs rest (str_map_insert target value acc),
-            LLVMInstruction.branch _cond _t _e => build_ssa_def_map_instrs rest acc,
-            LLVMInstruction.jump _label => build_ssa_def_map_instrs rest acc,
-            LLVMInstruction.ret _val => build_ssa_def_map_instrs rest acc,
-            LLVMInstruction.store _val _pty _ptr => build_ssa_def_map_instrs rest acc,
-            LLVMInstruction.comment _text => build_ssa_def_map_instrs rest acc,
+                let site : SsaDefSite := { val := value, block := block } in
+                build_ssa_def_map_instrs block rest (str_map_insert target site acc),
+            LLVMInstruction.branch _cond _t _e => build_ssa_def_map_instrs block rest acc,
+            LLVMInstruction.jump _label => build_ssa_def_map_instrs block rest acc,
+            LLVMInstruction.ret _val => build_ssa_def_map_instrs block rest acc,
+            LLVMInstruction.store _val _pty _ptr => build_ssa_def_map_instrs block rest acc,
+            LLVMInstruction.comment _text => build_ssa_def_map_instrs block rest acc,
             // A void call defines no SSA name either -- same treatment
             // as `store`/`comment` above.
-            LLVMInstruction.call_void _val => build_ssa_def_map_instrs rest acc,
+            LLVMInstruction.call_void _val => build_ssa_def_map_instrs block rest acc,
             // Defines no SSA name, exactly like a comment.
-            LLVMInstruction.loc_marker _loc => build_ssa_def_map_instrs rest acc,
+            LLVMInstruction.loc_marker _loc => build_ssa_def_map_instrs block rest acc,
         },
 }
 
 #[partial]
-def find_sites_in_blocks (fn_name : String) (arity : I64) (defs : HashMap String LLVMValue) (blocks : List LLVMBasicBlock) : List SelfTailCallSite := match blocks {
+def find_sites_in_blocks (fn_name : String) (arity : I64) (defs : HashMap String SsaDefSite) (blocks : List LLVMBasicBlock) : List SelfTailCallSite := match blocks {
     List.empty => List.empty,
     List.cons b rest =>
         List.append (find_sites_in_block fn_name arity defs b) (find_sites_in_blocks fn_name arity defs rest),
@@ -164,7 +181,7 @@ def find_sites_in_blocks (fn_name : String) (arity : I64) (defs : HashMap String
 /// fallback `ret (int_ 0)`) is safely skipped by `trace_tail_value` below,
 /// not specially handled here.
 #[partial]
-def find_sites_in_block (fn_name : String) (arity : I64) (defs : HashMap String LLVMValue) (b : LLVMBasicBlock) : List SelfTailCallSite := match b {
+def find_sites_in_block (fn_name : String) (arity : I64) (defs : HashMap String SsaDefSite) (b : LLVMBasicBlock) : List SelfTailCallSite := match b {
     LLVMBasicBlock.mk label instrs =>
         match List.last instrs {
             Option.some last_instr =>
@@ -192,11 +209,11 @@ def find_sites_in_block (fn_name : String) (arity : I64) (defs : HashMap String 
 /// be a self-tail-call and stops the trace on that branch, correctly
 /// leaving it untouched.
 #[partial]
-def trace_tail_value (fn_name : String) (arity : I64) (defs : HashMap String LLVMValue) (v : LLVMValue) (owning_label : String) : List SelfTailCallSite :=
+def trace_tail_value (fn_name : String) (arity : I64) (defs : HashMap String SsaDefSite) (v : LLVMValue) (owning_label : String) : List SelfTailCallSite :=
     match v {
         LLVMValue.var_ name =>
             match str_map_lookup name defs {
-                Option.some def_val => trace_tail_def fn_name arity defs name def_val owning_label,
+                Option.some site => trace_tail_def fn_name arity defs name site.val site.block owning_label,
                 Option.none => List.empty,
             },
         LLVMValue.int_ _n => List.empty,
@@ -235,15 +252,19 @@ def trace_tail_value (fn_name : String) (arity : I64) (defs : HashMap String LLV
     }
 
 /// What `name`'s own definition (`def_val`) is: either a genuine
-/// self-recursive call (site found), a `phi` (recurse one level into its
-/// own pairs, still owned by `owning_label` -- see this section's own
-/// "Critical wrinkle" doc comment: the phi's `assign` and the `ret` that
-/// consumes it always live in the SAME block), or anything else (stop).
+/// self-recursive call (site found -- only when `def_block` equals
+/// `owning_label`, i.e. the call sits in the very block whose `ret` it
+/// feeds; a call `assign`ed in a dominating block already ran, so the
+/// arm returns a computed value and must stay a `ret`), a `phi` (recurse
+/// one level into its own pairs, still owned by `owning_label` -- see
+/// this section's own "Critical wrinkle" doc comment: the phi's `assign`
+/// and the `ret` that consumes it always live in the SAME block), or
+/// anything else (stop).
 #[partial]
-def trace_tail_def (fn_name : String) (arity : I64) (defs : HashMap String LLVMValue) (name : String) (def_val : LLVMValue) (owning_label : String) : List SelfTailCallSite :=
+def trace_tail_def (fn_name : String) (arity : I64) (defs : HashMap String SsaDefSite) (name : String) (def_val : LLVMValue) (def_block : String) (owning_label : String) : List SelfTailCallSite :=
     match def_val {
         LLVMValue.call callee _ret_ty args _tail =>
-            if String.beq callee fn_name && I64.beq (List.length args) arity
+            if String.beq callee fn_name && I64.beq (List.length args) arity && String.beq def_block owning_label
             then List.cons (SelfTailCallSite.mk owning_label name Option.none args) List.empty
             else List.empty,
         LLVMValue.phi pairs => trace_phi_pairs fn_name arity defs pairs owning_label,
@@ -282,7 +303,7 @@ def trace_tail_def (fn_name : String) (arity : I64) (defs : HashMap String LLVMV
     }
 
 #[partial]
-def trace_phi_pairs (fn_name : String) (arity : I64) (defs : HashMap String LLVMValue) (pairs : List PhiPair) (merge_label : String) : List SelfTailCallSite := match pairs {
+def trace_phi_pairs (fn_name : String) (arity : I64) (defs : HashMap String SsaDefSite) (pairs : List PhiPair) (merge_label : String) : List SelfTailCallSite := match pairs {
     List.empty => List.empty,
     List.cons p rest =>
         List.append (trace_phi_pair fn_name arity defs p merge_label) (trace_phi_pairs fn_name arity defs rest merge_label),
@@ -293,13 +314,13 @@ def trace_phi_pairs (fn_name : String) (arity : I64) (defs : HashMap String LLVM
 /// self-recursive call. `merge_label` (threaded down from the caller) is
 /// the block that OWNS this phi -- what needs pruning if so.
 #[partial]
-def trace_phi_pair (fn_name : String) (arity : I64) (defs : HashMap String LLVMValue) (p : PhiPair) (merge_label : String) : List SelfTailCallSite :=
+def trace_phi_pair (fn_name : String) (arity : I64) (defs : HashMap String SsaDefSite) (p : PhiPair) (merge_label : String) : List SelfTailCallSite :=
     match p {
         PhiPair.mk val pred_label =>
             match val {
                 LLVMValue.var_ name =>
                     match str_map_lookup name defs {
-                        Option.some def_val => trace_phi_pair_def fn_name arity defs name def_val pred_label merge_label,
+                        Option.some site => trace_phi_pair_def fn_name arity defs name site.val site.block pred_label merge_label,
                         Option.none => List.empty,
                     },
                 LLVMValue.int_ _n => List.empty,
@@ -341,10 +362,10 @@ def trace_phi_pair (fn_name : String) (arity : I64) (defs : HashMap String LLVMV
 /// invariant -- never skips a level), so recurse into ITS pairs, now
 /// owned by `pred_label`.
 #[partial]
-def trace_phi_pair_def (fn_name : String) (arity : I64) (defs : HashMap String LLVMValue) (name : String) (def_val : LLVMValue) (pred_label : String) (merge_label : String) : List SelfTailCallSite :=
+def trace_phi_pair_def (fn_name : String) (arity : I64) (defs : HashMap String SsaDefSite) (name : String) (def_val : LLVMValue) (def_block : String) (pred_label : String) (merge_label : String) : List SelfTailCallSite :=
     match def_val {
         LLVMValue.call callee _ret_ty args _tail =>
-            if String.beq callee fn_name && I64.beq (List.length args) arity
+            if String.beq callee fn_name && I64.beq (List.length args) arity && String.beq def_block pred_label
             then List.cons (SelfTailCallSite.mk pred_label name (Option.some merge_label) args) List.empty
             else List.empty,
         LLVMValue.phi pairs2 => trace_phi_pairs fn_name arity defs pairs2 pred_label,
