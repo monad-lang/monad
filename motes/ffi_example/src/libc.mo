@@ -35,5 +35,18 @@ def atoi (s : String) : I32
 #[extern "c"]
 def abs (x : I32) : I32
 
+// `memset`/`memcpy`/`strlen_ptr` take a `Ptr` — a raw address the
+// self-hosted `ByteBuf.ptr` hands out (`bytebuf_ffi_test.mo` is the
+// proof). The `size_t` counts come through as `U64`, the fallback
+// `bitcast i64` param path `SSL_ctrl_host`'s `larg` already took.
+#[extern "c"]
+def memset (s : Ptr) (c : I32) (n : U64) : Ptr
+
+#[extern "c"]
+def memcpy (dest : Ptr) (src : Ptr) (n : U64) : Ptr
+
+#[extern "c" {link_name := "strlen"}]
+def strlen_ptr (s : Ptr) : I64
+
 #[extern "c"]
 def sin (x : F64) : F64

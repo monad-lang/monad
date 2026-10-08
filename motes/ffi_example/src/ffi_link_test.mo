@@ -35,10 +35,11 @@ def test_extern_sin_needs_libm : Bool :=
 
 /// Signed `I32` on the way back: a NEGATIVE value from C must arrive as
 /// the number it is, not as the unsigned reading of the same bits.
-/// Asserted through `I32.to_string` because `I32.beq`'s `i32_eq` native is
-/// not wired on the self-hosted side and this corpus cannot spell an `I32`
-/// literal. Which ABI cast produces it (`sext`, not `zext`) is asserted
-/// against the emitted IR in `lang/src/codegen/test/extern_codegen_tests.mo`
+/// `I32.to_string` shows the sign in one observable (`I32.beq` is wired
+/// self-hosted too, runtime/src/natives.mo, but a Boolean cannot show
+/// WHICH sign came back if this fails). Which ABI cast produces it
+/// (`sext`, not `zext`) is asserted against the emitted IR in
+/// `lang/src/codegen/test/extern_codegen_tests.mo`
 /// -- Monad's own `I32` operations all re-narrow to 32 bits, so no run-time
 /// value here could tell the two apart.
 #[test]
