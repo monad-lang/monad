@@ -176,6 +176,9 @@ pub def IO.list_dir (path : Path) : IO (List String) :=
 //   tcp_close_listener  connections already accepted from it
 //   tcp_local_port   the port the listener actually bound; a failure
 //                    returns 0 (the type has no `Result` channel)
+//   tcp_fd           the connection's raw descriptor, for FFI calls that
+//                    take one (`SSL_set_fd` in motes/tls); the Socket IS
+//                    the fd, so this is typed extraction, not a lookup
 //
 // `Socket` and `Listener` are opaque: their single zero-arity
 // constructor exists only so the type checker has a type to name, and
@@ -214,6 +217,9 @@ def IO.tcp_close_listener (listener : Listener) : IO Unit
 
 #[native "tcp_local_port"]
 def IO.tcp_local_port (listener : Listener) : IO U16
+
+#[native "tcp_fd"]
+def IO.tcp_fd (sock : Socket) : IO I32
 
 // TODO support constraints
 // def IO.fprintln [ToString A] (a: A) : IO Unit :=

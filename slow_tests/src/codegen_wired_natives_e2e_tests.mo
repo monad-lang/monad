@@ -383,6 +383,49 @@ def main (args : List String) : IO I64 := do {
 "# in
     compile_source_run_expect source "c_tcp_roundtrip" 7
 
+/// `IO.tcp_fd` end to end: both ends of a real connection hand back a
+/// descriptor that is non-negative and distinct from the peer's -- the
+/// first assertion ever to exercise the compiled `I32` comparison group
+/// (`runtime/src/natives.mo`), which the fd's `IO I32` type forces.
+/// `I64.to_i32 0` for the zero because the corpus has no `i32` literal.
+#[test]
+def test_c_tcp_fd : IO Bool :=
+    let source := r#"use std::io {Socket}
+def main (args : List String) : IO I64 := do {
+    let listen_res <- IO.tcp_listen 0u16;
+    match listen_res {
+        Result.err _ => return 1,
+        Result.ok listener => do {
+            let port <- IO.tcp_local_port listener;
+            let conn_res <- IO.tcp_connect "127.0.0.1" port;
+            match conn_res {
+                Result.err _ => do { let _ <- IO.tcp_close_listener listener; return 2 },
+                Result.ok client => do {
+                    let accept_res <- IO.tcp_accept listener;
+                    let _ <- IO.tcp_close_listener listener;
+                    match accept_res {
+                        Result.err _ => do { let _ <- IO.tcp_close client; return 3 },
+                        Result.ok server => do {
+                            let client_fd <- IO.tcp_fd client;
+                            let server_fd <- IO.tcp_fd server;
+                            let _ <- IO.tcp_close client;
+                            let _ <- IO.tcp_close server;
+                            let client_negative := I32.lt client_fd (I64.to_i32 0);
+                            let server_negative := I32.lt server_fd (I64.to_i32 0);
+                            let same_fd := I32.beq client_fd server_fd;
+                            if client_negative || server_negative || same_fd
+                            then return 4
+                            else return 7
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+"# in
+    compile_source_run_expect source "c_tcp_fd" 7
+
 /// Connecting to a port nothing listens on is `Result.err`, not a hang
 /// and not a bogus `Socket` -- the same negative the deleted Rust unit
 /// test `test_tcp_connect_to_closed_port_returns_err` covered. The port

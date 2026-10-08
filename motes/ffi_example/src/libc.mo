@@ -24,10 +24,11 @@ def strlen (s : String) : I64
 // Here for `ffi_link_test.mo`, and for what it is the only way to say: a
 // NEGATIVE `I32` from C, so the sign of a narrow return is observable at
 // run time (`abs` of it, and `I32.to_string` of it). `puts` returns an
-// `I32` too, but only a non-negative one; `I32.beq` cannot help either --
-// its `i32_eq` native is wired on the Rust host and not on the
-// self-hosted side -- and this corpus has no `I32` literal to compare
-// against.
+// `I32` too, but only a non-negative one; `I32.beq` was of no help when
+// this comment was written -- `i32_eq` was unwired on the self-hosted
+// side -- but it is now (runtime/src/natives.mo), and the corpus still
+// has no `I32` literal to compare against, so `to_string` remains the
+// observable.
 #[extern "c"]
 def atoi (s : String) : I32
 

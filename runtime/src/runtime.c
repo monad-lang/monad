@@ -1907,6 +1907,14 @@ int64_t monad_tcp_local_port(int64_t listener) {
     return (int64_t)ntohs(addr.sin_port);
 }
 
+/* `IO.tcp_fd (sock : Socket) : IO I32` -- the connection's raw
+   descriptor, for C FFI calls that take one (`SSL_set_fd` in motes/tls
+   is the first caller). A `Socket` value already IS the descriptor, so
+   this is a typed extraction, not a lookup. */
+int64_t monad_tcp_fd(int64_t sock) {
+    return sock;
+}
+
 /* ─── Pointer FFI (`init/prelude.mo`'s `Ptr`) ──────────────────────── */
 
 /* `Ptr.null : Ptr` -- the NULL pointer, for C functions whose callback
