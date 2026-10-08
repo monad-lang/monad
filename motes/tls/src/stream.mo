@@ -66,9 +66,14 @@ pub def Tls.connect (host : String) (port : U16) : IO (Result String Tls.Stream)
           else do {
             let handshake : I32 := SSL_connect ssl;
             if Bool.not (I32.beq handshake (I64.to_i32 1))
+            // The verify result rides along: without it every certificate
+            // failure reports the same SSL_ERROR_SSL, and the caller cannot
+            // tell expired (10) from hostname-mismatch (62) from self-signed.
             then Tls.abort ssl ctx sock
               (String.concat "tls: SSL_connect failed: "
-                (Tls.ssl_error_message (SSL_get_error ssl handshake)))
+                (String.concat (Tls.ssl_error_message (SSL_get_error ssl handshake))
+                  (String.concat " (verify result "
+                    (String.concat (I64.to_string (SSL_get_verify_result ssl)) ")"))))
             else do {
               let verify : I64 := SSL_get_verify_result ssl;
               if Bool.not (I64.beq verify Ssl.x509_v_ok)

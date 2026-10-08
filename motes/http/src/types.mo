@@ -207,7 +207,7 @@ type Transport {
   plain (sock : Socket),
   secure (read : U64 -> IO (Result String (List U8)))
          (write : List U8 -> IO (Result String U64))
-         (close : IO Unit)
+         (close : Unit -> IO Unit)
 }
 open Transport { plain, secure }
 
@@ -223,10 +223,16 @@ def Transport.write (t : Transport) (data : List U8) : IO (Result String U64) :=
     Transport.secure _ write _ => write data
   }
 
+// `close` takes a `Unit` where the two payload fields are called with the
+// values they act on: in the compiled backend an action stored in a ctor
+// field executes at CONSTRUCTION, and a closure stored in an action-typed
+// field crashes when the arm returns it for execution — the call is the one
+// shape that survives (probed 2026-10-08; `Body.stream`'s action field is
+// the same trap, never constructed anywhere).
 def Transport.close (t : Transport) : IO Unit :=
   match t {
     Transport.plain sock => IO.tcp_close sock,
-    Transport.secure _ _ close => close
+    Transport.secure _ _ close => close unit
   }
 
 // ── Framing ─────────────────────────────────────────────────────────────

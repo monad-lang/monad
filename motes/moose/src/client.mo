@@ -185,7 +185,13 @@ def Client.connect_tls_done (hp : Pair String U16) (tls_res : Result String Tls.
     Result.ok s =>
       let host := hp.first in
       let port := hp.second in
-      return (Result.ok ({ socket := Transport.secure (Tls.read s) (Tls.write s) (Tls.close s), host := host, port := port } : Connection))
+      // Explicit lambdas, and a `Unit`-taking close: a partial application
+      // in constructor-argument position miscompiles in the compiled backend
+      // (same family as the bare struct literal in argument position), and
+      // an action-typed close field executes at construction — killing the
+      // session before the first write. `Transport.close`'s comment in
+      // http/types.mo has the full story.
+      return (Result.ok ({ socket := Transport.secure (fn n => Tls.read s n) (fn data => Tls.write s data) (fn _ => Tls.close s), host := host, port := port } : Connection))
   }
 
 /// Write a request to the connection's socket (no read). Exposed so callers
