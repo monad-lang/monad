@@ -137,6 +137,9 @@ pub def I32.gt (a b : I32) : Bool
 #[native i32_to_string]
 pub def I32.to_string (a : I32) : String
 
+#[native i32_to_i64]
+pub def I32.to_i64 (a : I32) : I64
+
 instance Add I32 {
 	def add (a b : I32) : I32 := I32.add a b
 }
@@ -188,6 +191,12 @@ pub def I64.gt (a b : I64) : Bool
 
 #[native i64_to_u64]
 def I64.to_u64 (a : I64) : U64
+
+/// For FFI calls that take a C `int` (`SSL_set_fd` in motes/tls takes
+/// the socket's descriptor). Identity at the payload level; no
+/// truncation is applied, matching the reference's `int_to_int`.
+#[native i64_to_i32]
+pub def I64.to_i32 (a : I64) : I32
 
 #[native i64_to_u32]
 def I64.to_u32 (a : I64) : U32

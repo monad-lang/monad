@@ -416,6 +416,17 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "i8_eq" then Option.some (NativeWrapKind.bool_result "monad_i8_eq")
             else if String.beq target "i8_lt" then Option.some (NativeWrapKind.bool_result "monad_i8_lt")
             else if String.beq target "i8_gt" then Option.some (NativeWrapKind.bool_result "monad_i8_gt")
+            // The `I32` comparisons and `I32`↔`I64` conversions, newly
+            // reachable from `motes/tls`: OpenSSL entry points return
+            // `int`, and the handshake compares it. No mk_decl -- these
+            // are `define`s in the runtime module (runtime/src/natives.mo),
+            // and a `declare` beside a `define` is the invalid
+            // redefinition the d64 comment warns about.
+            else if String.beq target "i32_eq" then Option.some (NativeWrapKind.bool_result "monad_i32_eq")
+            else if String.beq target "i32_lt" then Option.some (NativeWrapKind.bool_result "monad_i32_lt")
+            else if String.beq target "i32_gt" then Option.some (NativeWrapKind.bool_result "monad_i32_gt")
+            else if String.beq target "i32_to_i64" then Option.some (NativeWrapKind.passthrough "monad_i32_to_i64")
+            else if String.beq target "i64_to_i32" then Option.some (NativeWrapKind.passthrough "monad_i64_to_i32")
             // The `I64` arithmetic/comparison family -- the last group in
             // `native_op_table` (see that table's own doc comment, and
             // `runtime/src/natives.mo`'s emitters for the semantics).
@@ -569,6 +580,10 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "tcp_close" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_close")
             else if String.beq target "tcp_close_listener" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_close_listener")
             else if String.beq target "tcp_local_port" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_local_port")
+            // `tcp_fd` is typed extraction, not a lookup: the runtime
+            // value already IS the descriptor, so it passes through like
+            // `tcp_local_port` (an `IO I32` over an i64 result).
+            else if String.beq target "tcp_fd" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_fd")
             // `Ptr.null` (init/prelude.mo) -- the NULL pointer for the C
             // FFI's callback arguments. `passthrough` with zero params:
             // the call's result IS the def's value, the raw word 0.
@@ -847,13 +862,16 @@ def runtime_declarations : List LLVMDeclaration :=
     let d83 := mk_decl "monad_bytebuf_to_list" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d84 := mk_decl "monad_bytebuf_free" (List.cons "i64" List.empty) "i64" in
     let d85 := mk_decl "monad_bytebuf_ptr" (List.cons "i64" List.empty) "i64" in
+    // `monad_tcp_fd` (runtime.c) -- `IO.tcp_fd`'s backing function. The
+    // Socket value is the descriptor already; one i64 arg, i64 result.
+    let d86 := mk_decl "monad_tcp_fd" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d68, d69, d70, d71, d72,
-     d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85]
+     d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d86]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

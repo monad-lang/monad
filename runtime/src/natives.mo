@@ -34,11 +34,11 @@
 use llvm::ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair, mk}
 use std::list {}
 
-open LLVMType {i1_, i8_, i64_, ptr}
+open LLVMType {i1_, i32_, i8_, i64_, ptr}
 open LLVMValue {
   add, alloc_constructor, and_, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
-  int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, shl_, sub, udiv,
-  urem, var_, xor_, zext,
+  int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, sext, shl_, sub,
+  trunc, udiv, urem, var_, xor_, zext,
 }
 open LLVMInstruction {assign, branch, jump, ret}
 
@@ -88,6 +88,8 @@ def numeric_runtime_functions : List LLVMFunction :=
    emit_u16_eq, emit_u16_lt, emit_u16_gt,
    emit_u16_add, emit_u16_sub, emit_u16_mul, emit_u16_div,
    emit_i8_eq, emit_i8_lt, emit_i8_gt,
+   emit_i32_eq, emit_i32_lt, emit_i32_gt,
+   emit_i32_to_i64, emit_i64_to_i32,
    emit_i64_add, emit_i64_sub, emit_i64_mul, emit_i64_div,
    emit_i64_eq, emit_i64_lt, emit_i64_gt]
 
@@ -789,6 +791,36 @@ def emit_u16_div : LLVMFunction := emit_guarded_native "monad_u16_div" (sdiv (pa
 def emit_i8_eq : LLVMFunction := emit_icmp_native "monad_i8_eq" (icmp_eq (parm_ 0) (parm_ 1))
 def emit_i8_lt : LLVMFunction := emit_icmp_native "monad_i8_lt" (icmp_slt (parm_ 0) (parm_ 1))
 def emit_i8_gt : LLVMFunction := emit_icmp_native "monad_i8_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+
+/// The `I32` comparison family (`init/number.mo`'s `I32.beq`/`lt`/`gt`)
+/// plus the `I32`↔`I64` conversions, newly reachable from `motes/tls`:
+/// every OpenSSL entry point returns `int`, and the handshake compares
+/// it (`SSL_connect == 1`, `SSL_get_error` dispatch). Signed `slt`/`sgt`
+/// and unmasked, like the `I8` group directly above: the reference's
+/// `int_cmp` group never masks, and an `I32` payload wider than 32 bits
+/// cannot be constructed.
+///
+/// `i32_to_i64` is an identity native (the payload already IS the value).
+/// `i64_to_i32` must instead RE-INTERPRET the low 32 bits, because the
+/// reference's `int_to_int` masks with `v as i32 as i64` -- a
+/// sign-reinterpreting truncation, not a bit mask -- so a trunc+sext
+/// pair, exactly the shape `sext`'s own doc comment describes for C
+/// integers.
+def emit_i32_eq : LLVMFunction := emit_icmp_native "monad_i32_eq" (icmp_eq (parm_ 0) (parm_ 1))
+def emit_i32_lt : LLVMFunction := emit_icmp_native "monad_i32_lt" (icmp_slt (parm_ 0) (parm_ 1))
+def emit_i32_gt : LLVMFunction := emit_icmp_native "monad_i32_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+def emit_i32_to_i64 : LLVMFunction := emit_identity_native "monad_i32_to_i64"
+def emit_i64_to_i32 : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "t" (trunc (parm_ 0) i64_ i32_),
+       assign "s" (sext (var_ "t") i32_ i64_),
+       ret (var_ "s")] in
+  { name := "monad_i64_to_i32",
+    params := (i64_params 1),
+    ret_ty := i64_,
+    blocks := [entry],
+    dbg_loc := Option.none }
 
 
 // ─── Bench stubs ────────────────────────────────────────────────────
