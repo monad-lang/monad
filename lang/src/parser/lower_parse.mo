@@ -45,6 +45,7 @@ use lang::types {
   ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
   QualifiedName, Struct, StructField, StructLitField, Term, binder_anon, binder_binder,
   binder_named,
+  dict_hint_marker_prefix,
   sentinel,
   show_identifier,
 }
@@ -430,6 +431,9 @@ def collect_kind_rems (k : ParseTermKind) (acc : List I64) : List I64 := match k
     ParseTermKind.pi _n _a _r => acc,
     ParseTermKind.var _ => acc,
     ParseTermKind.var_macro _ => acc,
+    // A hint marker has no children and no position of its own -- it is
+    // metadata for the enclosing application, not an instruction.
+    ParseTermKind.dict_hint _ => acc,
     ParseTermKind.con _ => acc,
     ParseTermKind.ntv _ => acc,
     // A level carries no `rem`: it is not a ParseTerm child.
@@ -509,6 +513,7 @@ def kind_wants_loc (k : ParseTermKind) : Bool := match k {
     ParseTermKind.pi _ _ _ => false,
     ParseTermKind.sort _ => false,
     ParseTermKind.quote_ _ => false,
+    ParseTermKind.dict_hint _ => false,
     ParseTermKind.hole => false,
 }
 
@@ -652,6 +657,16 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // Desugared HERE, not in the grammar -- this is the whole reason
         // the parse stage can drop `ctx`.
         ParseTermKind.do_ stmts => lower_parse_do ctx stmts,
+        // `f #Named.Instance args`'s marker: a sentinel var whose name is
+        // the `__hint_`-prefixed instance name -- the one spelling
+        // `dict_hint_name` (lang/scope.mo) recognizes, and the only thing
+        // that ever resolves it (the checker's app path strips and
+        // validates the markers; the dict-resolution pass consumes them).
+        // Deliberately NOT a resolvable name: nothing else can ever
+        // reference it, and an unstripped marker that reaches free-var
+        // checking is a loud error naming the instance.
+        ParseTermKind.dict_hint name =>
+            Term.var sentinel (DebugName.named (Identifier.id (String.concat dict_hint_marker_prefix (show_identifier name)))),
         ParseTermKind.hole => Term.hole,
     }
 

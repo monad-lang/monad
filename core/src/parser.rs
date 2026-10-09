@@ -818,7 +818,31 @@ fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
   // `term_inner`) handles it. A bare `r` used as a real function variable
   // (e.g. `r x`, followed by whitespace) still parses as an application.
   let (input, fun) = alt((macro_call, variable, parens)).parse(input)?;
-  let (input, args) = many1(alt((preceded(ws1, term_inner), parens))).parse(input)?;
+  // `f #Named.Instance args` -- an explicit dict hint. The host only needs
+  // parse-level parity here (the dict-pass half is self-hosted): consume
+  // and DISCARD the marker, so `f #Ins` with no further args must parse
+  // too -- hence many0 when a hint was present, many1 otherwise.
+  let (input, hint) = opt(preceded(
+    ws1,
+    preceded(
+      tag("#"),
+      preceded(
+        ws0,
+        alt((
+          name_path_expression,
+          map(identifier, |i| NamePath::new(vec![i])),
+        )),
+      ),
+    ),
+  ))
+  .parse(input)?;
+  let (input, args) = if hint.is_some() {
+    let (input, args) = many0(alt((preceded(ws1, term_inner), parens))).parse(input)?;
+    (input, args)
+  } else {
+    let (input, args) = many1(alt((preceded(ws1, term_inner), parens))).parse(input)?;
+    (input, args)
+  };
 
   Ok((input, apps(fun, args)))
 }

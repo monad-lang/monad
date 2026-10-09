@@ -898,6 +898,10 @@ def pt_quote_ (t : ParseTerm) : ParseTerm := pt_ (ParseTermKind.quote_ t)
 #[partial]
 def pt_do (stmts : List DoStmt) : ParseTerm := pt_ (ParseTermKind.do_ stmts)
 
+/// `f #Named.Instance args`'s marker term -- see `ParseTermKind.dict_hint`.
+#[partial]
+def pt_dict_hint (name : Identifier) : ParseTerm := pt_ (ParseTermKind.dict_hint name)
+
 def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 
 
@@ -1176,6 +1180,13 @@ pub type ParseTermKind {
     /// binder context is known. The grammar used to desugar inline,
     /// which is only possible while it also threads `ctx`.
     do_ (stmts: List DoStmt),
+    /// `f #Named.Instance args`'s instance hint -- the parsed `#` marker.
+    /// Only ever appears as the FIRST argument of an application
+    /// (`pt_dict_hint` is emitted by `dict_hint_term`, lang/src/parser.mo,
+    /// as `app <callee> (dict_hint ...)`), never free-standing. Lowering
+    /// turns it into the `Term.var` marker argument the dict-resolution
+    /// pass strips back off; it survives lowering ONLY as that marker.
+    dict_hint (name: Identifier),
     hole,
 }
 
@@ -1577,6 +1588,17 @@ pub type TypeError {
     /// dropping it is as wrong as using it twice.
     linear_unused (name: Identifier) (typ: Term),
 }
+
+/// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`
+/// named `__hint_<instance name>` (lowered at `ParseTermKind.dict_hint`'s
+/// arm, lang/parser/lower_parse.mo). The prefix is shared knowledge between
+/// that lowering arm, `dict_hint_name`'s recognizer (lang/scope.mo), and
+/// the two consumers that strip the markers back off -- the checker's app
+/// path and the dict-resolution pass -- so it lives here rather than being
+/// spelled twice. Never a name anything else can produce: identifiers may
+/// not contain `_`-prefixed words the parser hands out, and no user binder
+/// can shadow a sentinel (global) index.
+pub def dict_hint_marker_prefix : String := "__hint_"
 
 /// Canonical EvalError uses de Bruijn Term. EvalErrorV0 is the legacy V0 variant.
 type EvalError {
@@ -3021,6 +3043,12 @@ pub struct ScopeData {
     // above, and for the same reason: the lookup happens after
     // `scope_resolve_name`, under the qualified name it returns.
     cubical_prims : HashMap String CubicalPrim := HashMap.map HashMap.empty_buckets,
+    // A def's declared `[Class V]` constraints (`Def.constraints`) -- the
+    // `#Named.Instance` hint checker (`validate_dict_hints`,
+    // lang/scope.mo) validates each hint against the callee's class
+    // constraints, so the checker needs them by name. Side-table pattern
+    // of `def_params`/`def_sigs` above; keyed by the resolved name.
+    def_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

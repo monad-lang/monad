@@ -25,6 +25,7 @@ fn npt(s: &str) -> NamePath {
 mod attributes;
 mod basics;
 mod declarations;
+mod dict_hint;
 mod do_notation;
 mod docstrings;
 mod expressions;

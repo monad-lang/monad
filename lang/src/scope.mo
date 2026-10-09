@@ -5,13 +5,14 @@ use lang::types {
   ModulePath, ModuleRegistry, NamePath, NameRef, Native, NumSuffix, OpenFilter,
   Operator, Param, QualifiedName, Scope, ScopeClassDef, ScopeData, ScopeDef,
   ScopeError, ScopeInstance, Similar, SortLevel, Struct, StructField,
-  StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
+  StructLitField, Term, TypeConstraint, TypeError, UseFilter, UseItem, Visibility,
   attr_args, binder_anon, binder_binder, binder_explicit, binder_is_explicit,
   binder_is_level,
-  binder_level, binder_name, binder_named, cubical_prim_of_name, f32, f64, i16, i32,
+  binder_level, binder_name, binder_named, cubical_prim_of_name, dict_hint_marker_prefix,
+  f32, f64, i16, i32,
   i64, i8, id_member,
   many, mk, name_path_similar, open_all, open_only, package_private, param_many,
-  priv_, pub_, show_identifier, show_module_path, show_name_path, show_operator,
+  priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
   term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
   use_name, use_rename, use_sub, use_sub_rename,
   AttrArg,
@@ -482,7 +483,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
 
 def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match df {
-        Def.mk {name := defname, typ, term := term_, vis, params := decl_params, attrs := def_attrs, ..} =>
+        Def.mk {name := defname, typ, term := term_, vis, params := decl_params, attrs := def_attrs, constraints := def_constraints, ..} =>
             let sd : ScopeDef := {
                 name := defname,
                 module := path,
@@ -554,10 +555,15 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // them. Skipping registration is strictly stricter: the
             // only programs newly rejected are the ones that were being
             // accepted by unfolding to top.
-            match def_body_is_real term_ {
+            let with_body : ScopeData := match def_body_is_real term_ {
                 Bool.true => scope_data_add_def_body with_prim defname term_,
                 Bool.false => with_prim,
-            }
+            } in
+            // ... and the def's declared `[Class V]` constraints: the
+            // `#Named.Instance` hint checker validates a hint against the
+            // callee's constraints, which `scope_find_def_constraints`
+            // reads back from this table.
+            scope_data_add_def_constraints with_body defname def_constraints
     }
 
 /// Does a def body carry a real body, or is it a body-less declaration?
@@ -669,6 +675,12 @@ def scope_data_add_def_body (sd : ScopeData) (name : NamePath) (body : Term) : S
 /// as `scope_data_add_def_body` just above.
 def scope_data_add_cubical_prim (sd : ScopeData) (name : NamePath) (prim : CubicalPrim) : ScopeData :=
     { sd with cubical_prims := npath_map_insert name prim sd.cubical_prims }
+
+/// Register `name -> constraints` into `sd.def_constraints` -- the
+/// `#Named.Instance` hint checker reads them back via
+/// `scope_find_def_constraints`.
+def scope_data_add_def_constraints (sd : ScopeData) (name : NamePath) (constraints : List TypeConstraint) : ScopeData :=
+    { sd with def_constraints := npath_map_insert name constraints sd.def_constraints }
 
 /// Registers `ind` two ways: into `.inductives` (constructor/arity
 /// lookups — `scope_find_inductive` and friends) *and*, like
@@ -1348,6 +1360,18 @@ def scope_data_find_cubical_prim (sd : ScopeData) (name : NamePath) : Option Cub
 pub def scope_find_cubical_prim (name : NamePath) (s : Scope) : Option CubicalPrim :=
     let g : ScopeData := scope_globals s in
     scope_data_find_cubical_prim g name
+
+// --- ScopeData: a def's declared [Class V] constraints ---
+
+def scope_data_find_def_constraints (sd : ScopeData) (name : NamePath) : Option (List TypeConstraint) :=
+    npath_map_lookup name sd.def_constraints
+
+/// Globals only, same shape as `scope_find_def_sig` -- the constraints
+/// are a property of the DECLARATION, so a local shadowing the name
+/// does not inherit them.
+pub def scope_find_def_constraints (name : NamePath) (s : Scope) : Option (List TypeConstraint) :=
+    let g : ScopeData := scope_globals s in
+    scope_data_find_def_constraints g name
 
 // --- ScopeData: find an Inductive by ModulePath ---
 
@@ -2391,7 +2415,7 @@ def class_defs_names (cds : List ClassDef) : List Identifier :=
 /// stays distinct, where a last-segment comparison would coarsen the two
 /// apart.
 #[partial]
-def class_name_eq (a : NamePath) (b : NamePath) : Bool :=
+pub def class_name_eq (a : NamePath) (b : NamePath) : Bool :=
     String.beq (show_name_path a) (show_name_path b)
 
 /// Finds the `Class` an instance's own `cls : NamePath` field names,
@@ -2486,6 +2510,13 @@ def instance_module_prefix (insname : Identifier) : String :=
     let idx := find_qualifier_sep s 0 (String.length s) in
     if I64.beq idx (0 - 1) then "" else String.slice s 0 idx
 
+/// The instance's own name with any `module::` qualifier stripped -- the
+/// identifier as declared in its own module.
+pub def instance_bare_name (insname : Identifier) : String :=
+    let s := show_identifier insname in
+    let idx := find_qualifier_sep s 0 (String.length s) in
+    if I64.beq idx (0 - 1) then s else String.slice s (idx + 2) (String.length s - idx - 2)
+
 #[partial]
 def find_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
     if I64.gt (i + 2) n then (0 - 1)
@@ -2515,8 +2546,14 @@ def with_module_prefix (prefix : String) (full : String) : String :=
 /// The name is additionally prefixed with the instance's declaring
 /// module (`instance_module_prefix`) -- see `with_module_prefix` for
 /// why the class+type pair alone is not unique program-wide.
+///
+/// A NAMED instance (`instance ShowA : Show I64`) also appends its own
+/// name: two named instances of the same class+carrier mint distinct
+/// promoted methods (the hint feature's whole selection target), where
+/// the bare class+type mangling gave both the same name. An anonymous
+/// instance keeps the historical name.
 #[partial]
-def mangle_instance_method_name (prefix : String) (cls_name : NamePath) (ins_args : List Term) (method_name : Identifier) : NamePath :=
+pub def mangle_instance_method_name (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (method_name : Identifier) : NamePath :=
     let cls_str := show_name_path cls_name in
     let args_str := terms_to_slug ins_args in
     let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
@@ -2531,18 +2568,27 @@ def mangle_instance_method_name (prefix : String) (cls_name : NamePath) (ins_arg
     // ctor_owners threading (the args here are already-resolved calls,
     // not bare local vars). `String.concat` is the same idiom already
     // used elsewhere to sidestep this class of gap entirely.
-    let full := String.concat (String.concat cls_str sep_args) (String.concat "_" (show_identifier method_name)) in
-    NamePath.npath (List.cons (Identifier.id (with_module_prefix prefix full)) List.empty)
+    let full0 := String.concat (String.concat cls_str sep_args) (String.concat "_" (show_identifier method_name)) in
+    let ins_str := instance_bare_name insname in
+    let full := if String.beq ins_str "_" then full0 else String.concat full0 (String.concat "_" ins_str) in
+    NamePath.npath (List.cons (Identifier.id (with_module_prefix (instance_module_prefix insname) full)) List.empty)
 
-/// The mangled top-level name an instance's own dictionary VALUE def
-/// gets (distinct from any of its promoted methods' own names above).
-#[partial]
-def mangle_instance_dict_name (prefix : String) (cls_name : NamePath) (ins_args : List Term) : NamePath :=
+/// The mangled name of an instance's own dictionary VALUE def. A NAMED
+/// instance (`instance ShowA : Show I64`) appends its own name: two named
+/// instances of the same class+carrier would otherwise mint the SAME
+/// `__Dict_<Cls>_<args>` def -- the exact shape the `#Named.Instance`
+/// hint selects between -- and collide. An anonymous instance keeps the
+/// historical name.
+pub def mangle_instance_dict_name (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) : NamePath :=
     let cls_str := show_name_path cls_name in
     let args_str := terms_to_slug ins_args in
     let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
-    let full := String.concat (String.concat "__Dict_" cls_str) sep_args in
-    NamePath.npath (List.cons (Identifier.id (with_module_prefix prefix full)) List.empty)
+    let ins_str := instance_bare_name insname in
+    let full :=
+        if String.beq ins_str "_"
+        then String.concat (String.concat "__Dict_" cls_str) sep_args
+        else String.concat (String.concat (String.concat "__Dict_" cls_str) sep_args) (String.concat "_" ins_str) in
+    NamePath.npath (List.cons (Identifier.id (with_module_prefix (instance_module_prefix insname) full)) List.empty)
 
 /// Builds one instance's promoted method Decls (real top-level defs,
 /// renamed via `mangle_instance_method_name`) plus its own dictionary
@@ -2558,8 +2604,7 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
     match ins {
         Instance.mk insname cls_name ins_constraints ins_args _ _ defs =>
             let method_names := class_method_names cls in
-            let prefix := instance_module_prefix insname in
-            match build_dict_fields prefix cls_name ins_args defs method_names {
+            match build_dict_fields insname cls_name ins_args defs method_names {
                 Option.some field_terms =>
                     // `ins_constraints` (the instance's own `[Add A]` in
                     // e.g. `instance [Add A] HAdd A A A { ... }`) is
@@ -2575,8 +2620,8 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
                     // instance-forwarding case (this exact HAdd/Add
                     // shape) would never gain the dict param its own
                     // body (`Add.add a b`) needs.
-                    let method_decls := promote_methods prefix cls_name ins_args ins_constraints defs method_names in
-                    let dict_name := mangle_instance_dict_name prefix cls_name ins_args in
+                    let method_decls := promote_methods insname cls_name ins_args ins_constraints defs method_names in
+                    let dict_name := mangle_instance_dict_name insname cls_name ins_args in
                     let dict_con := Con.mk (Identifier.id "mk") dict_name (List.length field_terms) (options_of field_terms) in
                     let dict_def := Def.mk dict_name (Term.sort (SortLevel.concrete 1)) (Term.con dict_con)
                         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty in
@@ -2591,7 +2636,7 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
 /// unchanged, mirroring how `28d98dc`'s infix-resolution pass and
 /// Phase 0's own boxing both leave a Def's own shape otherwise alone.
 #[partial]
-def promote_methods (prefix : String) (cls_name : NamePath) (ins_args : List Term) (ins_constraints : List TypeConstraint) (defs : List Def) (method_names : List Identifier) : List Decl :=
+def promote_methods (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (ins_constraints : List TypeConstraint) (defs : List Def) (method_names : List Identifier) : List Decl :=
     match method_names {
         List.empty => List.empty,
         List.cons mname rest =>
@@ -2599,16 +2644,16 @@ def promote_methods (prefix : String) (cls_name : NamePath) (ins_args : List Ter
                 Option.some d =>
                     match d {
                         Def.mk {typ, term := term_, constraints := own_constraints, attrs, vis, params, ..} =>
-                            let new_name := mangle_instance_method_name prefix cls_name ins_args mname in
+                            let new_name := mangle_instance_method_name insname cls_name ins_args mname in
                             // `ins_constraints` prepended ahead of the
                             // method's own (usually empty) constraints --
                             // see promote_instance's own doc comment on
                             // why this is here.
                             let all_constraints := List.append ins_constraints own_constraints in
                             let renamed := Def.mk new_name typ term_ all_constraints attrs vis params in
-                            List.cons (Decl.def_d renamed) (promote_methods prefix cls_name ins_args ins_constraints defs rest),
+                            List.cons (Decl.def_d renamed) (promote_methods insname cls_name ins_args ins_constraints defs rest),
                     },
-                Option.none => promote_methods prefix cls_name ins_args ins_constraints defs rest,
+                Option.none => promote_methods insname cls_name ins_args ins_constraints defs rest,
             },
     }
 
@@ -2618,17 +2663,17 @@ def promote_methods (prefix : String) (cls_name : NamePath) (ins_args : List Ter
 /// mangled name. `Option.none` (propagated by the caller as a hard
 /// failure) the moment any declared method is missing from `defs`.
 #[partial]
-def build_dict_fields (prefix : String) (cls_name : NamePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
+def build_dict_fields (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
     match method_names {
         List.empty => Option.some List.empty,
         List.cons mname rest =>
             match find_instance_method defs mname {
                 Option.none => Option.none,
                 Option.some _ =>
-                    match build_dict_fields prefix cls_name ins_args defs rest {
+                    match build_dict_fields insname cls_name ins_args defs rest {
                         Option.none => Option.none,
                         Option.some rest_terms =>
-                            let mangled := mangle_instance_method_name prefix cls_name ins_args mname in
+                            let mangled := mangle_instance_method_name insname cls_name ins_args mname in
                             // Sentinel (`-1`), not `Term.var 0` -- `mangled`
                             // is always a globally-unique mangled name,
                             // NEVER a real local binding at whatever depth
@@ -5821,6 +5866,174 @@ def method_suffix_of (s : String) : Option String :=
     let idx := last_dot_index s 0 (0 - 1) in
     if idx < 0 then Option.none else Option.some (String.drop (idx + 1) s)
 
+// `f #Named.Instance args`'s lowered marker arguments.
+//
+// The hint lowers to `Term.var sentinel (named "__hint_<name>")` and rides
+// the application spine as its FIRST argument -- the position dictionary
+// arguments resolve to. Markers only ever parse directly after the callee
+// (`dict_hint_term`, lang/parser.mo), so every marker sits at the spine's
+// head; one found mid-spine is left for the checker to reject.
+
+/// Is this term one lowered `#Named.Instance` marker? Answers the
+/// instance name it carries.
+pub def dict_hint_name (t : Term) : Option String :=
+    match term_peel t {
+        Term.var idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    let text := show_identifier id in
+                    let plen : I64 := String.length dict_hint_marker_prefix in
+                    if Bool.and (I64.beq idx sentinel) (String.starts_with dict_hint_marker_prefix text)
+                    then Option.some (String.slice text plen (String.length text - plen))
+                    else Option.none,
+                DebugName.unnamed => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// Peel a call spine's LEADING `#` markers: the hint grammar
+/// (`dict_hint_term`, lang/parser.mo) only ever parses one directly
+/// after the callee, so every marker sits at the spine's head. Later
+/// markers cannot occur, and a marker found mid-spine is left in place
+/// for the checker's catch-all (`type_check_app`'s marker guard) to
+/// reject loudly rather than silently dropping a hint the writer
+/// expected to take effect.
+pub def strip_dict_hint_args (args : List Term) : Pair (List String) (List Term) :=
+    strip_dict_hint_args_go args List.empty
+
+#[partial]
+def strip_dict_hint_args_go (args : List Term) (hints : List String) : Pair (List String) (List Term) :=
+    match args {
+        List.empty => Pair.pair (List.reverse hints) List.empty,
+        List.cons a rest =>
+            match dict_hint_name a {
+                Option.some h => strip_dict_hint_args_go rest (List.cons h hints),
+                Option.none => Pair.pair (List.reverse hints) args,
+            },
+    }
+
+/// Re-synthesize the marker terms for a hint list -- the checker peels
+/// markers before checking a call and re-attaches them to its rebuilt
+/// term, so the hint still reaches the codegen dict pass.
+#[partial]
+pub def dict_hint_marker_terms (hints : List String) : List Term :=
+    match hints {
+        List.empty => List.empty,
+        List.cons h rest => List.cons (Term.var sentinel (DebugName.named (Identifier.id (String.concat dict_hint_marker_prefix h)))) (dict_hint_marker_terms rest),
+    }
+
+/// The instance named `hint` in a flat instance list. Instance names are
+/// stored as the JOINED dotted string (`instance_try_named`,
+/// lang/parser.mo) -- the same spelling the hint carries -- and an
+/// anonymous instance (`Identifier.id "_"`) is never hintable.
+#[partial]
+def instance_named (instances : List Instance) (hint : String) : Option Instance :=
+    match instances {
+        List.empty => Option.none,
+        List.cons ins rest =>
+            match ins {
+                Instance.mk nm _ _ _ _ _ _ =>
+                    if String.beq (show_identifier nm) hint then Option.some ins
+                    else instance_named rest hint,
+            },
+    }
+
+/// The first hint naming an instance OF `cls_name` -- the instance that
+/// overrides auto-resolution for a call to that class. Hints naming
+/// instances of other classes are skipped here; they stay for the call's
+/// other constraints to consume.
+#[partial]
+def dict_hinted_instance (instances : List Instance) (cls_name : NamePath) (hints : List String) : Option Instance :=
+    match hints {
+        List.empty => Option.none,
+        List.cons h rest =>
+            match instance_named instances h {
+                Option.some ins =>
+                    match ins {
+                        Instance.mk _ ins_cls _ _ _ _ _ =>
+                            if class_name_eq ins_cls cls_name
+                            then Option.some ins
+                            else dict_hinted_instance instances cls_name rest,
+                    },
+                Option.none => dict_hinted_instance instances cls_name rest,
+            },
+    }
+
+/// Flatten the scope's per-class instance groups for a by-name lookup.
+#[partial]
+def scope_find_instance_by_name_go (groups : List ScopeInstance) (hint : String) : Option Instance :=
+    match groups {
+        List.empty => Option.none,
+        List.cons g rest =>
+            match instance_named g.instances hint {
+                Option.some ins => Option.some ins,
+                Option.none => scope_find_instance_by_name_go rest hint,
+            },
+    }
+
+/// The instance named `hint` anywhere in the scope's globals.
+pub def scope_find_instance_by_name (s : Scope) (hint : String) : Option Instance :=
+    let sd : ScopeData := scope_globals s in
+    scope_find_instance_by_name_go sd.instances hint
+
+/// Can the callee USE a hint for class `ins_cls`? Yes when the callee is
+/// that class's own method (`Ord.compare` hints an `Ord` instance), or
+/// when the callee's own declared constraints mention the class
+/// (`sort [Ord A]`).
+def hint_class_usable (classes : List Class) (callee : Identifier) (resolved : Option NamePath) (ins_cls : NamePath) (s : Scope) : Bool :=
+    let method_class := match class_method_ref classes callee {
+        Option.some ref =>
+            match ref {
+                ClassMethodRef.mk cls _ => Option.some (class_own_name cls),
+            },
+        Option.none => Option.none,
+    } in
+    match method_class {
+        Option.some cname => class_name_eq cname ins_cls,
+        Option.none =>
+            match resolved {
+                Option.some r => hint_class_in_constraints r ins_cls s,
+                Option.none => false,
+            },
+    }
+
+#[partial]
+def hint_class_in_constraints (resolved : NamePath) (ins_cls : NamePath) (s : Scope) : Bool :=
+    match scope_find_def_constraints resolved s {
+        Option.none => false,
+        Option.some constraints => hint_class_in_constraints_go constraints ins_cls,
+    }
+
+def hint_class_in_constraints_go (constraints : List TypeConstraint) (ins_cls : NamePath) : Bool :=
+    match constraints {
+        List.empty => false,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk cls _ =>
+                    if class_name_eq cls ins_cls then true else hint_class_in_constraints_go rest ins_cls,
+            },
+    }
+
+/// Validate a call's `#Named.Instance` hints: each must name a declared
+/// instance, and the callee must be able to use it (its class's method,
+/// or one of its own constraints). Answers the first failure as a
+/// `TypeError.custom` naming the hint; `Option.none` accepts.
+pub def validate_dict_hints (callee : Identifier) (resolved : Option NamePath) (hints : List String) (s : Scope) : Option TypeError :=
+    match hints {
+        List.empty => Option.none,
+        List.cons h rest =>
+            match scope_find_instance_by_name s h {
+                Option.none => Option.some (TypeError.custom (String.concat "no instance named '" (String.concat h "'"))),
+                Option.some ins =>
+                    match ins {
+                        Instance.mk _ ins_cls _ _ _ _ _ =>
+                            if hint_class_usable (scope_data_classes (scope_globals s)) callee resolved ins_cls s
+                            then validate_dict_hints callee resolved rest s
+                            else Option.some (TypeError.custom (String.concat "instance '" (String.concat h "' is not usable by this call"))),
+                    },
+            },
+    }
+
 /// Class name's own `Identifier` -> the `Class`'s own declared name.
 #[partial]
 def class_own_name (cls : Class) : NamePath :=
@@ -5962,7 +6175,7 @@ def resolve_dict_arg_plain (instances : List Instance) (cls_name : NamePath) (ca
         Option.some ins =>
             match ins {
                 Instance.mk found_insname _ _ ins_args _ _ _ =>
-                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name (instance_module_prefix found_insname) cls_name ins_args)))),
+                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname cls_name ins_args)))),
             },
     }
 
@@ -6056,10 +6269,21 @@ def instance_tier_candidates (instances : List Instance) (cls_name : NamePath) (
 /// see it) finds `instance BOrd String` here. Tried only after the
 /// primary `carrier` fails, preserving the existing, already-correct
 /// behavior for the common same-type-variable case.
+/// `hints` is the call's `#Named.Instance` override list -- a hint naming
+/// an instance OF THIS constraint's class wins over everything below,
+/// including the dict_env binding: the hint is the writer's explicit
+/// choice, and it pins the dict this constraint resolves to.
 #[partial]
-def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (bindings : List (Pair Identifier Term)) (carrier : Term) (extra_carriers : List Term) (c : TypeConstraint) : Option Term :=
+def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (hints : List String) (bindings : List (Pair Identifier Term)) (carrier : Term) (extra_carriers : List Term) (c : TypeConstraint) : Option Term :=
     match c {
         TypeConstraint.mk cls_name vars =>
+            match dict_hinted_instance instances cls_name hints {
+                Option.some ins =>
+                    match ins {
+                        Instance.mk found_insname _ _ ins_args _ _ _ =>
+                            Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname cls_name ins_args)))),
+                    },
+                Option.none =>
             match lookup_dict_binding dict_env cls_name {
                 Option.some bound_id => Option.some (Term.var 0 (DebugName.named bound_id)),
                 Option.none =>
@@ -6106,7 +6330,7 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                         Option.some p =>
                             match p {
                                 Pair.pair bound _matched_ins =>
-                                    match resolve_dict_arg classes instances dict_env List.empty bound List.empty c {
+                                    match resolve_dict_arg classes instances dict_env hints List.empty bound List.empty c {
                                         Option.some t => Option.some t,
                                         Option.none => resolve_dict_arg_plain instances cls_name searched,
                                     },
@@ -6114,17 +6338,18 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                         Option.none => resolve_dict_arg_plain instances cls_name searched,
                     },
             },
+            },
     }
 
 #[partial]
-def resolve_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (bindings : List (Pair Identifier Term)) (carrier : Term) (extra_carriers : List Term) (constraints : List TypeConstraint) : Option (List Term) :=
+def resolve_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (hints : List String) (bindings : List (Pair Identifier Term)) (carrier : Term) (extra_carriers : List Term) (constraints : List TypeConstraint) : Option (List Term) :=
     match constraints {
         List.empty => Option.some List.empty,
         List.cons c rest =>
-            match resolve_dict_arg classes instances dict_env bindings carrier extra_carriers c {
+            match resolve_dict_arg classes instances dict_env hints bindings carrier extra_carriers c {
                 Option.none => Option.none,
                 Option.some arg =>
-                    match resolve_dict_args classes instances dict_env bindings carrier extra_carriers rest {
+                    match resolve_dict_args classes instances dict_env hints bindings carrier extra_carriers rest {
                         Option.none => Option.none,
                         Option.some rest_args => Option.some (List.cons arg rest_args),
                     },
@@ -6278,8 +6503,16 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
         Term.app _ _ =>
             match flatten_call_spine t {
                 CallSpine.mk head args =>
-                    let hints := call_arg_hints classes def_types env ctor_owners ctor_field_types head args expect in
-                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hints args in
+                    // `f #Named.Instance args` -- the hint markers ride
+                    // the spine's head (lowering puts them in the FIRST
+                    // argument slot). Peel them before anything else looks
+                    // at the args: the dispatch paths below consume the
+                    // hint list, and the markers never survive into a
+                    // rebuilt call.
+                    match strip_dict_hint_args args {
+                        Pair.pair dict_hints spine_args =>
+                    let hints := call_arg_hints classes def_types env ctor_owners ctor_field_types head spine_args expect in
+                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hints spine_args in
                     // `App(Lam(id, typ, body), value)` -- the parser's
                     // desugaring of EVERY `let`, annotated or not -- gets its
                     // binder's type from the resolved VALUE when the source
@@ -6298,14 +6531,15 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                                         Option.some ref =>
                                             match ref {
                                                 ClassMethodRef.mk cls method_name =>
-                                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name resolved_args head args def_carrier env ctor_owners expect,
+                                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name resolved_args head spine_args def_carrier env ctor_owners expect dict_hints,
                                             },
-                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env def_constraints def_types ctor_field_types id head resolved_args env ctor_owners,
+                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env dict_hints def_constraints def_types ctor_field_types id head resolved_args env ctor_owners,
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
                         _ => rebuild_call (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none dispatch_head) resolved_args,
                     },
+            },
             },
         // A NULLARY class method reference (e.g. `FromListLiteral.empty`,
         // `MakeEmpty.empty`) is a bare `Term.var`, never wrapped in a
@@ -6325,7 +6559,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                         Option.some ref =>
                             match ref {
                                 ClassMethodRef.mk cls method_name =>
-                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect,
+                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect List.empty,
                             },
                         Option.none => t,
                     },
@@ -6976,39 +7210,46 @@ def resolve_class_call_case (classes : List Class) (instances : List Instance) (
 /// resolved via ordinary recursion, per this pass's own "leave
 /// unresolved rather than guess" style, matching `resolve_infix_term`).
 #[partial]
-def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expected : Option Term) : Term :=
+def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expected : Option Term) (hints : List String) : Term :=
     let cls_name := class_own_name cls in
-    match lookup_dict_binding dict_env cls_name {
-        Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
+    // Computed once here (the highest point `resolved_args`/`env`/
+    // `ctor_owners`/`def_types` are all still together) and threaded
+    // unchanged through the whole D4 chain down to `resolve_dict_arg`'s
+    // own `extra_carriers` fallback: the call's args, its annotated
+    // expectation, and the callee's own class signature, each projected
+    // to carriers in that order.
+    let ad := infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args in
+    let ex := carrier_hint_list expected in
+    let pj := method_carrier_hints cls method_name expected def_carrier in
+    let extra_carriers := demote_uninformative_carriers (List.append ad (List.append ex pj)) in
+    match dict_hinted_instance instances cls_name hints {
+        // The `#Named.Instance` override wins over both the dict_env
+        // binding and auto-resolution -- it is the writer's explicit
+        // choice of instance. The carrier still comes from the call's
+        // own evidence when there is any (it binds the instance's
+        // wildcards for its own constraints' resolution); without one,
+        // the instance's first declared arg stands in, so at least a
+        // fully concrete hinted instance dispatches with no evidence.
+        Option.some ins =>
+            match ins {
+                Instance.mk _ _ _ ins_args _ _ _ =>
+                    let hint_carrier : Term :=
+                        match infer_carrier_from_args_go env ctor_owners def_types ctor_field_types resolved_args {
+                            Option.some c => c,
+                            Option.none =>
+                                match ins_args {
+                                    List.cons a _ => a,
+                                    List.empty => Term.hole,
+                                },
+                        } in
+                    resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head hint_carrier ins extra_carriers,
+            },
         Option.none =>
-            // Computed once here (the highest point `resolved_args`/`env`/
-            // `ctor_owners`/`def_types` are all still together) and
-            // threaded unchanged through the whole D4 chain down to
-            // `resolve_dict_arg`'s own `extra_carriers` fallback -- see
-            // that function's doc comment for why this exists.
-            //
-            // The call's OWN expected carrier (`expected`, the annotated
-            // binding this call is the value of) is APPENDED, not
-            // prepended: every candidate the arguments already revealed is
-            // tried first, so a call that resolved before this channel
-            // existed resolves to exactly the same instance it did. The
-            // hint is only consulted where the args revealed nothing at
-            // all -- `Map.empty`'s nullary shape, `Bounded.max_bound` --
-            // which is the family that could never resolve.
-            //
-            // Then the SAME two hints again, projected through the
-            // callee's own class signature (`method_carrier_hints`): a
-            // hint is a whole type, and the carrier an instance's args are
-            // written in is the class's own carrier parameter applied to
-            // its arguments, which is a subterm of that type in the
-            // codomain position. The raw hint is kept FIRST so the
-            // existing channel's own order, and therefore every resolution
-            // that already worked, is untouched.
-            let ad := infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args in
-            let ex := carrier_hint_list expected in
-            let pj := method_carrier_hints cls method_name expected def_carrier in
-            let extra_carriers := demote_uninformative_carriers (List.append ad (List.append ex pj)) in
-            resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
+            match lookup_dict_binding dict_env cls_name {
+                Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
+                Option.none =>
+                    resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
+            },
     }
 
 /// D4: no bound dict for this class in scope -- try a fresh concrete
@@ -7200,7 +7441,7 @@ def resolve_class_method_call_with_instance (classes : List Class) (instances : 
             // instances whose head names no variable at all
             // (`method_sig_bindings`).
             let bindings := List.append (carrier_bindings (instance_wildcard_names ins) ins_args carrier) (method_sig_bindings classes ins_cls_name method_name carrier) in
-            resolve_class_method_call_with_dict_args (instance_module_prefix insname) classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier bindings (emitted_dict_constraints ins method_name) ins_args extra_carriers,
+            resolve_class_method_call_with_dict_args insname classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier bindings (emitted_dict_constraints ins method_name) ins_args extra_carriers,
     }
 
 /// The instance constraints whose dictionary parameter the EMITTED
@@ -7250,11 +7491,15 @@ def emitted_dict_constraints (ins : Instance) (method_name : Identifier) : List 
     }
 
 #[partial]
-def resolve_class_method_call_with_dict_args (prefix : String) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (bindings : List (Pair Identifier Term)) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
-    match resolve_dict_args classes instances dict_env bindings carrier extra_carriers ins_constraints {
+def resolve_class_method_call_with_dict_args (insname : Identifier) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (bindings : List (Pair Identifier Term)) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
+    // `List.empty` hints: these are the MATCHED INSTANCE'S OWN
+    // constraints, not the call's -- a hint naming the instance would
+    // here resolve its own element constraint back to itself (the A8
+    // self-reference), so only the call-site constraints ever see hints.
+    match resolve_dict_args classes instances dict_env List.empty bindings carrier extra_carriers ins_constraints {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some dict_args =>
-            let mangled : Identifier := mangled_to_identifier (mangle_instance_method_name prefix cls_name ins_args method_name) in
+            let mangled : Identifier := mangled_to_identifier (mangle_instance_method_name insname cls_name ins_args method_name) in
             // Sentinel, not `Term.var 0` -- same rationale as
             // `build_dict_fields`'s own mangled-method reference just
             // above: a mangled instance-method name is never a real
@@ -7656,7 +7901,7 @@ def find_minted_name_sep (s : String) (i : I64) (n : I64) : I64 :=
 /// passes through completely unchanged -- this must never touch an
 /// ordinary, unconstrained call.
 #[partial]
-def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
+def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (hints : List String) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
     match lookup_def_constraints def_constraints (NamePath.npath (List.cons id List.empty)) {
         Option.none => rebuild_call head resolved_args,
         Option.some constraints =>
@@ -7667,7 +7912,7 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
                 Option.some carrier =>
                     // No instance head here (an ordinary constrained DEF call), so no
                     // bindings: `List.empty` keeps the pre-existing whole-carrier order.
-                    match resolve_dict_args classes instances dict_env List.empty carrier (demote_uninformative_carriers (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args)) constraints {
+                    match resolve_dict_args classes instances dict_env hints List.empty carrier (demote_uninformative_carriers (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args)) constraints {
                         Option.none => rebuild_call head resolved_args,
                         Option.some dict_args => rebuild_call head (List.append dict_args resolved_args),
                     },

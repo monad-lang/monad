@@ -1,7 +1,7 @@
 /// Self-hosted Monad grammar parser.
 /// Split into modules for maintainability.
 use lang::types {
-  AttrArg, Attribute, Decl, DoStmt, FieldPattern, FieldPatternEntry, Identifier,
+  AttrArg, Attribute, Decl, DebugName, DoStmt, FieldPattern, FieldPatternEntry, Identifier,
   InductConstructor, LocatedSpan, Location, ModulePath, Multiplicity, NamePath,
   NameRef, OpenFilter, Param, ParseClass, ParseClassDef, ParseDecl, ParseDef,
   ParseInductConstructor, ParseInstance, ParseMatchCase, ParseParam, ParseSpan,
@@ -12,7 +12,7 @@ use lang::types {
   named, num, operator, package_private, parse_param_many, parse_param_with_mult,
   pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
   pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
-  pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_do,
+  pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_dict_hint, pt_do,
   pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
   pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
   struct_update, term_loc, u32, u64, var, zero,
@@ -6272,6 +6272,122 @@ def macro_call_term_bang (r : ParseResult String) (name : String) : ParseResult 
         fail e => fail e
     }
 
+// ─── Term-position `f #Named.Instance args` (dict override hint) ────────
+//
+// A `#` in EXPRESSION position is otherwise unbound (`#` only starts
+// decl-level `#[...]`/`#![]` attributes), so this atom stakes no claim
+// against any existing grammar. The callee is parsed by `variable`
+// itself (the same qualified/dotted/sort-fallback chain every bare
+// variable goes through), then a `#` and a dotted identifier run name
+// the instance to dispatch through. Emitted as ONE atom
+// `app <callee> (dict_hint <name>)` so the hint rides the application
+// spine as its first argument -- exactly where the dict-resolution pass
+// expects dictionary arguments -- and `f #My.Ord xs` then applies `xs`
+// (and everything after) through the ordinary juxtaposition loop for
+// free, the same way `foo! 1 2` does (`macro_call_term`, above).
+//
+// MUST be tried before `variable` in `atom_parsers` below: `variable`
+// alone would match just `f` on input `f #My.Ord x`, leaving
+// `#My.Ord x` unconsumed -- the same alternation-order hazard as
+// `macro_call_term` (see its own comment and
+// `test_macro_call_term_ordering_hazard_is_real`).
+//
+// The hint has no semantics of its own: the checker's app path strips
+// and validates the marker arguments (`try_type_check_def_call`,
+// lang/typecheck/infer.mo), and the dict-resolution pass uses the named
+// instance instead of carrier matching (`resolve_class_calls_decls`,
+// lang/scope.mo).
+#[partial]
+def dict_hint_term (input : String) : ParseResult ParseTerm :=
+    dict_hint_var (variable input) input
+
+#[partial]
+def dict_hint_var (r : ParseResult ParseTerm) (input : String) : ParseResult ParseTerm :=
+    match r {
+        success rem t => dict_hint_hash (tag "#" (skip_spaces rem)) t,
+        fail e => fail e
+    }
+
+/// The callee must be a bare variable atom -- `dict_hint_var` ran
+/// `variable`, which also answers sort forms (`Sort u`) and `_`; those
+/// are not hintable callees.
+#[partial]
+def dict_hint_hash (r : ParseResult String) (callee : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem _ => dict_hint_name (dotted_identifier (skip_spaces rem)) callee,
+        fail e => fail e
+    }
+
+/// `dotted_identifier`'s success remainder is the rest of the input; the
+/// name is the JOINED dotted string, the same spelling a named
+/// instance's own name is stored as (`instance_try_named` above).
+#[partial]
+def dict_hint_name (r : ParseResult (List String)) (callee : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem ids =>
+            success rem (pt_app callee (pt_dict_hint (Identifier.id (join_dotted_identifiers ids)))),
+        fail e => fail e
+    }
+
+/// Does the term contain the `__hint_<name>` marker var anywhere? The
+/// lowered marker is a sentinel var, so a shallow walk suffices.
+#[partial]
+def term_has_hint_name (t : Term) (nm : String) : Bool :=
+	match t {
+		Term.var _ dbg =>
+			match dbg {
+				DebugName.named id => String.beq (show_identifier id) nm,
+				DebugName.unnamed => false,
+			},
+		Term.app f a => term_has_hint_name f nm || term_has_hint_name a nm,
+		Term.lam _ _ b => term_has_hint_name b nm,
+		_ => false,
+	}
+
+/// `f #Named.Instance x` lowers to `(f marker) x` -- the marker rides the
+/// innermost argument slot, the one spelling the checker's app path and
+/// the dict pass peel back off the spine's head.
+#[test]
+def test_dict_hint_lowers_to_marker_arg : Bool :=
+	match decls_parser "def pick (x : I64) : String := show #ShowB x" {
+		success _ ds =>
+			match ds {
+				List.cons d _ =>
+					match d {
+						Decl.def_d df => term_has_hint_name df.term "__hint_ShowB",
+						_ => false,
+					},
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// A dotted instance name stays joined: the hint names
+/// `My.Ord`, not `My` applied to `Ord`.
+#[test]
+def test_dict_hint_keeps_dotted_name : Bool :=
+	match decls_parser "def q (x : I64) : String := show #My.Ord x" {
+		success _ ds =>
+			match ds {
+				List.cons d _ =>
+					match d {
+						Decl.def_d df => term_has_hint_name df.term "__hint_My.Ord",
+						_ => false,
+					},
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// A `#` NOT following a variable callee is not a hint: no atom accepts
+/// it, so the strict decl parse fails rather than silently dropping it.
+#[test]
+def test_dict_hint_requires_variable_callee : Bool :=
+	match decls_parser_strict "def q : I64 := #Solo" {
+		success _ _ => false,
+		fail _ => true,
+	}
+
 #[partial]
 def atom_parsers : List (String -> ParseResult ParseTerm) :=
     // `raw_string_parse` MUST be tried before `variable ctx`: `r` is a valid
@@ -6292,7 +6408,7 @@ def atom_parsers : List (String -> ParseResult ParseTerm) :=
     // `plans/bootstrapping/self-hosted-compiler.md` for the corpus impact
     // this had (137 real `do {` usages across cli/src/main.mo and
     // lang/module.mo, all previously unparseable).
-    [raw_string_parse, char_literal, quote_term_parser, macro_call_term, variable, literal_parser, match_parser, if_parser, do_parser, let_term_parser, list_literal_parser, struct_lit_parser]
+    [raw_string_parse, char_literal, quote_term_parser, macro_call_term, dict_hint_term, variable, literal_parser, match_parser, if_parser, do_parser, let_term_parser, list_literal_parser, struct_lit_parser]
 
 // ─── Field-pattern match-case grammar (`plans/implementations/
 // struct-field-destructuring.md`'s Phase 6) ─────────────────────────────

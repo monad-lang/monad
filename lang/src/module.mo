@@ -7112,6 +7112,83 @@ def decl_list_has_use_it_calling_makeempty_mybox_empty (ds : List Decl) : Bool :
             }) || decl_list_has_use_it_calling_makeempty_mybox_empty rest,
     }
 
+/// `f #Named.Instance args`: the hint picks WHICH same-class same-carrier
+/// instance a class-method call dispatches through. Two named `Show I64`
+/// instances; auto-resolution would pick the first (`Show_I64_show_ShowA`),
+/// the hint pins the second. Also proves the named-instance mangling keeps
+/// the two instances' promoted methods distinct at all (without it both
+/// mint `Show_I64_show` and silently collide).
+/// Dotted calls, not bare `show` -- `resolve_class_calls_decls` is the
+/// SYNTACTIC Phase 4 pass (`class_method_ref` only recognizes a dotted
+/// `Class.method` reference; bare-name resolution lives in `infer.mo`'s
+/// type-checker path, exercised by `test_dict_hint_valid_call_checks_clean`
+/// below instead). Mirrors `test_resolve_class_calls_decls_uses_class_
+/// declared_default_carrier`'s own dotted `MakeEmpty.empty` convention.
+#[test]
+def test_dict_hint_selects_named_instance : IO Bool := do {
+    let src : String :=
+        "class Show A { def show (a : A) : String }\n" ++
+        "instance ShowA : Show I64 { def show (a : I64) : String := \"a\" }\n" ++
+        "instance ShowB : Show I64 { def show (a : I64) : String := \"b\" }\n" ++
+        "def auto_pick (x : I64) : String := Show.show x\n" ++
+        "def hinted_pick (x : I64) : String := Show.show #ShowB x";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let dispatched := resolve_class_calls_decls dict_paramed;
+            let auto_ok := decl_list_def_term_contains dispatched "auto_pick" "Show_I64_show_ShowA";
+            let hinted_ok := decl_list_def_term_contains dispatched "hinted_pick" "Show_I64_show_ShowB";
+            Bool.and auto_ok hinted_ok
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
+#[partial]
+def decl_list_def_term_contains (ds : List Decl) (nm : String) (frag : String) : Bool :=
+    match ds {
+        List.empty => false,
+        List.cons d rest =>
+            (match d {
+                Decl.def_d df =>
+                    String.beq (show_name_path df.name) nm &&
+                        String.contains (show_term df.term) frag,
+                _ => false,
+            }) || decl_list_def_term_contains rest nm frag,
+    }
+
+/// The checker accepts a valid hinted call: two same-carrier instances,
+/// the hint names one, the file checks clean.
+#[test]
+def test_dict_hint_valid_call_checks_clean : IO Bool := do {
+    let src : String :=
+        "class Show A { def show (a : A) : String }\n" ++
+        "instance ShowA : Show I64 { def show (a : I64) : String := \"a\" }\n" ++
+        "instance ShowB : Show I64 { def show (a : I64) : String := \"b\" }\n" ++
+        "def pick (x : I64) : String := show #ShowB x";
+    let diags <- check_synthetic_source src;
+    return (match diags { List.empty => true, List.cons _ _ => false })
+}
+
+/// A hint naming an instance that does not exist is a check-time error
+/// naming it -- not a silent fall-back to auto-resolution.
+#[test]
+def test_dict_hint_unknown_instance_errors : IO Bool := do {
+    let src : String :=
+        "class Show A { def show (a : A) : String }\n" ++
+        "instance ShowA : Show I64 { def show (a : I64) : String := \"a\" }\n" ++
+        "def pick (x : I64) : String := show #NoSuch x";
+    let diags <- check_synthetic_source src;
+    return (match diags {
+        List.cons d _ => String.contains d "no instance named 'NoSuch'",
+        List.empty => false,
+    })
+}
+
 #[partial]
 def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
     match ds {

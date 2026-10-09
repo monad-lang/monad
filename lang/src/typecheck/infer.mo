@@ -1,7 +1,7 @@
 use std::map {HashMap.to_list}
 use lang::types {
   Binder, Class, Con, Cubical, CubicalPrim, DebugName, Def, FieldPattern,
-  FieldPatternEntry, Identifier, InductConstructor, Inductive, Literal,
+  FieldPatternEntry, Identifier, InductConstructor, Inductive, Instance, Literal,
   LocalScope, LocalVar, Location, MatchCase, ModulePath, NamePath, NameRef,
   Native, NumSuffix, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
   ScopeError, Similar, SortLevel, StructLitField, Term, TypeConstraint,
@@ -18,8 +18,10 @@ use lang::types {
 use lang::scope {
   ClassMethodRef, DictBinding, build_dict_field_projection_checked,
   build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
+  class_name_eq,
   class_method_var_names, class_param_names, dict_binding_class_of,
-  dict_param_name, find_constructor_in_inductive, find_matching_instance,
+  dict_hint_marker_terms, dict_hint_name, dict_param_name,
+  find_constructor_in_inductive, find_matching_instance,
   flatten_call_spine, inductive_has_constructor, instance_module_prefix,
   instance_wildcard_names, list_append, mangle_instance_dict_name,
   mangle_instance_method_name, mangled_to_identifier, param_names, rebuild_call,
@@ -27,8 +29,10 @@ use lang::scope {
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
   scope_find_class_def_by_name, scope_find_def_params, scope_find_def_return_type,
   scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
-  scope_find_local, scope_globals, scope_instance_candidates, scope_push_local,
-  scope_find_cubical_prim, scope_resolve_name, type_mentions_any,
+  scope_find_instance_by_name, scope_find_local, scope_globals,
+  scope_instance_candidates, scope_push_local,
+  scope_find_cubical_prim, scope_resolve_name, strip_dict_hint_args,
+  type_mentions_any, validate_dict_hints,
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {term_permute, term_subst, term_shift}
@@ -396,12 +400,12 @@ def term_is_self_dict (self_dict : Identifier) (t : Term) : Bool :=
     }
 
 def resolve_class_method_d4
-    (prefix : String) (ins_cls_name : NamePath) (method_name : Identifier)
+    (insname : Identifier) (ins_cls_name : NamePath) (method_name : Identifier)
     (ins_constraints : List TypeConstraint) (ins_args : List Term) (carrier : Term)
     (bindings : List (Pair Identifier Term))
     (expected_type : Term) (scope : Scope) (locals : LocalScope)
     : Result TypeError TypedTerm :=
-    let mangled := mangle_instance_method_name prefix ins_cls_name ins_args method_name in
+    let mangled := mangle_instance_method_name insname ins_cls_name ins_args method_name in
     let mangled_id := mangled_to_identifier mangled in
     match scope_resolve_name (NameRef.nid mangled_id) scope locals {
         err _ => err (TypeError.custom "instance is missing its promoted method"),
@@ -493,7 +497,7 @@ def resolve_class_method_d4
                     // its side. The bindings themselves are computed at
                     // the CALL SITE (`resolve_class_method`), which is
                     // where the matched `Instance` is in hand.
-                    match resolve_dict_args classes instances dict_env bindings carrier List.empty ins_constraints {
+                    match resolve_dict_args classes instances dict_env List.empty bindings carrier List.empty ins_constraints {
                         Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
                         Option.some dict_args =>
                             // Refuse the self-match -- see
@@ -509,7 +513,7 @@ def resolve_class_method_d4
                             // that unresolved `A` and the whole-carrier
                             // fallback lands back on `BEq (Option A)` --
                             // the instance being expanded.
-                            if dict_args_contain_self (mangled_to_identifier (mangle_instance_dict_name prefix ins_cls_name ins_args)) dict_args
+                            if dict_args_contain_self (mangled_to_identifier (mangle_instance_dict_name insname ins_cls_name ins_args)) dict_args
                             then err (TypeError.custom "self-referential instance dictionary")
                             else
                                 let applied_typ : Term := strip_n_pis inst_sig (List.length dict_args) in
@@ -568,7 +572,7 @@ def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifi
         Option.some ins =>
             let bindings : List (Pair Identifier Term) :=
                 carrier_bindings (instance_wildcard_names ins) ins.args carrier in
-            resolve_class_method_d4 (instance_module_prefix ins.name) ins.cls method_name ins.constraints ins.args carrier bindings expected_type scope locals,
+            resolve_class_method_d4 ins.name ins.cls method_name ins.constraints ins.args carrier bindings expected_type scope locals,
     }
 
 /// The carrier a call INSIDE a dictionary-carrying scope must be resolved
@@ -3094,6 +3098,14 @@ def debug_name_to_id (dbg : DebugName) : Identifier :=
 def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option (Result TypeError TypedTerm) :=
     match flatten_call_spine app_term {
         CallSpine.mk head args =>
+            // `f #Named.Instance args` -- the hint markers ride the spine's
+            // head (lowering puts them in the FIRST argument slot). Peel
+            // them before the arity check counts arguments; they are
+            // validated right after the callee resolves and re-attached to
+            // the rebuilt term at the bottom, so the codegen dict pass
+            // still sees the hint.
+            match strip_dict_hint_args args {
+                Pair.pair dict_hints real_args =>
             match head {
                 Term.var idx dbg =>
                     match dbg {
@@ -3126,15 +3138,18 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                     ok sd =>
                                         match sd {
                                             mk resolved_name _ _ _ _ =>
+                                                match validate_dict_hints id (Option.some resolved_name) dict_hints scope {
+                                                    Option.some e => Option.some (err e),
+                                                    Option.none =>
                                                 match scope_find_def_sig resolved_name scope {
                                                     Option.none => Option.none,
                                                     Option.some sig =>
                                                         match sig_tvars_params_ret sig {
                                                             SigInfo.mk params ret =>
-                                                                if I64.gt (List.length args) (List.length params)
+                                                                if I64.gt (List.length real_args) (List.length params)
                                                                 then Option.none
                                                                 else
-                                                                    match def_call_check_args args params List.empty scope local_types locals {
+                                                                    match def_call_check_args real_args params List.empty scope local_types locals {
                                                                         err _ => Option.none,
                                                                         ok pair =>
                                                                             match pair {
@@ -3148,7 +3163,7 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     // `def wrong : I64 := add2 1`, which
                                                                                     // the reference checker rejects.
                                                                                     let full_ret : Term :=
-                                                                                        rebuild_pi_chain (drop_params (List.length args) params) ret in
+                                                                                        rebuild_pi_chain (drop_params (List.length real_args) params) ret in
                                                                                     let subst_ret : Term := subst_typevars_term full_ret subst in
                                                                                     // SOLVE THE RETURN DIRECTION.
                                                                                     // The argument direction above can
@@ -3188,17 +3203,23 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                             ok u => u,
                                                                                             err _ => refined_ret,
                                                                                         } in
-                                                                                    let rebuilt : Term := rebuild_call head elab_args in
+                                                                                    // Re-attach the peeled `#` markers ahead of
+                                                                                    // the elaborated arguments: this rebuilt term
+                                                                                    // is what elaboration stores, and the dict
+                                                                                    // pass reads the hint off these markers.
+                                                                                    let rebuilt : Term := rebuild_call head (List.append (dict_hint_marker_terms dict_hints) elab_args) in
                                                                                     Option.some (ok (mk_typed rebuilt result_typ)),
                                                                             },
                                                                     },
                                                         },
                                                 },
                                         },
+                                        },
                                 },
                         DebugName.unnamed => Option.none,
                     },
                 _ => Option.none,
+            },
             },
     }
 
@@ -3630,6 +3651,11 @@ def try_type_check_cubical_call (app_term : Term) (expected_type : Term) (scope 
 // exactly as the single fused function did before the split.
 #[terminating]
 def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match dict_hint_name a {
+        // `f #Named.Instance` -- the marker arm. Everything else is the
+        // pre-existing body, untouched.
+        Option.some hint => try_type_check_hinted_app f hint expected_type scope local_types locals,
+        Option.none =>
     match try_type_check_cubical_call (Term.app f a) expected_type scope local_types locals {
         Option.some r => r,
         Option.none =>
@@ -3677,6 +3703,120 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
     }
     }
     }
+    }
+    }
+
+/// The `f #Named.Instance` arm of `type_check_app` (below). The hint
+/// marker lowers to the INNERMOST application's argument, so this is
+/// reached at `(f #Hint)` -- for an ordinary resolvable def call the
+/// outer spine's `try_type_check_def_call` already peeled, validated and
+/// re-attached the marker, so what reaches here is chiefly the
+/// class-method shape (whose callee does not resolve as a def at all).
+/// A class-method callee dispatches THROUGH the hinted instance
+/// directly (mirroring `resolve_class_method_carrier`, so the
+/// elaborated term carries the hinted instance's mangled method and the
+/// codegen pass never re-does the choice); any other callee is checked
+/// alone with the marker re-attached, leaving the dispatch to the
+/// codegen dict pass.
+def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match term_peel f {
+        Term.var idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    let classes : List Class := scope_data_classes (scope_globals scope) in
+                    // The class whose method `id` is: the dotted spelling
+                    // (`Ord.compare`) through `class_method_ref`, the bare
+                    // one (`compare`) through the class-def registry the
+                    // free-var path's own `resolve_class_method` arm uses
+                    // -- a bare name never reaches `class_method_ref`'s
+                    // prefix rule, so without the second lookup every
+                    // bare class-method hint would fall to the
+                    // constrained-def arm and die on `unknown variable`.
+                    let owner : Option (Pair NamePath Identifier) :=
+                        match class_method_ref classes id {
+                            Option.some ref =>
+                                match ref {
+                                    ClassMethodRef.mk cls method_name =>
+                                        match cls {
+                                            Class.mk cname _ _ _ _ =>
+                                                Option.some (Pair.pair (NamePath.npath (List.cons cname List.empty)) method_name),
+                                        },
+                                },
+                            Option.none =>
+                                match id {
+                                    Identifier.id s =>
+                                        match dotted_qualifier s {
+                                            Option.some _ => Option.none,
+                                            Option.none =>
+                                                match scope_find_class_def_by_name id scope {
+                                                    ok cd =>
+                                                        match cd {
+                                                            mk cls_name _ method_name _ => Option.some (Pair.pair cls_name method_name),
+                                                        },
+                                                    err _ => Option.none,
+                                                },
+                                        },
+                                },
+                        } in
+                    match owner {
+                        Option.some owner_pair =>
+                            match owner_pair {
+                                Pair.pair owner_cls method_name =>
+                            let one_hint : List String := List.cons hint List.empty in
+                            match scope_find_instance_by_name scope hint {
+                                Option.none => err (TypeError.custom (String.concat "no instance named '" (String.concat hint "'"))),
+                                Option.some ins =>
+                                    match ins {
+                                        Instance.mk insname ins_cls ins_constraints ins_args _ _ _ =>
+                                            if not (class_name_eq ins_cls owner_cls)
+                                            then err (TypeError.custom (String.concat "instance '" (String.concat hint (String.concat "' is not an instance of the class owning '" (String.concat (show_identifier id) "'")))))
+                                            else
+                                                // The carrier the call's own expectation
+                                                // reveals; the instance's first declared
+                                                // arg when it reveals nothing, so a
+                                                // concrete hinted instance dispatches
+                                                // with no evidence at all (the same
+                                                // fallback lang.scope's dict pass uses).
+                                                let hint_carrier : Term :=
+                                                    match carrier_from_expected_type expected_type {
+                                                        Option.some c => c,
+                                                        Option.none =>
+                                                            match ins_args {
+                                                                List.cons a _ => a,
+                                                                List.empty => Term.hole,
+                                                            },
+                                                    } in
+                                                let bindings : List (Pair Identifier Term) :=
+                                                    carrier_bindings (instance_wildcard_names ins) ins_args hint_carrier in
+                                                resolve_class_method_d4 insname ins_cls method_name ins_constraints ins_args hint_carrier bindings expected_type scope locals,
+                                    },
+                            },
+                            },
+                        Option.none =>
+                            // Not a class-method callee: validate the hint against
+                            // the callee's own registered constraints when the callee
+                            // resolves, then check the callee alone, marker re-attached.
+                            match scope_resolve_name (NameRef.nid id) scope locals {
+                                err _ => err (TypeError.unknown_var (NameRef.nid id)),
+                                ok sd =>
+                                    match sd {
+                                        mk resolved_name _ _ _ _ =>
+                                            let one_hint : List String := List.cons hint List.empty in
+                                            match validate_dict_hints id (Option.some resolved_name) one_hint scope {
+                                                Option.some e => err e,
+                                                Option.none =>
+                                                    match type_check f expected_type scope local_types locals {
+                                                        err e => err e,
+                                                        ok tt =>
+                                                            ok (mk_typed (rebuild_call tt.term (dict_hint_marker_terms one_hint)) tt.typ),
+                                                    },
+                                            },
+                                    },
+                            },
+                    },
+                DebugName.unnamed => err (TypeError.custom "dict hint on an unnamed callee"),
+            },
+        _ => err (TypeError.custom "dict hint on a non-variable callee"),
     }
 
 /// The reference checker's `App(Lam{param_typ: Hole}, arg)` arms --
