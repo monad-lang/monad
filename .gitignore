@@ -40,6 +40,8 @@ plans
 
 # Agents
 .opencode
+.ori
+.vibe
 
 # Python bytecode from the one-off migration scripts in scripts/
 __pycache__/
