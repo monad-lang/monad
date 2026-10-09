@@ -34,6 +34,7 @@ use lang::types {
   cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_pathp, cub_transp,
   cubical_prim_eq, sentinel, sort_n,
 }
+use init::borrow {Borrow}
 
 def checker_synthetic_path : ModulePath :=
     ModulePath.mp (List.cons (Identifier.id "proofs_checker") List.empty)
@@ -316,42 +317,49 @@ def pathp_call (line : Term) (left : String) (right : String) : Term :=
 def checks_as_pathp (s : Scope) (t : Term) (expected : Term)
     (left : CubicalPrim) (right : CubicalPrim) : Bool :=
     match type_check t expected s empty_local_types empty_locals {
+        // Two-step match, same reason as `checks_as_bare_prim` above: `ok`
+        // is a variant constructor with a single struct payload, so the
+        // payload's own record pattern is a second `match` -- one
+        // destructure of `tt`, not two field reads (`.typ` then `.term`).
         ok tt =>
-            match tt.typ {
-                Term.sort _ =>
-                    match tt.term {
-                        Term.cubical c =>
-                            match c {
-                                { prim := q, args := as } =>
-                                    cubical_prim_eq q CubicalPrim.pathp
-                                        && match as {
-                                            // Exactly three args, pinned by the
-                                            // peeling below reaching `List.empty` --
-                                            // the arity table rejects any other
-                                            // count at formation, so this match
-                                            // is a shape read, not an arity check.
-                                            List.cons ln rest =>
-                                                match ln {
-                                                    Term.lam _dbg _dom _body =>
-                                                        match rest {
-                                                            List.cons lft rest2 =>
-                                                                match rest2 {
-                                                                    List.cons rgt rest3 =>
-                                                                        List.is_empty rest3
-                                                                            && arg_is_bare_prim lft left
-                                                                            && arg_is_bare_prim rgt right,
+            match tt {
+                { term := tm, typ := ty } =>
+                    match ty {
+                        Term.sort _ =>
+                            match tm {
+                                Term.cubical c =>
+                                    match c {
+                                        { prim := q, args := as } =>
+                                            cubical_prim_eq q CubicalPrim.pathp
+                                                && match as {
+                                                    // Exactly three args, pinned by the
+                                                    // peeling below reaching `List.empty` --
+                                                    // the arity table rejects any other
+                                                    // count at formation, so this match
+                                                    // is a shape read, not an arity check.
+                                                    List.cons ln rest =>
+                                                        match ln {
+                                                            Term.lam _dbg _dom _body =>
+                                                                match rest {
+                                                                    List.cons lft rest2 =>
+                                                                        match rest2 {
+                                                                            List.cons rgt rest3 =>
+                                                                                List.is_empty rest3
+                                                                                    && arg_is_bare_prim lft left
+                                                                                    && arg_is_bare_prim rgt right,
+                                                                            List.empty => false,
+                                                                        },
                                                                     List.empty => false,
                                                                 },
-                                                            List.empty => false,
+                                                            _ => false,
                                                         },
-                                                    _ => false,
+                                                    List.empty => false,
                                                 },
-                                            List.empty => false,
-                                        },
+                                    },
+                                _ => false,
                             },
                         _ => false,
                     },
-                _ => false,
             },
         err _ => false,
     }
@@ -789,22 +797,28 @@ def is_sort_one (t : Term) : Bool :=
 def checks_as_prim_with (s : Scope) (t : Term) (p : CubicalPrim) (expected : Term)
     (arg_is : Term -> Bool) (typ_is : Term -> Bool) : Bool :=
     match type_check t expected s empty_local_types empty_locals {
+        // Two-step match: `ok`'s single struct payload is its own `match`
+        // (see `checks_as_bare_prim`'s comment) -- one destructure of `tt`,
+        // not two field reads.
         ok tt =>
-            let shape_ok : Bool :=
-                match tt.term {
-                    Term.cubical c =>
-                        match c {
-                            { prim := q, args := as } =>
-                                cubical_prim_eq q p
-                                    && match as {
-                                        List.cons a rest =>
-                                            List.is_empty rest && arg_is a,
-                                        List.empty => false,
-                                    },
-                        },
-                    _ => false,
-                } in
-            shape_ok && typ_is tt.typ,
+            match tt {
+                { term := tm, typ := ty } =>
+                    let shape_ok : Bool :=
+                        match tm {
+                            Term.cubical c =>
+                                match c {
+                                    { prim := q, args := as } =>
+                                        cubical_prim_eq q p
+                                            && match as {
+                                                List.cons a rest =>
+                                                    List.is_empty rest && arg_is a,
+                                                List.empty => false,
+                                            },
+                                },
+                            _ => false,
+                        } in
+                    shape_ok && typ_is ty,
+            },
         err _ => false,
     }
 
@@ -1019,35 +1033,41 @@ def is_system_over (t : Term) (phi : Term) (base : Term) : Bool :=
 def checks_as_prim_with4 (s : Scope) (t : Term) (p : CubicalPrim) (expected : Term)
     (args_ok : Term -> Term -> Term -> Term -> Bool) (typ_is : Term -> Bool) : Bool :=
     match type_check t expected s empty_local_types empty_locals {
+        // Two-step match: `ok`'s single struct payload is its own `match`
+        // (see `checks_as_bare_prim`'s comment) -- one destructure of `tt`,
+        // not two field reads.
         ok tt =>
-            let shape_ok : Bool :=
-                match tt.term {
-                    Term.cubical c =>
-                        match c {
-                            { prim := q, args := as } =>
-                                cubical_prim_eq q p
-                                    && match as {
-                                        List.cons a1 r1 =>
-                                            match r1 {
-                                                List.cons a2 r2 =>
-                                                    match r2 {
-                                                        List.cons a3 r3 =>
-                                                            match r3 {
-                                                                List.cons a4 r4 =>
-                                                                    List.is_empty r4
-                                                                        && args_ok a1 a2 a3 a4,
+            match tt {
+                { term := tm, typ := ty } =>
+                    let shape_ok : Bool :=
+                        match tm {
+                            Term.cubical c =>
+                                match c {
+                                    { prim := q, args := as } =>
+                                        cubical_prim_eq q p
+                                            && match as {
+                                                List.cons a1 r1 =>
+                                                    match r1 {
+                                                        List.cons a2 r2 =>
+                                                            match r2 {
+                                                                List.cons a3 r3 =>
+                                                                    match r3 {
+                                                                        List.cons a4 r4 =>
+                                                                            List.is_empty r4
+                                                                                && args_ok a1 a2 a3 a4,
+                                                                        List.empty => false,
+                                                                    },
                                                                 List.empty => false,
                                                             },
                                                         List.empty => false,
                                                     },
                                                 List.empty => false,
                                             },
-                                        List.empty => false,
-                                    },
-                        },
-                    _ => false,
-                } in
-            shape_ok && typ_is tt.typ,
+                                },
+                            _ => false,
+                        } in
+                    shape_ok && typ_is ty,
+            },
         err _ => false,
     }
 
@@ -1157,8 +1177,12 @@ def test_hcomp_result_type_is_unified_with_the_expected_type : Bool :=
 
 /// `hcomp I φ (fn i => fn h => i0) i0` as a WHNF probe: hand-built and
 /// already checked-shaped, because `whnf` is what is under test.
+///
+/// `phi` is read twice (the composite's own face and the system built
+/// over it), so it is borrowed: `Borrow Term` is Copy, `Term` is not.
 def hcomp_in (phi : Term) : Term :=
-    cub_hcomp cub_interval phi (system_over phi) cub_i0
+    let b : Borrow Term := Borrow.of phi in
+    cub_hcomp cub_interval (Borrow.get b) (system_over (Borrow.get b)) cub_i0
 
 #[test]
 def test_whnf_reduces_hcomp_over_a_refuted_face_to_the_base : Bool :=

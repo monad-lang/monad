@@ -13,6 +13,7 @@ use std::show {Show}
 // std/map_tests.mo's note for why that caution is gone.
 use std::map {HashMap, HashMap.empty_buckets, map}
 use std::list {List.intercalate, List.length}
+use init::copy {Copy}
 
 pub type Identifier {
     id String
@@ -686,6 +687,12 @@ pub type CubicalPrim {
 pub struct Cubical {
     prim : CubicalPrim,
     args : List Term,
+}
+
+// `CubicalPrim` is a flat, payload-free tag -- duplicating it is a register
+// move, the same shape as the scalar instances in `init/src/copy.mo`.
+instance Copy CubicalPrim {
+    def copy (p : CubicalPrim) : Pair CubicalPrim CubicalPrim := Pair.pair p p
 }
 
 // Optional debug name carried by de Bruijn variables and binders.
