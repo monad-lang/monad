@@ -454,16 +454,41 @@ def reach_acc (graph : List (Pair String (List String))) (work : List String) (s
             else reach_acc graph (strs_append (graph_lookup hd graph) tl) (List.cons hd seen),
     }
 
-def filter_mutual (graph : List (Pair String (List String))) (start : String) (fwd : List String) (keys : List String) : List String :=
+/// Every key's reachability set, computed once. `filter_mutual`'s candidate
+/// test needs `reach(k)` for every `k` the start can reach, so asking for it
+/// fresh per candidate made one `mutual_class` call cubic in the module --
+/// and `check_defs` asked once per def, quartic. A parser-sized module paid
+/// hours for a partition Tarjan finds in one pass; memoizing the walks keeps
+/// the no-Tarjan shape below while collapsing it to one walk per key.
+def reach_table (graph : List (Pair String (List String))) (keys : List String) : List (Pair String (List String)) :=
     match keys {
         List.empty => List.empty,
         List.cons k tl =>
-            if String.beq k start then List.cons k (filter_mutual graph start fwd tl)
+            List.cons (Pair.pair k (reach_acc graph (graph_lookup k graph) List.empty))
+                (reach_table graph tl),
+    }
+
+/// One entry of a reach (or class) table. Missing keys reach nothing, which
+/// is what `graph_lookup` answers for them too.
+def table_lookup (key : String) (tbl : List (Pair String (List String))) : List String :=
+    match tbl {
+        List.empty => List.empty,
+        List.cons hd tl =>
+            match hd {
+                Pair.pair k v => if String.beq k key then v else table_lookup key tl,
+            },
+    }
+
+def filter_mutual (tbl : List (Pair String (List String))) (start : String) (fwd : List String) (keys : List String) : List String :=
+    match keys {
+        List.empty => List.empty,
+        List.cons k tl =>
+            if String.beq k start then List.cons k (filter_mutual tbl start fwd tl)
             else if str_mem k fwd then
-                if str_mem start (reach_acc graph (graph_lookup k graph) List.empty)
-                then List.cons k (filter_mutual graph start fwd tl)
-                else filter_mutual graph start fwd tl
-            else filter_mutual graph start fwd tl,
+                if str_mem start (table_lookup k tbl)
+                then List.cons k (filter_mutual tbl start fwd tl)
+                else filter_mutual tbl start fwd tl
+            else filter_mutual tbl start fwd tl,
     }
 
 /// The defs that both reach and are reached by `start`, including `start`
@@ -472,10 +497,31 @@ def filter_mutual (graph : List (Pair String (List String))) (start : String) (f
 /// one means `start` is only self-recursive. This is where `find_mutual_groups`
 /// lands without Tarjan: mutual reachability is an equivalence relation, so its
 /// classes partition the graph the same way SCCs do, and no mutable
-/// index/lowlink state has to be threaded through the walk.
-def mutual_class (graph : List (Pair String (List String))) (start : String) (keys : List String) : List String :=
-    let fwd := reach_acc graph (graph_lookup start graph) List.empty in
-    filter_mutual graph start fwd keys
+/// index/lowlink state has to be threaded through the walk. The reachability
+/// sets come from `reach_table`'s memo rather than fresh walks.
+def mutual_class (tbl : List (Pair String (List String))) (start : String) (keys : List String) : List String :=
+    filter_mutual tbl start (table_lookup start tbl) keys
+
+/// `cls`'s every member mapped to `cls`. Mutual classes are an equivalence
+/// relation's classes, so one computation serves every member.
+def assign_class (cls : List String) (members : List String) (acc : List (Pair String (List String))) : List (Pair String (List String)) :=
+    match members {
+        List.empty => acc,
+        List.cons m tl => List.cons (Pair.pair m cls) (assign_class cls tl acc),
+    }
+
+/// The key -> class table every def looks its group up in. Each class is
+/// computed for its first declaration-order member only; the members are
+/// marked as assigned so later ones skip recomputing it.
+def all_classes (tbl : List (Pair String (List String))) (keys : List String) (assigned : List String) (acc : List (Pair String (List String))) : List (Pair String (List String)) :=
+    match keys {
+        List.empty => acc,
+        List.cons k tl =>
+            if str_mem k assigned then all_classes tbl tl assigned acc
+            else
+                let cls : List String := mutual_class tbl k keys in
+                all_classes tbl tl (strs_append cls assigned) (assign_class cls cls acc),
+    }
 
 def list_has_two (xs : List String) : Bool :=
     match xs {
@@ -568,16 +614,17 @@ def check_one_def (d : Def) (names : List String) (in_group : Bool) : List Strin
 /// checked against the WHOLE group, so a call that passes through a sibling is
 /// still judged on whether it decreases -- that is what makes a group checkable
 /// at all, and why the group's members are reported individually rather than
-/// only the first of them.
-def check_defs (defs : List Def) (graph : List (Pair String (List String))) (keys : List String) : List String :=
+/// only the first of them. The group comes from the `all_classes` table, so
+/// computing it costs one lookup, not a fresh partition.
+def check_defs (defs : List Def) (classes : List (Pair String (List String))) : List String :=
     match defs {
         List.empty => List.empty,
         List.cons d tl =>
             let key := def_key d in
-            let group := mutual_class graph key keys in
+            let group := table_lookup key classes in
             let grouped := list_has_two group in
             let names := if grouped then group else List.cons key List.empty in
-            strs_append (check_one_def d names grouped) (check_defs tl graph keys),
+            strs_append (check_one_def d names grouped) (check_defs tl classes),
     }
 
 def def_callees (keys : List String) (d : Def) : Pair String (List String) :=
@@ -613,7 +660,9 @@ pub def check_termination_all (decls : List Decl) : List String :=
     let defs := collect_defs decls in
     let keys := List.map def_key defs in
     let graph := List.map (def_callees keys) defs in
-    List.map render_diag (check_defs defs graph keys)
+    let tbl := reach_table graph keys in
+    let classes := all_classes tbl keys List.empty List.empty in
+    List.map render_diag (check_defs defs classes)
 
 // ------------------------------------------------------------------ tests
 //
