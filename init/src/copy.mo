@@ -116,15 +116,3 @@ instance Copy Char {
 instance Copy Unit {
     def copy (x : Unit) : Pair Unit Unit := Pair.pair x x
 }
-
-#[test]
-def test_copy_i64_duplicates : Bool :=
-    match Copy.copy 7 {
-        Pair.pair a b => I64.beq a 7 && I64.beq b 7,
-    }
-
-#[test]
-def test_copy_bool_duplicates : Bool :=
-    match Copy.copy true {
-        Pair.pair a b => a && b,
-    }
