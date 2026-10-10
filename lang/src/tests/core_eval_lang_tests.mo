@@ -267,6 +267,36 @@ def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity :
     _ => false,
   }
 
+// ─── Test 4b: a wildcard match arm against a non-nullary constructor ──
+// Regression for a real bug: `lower_one_match_arm`'s synthesized arms
+// (wildcard-filled or `match_fail`) used to hardcode `MatchArm.arm 0 ..`
+// regardless of the matched constructor's actual field count. At run
+// time `core_eval.mo`'s `dispatch_arm` requires `bind_count == List.length
+// args` to extend the environment, so dispatching `mycons hd tl` (2
+// fields) into a `_ => ..` arm that never names `hd`/`tl` tripped
+// `ce_arity_mismatch expected=0 got=2` even though the arm's body
+// references no bound locals at all. Fixed by sizing synthesized arms
+// from `ctor_field_count ctor`, not a hardcoded `0`.
+def mylist_nil : Term := Term.con (Con.mk (Identifier.id "mynil") mylist_path 0 List.empty)
+
+def mylist_cons (hd : Term) (tl : Term) : Term :=
+  Term.con (Con.mk (Identifier.id "mycons") mylist_path 1 [Option.some hd, Option.some tl])
+
+def wildcard_arity_match_term : Term :=
+  Term.lit (Literal.match_
+    (mylist_cons (num 1) mylist_nil)
+    [
+      MatchCase.mk (Identifier.id "mynil") List.empty (num 0) Option.none,
+      MatchCase.mk (Identifier.id "_") List.empty (num 99) Option.none,
+    ])
+
+def wildcard_arity_test_decls : List Decl :=
+  [mylist_decl, def_decl "main" wildcard_arity_match_term]
+
+#[test]
+def test_wildcard_match_arm_against_nonnullary_constructor_end_to_end : Bool :=
+  opt_value_num_is (lower_and_run (build_ctx wildcard_arity_test_decls) "main") 99
+
 // ─── Test 5: a native-attributed stub def referenced as a free var ────
 // `lang/lower_core_ir.mo`'s `lower_one_global` -- `#[native i64_add]
 // def add_native (a b : I64) : I64` (no `:=` body at all -- mirrors

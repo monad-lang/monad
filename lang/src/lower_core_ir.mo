@@ -424,9 +424,39 @@ def inductive_has_constructor_named (ind : Inductive) (name : Identifier) : Bool
 /// outright. Restoring it means changing what `MatchCase` stores for a
 /// name — 89 call sites across 18 files — so it is deliberately not
 /// attempted here.
+///
+/// A cheap, purely incremental narrowing that IS attempted here: among
+/// same-named candidates, prefer one whose constructor's field count
+/// also matches the written case's own binder count (`find_case_inductive`
+/// passes its first case's `List.length case_args` down as `arity_hint`).
+/// Two same-named, same-ARITY ctors can still collide -- this does not
+/// claim to be the real fix -- but a generated `match v { mk f1 f2 => .. }`
+/// derived from a 2-field struct no longer resolves to an unrelated
+/// 1-field or 5-field `mk` elsewhere in the whole-program scope merely
+/// because that candidate's path happened to sort lower. Falls back to
+/// the old name-only search (and its same lowest-path tie-break) whenever
+/// the arity-filtered search finds nothing, so every previously-resolved
+/// case keeps resolving exactly as before.
 #[partial]
-def find_inductive_by_case_name (inds : List Inductive) (name : Identifier) : Option Inductive :=
-  find_inductive_by_case_name_go inds name Option.none
+def find_inductive_by_case_name (inds : List Inductive) (name : Identifier) (arity_hint : Option I64) : Option Inductive :=
+  match find_inductive_by_case_name_go_arity inds name arity_hint Option.none {
+    Option.some ind => Option.some ind,
+    Option.none => find_inductive_by_case_name_go inds name Option.none,
+  }
+
+#[partial]
+def find_inductive_by_case_name_go_arity (inds : List Inductive) (name : Identifier) (arity_hint : Option I64) (best : Option Inductive) : Option Inductive :=
+  match arity_hint {
+    Option.none => Option.none,
+    Option.some arity =>
+      match inds {
+        List.empty => best,
+        List.cons ind rest =>
+          if inductive_has_constructor_named_with_arity ind name arity
+          then find_inductive_by_case_name_go_arity rest name arity_hint (lower_inductive_path_of best ind)
+          else find_inductive_by_case_name_go_arity rest name arity_hint best,
+      },
+  }
 
 #[partial]
 def find_inductive_by_case_name_go (inds : List Inductive) (name : Identifier) (best : Option Inductive) : Option Inductive :=
@@ -436,6 +466,21 @@ def find_inductive_by_case_name_go (inds : List Inductive) (name : Identifier) (
       if inductive_has_constructor_named ind name
       then find_inductive_by_case_name_go rest name (lower_inductive_path_of best ind)
       else find_inductive_by_case_name_go rest name best,
+  }
+
+def inductive_has_constructor_named_with_arity (ind : Inductive) (name : Identifier) (arity : I64) : Bool :=
+  match ind {
+    Inductive.mk _ _ _ constructors _ _ => list_has_constructor_named_with_arity constructors name arity,
+  }
+
+#[partial]
+def list_has_constructor_named_with_arity (cs : List InductConstructor) (name : Identifier) (arity : I64) : Bool :=
+  match cs {
+    List.empty => false,
+    List.cons c rest =>
+      if constructor_simple_name_eq c name && I64.beq (ctor_field_count c) arity
+      then true
+      else list_has_constructor_named_with_arity rest name arity,
   }
 
 /// Keep whichever of the two inductives has the lower path, so the
@@ -466,7 +511,8 @@ def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Induct
     List.empty => Option.none,
     List.cons c _ =>
       match c {
-        MatchCase.mk name _ _ _ => find_inductive_by_case_name (scope_all_inductives scope) name,
+        MatchCase.mk name case_args _ _ =>
+          find_inductive_by_case_name (scope_all_inductives scope) name (Option.some (List.length case_args)),
       },
   }
 
@@ -532,8 +578,8 @@ def lower_one_match_arm
     Option.some found_case => lower_explicit_match_case ctx found_case acc k,
     Option.none =>
       match find_wildcard_case cases {
-        Option.some wc => lower_wildcard_match_case ctx wc acc k,
-        Option.none => k (MatchArm.arm 0 (CoreIr.match_fail (modpath_of ind_name) (ctor_name ctor))) acc,
+        Option.some wc => lower_wildcard_match_case ctx (ctor_field_count ctor) wc acc k,
+        Option.none => k (MatchArm.arm (ctor_field_count ctor) (CoreIr.match_fail (modpath_of ind_name) (ctor_name ctor))) acc,
       },
   }
 
@@ -548,15 +594,21 @@ def lower_explicit_match_case
         k (MatchArm.arm (List.length case_args) bir) acc1),
   }
 
+/// A wildcard-filled arm's body binds none of the matched constructor's
+/// own fields (it never named them), but `dispatch_arm` (core_eval.mo)
+/// still requires `bind_count == List.length args` to extend the
+/// environment -- so this arm's `bind_count` must be the CTOR's real
+/// field count, not 0, or any non-nullary constructor falling through to
+/// this wildcard trips `ce_arity_mismatch` at run time.
 #[partial]
 def lower_wildcard_match_case
-    (ctx : LowerCtx) (wc : MatchCase) (acc : LowerAcc)
+    (ctx : LowerCtx) (arity : I64) (wc : MatchCase) (acc : LowerAcc)
     (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match wc {
     MatchCase.mk _ _ wc_body _ =>
       lower_then (lower_term ctx wc_body acc) (fn bir => fn acc1 =>
-        k (MatchArm.arm 0 bir) acc1),
+        k (MatchArm.arm arity bir) acc1),
   }
 
 #[partial]
