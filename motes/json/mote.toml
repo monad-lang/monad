@@ -27,3 +27,10 @@ path = "../../std"
 
 [dependencies.parsec]
 path = "../parsec"
+
+# `serde`'s `Serializer`/`Deserializer` are the generic derive backend's
+# own interface -- this is the edge `plans/library-ideas/serde.md`
+# inverts from the original draft (json depending on serde, not the
+# reverse): `src/serde_backend.mo` implements them for `Json`.
+[dependencies.serde]
+path = "../serde"
