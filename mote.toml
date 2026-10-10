@@ -50,4 +50,5 @@ members = [
   "motes/tls",
   "motes/serde",
   "motes/openai",
+  "motes/shuttle",
 ]

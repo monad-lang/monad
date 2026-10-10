@@ -1,0 +1,28 @@
+# The Monad AI agent harness: a typed tool-use loop, a normalized
+# transcript (Message/Turn), and a Loom-free BTreeMap tool registry
+# (plans/implementations/agent-skills.md Phase 2).
+[mote]
+name = "shuttle"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.json]
+path = "../json"
+
+[dependencies.serde]
+path = "../serde"
+
+[dependencies.http]
+path = "../http"
+
+[dependencies.moose]
+path = "../moose"
+
+[dependencies.openai]
+path = "../openai"
