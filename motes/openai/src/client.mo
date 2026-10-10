@@ -5,7 +5,8 @@
 use init::transformers {ResultT}
 use json::json {Json.to_string, Json.parse, Json.ParseError.to_string}
 use json::serde_backend {}
-use http::types {Headers, Headers.empty, Headers.set, Response}
+use http::types {Headers, Headers.empty, Headers.set, Response, Uri}
+use http::uri {Uri.parse}
 use http::body {Body.from_text, Body.to_bytes_pure}
 use moose::client {Client.post}
 use openai::types {ChatRequest, ChatResponse, ApiUsage}
@@ -36,8 +37,8 @@ def decode_chat_response (r : Response) : Result String ChatResponse :=
         Result.ok j => ChatResponse.deserialize_json j,
     }
 
-def openai_complete_io (url : String) (headers : Headers) (body_str : String) : IO (Result String ChatResponse) := do {
-    let resp <- Client.post url headers (Body.from_text body_str);
+def openai_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String ChatResponse) := do {
+    let resp <- Client.post u headers (Body.from_text body_str);
     return (match resp {
         Result.err e => Result.err e,
         Result.ok r => decode_chat_response r,
@@ -46,8 +47,15 @@ def openai_complete_io (url : String) (headers : Headers) (body_str : String) : 
 
 /// POST `{base_url}/v1/chat/completions`. `api_key` is `Option.none` for
 /// an unauthenticated local server (Ollama); `Option.some key` sends
-/// `Authorization: Bearer <key>` (Mistral AI and friends).
+/// `Authorization: Bearer <key>` (Mistral AI and friends). `base_url`
+/// stays a `String` -- it's a config-level host root with a path still
+/// to append, not yet a URI -- but the appended, full address is parsed
+/// to a `Uri` once here, at the one place a malformed `base_url` can
+/// actually fail, rather than threading a raw `String` into `Client.post`.
 pub def OpenAI.complete (base_url : String) (api_key : Option String) (req : ChatRequest) : ResultT String IO ChatResponse :=
     let body_str := Json.to_string (ChatRequest.serialize_json req) in
-    let url := String.concat base_url "/v1/chat/completions" in
-    ResultT.mk (openai_complete_io url (openai_headers api_key) body_str)
+    let url_str := String.concat base_url "/v1/chat/completions" in
+    match Uri.parse url_str {
+        Result.err e => ResultT.mk (return (Result.err e)),
+        Result.ok u => ResultT.mk (openai_complete_io u (openai_headers api_key) body_str),
+    }

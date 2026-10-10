@@ -124,13 +124,13 @@ def is_transient (e : String) : Bool :=
   String.contains e "SSL_ERROR_SYSCALL" || String.contains e "tcp_connect"
 
 #[terminating]
-def get_retry (url : String) (attempts : I64) : IO (Result String Response) := do {
-  let res <- Client.get url Headers.empty;
+def get_retry (u : Uri) (attempts : I64) : IO (Result String Response) := do {
+  let res <- Client.get u Headers.empty;
   match res {
     Result.ok r => return (Result.ok r),
     Result.err e =>
       if Bool.and (is_transient e) (I64.gt attempts 0)
-      then get_retry url (attempts - 1)
+      then get_retry u (attempts - 1)
       else return (Result.err e)
   }
 }
@@ -143,11 +143,14 @@ def test_https_get_badssl : IO Bool := do {
   let enabled <- tls_network_enabled;
   if Bool.not enabled
   then return true
-  else do {
-    let res <- get_retry "https://badssl.com" 5;
-    match res {
-      Result.err e => do { IO.println ("https_get: " ++ e); return false },
-      Result.ok r => return (U16.beq r.status Status.ok)
+  else match Uri.parse "https://badssl.com" {
+    Result.err e => do { IO.println ("https_get: bad literal uri: " ++ e); return false },
+    Result.ok u => do {
+      let res <- get_retry u 5;
+      match res {
+        Result.err e => do { IO.println ("https_get: " ++ e); return false },
+        Result.ok r => return (U16.beq r.status Status.ok)
+      }
     }
   }
 }
@@ -160,11 +163,14 @@ def test_http_to_https_redirect_chain : IO Bool := do {
   let enabled <- tls_network_enabled;
   if Bool.not enabled
   then return true
-  else do {
-    let res <- get_retry "http://badssl.com" 5;
-    match res {
-      Result.err e => do { IO.println ("redirect_chain: " ++ e); return false },
-      Result.ok r => return (U16.beq r.status Status.ok)
+  else match Uri.parse "http://badssl.com" {
+    Result.err e => do { IO.println ("redirect_chain: bad literal uri: " ++ e); return false },
+    Result.ok u => do {
+      let res <- get_retry u 5;
+      match res {
+        Result.err e => do { IO.println ("redirect_chain: " ++ e); return false },
+        Result.ok r => return (U16.beq r.status Status.ok)
+      }
     }
   }
 }

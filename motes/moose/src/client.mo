@@ -378,30 +378,25 @@ def Client.drop_headers (names : List String) (h : Headers) : Headers :=
 def Client.request (req : Request) : IO (Result String Response) :=
   Client.request_with 0i64 req
 
-/// Convenience: GET a URL with the given headers, follow up to 10
-/// redirects (idempotent, matches browser/curl convention).
-def Client.get (url : String) (hdrs : Headers) : IO (Result String Response) :=
-  match Uri.parse url {
-    Result.err e => return (Result.err e),
-    Result.ok u =>
-      let req : Request :=
-        { method := Method.GET, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := Body.empty }
-      in
-      Client.request_with 10i64 req
-  }
+/// Convenience: GET a `Uri` with the given headers, follow up to 10
+/// redirects (idempotent, matches browser/curl convention). Takes a
+/// structured `Uri`, not a raw `String` -- parsing (`Uri.parse`, which
+/// can fail on malformed input) is the caller's own concern, same as
+/// `Request`'s own `uri` field.
+def Client.get (u : Uri) (hdrs : Headers) : IO (Result String Response) :=
+  let req : Request :=
+    { method := Method.GET, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := Body.empty }
+  in
+  Client.request_with 10i64 req
 
-/// Convenience: POST a body to a URL with the given headers, one-shot --
-/// NOT following redirects. `redirect_preserves` is itself correct
+/// Convenience: POST a body to a `Uri` with the given headers, one-shot
+/// -- NOT following redirects. `redirect_preserves` is itself correct
 /// (RFC-matching: 301/302 downgrade a POST to a GET, 307/308 preserve
 /// it), but silently retrying a non-idempotent request on ANY redirect
 /// is the wrong default for an API client; following one is the
 /// caller's decision (`Client.request_with`, directly).
-def Client.post (url : String) (hdrs : Headers) (body : Body) : IO (Result String Response) :=
-  match Uri.parse url {
-    Result.err e => return (Result.err e),
-    Result.ok u =>
-      let req : Request :=
-        { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
-      in
-      Client.request_with 0i64 req
-  }
+def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Response) :=
+  let req : Request :=
+    { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
+  in
+  Client.request_with 0i64 req
