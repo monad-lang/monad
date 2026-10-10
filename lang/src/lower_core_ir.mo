@@ -506,7 +506,55 @@ def inductive_path_str (ind : Inductive) : String :=
 /// first case. Well-typed, exhaustive matches always have at least one
 /// real (non-wildcard) case naming a real constructor of the scrutinee's
 /// type, so this is sufficient in practice.
+///
+/// "Sufficient in practice" breaks down for a VERY common shape: a list
+/// match's first case is `List.empty`/`List.cons`'s own OWN bare "empty"
+/// or "cons" (qualifier dropped, as above) -- names and arities ALSO
+/// owned by any other arity-0-`empty` type in whole-program scope
+/// (`BTreeMap`/`HashMap`-shaped trees all declare one). Confirmed by
+/// direct repro: once such a type is anywhere in scope, a generated
+/// derive function's own `match tail { List.empty => .., List.cons _ _
+/// => .. }` could resolve to THAT type instead of `List` -- same name,
+/// same arity (0) for the first case, so the one-name arity hint above
+/// cannot break the tie -- building arms for the wrong inductive's ctor
+/// list entirely and dispatching a real `List.cons` value into whichever
+/// arm lands at its tag, which is sized for an unrelated constructor.
+/// `ce_arity_mismatch expected=5 got=2` was exactly this: tag 1 landed on
+/// a `BTreeMap`-shaped type's 5-field `node`, not `List`'s own 2-field
+/// `cons`.
+///
+/// Fixed by requiring a candidate to own a matching (name, arity) ctor
+/// for EVERY explicit case in the match, not just the first -- `List`
+/// owns both "empty" and "cons", a `BTreeMap`-shaped type owns "empty"
+/// but never "cons", so the all-cases filter alone already disambiguates
+/// this specific collision. Falls back to the old first-case-only search
+/// (arity-hinted, then name-only) when the all-cases filter finds
+/// nothing, so no previously-resolved match changes.
 def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Inductive :=
+  if has_any_explicit_case cases
+  then
+    match find_inductive_matching_all_cases (scope_all_inductives scope) cases Option.none {
+      Option.some ind => Option.some ind,
+      Option.none => find_case_inductive_by_first_case scope cases,
+    }
+  else find_case_inductive_by_first_case scope cases
+
+/// Guards `find_inductive_matching_all_cases` against a match built from
+/// nothing but wildcard cases (e.g. `match v { _ => default }`) -- with
+/// no explicit case to constrain anything, `inductive_matches_all_cases`
+/// is vacuously true for every inductive in the whole program, and the
+/// lowest-path tie-break would pick one essentially at random. Only a
+/// match with at least one real, named case gets the all-cases search;
+/// a wildcard-only match keeps the old first-case-only behavior (where
+/// the "first case" IS the wildcard, same as before this fix).
+#[partial]
+def has_any_explicit_case (cases : List MatchCase) : Bool :=
+  match cases {
+    List.empty => false,
+    List.cons c rest => if is_wildcard_case c then has_any_explicit_case rest else true,
+  }
+
+def find_case_inductive_by_first_case (scope : Scope) (cases : List MatchCase) : Option Inductive :=
   match cases {
     List.empty => Option.none,
     List.cons c _ =>
@@ -514,6 +562,32 @@ def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Induct
         MatchCase.mk name case_args _ _ =>
           find_inductive_by_case_name (scope_all_inductives scope) name (Option.some (List.length case_args)),
       },
+  }
+
+#[partial]
+def find_inductive_matching_all_cases (inds : List Inductive) (cases : List MatchCase) (best : Option Inductive) : Option Inductive :=
+  match inds {
+    List.empty => best,
+    List.cons ind rest =>
+      if inductive_matches_all_cases ind cases
+      then find_inductive_matching_all_cases rest cases (lower_inductive_path_of best ind)
+      else find_inductive_matching_all_cases rest cases best,
+  }
+
+#[partial]
+def inductive_matches_all_cases (ind : Inductive) (cases : List MatchCase) : Bool :=
+  match cases {
+    List.empty => true,
+    List.cons c rest =>
+      if is_wildcard_case c
+      then inductive_matches_all_cases ind rest
+      else
+        match c {
+          MatchCase.mk name case_args _ _ =>
+            if inductive_has_constructor_named_with_arity ind name (List.length case_args)
+            then inductive_matches_all_cases ind rest
+            else false,
+        },
   }
 
 def is_wildcard_case (c : MatchCase) : Bool :=

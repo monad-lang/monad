@@ -44,7 +44,9 @@ def first_text (cs : List Content) : Option String :=
 
 def content_to_tool_call (c : Content) : Option ToolCall :=
     match c {
-        Content.tool_use id name input => Option.some { id := id, name := name, arguments := Json.to_string input },
+        Content.tool_use id name input =>
+            let tc : ToolCall := { id := id, name := name, arguments := Json.to_string input } in
+            Option.some tc,
         _ => Option.none,
     }
 
@@ -62,7 +64,8 @@ def collect_tool_calls (cs : List Content) : List ToolCall :=
 def tool_result_to_message (c : Content) : Option ChatMessage :=
     match c {
         Content.tool_result call_id output is_error =>
-            Option.some { role := "tool", content := Option.some output, tool_calls := List.empty, tool_call_id := Option.some call_id, name := Option.none },
+            let m : ChatMessage := { role := "tool", content := Option.some output, tool_calls := List.empty, tool_call_id := Option.some call_id, name := Option.none } in
+            Option.some m,
         _ => Option.none,
     }
 
