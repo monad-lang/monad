@@ -47,13 +47,13 @@ pub struct ChatRequest {
 derive_json_serialize! ChatRequest
 derive_json_deserialize! ChatRequest
 
-pub struct Usage {
+pub struct ApiUsage {
     prompt_tokens : I64,
     completion_tokens : I64,
 }
 
-derive_json_serialize! Usage
-derive_json_deserialize! Usage
+derive_json_serialize! ApiUsage
+derive_json_deserialize! ApiUsage
 
 pub struct Choice {
     message : ChatMessage,
@@ -65,7 +65,7 @@ derive_json_deserialize! Choice
 
 pub struct ChatResponse {
     choices : List Choice,
-    usage : Usage,
+    usage : ApiUsage,
 }
 
 derive_json_serialize! ChatResponse

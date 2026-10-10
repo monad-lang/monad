@@ -8,7 +8,19 @@ use json::serde_backend {}
 use http::types {Headers, Headers.empty, Headers.set, Response}
 use http::body {Body.from_text, Body.to_bytes_pure}
 use moose::client {Client.post}
-use openai::types {ChatRequest, ChatResponse}
+use openai::types {ChatRequest, ChatResponse, ApiUsage}
+
+/// Named `ApiUsage`, not `Usage` -- this is a whole-program-scope
+/// language (`mote.toml`'s own comment), and a consumer mote almost
+/// certainly has its own `Usage` type (shuttle's does: `{input_tokens,
+/// output_tokens, cached_tokens}`, a different shape). Two same-named
+/// types sharing a same-arity `mk` constructor resolve a QUALIFIED
+/// `Usage.mk` pattern ambiguously by bare name once both are loaded
+/// together, not by which file imported which -- measured directly
+/// (`expected 2 constructor fields, got 0` at run time, not a compile
+/// error). A distinct name sidesteps the collision at its root.
+pub def ApiUsage.tokens (u : ApiUsage) : Pair I64 I64 :=
+    match u { ApiUsage.mk prompt_tokens completion_tokens => Pair.pair prompt_tokens completion_tokens }
 
 def openai_headers (api_key : Option String) : Headers :=
     let base := Headers.set "Content-Type" "application/json" Headers.empty in

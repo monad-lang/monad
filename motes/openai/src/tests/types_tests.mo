@@ -1,4 +1,4 @@
-use openai::types {ChatMessage, ChatRequest, ChatResponse, Choice, ToolCall, ToolDef, Usage}
+use openai::types {ChatMessage, ChatRequest, ChatResponse, Choice, ToolCall, ToolDef, ApiUsage}
 use json::json {Json}
 
 #[test]
