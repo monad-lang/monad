@@ -232,13 +232,28 @@ def build_type_info_value (ind : Inductive) : Result String Value :=
             },
     }
 
+/// Strip a `Term.ctx` location wrapper before matching -- a struct
+/// field's own declared default (`StructField.mk`'s `fdefault`, threaded
+/// straight through `struct_fields_to_params` with no further
+/// elaboration) carries one, unlike the type-annotation `Term`s this
+/// function was originally written for. Mirrors
+/// `core/src/eval/meta_reflect.rs`'s own `strip_ctx`, run on the Rust
+/// host side of this exact conversion.
+#[partial]
+def strip_term_ctx (t : Term) : Term :=
+    match t {
+        Term.ctx _loc inner => strip_term_ctx inner,
+        _ => t,
+    }
+
 /// `Term` -> `Expr` Value -- deliberately as limited as `init/meta.mo`'s
 /// own `Expr` surface (a field's declared TYPE is the only thing this
 /// direction is ever used for in this corpus): a plain var reference,
 /// an application chain, or a string/int literal. Anything else is a
 /// clear, immediate error rather than a silently-wrong reflection.
 #[partial]
-def term_to_expr_value (t : Term) : Result String Value :=
+def term_to_expr_value (t_raw : Term) : Result String Value :=
+    let t := strip_term_ctx t_raw in
     match t {
         Term.var _idx dbg =>
             match dbg {
