@@ -1,0 +1,14 @@
+# Loom Phase 1 (plans/library-ideas/plugin-framework.md): a fixed/
+# closed-Gamma `Warp`, reusing the already-landed, already-tested
+# Comonad (Pair E) instance from init/src/prelude.mo rather than
+# inventing a new one. `init`/`std` only -- Phase 1 needs nothing else.
+[mote]
+name = "loom"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
