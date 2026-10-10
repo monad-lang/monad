@@ -270,7 +270,7 @@ def test_connect_refused : IO Bool := do {
     Result.ok listener => do {
       let port <- IO.tcp_local_port listener;
       IO.tcp_close_listener listener;
-      let resp <- Client.get (url_for port);
+      let resp <- Client.get (url_for port) Headers.empty;
       return (match resp {
         Result.ok _ => false,
         Result.err _ => true

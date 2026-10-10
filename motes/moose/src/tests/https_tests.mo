@@ -125,7 +125,7 @@ def is_transient (e : String) : Bool :=
 
 #[terminating]
 def get_retry (url : String) (attempts : I64) : IO (Result String Response) := do {
-  let res <- Client.get url;
+  let res <- Client.get url Headers.empty;
   match res {
     Result.ok r => return (Result.ok r),
     Result.err e =>
