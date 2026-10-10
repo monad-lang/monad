@@ -48,4 +48,5 @@ members = [
   "motes/toolkit",
   "motes/tui",
   "motes/tls",
+  "motes/serde",
 ]

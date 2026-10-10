@@ -1,0 +1,15 @@
+# Generic, format-agnostic derive layer: `Serializer`/`Deserializer`
+# classes plus the TypeInfo-driven code generation that produces
+# instances of them for a user type. No format backend lives here --
+# `motes/json` depends on THIS mote and supplies the `Json` instance,
+# not the other way around (see plans/library-ideas/serde.md).
+#
+# `init`/`std` only, ambient -- declared anyway per this repo's own
+# manifest convention (see the root mote.toml's comment).
+[mote]
+name = "serde"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.std]
+path = "../../std"
