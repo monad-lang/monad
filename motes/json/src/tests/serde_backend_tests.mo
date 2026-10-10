@@ -1,25 +1,9 @@
-use serde::derive {derive_serialize_meta, derive_deserialize_meta}
-use init::meta {TypeInfo, Decl, Expr}
 use json::json {Json}
-use json::serde_backend {}
+use json::serde_backend {derive_json_serialize, derive_json_deserialize}
 
 struct Point3 {
     x : I64,
     name : String,
-}
-
-def derive_json_serialize_meta (info : TypeInfo) : List Decl :=
-    derive_serialize_meta "json" (Expr.e_var "Json") info
-
-defmacro derive_json_serialize T := decls {
-    reflect_type_info! T derive_json_serialize_meta
-}
-
-def derive_json_deserialize_meta (info : TypeInfo) : List Decl :=
-    derive_deserialize_meta "json" (Expr.e_var "Json") info
-
-defmacro derive_json_deserialize T := decls {
-    reflect_type_info! T derive_json_deserialize_meta
 }
 
 derive_json_serialize! Point3

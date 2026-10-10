@@ -49,4 +49,5 @@ members = [
   "motes/tui",
   "motes/tls",
   "motes/serde",
+  "motes/openai",
 ]

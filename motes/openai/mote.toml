@@ -1,0 +1,26 @@
+# A standalone, typed client for the OpenAI-compatible chat-completions
+# API -- faithful to the wire shape (not shuttle's own Message/Turn
+# normal form), reusable by anything that wants OpenAI-shaped chat
+# completions (Ollama and Mistral AI both speak this unchanged).
+[mote]
+name = "openai"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.json]
+path = "../json"
+
+[dependencies.serde]
+path = "../serde"
+
+[dependencies.http]
+path = "../http"
+
+[dependencies.moose]
+path = "../moose"

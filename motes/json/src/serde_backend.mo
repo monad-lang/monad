@@ -14,6 +14,7 @@
 /// instance API, this mote's `serde` instance is what the generic derive
 /// mechanism needs.
 use serde::format {Serializer, Deserializer}
+use serde::derive {derive_serialize_meta, derive_deserialize_meta}
 use std::map {}
 use json::json {
     Json, Json.make_null, Json.make_bool, Json.make_num_int, Json.make_str,
@@ -21,6 +22,7 @@ use json::json {
     Json.get_num_i64, Json.get_str, Json.get_array, Json.get_object,
     Json.object_get,
 }
+use init::meta {TypeInfo, Decl, Expr}
 
 def json_pairs_to_object (fields : List (Pair String Json)) (acc : BTreeMap String Json) : BTreeMap String Json :=
     match fields {
@@ -73,3 +75,26 @@ pub def json_de_get_int (d : Json) : Result String I64 := Deserializer.de_get_in
 pub def json_de_get_string (d : Json) : Result String String := Deserializer.de_get_string d
 pub def json_de_get_list (d : Json) : Result String (List Json) := Deserializer.de_get_list d
 pub def json_de_get_field (d : Json) (name : String) : Result String (Option Json) := Deserializer.de_get_field d name
+
+// The shared `derive_json_serialize!`/`derive_json_deserialize!` macros
+// -- EVERY consumer (`motes/openai`, `motes/shuttle`, ...) uses THESE,
+// never redefines its own `derive_json_serialize_meta`/`defmacro
+// derive_json_serialize`: this is a whole-program-scope language
+// (`mote.toml`'s own comment), so two files each declaring a same-named
+// top-level def/macro collide -- confirmed directly, and the failure
+// mode is a wildly misleading unrelated panic (`uses unloaded module:
+// init.copy`), not a clean "duplicate name" error. One definition here,
+// `pub`, is the fix.
+pub def derive_json_serialize_meta (info : TypeInfo) : List Decl :=
+    derive_serialize_meta "json" (Expr.e_var "Json") info
+
+defmacro derive_json_serialize T := decls {
+    reflect_type_info! T derive_json_serialize_meta
+}
+
+pub def derive_json_deserialize_meta (info : TypeInfo) : List Decl :=
+    derive_deserialize_meta "json" (Expr.e_var "Json") info
+
+defmacro derive_json_deserialize T := decls {
+    reflect_type_info! T derive_json_deserialize_meta
+}
