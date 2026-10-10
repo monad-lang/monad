@@ -5,9 +5,12 @@ use json::json {Json}
 use json::serde_backend {}
 use init::transformers {ResultT}
 use std::io {IO.get_env}
+use std::process {process_id}
 
+/// PID-qualified so two sessions' test runs sharing this filesystem's
+/// /tmp never collide on the same path.
 def scratch_path (name : String) : String :=
-    String.concat "/tmp/shuttle_file_tools_test_" name
+    String.concat "/tmp/shuttle_file_tools_test_" (String.concat (I64.to_string process_id) (String.concat "_" name))
 
 def write_tool_result : IO (Result String Content) :=
     let args : WriteArgs := { path := scratch_path "a.txt", content := "hello\nworld" } in

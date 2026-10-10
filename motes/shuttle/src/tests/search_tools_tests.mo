@@ -4,16 +4,24 @@ use shuttle::message_types {Content}
 use init::transformers {ResultT}
 use std::io {IO.write_file}
 use std::path {Path.of}
+use std::process {exec_cmd, process_id}
+
+/// PID-qualified so two sessions' test runs sharing this filesystem's
+/// /tmp never collide on the same directory.
+def test_dir : String := String.concat "/tmp/shuttle_search_test_dir_" (I64.to_string process_id)
+
+def test_file_path : String := String.concat test_dir "/a.txt"
 
 def setup_fixture : IO Unit := do {
-    match Path.of "/tmp/shuttle_search_test_dir/a.txt" {
+    exec_cmd "mkdir" ["-p", test_dir];
+    match Path.of test_file_path {
         Result.ok p => IO.write_file p "needle in a haystack\nanother line",
         Result.err _ => return unit,
     }
 }
 
 def grep_fixture_result : IO (Result String Content) :=
-    let args : GrepArgs := { pattern := "needle", path := "/tmp/shuttle_search_test_dir/a.txt" } in
+    let args : GrepArgs := { pattern := "needle", path := test_file_path } in
     ResultT.run (grep_run "g1" (GrepArgs.serialize_json args))
 
 def content_is_ok_and_contains (c : Content) (needle : String) : Bool :=
@@ -33,7 +41,7 @@ def test_grep_finds_match : IO Bool := do {
 }
 
 def glob_fixture_result : IO (Result String Content) :=
-    let args : GlobArgs := { pattern := "a.txt", path := "/tmp/shuttle_search_test_dir" } in
+    let args : GlobArgs := { pattern := "a.txt", path := test_dir } in
     ResultT.run (glob_run "gl1" (GlobArgs.serialize_json args))
 
 #[test]
