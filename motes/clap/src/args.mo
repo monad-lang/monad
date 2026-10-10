@@ -132,13 +132,13 @@ pub def Cli.take_opt (long : String) (short : String) (default : String) (args :
 // names out of a real field's own namespace.
 
 def cli_field_name (f : FieldInfo) : String :=
-    match f { field_info name typ attrs => name }
+    match f { field_info name typ attrs default => name }
 
 def cli_field_typ (f : FieldInfo) : Expr :=
-    match f { field_info name typ attrs => typ }
+    match f { field_info name typ attrs default => typ }
 
 def cli_field_attrs (f : FieldInfo) : List String :=
-    match f { field_info name typ attrs => attrs }
+    match f { field_info name typ attrs default => attrs }
 
 def cli_has_arg_attr (f : FieldInfo) : Bool :=
     List.any (fn a => a == "arg") (cli_field_attrs f)

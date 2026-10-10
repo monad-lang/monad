@@ -134,6 +134,26 @@ fn list_value(
   Ok(acc)
 }
 
+/// `Option A` -- declaration order in `init/prelude.mo` is `some`
+/// (tag 0), `none` (tag 1), the same convention `list_value` above
+/// leans on for `List`.
+fn option_value(
+  inductives: &Map<NamePath, Inductive>,
+  item: Option<Value>,
+) -> Result<Value, MacroError> {
+  let induct = find_inductive(inductives, "Option")?;
+  match item {
+    Some(v) => Ok(Value::Con {
+      tag: ctor_tag(induct, "some")?,
+      args: Arc::new(vec![v].into()),
+    }),
+    None => Ok(Value::Con {
+      tag: ctor_tag(induct, "none")?,
+      args: Arc::new(vec![].into()),
+    }),
+  }
+}
+
 fn value_to_list(
   inductives: &Map<NamePath, Inductive>,
   v: Value,
@@ -297,9 +317,27 @@ pub fn build_type_info_value(
         .map(|a| str_value(a.name.as_str()))
         .collect();
       let attrs_v = list_value(inductives, attr_values)?;
+      // A struct field's default lives on `Inductive.defaults` (keyed by
+      // field name), NOT on `Param.default` -- `term::stru()` builds the
+      // `mk` constructor's params via `param_with_mult`, which drops the
+      // default; only `induct.defaults` keeps it (measured: reproduced
+      // directly, a struct's `FieldInfo.default` was always `none`
+      // without this fallback). `Param.default` is still checked first
+      // for the OTHER place a default can live (a `def`'s own brace
+      // params, per `stru_field_to_def_param`'s doc comment).
+      let default_term = field
+        .default
+        .as_deref()
+        .cloned()
+        .or_else(|| induct.defaults.get(&field.name).cloned());
+      let default_v = match default_term.as_ref() {
+        Some(t) => Some(term_to_expr_value(t, inductives)?),
+        None => None,
+      };
+      let default_v = option_value(inductives, default_v)?;
       field_values.push(Value::Con {
         tag: field_info_tag,
-        args: Arc::new(vec![name_v, typ_v, attrs_v].into()),
+        args: Arc::new(vec![name_v, typ_v, attrs_v, default_v].into()),
       });
     }
     let fields_list = list_value(inductives, field_values)?;
