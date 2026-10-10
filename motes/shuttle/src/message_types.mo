@@ -17,7 +17,7 @@ use json::json {
     Json.make_str, Json.make_bool, Json.make_object, Json.get_str,
     Json.get_bool, Json.get_object, Json.object_get,
 }
-use std::map {}
+use std::map {BTreeMap}
 
 pub type Role {
     system_,

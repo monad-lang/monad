@@ -15,7 +15,7 @@
 /// mechanism needs.
 use serde::format {Serializer, Deserializer}
 use serde::derive {derive_serialize_meta, derive_deserialize_meta}
-use std::map {}
+use std::map {BTreeMap}
 use json::json {
     Json, Json.make_null, Json.make_bool, Json.make_num_int, Json.make_str,
     Json.make_array, Json.make_object, Json.get_bool, Json.get_num,

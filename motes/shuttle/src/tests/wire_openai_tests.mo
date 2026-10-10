@@ -4,6 +4,7 @@ use shuttle::message {Message, Turn}
 use shuttle::tool {ToolSpec}
 use openai::types {ChatRequest, ChatMessage, ChatResponse, Choice, ApiUsage, ToolCall}
 use json::json {Json}
+use std::list {List.length}
 
 #[test]
 def test_encode_request_system_message_first : Bool :=

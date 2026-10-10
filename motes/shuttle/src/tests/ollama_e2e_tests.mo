@@ -22,6 +22,7 @@ use std::io {IO.get_env}
 use std::path {Path.of}
 use std::io {IO.write_file}
 use std::process {process_id}
+use std::list {List.any}
 
 def sentinel : String := "SHUTTLE_E2E_SENTINEL_42"
 

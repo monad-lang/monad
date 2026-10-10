@@ -3,6 +3,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::message_types {Content}
 use json::json {Json}
 use init::transformers {ResultT}
+use std::list {List.length}
 
 def mk_tool (name : String) : ToolImpl :=
     { spec := { name := name, description := "", schema := Json.null }, run := fn j => ResultT.mk (return (Result.ok (Content.text name))) }
