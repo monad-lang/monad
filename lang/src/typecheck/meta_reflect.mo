@@ -65,8 +65,13 @@ def e_str_val (value : String) : Value := Value.v_con 1 (List.cons (str_val valu
 def e_int_val (n : I64) : Value := Value.v_con 2 (List.cons (num_val n) List.empty)
 def e_app_val (f : Value) (a : Value) : Value := Value.v_con 4 (List.cons f (List.cons a List.empty))
 
-def field_info_val (name : Value) (typ : Value) (attrs : Value) : Value :=
-    Value.v_con 0 (List.cons name (List.cons typ (List.cons attrs List.empty)))
+def field_info_val (name : Value) (typ : Value) (attrs : Value) (default : Value) : Value :=
+    Value.v_con 0 (List.cons name (List.cons typ (List.cons attrs (List.cons default List.empty))))
+
+/// `Option A` -- `some`/`none` are `init/prelude.mo`'s declaration order
+/// (tags 0/1), the same convention `bool_val` above leans on for `Bool`.
+def some_val (v : Value) : Value := Value.v_con 0 (List.cons v List.empty)
+def none_val : Value := Value.v_con 1 List.empty
 
 def ctor_info_val (name : Value) (fields : Value) : Value :=
     Value.v_con 0 (List.cons name (List.cons fields List.empty))
@@ -150,12 +155,30 @@ def attr_names_val_list (attrs : List Attribute) : List Value :=
         List.cons a rest => List.cons (str_val (attr_bare_name a)) (attr_names_val_list rest),
     }
 
+/// The default's own `Expr` conversion is independent of whether the
+/// field has one at all -- `Option.none` short-circuits without ever
+/// calling `term_to_expr_value`.
+def default_expr_value (d : Option Term) : Result String Value :=
+    match d {
+        Option.none => Result.ok none_val,
+        Option.some t =>
+            match term_to_expr_value t {
+                Result.ok v => Result.ok (some_val v),
+                Result.err e => Result.err e,
+            },
+    }
+
 def field_info_value (p : Param) : Result String Value :=
     match p {
-        Param.mk pname ptyp _mult _default pattrs =>
+        Param.mk pname ptyp _mult pdefault pattrs =>
             match term_to_expr_value ptyp {
-                Result.ok typ_val => Result.ok (field_info_val (str_val (show_identifier_ pname)) typ_val (attr_names_val pattrs)),
                 Result.err e => Result.err e,
+                Result.ok typ_val =>
+                    match default_expr_value pdefault {
+                        Result.err e => Result.err e,
+                        Result.ok default_val =>
+                            Result.ok (field_info_val (str_val (show_identifier_ pname)) typ_val (attr_names_val pattrs) default_val),
+                    },
             },
     }
 
@@ -894,8 +917,8 @@ def irlit_eq (a : IrLit) (b : IrLit) : Bool :=
 def expected_point_type_info : Value :=
     type_info_val (str_val "Point") (list_value (List.cons
         (ctor_info_val (str_val "mk") (list_value (List.cons
-            (field_info_val (str_val "x") (e_var_val "I64") (list_value List.empty))
-            (List.cons (field_info_val (str_val "y") (e_var_val "I64") (list_value List.empty)) List.empty))))
+            (field_info_val (str_val "x") (e_var_val "I64") (list_value List.empty) none_val)
+            (List.cons (field_info_val (str_val "y") (e_var_val "I64") (list_value List.empty) none_val) List.empty))))
         List.empty))
 
 #[test]

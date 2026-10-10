@@ -14,13 +14,18 @@
 
 /// One field of one constructor: its declared name, its type as a
 /// constructible `Expr` (so it can be echoed straight into generated
-/// code, e.g. a lens's `Lens T field_typ` type), and its own attribute
+/// code, e.g. a lens's `Lens T field_typ` type), its own attribute
 /// names (e.g. `["arg"]` for a `#[arg] verbose : Bool` field, `[]` for an
 /// unannotated one) — bare names only, no attribute arguments, matching
 /// what `derive_cli_meta` (`cli/src/args.mo`) needs to tell a flag field from
-/// a positional one.
+/// a positional one — and its declared default value (`f : T := e`), as a
+/// constructible `Expr`, when it has one. A derive that treats a defaulted
+/// field as optional (e.g. a generated JSON Schema's `required` list, or a
+/// decoder falling back to the default on a missing key) reads this field;
+/// before it existed that had to be faked by convention (an `Option`-typed
+/// field standing in for "optional").
 pub type FieldInfo {
-    field_info (name : String) (typ : Expr) (attrs : List String)
+    field_info (name : String) (typ : Expr) (attrs : List String) (default : Option Expr)
 }
 
 /// One constructor: its declared name, and its fields in declared order.
