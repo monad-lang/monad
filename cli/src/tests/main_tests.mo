@@ -277,27 +277,32 @@ def test_from_args_check_affine_flag : Bool :=
         _ => false,
     }
 
+// `Command.test` carries `jobs` as its fourth field, so every match here
+// binds it positionally -- adding a field to the constructor and leaving
+// these at three binders compiles clean and then fails at runtime, the
+// exact hazard AGENTS.md records for positional struct matches (this file
+// shipped that way once: run 38147433273, five red tests).
 #[test]
 def test_from_args_test : Bool :=
     match Command.from_args ["test", "a.mo", "b.mo", "-v"] {
-        Command.test files verbose workspace =>
-            files == ["a.mo", "b.mo"] && verbose == true && workspace == false,
+        Command.test files verbose workspace jobs =>
+            files == ["a.mo", "b.mo"] && verbose == true && workspace == false && jobs == 4,
         _ => false,
     }
 
 #[test]
 def test_from_args_test_workspace_flag : Bool :=
     match Command.from_args ["test", "--workspace"] {
-        Command.test files verbose workspace =>
-            List.is_empty files && workspace == true && verbose == false,
+        Command.test files verbose workspace jobs =>
+            List.is_empty files && workspace == true && verbose == false && jobs == 4,
         _ => false,
     }
 
 #[test]
 def test_from_args_test_workspace_short_flag : Bool :=
     match Command.from_args ["test", "-w", "-v"] {
-        Command.test files verbose workspace =>
-            List.is_empty files && workspace == true && verbose == true,
+        Command.test files verbose workspace jobs =>
+            List.is_empty files && workspace == true && verbose == true && jobs == 4,
         _ => false,
     }
 
@@ -306,8 +311,26 @@ def test_from_args_test_workspace_short_flag : Bool :=
 #[test]
 def test_from_args_test_workspace_flag_not_a_path : Bool :=
     match Command.from_args ["test", "--workspace", "a.mo"] {
-        Command.test files verbose workspace =>
+        Command.test files verbose workspace jobs =>
             files == ["a.mo"] && workspace == true,
+        _ => false,
+    }
+
+// `--jobs/-j <N>`: peeled with the other flags, its number not left among
+// the paths, and its value carried into the command.
+#[test]
+def test_from_args_test_jobs_flag : Bool :=
+    match Command.from_args ["test", "--jobs", "2", "a.mo"] {
+        Command.test files verbose workspace jobs =>
+            files == ["a.mo"] && jobs == 2,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_test_jobs_short_flag_clamps_below_one : Bool :=
+    match Command.from_args ["test", "-j", "0", "a.mo"] {
+        Command.test files verbose workspace jobs =>
+            files == ["a.mo"] && jobs == 1,
         _ => false,
     }
 
@@ -318,7 +341,7 @@ def test_from_args_test_workspace_flag_not_a_path : Bool :=
 #[test]
 def test_from_args_test_no_files_is_a_test_command : Bool :=
     match Command.from_args ["test"] {
-        Command.test files verbose workspace =>
+        Command.test files verbose workspace jobs =>
             List.is_empty files && workspace == false && verbose == false,
         _ => false,
     }
