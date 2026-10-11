@@ -5712,11 +5712,10 @@ def has_decl_gen_expansion (registry : List DeclGenEntry) (decls : List Decl) : 
 /// parsed one does -- which is what `raw_target` is for.
 ///
 /// `raw_target` covers the MAIN module only. A derive in a DEPENDENCY
-/// module still reaches `graph`/`target` (and so the checker) but not the
-/// codegen paths, which read each module's own `decl_list`; no corpus
-/// file derives into a dependency, and the fix for that case is the same
-/// "codegen consumes the prepared whole graph" step `elaborate_loaded_
-/// modules`'s own doc comment calls Stage 3, not a fourth list here.
+/// module reaches `graph`/`target` (and so the checker) the same way, but
+/// codegen reads each module's own `decl_list` directly -- `raw_all`
+/// (below) is the fourth list that covers that case: the same expansion,
+/// applied to each DEPENDENCY module's own raw `decl_list` in turn.
 pub struct GraphExpansion {
     graph : List Decl,
     target : List Decl,
@@ -5731,9 +5730,67 @@ pub struct GraphExpansion {
     /// does, so a file that expands nothing keeps the exact list it
     /// loaded (and `loaded` is a pure value the caller may keep sharing).
     raw_changed : Bool,
+    /// One entry per DEPENDENCY module whose own raw `decl_list` gained
+    /// decl-gen/`reflect_type_info!` output -- a derive written in a
+    /// dependency mote (not the file being compiled) otherwise never
+    /// reaches codegen, which reads each module's own `decl_list`
+    /// verbatim (`collect_all_decls_from_modules`, `lang.codegen.decls`).
+    /// Always empty when `changed` is false, by the same monotonicity
+    /// `raw_changed` relies on: a decl-gen call that doesn't survive
+    /// substitution over the WHOLE graph cannot survive over any one
+    /// module's own subset of it either.
+    raw_all : List (Pair ModulePath (List Decl)),
 }
 
-def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) : Result String GraphExpansion :=
+/// Same `decl_gen_subst_decls` -> `resolve_reflect_calls` pipeline
+/// `expand_decls_graph` runs for `target`/`raw_target`, run once per
+/// DEPENDENCY module over that module's own raw `decl_list` -- see
+/// `GraphExpansion.raw_all`'s own doc comment for why this exists.
+/// `mods` must already exclude the target module (the caller's
+/// `raw_target` covers that one).
+#[partial]
+def expand_dep_modules_raw (registry : List DeclGenEntry) (inds : List Inductive) (dispatched : List Decl) (mods : List ModuleInfo) : Result String (List (Pair ModulePath (List Decl))) :=
+    match mods {
+        List.empty => Result.ok List.empty,
+        List.cons m rest =>
+            match expand_dep_modules_raw registry inds dispatched rest {
+                Result.err e => Result.err e,
+                Result.ok tail =>
+                    let subst : List Decl := decl_gen_subst_decls registry m.decl_list in
+                    let changed : Bool := has_decl_gen_expansion registry m.decl_list || has_reflect_type_info_call subst in
+                    if changed then
+                        match resolve_reflect_calls inds dispatched subst {
+                            Result.err e => Result.err e,
+                            Result.ok final => Result.ok (List.cons (Pair.pair m.path final) tail),
+                        }
+                    else Result.ok tail,
+            },
+    }
+
+/// `replace_module_decls`, applied once per `(ModulePath, List Decl)`
+/// entry -- each call only ever touches the ONE module its own path
+/// names, so folding this over `raw_all` patches every dependency module
+/// that gained decl-gen output without disturbing any other.
+#[partial]
+def replace_many_module_decls (entries : List (Pair ModulePath (List Decl))) (mods : List ModuleInfo) : List ModuleInfo :=
+    match entries {
+        List.empty => mods,
+        List.cons e rest =>
+            match e { Pair.pair mp decls => replace_many_module_decls rest (replace_module_decls mp decls mods) },
+    }
+
+/// `loaded` with every DEPENDENCY module named in `entries` patched the
+/// same way `replace_main_decls` patches the target -- see
+/// `GraphExpansion.raw_all`'s own doc comment. `entries` never names the
+/// main module (`expand_dep_modules_raw`'s caller excludes it), so only
+/// `all_modules` needs the walk; `main_module` is untouched.
+#[partial]
+def replace_dep_module_decls (loaded : LoadedModules) (entries : List (Pair ModulePath (List Decl))) : LoadedModules :=
+    match loaded {
+        LoadedModules.mk main all => LoadedModules.mk main (replace_many_module_decls entries all)
+    }
+
+def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) (dep_modules : List ModuleInfo) : Result String GraphExpansion :=
     let registry : List DeclGenEntry := build_decl_gen_registry whole_graph_decls in
     let graph_subst : List Decl := decl_gen_subst_decls registry whole_graph_decls in
     let target_subst : List Decl := decl_gen_subst_decls registry target in
@@ -5782,15 +5839,19 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
                         match resolve_reflect_calls inds dispatched raw_subst {
                             Result.err e => Result.err e,
                             Result.ok raw_final =>
-                                let expanded : GraphExpansion :=
-                                    { graph := graph_final, target := target_final, raw_target := raw_final, changed := true, raw_changed := raw_changed } in
-                                Result.ok expanded,
+                                match expand_dep_modules_raw registry inds dispatched dep_modules {
+                                    Result.err e => Result.err e,
+                                    Result.ok raw_all_final =>
+                                        let expanded : GraphExpansion :=
+                                            { graph := graph_final, target := target_final, raw_target := raw_final, changed := true, raw_changed := raw_changed, raw_all := raw_all_final } in
+                                        Result.ok expanded,
+                                },
                         },
                 },
         }
     else
         let unexpanded : GraphExpansion :=
-            { graph := graph_subst, target := target_subst, raw_target := raw_subst, changed := substituted, raw_changed := raw_changed } in
+            { graph := graph_subst, target := target_subst, raw_target := raw_subst, changed := substituted, raw_changed := raw_changed, raw_all := List.empty } in
         Result.ok unexpanded
 
 /// THE canonical front-end pipeline: parse -> load the full transitive
@@ -5992,7 +6053,10 @@ def elaborate_loaded_modules_cached_go (file_path : String) (check_deps : Bool) 
             // -- see `expand_decls_graph`'s own doc comment. A no-op for
             // any file that never (transitively) invokes
             // `reflect_type_info!`, so safe to run unconditionally.
-            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed_flat target_decls_pre target_decls_raw;
+            // `dep_mods` excludes the target itself -- `target_decls_raw`/
+            // `raw_target` already cover that one; see `GraphExpansion.raw_all`.
+            let dep_mods : List ModuleInfo := List.filter (fn (m : ModuleInfo) => Bool.not (modpath_eq m.path target_mp)) (get_loaded_all loaded);
+            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed_flat target_decls_pre target_decls_raw dep_mods;
             let t_expand : I64 <- bench_step verbose "  elab: expand_decls_graph" t_target 0;
             match expansion_result {
                 Result.err e => return (Result.err e),
@@ -6079,10 +6143,15 @@ def elaborate_loaded_modules_cached_go (file_path : String) (check_deps : Bool) 
                     // comment for why the prepared list is the wrong shape
                     // to hand them.
                     let raw_changed : Bool := expansion.raw_changed;
-                    let loaded2 : LoadedModules :=
+                    let loaded_main_patched : LoadedModules :=
                         if raw_changed
                         then replace_main_decls loaded target_mp expansion.raw_target
                         else loaded;
+                    // Dependency modules whose OWN raw decls gained
+                    // decl-gen output -- see `GraphExpansion.raw_all`'s
+                    // own doc comment. A no-op (empty list) for every file
+                    // that doesn't derive into a dependency, same as above.
+                    let loaded2 : LoadedModules := replace_dep_module_decls loaded_main_patched expansion.raw_all;
                     // Annotated local, not an inline literal --
                     // see `load_module_with_info`'s own note.
                     let elaborated : ElaboratedModules :=
