@@ -8041,3 +8041,18 @@ def test_normalize_path_keeps_an_absolute_root : Bool :=
 #[test]
 def test_normalize_path_is_idempotent : Bool :=
     String.beq (normalize_path (normalize_path "../lang/../init/src/number.mo")) "../init/src/number.mo"
+
+/// A list literal is `FromListLiteral.cons`/`.empty`; the checker, not the
+/// codegen carrier guesser, must resolve them -- in argument, let and return position.
+#[test]
+def test_elaborate_list_literal_resolves : IO Bool := do {
+    let src : String :=
+        "type List (A : Type) { empty, cons (a : A) (List A) }\n" ++
+        "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) (L A) : L A\n def empty : L A }\n" ++
+        "instance FromListLiteral List { def cons (a : A) (l : List A) : List A := List.cons a l\n def empty : List A := List.empty }\n" ++
+        "def len (xs : List I64) : I64 := 0\n" ++
+        "def in_arg : I64 := len [1, 2]\n" ++
+        "def in_ret : List I64 := [3]\n";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "FromListLiteral.cons") && not (String.contains out "FromListLiteral.empty"))
+}

@@ -37,6 +37,7 @@ use lang::scope {
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {term_permute, term_subst, term_shift}
+use lib::typecheck::traverse {term_children}
 use lib::typecheck::cubical {
   PathParts, endpoint_of, path_parts_of, peels_to_bare_interval,
 }
@@ -3331,7 +3332,8 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                 List.cons param_ty rest_params =>
                     let a_expected : Term := subst_typevars_term param_ty subst in
                     match type_check arg Term.hole scope local_types locals {
-                        ok a_tt =>
+                        ok a_tt0 =>
+                            let a_tt : TypedTerm := recheck_unresolved_class_calls arg a_tt0 a_expected scope local_types locals in
                             def_call_continue arg a_tt param_ty rest rest_params subst scope local_types locals,
                         err _ =>
                             // Same vacuous-success trap `type_check_app`
@@ -3359,6 +3361,76 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                             },
                     },
             },
+    }
+
+/// An argument inferred in isolation leaves a class-method call whose carrier
+/// only the PARAMETER type can supply (`len [1, 2]`: the literal's
+/// `FromListLiteral.cons` has nothing else to read `List` from). Re-check it
+/// against that parameter type with its still-unsolved variables opened to holes,
+/// and keep the result only if it resolved what the isolated check did not.
+#[partial]
+def recheck_unresolved_class_calls (arg : Term) (a_tt : TypedTerm) (a_expected : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : TypedTerm :=
+    if not (mentions_class_method_ref a_tt.term scope locals) then a_tt
+    else
+        let want : Term := open_free_type_vars a_expected scope in
+        if not (has_informative_head want) then a_tt
+        else
+            match type_check arg want scope local_types locals {
+                err _ => a_tt,
+                ok b_tt => if mentions_class_method_ref b_tt.term scope locals then a_tt else b_tt,
+            }
+
+/// Does `t` still hold a reference that is a class method and nothing else
+/// (`FromListLiteral.cons`, not its mangled `FromListLiteral_List_cons`)?
+#[partial]
+def mentions_class_method_ref (t : Term) (scope : Scope) (locals : LocalScope) : Bool :=
+    match t {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel then
+                match dbg {
+                    DebugName.named id => is_unresolved_class_method_ref id scope locals,
+                    DebugName.unnamed => false,
+                }
+            else false,
+        _ => any_mentions_class_method_ref (term_children t) scope locals,
+    }
+
+#[partial]
+def any_mentions_class_method_ref (ts : List Term) (scope : Scope) (locals : LocalScope) : Bool :=
+    match ts {
+        List.empty => false,
+        List.cons x rest =>
+            if mentions_class_method_ref x scope locals then true
+            else any_mentions_class_method_ref rest scope locals,
+    }
+
+def is_unresolved_class_method_ref (id : Identifier) (scope : Scope) (locals : LocalScope) : Bool :=
+    match scope_resolve_name (NameRef.nid id) scope locals {
+        ok _ => false,
+        err _ =>
+            if not (ref_names_class_method id scope) then false
+            else
+                match scope_find_class_def_for_ref id (match id { Identifier.id s => Identifier.id (last_dotted_segment s) }) scope {
+                    ok _ => true,
+                    err _ => false,
+                },
+    }
+
+/// `t` with each free name that resolves to no type in `scope` (a signature
+/// variable nothing solved) replaced by a hole.
+#[partial]
+def open_free_type_vars (t : Term) (scope : Scope) : Term :=
+    match term_peel t {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel then
+                match dbg {
+                    DebugName.named id => if is_scope_type_name id scope then t else Term.hole,
+                    DebugName.unnamed => t,
+                }
+            else t,
+        Term.app f a => Term.app (open_free_type_vars f scope) (open_free_type_vars a scope),
+        Term.pi b dom cod => Term.pi b (open_free_type_vars dom scope) (open_free_type_vars cod scope),
+        _ => t,
     }
 
 /// `def_call_check_args`'s per-argument tail: solve this parameter's
