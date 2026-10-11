@@ -282,7 +282,8 @@ def renamed_entry_def (def_val : Def) : Def :=
 // `compile_loaded_modules_to_test_ir`) right before returning, and the
 // parent reads THAT back as the authoritative per-test result -- which
 // is what makes the parent's `X/Y total tests passed` summary count
-// tests rather than files. The exit code still carries the failure
+// tests (plus, in its denominator, files that never compiled) rather
+// than files. The exit code still carries the failure
 // count (kept so a driver binary run by hand from the shell still says
 // something), but the parent treats a missing or unparseable result
 // file -- a driver that died before writing it -- as "the driver
@@ -562,13 +563,13 @@ pub struct TestIrResult {
 /// `result_path` is where the driver writes its `__MONAD_TEST__ <failed>`
 /// marker (see the synthesis header): a per-binary file under the
 /// parent's pid-unique out dir, threaded in from `cli/src/main.mo`'s
-/// `run_test_loop_codegen`.
+/// `run_test_file_tail`.
 ///
 /// `triple` is the machine the driver is being built for, and it comes in
 /// as a parameter rather than from `compile_db_module`'s own default
 /// because THIS driver is linked and run immediately: a header naming some
 /// other machine is an `llc`-built object of the wrong architecture at
-/// `clang`'s link. `run_test_loop_codegen` has already probed it for the
+/// `clang`'s link. `run_test_file_tail` has already probed it for the
 /// link, so this costs nothing extra.
 #[partial]
 pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path : String) (triple : String) : IO (Result String TestIrResult) := do {

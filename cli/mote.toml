@@ -23,6 +23,12 @@ path = "../std"
 [dependencies.clap]
 path = "../motes/clap"
 
+# One function: `parse_i64`, for `monad test --jobs/-j <N>`'s value. The
+# same tested string-to-int the driver result file already goes through
+# (`parse_driver_result`, lang/src/codegen/test_driver.mo).
+[dependencies.parsec]
+path = "../motes/parsec"
+
 # The build orchestrator: input hashing and the artifact store.
 [dependencies.build]
 path = "../build"

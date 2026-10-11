@@ -497,6 +497,41 @@ if [ "$sweep_jobs" -lt 1 ]; then
   exit 2
 fi
 
+# The runner's own in-process parallelism, handed to `monad test --jobs`:
+# the per-file tail (driver IR codegen, emit, llc/clang, run) overlaps
+# across a bounded FIFO window of `forkIO` fibers INSIDE one `monad`
+# process (cli/src/main.mo's `run_test_loop`), so the `ModuleInfoCache`
+# that makes later files cheap stays warm in the parent and the
+# elaborate/check gate keeps its deterministic order. Default 4, the
+# runner's own; `MONAD_TEST_JOBS=1` forces the serial path, which is the
+# same transcript the runner printed before the flag existed.
+#
+# SHARDS x JOBS OVERSUBSCRIPTION, the thing to tune rather than guess:
+# each shard is a process and each process runs up to `test_jobs` fibers,
+# so the sweep's total concurrency is `sweep_jobs * test_jobs` -- and the
+# header's own 4-core measurement already showed what past-`nproc`
+# co-tenancy buys: flat wall, tripled summed work. The two knobs are
+# ALTERNATIVES, not multipliers. The runner's fibers share one process's
+# warm `ModuleInfoCache` (a save the shard split cannot get, per the
+# header's own warm-up note), so the shape to try on a measured box is
+# FEWER shards with more jobs each -- e.g. `MONAD_SWEEP_JOBS=2
+# MONAD_TEST_JOBS=2` on 4 cores -- and the shape to avoid is
+# `MONAD_SWEEP_JOBS=4 MONAD_TEST_JOBS=4`, which is 16-way co-tenancy on
+# 4 cores. CI sets both explicitly from what a run measures; the defaults
+# here serve local runs, where one process with 4 jobs is the common
+# case (a developer types `monad test std/`, no sharding involved).
+test_jobs="${MONAD_TEST_JOBS:-4}"
+case "$test_jobs" in
+  *[!0-9]*)
+    echo "MONAD_TEST_JOBS must be a positive integer, got '${test_jobs}'" >&2
+    exit 2
+    ;;
+esac
+if [ "$test_jobs" -lt 1 ]; then
+  echo "MONAD_TEST_JOBS must be at least 1, got '${test_jobs}'" >&2
+  exit 2
+fi
+
 # One definition for both phases. They are the same corpus, and "the two
 # `find` lists agree exactly" was a comment that a later edit could
 # falsify silently; a list built once cannot drift from itself. Biggest
@@ -567,6 +602,12 @@ run_shards() {
   local dir="$1" subcmd="$2"
   local i f s max min=-1 walls="" total=0
   local -a targets
+  # `--jobs` is the test runner's own flag; only `test` takes it, and this
+  # function is the one launch site every phase shares.
+  local -a jobs_flag=()
+  if [ "$subcmd" = test ]; then
+    jobs_flag=(--jobs "$test_jobs")
+  fi
   shard_rcs=()
   shard_files_n=()
   shard_pids=()
@@ -598,7 +639,7 @@ run_shards() {
     (
       s0=$SECONDS
       rc=0
-      "$monad" "$subcmd" "${targets[@]}" > "$dir/${subcmd}-${i}.log" 2>&1 || rc=$?
+      "$monad" "$subcmd" ${jobs_flag[@]+"${jobs_flag[@]}"} "${targets[@]}" > "$dir/${subcmd}-${i}.log" 2>&1 || rc=$?
       printf '%s\n' "$((SECONDS - s0))" > "$dir/${subcmd}-${i}.secs"
       exit "$rc"
     ) &
@@ -634,28 +675,29 @@ run_shards() {
 # One shard's verdict, from its log and status. A non-zero status is a
 # failure unless the shard had nothing runnable in it: `No tests found` is
 # what a whole invocation prints when it ends with
-# `tests_passed + tests_failed == 0` (cli/src/main.mo:839-845), which is
-# the truth for a shard of files with no `#[test]`s -- and ALSO for a shard
-# whose every file failed to compile, since a file whose driver was never
-# produced moves neither counter. The `file(s) skipped` line separates
-# them: it is printed only for files that had no runnable tests, so a
-# shard whose skips account for every file it was handed really did have
-# nothing to run, and anything else is a failure. Without this, one shard
-# of compile failures would exit 1 like a shard of no-tests files, and the
-# aggregate total would still be non-zero -- a false green of exactly the
-# kind this script's own `set -e` bug was.
+# `tests_passed + tests_failed + files_failed == 0` (cli/src/main.mo's
+# `run_test_loop` drain arm) -- i.e. ONLY for a shard where no file
+# produced tests and none failed to compile. A compile-broken file moved
+# `files_failed` from the start (the exit status, the FAIL lines) and now
+# also moves the `X/Y total tests passed` denominator, so a shard whose
+# every file failed to compile prints `0/N total tests passed` and fails
+# the `No tests found` grep below outright. What the grep plus the
+# `file(s) skipped` comparison still decide -- and all they decide -- is
+# the no-`#[test]`s case: a shard of files with nothing runnable, which
+# is the one legitimate way to end a run at zero and exit 1.
 #
 # The `skipped == given` rescue is believed UNREACHABLE, and is kept only as
 # a net. A shard exits non-zero iff `tests_failed > 0 || files_failed > 0`
-# (cli/src/main.mo:865), and a file that fails a gate or a driver compile
-# moves `files_failed` and never `skipped` (:890,904 vs :933,969) -- one
+# (cli/src/main.mo's drain arm), and a file that fails a gate or a driver compile
+# moves `files_failed` and never `skipped` -- one
 # bucket per file. So `rc != 0` implies at least one file was neither
 # skipped nor successful, i.e. `skipped < given`, and the arm cannot fire.
 # Driven with four synthetic logs (2026-09-27): all-no-tests rc=1 skipped
 # 3/3 -> ok (the arm, reachable only in the fixture); one gate failure
 # skipped 2/3 -> failed; a red shard with no `No tests found` -> failed;
-# rc=0 -> ok. The distinction that actually catches compile failures is the
-# `No tests found` grep above plus the comparison, not a rescue of them.
+# rc=0 -> ok. The compile-failure catch is now first-class in the
+# runner's own totals line; the grep-and-comparison here is the
+# no-tests case's guard, not a workaround for a silent runner.
 shard_verdict() {
   local log="$1" given="$2" rc="$3"
   local skipped
@@ -698,7 +740,10 @@ fi
 # One aggregate line, summed from the shards' own totals rather than
 # re-derived, so the number a reader compares against a serial run is the
 # compiler's. `MONAD_SWEEP_JOBS=1` prints it over a single shard, which is
-# the same run it was before plus this line.
+# the same run it was before plus this line. The denominator includes each
+# shard's compile-failed files (the runner folds `files_failed` into its
+# own ratio), so a red sweep shows its broken files in this total rather
+# than only in the per-file FAIL lines above.
 read -r sweep_passed sweep_total sweep_skipped <<< "$(sed -e 's/\x1b\[[0-9;]*m//g' "$shard_dir/test.log" \
   | awk -F'[/ ]' '
       /^[0-9]+\/[0-9]+ total tests passed$/ { p += $1; t += $2; next }
