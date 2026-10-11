@@ -570,6 +570,19 @@ def print_stats_lines (ls : List String) : IO Unit := match ls {
 /// Print the handoff report when `verbose` or `MONAD_ELAB_STATS` is set.
 /// `elaborated` is the decl list straight out of elaboration (before
 /// `resolve_class_calls_decls`); `reachable` is the final filtered list.
+/// Interim switch for the reachable-elaboration-failure gate
+/// (`validate_reachable_elaborated`). The compiler's own self-compile still
+/// has 55 decls (34 reachable) that fail to elaborate, all bare-name
+/// collisions (`Param` in lang/types.mo and init/meta.mo, `MatchArm` in
+/// lang/core_ir.mo and init/meta.mo, and the constructors those drag in).
+/// Qualified-name resolution (plan item 10) removes them; the gate then
+/// becomes unconditional and this switch is deleted.
+#[partial]
+pub def strict_elab_enabled : IO Bool := do {
+    let env <- get_env "MONAD_STRICT_ELAB";
+    return (match env { Option.some _ => true, Option.none => false })
+}
+
 #[partial]
 pub def report_elab_stats (verbose : Bool) (failed : List String) (elaborated : List Decl) (reachable : List Decl) : IO Unit := do {
     let env <- get_env "MONAD_ELAB_STATS";
@@ -583,11 +596,12 @@ pub def report_elab_stats (verbose : Bool) (failed : List String) (elaborated : 
         let sl_reach := find_undesugared_struct_lit_defs (extract_defs reach_elab);
         let spread0 : CtorSpread := { counts := str_map_empty, first := str_map_empty, arity_multi := str_map_empty, bare_names := 0, multi_owner := 0, multi_arity := 0 };
         let spread := scan_ctor_spread (List.reverse (collect_ctor_claims_inds (extract_inductives reachable) List.empty)) spread0;
-        let l_swallowed : String := "elab_stats: swallowed=" ++ I64.to_string (List.length failed) ++ " [" ++ List.intercalate ", " (stats_take failed 8) ++ "]";
+        let l_swallowed : String := "elab_stats: swallowed=" ++ I64.to_string (List.length failed);
+        let swallowed_lines : List String := List.map (fn m => "elab_stats: swallowed " ++ m) (stats_take failed 100);
         let l_calls : String := "elab_stats: unresolved_class_call_sites graph=" ++ I64.to_string (List.length cc_all) ++ " reachable=" ++ I64.to_string (List.length cc_reach);
         let l_lits : String := "elab_stats: undesugared_struct_lit_defs graph=" ++ I64.to_string (List.length sl_all) ++ " reachable=" ++ I64.to_string (List.length sl_reach);
         let l_ctors : String := "elab_stats: ctor_bare_names reachable=" ++ I64.to_string spread.bare_names ++ " multi_owner=" ++ I64.to_string spread.multi_owner ++ " multi_arity=" ++ I64.to_string spread.multi_arity;
         let samples : List String := List.map (fn m => "elab_stats: sample " ++ m) (stats_take cc_reach 5);
-        print_stats_lines (List.append [l_swallowed, l_calls, l_lits, l_ctors] samples)
+        print_stats_lines (List.append [l_swallowed, l_calls, l_lits, l_ctors] (List.append swallowed_lines samples))
     }
 }

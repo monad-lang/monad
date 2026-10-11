@@ -2616,6 +2616,7 @@ def decl_display_name (d : Decl) : String :=
 pub struct BestEffortElab {
     decls : List Decl,
     failed : List String,
+    errors : List String,
 }
 
 #[partial]
@@ -2624,24 +2625,29 @@ def best_effort_decls (r : BestEffortElab) : List Decl := r.decls
 #[partial]
 def best_effort_failed (r : BestEffortElab) : List String := r.failed
 
+/// One `name: message` line per failed decl, parallel to `best_effort_failed`.
+#[partial]
+def best_effort_errors (r : BestEffortElab) : List String := r.errors
+
 /// Declared return type, not a bare literal at the use site -- the
 /// self-hosted checker cannot infer a struct literal's type in `return`/
 /// argument position and the self-hosted backend miscompiles one there.
 #[partial]
-def mk_best_effort_elab (decls : List Decl) (failed : List String) : BestEffortElab :=
-    { decls := decls, failed := failed }
+def mk_best_effort_elab (decls : List Decl) (failed : List String) (errors : List String) : BestEffortElab :=
+    { decls := decls, failed := failed, errors := errors }
 
 #[partial]
 def elaborate_module_decls_reporting (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : BestEffortElab :=
     match decl_list {
-        List.empty => mk_best_effort_elab List.empty List.empty,
+        List.empty => mk_best_effort_elab List.empty List.empty List.empty,
         List.cons d rest =>
             let tail : BestEffortElab := elaborate_module_decls_reporting scope rest locals in
             match elaborate_decl_with_scope d scope locals {
-                Result.ok d2 => mk_best_effort_elab (List.cons d2 tail.decls) tail.failed,
-                Result.err _ =>
+                Result.ok d2 => mk_best_effort_elab (List.cons d2 tail.decls) tail.failed tail.errors,
+                Result.err e =>
                     mk_best_effort_elab (List.cons d tail.decls)
-                        (List.cons (decl_display_name d) tail.failed),
+                        (List.cons (decl_display_name d) tail.failed)
+                        (List.cons (String.concat (decl_display_name d) (String.concat ": " e)) tail.errors),
             },
     }
 

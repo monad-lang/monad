@@ -28,7 +28,7 @@ use runtime::natives {runtime_native_functions}
 use lang::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   strip_db_lams, validate_no_colliding_def_symbols,
-  report_elab_stats, validate_no_undesugared_struct_lits, validate_no_unwired_natives,
+  report_elab_stats, strict_elab_enabled, validate_no_undesugared_struct_lits, validate_no_unwired_natives,
 }
 use lang::codegen::ctors {
   bare_ctor_tag, build_constructor_arity_map,
@@ -61,13 +61,14 @@ use lib::codegen::symbols {
   replace_dots_with_underscores, string_find_last, symbol_identifier,
   unqualify_def_name,
 }
+use lib::elaborate {names_of_decls}
 use lib::codegen::util {
   dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
   ident_in_list, identifier_eq, join_semicolon_msgs, rev_vals
 }
 use lib::module {
   BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
-  best_effort_failed, elaborate_module_decls_best_effort,
+  best_effort_errors, best_effort_failed, decl_display_name, elaborate_def_typs, elaborate_module_decls_best_effort,
   elaborate_module_decls_reporting, get_loaded_all, get_loaded_main,
   resolve_open_aliases_in_modules
 }
@@ -5984,6 +5985,55 @@ def report_elab_failures (failed : List String) : IO Unit :=
                         (List.intercalate ", " (take_first_n failed 5))))),
     }
 
+/// Decl-name set of `decls`, for `reachable_elab_failures`.
+#[partial]
+def decl_name_set (decls : List Decl) (acc : HashMap String Bool) : HashMap String Bool :=
+    match decls {
+        List.empty => acc,
+        List.cons d rest => decl_name_set rest (str_map_insert (decl_display_name d) true acc),
+    }
+
+/// `name: message` for each decl in `failed`/`errors` (parallel lists, see
+/// `BestEffortElab`) that elaboration gave up on and the program still
+/// reaches. A failed decl codegen never reaches cannot affect the output, so
+/// it does not block the build; one it does reach has fallen back to the
+/// syntactic passes, which is where the silent miscompiles came from.
+#[partial]
+def reachable_elab_failures_go (failed : List String) (errors : List String) (names : HashMap String Bool) : List String :=
+    match failed {
+        List.empty => List.empty,
+        List.cons f frest => match errors {
+            List.empty => List.empty,
+            List.cons e erest =>
+                let rest : List String := reachable_elab_failures_go frest erest names in
+                match str_map_lookup f names {
+                    Option.some _ => List.cons e rest,
+                    Option.none => rest,
+                },
+        },
+    }
+
+/// Hard error (no fallback) when a reachable decl did not elaborate.
+#[partial]
+pub def validate_reachable_elaborated (strict : Bool) (report : BestEffortElab) (reachable : List Decl) : Result String (List Decl) :=
+    if not strict then Result.ok reachable else
+    let bad : List String := reachable_elab_failures_go (best_effort_failed report) (best_effort_errors report) (decl_name_set reachable str_map_empty) in
+    match bad {
+        List.empty => Result.ok reachable,
+        List.cons _ _ =>
+            Result.err (String.concat (I64.to_string (List.length bad))
+                (String.concat " reachable decl(s) did not elaborate: "
+                    (List.intercalate "; " (take_first_n bad 5)))),
+    }
+
+/// The first failing gate's result, else the second's.
+#[partial]
+pub def gate_then (first : Result String (List Decl)) (second : Result String (List Decl)) : Result String (List Decl) :=
+    match first {
+        Result.err _ => first,
+        Result.ok _ => second,
+    }
+
 /// First `n`, for a report that must not print 4000 names.
 #[partial]
 def take_first_n (xs : List String) (n : I64) : List String :=
@@ -6052,7 +6102,7 @@ pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List
     let t_desugar : I64 <- bench_step verbose "  front end: build_scope_from_decls" t_scope (List.length scope_data.classes);
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-    let desugared_decls := desugar_struct_lits_decls scope dict_param_decls;
+    let desugared_decls := elaborate_def_typs (desugar_struct_lits_decls scope dict_param_decls) (names_of_decls dict_param_decls);
     let t_elab : I64 <- bench_step verbose "  front end: desugar_struct_lits" t_desugar (List.length desugared_decls);
     let report : BestEffortElab := elaborate_module_decls_reporting scope desugared_decls empty_locs;
     let elaborated : List Decl := best_effort_decls report;
@@ -6163,7 +6213,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     let main_mi : ModuleInfo := get_loaded_main loaded;
     let main_root : String := qualified_def_name_str main_mi.path (bare_npath "main");
     let reachable_decls := filter_reachable_decls main_root dispatched_decls;
-    report_elab_stats verbose (best_effort_failed elab_report) elaborated reachable_decls;
+    report_elab_stats verbose (best_effort_errors elab_report) elaborated reachable_decls;
     if verbose then do {
         let reachable_count := List.length reachable_decls;
         Bench.report_since "filter_reachable" t_reach;
@@ -6178,8 +6228,9 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     // for the direct repro that found this the hard way) and fail here,
     // with a precise message, instead of proceeding to codegen/`llc` and
     // surfacing it many stages later as an undefined-symbol error.
+    let strict_elab : Bool <- strict_elab_enabled;
     let dispatched_classes := collect_classes dispatched_decls;
-    match validate_no_unresolved_class_calls dispatched_classes reachable_decls {
+    match gate_then (validate_reachable_elaborated strict_elab elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
         Result.err e => do {
             if verbose then do { fail_line ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")"); return unit } else return unit;
             return (Result.err e)

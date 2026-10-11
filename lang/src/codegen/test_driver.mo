@@ -49,16 +49,17 @@ use lang::types {
   show_identifier, use_bare,
 }
 use lib::codegen::emit {
-  CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io
+  CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
+  gate_then, validate_reachable_elaborated
 }
 use lang::codegen::symbols {
   bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
 use parsec::number {parse_i64}
-use lib::codegen::validate {report_elab_stats, validate_no_unwired_natives}
+use lib::codegen::validate {report_elab_stats, strict_elab_enabled, validate_no_unwired_natives}
 use llvm::ir {LLVMModule}
 use lang::module {
-  BestEffortElab, LoadedModules, ModuleInfo, best_effort_failed, get_loaded_all,
+  BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
   get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
 }
 use lib::scope {
@@ -601,33 +602,23 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
 /// call.
 #[partial]
 def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl) (total_tests : I64) (triple : String) : IO (Result String TestIrResult) := do {
-                    // Must run per-module, on each loaded module's own
-                    // decl_list, BEFORE `collect_all_decls_from_modules`
-                    // flattens everything -- see `lang.module`'s own
-                    // `resolve_open_aliases_in_module_info` doc comment
-                    // (confirmed regression: applying this to an
-                    // already-flattened multi-module list lets one
-                    // module's own alias shadow an unrelated local
-                    // variable of the same bare name elsewhere). The
-                    // synthesized `driver_decls` need no resolution here
-                    // -- generated source, no `use`/`open` of its own.
-                    let aliased_mods := resolve_open_aliases_in_modules (get_loaded_all loaded);
-                    // A target file may define its own `main` alongside
-                    // its tests. Rename it out of the way before the
-                    // splice -- see `rename_user_main` for why the
-                    // driver's `main` would otherwise lose to it.
-                    let target_for_rename : ModuleInfo := get_loaded_main loaded;
-                    let renamed_mods := rename_user_main_in_modules target_for_rename.path aliased_mods;
-                    // The synthesized driver joins the program as its own
-                    // module so that `qualify_modules` sees it: its body
-                    // calls real library defs (`I64.to_string`, `++`) by
-                    // bare name, and those names are about to become
-                    // module-qualified. Left outside the pass, every one
-                    // of those calls would name a symbol that no longer
-                    // exists.
+                    // Per-module, BEFORE the modules are flattened -- see
+                    // `lang.module`'s `resolve_open_aliases_in_module_info`
+                    // (applied to an already-flattened list, one module's
+                    // alias shadows an unrelated local elsewhere). The
+                    // driver is its own module, in the list from the start,
+                    // so its `open IO {println}` resolves like any other
+                    // module's; it also lets `qualify_modules` see it, since
+                    // its body calls real library defs (`I64.to_string`,
+                    // `++`) by bare name.
                     let driver_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "__test_driver") List.empty);
                     let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
-                    let with_driver := List.append renamed_mods (List.cons driver_mod List.empty);
+                    let aliased_mods := resolve_open_aliases_in_modules (List.append (get_loaded_all loaded) (List.cons driver_mod List.empty));
+                    // A target file may define its own `main` alongside its
+                    // tests; rename it out of the way -- see `rename_user_main`
+                    // for why the driver's `main` would otherwise lose to it.
+                    let target_for_rename : ModuleInfo := get_loaded_main loaded;
+                    let with_driver := rename_user_main_in_modules target_for_rename.path aliased_mods;
                     let qualify_result <- qualify_modules false with_driver;
                     // Annotated rebinding: `qualify_result` arrives from a
                     // do-notation bind -- an unannotated lambda binder
@@ -679,7 +670,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                         then qualified_def_name_str driver_mp (bare_npath "main")
                         else "main";
                     let reachable := filter_reachable_decls driver_root dispatched_decls;
-                    report_elab_stats false (best_effort_failed elab_report) elaborated reachable;
+                    report_elab_stats false (best_effort_errors elab_report) elaborated reachable;
                     // Validate the REACHABLE decls, not the full spliced
                     // graph -- see `lang.codegen.emit`'s own
                     // `compile_loaded_modules_to_ir` / `validate_no_
@@ -687,8 +678,9 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     // (a bug in dead code the test driver never actually
                     // exercises must not block every other test in the
                     // same file from running).
+                    let strict_elab : Bool <- strict_elab_enabled;
                     let dispatched_classes := collect_classes dispatched_decls;
-                    match validate_no_unresolved_class_calls dispatched_classes reachable {
+                    match gate_then (validate_reachable_elaborated strict_elab elab_report reachable) (validate_no_unresolved_class_calls dispatched_classes reachable) {
                         Result.err e => return (Result.err e),
                         Result.ok _ =>
                             // The same fail-fast gate the real compile
