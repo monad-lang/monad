@@ -371,10 +371,33 @@ jobs:
       # devenv-tasks captures a task's stdout and shows it only on failure, and
       # here the output IS the diagnostic -- the compile's --verbose per-module
       # stage trace and the sweep's per-file verdicts.
+      # `--profile` exists for ONE failure, and it is not cosmetic. `nix
+      # develop` realizes the devshell but registers NO gc root, so every path
+      # the env only references -- `NIX_LDFLAGS`' `-L.../openssl-3.6.3/lib`
+      # among them -- stays deletable by a garbage collection that fires while
+      # the job runs. The public runner hit exactly that, three runs in a row
+      # (from 38045526832 on): mid-sweep its driver links started failing with
+      # `ld.bfd: cannot find -lssl` for motes/tls and motes/moose -- the only
+      # corpus files whose `[link] libs` reach past `-lgc` -- while every other
+      # driver beside them linked `-lgc` fine, on a runner whose own ladder
+      # log showed the openssl `-L` present in the env the whole time. What
+      # divided them was reachability: boehm-gc is in the store-cached rung-1's
+      # closure (a binary that RUNS all sweep long) and nothing rooted
+      # openssl, so the GC took one and left the other. The same commit's sweep
+      # passed on the private fleet, and the same machine had passed these
+      # files twelve hours earlier, so the code was never the variable.
+      # `--profile` installs the devshell into a profile, which nix registers
+      # under /nix/var/nix/gcroots/auto -- a root the GC respects for the
+      # profile's lifetime, pinning clang, llc, boehm-gc AND openssl for the
+      # whole job. The profile lives outside the checkout so generations
+      # accumulate as profile generations (self-pruning) rather than as
+      # checkout residue; the store stays warm between jobs for free. Both
+      # compiled steps below share it for the same reason.
       - name: Bootstrap ladder and self-hosted sweep
         run: |
-          nix develop --no-pure-eval --accept-flake-config -c \
-            scripts/ci-compiler-checks.sh
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/ci-compiler-checks.sh
 
       # Its own step, after the merged one, and NOT folded into the script: it
       # reuses the binary the ladder wrote to
@@ -385,8 +408,9 @@ jobs:
       # rather than through `devenv tasks run monad:debug-oracle`.
       - name: Debug transparency oracle
         run: |
-          nix develop --no-pure-eval --accept-flake-config -c \
-            scripts/debug-oracle.sh
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/debug-oracle.sh
 
   # `packages.monad` left the per-PR path when `test` became `compiler-checks`:
   # the sweep grades the ladder's own release rung-1, so on a compiler change
