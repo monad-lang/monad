@@ -19,7 +19,8 @@ use lang::scope {
   ClassMethodRef, DictBinding, build_dict_field_projection_checked,
   build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
   class_name_eq,
-  class_method_var_names, class_param_names, dict_binding_class_of,
+  class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
+  method_carrier_hint,
   dict_hint_marker_terms, dict_hint_name, dict_param_name,
   find_constructor_in_inductive, find_matching_instance,
   flatten_call_spine, inductive_has_constructor, instance_module_prefix,
@@ -554,11 +555,53 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                             resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
                     },
                 Option.none =>
-                    match carrier_from_expected_type expected_type {
-                        Option.none => err (TypeError.custom "cannot infer carrier type for class method"),
-                        Option.some carrier =>
-                            resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
+                    let direct : Result TypeError TypedTerm :=
+                        match carrier_from_expected_type expected_type {
+                            Option.none => err (TypeError.custom "cannot infer carrier type for class method"),
+                            Option.some carrier =>
+                                resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
+                        } in
+                    match direct {
+                        ok _ => direct,
+                        err _ =>
+                            match class_has_single_param cls {
+                                false => direct,
+                                true =>
+                                    match method_carrier_hint cls method_name (Option.some (final_result_type expected_type)) {
+                                        Option.none => direct,
+                                        Option.some carrier =>
+                                            match resolve_class_method_carrier class_name method_name carrier expected_type scope locals {
+                                                ok tt => ok (open_method_vars cls method_name tt),
+                                                err _ => direct,
+                                            },
+                                    },
+                            },
                     },
+            },
+    }
+
+/// A call resolved only from its expected RESULT has the method's own type
+/// variables (`A` in `pure : A -> M A`) still unsolved; the checker has no metas,
+/// so they become holes rather than rigid names no later arm could agree with.
+def open_method_vars (cls : Class) (method_name : Identifier) (tt : TypedTerm) : TypedTerm :=
+    match class_method_declared_type cls method_name {
+        Option.none => tt,
+        Option.some sig =>
+            TypedTerm.mk tt.term (fill_unsolved_vars (class_method_var_names cls sig) tt.typ),
+    }
+
+/// A heterogeneous class (`HAdd A B C`) has no single carrier to read off a
+/// result type, so the result-type fallback applies to one-parameter classes only.
+def class_has_single_param (cls : Class) : Bool :=
+    match cls {
+        Class.mk _ params _ _ _ =>
+            match params {
+                List.cons _ rest =>
+                    match rest {
+                        List.empty => true,
+                        _ => false,
+                    },
+                _ => false,
             },
     }
 
@@ -3665,7 +3708,7 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
     match infer_position_hole f a {
         Option.some e => err e,
         Option.none =>
-    let a_expected : Term := app_arg_expected_type_from_callee f a scope local_types locals in
+    let a_expected : Term := app_arg_expected_type_from_callee f a expected_type scope local_types locals in
     match type_check a a_expected scope local_types locals {
         ok a_tt =>
             if not (struct_literal_arg_matches_expected a a_expected scope) then
@@ -3983,21 +4026,122 @@ pub struct CalleeDomain {
 /// handles the inline-lambda callee; this adds the one other shape whose
 /// answer is knowably useless -- an unannotated lambda argument to a non-lambda
 /// callee, i.e. a do-bind's continuation -- by asking the callee for its domain
-/// at this position. Every other argument keeps the old hole unchanged.
+/// at this position. For a class-method callee, the carrier the call's expected
+/// result implies is also handed down (to the argument, and to a continuation's
+/// body). Every other argument keeps the old hole unchanged.
 #[terminating]
-def app_arg_expected_type_from_callee (f : Term) (a : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Term :=
+def app_arg_expected_type_from_callee (f : Term) (a : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Term :=
     let written : Term := app_arg_expected_type f in
     if is_hole written && arg_is_unannotated_lam a then
         match callee_arg_domain f scope local_types locals {
             Option.none => written,
             Option.some cd =>
                 match lam_binder_hint cd scope {
-                    Option.some bt => Term.pi binder_anon bt Term.hole,
-                    Option.none => written,
+                    Option.some bt => Term.pi binder_anon bt (class_method_lam_body_expected f expected_type cd scope),
+                    Option.none =>
+                        let body : Term := class_method_lam_body_expected f expected_type cd scope in
+                        if is_hole body then written else Term.pi binder_anon Term.hole body,
                 },
+        }
+    else if is_hole written then
+        match class_method_result_domain f expected_type scope {
+            Option.some d => d,
+            Option.none => written,
         }
     else
         written
+
+/// A class-method call's declared type variables, solved from the call's
+/// own EXPECTED result: the parameter the next argument fills, the names the
+/// class binds, and what `ret` matched against the expected result type.
+/// Cheap by construction -- it checks no argument.
+struct ResultSolution {
+    next_param : Term,
+    vars : List Identifier,
+    subst : List (Pair Identifier Term),
+}
+
+#[partial]
+def class_method_result_solution (f : Term) (expected : Term) (scope : Scope) : Option ResultSolution :=
+    match flatten_call_spine f {
+        CallSpine.mk head args =>
+            match class_method_declared_sig head scope {
+                Option.none => Option.none,
+                Option.some decl =>
+                    match sig_tvars_params_ret decl.sig {
+                        SigInfo.mk params ret =>
+                            if is_bare_type_var ret then Option.none else
+                            match nth_type (List.length args) params {
+                                Option.none => Option.none,
+                                Option.some next_param =>
+                                    let sol : ResultSolution := { next_param := next_param, vars := decl.vars, subst := solve_typevars scope ret (final_result_type expected) List.empty } in
+                                    Option.some sol,
+                            },
+                    },
+            },
+    }
+
+/// A bare-variable result (`put : A -> A`) says nothing the arguments do not,
+/// and an ill-typed expectation would pin it.
+def is_bare_type_var (t : Term) : Bool :=
+    match term_peel t {
+        Term.var _ _ => true,
+        _ => false,
+    }
+
+/// `t` with each of `vars` still free in it replaced by a hole: an unsolved
+/// signature variable says "unknown here", not a type to check against.
+#[partial]
+def fill_unsolved_vars (vars : List Identifier) (t : Term) : Term :=
+    match vars {
+        List.empty => t,
+        List.cons v rest => fill_unsolved_vars rest (name_subst_term v Term.hole t),
+    }
+
+/// An applied type whose head survived the hole-fill: `IO _` carries the
+/// carrier, `_ _` and a bare `_` carry nothing.
+#[partial]
+def has_informative_head (t : Term) : Bool :=
+    match term_peel t {
+        Term.hole => false,
+        Term.app g _ => has_informative_head g,
+        _ => true,
+    }
+
+/// What a class-method call's NON-lambda argument should be checked against
+/// when the carrier is only known from the call's expected result: the
+/// declared parameter type with the carrier solved and the rest left open.
+/// `Monad.bind (Monad.pure c) k : IO I64` hands `Monad.pure c` the type
+/// `IO _`, which is what lets the inner call resolve its own carrier.
+#[partial]
+def class_method_result_domain (f : Term) (expected : Term) (scope : Scope) : Option Term :=
+    match class_method_result_solution f expected scope {
+        Option.none => Option.none,
+        Option.some sol =>
+            match sol.subst {
+                List.empty => Option.none,
+                List.cons _ _ =>
+                    let d : Term := fill_unsolved_vars sol.vars (subst_typevars_term sol.next_param sol.subst) in
+                    if has_informative_head d then Option.some d else Option.none,
+            },
+    }
+
+/// The expected type of an unannotated continuation's BODY: the domain's
+/// codomain with the result-derived carrier filled in and the rest left open
+/// (`A -> M B` against `IO I64` gives `IO _`). `Term.hole` when that says
+/// nothing -- the old behavior.
+#[partial]
+def class_method_lam_body_expected (f : Term) (expected : Term) (cd : CalleeDomain) (scope : Scope) : Term :=
+    match term_peel cd.dom {
+        Term.pi _ _ cod =>
+            match class_method_result_solution f expected scope {
+                Option.none => Term.hole,
+                Option.some sol =>
+                    let filled : Term := fill_unsolved_vars cd.vars (subst_typevars_term cod sol.subst) in
+                    if has_informative_head filled then filled else Term.hole,
+            },
+        _ => Term.hole,
+    }
 
 /// Is this argument a lambda whose written parameter type is a hole? Peeled,
 /// matching `infer_position_hole`'s own peeling, so a wrapped lambda still

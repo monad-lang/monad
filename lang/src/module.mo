@@ -7057,6 +7057,57 @@ def check_synthetic_source (src : String) : IO (List String) := do {
 }
 
 /// D4: a class-method call at a CONCRETE carrier with a real matching
+/// `check_synthetic_source`'s elaborating twin: the pretty-printed decls the
+/// checker hands to codegen, with no syntactic class-call pass in between.
+#[partial]
+def elaborate_synthetic_source (src : String) : IO String := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let sd : ScopeData := build_scope_from_decls path dict_paramed;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let report : BestEffortElab := elaborate_module_decls_reporting scope dict_paramed locals;
+            return (show_decls (best_effort_decls report))
+        },
+        ParseResult.fail _ => do { return "parse failed" },
+    }
+}
+
+/// Return-only carrier: `Pure.pure_ 3` has no argument mentioning `M`, so the
+/// carrier must come from the expected result type through the method's own
+/// signature. The checker used to leave this call for `resolve_class_calls_decls`.
+#[test]
+def test_elaborate_return_only_carrier_resolves : IO Bool := do {
+    let src : String :=
+        "type Box (A : Type) { box (a : A) }\n" ++
+        "class Pure (M : Type -> Type) { def pure_ (a : I64) : M I64 }\n" ++
+        "instance Pure Box { def pure_ (a : I64) : Box I64 := Box.box a }\n" ++
+        "def g : Box I64 := Pure.pure_ 3";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "Pure.pure_ 3"))
+}
+
+/// `Monad.bind`/`Monad.pure` name their class: `IndexedMonad` declares the same
+/// method names later, and a bare-name scan used to pick it, leaving every
+/// do-block bind unresolved for `resolve_class_calls_decls`.
+#[test]
+def test_elaborate_qualified_class_method_beats_same_named_method : IO Bool := do {
+    let src : String :=
+        "type Box (A : Type) { box (a : A) }\n" ++
+        "class Monad (M : Type -> Type) { def bind (ma : M I64) (f : I64 -> M I64) : M I64\n def pure (a : I64) : M I64 }\n" ++
+        "class IndexedMonad (M : Type -> Type) { def bind (ma : M I64) (f : I64 -> M I64) : M I64\n def pure (a : I64) : M I64 }\n" ++
+        "instance Monad Box { def bind (ma : Box I64) (f : I64 -> Box I64) : Box I64 := f 0\n def pure (a : I64) : Box I64 := Box.box a }\n" ++
+        "def g : Box I64 := Monad.bind (Box.box 1) (fn x => Monad.pure x)";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "Monad.bind") && not (String.contains out "Monad.pure"))
+}
+
 /// instance resolves cleanly -- `Speak.say d` (`d : Dog`) dispatches to
 /// the promoted `Speak_Dog_say`, proving `resolve_class_method`'s new
 /// `find_matching_instance`-based lookup (replacing the old, permanently-
