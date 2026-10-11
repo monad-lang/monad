@@ -66,7 +66,7 @@ use lib::codegen::util {
   ident_in_list, identifier_eq, join_semicolon_msgs, rev_vals
 }
 use lib::module {
-  LoadedModules, ModuleInfo, bench_step, best_effort_decls,
+  BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
   best_effort_failed, elaborate_module_decls_best_effort,
   elaborate_module_decls_reporting, get_loaded_all, get_loaded_main,
   resolve_open_aliases_in_modules
@@ -6027,6 +6027,40 @@ def call_target_gate_probe (r : Result String LLVMModule) : I64 := match r {
     Result.ok _ => 1,
 }
 
+/// What the front end hands codegen: the whole-program scope and every decl
+/// after the checker's elaboration, plus the elaboration report. `build` and
+/// `test` both reach codegen through this one value.
+pub struct CompileInput {
+    scope : Scope,
+    decls : List Decl,
+    report : BestEffortElab,
+}
+
+/// The shared front end for `build` and `test`, from already-qualified
+/// modules to elaborated decls: flatten, infix resolution, instance
+/// promotion, dictionary parameters, scope, struct-literal desugaring,
+/// elaboration.
+#[partial]
+pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List ModuleInfo) (verbose : Bool) : IO CompileInput := do {
+    let all_decls := collect_all_decls_from_modules qualified_mods List.empty;
+    let infixes := collect_infixes all_decls;
+    let resolved_decls := resolve_infix_decls infixes all_decls;
+    let promoted_decls := promote_instance_defs resolved_decls;
+    let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
+    let t_scope : I64 <- Bench.now;
+    let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
+    let t_desugar : I64 <- bench_step verbose "  front end: build_scope_from_decls" t_scope (List.length scope_data.classes);
+    let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
+    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+    let desugared_decls := desugar_struct_lits_decls scope dict_param_decls;
+    let t_elab : I64 <- bench_step verbose "  front end: desugar_struct_lits" t_desugar (List.length desugared_decls);
+    let report : BestEffortElab := elaborate_module_decls_reporting scope desugared_decls empty_locs;
+    let elaborated : List Decl := best_effort_decls report;
+    let _t_done : I64 <- bench_step verbose "  front end: elaborate_module_decls" t_elab (List.length elaborated);
+    let input : CompileInput := { scope := scope, decls := elaborated, report := report };
+    return input
+}
+
 /// `compile_loaded_modules_to_ir`, with DWARF debug info (one location
 /// per top-level def, from the `Term.ctx` wrapper on its body).
 /// `source_path` is passed straight through to
@@ -6101,109 +6135,17 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
         return unit
     } else return unit;
 
-    // Stage 1: collect all declarations (now each already carrying its
-    // own module path, so the flat list is still collision-free)
-    stage verbose "collect decls";
-    let t_collect : I64 <- Bench.now;
-    let all_decls := collect_all_decls_from_modules qualified_mods List.empty;
-    if verbose then do {
-        let def_count := List.length all_decls;
-        Bench.report_since "collect_decls" t_collect;
-        println ("Total defs collected: " ++ I64.to_string def_count)
-    } else return unit;
-
-    // Stage 2: resolve every infix-operator reference (`+`, `==`, ...) to its
-    // real registered target BEFORE reachability filtering -- see
-    // lang.scope's own extended doc comment above `lookup_infix`/
-    // `resolve_infix_decls` for why this can't happen at parse time.
-    // Must run first, not after `filter_reachable_decls`: reachability
-    // is computed by walking each Def's own body for names it calls
-    // (`collect_referenced_names`) -- an UNRESOLVED operator var (named
-    // "&&", not "Bool.and") makes that walk blind to the fact that
-    // `Bool.and` is actually called at all, so `Bool.and` itself gets
-    // filtered out as "unreachable" and codegen later emits a call to
-    // a function that was never compiled into the module ("undefined
-    // value '@Bool_and'" at link time) -- confirmed as a real bug via
-    // a direct repro (`helper (true && false)`) while wiring this in.
-    stage verbose "resolve infix operators";
-    let t_infix : I64 <- Bench.now;
-    let infixes := collect_infixes all_decls;
-    let resolved_decls := resolve_infix_decls infixes all_decls;
-    if verbose then do {
-        Bench.report_since "infix_resolve" t_infix;
-        return unit
-    } else return unit;
-
-    // Stage 3: dictionary-passing typeclass dispatch (see
-    // plans/bootstrapping/self-hosted-compiler.md's Phases 2-4) -- same
-    // "must run before reachability filtering" reasoning as infix
-    // resolution just above: promotion (Phase 2) mints new top-level
-    // defs (per-instance methods + dictionary values) that reachability
-    // needs to see; constrained-def dict params (Phase 3) and call-site
-    // resolution (Phase 4) rewrite `Class.method`-shaped references to
-    // their real concrete/promoted targets, which reachability's own
-    // name-based walk (`collect_referenced_names`) is blind to while
-    // they're still unresolved class-method names. Order matters: Phase
-    // 2 before 3 (Phase 3 reads a promoted method's own constraints,
-    // which Phase 2 threads in from its owning Instance), Phase 3
-    // before 4 (Phase 4 needs the dict PARAMETERS Phase 3 adds already
-    // in place to know which locals are bound dicts).
-    stage verbose "dictionary dispatch";
-    let t_dict : I64 <- Bench.now;
-    let promoted_decls := promote_instance_defs resolved_decls;
-    let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
-    if verbose then do {
-        Bench.report_since "dict_dispatch" t_dict;
-        return unit
-    } else return unit;
-
-    // Stage 4: try real dictionary-dispatch resolution via the type checker first
-    // (`lang.typecheck.infer`'s `resolve_class_method`, using REAL
-    // inferred types -- fixes the class of gap the syntactic
-    // `resolve_class_calls_decls` pass below can't cover on its own; the
-    // `Append_append` self-compile bug this whole plan exists to fix is
-    // exactly that gap). `resolve_class_calls_decls` still always runs
-    // afterward -- it's naturally idempotent on already-resolved calls
-    // (`class_method_ref` no longer recognizes a rewritten reference as
-    // `Class.method`-shaped) and covers what elaboration deliberately
-    // doesn't (heterogeneous/multi-param classes, `instance_d` bodies
-    // the checker's own per-decl walk never visits). If elaboration
-    // fails ANYWHERE in the whole loaded graph (e.g. an unrelated,
-    // pre-existing gap in a dependency having nothing to do with the
-    // program actually being compiled), fall back to the original,
-    // unelaborated decls -- this must never newly break a compile that
-    // worked before this pass existed.
-    //
-    // Sub-timed with `bench_step` (`lang/module.mo`), the same helper
-    // `elaborate_loaded_modules_cached` threads through its own pure
-    // `let` chain. This phase was measured at 659182ms of a 969811ms
-    // self-compile -- 68% of the whole thing -- behind ONE opaque
-    // number, so which of these three operations owns it was unknown.
-    // `bench_step`'s `forced` argument consumes each step's result so
-    // the work lands inside its own span; the check that matters is
-    // arithmetic (AGENTS.md item 25): these three must sum to the
-    // `elaborate_class` total still printed below.
-    stage verbose "elaborate class dispatch";
+    // The shared front end (`compile_input_of_modules`), then the syntactic
+    // class-call pass over its elaborated decls.
+    stage verbose "front end";
     let t_elab : I64 <- Bench.now;
     let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
-    let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
-    let t_scope : I64 <- bench_step verbose "  elaborate_class: build_scope_from_decls" t_elab (List.length scope_data.classes);
-    let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
-    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-    let desugared_decls := desugar_struct_lits_decls scope dict_param_decls;
-    let t_desugar : I64 <- bench_step verbose "  elaborate_class: desugar_struct_lits" t_scope (List.length desugared_decls);
-    // The reporting variant, so `--verbose` says how many decls elaboration
-    // gave up on instead of nothing at all. A swallowed failure leaves a def
-    // un-elaborated and pushes the work onto codegen's syntactic fallbacks,
-    // and when one of those has a wrapper-transparency gap the symptom lands
-    // stages later in a def whose real problem was never printed -- which is
-    // how `no instance found for `Append.append`` stayed a mystery.
-    let elab_report := elaborate_module_decls_reporting scope desugared_decls empty_locs;
-    let elaborated := best_effort_decls elab_report;
-    let t_best_effort : I64 <- bench_step verbose "  elaborate_class: elaborate_module_decls_best_effort" t_desugar (List.length elaborated);
+    let input : CompileInput <- compile_input_of_modules target_mp qualified_mods verbose;
+    let elab_report : BestEffortElab := input.report;
+    let elaborated : List Decl := input.decls;
     if verbose then report_elab_failures (best_effort_failed elab_report) else return unit;
     let dispatched_decls := resolve_class_calls_decls elaborated;
-    let _t_dispatch : I64 <- bench_step verbose "  elaborate_class: resolve_class_calls_decls" t_best_effort (List.length dispatched_decls);
+    let _t_dispatch : I64 <- bench_step verbose "  front end: resolve_class_calls_decls" t_elab (List.length dispatched_decls);
     if verbose then do {
         Bench.report_since "elaborate_class" t_elab;
         return unit

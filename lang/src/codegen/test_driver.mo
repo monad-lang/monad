@@ -42,17 +42,14 @@
 /// files are `std/src/concurrent/fiber_test.mo` and
 /// `std/src/concurrent/combine_test.mo`; they stay deferred until a
 /// self-hosted async runtime exists.
-use lang::codegen::decls {
-  collect_all_decls_from_modules, filter_reachable_decls,
-}
+use lang::codegen::decls {filter_reachable_decls}
 use lang::codegen::qualify {qualified_def_name_str, qualify_modules}
 use lang::types {
-  Attribute, DebugName, Decl, Def, LocalScope, ModulePath, NamePath, Scope,
-  ScopeData, Term, has_attr, i64, id, no_attrs, num, package_private,
+  Attribute, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
   show_identifier, use_bare,
 }
 use lib::codegen::emit {
-  compile_db_module_with_debug, desugar_struct_lits_decls, emit_type_head_is_io
+  CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io
 }
 use lang::codegen::symbols {
   bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
@@ -61,13 +58,11 @@ use parsec::number {parse_i64}
 use lib::codegen::validate {report_elab_stats, validate_no_unwired_natives}
 use llvm::ir {LLVMModule}
 use lang::module {
-  LoadedModules, ModuleInfo, best_effort_decls, best_effort_failed, elaborate_module_decls_reporting, get_loaded_all,
+  BestEffortElab, LoadedModules, ModuleInfo, best_effort_failed, get_loaded_all,
   get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
 }
 use lib::scope {
-  add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
-  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
-  resolve_infix_decls, strip_all_leading_binders,
+  collect_classes, resolve_class_calls_decls, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
 use std::list {List.intercalate, List.length}
@@ -664,58 +659,16 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                         // compile path with a proper message.
                         Result.err _ => with_driver,
                     };
-                    let spliced := collect_all_decls_from_modules qualified_mods List.empty;
-                    // See lang.codegen.emit's own `compile_loaded_modules_to_ir`
-                    // for why this must resolve infixes BEFORE reachability
-                    // filtering, not after (an unresolved operator var
-                    // hides its real target from reachability analysis,
-                    // so that target gets filtered out and never compiled
-                    // at all) -- the synthesized driver's own
-                    // `synth_sum_expr` uses `+` (this file's own doc
-                    // comment above), so this is what makes `monad test`
-                    // actually compile at all.
-                    let infixes := collect_infixes spliced;
-                    let resolved_spliced := resolve_infix_decls infixes spliced;
-                    // Dictionary-passing typeclass dispatch (see
-                    // lang.codegen.emit's own compile_loaded_modules_to_ir
-                    // for the full ordering rationale) -- the synthesized
-                    // driver itself uses `+`/`==`/`++` (all typeclass-
-                    // routed after infix resolution), so this is what
-                    // actually closes the gap `28d98dc`'s own commit
-                    // message left explicitly open for `monad test`.
-                    let promoted_spliced := promote_instance_defs resolved_spliced;
-                    let dict_param_spliced := add_constraint_dict_params_decls promoted_spliced;
-
-                    // Stage 3 of `bootstrapping/unify-check-compile-test-
-                    // elaboration.md`: try real dictionary-dispatch
-                    // resolution via the type checker BEFORE the
-                    // syntactic `resolve_class_calls_decls` fallback --
-                    // see `lang.codegen.emit`'s own `compile_loaded_
-                    // modules_to_ir` for the full rationale. This is
-                    // exactly what fixes the driver's OWN synthesized
-                    // summary line (`I64.to_string __passed ++ "/" ++
-                    // ...`, `synthesize_test_driver_source` above): the
-                    // outer `++`'s carrier was never resolvable by the
-                    // syntactic pass alone (both operands are computed,
-                    // not literal/bare-var), which is the original
-                    // `Append_append` self-compile failure this plan
-                    // exists to fix.
+                    // The same front end `build` runs (`compile_input_of_modules`).
+                    // The driver's own summary line (`I64.to_string __passed ++
+                    // "/" ++ ...`) has computed operands, which the syntactic
+                    // `resolve_class_calls_decls` below can only resolve once
+                    // elaboration has run.
                     let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
-                    let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_spliced;
-                    let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
-                    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-                    // Same pre-elaborate struct-literal desugaring as the
-                    // compile pipeline (`compile_loaded_modules_to_ir_with_
-                    // debug`): this path calls `compile_db_module_with_debug` directly
-                    // with NO `validate_no_undesugared_struct_lits` gate
-                    // afterwards, so an un-desugared literal here would
-                    // otherwise hit `crash_struct_lit_reached_codegen` (or,
-                    // before that backstop existed, silently compile to
-                    // `void_val` and corrupt the test's own output).
-                    let desugared_spliced := desugar_struct_lits_decls scope dict_param_spliced;
-                    let elab_report := elaborate_module_decls_reporting scope desugared_spliced empty_locs;
-                    let elaborated := best_effort_decls elab_report;
-                    let dispatched_spliced := resolve_class_calls_decls elaborated;
+                    let input : CompileInput <- compile_input_of_modules target_mp qualified_mods false;
+                    let elab_report : BestEffortElab := input.report;
+                    let elaborated : List Decl := input.decls;
+                    let dispatched_decls := resolve_class_calls_decls elaborated;
                     // The root has to match the branch actually taken
                     // above: on the fallback the decls are still
                     // UNqualified, and rooting at `__test_driver::main`
@@ -725,7 +678,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                         if qualified_ok
                         then qualified_def_name_str driver_mp (bare_npath "main")
                         else "main";
-                    let reachable := filter_reachable_decls driver_root dispatched_spliced;
+                    let reachable := filter_reachable_decls driver_root dispatched_decls;
                     report_elab_stats false (best_effort_failed elab_report) elaborated reachable;
                     // Validate the REACHABLE decls, not the full spliced
                     // graph -- see `lang.codegen.emit`'s own
@@ -734,7 +687,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     // (a bug in dead code the test driver never actually
                     // exercises must not block every other test in the
                     // same file from running).
-                    let dispatched_classes := collect_classes dispatched_spliced;
+                    let dispatched_classes := collect_classes dispatched_decls;
                     match validate_no_unresolved_class_calls dispatched_classes reachable {
                         Result.err e => return (Result.err e),
                         Result.ok _ =>
