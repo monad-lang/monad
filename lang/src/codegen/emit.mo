@@ -28,7 +28,7 @@ use runtime::natives {runtime_native_functions}
 use lang::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   strip_db_lams, validate_no_colliding_def_symbols,
-  validate_no_undesugared_struct_lits, validate_no_unwired_natives,
+  report_elab_stats, validate_no_undesugared_struct_lits, validate_no_unwired_natives,
 }
 use lang::codegen::ctors {
   bare_ctor_tag, build_constructor_arity_map,
@@ -6221,6 +6221,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     let main_mi : ModuleInfo := get_loaded_main loaded;
     let main_root : String := qualified_def_name_str main_mi.path (bare_npath "main");
     let reachable_decls := filter_reachable_decls main_root dispatched_decls;
+    report_elab_stats verbose (best_effort_failed elab_report) elaborated reachable_decls;
     if verbose then do {
         let reachable_count := List.length reachable_decls;
         Bench.report_since "filter_reachable" t_reach;

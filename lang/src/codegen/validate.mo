@@ -21,11 +21,15 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::types {
   Con, Decl, Def, Literal, MatchCase, Native, Term, binder_is_explicit, term_peel,
 }
+use lib::scope {collect_classes, find_unresolved_class_calls_decls}
+use lib::codegen::ctors {CtorClaim, collect_ctor_claims_inds}
+use std::list {List.intercalate, List.length}
+open IO {get_env, println}
 use llvm::ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
   LLVMValue, PhiPair,
 }
-use lib::codegen::decls {def_name_str, extract_defs}
+use lib::codegen::decls {def_name_str, extract_defs, extract_inductives}
 use runtime::natives {runtime_native_functions}
 use lib::codegen::natives {
   lookup_native_any, native_attr_target_name, native_runtime_fn_name,
@@ -487,4 +491,103 @@ def strip_db_lams (term_ : Term) : Term := match term_peel term_ {
     // function most wants -- `compile_db_def_ir_body` compiles exactly
     // this, so peeling here would silently discard it.
     _ => term_,
+}
+
+// --- Elaboration-handoff measurement (codegen-from-checker, stage 11.0) ---
+//
+// What the checker left for codegen's syntactic fallbacks to cover. Report
+// only: nothing here gates a build.
+
+/// Per-bare-constructor-name claim counts, for the tag/arity keying that
+/// resolves a constructor by spelling instead of by owner.
+pub struct CtorSpread {
+    counts : HashMap String I64,
+    first : HashMap String I64,
+    arity_multi : HashMap String Bool,
+    bare_names : I64,
+    multi_owner : I64,
+    multi_arity : I64,
+}
+
+#[partial]
+def scan_ctor_spread (claims : List CtorClaim) (st : CtorSpread) : CtorSpread := match claims {
+    List.empty => st,
+    List.cons cl rest =>
+        match cl {
+            CtorClaim.mk bare arity _qualified =>
+                let st2 : CtorSpread := match str_map_lookup bare st.counts {
+                    Option.none => { st with counts := str_map_insert bare 1 st.counts, first := str_map_insert bare arity st.first, bare_names := st.bare_names + 1 },
+                    Option.some n =>
+                        let st_n : CtorSpread := { st with counts := str_map_insert bare (n + 1) st.counts, multi_owner := if n == 1 then st.multi_owner + 1 else st.multi_owner } in
+                        match str_map_lookup bare st.first {
+                            Option.none => st_n,
+                            Option.some a0 =>
+                                if a0 == arity then st_n
+                                else match str_map_lookup bare st.arity_multi {
+                                    Option.some _ => st_n,
+                                    Option.none => { st_n with arity_multi := str_map_insert bare true st_n.arity_multi, multi_arity := st_n.multi_arity + 1 },
+                                },
+                        }
+                } in
+                scan_ctor_spread rest st2,
+        },
+}
+
+#[partial]
+def reachable_def_names (defs : List Def) (acc : HashMap String Bool) : HashMap String Bool := match defs {
+    List.empty => acc,
+    List.cons d rest => reachable_def_names rest (str_map_insert (def_name_str d) true acc),
+}
+
+#[partial]
+def restrict_decls_to_names (names : HashMap String Bool) (decls : List Decl) : List Decl := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.def_d def_ =>
+                match str_map_lookup (def_name_str def_) names {
+                    Option.some _ => List.cons d (restrict_decls_to_names names rest),
+                    Option.none => restrict_decls_to_names names rest,
+                },
+            _ => restrict_decls_to_names names rest,
+        },
+}
+
+#[partial]
+def stats_take (xs : List String) (n : I64) : List String :=
+    if I64.lt n 1 then List.empty
+    else match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons x (stats_take rest (n - 1)),
+    }
+
+#[partial]
+def print_stats_lines (ls : List String) : IO Unit := match ls {
+    List.empty => return unit,
+    List.cons l rest => do { println l; print_stats_lines rest },
+}
+
+/// Print the handoff report when `verbose` or `MONAD_ELAB_STATS` is set.
+/// `elaborated` is the decl list straight out of elaboration (before
+/// `resolve_class_calls_decls`); `reachable` is the final filtered list.
+#[partial]
+pub def report_elab_stats (verbose : Bool) (failed : List String) (elaborated : List Decl) (reachable : List Decl) : IO Unit := do {
+    let env <- get_env "MONAD_ELAB_STATS";
+    let on : Bool := verbose || (match env { Option.some _ => true, Option.none => false });
+    if not on then return unit else do {
+        let classes := collect_classes elaborated;
+        let reach_elab := restrict_decls_to_names (reachable_def_names (extract_defs reachable) str_map_empty) elaborated;
+        let cc_all := find_unresolved_class_calls_decls classes elaborated;
+        let cc_reach := find_unresolved_class_calls_decls classes reach_elab;
+        let sl_all := find_undesugared_struct_lit_defs (extract_defs elaborated);
+        let sl_reach := find_undesugared_struct_lit_defs (extract_defs reach_elab);
+        let spread0 : CtorSpread := { counts := str_map_empty, first := str_map_empty, arity_multi := str_map_empty, bare_names := 0, multi_owner := 0, multi_arity := 0 };
+        let spread := scan_ctor_spread (List.reverse (collect_ctor_claims_inds (extract_inductives reachable) List.empty)) spread0;
+        let l_swallowed : String := "elab_stats: swallowed=" ++ I64.to_string (List.length failed) ++ " [" ++ List.intercalate ", " (stats_take failed 8) ++ "]";
+        let l_calls : String := "elab_stats: unresolved_class_call_sites graph=" ++ I64.to_string (List.length cc_all) ++ " reachable=" ++ I64.to_string (List.length cc_reach);
+        let l_lits : String := "elab_stats: undesugared_struct_lit_defs graph=" ++ I64.to_string (List.length sl_all) ++ " reachable=" ++ I64.to_string (List.length sl_reach);
+        let l_ctors : String := "elab_stats: ctor_bare_names reachable=" ++ I64.to_string spread.bare_names ++ " multi_owner=" ++ I64.to_string spread.multi_owner ++ " multi_arity=" ++ I64.to_string spread.multi_arity;
+        let samples : List String := List.map (fn m => "elab_stats: sample " ++ m) (stats_take cc_reach 5);
+        print_stats_lines (List.append [l_swallowed, l_calls, l_lits, l_ctors] samples)
+    }
 }

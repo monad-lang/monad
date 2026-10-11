@@ -58,10 +58,10 @@ use lang::codegen::symbols {
   bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
 use parsec::number {parse_i64}
-use lib::codegen::validate {validate_no_unwired_natives}
+use lib::codegen::validate {report_elab_stats, validate_no_unwired_natives}
 use llvm::ir {LLVMModule}
 use lang::module {
-  LoadedModules, ModuleInfo, elaborate_module_decls_best_effort, get_loaded_all,
+  LoadedModules, ModuleInfo, best_effort_decls, best_effort_failed, elaborate_module_decls_reporting, get_loaded_all,
   get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
 }
 use lib::scope {
@@ -713,7 +713,8 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     // before that backstop existed, silently compile to
                     // `void_val` and corrupt the test's own output).
                     let desugared_spliced := desugar_struct_lits_decls scope dict_param_spliced;
-                    let elaborated := elaborate_module_decls_best_effort scope desugared_spliced empty_locs;
+                    let elab_report := elaborate_module_decls_reporting scope desugared_spliced empty_locs;
+                    let elaborated := best_effort_decls elab_report;
                     let dispatched_spliced := resolve_class_calls_decls elaborated;
                     // The root has to match the branch actually taken
                     // above: on the fallback the decls are still
@@ -725,6 +726,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                         then qualified_def_name_str driver_mp (bare_npath "main")
                         else "main";
                     let reachable := filter_reachable_decls driver_root dispatched_spliced;
+                    report_elab_stats false (best_effort_failed elab_report) elaborated reachable;
                     // Validate the REACHABLE decls, not the full spliced
                     // graph -- see `lang.codegen.emit`'s own
                     // `compile_loaded_modules_to_ir` / `validate_no_
