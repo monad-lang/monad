@@ -16,7 +16,7 @@ use lang::types {
   cub, cub_transp,
 }
 use lang::scope {
-  ClassMethodRef, DictBinding, build_dict_field_projection_checked,
+  ClassMethodRef, DictBinding, bind_term_vars, build_dict_field_projection_checked,
   build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
   class_default_carrier, class_name_eq,
   class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
@@ -3355,6 +3355,152 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
             },
     }
 
+/// `App`-spine probe for a CONSTRUCTOR reference callee (`ResultT.mk arg`,
+/// `List.cons h t`, ...) -- the ordinary prefix-call spelling every
+/// constructor application outside struct-literal/named-call syntax uses
+/// (`type_check_con`'s own doc comment: "the parser never builds
+/// `Term.con`"). `try_type_check_def_call` already declines these
+/// outright (a constructor has no `def_sigs` entry), so without this
+/// probe a constructor's arguments are checked bottom-up, intrinsic-first
+/// (`type_check_app_ordinary`'s own order, via `con_ref_result_type`
+/// trusting whatever Pi `type_check_app`'s recursion already built from
+/// the ARGUMENT's own inferred type) -- fine when an argument reveals the
+/// constructor's own type params on its own, but a parameter typed in
+/// terms of the OWNING type's params (`ResultT.mk`'s `run : M (Result E
+/// A)`) can have an argument that carries NO information of its own about
+/// `M` (a `do`-block ending in a bare `Monad.pure` call: `pure`'s only
+/// argument never mentions the monad it targets). Only the OUTER
+/// `expected_type`, via this constructor's own RETURN type (always
+/// exactly its owning type applied to its own params), can recover it --
+/// and unlike an ordinary def, a constructor's return type ALWAYS names
+/// every one of its own params, so solving from `expected_type` FIRST
+/// (before looking at any argument) strictly dominates the argument-
+/// direction solving `def_call_check_args` uses for ordinary defs.
+/// Reuses `con_own_param_bindings`, the same carrier recovery
+/// `check_con_args_against_params` already uses for struct-literal/
+/// named-call syntax.
+///
+/// `Option.none` (defer to the existing bottom-up path, unchanged)
+/// whenever the spine's head isn't a bare, unshadowed constructor
+/// reference, its arity doesn't match, OR `con_own_param_bindings` comes
+/// back empty -- an uninformative `expected_type` means this probe would
+/// check each argument against the constructor's own ABSTRACT param
+/// types (bare, unbound type variables), which is not equivalent to the
+/// existing path's `Term.hole` (no expectation at all) and could reject
+/// an argument the old path accepted. Taking over only when a real
+/// substitution exists keeps this purely additive, matching
+/// `con_result_type`'s own "only ever ADD precision, never override"
+/// discipline.
+/// Resolve a (possibly-qualified) constructor reference to its OWNING
+/// inductive. Prefers the QUALIFIED lookup (`scope_find_inductive` on the
+/// text before the last dot, e.g. `ResultT` in `ResultT.mk`) when `id`
+/// actually carries one -- `scope_find_inductive_by_constructor con_mp`
+/// (the fallback, and `type_check_free_var_con`'s own ONLY lookup) scans
+/// EVERY registered inductive for ONE owning a constructor named like
+/// `con_mp` and returns the FIRST match (`find_inductive_by_constructor_
+/// in_pairs`, `lang/scope.mo`) -- sound enough for `type_check_free_var_
+/// con`'s own purpose (confirming SOME inductive owns this ctor name,
+/// then trusting `expected_type` verbatim regardless of which), but
+/// `con_own_param_bindings` below needs the ACTUAL owning type, and `mk`
+/// is this corpus's single most common constructor name (every struct's
+/// own synthetic constructor) -- an unqualified scan would, in practice,
+/// resolve `ResultT.mk` to some unrelated FIRST-in-hashmap-order struct
+/// instead, computing bindings for the wrong type entirely (silently:
+/// `bind_term_vars` just fails to match and returns no bindings, so this
+/// probe harmlessly declines rather than miscompiling -- confirmed via a
+/// forced diagnostic, not assumed). Falls back to the ambiguous scan only
+/// when `id` has no qualifier, or the qualifier doesn't name a real
+/// inductive (a local alias, a module path segment, ...).
+#[partial]
+def con_call_resolve_inductive (id : Identifier) (con_mp : NamePath) (scope : Scope) : Option Inductive :=
+    match id {
+        Identifier.id s =>
+            match dotted_qualifier s {
+                Option.some q =>
+                    match scope_find_inductive (NamePath.mk (List.cons (Identifier.id q) List.empty)) scope {
+                        ok ind => Option.some ind,
+                        err _ => scope_find_inductive_by_constructor con_mp scope,
+                    },
+                Option.none => scope_find_inductive_by_constructor con_mp scope,
+            },
+    }
+
+#[terminating]
+def try_type_check_con_call (app_term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option (Result TypeError TypedTerm) :=
+    match flatten_call_spine app_term {
+        CallSpine.mk head args =>
+            match head {
+                Term.var idx dbg =>
+                    match dbg {
+                        DebugName.named id =>
+                            if not (I64.beq idx sentinel) then Option.none
+                            else if is_some_local (scope_find_local id locals) then Option.none
+                            else
+                                let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
+                                let con_mp : NamePath := NamePath.mk (List.cons bare_name List.empty) in
+                                match con_call_resolve_inductive id con_mp scope {
+                                    Option.none => Option.none,
+                                    Option.some ind =>
+                                        match find_constructor_in_inductive ind con_mp {
+                                            Option.none => Option.none,
+                                            Option.some ctor =>
+                                                match ctor {
+                                                    InductConstructor.mk con_name params _ =>
+                                                        if not (I64.beq (List.length args) (List.length params)) then Option.none
+                                                        else
+                                                            let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
+                                                            if List.is_empty bindings then Option.none
+                                                            else
+                                                                match con_call_check_args args params bindings scope local_types locals {
+                                                                    err e => Option.some (err e),
+                                                                    ok elab_args =>
+                                                                        let c : Con := Con.mk (struct_lit_con_name con_name) (inductive_type_path ind) (List.length params) (wrap_all_some elab_args) in
+                                                                        Option.some (ok (mk_typed (Term.con c) (con_result_type ind expected_type))),
+                                                                },
+                                                }
+                                        },
+                                },
+                    },
+                _ => Option.none,
+            },
+    }
+
+/// `try_type_check_con_call`'s argument loop: every argument checked
+/// TOP-DOWN against its own (bindings-substituted) declared param type --
+/// the right order here specifically because `bindings` already came
+/// from solving the constructor's OWN return type against `expected_type`
+/// before any argument is examined (see `try_type_check_con_call`'s own
+/// doc comment for why this is safe, unlike checking an ordinary def's
+/// still-unsolved param type directly).
+#[partial]
+def con_call_check_args (args : List Term) (params : List Param) (bindings : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (List Term) :=
+    match args {
+        List.empty => ok List.empty,
+        List.cons a rest =>
+            match params {
+                List.empty => err (TypeError.custom "constructor arity mismatch"),
+                List.cons p prest =>
+                    match p {
+                        Param.mk _ ptyp _ _ _ =>
+                            match type_check a (apply_con_param_bindings bindings ptyp) scope local_types locals {
+                                err e => err e,
+                                ok a_tt =>
+                                    match con_call_check_args rest prest bindings scope local_types locals {
+                                        err e => err e,
+                                        ok rest_elab => ok (List.cons (a_tt.term) rest_elab),
+                                    },
+                            }
+                    }
+            }
+    }
+
+#[partial]
+def wrap_all_some (xs : List Term) : List (Option Term) :=
+    match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons (Option.some x) (wrap_all_some rest),
+    }
+
 /// `Option.some`-ness test for a `LocalVar` lookup -- `try_type_check_
 /// def_call`'s shadow guard only needs to know WHETHER a local of that
 /// name exists, not what it is.
@@ -3998,6 +4144,9 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
     match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
         Option.some r => r,
         Option.none =>
+    match try_type_check_con_call (Term.app f a) expected_type scope local_types locals {
+        Option.some r => r,
+        Option.none =>
     match infer_position_hole f a {
         Option.some e => err e,
         Option.none =>
@@ -4037,6 +4186,7 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
                         },
                     }
             },
+    }
     }
     }
     }
@@ -5485,7 +5635,8 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
                                     match ctor {
                                         InductConstructor.mk _ params _ =>
                                             if I64.beq num_args (List.length params) then
-                                                match check_con_args_against_params args params scope local_types locals {
+                                                let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
+                                                match check_con_args_against_params args params bindings scope local_types locals {
                                                     ok elab_args => ok (mk_typed (Term.con (Con.mk cname typ_name num_args elab_args)) (con_result_type ind expected_type)),
                                                     err e => err e,
                                                 }
@@ -5536,6 +5687,69 @@ def con_result_type (ind : Inductive) (expected_type : Term) : Term :=
     then Term.var sentinel (DebugName.named (inductive_bare_name ind))
     else expected_type
 
+/// `ind`'s own type head (`inductive_bare_name ind`), applied to its own
+/// declared PARAM NAMES in declaration order -- `ResultT E M A` for
+/// `ResultT`'s three type params, as a symbolic "shape" to unify a real
+/// applied type against (`bind_term_vars`'s own `shape` argument).
+#[partial]
+def inductive_applied_to_own_params (ind : Inductive) (names : List Identifier) : Term :=
+    match ind {
+        Inductive.mk _ _ _ _ _ _ =>
+            apply_term_to_named_vars (Term.var sentinel (DebugName.named (inductive_bare_name ind))) names
+    }
+
+#[partial]
+def apply_term_to_named_vars (head : Term) (names : List Identifier) : Term :=
+    match names {
+        List.empty => head,
+        List.cons n rest => apply_term_to_named_vars (Term.app head (Term.var sentinel (DebugName.named n))) rest,
+    }
+
+/// Bindings for `ind`'s own type params (`E`, `M`, `A` for `ResultT`),
+/// recovered by unifying `ind` applied to those names against the real
+/// `expected_type` -- `instance [Monad M] Monad (ResultT E M)`'s own
+/// `carrier_bindings` does the identical job for an INSTANCE's wildcard
+/// args; this is the constructor-argument-checking sibling that case
+/// never covered. `List.empty` when `expected_type` carries no real
+/// information (a hole/placeholder): `bind_term_vars` would just fail to
+/// match a concrete shape against a hole, so skip it rather than let it
+/// try.
+///
+/// Without this, `check_con_args_against_params` checked each arg
+/// against the constructor's LITERAL declared param type -- `run : M
+/// (Result E A)` for `ResultT.mk`, with `M`/`E`/`A` still the type's own
+/// abstract parameters, never substituted with what `expected_type`
+/// (`ResultT String IO Content`) already says they are. A `do`-block
+/// argument's `Monad.pure`/`Monad.bind` call then had no concrete carrier
+/// to resolve against (`resolve_class_method`'s own `expected_type`
+/// channel, `carrier_from_expected_type`), silently fell through to the
+/// unresolved-sentinel fallback (this file's own `err _ =>` arm just
+/// above `resolve_class_method`'s call site), and surfaced many stages
+/// later as `no instance found for `Monad.pure`` once codegen's
+/// reachability gate ran -- MEASURED on `motes/shuttle`'s `registry_tests.
+/// mo`/`ollama_e2e_tests.mo` (`run_tool`, `mk_tool`), both `ResultT`-typed.
+#[partial]
+def con_own_param_bindings (ind : Inductive) (expected_type : Term) : List (Pair Identifier Term) :=
+    if is_hole expected_type then List.empty
+    else
+        match ind {
+            Inductive.mk _ params _ _ _ _ =>
+                let names : List Identifier := param_names params in
+                bind_term_vars names (inductive_applied_to_own_params ind names) expected_type List.empty
+        }
+
+/// Substitute every `(name, type)` binding `con_own_param_bindings`
+/// recovered into one constructor param's declared type, one name at a
+/// time -- `name_subst_term` is a free-variable substitution, so this is
+/// sound even though `t` may mention more than one of `ind`'s own params.
+#[partial]
+def apply_con_param_bindings (bindings : List (Pair Identifier Term)) (t : Term) : Term :=
+    match bindings {
+        List.empty => t,
+        List.cons b rest =>
+            match b { Pair.pair name repl => apply_con_param_bindings rest (name_subst_term name repl t) },
+    }
+
 def con_arity_msg (full_name : NamePath) (got : I64) (want : I64) : String :=
     "constructor arity mismatch: " ++ show_name_path full_name ++ " expects "
         ++ I64.to_string want ++ " arg(s), got " ++ I64.to_string got
@@ -5573,7 +5787,8 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
                                     match ctor {
                                         InductConstructor.mk con_name params _ =>
                                             let args : List (Option Term) := struct_lit_build_args params fields in
-                                            match check_con_args_against_params args params scope local_types locals {
+                                            let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
+                                            match check_con_args_against_params args params bindings scope local_types locals {
                                                 err e => err e,
                                                 ok elab_args =>
                                                     let mk_name : Identifier := struct_lit_con_name con_name in
@@ -5937,7 +6152,8 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
                                                 err e => err e,
                                                 ok _ =>
                                                     let args : List (Option Term) := struct_lit_build_args params fields in
-                                                    match check_con_args_against_params args params scope local_types locals {
+                                                    let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
+                                                    match check_con_args_against_params args params bindings scope local_types locals {
                                                         err e => err e,
                                                         ok elab_args =>
                                                             let mk_name : Identifier := struct_lit_con_name con_name in
@@ -6154,7 +6370,8 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                                     // untouched field needs no check: it becomes a
                                                     // binder of the wrapping match, typed by the
                                                     // constructor itself.
-                                                    match check_con_args_against_params (struct_update_override_args params fields) params scope local_types locals {
+                                                    let bindings : List (Pair Identifier Term) := con_own_param_bindings ind base_typ in
+                                                    match check_con_args_against_params (struct_update_override_args params fields) params bindings scope local_types locals {
                                                         err e => err e,
                                                         ok elab_overrides =>
                                                             let mk_name : Identifier := struct_lit_con_name con_name in
@@ -6301,14 +6518,17 @@ def check_con_args_untyped (args : List (Option Term)) (scope : Scope) (local_ty
 
 /// Zip each present argument against the constructor's own declared
 /// params, positionally, checking each present arg against its param's
-/// literal declared type. If `args` somehow outlasts `params` (shouldn't
-/// happen once `type_check_con`'s own arity check has already run, but
-/// stay defensive rather than silently skipping the overflow), the
-/// remaining args fall back to `check_con_args_untyped`. Returns the
-/// ELABORATED args -- see `check_con_args_untyped`'s own doc comment
-/// just above for why.
+/// declared type -- with `bindings` (`con_own_param_bindings`) applied
+/// first, so a PARAMETERIZED type's param type (`run : M (Result E A)`
+/// for `ResultT.mk`) is checked against what `expected_type` already
+/// said `E`/`M`/`A` are, not their bare, still-abstract names. If `args`
+/// somehow outlasts `params` (shouldn't happen once `type_check_con`'s
+/// own arity check has already run, but stay defensive rather than
+/// silently skipping the overflow), the remaining args fall back to
+/// `check_con_args_untyped`. Returns the ELABORATED args -- see
+/// `check_con_args_untyped`'s own doc comment just above for why.
 #[terminating]
-def check_con_args_against_params (args : List (Option Term)) (params : List Param) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (List (Option Term)) :=
+def check_con_args_against_params (args : List (Option Term)) (params : List Param) (bindings : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (List (Option Term)) :=
     match args {
         List.empty => ok List.empty,
         List.cons a rest =>
@@ -6317,7 +6537,7 @@ def check_con_args_against_params (args : List (Option Term)) (params : List Par
                 List.cons p prest =>
                     match a {
                         Option.none =>
-                            match check_con_args_against_params rest prest scope local_types locals {
+                            match check_con_args_against_params rest prest bindings scope local_types locals {
                                 err e => err e,
                                 ok rest_elab => ok (List.cons Option.none rest_elab),
                             },
@@ -6327,7 +6547,7 @@ def check_con_args_against_params (args : List (Option Term)) (params : List Par
                                     match type_check term ptyp scope local_types locals {
                                         err e => err e,
                                         ok tt =>
-                                            match check_con_args_against_params rest prest scope local_types locals {
+                                            match check_con_args_against_params rest prest bindings scope local_types locals {
                                                 err e => err e,
                                                 ok rest_elab => ok (List.cons (Option.some (tt.term)) rest_elab),
                                             },
