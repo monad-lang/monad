@@ -27,7 +27,7 @@ use lang::scope {
   mangle_instance_method_name, mangled_to_identifier, param_names, rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
-  scope_find_class_def_by_name, scope_find_def_params, scope_find_def_return_type,
+  scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_params, scope_find_def_return_type,
   scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_instance_by_name, scope_find_local, scope_globals,
   scope_instance_candidates, scope_push_local,
@@ -2601,7 +2601,7 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                     let bare_id : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
                     let clsd_result : Result ScopeError ScopeClassDef :=
                         if ref_names_class_method id scope
-                        then scope_find_class_def_by_name bare_id scope
+                        then scope_find_class_def_for_ref id bare_id scope
                         else err (ScopeError.class_not_found (NamePath.npath (List.cons bare_id List.empty))) in
                     match clsd_result {
                         ok cd =>

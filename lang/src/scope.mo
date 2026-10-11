@@ -5948,6 +5948,42 @@ def class_method_ref (classes : List Class) (id : Identifier) : Option ClassMeth
             },
     }
 
+/// The class-method entry a reference names. A QUALIFIED reference
+/// (`Monad.bind`) is decided by its qualifier -- the bare-name scan
+/// answers with the last-declared class that has a method of that name
+/// (`IndexedMonad.bind`, for `Monad.bind`), which no instance of the named
+/// class ever matches.
+#[partial]
+pub def scope_find_class_def_for_ref (id : Identifier) (bare_id : Identifier) (s : Scope) : Result ScopeError ScopeClassDef :=
+    match class_method_ref (scope_data_classes (scope_globals s)) id {
+        Option.none => scope_find_class_def_by_name bare_id s,
+        Option.some ref =>
+            match ref {
+                ClassMethodRef.mk cls method =>
+                    let g : ScopeData := scope_globals s in
+                    match cls {
+                        Class.mk cname _ _ _ _ =>
+                            match find_class_def_of (NamePath.npath (List.cons cname List.empty)) method g.class_defs {
+                                Option.some cd => ok cd,
+                                Option.none => scope_find_class_def_by_name bare_id s,
+                            },
+                    },
+            },
+    }
+
+#[partial]
+def find_class_def_of (cls_np : NamePath) (method : Identifier) (cds : List ScopeClassDef) : Option ScopeClassDef :=
+    match cds {
+        List.empty => Option.none,
+        List.cons cd rest =>
+            match cd {
+                mk cd_cls _ cd_name _ =>
+                    if class_name_eq cd_cls cls_np && Similar.similar cd_name method
+                    then Option.some cd
+                    else find_class_def_of cls_np method rest,
+            },
+    }
+
 pub type ClassMethodRef {
     mk (cls : Class) (method_name : Identifier),
 }
