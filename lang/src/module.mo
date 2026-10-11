@@ -28,7 +28,8 @@ use lang::mote {
   Mote.parse_manifest, Mote.toolchain_candidates, Mote.toolchain_missing_hint,
   Mote.toolchain_root, Mote.workspace_members, MoteManifest,
 }
-use lib::pretty {show_term}
+use lib::pretty {show_term, show_decls}
+use lib::typecheck::name_subst {close_named_vars}
 use lib::typecheck::macro_apply {expand_decl_gen_call}
 use lib::typecheck::macro_queue {DeclGenEntry, build_decl_gen_registry, derive_bridge_decls, expand_decls, lookup_decl_gen}
 use lib::typecheck::meta_eval {meta_eval_invoke}
@@ -2534,7 +2535,7 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
         let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
         let body_scope : Scope := scope_for_elab_body attrs scope in
         match type_check body typ body_scope empty_local_types locals_ {
-            Result.ok tt => Result.ok (Def.mk name typ (tt.term) constraints attrs vis params),
+            Result.ok tt => Result.ok (Def.mk name typ (close_named_vars List.empty tt.term) constraints attrs vis params),
             Result.err e => Result.err (render_type_error (show_name_path name) Option.none e),
         }
 
@@ -7056,7 +7057,6 @@ def check_synthetic_source (src : String) : IO (List String) := do {
     }
 }
 
-/// D4: a class-method call at a CONCRETE carrier with a real matching
 /// `check_synthetic_source`'s elaborating twin: the pretty-printed decls the
 /// checker hands to codegen, with no syntactic class-call pass in between.
 #[partial]
@@ -7108,6 +7108,7 @@ def test_elaborate_qualified_class_method_beats_same_named_method : IO Bool := d
     return (not (String.contains out "Monad.bind") && not (String.contains out "Monad.pure"))
 }
 
+/// D4: a class-method call at a CONCRETE carrier with a real matching
 /// instance resolves cleanly -- `Speak.say d` (`d : Dog`) dispatches to
 /// the promoted `Speak_Dog_say`, proving `resolve_class_method`'s new
 /// `find_matching_instance`-based lookup (replacing the old, permanently-

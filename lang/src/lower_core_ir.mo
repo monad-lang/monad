@@ -584,12 +584,24 @@ def lower_match_arms
 
 #[partial]
 def lower_match (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
+  if is_dict_projection_scrutinee value then lower_dict_projection ctx value cases acc
+  else
   match find_case_inductive (ctx_scope ctx) cases {
     Option.none => lower_err (LowerError.le_unknown_inductive (ModulePath.mp List.empty)) acc,
     Option.some ind =>
       lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
         lower_match_arms ctx ind cases acc1 (fn arms => fn acc2 =>
           lower_ok (CoreIr.match_ vir arms) acc2)),
+  }
+
+#[partial]
+def lower_dict_projection (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
+  match cases {
+    List.cons c _ =>
+      lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
+        lower_explicit_match_case ctx c acc1 (fn arm => fn acc2 =>
+          lower_ok (CoreIr.match_ vir [arm]) acc2)),
+    List.empty => lower_err (LowerError.le_unknown_inductive (ModulePath.mp List.empty)) acc,
   }
 
 #[partial]
@@ -682,8 +694,36 @@ def lower_con (ctx : LowerCtx) (c : Con) (acc : LowerAcc) : Pair (Result LowerEr
     Con.mk name typ_name num_args args =>
       match scope_find_inductive typ_name (ctx_scope ctx) {
         Result.ok ind => lower_con_with_inductive ctx ind name num_args args acc,
-        Result.err _ => lower_err (LowerError.le_unknown_inductive (modpath_of typ_name)) acc,
+        Result.err _ =>
+          // A dictionary value (`__Dict_<Cls>_<args>`) is typed by its own
+          // minted name, which names no inductive: it is a one-constructor product.
+          if is_dict_value_con name typ_name then
+            lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
+              lower_ok (CoreIr.con 0 num_args present_args) acc1)
+          else lower_err (LowerError.le_unknown_inductive (modpath_of typ_name)) acc,
       },
+  }
+
+def is_dict_value_con (ctor : Identifier) (typ_name : NamePath) : Bool :=
+  match ctor {
+    Identifier.id c =>
+      if String.beq c "mk"
+      then String.contains (show_name_path typ_name) "__Dict_"
+      else false,
+  }
+
+/// A D5 dictionary projection: `match __dict_Cls { mk f1 .. fn => body }`.
+def is_dict_projection_scrutinee (value : Term) : Bool :=
+  match value {
+    Term.var _ dbg =>
+      match dbg {
+        DebugName.named id =>
+          match id {
+            Identifier.id text => String.starts_with "__dict_" text,
+          },
+        DebugName.unnamed => false,
+      },
+    _ => false,
   }
 
 /// A fixed name -> id mapping matching `lang/core_eval.mo`'s

@@ -39,10 +39,10 @@
 /// binders of the same name) — flagged here rather than silently
 /// assumed correct.
 use lang::types {
-  Attribute, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
+  Attribute, Binder, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, Literal, MatchCase, ModulePath, Native, Param, Struct,
   StructField, StructLitField, Term, TypeConstraint, concrete, id_eq, level_const,
-  named, npath, package_private, sentinel, unnamed, use_bare,
+  named, npath, package_private, sentinel, unnamed, use_bare, binder_name, list_reverse, binder_named,
 }
 use lib::typecheck::traverse {con_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, term_map_children}
 
@@ -71,6 +71,64 @@ pub def name_subst_term (target : Identifier) (replacement : Term) (t : Term) : 
         // a bare reference, and this module has no `resolve_quote`
         // equivalent of its own to defer to).
         _ => term_map_children (name_subst_term target replacement) t,
+    }
+
+/// Closes the checker's by-name free references (`Term.var sentinel (named X)`,
+/// as `build_dict_field_projection_checked` emits for D5 dict forwarding) over
+/// their enclosing binders, so index-driven consumers (`lower_core_ir`) can
+/// read the elaborated term. `stack` holds the binder names above `t`,
+/// innermost first; a name with no enclosing binder is a global and is left alone.
+#[partial]
+pub def close_named_vars (stack : List Identifier) (t : Term) : Term :=
+    match t {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel then
+                match dbg {
+                    DebugName.named id =>
+                        match stack_index_of id stack 0 {
+                            Option.some i => Term.var i dbg,
+                            Option.none => t,
+                        },
+                    DebugName.unnamed => t,
+                }
+            else t,
+        Term.lam b typ body =>
+            Term.lam b (close_named_vars stack typ) (close_named_vars (List.cons (binder_stack_name b) stack) body),
+        Term.pi b arg ret =>
+            Term.pi b (close_named_vars stack arg) (close_named_vars (List.cons (binder_stack_name b) stack) ret),
+        Term.lit lit =>
+            match lit {
+                Literal.match_ scrut cases =>
+                    Term.lit (Literal.match_ (close_named_vars stack scrut) (close_named_cases stack cases)),
+                _ => term_map_children (close_named_vars stack) t,
+            },
+        _ => term_map_children (close_named_vars stack) t,
+    }
+
+#[partial]
+def close_named_cases (stack : List Identifier) (cases : List MatchCase) : List MatchCase :=
+    match cases {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                MatchCase.mc name args body fp =>
+                    List.cons (MatchCase.mc name args (close_named_vars (List.append (list_reverse args) stack) body) fp)
+                        (close_named_cases stack rest),
+            },
+    }
+
+def binder_stack_name (b : Binder) : Identifier :=
+    match binder_name b {
+        DebugName.named id => id,
+        DebugName.unnamed => Identifier.id "",
+    }
+
+#[partial]
+def stack_index_of (target : Identifier) (stack : List Identifier) (i : I64) : Option I64 :=
+    match stack {
+        List.empty => Option.none,
+        List.cons id rest =>
+            if id_eq id target then Option.some i else stack_index_of target rest (i + 1),
     }
 
 // The `Literal`/`MatchCase`/`StructLitField` walks this module used to
@@ -288,6 +346,35 @@ def test_name_subst_term_leaves_bound_var_untouched : Bool :=
     let bound : Term := Term.var 0 DebugName.unnamed in
     match name_subst_term t_ident replacement bound {
         Term.var idx _ => I64.beq idx 0,
+        _ => false,
+    }
+
+#[test]
+def test_close_named_vars_closes_over_enclosing_lam : Bool :=
+    // `fn T => <T>` : the by-name reference becomes the innermost bound index
+    let t : Term := Term.lam (binder_named t_ident) (Term.sort (SortLevel.concrete 0)) (named_ref t_ident) in
+    match close_named_vars List.empty t {
+        Term.lam _ _ body => match body { Term.var idx _ => I64.beq idx 0, _ => false },
+        _ => false,
+    }
+
+#[test]
+def test_close_named_vars_skips_the_nearer_binder_of_another_name : Bool :=
+    // `fn T => fn U => <T>`: `T` is one binder further out than `U`
+    let inner : Term := Term.lam (binder_named other_ident) (Term.sort (SortLevel.concrete 0)) (named_ref t_ident) in
+    let t : Term := Term.lam (binder_named t_ident) (Term.sort (SortLevel.concrete 0)) inner in
+    match close_named_vars List.empty t {
+        Term.lam _ _ o => match o {
+            Term.lam _ _ body => match body { Term.var idx _ => I64.beq idx 1, _ => false },
+            _ => false,
+        },
+        _ => false,
+    }
+
+#[test]
+def test_close_named_vars_leaves_unbound_name_alone : Bool :=
+    match close_named_vars List.empty (named_ref t_ident) {
+        Term.var idx _ => I64.beq idx sentinel,
         _ => false,
     }
 
