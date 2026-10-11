@@ -49,7 +49,7 @@ use lib::typecheck::traverse {con_map_children, native_map_children, opt_term_ma
 // ─── Term-level walk ─────────────────────────────────────────────────
 
 #[terminating]
-def name_subst_term (target : Identifier) (replacement : Term) (t : Term) : Term :=
+pub def name_subst_term (target : Identifier) (replacement : Term) (t : Term) : Term :=
     match t {
         // The ONLY node this walk treats specially: a free, named
         // reference matching `target` becomes `replacement`.

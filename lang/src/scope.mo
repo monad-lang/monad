@@ -10,13 +10,14 @@ use lang::types {
   binder_is_level,
   binder_level, binder_name, binder_named, cubical_prim_of_name, dict_hint_marker_prefix,
   f32, f64, i16, i32,
-  i64, i8, id_member,
+  i64, i8, id_eq, id_member,
   many, mk, name_path_similar, open_all, open_only, package_private, param_many,
   priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
   term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
   use_name, use_rename, use_sub, use_sub_rename,
   AttrArg,
 }
+use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::traverse {con_map_children, native_map_children, term_map_children}
 // `collect_def_types` registers `elaborate_def`-wrapped types and needs the
 // same whole-graph known-name set the `check` path's `elaborate_def_typs`
@@ -2595,16 +2596,14 @@ pub def mangle_instance_dict_name (insname : Identifier) (cls_name : NamePath) (
 /// VALUE Decl (a `Term.con` whose fields are `Term.var` references to
 /// those just-minted methods, in `cls`'s own declared method order --
 /// boxed correctly as callable closures by Phase 0's `Term.var`
-/// value-position fix, not eager-called). `Option.none` if `defs` is
-/// missing a method the class declares (a hard, clean failure -- see
-/// this instance's own doc comment on `Instance.defs`, no default-
-/// method fallback exists in this corpus today).
+/// handling). `Option.none` only when `defs` omits a method the class
+/// declares AND the class has no default for it.
 #[partial]
 def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
     match ins {
         Instance.mk insname cls_name ins_constraints ins_args _ _ defs =>
             let method_names := class_method_names cls in
-            match build_dict_fields insname cls_name ins_args defs method_names {
+            match build_dict_fields cls insname cls_name ins_args defs method_names {
                 Option.some field_terms =>
                     // `ins_constraints` (the instance's own `[Add A]` in
                     // e.g. `instance [Add A] HAdd A A A { ... }`) is
@@ -2620,7 +2619,7 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
                     // instance-forwarding case (this exact HAdd/Add
                     // shape) would never gain the dict param its own
                     // body (`Add.add a b`) needs.
-                    let method_decls := promote_methods insname cls_name ins_args ins_constraints defs method_names in
+                    let method_decls := promote_methods cls insname cls_name ins_args ins_constraints defs method_names in
                     let dict_name := mangle_instance_dict_name insname cls_name ins_args in
                     let dict_con := Con.mk (Identifier.id "mk") dict_name (List.length field_terms) (options_of field_terms) in
                     let dict_def := Def.mk dict_name (Term.sort (SortLevel.concrete 1)) (Term.con dict_con)
@@ -2636,7 +2635,7 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
 /// unchanged, mirroring how `28d98dc`'s infix-resolution pass and
 /// Phase 0's own boxing both leave a Def's own shape otherwise alone.
 #[partial]
-def promote_methods (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (ins_constraints : List TypeConstraint) (defs : List Def) (method_names : List Identifier) : List Decl :=
+def promote_methods (cls : Class) (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (ins_constraints : List TypeConstraint) (defs : List Def) (method_names : List Identifier) : List Decl :=
     match method_names {
         List.empty => List.empty,
         List.cons mname rest =>
@@ -2651,9 +2650,73 @@ def promote_methods (insname : Identifier) (cls_name : NamePath) (ins_args : Lis
                             // why this is here.
                             let all_constraints := List.append ins_constraints own_constraints in
                             let renamed := Def.mk new_name typ term_ all_constraints attrs vis params in
-                            List.cons (Decl.def_d renamed) (promote_methods insname cls_name ins_args ins_constraints defs rest),
+                            List.cons (Decl.def_d renamed) (promote_methods cls insname cls_name ins_args ins_constraints defs rest),
                     },
-                Option.none => promote_methods insname cls_name ins_args ins_constraints defs rest,
+                Option.none =>
+                    // Omitted by the instance: splice the class's own
+                    // default, with the class's params replaced by this
+                    // instance's args. The class's superclass constraints
+                    // are NOT carried over -- with the carrier concrete
+                    // they are discharged by ordinary instance resolution
+                    // inside the body; only the instance's own constraints
+                    // (which may mention its type variables) are kept.
+                    match class_method_default cls mname {
+                        Option.none => promote_methods cls insname cls_name ins_args ins_constraints defs rest,
+                        Option.some cd =>
+                            match cd {
+                                ClassDef.mk _ ctyp cdefault =>
+                                    match cdefault {
+                                        Option.none => promote_methods cls insname cls_name ins_args ins_constraints defs rest,
+                                        Option.some body =>
+                                            let new_name := mangle_instance_method_name insname cls_name ins_args mname in
+                                            let new_typ := subst_class_params cls ins_args ctyp in
+                                            let new_body := subst_class_params cls ins_args body in
+                                            let synthesized := Def.mk new_name new_typ new_body ins_constraints List.empty Visibility.package_private List.empty in
+                                            List.cons (Decl.def_d synthesized) (promote_methods cls insname cls_name ins_args ins_constraints defs rest),
+                                    },
+                            },
+                    },
+            },
+    }
+
+/// The class's own `ClassDef` for `mname`, if it declares one.
+#[partial]
+def class_method_default (cls : Class) (mname : Identifier) : Option ClassDef :=
+    match cls {
+        Class.mk _ _ _ methods _ => class_def_by_name methods mname,
+    }
+
+#[partial]
+def class_def_by_name (cds : List ClassDef) (mname : Identifier) : Option ClassDef :=
+    match cds {
+        List.empty => Option.none,
+        List.cons cd rest =>
+            match cd {
+                ClassDef.mk n _ _ => if id_eq n mname then Option.some cd else class_def_by_name rest mname,
+            },
+    }
+
+/// Replaces each of the class's own params, in order, by the matching
+/// instance arg. The class's params are free by-name references inside a
+/// `ClassDef` (`Term.var` with a `named` debug name), which is exactly
+/// what `name_subst_term` rewrites.
+#[partial]
+def subst_class_params (cls : Class) (ins_args : List Term) (t : Term) : Term :=
+    match cls {
+        Class.mk _ params _ _ _ => subst_params_by_args params ins_args t,
+    }
+
+#[partial]
+def subst_params_by_args (params : List Param) (args : List Term) (t : Term) : Term :=
+    match params {
+        List.empty => t,
+        List.cons p prest =>
+            match p {
+                Param.mk pname _ _ _ _ =>
+                    match args {
+                        List.empty => t,
+                        List.cons a arest => subst_params_by_args prest arest (name_subst_term pname a t),
+                    },
             },
     }
 
@@ -2663,14 +2726,14 @@ def promote_methods (insname : Identifier) (cls_name : NamePath) (ins_args : Lis
 /// mangled name. `Option.none` (propagated by the caller as a hard
 /// failure) the moment any declared method is missing from `defs`.
 #[partial]
-def build_dict_fields (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
+def build_dict_fields (cls : Class) (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
     match method_names {
         List.empty => Option.some List.empty,
         List.cons mname rest =>
-            match find_instance_method defs mname {
-                Option.none => Option.none,
-                Option.some _ =>
-                    match build_dict_fields insname cls_name ins_args defs rest {
+            if Bool.not (method_available cls defs mname)
+            then Option.none
+            else
+                    match build_dict_fields cls insname cls_name ins_args defs rest {
                         Option.none => Option.none,
                         Option.some rest_terms =>
                             let mangled := mangle_instance_method_name insname cls_name ins_args mname in
@@ -2694,6 +2757,22 @@ def build_dict_fields (insname : Identifier) (cls_name : NamePath) (ins_args : L
                             // (`lang/typecheck/meta_eval.mo`).
                             let method_ref := Term.var (0 - 1) (DebugName.named (mangled_to_identifier mangled)) in
                             Option.some (List.cons method_ref rest_terms),
+                    },
+    }
+
+/// Does `mname` have a body for this instance: written in the instance,
+/// or defaulted by the class?
+#[partial]
+def method_available (cls : Class) (defs : List Def) (mname : Identifier) : Bool :=
+    match find_instance_method defs mname {
+        Option.some _ => true,
+        Option.none =>
+            match class_method_default cls mname {
+                Option.none => false,
+                Option.some cd =>
+                    match cd {
+                        ClassDef.mk _ _ cdefault =>
+                            match cdefault { Option.none => false, Option.some _ => true },
                     },
             },
     }
@@ -7441,7 +7520,7 @@ def resolve_class_method_call_with_instance (classes : List Class) (instances : 
             // instances whose head names no variable at all
             // (`method_sig_bindings`).
             let bindings := List.append (carrier_bindings (instance_wildcard_names ins) ins_args carrier) (method_sig_bindings classes ins_cls_name method_name carrier) in
-            resolve_class_method_call_with_dict_args insname classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier bindings (emitted_dict_constraints ins method_name) ins_args extra_carriers,
+            resolve_class_method_call_with_dict_args insname classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier bindings (emitted_dict_constraints classes ins method_name) ins_args extra_carriers,
     }
 
 /// The instance constraints whose dictionary parameter the EMITTED
@@ -7471,17 +7550,33 @@ def resolve_class_method_call_with_instance (classes : List Class) (instances : 
 /// instance here reads the same term the emission pass scanned, whether
 /// or not an earlier pass rewrote infix operators inside it.
 ///
-/// `Option.none` (the instance does not implement this method at all)
-/// keeps the unfiltered list: nothing was promoted in that case
-/// (`build_dict_fields` fails and `promote_instance` returns
-/// `Option.none`), so the mangled name is a dangling global either way --
-/// a loud link-time undefined symbol, not a silent miscompile.
+/// A method the instance omits is promoted from the CLASS's default
+/// (`promote_methods`), so the same filter runs over that default's body.
+/// With no default either, nothing was promoted (`build_dict_fields`
+/// fails and `promote_instance` returns `Option.none`) and the list stays
+/// unfiltered: the mangled name is a dangling global either way -- a
+/// loud link-time undefined symbol, not a silent miscompile.
 #[partial]
-def emitted_dict_constraints (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
+def emitted_dict_constraints (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
     match ins {
-        Instance.mk _ _ ins_constraints _ _ _ defs =>
+        Instance.mk _ cname ins_constraints _ _ _ defs =>
             match find_instance_method defs method_name {
-                Option.none => ins_constraints,
+                Option.none =>
+                    match find_class_by_name classes cname {
+                        Option.none => ins_constraints,
+                        Option.some cls =>
+                            match class_method_default cls method_name {
+                                Option.none => ins_constraints,
+                                Option.some cd =>
+                                    match cd {
+                                        ClassDef.mk _ _ cdefault =>
+                                            match cdefault {
+                                                Option.none => ins_constraints,
+                                                Option.some body => qualifying_dict_constraints ins_constraints body,
+                                            },
+                                    },
+                            },
+                    },
                 Option.some d =>
                     match d {
                         Def.mk {term := body, constraints := own_constraints, ..} =>
@@ -8357,6 +8452,74 @@ def test_promote_instance_defs_missing_method_skips_instance : Bool :=
     let decl_list := List.cons (Decl.class_d cls) (List.cons (Decl.instance_d ins) List.empty) in
     let promoted := promote_instance_defs decl_list in
     not (decl_list_has_def_named promoted "Show_show") && not (decl_list_has_def_named promoted "__Dict_Show")
+
+/// Fixture: `class Cmp A { def lt : A; def lte : A := A }` -- the default
+/// body is just the class param, so the substitution is observable.
+#[partial]
+def dummy_cmp_class : Class :=
+    let a_param := param_many (Identifier.id "A") (Term.sort (SortLevel.concrete 1)) in
+    let a_ref := Term.var (0 - 1) (DebugName.named (Identifier.id "A")) in
+    let lt_method := ClassDef.mk (Identifier.id "lt") a_ref Option.none in
+    let lte_method := ClassDef.mk (Identifier.id "lte") a_ref (Option.some a_ref) in
+    Class.mk (Identifier.id "Cmp") (List.cons a_param List.empty) List.empty
+        (List.cons lt_method (List.cons lte_method List.empty)) Visibility.package_private
+
+#[partial]
+def dummy_cmp_bool_decls : List Decl :=
+    let cls_name := NamePath.npath (List.cons (Identifier.id "Cmp") List.empty) in
+    let bool_arg := Term.var (0 - 1) (DebugName.named (Identifier.id "Bool")) in
+    let lt_name := NamePath.npath (List.cons (Identifier.id "lt") List.empty) in
+    let lt_def := Def.mk lt_name Term.hole (mk_i64_dummy 1) List.empty List.empty Visibility.package_private List.empty in
+    let ins := Instance.mk (Identifier.id "_") cls_name List.empty (List.cons bool_arg List.empty)
+        Visibility.package_private List.empty (List.cons lt_def List.empty) in
+    List.cons (Decl.class_d dummy_cmp_class) (List.cons (Decl.instance_d ins) List.empty)
+
+#[test]
+def test_promote_instance_defs_class_default_fills_omitted_method : Bool :=
+    let promoted := promote_instance_defs dummy_cmp_bool_decls in
+    decl_list_has_def_named promoted "Cmp_Bool_lt" &&
+    decl_list_has_def_named promoted "Cmp_Bool_lte" &&
+    decl_list_has_def_named promoted "__Dict_Cmp_Bool"
+
+#[test]
+def test_promote_instance_defs_class_default_substitutes_class_param : Bool :=
+    let promoted := promote_instance_defs dummy_cmp_bool_decls in
+    match decl_list_def_named promoted "Cmp_Bool_lte" {
+        Option.none => false,
+        Option.some d =>
+            match d {
+                Def.mk {typ := t, term := b, ..} =>
+                    term_is_named_var t "Bool" && term_is_named_var b "Bool",
+            },
+    }
+
+#[partial]
+def term_is_named_var (t : Term) (name : String) : Bool :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => String.beq (show_identifier id) name,
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
+#[partial]
+def decl_list_def_named (decl_list : List Decl) (name : String) : Option Def :=
+    match decl_list {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ =>
+                    match def_ {
+                        Def.mk {name := n, ..} =>
+                            if String.beq (show_name_path n) name
+                            then Option.some def_
+                            else decl_list_def_named rest name,
+                    },
+                _ => decl_list_def_named rest name,
+            },
+    }
 
 #[partial]
 def mk_i64_dummy (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)

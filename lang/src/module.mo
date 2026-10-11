@@ -7234,6 +7234,25 @@ def test_dict_hint_unknown_instance_errors : IO Bool := do {
     })
 }
 
+/// A class default using a SUPERCLASS method (`Functor.map` inside
+/// `MyMonad.lift2`'s default, with `[Functor M]` on the class) checks clean,
+/// and an instance omitting `lift2` still promotes, so a call to it checks.
+#[test]
+def test_class_default_uses_superclass_method : IO Bool := do {
+    let src : String :=
+        "class Functor F { def map (f : A -> B) (fa : F A) : F B }\n" ++
+        "class [Functor M] MyMonad (M : Type -> Type) {\n" ++
+        "    def bind (a : M A) (f : A -> M B) : M B\n" ++
+        "    def lift2 (f : A -> B) (ma : M A) : M B := Functor.map f ma\n" ++
+        "}\n" ++
+        "type Box A { mk (a : A) }\n" ++
+        "instance Functor Box { def map (f : A -> B) (fa : Box A) : Box B := match fa { mk a => Box.mk (f a) } }\n" ++
+        "instance MyMonad Box { def bind (a : Box A) (f : A -> Box B) : Box B := match a { mk v => f v } }\n" ++
+        "def use_lift2 (f : I64 -> I64) (b : Box I64) : Box I64 := MyMonad.lift2 f b";
+    let diags <- check_synthetic_source src;
+    return (match diags { List.empty => true, List.cons _ _ => false })
+}
+
 /// A class default body is type-checked: an unbound name inside it is an
 /// error (it used to be discarded unchecked).
 #[test]
@@ -7247,6 +7266,61 @@ def test_class_default_body_is_checked : IO Bool := do {
     return (match diags {
         List.cons d _ => String.contains d "this_name_does_not_exist",
         List.empty => false,
+    })
+}
+
+/// An instance omitting a defaulted method is not dropped: its dict exists
+/// and a call to the omitted method dispatches to the spliced default.
+#[test]
+def test_instance_omitting_defaulted_method_dispatches : IO Bool := do {
+    let src : String :=
+        "class Speak A {\n" ++
+        "    def say (a : A) : String\n" ++
+        "    def shout (a : A) : String := Speak.say a\n" ++
+        "}\n" ++
+        "type Dog { woof }\n" ++
+        "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
+        "def loud (d : Dog) : String := Speak.shout d";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let dispatched := resolve_class_calls_decls dict_paramed;
+            decl_list_def_term_contains dispatched "loud" "Speak_Dog_shout"
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
+/// Return-type-only carrier: `Decode.decode s` mentions its carrier `D` only
+/// in the result, so dispatch must read it from the ascription / the def's
+/// declared return type (the JSON-deserializer shape).
+#[test]
+def test_return_only_carrier_dispatches : IO Bool := do {
+    let src : String :=
+        "class Decode D { def decode (s : String) : D }\n" ++
+        "type Cat { meow }\n" ++
+        "type Cow { moo }\n" ++
+        "instance Decode Cat { def decode (s : String) : Cat := Cat.meow }\n" ++
+        "instance Decode Cow { def decode (s : String) : Cow := Cow.moo }\n" ++
+        "def as_cow (s : String) : Cow := Decode.decode s\n" ++
+        "def as_cat (s : String) : Cat := let c : Cat := Decode.decode s in c";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let dispatched := resolve_class_calls_decls dict_paramed;
+            let cow_ok := decl_list_def_term_contains dispatched "as_cow" "Decode_Cow_decode";
+            let cat_ok := decl_list_def_term_contains dispatched "as_cat" "Decode_Cat_decode";
+            Bool.and cow_ok cat_ok
+        },
+        ParseResult.fail _ => false,
     })
 }
 
