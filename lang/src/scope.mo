@@ -2968,7 +2968,7 @@ def prepend_dict_lams (constraints : List TypeConstraint) (term_ : Term) : Term 
 /// bound dict to a nested call, so the naming scheme here is load-
 /// bearing for that phase, not just cosmetic.
 #[partial]
-def dict_param_name (cls : NamePath) : String :=
+pub def dict_param_name (cls : NamePath) : String :=
     "__dict_" ++ show_name_path cls
 
 /// Adds one leading dictionary parameter per qualifying constraint (see

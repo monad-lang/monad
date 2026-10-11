@@ -46,6 +46,7 @@ use lib::scope {
   add_constraint_dict_params_decl_groups, add_constraint_dict_params_decls,
   build_scope_from_decls, build_scope_from_groups, decl_groups_flatten,
   collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
+  dict_param_name,
   filter_valid_open_aliases,
   modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
   param_names, promote_instance_decl_groups, promote_instance_defs,
@@ -2354,28 +2355,49 @@ def check_struct_field_with_scope (f : StructField) (scope : Scope) (locals : Lo
 #[partial]
 def check_class_with_scope (cls : Class) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match cls {
-        Class.mk name _params _constraints methods _vis => do {
+        Class.mk name _params constraints methods _vis => do {
             if verbose then println ("  checking class " ++ identifier_to_string name) else do { return unit };
             let locals_ : LocalScope := locals_with_class_typevars cls scope locals;
-            check_class_methods_with_scope methods scope locals_ path verbose
+            check_class_methods_with_scope methods constraints scope locals_ path verbose
         }
     }
 
 #[partial]
-def check_class_methods_with_scope (methods : List ClassDef) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+def check_class_methods_with_scope (methods : List ClassDef) (constraints : List TypeConstraint) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match methods {
         List.empty => do { return List.empty },
         List.cons m rest => do {
-            let here : List String <- check_class_method_with_scope m scope locals path verbose;
-            let there : List String <- check_class_methods_with_scope rest scope locals path verbose;
+            let here : List String <- check_class_method_with_scope m constraints scope locals path verbose;
+            let there : List String <- check_class_methods_with_scope rest constraints scope locals path verbose;
             return (list_append here there)
         }
     }
 
+/// One `__dict_<Cls>` local per constraint, same binding NAME
+/// `prepend_dict_lams`/`dict_param_name` (`lang/scope.mo`) use for an
+/// ordinary constrained def's own leading dict parameters -- so a
+/// default method's body resolving e.g. `Functor.map` finds the exact
+/// same `local_dict_for_class` binding `resolve_class_method`'s D5
+/// forwarding arm already knows how to read (`lang/typecheck/infer.mo`).
+/// The bound TYPE is `Term.hole`, mirroring `dict_param_type_placeholder`:
+/// nothing here ever type-checks the dict VALUE, only resolves calls
+/// through its presence.
 #[partial]
-def check_class_method_with_scope (m : ClassDef) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+def locals_with_class_constraint_dicts (constraints : List TypeConstraint) (locals : LocalScope) : LocalScope :=
+    match constraints {
+        List.empty => locals,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk cls _vars =>
+                    let lv : LocalVar := { name := Identifier.id (dict_param_name cls), typ := Term.hole, multiplicity := Multiplicity.many } in
+                    locals_with_class_constraint_dicts rest (scope_push_local lv locals),
+            },
+    }
+
+#[partial]
+def check_class_method_with_scope (m : ClassDef) (constraints : List TypeConstraint) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match m {
-        ClassDef.mk name typ _default => do {
+        ClassDef.mk name typ default => do {
             if verbose then println ("    checking method " ++ identifier_to_string name) else do { return unit };
             // Beyond the class's own params (already skolemized into
             // `locals` by `check_class_with_scope`'s caller), a method's
@@ -2386,11 +2408,34 @@ def check_class_method_with_scope (m : ClassDef) (scope : Scope) (locals : Local
             // `locals_with_def_typevars`'s identical treatment of an
             // ordinary def's own implicit type params.
             let locals_ : LocalScope := bind_unresolved_as_local_typevars (free_vars typ List.empty) scope locals;
-            return (match type_check typ Term.hole scope empty_local_types locals_ {
-                Result.ok _ => List.empty,
-                Result.err e => [render_type_error (identifier_to_string name) path e]
-            })
+            let sig_diags : List String :=
+                match type_check typ Term.hole scope empty_local_types locals_ {
+                    Result.ok _ => List.empty,
+                    Result.err e => [render_type_error (identifier_to_string name) path e]
+                };
+            // `default` (`class Monad M { def pure ... := ... }`-style
+            // body-carrying method decl) was previously never checked at
+            // all -- the class's own `[Functor M]`-style constraints need
+            // a bound `__dict_<Cls>` local for the body's `Functor.map`-
+            // style calls to resolve through (see `locals_with_class_
+            // constraint_dicts` above); confirmed load-bearing via direct
+            // repro (an unbound-name default body checked clean before
+            // this).
+            let dict_locals : LocalScope := locals_with_class_constraint_dicts constraints locals_;
+            let default_diags : List String :=
+                match default {
+                    Option.none => List.empty,
+                    Option.some body => check_default_method_body body typ scope dict_locals name path,
+                };
+            return (list_append sig_diags default_diags)
         }
+    }
+
+#[partial]
+def check_default_method_body (body : Term) (typ : Term) (scope : Scope) (dict_locals : LocalScope) (name : Identifier) (path : Option String) : List String :=
+    match type_check body typ scope empty_local_types dict_locals {
+        Result.ok _ => List.empty,
+        Result.err e => [render_type_error (identifier_to_string name) path e]
     }
 
 /// `scope` with the def-body match-coverage check switched off, when `attrs`
@@ -7185,6 +7230,22 @@ def test_dict_hint_unknown_instance_errors : IO Bool := do {
     let diags <- check_synthetic_source src;
     return (match diags {
         List.cons d _ => String.contains d "no instance named 'NoSuch'",
+        List.empty => false,
+    })
+}
+
+/// A class default body is type-checked: an unbound name inside it is an
+/// error (it used to be discarded unchecked).
+#[test]
+def test_class_default_body_is_checked : IO Bool := do {
+    let src : String :=
+        "class Speak A {\n" ++
+        "    def say (a : A) : String\n" ++
+        "    def say_twice (a : A) : String := this_name_does_not_exist a\n" ++
+        "}";
+    let diags <- check_synthetic_source src;
+    return (match diags {
+        List.cons d _ => String.contains d "this_name_does_not_exist",
         List.empty => false,
     })
 }

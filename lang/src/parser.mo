@@ -2901,33 +2901,43 @@ def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Iden
 def class_method_try_implicit (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem _ => class_method_implicit_skip (take_while is_not_close_curly rem) rem mname name methods vis,
-		fail _ => class_method_params_try (tag "(" (skip_spaces orig)) orig mname name methods List.empty vis,
+		fail _ => class_method_params_try (tag "(" (skip_spaces orig)) orig mname name methods List.empty List.empty vis,
 	}
 
 #[partial]
 def class_method_implicit_skip (r : ParseResult String) (rem : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success after_bracket _ => class_method_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket mname name methods vis,
-		fail _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty vis,
+		fail _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty List.empty vis,
 	}
 
 #[partial]
 def class_method_implicit_close (r : ParseResult String) (after_bracket : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty vis,
-		fail _ => class_method_params_try (tag "(" (skip_spaces after_bracket)) after_bracket mname name methods List.empty vis,
+		success rem _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty List.empty vis,
+		fail _ => class_method_params_try (tag "(" (skip_spaces after_bracket)) after_bracket mname name methods List.empty List.empty vis,
 	}
 
+/// `param_names` threads alongside `param_types` -- in parallel, same
+/// declaration order, same length -- purely so a `:=` default body can
+/// be lambda-wrapped over the REAL param names once parsed
+/// (`class_method_try_default`'s fail arm below); `ClassDef`/
+/// `ParseClassDef` themselves stay 3 fields (`name`/`typ`/`default`),
+/// unaware names were ever threaded. An unnamed/positional param
+/// (`class_method_unnamed_param`) pushes the empty-identifier
+/// placeholder, mirroring the host's own `cons_param`
+/// (`core/src/parser.rs`) -- a default referencing an unnamed param by
+/// name was never writable anyway, so the placeholder is inert there.
 #[partial]
-def class_method_params_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_params_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => class_method_param_loop rem mname name methods param_types vis,
+		success rem _ => class_method_param_loop rem mname name methods param_types param_names vis,
 		fail _ => class_method_ret_type (tag ":" (skip_spaces orig)) mname name methods vis
 	}
 
 #[partial]
-def class_method_param_loop (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_one_param (identifier (skip_spaces input)) input mname name methods param_types vis
+def class_method_param_loop (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
+	class_method_one_param (identifier (skip_spaces input)) input mname name methods param_types param_names vis
 
 /// `group_start` is the position right after the group's `(`, before any
 /// name has been consumed — kept around so that if this turns out to be
@@ -2935,48 +2945,63 @@ def class_method_param_loop (input : String) (mname : Identifier) (name : Identi
 /// second param in init/prelude.mo) rather than `name(s) : Type`, the
 /// whole group can be re-parsed from scratch as one bare type expression.
 #[partial]
-def class_method_one_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_one_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem pname => class_method_more_names rem mname name methods param_types 1 orig vis,
-		fail _ => class_method_unnamed_param orig mname name methods param_types vis
+		success rem pname => class_method_more_names rem mname name methods param_types param_names (List.cons (Identifier.id pname) List.empty) 1 orig vis,
+		fail _ => class_method_unnamed_param orig mname name methods param_types param_names vis
 	}
 
 /// After the first name in a `(...)` param group, try to parse MORE
 /// space-separated names sharing one type — supports `(a b : A)`, not
-/// just `(a : A) (b : A)`.
+/// just `(a : A) (b : A)`. `group_names` accumulates THIS group's own
+/// names only, in the SAME order `count`/`push_n_terms` later zips
+/// against (most-recent-first); the OUTER `param_names` passes through
+/// unchanged until the group closes (`class_method_param_type`), where
+/// `group_names` is folded onto it.
 #[partial]
-def class_method_more_names (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_more_names_try (identifier (skip_spaces input)) input mname name methods param_types count group_start vis
+def class_method_more_names (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
+	class_method_more_names_try (identifier (skip_spaces input)) input mname name methods param_types param_names group_names count group_start vis
 
 #[partial]
-def class_method_more_names_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_more_names_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem pname => class_method_more_names rem mname name methods param_types (count + 1) group_start vis,
-		fail _ => class_method_param_colon_or_unnamed (tag ":" (skip_spaces orig)) mname name methods param_types count group_start vis
+		success rem pname => class_method_more_names rem mname name methods param_types param_names (List.cons (Identifier.id pname) group_names) (count + 1) group_start vis,
+		fail _ => class_method_param_colon_or_unnamed (tag ":" (skip_spaces orig)) mname name methods param_types param_names group_names count group_start vis
 	}
 
 /// `orig`'s tokens parsed as one-or-more names, but no `:` follows —
 /// re-parse from `group_start` as a single bare (unnamed/positional)
 /// type instead, e.g. `(L A)` where "L" and "A" looked like two
-/// space-separated names but are really an application `L A`.
+/// space-separated names but are really an application `L A`. The
+/// outer `param_names` accumulated so far is threaded through
+/// unchanged (nothing in THIS group contributed to it yet); the
+/// re-parse starts a fresh group, so `class_method_unnamed_param`
+/// takes `param_names` directly rather than `group_names`.
 #[partial]
-def class_method_param_colon_or_unnamed (r : ParseResult String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_param_colon_or_unnamed (r : ParseResult String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (group_start : String) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem _ =>
-			class_method_param_type (type_expression rem) mname name methods param_types count vis,
-		fail _ => class_method_unnamed_param group_start mname name methods param_types vis
+			class_method_param_type (type_expression rem) mname name methods param_types param_names group_names count vis,
+		fail _ => class_method_unnamed_param group_start mname name methods param_types param_names vis
 	}
 
 /// Parse a group's content as a single bare/unnamed type (no `name :`
-/// prefix at all), contributing exactly one param.
+/// prefix at all), contributing exactly one param -- pushes the empty-
+/// identifier placeholder onto the OUTER `param_names` as that param's
+/// name (see `class_method_params_try`'s own doc comment).
 #[partial]
-def class_method_unnamed_param (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_param_type (type_expression input) mname name methods param_types 1 vis
+def class_method_unnamed_param (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
+	class_method_param_type (type_expression input) mname name methods param_types param_names (List.cons (Identifier.id "") List.empty) 1 vis
 
+/// `group_names` holds exactly this group's own names (most-recent-
+/// first, matching `push_n_terms`'s own fold direction for
+/// `param_types`); folded onto the OUTER `param_names` here, at group
+/// close, the same point `push_n_terms` folds the group's types onto
+/// the outer `param_types`.
 #[partial]
-def class_method_param_type (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (count : I64) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_param_type (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (group_names : List Identifier) (count : I64) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem typ => class_method_close_or_next rem mname name methods (push_n_terms typ count param_types) vis,
+		success rem typ => class_method_close_or_next rem mname name methods (push_n_terms typ count param_types) (push_ids group_names param_names) vis,
 		fail e => fail e
 	}
 
@@ -2986,27 +3011,44 @@ def class_method_param_type (r : ParseResult ParseTerm) (mname : Identifier) (na
 def push_n_terms (typ : ParseTerm) (n : I64) (acc : List ParseTerm) : List ParseTerm :=
 	if I64.gt n 0 then push_n_terms typ (n - 1) (List.cons typ acc) else acc
 
+/// `ids` followed by `acc`, order preserved in each -- the `List
+/// Identifier` append `group_names`/`param_names` needs, inlined
+/// because `list_append` (`lang/scope.mo`) isn't `pub`/imported here.
+/// `group_names` is already reverse-declaration-order WITHIN its own
+/// group (each new name conses onto the front, so the last-declared
+/// name of the group is `ids`'s head); `acc` (the outer `param_names`)
+/// holds every EARLIER group's names in that same reverse-declaration
+/// convention. Putting `ids` first keeps the whole result in one
+/// consistent reverse-declaration-order list, the same convention
+/// `param_types`/`push_n_terms` already follows.
 #[partial]
-def class_method_close_or_next (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_close_param (tag ")" (skip_spaces input)) input mname name methods param_types vis
-
-#[partial]
-def class_method_try_close_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	match r {
-		success rem _ => class_method_ret_or_more rem mname name methods param_types vis,
-		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types vis
+def push_ids (ids : List Identifier) (acc : List Identifier) : List Identifier :=
+	match ids {
+		List.empty => acc,
+		List.cons hd rest => List.cons hd (push_ids rest acc),
 	}
 
 #[partial]
-def class_method_ret_or_more (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_ret_type (tag ":" (skip_spaces input)) input mname name methods param_types vis
+def class_method_close_or_next (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
+	class_method_try_close_param (tag ")" (skip_spaces input)) input mname name methods param_types param_names vis
 
 #[partial]
-def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_try_close_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => class_method_ret_or_more rem mname name methods param_types param_names vis,
+		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types param_names vis
+	}
+
+#[partial]
+def class_method_ret_or_more (input : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
+	class_method_try_ret_type (tag ":" (skip_spaces input)) input mname name methods param_types param_names vis
+
+#[partial]
+def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem _ =>
-			class_method_ret_type_val (type_expression rem) mname name methods param_types vis,
-		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types vis
+			class_method_ret_type_val (type_expression rem) mname name methods param_types param_names vis,
+		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods param_types param_names vis
 	}
 
 /// Combine every explicit param's type (parsed via `(...)` groups) with
@@ -3019,9 +3061,9 @@ def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : 
 /// silently dropping `(f: A -> B) ->` — a correctness bug independent of,
 /// and worse than, the multi-name parsing failure this fix also covers.
 #[partial]
-def class_method_ret_type_val (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_ret_type_val (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem ret_typ => class_method_default_or_done rem mname (build_pi_chain param_types ret_typ) name methods vis,
+		success rem ret_typ => class_method_default_or_done rem mname (build_pi_chain param_types ret_typ) param_names name methods vis,
 		fail e => fail e
 	}
 
@@ -3038,9 +3080,9 @@ def build_pi_chain (param_types : List ParseTerm) (ret : ParseTerm) : ParseTerm 
 }
 
 #[partial]
-def class_method_next_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_next_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (param_types : List ParseTerm) (param_names : List Identifier) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => class_method_param_loop rem mname name methods param_types vis,
+		success rem _ => class_method_param_loop rem mname name methods param_types param_names vis,
 		fail _ => fail (ParseError.custom "expected ) or another parameter" orig)
 	}
 
@@ -3055,29 +3097,70 @@ def class_method_ret_type (r : ParseResult String) (mname : Identifier) (name : 
 #[partial]
 def class_method_sig_type (r : ParseResult ParseTerm) (mname : Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
-		success rem typ => class_method_default_or_done rem mname typ name methods vis,
+		success rem typ => class_method_default_or_done rem mname typ List.empty name methods vis,
 		fail e => fail e
 	}
 
 #[partial]
-def class_method_default_or_done (input : String) (mname : Identifier) (typ : ParseTerm) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
-	class_method_try_default (tag ":=" (skip_spaces input)) input mname typ name methods vis
+def class_method_default_or_done (input : String) (mname : Identifier) (typ : ParseTerm) (param_names : List Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
+	class_method_try_default (tag ":=" (skip_spaces input)) input mname typ param_names name methods vis
+
+/// Builds a `ParseParam` for `lam_params`-style lambda-wrapping, all
+/// fields fixed/empty except name+type -- a class method's own param
+/// has no multiplicity prefix, no default, no attrs (its abstract
+/// signature never writes any of those; see `build_pi_chain`'s doc
+/// comment on why the TYPE side stays unnamed/non-dependent too).
+def class_method_lam_param (pname : Identifier) (typ : ParseTerm) : ParseParam :=
+	ParseParam.mk pname typ Multiplicity.many Option.none List.empty
+
+/// Zip `param_names` against the method's own Pi-chain `typ` to recover
+/// each param's TYPE for lambda-wrapping -- the caller passes
+/// `param_names` already reversed into DECLARATION order (matching
+/// `typ`'s own declaration-order Pi chain), so the first name here
+/// pairs with the first (outermost) Pi domain, and so on. Walks `typ`'s
+/// leading `Term.pi`s in lock-step; length-matched by construction
+/// (`push_n_terms`/the names accumulator above push exactly one of each
+/// per declared param), so running out of one before the other never
+/// happens for a well-formed method signature.
+#[partial]
+def class_method_lam_params_of (param_names : List Identifier) (typ : ParseTerm) : List ParseParam :=
+	match param_names {
+		List.empty => List.empty,
+		List.cons pname rest =>
+			match typ.kind {
+				ParseTermKind.pi _b dom ret =>
+					List.cons (class_method_lam_param pname dom) (class_method_lam_params_of rest ret),
+				_ => List.empty,
+			},
+	}
 
 #[partial]
-def class_method_try_default (r : ParseResult String) (orig : String) (mname : Identifier) (typ : ParseTerm) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_try_default (r : ParseResult String) (orig : String) (mname : Identifier) (typ : ParseTerm) (param_names : List Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem _ =>
-			class_method_default_val (expression (skip_docstrings (skip_spaces rem))) orig mname typ name methods vis,
+			class_method_default_val (expression (skip_docstrings (skip_spaces rem))) orig mname typ param_names name methods vis,
 		fail _ =>
 			let none_val : Option ParseTerm := Option.none in
 			class_methods orig name (List.cons (ParseClassDef.mk mname typ none_val) methods) vis
 	}
 
+/// `default`'s raw parsed RHS is lambda-wrapped over the method's OWN
+/// param names here, before it's ever stored -- `ParseClassDef`/
+/// `ClassDef` stay the pre-existing 3 fields (`name`/`typ`/`default`),
+/// unaware a param list was ever threaded; the wrapping is the whole
+/// fix (see this chain's own header comment at `class_method_params_
+/// try`). `param_names` is reversed first: it was accumulated most-
+/// recent-first like `param_types`, but `lam_params` itself ALSO
+/// reverses before folding (its own doc comment) -- so passing the
+/// already-reversed (declaration-order) list here is what makes
+/// `lam_params`'s own reversal land on first-declared-outermost, the
+/// same nesting an ordinary `def`'s body gets.
 #[partial]
-def class_method_default_val (r : ParseResult ParseTerm) (orig : String) (mname : Identifier) (typ : ParseTerm) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
+def class_method_default_val (r : ParseResult ParseTerm) (orig : String) (mname : Identifier) (typ : ParseTerm) (param_names : List Identifier) (name : Identifier) (methods : List ParseClassDef) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem defval =>
-			let some_val : Option ParseTerm := Option.some defval in
+			let wrapped : ParseTerm := lam_params (class_method_lam_params_of (list_reverse param_names) typ) defval in
+			let some_val : Option ParseTerm := Option.some wrapped in
 			class_methods rem name (List.cons (ParseClassDef.mk mname typ some_val) methods) vis,
 		fail e => fail e
 	}
