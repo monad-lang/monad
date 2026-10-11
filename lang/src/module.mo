@@ -2413,14 +2413,8 @@ def check_class_method_with_scope (m : ClassDef) (constraints : List TypeConstra
                     Result.ok _ => List.empty,
                     Result.err e => [render_type_error (identifier_to_string name) path e]
                 };
-            // `default` (`class Monad M { def pure ... := ... }`-style
-            // body-carrying method decl) was previously never checked at
-            // all -- the class's own `[Functor M]`-style constraints need
-            // a bound `__dict_<Cls>` local for the body's `Functor.map`-
-            // style calls to resolve through (see `locals_with_class_
-            // constraint_dicts` above); confirmed load-bearing via direct
-            // repro (an unbound-name default body checked clean before
-            // this).
+            // The class's own `[Functor M]`-style constraints need a bound
+            // `__dict_<Cls>` local for the default body's `Functor.map` calls.
             let dict_locals : LocalScope := locals_with_class_constraint_dicts constraints locals_;
             let default_diags : List String :=
                 match default {

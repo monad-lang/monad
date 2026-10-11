@@ -2706,8 +2706,32 @@ def subst_class_params (cls : Class) (ins_args : List Term) (t : Term) : Term :=
         Class.mk _ params _ _ _ => subst_params_by_args params ins_args t,
     }
 
+/// Two passes so the substitution is simultaneous: renaming every param
+/// to a placeholder first keeps an instance arg that happens to share a
+/// later param's name (`instance Foo B A` for `class Foo A B`) from being
+/// substituted a second time.
 #[partial]
 def subst_params_by_args (params : List Param) (args : List Term) (t : Term) : Term :=
+    subst_placeholders_by_args params args (rename_params_to_placeholders params t)
+
+#[partial]
+def param_placeholder (pname : Identifier) : Identifier :=
+    Identifier.id (String.concat "__class_param_" (show_identifier pname))
+
+#[partial]
+def rename_params_to_placeholders (params : List Param) (t : Term) : Term :=
+    match params {
+        List.empty => t,
+        List.cons p prest =>
+            match p {
+                Param.mk pname _ _ _ _ =>
+                    rename_params_to_placeholders prest
+                        (name_subst_term pname (Term.var (0 - 1) (DebugName.named (param_placeholder pname))) t),
+            },
+    }
+
+#[partial]
+def subst_placeholders_by_args (params : List Param) (args : List Term) (t : Term) : Term :=
     match params {
         List.empty => t,
         List.cons p prest =>
@@ -2715,7 +2739,8 @@ def subst_params_by_args (params : List Param) (args : List Term) (t : Term) : T
                 Param.mk pname _ _ _ _ =>
                     match args {
                         List.empty => t,
-                        List.cons a arest => subst_params_by_args prest arest (name_subst_term pname a t),
+                        List.cons a arest =>
+                            subst_placeholders_by_args prest arest (name_subst_term (param_placeholder pname) a t),
                     },
             },
     }
@@ -2724,7 +2749,8 @@ def subst_params_by_args (params : List Param) (args : List Term) (t : Term) : T
 /// each field is a bare `Term.var` reference (in VALUE position, so
 /// Phase 0's `alloc_closure` boxing applies) to that method's own
 /// mangled name. `Option.none` (propagated by the caller as a hard
-/// failure) the moment any declared method is missing from `defs`.
+/// failure) the moment a declared method is neither in `defs` nor
+/// defaulted by the class.
 #[partial]
 def build_dict_fields (cls : Class) (insname : Identifier) (cls_name : NamePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
     match method_names {
@@ -2733,31 +2759,31 @@ def build_dict_fields (cls : Class) (insname : Identifier) (cls_name : NamePath)
             if Bool.not (method_available cls defs mname)
             then Option.none
             else
-                    match build_dict_fields cls insname cls_name ins_args defs rest {
-                        Option.none => Option.none,
-                        Option.some rest_terms =>
-                            let mangled := mangle_instance_method_name insname cls_name ins_args mname in
-                            // Sentinel (`-1`), not `Term.var 0` -- `mangled`
-                            // is always a globally-unique mangled name,
-                            // NEVER a real local binding at whatever depth
-                            // this dict VALUE's own field ends up embedded
-                            // at, so this must use the checker/evaluator's
-                            // real free-variable convention (see
-                            // `build_dict_field_projection_checked`'s own
-                            // doc comment for the general rule this
-                            // follows) -- confirmed load-bearing via direct
-                            // repro: `lang/lower_core_ir.mo`'s own de-Bruijn-
-                            // index-driven lowering (unlike codegen's NAME-
-                            // driven `compile_db_term_ir`, which tolerates
-                            // any index for a `DebugName.named` var) reads
-                            // `Term.var 0` here as "the innermost real
-                            // local," not a global reference, whenever this
-                            // dict value's own body is lowered by
-                            // `reflect_type_info!`'s meta-eval
-                            // (`lang/typecheck/meta_eval.mo`).
-                            let method_ref := Term.var (0 - 1) (DebugName.named (mangled_to_identifier mangled)) in
-                            Option.some (List.cons method_ref rest_terms),
-                    },
+                match build_dict_fields cls insname cls_name ins_args defs rest {
+                    Option.none => Option.none,
+                    Option.some rest_terms =>
+                        let mangled := mangle_instance_method_name insname cls_name ins_args mname in
+                        // Sentinel (`-1`), not `Term.var 0` -- `mangled`
+                        // is always a globally-unique mangled name,
+                        // NEVER a real local binding at whatever depth
+                        // this dict VALUE's own field ends up embedded
+                        // at, so this must use the checker/evaluator's
+                        // real free-variable convention (see
+                        // `build_dict_field_projection_checked`'s own
+                        // doc comment for the general rule this
+                        // follows) -- confirmed load-bearing via direct
+                        // repro: `lang/lower_core_ir.mo`'s own de-Bruijn-
+                        // index-driven lowering (unlike codegen's NAME-
+                        // driven `compile_db_term_ir`, which tolerates
+                        // any index for a `DebugName.named` var) reads
+                        // `Term.var 0` here as "the innermost real
+                        // local," not a global reference, whenever this
+                        // dict value's own body is lowered by
+                        // `reflect_type_info!`'s meta-eval
+                        // (`lang/typecheck/meta_eval.mo`).
+                        let method_ref := Term.var (0 - 1) (DebugName.named (mangled_to_identifier mangled)) in
+                        Option.some (List.cons method_ref rest_terms),
+                },
     }
 
 /// Does `mname` have a body for this instance: written in the instance,
@@ -8490,6 +8516,36 @@ def test_promote_instance_defs_class_default_substitutes_class_param : Bool :=
             match d {
                 Def.mk {typ := t, term := b, ..} =>
                     term_is_named_var t "Bool" && term_is_named_var b "Bool",
+            },
+    }
+
+/// `class Swap A B { def pick : A := B }` instantiated at `Swap B A`: the
+/// substitution must be simultaneous, or `A := B` is rewritten again by
+/// `B := A`.
+#[partial]
+def swap_decls : List Decl :=
+    let a_ref := Term.var (0 - 1) (DebugName.named (Identifier.id "A")) in
+    let b_ref := Term.var (0 - 1) (DebugName.named (Identifier.id "B")) in
+    let ty := Term.sort (SortLevel.concrete 1) in
+    let pick := ClassDef.mk (Identifier.id "pick") a_ref (Option.some b_ref) in
+    let cls := Class.mk (Identifier.id "Swap")
+        (List.cons (param_many (Identifier.id "A") ty) (List.cons (param_many (Identifier.id "B") ty) List.empty))
+        List.empty (List.cons pick List.empty) Visibility.package_private in
+    let cls_name := NamePath.npath (List.cons (Identifier.id "Swap") List.empty) in
+    let ins := Instance.mk (Identifier.id "_") cls_name List.empty
+        (List.cons b_ref (List.cons a_ref List.empty))
+        Visibility.package_private List.empty List.empty in
+    List.cons (Decl.class_d cls) (List.cons (Decl.instance_d ins) List.empty)
+
+#[test]
+def test_promote_instance_defs_class_default_subst_is_simultaneous : Bool :=
+    let promoted := promote_instance_defs swap_decls in
+    match decl_list_def_named promoted "Swap_B_A_pick" {
+        Option.none => false,
+        Option.some d =>
+            match d {
+                Def.mk {typ := t, term := b, ..} =>
+                    term_is_named_var t "B" && term_is_named_var b "A",
             },
     }
 
