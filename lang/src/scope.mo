@@ -8141,6 +8141,20 @@ def scope_resolve_instance (class_name : NamePath) (instance_key : InstanceKey) 
 def scope_instance_candidates (sd : ScopeData) (cls_name : NamePath) : List Instance :=
     find_instances_by_class sd.instances cls_name
 
+/// Every instance in scope, whatever its class -- what a CONSTRAINT of a
+/// different class than the matched instance's own (`[Add A] HAdd A A A`) is resolved against.
+pub def scope_all_instances (sd : ScopeData) : List Instance :=
+    all_scope_instances sd.instances
+
+def all_scope_instances (insts : List ScopeInstance) : List Instance :=
+    match insts {
+        List.empty => List.empty,
+        List.cons si rest =>
+            match si {
+                mk _ ins_list => list_append ins_list (all_scope_instances rest),
+            },
+    }
+
 def find_instances_by_class (insts : List ScopeInstance) (cls_name : NamePath) : List Instance :=
     match insts {
         List.empty => List.empty,

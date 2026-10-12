@@ -31,7 +31,7 @@ use lang::scope {
   scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_params, scope_find_def_return_type,
   scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_instance_by_name, scope_find_local, scope_globals,
-  scope_instance_candidates, scope_push_local,
+  scope_all_instances, scope_instance_candidates, scope_push_local,
   scope_find_cubical_prim, scope_resolve_name, strip_dict_hint_args,
   type_mentions_any, validate_dict_hints,
 }
@@ -458,7 +458,8 @@ def resolve_class_method_d4
                 List.empty => ok (mk_typed mangled_ref inst_sig),
                 List.cons _ _ =>
                     let classes := scope_data_classes (scope_globals scope) in
-                    let instances := scope_instance_candidates (scope_globals scope) ins_cls_name in
+                    // All classes' instances: a constraint of ANOTHER class (`[Add A] HAdd A A A`) is resolved here too.
+                    let instances := scope_all_instances (scope_globals scope) in
                     let dict_env := dict_env_from_locals locals in
                     // `List.empty` -- extending this call site with the same
                     // args-derived `extra_carriers` fallback `lang.scope`'s

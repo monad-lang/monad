@@ -8056,3 +8056,18 @@ def test_elaborate_list_literal_resolves : IO Bool := do {
     let out <- elaborate_synthetic_source src;
     return (not (String.contains out "FromListLiteral.cons") && not (String.contains out "FromListLiteral.empty"))
 }
+
+/// A constraint of another class than the matched instance's own
+/// (`[Add A] HAdd A A A`) is resolved by the checker, not left to the syntactic pass.
+#[test]
+def test_elaborate_cross_class_instance_constraint_resolves : IO Bool := do {
+    let src : String :=
+        "class HAdd A B C { def add : A -> B -> C }\n" ++
+        "class Add A { def add : A -> A -> A }\n" ++
+        "instance [Add A] HAdd A A A { def add (a b : A) : A := Add.add a b }\n" ++
+        "type N { mk_n (v : I64) }\n" ++
+        "instance Add N { def add (a b : N) : N := a }\n" ++
+        "def mix (a : N) (b : N) : N := HAdd.add a b\n";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "HAdd.add") && String.contains out "__Dict_Add_N")
+}
