@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Push to the project's Cachix cache (monad-lang.cachix.org).
 #
-# Called from CI inside `nix develop`, which is where `cachix` is (devenv.nix).
+# Called from CI inside `nix develop`, which is where `cachix` is (nix/packages.nix).
 # The darwin leg is the exception and enters it through `nix shell nixpkgs#cachix`
 # instead, because that runner cannot realise the dev shell at all.
 # Nothing else pushes: the runners' user is not a trusted Nix user, so there is

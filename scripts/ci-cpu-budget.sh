@@ -32,7 +32,7 @@
 # found" is how a real failure gets skimmed past, and `type -p` inside the dev
 # shell on the dev box is precisely what made it look fine: it answers a path
 # from the system profile, not from the shell, and the runner has no such
-# path. So the tools this script calls are now DECLARED in devenv.nix (gawk,
+# path. So the tools this script calls are now DECLARED in nix/packages.nix (gawk,
 # coreutils, gnugrep, util-linux) instead of being ambient luck, and the
 # `lscpu` call stays `command -v`-guarded so that dropping util-linux again
 # costs a diagnostic line rather than the step. The model name and logical
@@ -125,7 +125,7 @@ echo "nproc --all: $(nproc --all)"
 model="$(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo || true)"
 logical="$(awk '/^processor/ { n++ } END { print n + 0 }' /proc/cpuinfo || true)"
 echo "cpu: ${model:-unknown} x ${logical:-?} logical (from /proc/cpuinfo, which needs no tool)"
-# Declared in devenv.nix, so this resolves on the runner as well; the guard is
+# Declared in nix/packages.nix, so this resolves on the runner as well; the guard is
 # what keeps a future removal to a missing line rather than a failed step.
 if command -v lscpu > /dev/null; then
   lscpu | grep -E '^CPU\(s\)|^Model name' || true

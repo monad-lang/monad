@@ -74,7 +74,7 @@ jobs:
       # What the cross legs are about to need, pushed now that it exists. All
       # three are named because a build input is NOT in the output closure
       # `cachix push` walks -- rung 1 alone would stay uncached, which is the
-      # expensive one. `cachix` is the devshell's (devenv.nix): the runner host
+      # expensive one. `cachix` is the devshell's (nix/packages.nix): the runner host
       # has none. The same three are pushed by ci.yml's `flake-package` job on
       # the same commit; this is the copy that matters when the nightly wins
       # the race against it.
@@ -151,7 +151,7 @@ jobs:
       # a few seconds on a runner that turns out to have had one.
       - uses: DeterminateSystems/nix-installer-action@main
 
-      # NOT `nix develop`: devenv.nix declares `util-linux` for `lscpu`, which
+      # NOT `nix develop`: nix/packages.nix declares `util-linux` for `lscpu`, which
       # has no darwin build, so the default shell cannot be realised here at
       # all. The tools the script reaches for are named instead -- it is a
       # script's worth of coreutils rather than a toolchain's, because the

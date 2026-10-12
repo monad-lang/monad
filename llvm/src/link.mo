@@ -61,7 +61,7 @@ pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (ob
 /// collected (see `monad_alloc` in runtime/src/runtime.c, and
 /// plans/bootstrapping/linear-types-memory.md for why that is temporary).
 /// The include and library search paths come from the nix cc-wrapper via
-/// `boehmgc` in devenv.nix, so nothing here hardcodes a store path; on
+/// `boehmgc` in nix/packages.nix, so nothing here hardcodes a store path; on
 /// macOS, from pkg-config (`darwin_gc_flag`).
 /// `-pthread` here for the same reason as `compile_runtime_obj` above.
 #[partial]
@@ -75,7 +75,7 @@ pub def link_objects (objs : List String) (output : String) (extra_flags : List 
 /// is absent or does not know `bdw-gc`.
 ///
 /// On Linux the toolchain already finds libgc (the nix cc-wrapper via
-/// `boehmgc` in devenv.nix, or the distro's default paths), so the argv
+/// `boehmgc` in nix/packages.nix, or the distro's default paths), so the argv
 /// there stays exactly what it was. On macOS outside nix, nothing puts a
 /// package manager's prefix on clang's search path. Asking pkg-config
 /// rather than naming one keeps this neutral between Homebrew, MacPorts

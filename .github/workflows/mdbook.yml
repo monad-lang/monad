@@ -41,7 +41,7 @@ jobs:
       # GitHub-hosted runner spent to arrive at the same file.
       #
       # Same VERSION deliberately, and it is the one the published site has
-      # been rendered with. The dev shell's mdbook (devenv.nix) is the LOCAL
+      # been rendered with. The dev shell's mdbook (nix/packages.nix) is the LOCAL
       # preview copy, and that separation is stated there as intentional;
       # changing what renders monad-lang.org is a docs decision, not a CI
       # cleanup, so it is not smuggled in here.

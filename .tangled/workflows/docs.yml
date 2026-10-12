@@ -14,7 +14,7 @@
 # scripts/check-docs.sh, which the pre-commit sweep already runs.)
 #
 # mdbook comes from the devenv here, not from the GitHub workflow's
-# `cargo install mdbook 0.4.36` -- devenv.nix already lists it so a docs change
+# `cargo install mdbook 0.4.36` -- nix/packages.nix already lists it so a docs change
 # can be previewed locally with `docs-serve`, and pinning one version in two
 # places is how the two copies drift.
 #

@@ -41,6 +41,9 @@
   #   nix/monad.nix    packages.monad      rung 1, built by scripts/
   #   nix/bootstrap.nix checks.bootstrap   the fixpoint rung 1 asserts
   #
+  # (`nix/packages.nix` is not one of them: it is a DEVENV module, the dev
+  # shell's package list, imported by devenv.nix.)
+  #
   # The facts the three of them share are passed as explicit import arguments
   # rather than through `_module.args`: they are not module-system state, they
   # are what this flake knows about itself, and `import`-arguments cannot be
