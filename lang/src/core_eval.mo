@@ -670,7 +670,7 @@ def test_not_a_function_error : Bool :=
 
 #[test]
 def test_non_exhaustive_match_error : Bool :=
-  let mf : CoreIr := CoreIr.match_fail (ModulePath.mp [Identifier.id "Option"]) (Identifier.id "some") in
+  let mf : CoreIr := CoreIr.match_fail (ModulePath.mk [Identifier.id "Option"]) (Identifier.id "some") in
   is_err (run mf)
 
 def globals_with (defs : List GlobalDef) : GlobalTable := GlobalTable.global_table defs

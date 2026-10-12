@@ -14,8 +14,8 @@ use lib::parser {decls_parser_located}
 /// -- conversion checking against a populated scope is exercised in
 /// `whnf_tests.mo` and end-to-end in `typecheck_examples_tests.mo`.
 def test_scope : Scope := {
-    module_id := ModulePath.mp List.empty,
-    scope := build_scope_from_decls (ModulePath.mp List.empty) List.empty,
+    module_id := ModulePath.mk List.empty,
+    scope := build_scope_from_decls (ModulePath.mk List.empty) List.empty,
     parent := Option.none,
     incomplete_match_ok := false,
 }
@@ -157,7 +157,7 @@ def test_unify_app_different : Bool :=
 use lib::module {parse_all_decls}
 use parsec::core {fail, success}
 
-def conv_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "conv") List.empty)
+def conv_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "conv") List.empty)
 
 /// `idt` is the identity on types, `konst` ignores its argument.
 def conv_scope : Scope :=

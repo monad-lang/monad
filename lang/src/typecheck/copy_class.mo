@@ -78,7 +78,7 @@ pub def copy_verdict_grants_omega (v : CopyVerdict) : Bool :=
 
 /// The class this module resolves. A `NamePath` of one segment, matching
 /// how every other constructor/class lookup in the checker builds one.
-def copy_class_name : NamePath := NamePath.npath (List.cons (Identifier.id "Copy") List.empty)
+def copy_class_name : NamePath := NamePath.mk (List.cons (Identifier.id "Copy") List.empty)
 
 /// Does `typ` have a `Copy` instance in `scope`?
 pub def is_copy (scope : Scope) (typ : Term) : Bool :=

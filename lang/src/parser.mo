@@ -8,8 +8,7 @@ use lang::types {
   ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParsedParam,
   QualifiedName, SourceRange, Term, TypeConstraint, UseFilter, UseItem, Visibility,
   affine, app, char, char_to_string, concrete, destructured, f32, f64, flt, group,
-  has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, mc, mk,
-  named, num, operator, package_private, parse_param_many, parse_param_with_mult,
+  has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
   pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
   pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
   pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_dict_hint, pt_do,
@@ -118,7 +117,7 @@ def join_dotted_identifiers (ids : List String) : String :=
 /// because the two definitions happened to agree byte-for-byte.
 #[partial]
 def module_path_to_string (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => List.intercalate "::" (List.map show_identifier ids),
+    ModulePath.mk ids => List.intercalate "::" (List.map show_identifier ids),
 }
 
 #[partial]
@@ -126,7 +125,7 @@ def name_path_variable (input : String) : ParseResult NameRef :=
         match dotted_identifier input {
                 success rem ids =>
                         if at_least_two ids
-                        then success rem (NameRef.nnp (NamePath.npath (List.map Identifier.id ids)))
+                        then success rem (NameRef.nnp (NamePath.mk (List.map Identifier.id ids)))
                         else fail (ParseError.custom "not a dotted path" rem),
                 fail e => fail e
         }
@@ -166,9 +165,9 @@ def qualified_dotted_tail (rem : String) (ids : List String) (acc : List String)
 def qualified_finish (rem : String) (ids : List String) (tail : List String) : ParseResult NameRef :=
 	match list_reverse ids {
 		List.cons last_id rev_init =>
-			let module_part : ModulePath := ModulePath.mp (List.map Identifier.id (list_reverse rev_init)) in
+			let module_part : ModulePath := ModulePath.mk (List.map Identifier.id (list_reverse rev_init)) in
 			let name_ids : List String := List.cons last_id tail in
-			let name_part : NamePath := NamePath.npath (List.map Identifier.id name_ids) in
+			let name_part : NamePath := NamePath.mk (List.map Identifier.id name_ids) in
 			// This is the ONLY use of the `QualifiedName` import. The
 			// host's unused-import analysis does not count a
 			// module-qualified CONSTRUCTOR path as a reference, so it
@@ -444,7 +443,7 @@ def op_precedence (op : String) : I64 :=
 
 #[partial]
 def ids_to_module_path (ids : List String) : ModulePath :=
-	ModulePath.mp (List.map Identifier.id ids)
+	ModulePath.mk (List.map Identifier.id ids)
 
 #[partial]
 def module_path_parser (input : String) : ParseResult ModulePath :=
@@ -452,7 +451,7 @@ def module_path_parser (input : String) : ParseResult ModulePath :=
 
 #[partial]
 def ids_to_name_path (ids : List String) : NamePath :=
-	NamePath.npath (List.map Identifier.id ids)
+	NamePath.mk (List.map Identifier.id ids)
 
 /// A `.`-joined decl NAME (`open Bool`, `infix (+) := List.add`):
 /// distinct from `module_path_parser` since the qualified-names split
@@ -792,7 +791,7 @@ def lam_params_loop (params : List ParseParam) (body : ParseTerm) : ParseTerm :=
 def def_to_decl (body : ParseTerm) (name : Identifier) (typ : ParseTerm) (vis : Visibility) (params : List ParseParam) : ParseDecl :=
 	let empty_constraints : List TypeConstraint := List.empty in
 	let empty_attrs : List Attribute := List.empty in
-	pd_def_d  (ParseDef.mk (NamePath.npath (List.cons name List.empty)) typ body empty_constraints empty_attrs vis params)
+	pd_def_d  (ParseDef.mk (NamePath.mk (List.cons name List.empty)) typ body empty_constraints empty_attrs vis params)
 
 // --- Canonical declaration parsers (de Bruijn Term) ---
 
@@ -835,7 +834,7 @@ def plain_params_as_parsed (params : List ParseParam) : List ParsedParam :=
 
 /// `lam_params`, but wraps a `destructured` param's body in one extra
 /// `match` first -- same shape as the Rust reference's own `def_parser`/
-/// `lambda` Phase 3/4 handling. Reuses a REAL `MatchCase.mc` (bare name,
+/// `lambda` Phase 3/4 handling. Reuses a REAL `MatchCase.mk` (bare name,
 /// the field pattern's own written-order binders, `Option.some fp`) plus
 /// a plain `Term.var 0` scrutinee reference (correct by construction:
 /// nothing sits between the `Term.lam` this wraps and the `Term.match`'s
@@ -1173,7 +1172,7 @@ def infix_assign (input : String) (op : String) (vis : Visibility) : ParseResult
 
 def infix_path (input : String) (op : String) (vis : Visibility) : ParseResult ParseDecl :=
 	match name_path_parser (skip_spaces input) {
-		success rem path => success rem (pd_infix_d  (Operator.operator op) path vis),
+		success rem path => success rem (pd_infix_d  (Operator.mk op) path vis),
 		fail e => fail e
 	}
 
@@ -1543,7 +1542,7 @@ def type_cons_gadt_type (r : ParseResult ParseTerm) (name : Identifier) : ParseR
 	match r {
 		success rem typ =>
 			let empty_params : List ParseParam := List.empty in
-			success rem (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) empty_params typ),
+			success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params typ),
 		fail e => fail e
 	}
 
@@ -1666,7 +1665,7 @@ def type_cons_brace_close (r : ParseResult String) (name : Identifier) (fields :
 def type_cons_brace_to_constructor (rem : String) (name : Identifier) (fields : List ParseStructField) : ParseResult ParseInductConstructor :=
 	match cons_fields_to_params fields {
 		Option.some params =>
-			success rem (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) params (pt_hole )),
+			success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) params (pt_hole )),
 		Option.none =>
 			fail (ParseError.custom "a brace-declared constructor field has a default value, which is not supported on a bare `type` constructor (only `struct` bodies support field defaults)" rem)
 	}
@@ -1712,7 +1711,7 @@ def type_cons_try_bare (r : ParseResult ParseTerm) (orig : String) (name : Ident
 	match r {
 		success rem typ =>
 			let p : ParseParam := parse_param_many (Identifier.id "_") typ in
-			success rem (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) (List.cons p List.empty) (pt_hole )),
+			success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (List.cons p List.empty) (pt_hole )),
 		fail _ => type_cons_implicit (tag "{" (skip_spaces orig)) orig name
 	}
 
@@ -1879,14 +1878,14 @@ def type_cons_try_next_group (r : ParseResult String) (orig : String) (name : Id
 def type_cons_try_return_type (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
 	match tag ":" (skip_spaces orig) {
 		success rem _ => type_cons_return_type (type_expression (skip_docstrings (skip_spaces rem))) orig name params,
-		fail _ => success orig (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) (list_reverse params) (pt_hole ))
+		fail _ => success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) (pt_hole ))
 	}
 
 #[partial]
 def type_cons_return_type (r : ParseResult ParseTerm) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseInductConstructor :=
 	match r {
-		success rem typ => success rem (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) (list_reverse params) typ),
-		fail _ => success orig (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) (list_reverse params) (pt_hole )),
+		success rem typ => success rem (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) typ),
+		fail _ => success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) (list_reverse params) (pt_hole )),
 	}
 
 #[partial]
@@ -1895,7 +1894,7 @@ def type_cons_implicit (r : ParseResult String) (orig : String) (name : Identifi
 		success rem _ => type_cons_implicit_skip (take_while is_not_close_curly rem) rem orig name,
 		fail _ =>
 			let empty_params : List ParseParam := List.empty in
-			success orig (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) empty_params (pt_hole ))
+			success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole ))
 	}
 
 #[partial]
@@ -1904,7 +1903,7 @@ def type_cons_implicit_skip (r : ParseResult String) (rem : String) (orig : Stri
 		success after_bracket _ => type_cons_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket orig name,
 		fail _ =>
 			let empty_params : List ParseParam := List.empty in
-			success orig (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) empty_params (pt_hole ))
+			success orig (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole ))
 	}
 
 #[partial]
@@ -1913,14 +1912,14 @@ def type_cons_implicit_close (r : ParseResult String) (after_bracket : String) (
 		success rem _ => type_cons_paren_or_nil (tag "(" (skip_spaces rem)) rem name,
 		fail _ =>
 			let empty_params : List ParseParam := List.empty in
-			success after_bracket (ParseInductConstructor.mk (NamePath.npath (List.cons name List.empty)) empty_params (pt_hole ))
+			success after_bracket (ParseInductConstructor.mk (NamePath.mk (List.cons name List.empty)) empty_params (pt_hole ))
 	}
 
 
 #[partial]
 def type_to_decl (name : Identifier) (params : List ParseParam) (kind : ParseTerm) (cons : List ParseInductConstructor) (vis : Visibility) : ParseDecl :=
 	let empty_attrs : List Attribute := List.empty in
-	pd_inductive_d  (ParseInductive.mk (NamePath.npath (List.cons name List.empty)) params kind cons empty_attrs vis)
+	pd_inductive_d  (ParseInductive.mk (NamePath.mk (List.cons name List.empty)) params kind cons empty_attrs vis)
 
 /// Optional `pub `/`priv ` prefix before a declaration keyword (parsed
 /// after any attributes) — defaults to `Visibility.package_private` when
@@ -3503,7 +3502,7 @@ def instance_method_untyped_body (r : ParseResult ParseTerm) (name : Identifier)
 		success rem body =>
 			let empty_constraints : List TypeConstraint := List.empty in
 			let empty_attrs : List Attribute := List.empty in
-			let d : ParseDef := ParseDef.mk (NamePath.npath (List.cons name List.empty)) (pt_hole ) body empty_constraints empty_attrs Visibility.package_private List.empty in
+			let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) (pt_hole ) body empty_constraints empty_attrs Visibility.package_private List.empty in
 			instance_methods rem cls args (List.cons d methods),
 		fail e => fail e
 	}
@@ -3559,7 +3558,7 @@ def instance_method_finish (input : String) (name : Identifier) (params : List P
 	let empty_constraints : List TypeConstraint := List.empty in
 	let empty_attrs : List Attribute := List.empty in
 	let full_typ := build_param_pi_chain (parsed_params_as_params params) ret_typ in
-	let d : ParseDef := ParseDef.mk (NamePath.npath (List.cons name List.empty)) full_typ (lam_parsed_params params body) empty_constraints empty_attrs Visibility.package_private (parsed_params_as_params params) in
+	let d : ParseDef := ParseDef.mk (NamePath.mk (List.cons name List.empty)) full_typ (lam_parsed_params params body) empty_constraints empty_attrs Visibility.package_private (parsed_params_as_params params) in
 	instance_methods input cls args (List.cons d methods)
 
 /// Fold a `List Param` (already in left-to-right declaration order — the
@@ -3749,7 +3748,7 @@ def defmacro_term_body (r : ParseResult ParseTerm) (name : Identifier) (params :
 	match r {
 		success rem term =>
 			let body : ParseTerm := lam_params params term in
-			let np_ : NamePath := NamePath.npath (List.cons name List.empty) in
+			let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
 			let no_attrs : List Attribute := List.empty in
 			let no_constraints : List TypeConstraint := List.empty in
 			success rem (pd_def_macro_d  (ParseDef.mk np_ pt_hole  body no_constraints no_attrs Visibility.package_private List.empty)),
@@ -3786,7 +3785,7 @@ def defmacro_decls_result (r : ParseResult (List ParseDecl)) (name : Identifier)
 def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : List ParseParam) (decl_list : List ParseDecl) : ParseResult ParseDecl :=
 	match r {
 		success rem _ =>
-			let np_ : NamePath := NamePath.npath (List.cons name List.empty) in
+			let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
 			let no_attrs : List Attribute := List.empty in
 			success rem (pd_decl_gen_d  np_ params decl_list no_attrs),
 		fail e => fail (ParseError.custom "expected } to close decl_list block" "")
@@ -6680,7 +6679,7 @@ def match_case_arrow (r: ParseResult String) (name: Identifier) (args : List Ide
     }
 
 /// `args`, parsed by `match_case_arg_names` above, are threaded into
-/// the final `MatchCase.mc` for real now — a previous version always
+/// the final `MatchCase.mk` for real now — a previous version always
 /// hardcoded an empty list here regardless of what was actually parsed,
 /// silently dropping the constructor's bound-variable names (used
 /// downstream by `lang/typecheck/infer.mo`'s `type_check_match_case` to
@@ -7963,7 +7962,7 @@ def class_has_one_functor_f_constraint (c : ParseClass) : Bool :=
 def constraint_is_functor_f (tc : TypeConstraint) : Bool :=
 	match tc {
 		TypeConstraint.mk cls vars =>
-			Similar.similar cls (NamePath.npath (List.cons (Identifier.id "Functor") List.empty))
+			Similar.similar cls (NamePath.mk (List.cons (Identifier.id "Functor") List.empty))
 				&& (match vars {
 					List.cons v _ => Similar.similar v (Identifier.id "F"),
 					List.empty => false
@@ -8820,7 +8819,7 @@ def def_param_destructured_body_var_is (_expected_name : Identifier) (expected_i
                                                 List.cons case_ rest =>
                                                     (match rest { List.empty => true, _ => false }) &&
                                                     match case_ {
-                                                        MatchCase.mc _n _args body fp =>
+                                                        MatchCase.mk _n _args body fp =>
                                                             (match fp { Option.some _ => true, Option.none => false }) &&
                                                             (match body { Term.var idx _ => I64.beq idx expected_idx, _ => false })
                                                     },
@@ -9667,10 +9666,10 @@ def test_defmacro_decls_block_with_nested_macro_call : Bool :=
 
 #[partial]
 def module_path_last (mp : ModulePath) : Identifier :=
-    match mp { ModulePath.mp ids => list_last_or_default ids (Identifier.id "") }
+    match mp { ModulePath.mk ids => list_last_or_default ids (Identifier.id "") }
 
 def name_path_last (np : NamePath) : Identifier :=
-    match np { NamePath.npath ids => list_last_or_default ids (Identifier.id "") }
+    match np { NamePath.mk ids => list_last_or_default ids (Identifier.id "") }
 
 #[partial]
 def list_last_or_default (ids : List Identifier) (default_ : Identifier) : Identifier :=
@@ -10270,7 +10269,7 @@ def def_has_one_beq_a_constraint (d : ParseDef) : Bool :=
 def constraint_is_beq_a (tc : TypeConstraint) : Bool :=
     match tc {
         TypeConstraint.mk cls vars =>
-            Similar.similar cls (NamePath.npath (List.cons (Identifier.id "BEq") List.empty))
+            Similar.similar cls (NamePath.mk (List.cons (Identifier.id "BEq") List.empty))
                 && (match vars {
                     List.cons v _ => Similar.similar v (Identifier.id "A"),
                     List.empty => false

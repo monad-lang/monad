@@ -4,7 +4,7 @@
 ///
 /// Codegen used to key a constructor's runtime tag AND its recorded
 /// field count by the constructor's BARE name only (match dispatch's
-/// `MatchCase.mc` carries just the bare Identifier). Every
+/// `MatchCase.mk` carries just the bare Identifier). Every
 /// `type X { mk ... }` claimed the same `"mk"` key: last-writer-wins,
 /// so in the v29 self-compiled binary's own IR 283 constructors shared
 /// one tag at seven different arities, a value-position `mk` reference

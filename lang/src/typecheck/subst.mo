@@ -275,9 +275,9 @@ def test_match_case_binder_depth_shift : Bool :=
     // must not.
     let no_fp : Option FieldPattern := Option.none in
     let outer_ref : MatchCase :=
-        MatchCase.mc (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 2 DebugName.unnamed) no_fp in
+        MatchCase.mk (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 2 DebugName.unnamed) no_fp in
     let bound_ref : MatchCase :=
-        MatchCase.mc (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 1 DebugName.unnamed) no_fp in
+        MatchCase.mk (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 1 DebugName.unnamed) no_fp in
     // Asserted through the public `term_shift` entry point (the
     // per-node `match_case_shift` helper this used to call directly is
     // now `traverse.mo`'s shared `match_case_map_children_at_depth`).
@@ -291,7 +291,7 @@ def test_match_case_binder_depth_shift : Bool :=
                     match l {
                         Literal.match_ _ cases =>
                             match cases {
-                                List.cons c _ => match c { MatchCase.mc _ _ body _ => term_var_idx body },
+                                List.cons c _ => match c { MatchCase.mk _ _ body _ => term_var_idx body },
                                 List.empty => 0 - 1,
                             },
                         _ => 0 - 1,

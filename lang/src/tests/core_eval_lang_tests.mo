@@ -7,8 +7,7 @@ use lang::core_value {
 use lib::lower_core_ir {LowerCtx, lower_ctx_from_decls, lower_root}
 use lang::types {
   Attribute, DebugName, Decl, InductConstructor, ModulePath, NamePath, Param,
-  Term, binder_explicit, def_d, i64, id, ident, if_, inductive_d, many, match_, mc, mk,
-  num,
+  Term, binder_explicit, def_d, i64, id, ident, if_, inductive_d, many, match_, num,
   open_d, open_only, package_private,
 }
 
@@ -44,9 +43,9 @@ use lang::types {
 
 def sentinel : I64 := -1
 
-def mp1 (s : String) : ModulePath := ModulePath.mp [Identifier.id s]
+def mp1 (s : String) : ModulePath := ModulePath.mk [Identifier.id s]
 
-def np1 (s : String) : NamePath := NamePath.npath [Identifier.id s]
+def np1 (s : String) : NamePath := NamePath.mk [Identifier.id s]
 
 def named (s : String) : DebugName := DebugName.named (Identifier.id s)
 
@@ -147,8 +146,8 @@ def my_add_term : Term :=
       (Term.lit (Literal.match_
         (Term.var 1 (named "a"))
         [
-          MatchCase.mc (Identifier.id "z") List.empty (Term.var 0 (named "b")) Option.none,
-          MatchCase.mc (Identifier.id "s") [Identifier.id "n"]
+          MatchCase.mk (Identifier.id "z") List.empty (Term.var 0 (named "b")) Option.none,
+          MatchCase.mk (Identifier.id "s") [Identifier.id "n"]
             (mynat_s (Term.app (Term.app (free_var "my_add") (Term.var 0 (named "n"))) (Term.var 1 (named "b")))) Option.none,
         ])))
 
@@ -341,7 +340,7 @@ def get_b_term : Term :=
   Term.lam (binder_explicit (named "t")) Term.hole
     (Term.lit (Literal.match_
       (Term.var 0 (named "t"))
-      [MatchCase.mc (Identifier.id "triple_mk") [Identifier.id "a", Identifier.id "b", Identifier.id "c"] (Term.var 1 (named "b")) Option.none]))
+      [MatchCase.mk (Identifier.id "triple_mk") [Identifier.id "a", Identifier.id "b", Identifier.id "c"] (Term.var 1 (named "b")) Option.none]))
 
 def get_b_main_term : Term :=
   Term.app (free_var "get_b") (triple_con (num 10) (num 20) (num 30))

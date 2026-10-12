@@ -18,7 +18,7 @@ use lib::typecheck::whnf {whnf}
 // declared parameter). Inputs are hand-built `Term`s, so each test
 // exercises one reduction rule in isolation.
 
-def synthetic_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "synthetic") List.empty)
+def synthetic_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "synthetic") List.empty)
 
 def empty_locals : LocalScope := {
     vars := List.empty,
@@ -235,7 +235,7 @@ def iota_scope : Scope :=
 /// `field_pattern` is `Option.none` -- what every ELABORATED case
 /// carries (the checker clears it once the real constructor is known).
 def mc (con : String) (binders : List Identifier) (body : Term) : MatchCase :=
-    MatchCase.mc (Identifier.id con) binders body Option.none
+    MatchCase.mk (Identifier.id con) binders body Option.none
 
 def id_a : Identifier := Identifier.id "a"
 def id_b : Identifier := Identifier.id "b"

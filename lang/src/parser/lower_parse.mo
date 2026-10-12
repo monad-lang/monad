@@ -184,7 +184,7 @@ def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Term :=
 #[partial]
 def lower_path (ctx : ParseLowerCtx) (np : NamePath) (nref : NameRef) : Term :=
     match np {
-        NamePath.npath ids => lower_path_ids ctx ids nref,
+        NamePath.mk ids => lower_path_ids ctx ids nref,
     }
 
 
@@ -710,7 +710,7 @@ def lower_parse_match_cases (ctx : ParseLowerCtx) (cases : List ParseMatchCase) 
 
 #[partial]
 def lower_parse_match_case (ctx : ParseLowerCtx) (c : ParseMatchCase) : MatchCase :=
-    MatchCase.mc c.name c.args (lower_parse_term (lower_ctx_bind_all c.args ctx) c.body) c.field_pattern
+    MatchCase.mk c.name c.args (lower_parse_term (lower_ctx_bind_all c.args ctx) c.body) c.field_pattern
 
 
 #[partial]
@@ -1090,7 +1090,7 @@ def prefix_ident (prefix : Identifier) (n : Identifier) : Identifier :=
 
 #[partial]
 def prefix_npath (prefix : Identifier) (np : NamePath) : NamePath :=
-    NamePath.npath (List.cons
+    NamePath.mk (List.cons
         (Identifier.id (String.concat (show_identifier prefix) (String.concat "." (show_name_path np))))
         List.empty)
 

@@ -11,7 +11,7 @@
 /// core "where did this fail and what does the surrounding source look
 /// like" diagnostic, which is what a parse failure actually needs.
 
-use lib::types {Location, mk}
+use lib::types {Location}
 use parsec::core {ParseError, parse_error_remaining}
 use lib::parser::position {location_of_remaining}
 

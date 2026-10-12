@@ -266,7 +266,7 @@ def unit_test_struct_decl (type_name : String) : Struct :=
 /// A one-constructor `Inductive`, by hand -- the comparison case below.
 #[partial]
 def unit_test_inductive_decl (type_name : String) : Inductive :=
-    Inductive.mk (NamePath.npath (List.cons (Identifier.id type_name) List.empty))
+    Inductive.mk (NamePath.mk (List.cons (Identifier.id type_name) List.empty))
         List.empty (Term.sort (SortLevel.concrete 1)) List.empty List.empty Visibility.package_private
 
 /// `filter_reachable_decls` must carry STRUCT decls through, exactly as

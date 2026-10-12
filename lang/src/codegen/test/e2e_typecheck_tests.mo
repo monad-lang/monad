@@ -1,7 +1,7 @@
 use lang::types {
   app, binder_anon, binder_binder, binder_named, con, hole, i64, id, if_, lam, lit,
-  match_, mc, mk, named,
-  npath, num, package_private, pi, sort_n, str, var,
+  match_, named,
+  num, package_private, pi, sort_n, str, var,
 }
 use llvm::ir {emit_module}
 use lib::codegen::emit {check_contains, compile_db_decls_ir}
@@ -21,7 +21,7 @@ def test_compile_simple_function : Bool :=
     let body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -42,7 +42,7 @@ def test_compile_arithmetic : Bool :=
     let body := Term.app (Term.app add_var x_var) one in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -57,7 +57,7 @@ def test_compile_arithmetic : Bool :=
 def test_compile_multiple_defs : Bool :=
     let id1 := Identifier.id "const1" in
     let def1 := Def.mk
-        (NamePath.npath (List.cons id1 List.empty))
+        (NamePath.mk (List.cons id1 List.empty))
         (sort_n 1)
         (Term.lit (Literal.num 1 NumSuffix.i64))
         List.empty
@@ -65,7 +65,7 @@ def test_compile_multiple_defs : Bool :=
         Visibility.package_private List.empty in
     let id2 := Identifier.id "const2" in
     let def2 := Def.mk
-        (NamePath.npath (List.cons id2 List.empty))
+        (NamePath.mk (List.cons id2 List.empty))
         (sort_n 1)
         (Term.lit (Literal.num 2 NumSuffix.i64))
         List.empty
@@ -97,7 +97,7 @@ def test_compile_subtraction : Bool :=
     let body := Term.app (Term.app sub_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -119,7 +119,7 @@ def test_compile_multiplication : Bool :=
     let body := Term.app (Term.app mul_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -141,7 +141,7 @@ def test_compile_division : Bool :=
     let body := Term.app (Term.app div_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -171,7 +171,7 @@ def test_compile_equality : Bool :=
     let body := Term.app (Term.app eq_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -196,7 +196,7 @@ def test_compile_nested_arithmetic : Bool :=
     let body := Term.app (Term.app add_var mul_result) three in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -213,7 +213,7 @@ def test_compile_string_literal : Bool :=
     let body := Term.lit (Literal.str "hello") in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -230,7 +230,7 @@ def test_main_renaming : Bool :=
     let body := Term.lit (Literal.num 0 NumSuffix.i64) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -254,7 +254,7 @@ def test_compile_if_then_else : Bool :=
     let body := Term.lit (Literal.if_ cond then_val else_val) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -277,7 +277,7 @@ def test_compile_less_than : Bool :=
     let body := Term.app (Term.app lt_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -299,7 +299,7 @@ def test_compile_greater_than : Bool :=
     let body := Term.app (Term.app gt_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -321,7 +321,7 @@ def test_compile_not_equal : Bool :=
     let body := Term.app (Term.app ne_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -349,7 +349,7 @@ def test_compile_multi_param_function : Bool :=
         Term.lam (binder_named y_id) (sort_n 1) (
         Term.lam (binder_named z_id) (sort_n 1) body)) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -372,7 +372,7 @@ def test_compile_nested_lambdas : Bool :=
     let inner_lam := Term.lam (binder_named y_id) (sort_n 1) inner_body in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) inner_lam in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -392,7 +392,7 @@ def test_compile_constant_folding : Bool :=
     let body := Term.app (Term.app add_var five) three in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -417,7 +417,7 @@ def test_compile_if_with_gt : Bool :=
     let body := Term.lit (Literal.if_ cond then_val else_val) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -437,12 +437,12 @@ def test_compile_constructor : Bool :=
     let x_var := Term.var 0 (DebugName.named x_id) in
     let y_var := Term.var 1 (DebugName.named y_id) in
     let pair_name := Identifier.id "Pair" in
-    let pair_typ := NamePath.npath (List.cons pair_name List.empty) in
+    let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     let pair_con := Con.mk pair_name pair_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some y_var) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -468,7 +468,7 @@ def test_compile_complex_expression : Bool :=
     let body := Term.app (Term.app mul_var add1) add2 in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -497,7 +497,7 @@ def test_compile_all_arithmetic : Bool :=
     let body := Term.app (Term.app sub_var add_ab) div_mul_a in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -526,7 +526,7 @@ def test_compile_nested_if : Bool :=
     let body := Term.lit (Literal.if_ cond1 then_val1 inner_if) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -542,12 +542,12 @@ def test_compile_nested_if : Bool :=
 def test_compile_bool_true : Bool :=
     let id := Identifier.id "bool_true" in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let body := Term.con true_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -562,12 +562,12 @@ def test_compile_bool_true : Bool :=
 def test_compile_bool_false : Bool :=
     let id := Identifier.id "bool_false" in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let false_con := Con.mk (Identifier.id "false") bool_typ 0 List.empty in
     let body := Term.con false_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -584,7 +584,7 @@ def test_compile_bool_not : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     // Bool.not is a function: Bool -> Bool
     // We need to represent it as a variable reference
     let not_name := Identifier.id "Bool_not" in
@@ -592,7 +592,7 @@ def test_compile_bool_not : Bool :=
     let body := Term.app not_var x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -607,7 +607,7 @@ def test_compile_bool_not : Bool :=
 def test_compile_if_with_bool_literals : Bool :=
     let id := Identifier.id "if_bool" in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let true_val := Term.con true_con in
     let ten := Term.lit (Literal.num 10 NumSuffix.i64) in
@@ -616,7 +616,7 @@ def test_compile_if_with_bool_literals : Bool :=
     let body := Term.lit (Literal.if_ true_val ten twenty) in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -631,12 +631,12 @@ def test_compile_if_with_bool_literals : Bool :=
 def test_compile_list_empty : Bool :=
     let id := Identifier.id "list_empty" in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let body := Term.con empty_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -653,7 +653,7 @@ def test_compile_list_cons : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
     let cons_name := Identifier.id "cons" in
@@ -661,7 +661,7 @@ def test_compile_list_cons : Bool :=
     let body := Term.con cons_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -678,15 +678,15 @@ def test_compile_match_bool : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     // Match on bool with cases for true and false
-    let true_case := MatchCase.mc (Identifier.id "true") List.empty (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
-    let false_case := MatchCase.mc (Identifier.id "false") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let true_case := MatchCase.mk (Identifier.id "true") List.empty (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
+    let false_case := MatchCase.mk (Identifier.id "false") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
     let cases := List.cons true_case (List.cons false_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -717,7 +717,7 @@ def test_compile_recursive_factorial : Bool :=
     let body := Term.lit (Literal.if_ cond one mul_result) in
     let term_ := Term.lam (binder_named n_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -736,7 +736,7 @@ def test_compile_nested_bool_expr : Bool :=
     let a_var := Term.var 0 (DebugName.named a_id) in
     let b_var := Term.var 1 (DebugName.named b_id) in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let false_con := Con.mk (Identifier.id "false") bool_typ 0 List.empty in
     // Create a nested if: if a == true then (if b == true then true else false) else false
@@ -749,7 +749,7 @@ def test_compile_nested_bool_expr : Bool :=
     let body := Term.lit (Literal.if_ a_eq_true inner_if false_lit) in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -766,12 +766,12 @@ def test_compile_option_some : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some x_var) List.empty) in
     let body := Term.con some_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -786,12 +786,12 @@ def test_compile_option_some : Bool :=
 def test_compile_option_none : Bool :=
     let id := Identifier.id "option_none" in
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     let none_con := Con.mk (Identifier.id "none") option_typ 0 List.empty in
     let body := Term.con none_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -810,12 +810,12 @@ def test_compile_pair : Bool :=
     let x_var := Term.var 0 (DebugName.named x_id) in
     let y_var := Term.var 1 (DebugName.named y_id) in
     let pair_name := Identifier.id "Pair" in
-    let pair_typ := NamePath.npath (List.cons pair_name List.empty) in
+    let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some y_var) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -832,12 +832,12 @@ def test_compile_result_ok : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let result_name := Identifier.id "Result" in
-    let result_typ := NamePath.npath (List.cons result_name List.empty) in
+    let result_typ := NamePath.mk (List.cons result_name List.empty) in
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some x_var) List.empty) in
     let body := Term.con ok_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -854,12 +854,12 @@ def test_compile_result_err : Bool :=
     let e_id := Identifier.id "e" in
     let e_var := Term.var 0 (DebugName.named e_id) in
     let result_name := Identifier.id "Result" in
-    let result_typ := NamePath.npath (List.cons result_name List.empty) in
+    let result_typ := NamePath.mk (List.cons result_name List.empty) in
     let err_con := Con.mk (Identifier.id "err") result_typ 1 (List.cons (Option.some e_var) List.empty) in
     let body := Term.con err_con in
     let term_ := Term.lam (binder_named e_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -876,9 +876,9 @@ def test_compile_nested_constructors : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let pair_name := Identifier.id "Pair" in
-    let pair_typ := NamePath.npath (List.cons pair_name List.empty) in
+    let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     // Create some(5) and none
     let five := Term.lit (Literal.num 5 NumSuffix.i64) in
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some five) List.empty) in
@@ -890,7 +890,7 @@ def test_compile_nested_constructors : Bool :=
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -913,13 +913,13 @@ def test_compile_mutual_recursion : Bool :=
     let sub_var := Term.var 0 (DebugName.named (Identifier.id "I64_sub")) in
     // even(n) = if n == 0 then true else odd(n - 1)
     // odd(n) = if n == 1 then true else even(n - 1)
-    let even_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) zero) (Term.con (Con.mk (Identifier.id "true") (NamePath.npath (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named odd_id)) (Term.app (Term.app sub_var n_var) one))) in
+    let even_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) zero) (Term.con (Con.mk (Identifier.id "true") (NamePath.mk (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named odd_id)) (Term.app (Term.app sub_var n_var) one))) in
     let even_term := Term.lam (binder_named n_id) (sort_n 1) even_body in
-    let even_def := Def.mk (NamePath.npath [even_id]) (sort_n 1) even_term List.empty List.empty Visibility.package_private List.empty in
+    let even_def := Def.mk (NamePath.mk [even_id]) (sort_n 1) even_term List.empty List.empty Visibility.package_private List.empty in
     
-    let odd_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) one) (Term.con (Con.mk (Identifier.id "true") (NamePath.npath (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named even_id)) (Term.app (Term.app sub_var n_var) one))) in
+    let odd_body := Term.lit (Literal.if_ (Term.app (Term.app eq_var n_var) one) (Term.con (Con.mk (Identifier.id "true") (NamePath.mk (List.cons (Identifier.id "Bool") List.empty)) 0 List.empty)) (Term.app (Term.var 1 (DebugName.named even_id)) (Term.app (Term.app sub_var n_var) one))) in
     let odd_term := Term.lam (binder_named n_id) (sort_n 1) odd_body in
-    let odd_def := Def.mk (NamePath.npath [odd_id]) (sort_n 1) odd_term List.empty List.empty Visibility.package_private List.empty in
+    let odd_def := Def.mk (NamePath.mk [odd_id]) (sort_n 1) odd_term List.empty List.empty Visibility.package_private List.empty in
     
     let defs := List.cons even_def (List.cons odd_def List.empty) in
     let mod_ := compile_db_decls_ir defs in
@@ -952,7 +952,7 @@ def test_compile_complex_control_flow : Bool :=
     let body := Term.lit (Literal.if_ x_lt_zero mul_xy10 inner_if) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -973,7 +973,7 @@ def test_compile_triple : Bool :=
     let y_var := Term.var 1 (DebugName.named y_id) in
     let z_var := Term.var 2 (DebugName.named z_id) in
     let pair_name := Identifier.id "Pair" in
-    let pair_typ := NamePath.npath (List.cons pair_name List.empty) in
+    let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     // Create nested pairs: pair(x, pair(y, z))
     let inner_pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some y_var) (List.cons (Option.some z_var) List.empty)) in
     let inner_pair_val := Term.con inner_pair_con in
@@ -981,7 +981,7 @@ def test_compile_triple : Bool :=
     let body := Term.con outer_pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) (Term.lam (binder_named z_id) (sort_n 1) body)) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -998,7 +998,7 @@ def test_compile_nested_list : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
     let inner_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some empty_val) List.empty)) in
@@ -1007,7 +1007,7 @@ def test_compile_nested_list : Bool :=
     let body := Term.con outer_cons in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1035,7 +1035,7 @@ def test_compile_chained_natives : Bool :=
     let body := Term.app (Term.app sub_var mul_step) twenty in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1064,7 +1064,7 @@ def test_compile_mixed_bool_arith : Bool :=
     let body := Term.lit (Literal.if_ cond then_val else_val) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1081,23 +1081,23 @@ def test_compile_result_both : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let result_name := Identifier.id "Result" in
-    let result_typ := NamePath.npath (List.cons result_name List.empty) in
+    let result_typ := NamePath.mk (List.cons result_name List.empty) in
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some x_var) List.empty) in
     let ok_val := Term.con ok_con in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let true_val := Term.con true_con in
     let err_con := Con.mk (Identifier.id "err") result_typ 1 (List.cons (Option.some true_val) List.empty) in
     let err_val := Term.con err_con in
     // Create a pair of result values
     let pair_name := Identifier.id "Pair" in
-    let pair_typ := NamePath.npath (List.cons pair_name List.empty) in
+    let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some ok_val) (List.cons (Option.some err_val) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1130,7 +1130,7 @@ def test_compile_deeply_nested_if : Bool :=
     let body := Term.lit (Literal.if_ cond1 one middle_if) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1167,7 +1167,7 @@ def test_compile_lambda_multi_arg : Bool :=
     let result := Term.app lam_5_3 two in
     let term_ := result in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1188,7 +1188,7 @@ def test_compile_forall_type : Bool :=
     let forall_body := Term.lam (binder_named x_id) (sort_n 1) x_var in
     let term_ := Term.pi (binder_binder a_id) (sort_n 1) forall_body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1211,7 +1211,7 @@ def test_compile_pi_type : Bool :=
         Term.lam binder_anon (sort_n 1) a_var) in
     let term_ := Term.pi binder_anon a_var pi_body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1227,7 +1227,7 @@ def test_compile_type_universe : Bool :=
     let id := Identifier.id "type_universe" in
     let term_ := sort_n 1 in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 2)
         term_
         List.empty
@@ -1243,7 +1243,7 @@ def test_compile_hole : Bool :=
     let id := Identifier.id "hole_test" in
     let term_ := Term.hole in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1266,7 +1266,7 @@ def test_compile_partial_application : Bool :=
     let body := Term.app partial_add x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1289,7 +1289,7 @@ def test_compile_defs_with_deps : Bool :=
     let helper_body := Term.app (Term.app add_var x_var) ten in
     let helper_term := Term.lam (binder_named x_id) (sort_n 1) helper_body in
     let helper_def := Def.mk
-        (NamePath.npath (List.cons helper_id List.empty))
+        (NamePath.mk (List.cons helper_id List.empty))
         (sort_n 1)
         helper_term
         List.empty
@@ -1299,7 +1299,7 @@ def test_compile_defs_with_deps : Bool :=
     let five := Term.lit (Literal.num 5 NumSuffix.i64) in
     let helper_call := Term.app (Term.var 0 (DebugName.named helper_id)) five in
     let main_def := Def.mk
-        (NamePath.npath (List.cons main_id List.empty))
+        (NamePath.mk (List.cons main_id List.empty))
         (sort_n 1)
         helper_call
         List.empty
@@ -1317,17 +1317,17 @@ def test_compile_match_multiple_cases : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let false_con := Con.mk (Identifier.id "false") bool_typ 0 List.empty in
     // Match on bool with different return values
-    let true_case := MatchCase.mc (Identifier.id "true") List.empty (Term.lit (Literal.num 100 NumSuffix.i64)) Option.none in
-    let false_case := MatchCase.mc (Identifier.id "false") List.empty (Term.lit (Literal.num 200 NumSuffix.i64)) Option.none in
+    let true_case := MatchCase.mk (Identifier.id "true") List.empty (Term.lit (Literal.num 100 NumSuffix.i64)) Option.none in
+    let false_case := MatchCase.mk (Identifier.id "false") List.empty (Term.lit (Literal.num 200 NumSuffix.i64)) Option.none in
     let cases := List.cons true_case (List.cons false_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1350,7 +1350,7 @@ def test_compile_comparison_ops : Bool :=
     let body := Term.app (Term.app eq_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1373,7 +1373,7 @@ def test_compile_arithmetic_ops : Bool :=
     let body := Term.app (Term.app add_var x_var) y_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) (Term.lam (binder_named y_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1407,7 +1407,7 @@ def test_compile_fibonacci : Bool :=
     let body := Term.lit (Literal.if_ cond n_var sum) in
     let term_ := Term.lam (binder_named n_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1424,7 +1424,7 @@ def test_compile_triple_nested_list : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
     // Innermost list: [x]
@@ -1438,7 +1438,7 @@ def test_compile_triple_nested_list : Bool :=
     let body := Term.con outer_cons in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1454,32 +1454,32 @@ def test_compile_all_constructors : Bool :=
     let id := Identifier.id "all_ctors" in
     // Create one of each constructor type
     let bool_name := Identifier.id "Bool" in
-    let bool_typ := NamePath.npath (List.cons bool_name List.empty) in
+    let bool_typ := NamePath.mk (List.cons bool_name List.empty) in
     let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
     let true_val := Term.con true_con in
     
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
     
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some true_val) List.empty) in
     let some_val := Term.con some_con in
     
     let pair_name := Identifier.id "Pair" in
-    let pair_typ := NamePath.npath (List.cons pair_name List.empty) in
+    let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some empty_val) (List.cons (Option.some some_val) List.empty)) in
     let pair_val := Term.con pair_con in
     
     let result_name := Identifier.id "Result" in
-    let result_typ := NamePath.npath (List.cons result_name List.empty) in
+    let result_typ := NamePath.mk (List.cons result_name List.empty) in
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some pair_val) List.empty) in
     let body := Term.con ok_con in
     
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         body
         List.empty
@@ -1494,12 +1494,12 @@ def test_compile_all_constructors : Bool :=
 def test_compile_nat_zero : Bool :=
     let id := Identifier.id "nat_zero" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let body := Term.con zero_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1516,14 +1516,14 @@ def test_compile_nat_succ : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let succ_con := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some x_var) List.empty) in
     let body := Term.con succ_con in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1538,7 +1538,7 @@ def test_compile_nat_succ : Bool :=
 def test_compile_nested_nat : Bool :=
     let id := Identifier.id "nested_nat" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let succ_con1 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some zero_val) List.empty) in
@@ -1547,7 +1547,7 @@ def test_compile_nested_nat : Bool :=
     let body := Term.con succ_con2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1562,19 +1562,19 @@ def test_compile_nested_nat : Bool :=
 def test_compile_list_option_nat : Bool :=
     let id := Identifier.id "list_option_nat" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let succ_con := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some zero_val) List.empty) in
     let one_val := Term.con succ_con in
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some one_val) List.empty) in
     let some_nat := Term.con some_con in
     let none_con := Con.mk (Identifier.id "none") option_typ 0 List.empty in
     let none_nat := Term.con none_con in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
     let cons_con1 := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some some_nat) (List.cons (Option.some empty_val) List.empty)) in
@@ -1583,7 +1583,7 @@ def test_compile_list_option_nat : Bool :=
     let body := Term.con cons_con2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1598,7 +1598,7 @@ def test_compile_list_option_nat : Bool :=
 def test_compile_nat_three : Bool :=
     let id := Identifier.id "nat_three" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let succ_con1 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some zero_val) List.empty) in
@@ -1609,7 +1609,7 @@ def test_compile_nat_three : Bool :=
     let body := Term.con succ_con3 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1624,22 +1624,22 @@ def test_compile_nat_three : Bool :=
 def test_compile_option_list_nat : Bool :=
     let id := Identifier.id "option_list_nat" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
     let cons_con := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some zero_val) (List.cons (Option.some empty_val) List.empty)) in
     let list_nat := Term.con cons_con in
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some list_nat) List.empty) in
     let body := Term.con some_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1654,20 +1654,20 @@ def test_compile_option_list_nat : Bool :=
 def test_compile_pair_nat_list : Bool :=
     let id := Identifier.id "pair_nat_list" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
     let empty_val := Term.con empty_con in
     let pair_name := Identifier.id "Pair" in
-    let pair_typ := NamePath.npath (List.cons pair_name List.empty) in
+    let pair_typ := NamePath.mk (List.cons pair_name List.empty) in
     let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some zero_val) (List.cons (Option.some empty_val) List.empty)) in
     let body := Term.con pair_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1682,16 +1682,16 @@ def test_compile_pair_nat_list : Bool :=
 def test_compile_result_nat : Bool :=
     let id := Identifier.id "result_nat" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let result_name := Identifier.id "Result" in
-    let result_typ := NamePath.npath (List.cons result_name List.empty) in
+    let result_typ := NamePath.mk (List.cons result_name List.empty) in
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some zero_val) List.empty) in
     let body := Term.con ok_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1706,20 +1706,20 @@ def test_compile_result_nat : Bool :=
 def test_compile_result_option_nat : Bool :=
     let id := Identifier.id "result_option_nat" in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some zero_val) List.empty) in
     let some_val := Term.con some_con in
     let result_name := Identifier.id "Result" in
-    let result_typ := NamePath.npath (List.cons result_name List.empty) in
+    let result_typ := NamePath.mk (List.cons result_name List.empty) in
     let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some some_val) List.empty) in
     let body := Term.con ok_con in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1736,14 +1736,14 @@ def test_compile_match_nat_zero : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     // Match on Nat with case for zero
-    let zero_case := MatchCase.mc (Identifier.id "zero") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let zero_case := MatchCase.mk (Identifier.id "zero") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
     let cases := List.cons zero_case List.empty in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1760,16 +1760,16 @@ def test_compile_match_nat_zero_succ : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     // Match on Nat with cases for zero and succ
-    let zero_case := MatchCase.mc (Identifier.id "zero") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let zero_case := MatchCase.mk (Identifier.id "zero") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
     let succ_name := Identifier.id "n" in
-    let succ_case := MatchCase.mc (Identifier.id "succ") (List.cons succ_name List.empty) (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
+    let succ_case := MatchCase.mk (Identifier.id "succ") (List.cons succ_name List.empty) (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
     let cases := List.cons zero_case (List.cons succ_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1788,7 +1788,7 @@ def test_compile_nat_add : Bool :=
     let a_var := Term.var 0 (DebugName.named a_id) in
     let b_var := Term.var 1 (DebugName.named b_id) in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let succ_con := Con.mk (Identifier.id "succ") nat_typ 1 List.empty in
@@ -1797,17 +1797,17 @@ def test_compile_nat_add : Bool :=
     //   zero => b
     //   succ a' => succ (nat_add a' b)
     // }
-    let a_zero_case := MatchCase.mc (Identifier.id "zero") List.empty b_var Option.none in
+    let a_zero_case := MatchCase.mk (Identifier.id "zero") List.empty b_var Option.none in
     let a_prime := Identifier.id "a'" in
     let a_prime_var := Term.var 0 (DebugName.named a_prime) in
     let recursive_call := Term.app (Term.app add_var a_prime_var) b_var in
     let succ_result := Term.con (Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some recursive_call) List.empty)) in
-    let a_succ_case := MatchCase.mc (Identifier.id "succ") (List.cons a_prime List.empty) succ_result Option.none in
+    let a_succ_case := MatchCase.mk (Identifier.id "succ") (List.cons a_prime List.empty) succ_result Option.none in
     let cases := List.cons a_zero_case (List.cons a_succ_case List.empty) in
     let body := Term.lit (Literal.match_ a_var cases) in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1826,7 +1826,7 @@ def test_compile_nat_mul : Bool :=
     let a_var := Term.var 0 (DebugName.named a_id) in
     let b_var := Term.var 1 (DebugName.named b_id) in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     let mul_var := Term.var 2 (DebugName.named id) in
@@ -1834,18 +1834,18 @@ def test_compile_nat_mul : Bool :=
     //   zero => zero
     //   succ a' => nat_add b (nat_mul a' b)
     // }
-    let a_zero_case := MatchCase.mc (Identifier.id "zero") List.empty zero_val Option.none in
+    let a_zero_case := MatchCase.mk (Identifier.id "zero") List.empty zero_val Option.none in
     let a_prime := Identifier.id "a'" in
     let a_prime_var := Term.var 0 (DebugName.named a_prime) in
     let recursive_mul := Term.app (Term.app mul_var a_prime_var) b_var in
     let add_var := Term.var 0 (DebugName.named (Identifier.id "nat_add")) in
     let add_result := Term.app (Term.app add_var b_var) recursive_mul in
-    let a_succ_case := MatchCase.mc (Identifier.id "succ") (List.cons a_prime List.empty) add_result Option.none in
+    let a_succ_case := MatchCase.mk (Identifier.id "succ") (List.cons a_prime List.empty) add_result Option.none in
     let cases := List.cons a_zero_case (List.cons a_succ_case List.empty) in
     let body := Term.lit (Literal.match_ a_var cases) in
     let term_ := Term.lam (binder_named a_id) (sort_n 1) (Term.lam (binder_named b_id) (sort_n 1) body) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1862,22 +1862,22 @@ def test_compile_nat_pred : Bool :=
     let n_id := Identifier.id "n" in
     let n_var := Term.var 0 (DebugName.named n_id) in
     let nat_name := Identifier.id "Nat" in
-    let nat_typ := NamePath.npath (List.cons nat_name List.empty) in
+    let nat_typ := NamePath.mk (List.cons nat_name List.empty) in
     let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
     let zero_val := Term.con zero_con in
     // nat_pred n = match n {
     //   zero => zero
     //   succ n' => n'
     // }
-    let zero_case := MatchCase.mc (Identifier.id "zero") List.empty zero_val Option.none in
+    let zero_case := MatchCase.mk (Identifier.id "zero") List.empty zero_val Option.none in
     let n_prime := Identifier.id "n'" in
     let n_prime_var := Term.var 0 (DebugName.named n_prime) in
-    let succ_case := MatchCase.mc (Identifier.id "succ") (List.cons n_prime List.empty) n_prime_var Option.none in
+    let succ_case := MatchCase.mk (Identifier.id "succ") (List.cons n_prime List.empty) n_prime_var Option.none in
     let cases := List.cons zero_case (List.cons succ_case List.empty) in
     let body := Term.lit (Literal.match_ n_var cases) in
     let term_ := Term.lam (binder_named n_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1897,7 +1897,7 @@ def test_compile_string_beq : Bool :=
     let body := Term.app (Term.app beq_var s1) s2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1917,7 +1917,7 @@ def test_compile_string_concat : Bool :=
     let body := Term.app (Term.app concat_var s1) s2 in
     let term_ := Term.lam (binder_named (Identifier.id "x")) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1934,17 +1934,17 @@ def test_compile_list_is_empty : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let list_name := Identifier.id "List" in
-    let list_typ := NamePath.npath (List.cons list_name List.empty) in
+    let list_typ := NamePath.mk (List.cons list_name List.empty) in
     // Match on List with cases for empty and cons
-    let empty_case := MatchCase.mc (Identifier.id "empty") List.empty (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
+    let empty_case := MatchCase.mk (Identifier.id "empty") List.empty (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
     let head_name := Identifier.id "head" in
     let tail_name := Identifier.id "tail" in
-    let cons_case := MatchCase.mc (Identifier.id "cons") (List.cons head_name (List.cons tail_name List.empty)) (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let cons_case := MatchCase.mk (Identifier.id "cons") (List.cons head_name (List.cons tail_name List.empty)) (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
     let cases := List.cons empty_case (List.cons cons_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1961,16 +1961,16 @@ def test_compile_option_is_some : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let option_name := Identifier.id "Option" in
-    let option_typ := NamePath.npath (List.cons option_name List.empty) in
+    let option_typ := NamePath.mk (List.cons option_name List.empty) in
     // Match on Option with cases for some and none
     let some_name := Identifier.id "val" in
-    let some_case := MatchCase.mc (Identifier.id "some") (List.cons some_name List.empty) (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
-    let none_case := MatchCase.mc (Identifier.id "none") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let some_case := MatchCase.mk (Identifier.id "some") (List.cons some_name List.empty) (Term.lit (Literal.num 1 NumSuffix.i64)) Option.none in
+    let none_case := MatchCase.mk (Identifier.id "none") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
     let cases := List.cons some_case (List.cons none_case List.empty) in
     let body := Term.lit (Literal.match_ x_var cases) in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -1990,7 +1990,7 @@ def test_compile_io_pure : Bool :=
     let body := Term.app pure_var x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty
@@ -2011,7 +2011,7 @@ def test_compile_io_bind : Bool :=
     let body := Term.app (Term.app bind_var io_var) x_var in
     let term_ := Term.lam (binder_named x_id) (sort_n 1) body in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         term_
         List.empty

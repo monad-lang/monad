@@ -739,8 +739,8 @@ def eval_file_typechecked (em : ElaboratedModules) (verbose : Bool) : IO I64 {
     // different ones: `lower_ctx_from_decls` carries a module identity
     // (`ModulePath`), `lower_root` roots at a DEF name (`NamePath`).
     // Both are the one-segment "main".
-    let root_mp : ModulePath := ModulePath.mp [Identifier.id "main"];
-    let root_np : NamePath := NamePath.npath [Identifier.id "main"];
+    let root_mp : ModulePath := ModulePath.mk [Identifier.id "main"];
+    let root_np : NamePath := NamePath.mk [Identifier.id "main"];
     let ctx := lower_ctx_from_decls root_mp dispatched;
     match lower_root ctx root_np {
         Result.err e => do {
@@ -2229,7 +2229,7 @@ def main (args : List String) : IO I64 {
             // target's own decls.
             let base_dir : String := extract_directory file_path;
             let module_name : String := module_name_from_path file_path;
-            let mp : ModulePath := ModulePath.mp [Identifier.id module_name];
+            let mp : ModulePath := ModulePath.mk [Identifier.id module_name];
             let module_opt <- load_module_with_info base_dir mp;
             match module_opt {
                 Option.some mi => do {

@@ -109,7 +109,7 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
 def typecheck_source (source : String) : Bool :=
     match parse_all_decls source {
         success _ decl_list =>
-            let path := ModulePath.mp (List.cons (Identifier.id "synthetic") List.empty) in
+            let path := ModulePath.mk (List.cons (Identifier.id "synthetic") List.empty) in
             // Scope FIRST, from the raw (pre-elaboration) decls -- same
             // order as `elaborate_loaded_modules` (lang/module.mo), and
             // load-bearing for the signature-driven call path: the def

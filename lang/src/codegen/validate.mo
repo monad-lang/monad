@@ -262,7 +262,7 @@ def cases_have_struct_lit (cases : List MatchCase) : Bool := match cases {
     List.empty => false,
     List.cons c rest =>
         match c {
-            MatchCase.mc _name _args body _fp =>
+            MatchCase.mk _name _args body _fp =>
                 term_has_struct_lit body || cases_have_struct_lit rest,
         },
 }

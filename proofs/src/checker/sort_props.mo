@@ -221,7 +221,7 @@ def pi_universe_of_prop_components_stays_at_1 : Bool :=
 // scope `lang/src/tests`'s cubical pins are built from instead.
 
 def interval_kind_path : ModulePath :=
-    ModulePath.mp (List.cons (Identifier.id "proofs_sort_interval") List.empty)
+    ModulePath.mk (List.cons (Identifier.id "proofs_sort_interval") List.empty)
 
 def interval_kind_source : String :=
     String.concat "#[cubical \"interval\"] def I : Type\n"

@@ -816,7 +816,7 @@ def test_type_head_name_reports_unknown_as_question : Bool :=
 /// arithmetic, not instance resolution, which only a real corpus scope
 /// can exercise (and which `report_affine_usage_compiler` does).
 def probe_scope : Scope :=
-    { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
+    { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
       scope := scope_data_empty,
       parent := Option.none,
       incomplete_match_ok := false }

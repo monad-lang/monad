@@ -385,7 +385,7 @@ def builtin_arity_matches (base_name : String) (arity : I64) : Bool :=
 
 #[partial]
 def show_operator (op : Operator) : String := match op {
-    Operator.operator s => s,
+    Operator.mk s => s,
 }
 
 #[partial]
@@ -639,7 +639,7 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                     match fresh_temp ctx2 {
                                         CtxStrPair.mk ctx3 cmp_temp =>
                                             match this_case {
-                                                MatchCase.mc name args _body _fp =>
+                                                MatchCase.mk name args _body _fp =>
                                                     // Composite bare#arity key: the case's
                                                     // own positional binder count IS the
                                                     // constructor's field count for a
@@ -759,7 +759,7 @@ def retarget_terminal_ret (blocks : List LLVMBasicBlock) (target_val : LLVMValue
 #[partial]
 def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ : MatchCase) (case_label : String) (merge_label : String) : MatchChainResult :=
     match case_ {
-        MatchCase.mc _name args body _fp =>
+        MatchCase.mk _name args body _fp =>
             match bind_match_fields c scrutinee_val args 0 {
                 { ctx := c1, instrs := field_instrs } =>
                     match compile_db_term_ir c1 body {
@@ -2720,7 +2720,7 @@ def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : 
                             if looks_like_ctor && Bool.not also_a_real_fn && Bool.not also_a_local
                             then
                                 let base_name := extract_base_name name in
-                                let con := Con.mk (Identifier.id base_name) (NamePath.npath List.empty) (List.length args) (wrap_some_list args) in
+                                let con := Con.mk (Identifier.id base_name) (NamePath.mk List.empty) (List.length args) (wrap_some_list args) in
                                 Option.some (compile_con_ir c con)
                             else Option.none,
                         DebugName.unnamed => Option.none,
@@ -3802,7 +3802,7 @@ def extern_attr_target (attrs : List Attribute) : Option (List AttrArg) :=
 /// path a `use ... ::` names.
 #[partial]
 def last_segment_of_name_path (np : NamePath) : String := match np {
-    NamePath.npath ids => last_segment_of_id_list ids,
+    NamePath.mk ids => last_segment_of_id_list ids,
 }
 
 #[partial]
@@ -5283,12 +5283,12 @@ def test_compile_db_module_records_the_passed_triple : Bool :=
 
 #[test]
 def test_compile_db_inductive_decls : Bool :=
-    let some_name := NamePath.npath (List.cons (Identifier.id "Some") List.empty) in
+    let some_name := NamePath.mk (List.cons (Identifier.id "Some") List.empty) in
     let some_ctor := InductConstructor.mk some_name List.empty (Term.sort (SortLevel.concrete 1)) in
-    let none_name := NamePath.npath (List.cons (Identifier.id "None") List.empty) in
+    let none_name := NamePath.mk (List.cons (Identifier.id "None") List.empty) in
     let none_ctor := InductConstructor.mk none_name List.empty (Term.sort (SortLevel.concrete 1)) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
-    let ind_name := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
+    let ind_name := NamePath.mk (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.sort (SortLevel.concrete 1)) ctors empty_attrs Visibility.package_private in
     let funcs := compile_db_inductive_decls (List.cons ind List.empty) str_map_empty in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty in
@@ -5315,12 +5315,12 @@ def test_compile_db_inductive_decls : Bool :=
 /// exactly the map-building + lookup mechanism, not elaboration.
 #[test]
 def test_ctor_tag_map_qualified_name_lookup : Bool :=
-    let some_name := NamePath.npath (List.cons (Identifier.id "Some") List.empty) in
+    let some_name := NamePath.mk (List.cons (Identifier.id "Some") List.empty) in
     let some_ctor := InductConstructor.mk some_name List.empty (Term.sort (SortLevel.concrete 1)) in
-    let none_name := NamePath.npath (List.cons (Identifier.id "None") List.empty) in
+    let none_name := NamePath.mk (List.cons (Identifier.id "None") List.empty) in
     let none_ctor := InductConstructor.mk none_name List.empty (Term.sort (SortLevel.concrete 1)) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
-    let ind_name := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
+    let ind_name := NamePath.mk (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.sort (SortLevel.concrete 1)) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
     let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty in
@@ -5369,9 +5369,9 @@ def test_struct_ctor_reference_is_arity_known : Bool :=
 /// tag is a real table entry rather than the 0 fallback.
 #[test]
 def test_struct_ctor_reference_shares_the_literals_tag : Bool :=
-    let slim_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
+    let slim_mk := InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "mk") List.empty))
         [unit_test_param "only"] (Term.sort (SortLevel.concrete 1)) in
-    let slim := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Slim") List.empty))
+    let slim := Inductive.mk (NamePath.mk (List.cons (Identifier.id "Slim") List.empty))
         List.empty (Term.sort (SortLevel.concrete 1)) [slim_mk] empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim List.empty) in
     let arity_map := build_constructor_arity_map_with_structs (List.cons slim List.empty) (List.cons (unit_test_struct "Point" ["x", "y"]) List.empty) in
@@ -5395,13 +5395,13 @@ def test_struct_ctor_reference_shares_the_literals_tag : Bool :=
 /// exactly the map-building + lookup mechanism.
 #[test]
 def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
-    let slim_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
+    let slim_mk := InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "mk") List.empty))
         [unit_test_param "only"] (Term.sort (SortLevel.concrete 1)) in
-    let slim := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Slim") List.empty))
+    let slim := Inductive.mk (NamePath.mk (List.cons (Identifier.id "Slim") List.empty))
         List.empty (Term.sort (SortLevel.concrete 1)) [slim_mk] empty_attrs Visibility.package_private in
-    let wide_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
+    let wide_mk := InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "mk") List.empty))
         [unit_test_param "a", unit_test_param "b", unit_test_param "c"] (Term.sort (SortLevel.concrete 1)) in
-    let wide := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Wide") List.empty))
+    let wide := Inductive.mk (NamePath.mk (List.cons (Identifier.id "Wide") List.empty))
         List.empty (Term.sort (SortLevel.concrete 1)) [wide_mk] empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim (List.cons wide List.empty)) in
     let arity_map := build_constructor_arity_map (List.cons slim (List.cons wide List.empty)) in
@@ -5437,7 +5437,7 @@ def native_attr (target : String) : List Attribute :=
 def native_def_fixture (name : String) (target : String) : Def :=
     let body := Term.lam (binder_named (Identifier.id "a")) Term.hole
         (Term.lam (binder_named (Identifier.id "b")) Term.hole Term.hole) in
-    Def.mk (NamePath.npath (List.cons (Identifier.id name) List.empty)) Term.hole body
+    Def.mk (NamePath.mk (List.cons (Identifier.id name) List.empty)) Term.hole body
         List.empty (native_attr target) Visibility.package_private List.empty
 
 #[partial]
@@ -5578,7 +5578,7 @@ def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
 /// `compile_db_decls_ir_with_debug` tests below.
 #[partial]
 def debug_fixture_def : Def :=
-    Def.mk (NamePath.npath [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
+    Def.mk (NamePath.mk [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
         (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private List.empty
 
 /// A def with a source position on an INNER term, as
@@ -5600,7 +5600,7 @@ def debug_fixture_def : Def :=
 ///     constant is folded into a phi operand.
 #[partial]
 def located_fixture_def : Def :=
-    Def.mk (NamePath.npath [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
+    Def.mk (NamePath.mk [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
         (Term.ctx (Location.mk 40 9 7)
             (Term.lit (Literal.if_ (Term.lit (Literal.num 1 NumSuffix.i64))
                                    (Term.lit (Literal.num 2 NumSuffix.i64))
@@ -5611,7 +5611,7 @@ def located_fixture_def : Def :=
 /// body -- line 2, column 3, at offset 5.
 #[partial]
 def located_num_fixture_def : Def :=
-    Def.mk (NamePath.npath [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
+    Def.mk (NamePath.mk [Identifier.id "myfunc"]) (Term.sort (SortLevel.concrete 1))
         (Term.ctx (Location.mk 5 2 3) (Term.lit (Literal.num 42 NumSuffix.i64)))
         List.empty empty_attrs Visibility.package_private List.empty
 
@@ -5698,7 +5698,7 @@ def test_compile_db_decls_ir_default_has_no_debug_info : Bool :=
 /// (`materialize_branch_val`) never runs.
 #[partial]
 def native_bool_over_branching_fixture_def : Def :=
-    Def.mk (NamePath.npath [Identifier.id "spbeq"]) (Term.sort (SortLevel.concrete 1))
+    Def.mk (NamePath.mk [Identifier.id "spbeq"]) (Term.sort (SortLevel.concrete 1))
         (Term.lam (binder_named (Identifier.id "b")) (Term.sort (SortLevel.concrete 1))
             (Term.lam (binder_named (Identifier.id "x")) (Term.sort (SortLevel.concrete 1))
                 (Term.lam (binder_named (Identifier.id "y")) (Term.sort (SortLevel.concrete 1))
@@ -5891,7 +5891,7 @@ def desugar_struct_lit_con (scope : Scope) (fields : List StructLitField) (tn : 
     match type_head_name tn {
         Option.none => Option.none,
         Option.some sname =>
-            let typ_np : NamePath := NamePath.npath (List.cons sname List.empty) in
+            let typ_np : NamePath := NamePath.mk (List.cons sname List.empty) in
             match scope_find_inductive typ_np scope {
                 Result.err _ => Option.none,
                 Result.ok ind =>
@@ -5928,8 +5928,8 @@ def desugar_struct_lit_cases (scope : Scope) (cases : List MatchCase) : List Mat
     List.empty => List.empty,
     List.cons c rest =>
         match c {
-            MatchCase.mc cname cargs cbody cfp =>
-                List.cons (MatchCase.mc cname cargs (desugar_struct_lit_term scope cbody) cfp) (desugar_struct_lit_cases scope rest),
+            MatchCase.mk cname cargs cbody cfp =>
+                List.cons (MatchCase.mk cname cargs (desugar_struct_lit_term scope cbody) cfp) (desugar_struct_lit_cases scope rest),
         },
 }
 

@@ -35,7 +35,7 @@ use lang::types {
   AttrArg, Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, ModulePath, NamePath, Param, Struct, StructField, Term,
   TypeConstraint, binder_anon, concrete, empty_attrs, id_eq, level_const, many,
-  named, npath,
+  named, 
   package_private, sentinel, show_identifier, unnamed,
 }
 use lib::typecheck::macro_apply {expand_decl_gen_call}
@@ -51,7 +51,7 @@ type DeclGenEntry { dg_entry (name: Identifier) (params: List Param) (decl_list:
 /// registry entry is keyed by.
 #[partial]
 def name_path_last (np : NamePath) : Option Identifier :=
-    match np { NamePath.npath ids => List.last ids }
+    match np { NamePath.mk ids => List.last ids }
 
 #[partial]
 def build_term_macro_registry (decl_list : List Decl) : List TermMacroEntry :=
@@ -551,13 +551,13 @@ def term_type_level (t : Term) : I64 :=
     }
 
 def empty_constraints : List TypeConstraint := List.empty
-def dummy_path : NamePath := NamePath.npath (List.cons (Identifier.id "dummy") List.empty)
+def dummy_path : NamePath := NamePath.mk (List.cons (Identifier.id "dummy") List.empty)
 
 #[test]
 def test_expand_decls_drops_term_macro_definitions : Bool :=
     // `defmacro double x := x` on its own -- consumed into the
     // registry, produces zero output decl_list.
-    let double_name : NamePath := NamePath.npath (List.cons (Identifier.id "double") List.empty) in
+    let double_name : NamePath := NamePath.mk (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam binder_anon Term.hole (Term.var 0 DebugName.unnamed) in
     let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private List.empty) in
     match expand_decls (List.cons macro_def List.empty) {
@@ -570,7 +570,7 @@ def test_expand_decls_expands_term_position_macro_call_inside_a_def : Bool :=
     // `defmacro double x := x` + `def y : Hole := double! 9` --
     // ordinary def's own `term` field gets its macro call resolved,
     // and the macro definition itself is dropped from the output.
-    let double_name : NamePath := NamePath.npath (List.cons (Identifier.id "double") List.empty) in
+    let double_name : NamePath := NamePath.mk (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam binder_anon Term.hole (Term.var 0 DebugName.unnamed) in
     let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private List.empty) in
     let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named (Identifier.id "double"))) (Term.sort (SortLevel.concrete 9)) in
@@ -601,7 +601,7 @@ def test_expand_decls_resolves_std_derive_shape_end_to_end : Bool :=
     // `reflect_type_info!` call. Only the original `macro_call_d
     // "derive_lens"` invocation itself is gone, consumed into its
     // expansion.
-    let lens_name : NamePath := NamePath.npath (List.cons (Identifier.id "derive_lens") List.empty) in
+    let lens_name : NamePath := NamePath.mk (List.cons (Identifier.id "derive_lens") List.empty) in
     let t_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
     let named_t : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "T")) in
     let meta_ref : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "derive_lens_meta")) in
@@ -661,7 +661,7 @@ def test_expand_decls_arity_mismatch_leaves_call_unresolved : Bool :=
     // (see the `decl_gen_d` arm's own doc comment) -- so the output is
     // TWO decls: the still-present template, then the still-unresolved
     // (arity-mismatched) `macro_call_d`.
-    let gen_name : NamePath := NamePath.npath (List.cons (Identifier.id "needs_one") List.empty) in
+    let gen_name : NamePath := NamePath.mk (List.cons (Identifier.id "needs_one") List.empty) in
     let one_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
     let gen_def : Decl := Decl.decl_gen_d gen_name (List.cons one_param List.empty) List.empty List.empty in
     let no_args : List Term := List.empty in
@@ -699,7 +699,7 @@ def test_expand_decls_ordinary_decl_with_no_macros_is_unchanged : Bool :=
 /// assertions can also tell the templates apart by their meta-def.
 def bridge_template (macro_name : String) : Decl :=
     let t_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
-    let own_name : NamePath := NamePath.npath (List.cons (Identifier.id macro_name) List.empty) in
+    let own_name : NamePath := NamePath.mk (List.cons (Identifier.id macro_name) List.empty) in
     let meta_name : String := String.concat macro_name "_meta" in
     let body : Decl :=
         Decl.macro_call_d (Identifier.id "reflect_type_info")
@@ -875,7 +875,7 @@ def test_decl_type_attrs_reads_struct_and_inductive_only : Bool :=
     // on top of the `Inductive` one that `#[derive_cli] type` uses).
     let attr : Attribute := Attribute.mk (Identifier.id "derive_cli") List.empty in
     let struct_decl : Decl := bridge_struct (List.cons attr List.empty) in
-    let ind : Inductive := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Cmd") List.empty)) List.empty Term.hole List.empty (List.cons attr List.empty) Visibility.package_private in
+    let ind : Inductive := Inductive.mk (NamePath.mk (List.cons (Identifier.id "Cmd") List.empty)) List.empty Term.hole List.empty (List.cons attr List.empty) Visibility.package_private in
     let def_decl : Decl := Decl.def_d (Def.mk dummy_path Term.hole (Term.sort (SortLevel.concrete 1)) empty_constraints List.empty Visibility.package_private List.empty) in
     I64.beq (List.length (decl_type_attrs struct_decl)) 1 &&
     I64.beq (List.length (decl_type_attrs (Decl.inductive_d ind))) 1 &&

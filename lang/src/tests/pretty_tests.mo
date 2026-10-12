@@ -55,13 +55,13 @@ def test_show_identifier : Bool :=
 
 #[test]
 def test_show_module_path_single : Bool :=
-    let path : ModulePath := ModulePath.mp (List.cons test_id_A List.empty) in
+    let path : ModulePath := ModulePath.mk (List.cons test_id_A List.empty) in
     let result : String := show_module_path path in
     String.beq result "A"
 
 #[test]
 def test_show_module_path_dotted : Bool :=
-    let path : ModulePath := ModulePath.mp (List.cons test_id_A (List.cons test_id_x List.empty)) in
+    let path : ModulePath := ModulePath.mk (List.cons test_id_A (List.cons test_id_x List.empty)) in
     let result : String := show_module_path path in
     String.beq result "A.x"
 
@@ -260,8 +260,8 @@ def test_show_literal_if : Bool :=
 #[test]
 def test_show_literal_match_simple : Bool :=
     let scrut : Term := Term.lit (Literal.num 5 NumSuffix.i64) in
-    let case_none : MatchCase := MatchCase.mc (Identifier.id "none") empty_id_list (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
-    let case_some : MatchCase := MatchCase.mc (Identifier.id "some") (List.cons test_id_x List.empty) (Term.var 0 (DebugName.named test_id_x)) Option.none in
+    let case_none : MatchCase := MatchCase.mk (Identifier.id "none") empty_id_list (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") (List.cons test_id_x List.empty) (Term.var 0 (DebugName.named test_id_x)) Option.none in
     let cases : List MatchCase := List.cons case_none (List.cons case_some List.empty) in
     let lit : Literal := Literal.match_ scrut cases in
     let term : Term := Term.lit lit in
@@ -281,7 +281,7 @@ def test_show_term_native : Bool :=
 
 #[test]
 def test_show_term_con_no_args : Bool :=
-    let typ_path : NamePath := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
+    let typ_path : NamePath := NamePath.mk (List.cons (Identifier.id "Option") List.empty) in
     let con : Con := Con.mk (Identifier.id "none") typ_path 0 empty_opt_terms in
     let term : Term := Term.con con in
     let result : String := show_term term in
@@ -289,7 +289,7 @@ def test_show_term_con_no_args : Bool :=
 
 #[test]
 def test_show_term_con_with_args : Bool :=
-    let typ_path : NamePath := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
+    let typ_path : NamePath := NamePath.mk (List.cons (Identifier.id "Option") List.empty) in
     let arg1 : Option Term := Option.some (Term.lit (Literal.num 42 NumSuffix.i64)) in
     let args : List (Option Term) := List.cons arg1 empty_opt_terms in
     let con : Con := Con.mk (Identifier.id "some") typ_path 1 args in
@@ -301,7 +301,7 @@ def test_show_term_con_with_args : Bool :=
 
 #[test]
 def test_show_decl_def : Bool :=
-    let name : NamePath := NamePath.npath (List.cons (Identifier.id "id") List.empty) in
+    let name : NamePath := NamePath.mk (List.cons (Identifier.id "id") List.empty) in
     let typ : Term := Term.pi binder_anon (sort_n 1) (Term.pi binder_anon (Term.var 2 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_A))) in
     let body : Term := Term.lam (binder_named test_id_x) (Term.var 1 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_x)) in
     let def_ : Def := Def.mk name typ body empty_constraints empty_attrs Visibility.package_private List.empty in
@@ -311,12 +311,12 @@ def test_show_decl_def : Bool :=
 
 #[test]
 def test_show_decl_inductive : Bool :=
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Bool") List.empty) in
     let true_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "true") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "true") List.empty))
         empty_params (sort_n 1) in
     let false_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "false") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "false") List.empty))
         empty_params (sort_n 1) in
     let ctors : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let ind : Inductive := Inductive.mk type_name empty_params (sort_n 1) ctors empty_attrs Visibility.package_private in
@@ -349,22 +349,22 @@ def test_show_decl_class_simple : Bool :=
 
 #[test]
 def test_show_decl_infix : Bool :=
-    let op : Operator := Operator.operator "++" in
-    let path : NamePath := NamePath.npath (List.cons (Identifier.id "append") List.empty) in
+    let op : Operator := Operator.mk "++" in
+    let path : NamePath := NamePath.mk (List.cons (Identifier.id "append") List.empty) in
     let decl : Decl := Decl.infix_d op path Visibility.package_private in
     let result : String := show_decl decl in
     String.beq result "infix: ++ := append"
 
 #[test]
 def test_show_decl_use : Bool :=
-    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "prelude") List.empty) in
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id "prelude") List.empty) in
     let decl : Decl := Decl.use_d path UseFilter.use_bare false in
     let result : String := show_decl decl in
     String.beq result "use prelude"
 
 #[test]
 def test_show_decl_open : Bool :=
-    let path : NamePath := NamePath.npath (List.cons (Identifier.id "IO") List.empty) in
+    let path : NamePath := NamePath.mk (List.cons (Identifier.id "IO") List.empty) in
     let decl : Decl := Decl.open_d path OpenFilter.open_all in
     let result : String := show_decl decl in
     String.beq result "open IO"
@@ -373,7 +373,7 @@ def test_show_decl_open : Bool :=
 
 #[test]
 def test_show_instance : Bool :=
-    let cls_path : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
+    let cls_path : NamePath := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
     let args : List Term := [sort_n 1] in
     let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private List.empty List.empty in
     let result : String := show_instance ins in
@@ -384,7 +384,7 @@ def test_show_instance : Bool :=
 #[test]
 def test_show_match_case_no_args : Bool :=
     let body : Term := Term.lit (Literal.num 0 NumSuffix.i64) in
-    let mc : MatchCase := MatchCase.mc (Identifier.id "none") empty_id_list body Option.none in
+    let mc : MatchCase := MatchCase.mk (Identifier.id "none") empty_id_list body Option.none in
     let result : String := show_match_case mc in
     String.beq result "none => 0i64"
 
@@ -392,6 +392,6 @@ def test_show_match_case_no_args : Bool :=
 def test_show_match_case_with_args : Bool :=
     let body : Term := Term.var 0 (DebugName.named test_id_x) in
     let args : List Identifier := List.cons test_id_x (List.cons test_id_y List.empty) in
-    let mc : MatchCase := MatchCase.mc (Identifier.id "some") args body Option.none in
+    let mc : MatchCase := MatchCase.mk (Identifier.id "some") args body Option.none in
     let result : String := show_match_case mc in
     String.beq result "some x y => x"

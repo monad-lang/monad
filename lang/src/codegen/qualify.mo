@@ -16,7 +16,7 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::bench {Bench.now}
 use lang::types {
   Attribute, Decl, Def, Identifier, ModulePath, NamePath, StructField,
-  TypeConstraint, hole, many, mk, named, package_private, sentinel,
+  TypeConstraint, hole, many, named, package_private, sentinel,
   show_identifier, show_module_path, show_name_path, use_items, use_name, var,
 }
 use lib::module {ModuleInfo, bench_step}

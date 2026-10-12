@@ -74,8 +74,7 @@
 
 use lang::types {
   AttrArg, Attribute, DebugName, Decl, Def, Identifier, MatchCase, Term,
-  attr_args, binder_name, binder_named, has_attr, if_, match_, mk, npath,
-  package_private, show_identifier, show_name_path,
+  attr_args, binder_name, binder_named, has_attr, if_, match_, package_private, show_identifier, show_name_path,
 }
 use lib::pretty {show_term}
 
@@ -353,7 +352,7 @@ def check_cases (cases : List MatchCase) (key : String) (names : List String) (p
         List.empty => Option.none,
         List.cons c rest =>
             match c {
-                MatchCase.mc _cname cargs cbody _fp =>
+                MatchCase.mk _cname cargs cbody _fp =>
                     match check_body cbody key names params (extend_env_from_match env scrutinee cargs params) {
                         Option.some msg => Option.some msg,
                         Option.none => check_cases rest key names params env scrutinee,
@@ -405,7 +404,7 @@ def find_callees_cases (cases : List MatchCase) (names : List String) : List Str
         List.empty => List.empty,
         List.cons c rest =>
             match c {
-                MatchCase.mc _cname _cargs cbody _fp => str_union (find_callees cbody names) (find_callees_cases rest names),
+                MatchCase.mk _cname _cargs cbody _fp => str_union (find_callees cbody names) (find_callees_cases rest names),
             },
     }
 
@@ -680,7 +679,7 @@ def t_lam (s : String) (body : Term) : Term :=
 def t_app (f : Term) (a : Term) : Term := Term.app f a
 
 def t_case (name : String) (binders : List String) (body : Term) : MatchCase :=
-    MatchCase.mc (Identifier.id name) (List.map Identifier.id binders) body Option.none
+    MatchCase.mk (Identifier.id name) (List.map Identifier.id binders) body Option.none
 
 def t_match (scrutinee : Term) (cases : List MatchCase) : Term :=
     Term.lit (Literal.match_ scrutinee cases)
@@ -689,7 +688,7 @@ def t_match (scrutinee : Term) (cases : List MatchCase) : Term :=
 /// module reads only a def's `name`, `term` and `attrs`, and the checker never
 /// looks at the type at all.
 def t_def (name : String) (term : Term) (attrs : List Attribute) : Decl :=
-    Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id name) List.empty))
+    Decl.def_d (Def.mk (NamePath.mk (List.cons (Identifier.id name) List.empty))
         Term.hole term List.empty attrs Visibility.package_private List.empty)
 
 def t_partial_attr : Attribute := Attribute.mk (Identifier.id "partial") List.empty

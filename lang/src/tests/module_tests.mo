@@ -19,7 +19,7 @@ def empty_local_scope : LocalScope :=
 def test_module_path : ModulePath :=
     let test_id : Identifier := Identifier.id "Test" in
     let empty_id_list : List Identifier := List.cons test_id List.empty in
-    ModulePath.mp empty_id_list
+    ModulePath.mk empty_id_list
 
 def make_scope (sd : ScopeData) : Scope :=
     let path : ModulePath := test_module_path in
@@ -31,7 +31,7 @@ def make_scope (sd : ScopeData) : Scope :=
 /// `scope_find_inductive`/`resolve_def_in_scope_by_name` all take.
 def name_to_npath (i : Identifier) : NamePath :=
     let empty_id_list : List Identifier := List.empty in
-    NamePath.npath (List.cons i empty_id_list)
+    NamePath.mk (List.cons i empty_id_list)
 
 // Typed empty lists to avoid forall inference issues
 def empty_decls_list : List Decl := List.empty

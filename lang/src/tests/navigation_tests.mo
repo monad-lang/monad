@@ -175,9 +175,9 @@ def nt_show_term (t : Term) : String := show_term t
 
 /// The module and the file a def in another module is declared in, for the
 /// hand-built cache below.
-def nt_other_module : ModulePath := ModulePath.mp (List.cons (nt_id "other") List.empty)
+def nt_other_module : ModulePath := ModulePath.mk (List.cons (nt_id "other") List.empty)
 
-def nt_here_module : ModulePath := ModulePath.mp (List.cons (nt_id "here") List.empty)
+def nt_here_module : ModulePath := ModulePath.mk (List.cons (nt_id "here") List.empty)
 
 def nt_other_file : String := "/w/other.mo"
 

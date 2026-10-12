@@ -21,7 +21,7 @@ use llvm::strmap {str_map_empty, str_map_insert}
 #[test]
 def test_build_empty_scope : Bool :=
     let empty_id_list : List Identifier := List.empty in
-    let empty_path : ModulePath := ModulePath.mp empty_id_list in
+    let empty_path : ModulePath := ModulePath.mk empty_id_list in
     let no_decls : List Decl := List.empty in
     let empty_scope : ScopeData := build_scope_from_decls empty_path no_decls in
     true
@@ -30,9 +30,9 @@ def test_build_empty_scope : Bool :=
 
 #[test]
 def test_build_with_def : Bool :=
-    let name : NamePath := NamePath.npath (List.cons (Identifier.id "add") List.empty) in
+    let name : NamePath := NamePath.mk (List.cons (Identifier.id "add") List.empty) in
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let def_decl : Def := Def.mk name Term.hole Term.hole empty_constraints empty_attrs Visibility.package_private List.empty in
@@ -45,14 +45,14 @@ def test_build_with_def : Bool :=
 #[test]
 def test_build_with_inductive : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Bool") List.empty) in
     let empty_params : List Param := List.empty in
     let true_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "true") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "true") List.empty))
         empty_params (sort_n 1) in
     let false_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "false") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "false") List.empty))
         empty_params (sort_n 1) in
     let cns : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let empty_attrs : List Attribute := List.empty in
@@ -66,7 +66,7 @@ def test_build_with_inductive : Bool :=
 #[test]
 def test_scope_globals : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let sd : ScopeData := scope_data_empty in
     let s : Scope := {
         module_id := mod_path,
@@ -82,11 +82,11 @@ def test_scope_globals : Bool :=
 #[test]
 def test_scope_find_inductive_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Bool") List.empty) in
     let empty_params : List Param := List.empty in
     let true_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "true") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "true") List.empty))
         empty_params (sort_n 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
     let empty_attrs : List Attribute := List.empty in
@@ -112,8 +112,8 @@ def test_scope_find_inductive_found : Bool :=
 #[test]
 def test_scope_find_inductive_not_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let lookup_name : NamePath := NamePath.npath (List.cons (Identifier.id "NoSuch") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let lookup_name : NamePath := NamePath.mk (List.cons (Identifier.id "NoSuch") List.empty) in
     let sd : ScopeData := scope_data_empty in
     let s : Scope := {
         module_id := mod_path,
@@ -214,8 +214,8 @@ def test_scope_find_local_not_found : Bool :=
 #[test]
 def test_scope_resolve_name_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "add") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "add") List.empty) in
     let def_entry : ScopeDef := {
         name := def_name,
         module := mod_path,
@@ -250,7 +250,7 @@ def test_scope_resolve_name_found : Bool :=
 #[test]
 def test_scope_resolve_name_not_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let sd : ScopeData := scope_data_empty in
     let s : Scope := {
         module_id := mod_path,
@@ -258,7 +258,7 @@ def test_scope_resolve_name_not_found : Bool :=
         parent := Option.none,
         incomplete_match_ok := false,
     } in
-    let nref : NameRef := NameRef.nnp (NamePath.npath (List.cons (Identifier.id "no_such") List.empty)) in
+    let nref : NameRef := NameRef.nnp (NamePath.mk (List.cons (Identifier.id "no_such") List.empty)) in
     let empty_parent : Option LocalScope := Option.none in
     let locals : LocalScope := {
         vars := List.empty,
@@ -275,7 +275,7 @@ def test_scope_resolve_name_not_found : Bool :=
 #[test]
 def test_builtin_type_resolves : Bool :=
     let empty_id_list : List Identifier := List.empty in
-    let empty_path : ModulePath := ModulePath.mp empty_id_list in
+    let empty_path : ModulePath := ModulePath.mk empty_id_list in
     let no_decls : List Decl := List.empty in
     let sd : ScopeData := build_scope_from_decls empty_path no_decls in
     let s : Scope := {
@@ -284,7 +284,7 @@ def test_builtin_type_resolves : Bool :=
         parent := Option.none,
         incomplete_match_ok := false,
     } in
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Type") List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Type") List.empty) in
     let result : Result ScopeError ScopeDef := resolve_def_in_scope_by_name type_name s in
     match result {
         ok found => true,
@@ -296,7 +296,7 @@ def test_builtin_type_resolves : Bool :=
 #[test]
 def test_builtin_type_inductive : Bool :=
     let empty_id_list : List Identifier := List.empty in
-    let empty_path : ModulePath := ModulePath.mp empty_id_list in
+    let empty_path : ModulePath := ModulePath.mk empty_id_list in
     let no_decls : List Decl := List.empty in
     let sd : ScopeData := build_scope_from_decls empty_path no_decls in
     let s : Scope := {
@@ -305,7 +305,7 @@ def test_builtin_type_inductive : Bool :=
         parent := Option.none,
         incomplete_match_ok := false,
     } in
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Type") List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Type") List.empty) in
     let result : Result ScopeError Inductive := scope_find_inductive type_name s in
     match result {
         ok found => true,
@@ -317,7 +317,7 @@ def test_builtin_type_inductive : Bool :=
 #[test]
 def test_build_from_modules_empty : Bool :=
     let empty_id_list : List Identifier := List.empty in
-    let empty_path : ModulePath := ModulePath.mp empty_id_list in
+    let empty_path : ModulePath := ModulePath.mk empty_id_list in
     let empty_modules : ModuleRegistry := {
         modules := List.empty,
     } in
@@ -329,8 +329,8 @@ def test_build_from_modules_empty : Bool :=
 #[test]
 def test_build_from_modules_one_def : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "add") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "add") List.empty) in
     let def_entry : ScopeDef := {
         name := def_name,
         module := mod_path,
@@ -377,8 +377,8 @@ def test_build_from_modules_one_def : Bool :=
 /// does. Built as a pair of tests over the same two-module fixture so the
 /// only difference between them is WHICH module is being scoped.
 def priv_fixture (vis : Visibility) : ModuleRegistry :=
-    let owner : ModulePath := ModulePath.mp [Identifier.id "Owner"] in
-    let def_name : NamePath := NamePath.npath [Identifier.id "secret"] in
+    let owner : ModulePath := ModulePath.mk [Identifier.id "Owner"] in
+    let def_name : NamePath := NamePath.mk [Identifier.id "secret"] in
     let def_entry : ScopeDef := {
         name := def_name,
         module := owner,
@@ -404,7 +404,7 @@ def priv_fixture_resolves_from (vis : Visibility) (consumer : ModulePath) : Bool
         incomplete_match_ok := false,
     } in
     let locals : LocalScope := { vars := List.empty, parent := (Option.none : Option LocalScope) } in
-    let nref : NameRef := NameRef.nnp (NamePath.npath [Identifier.id "secret"]) in
+    let nref : NameRef := NameRef.nnp (NamePath.mk [Identifier.id "secret"]) in
     match scope_resolve_name nref s locals {
         ok _ => true,
         err _ => false
@@ -412,27 +412,27 @@ def priv_fixture_resolves_from (vis : Visibility) (consumer : ModulePath) : Bool
 
 #[test]
 def test_priv_def_is_visible_in_its_own_module : Bool :=
-    priv_fixture_resolves_from Visibility.priv_ (ModulePath.mp [Identifier.id "Owner"])
+    priv_fixture_resolves_from Visibility.priv_ (ModulePath.mk [Identifier.id "Owner"])
 
 #[test]
 def test_priv_def_is_hidden_from_other_modules : Bool :=
-    not (priv_fixture_resolves_from Visibility.priv_ (ModulePath.mp [Identifier.id "Other"]))
+    not (priv_fixture_resolves_from Visibility.priv_ (ModulePath.mk [Identifier.id "Other"]))
 
 /// The default (package-private) still crosses module boundaries -- only
 /// `priv` is enforced today, and the mote boundary is a later step.
 #[test]
 def test_package_private_def_still_crosses_modules : Bool :=
-    priv_fixture_resolves_from Visibility.package_private (ModulePath.mp [Identifier.id "Other"])
+    priv_fixture_resolves_from Visibility.package_private (ModulePath.mk [Identifier.id "Other"])
 
 #[test]
 def test_pub_def_crosses_modules : Bool :=
-    priv_fixture_resolves_from Visibility.pub_ (ModulePath.mp [Identifier.id "Other"])
+    priv_fixture_resolves_from Visibility.pub_ (ModulePath.mk [Identifier.id "Other"])
 
 // --- scope_resolve_instance found ---
 
 #[test]
 def test_scope_resolve_instance_found : Bool :=
-    let cls_name : NamePath := NamePath.npath (List.cons (Identifier.id "Monad") List.empty) in
+    let cls_name : NamePath := NamePath.mk (List.cons (Identifier.id "Monad") List.empty) in
     let inst_name : Identifier := Identifier.id "maybeMonad" in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_args : List Term := List.empty in
@@ -442,7 +442,7 @@ def test_scope_resolve_instance_found : Bool :=
     // top of `scope_data_empty` rather than a hand-written literal.
     let sd : ScopeData := scope_data_add_instance scope_data_empty ins in
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -465,10 +465,10 @@ def test_scope_resolve_instance_found : Bool :=
 
 #[test]
 def test_scope_resolve_instance_not_found : Bool :=
-    let cls_name : NamePath := NamePath.npath (List.cons (Identifier.id "Monad") List.empty) in
+    let cls_name : NamePath := NamePath.mk (List.cons (Identifier.id "Monad") List.empty) in
     let sd : ScopeData := scope_data_empty in
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -509,8 +509,8 @@ def test_list_append_non_empty : Bool :=
 
 #[test]
 def test_scope_resolve_instance_matches_class : Bool :=
-    let cls_name1 : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
-    let cls_name2 : NamePath := NamePath.npath (List.cons (Identifier.id "Monad") List.empty) in
+    let cls_name1 : NamePath := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
+    let cls_name2 : NamePath := NamePath.mk (List.cons (Identifier.id "Monad") List.empty) in
     let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty Visibility.package_private List.empty List.empty in
     let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty Visibility.package_private List.empty List.empty in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
@@ -518,7 +518,7 @@ def test_scope_resolve_instance_matches_class : Bool :=
     // top of `scope_data_empty` rather than a hand-written literal.
     let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty inst_show) inst_monad in
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -545,8 +545,8 @@ def test_scope_resolve_instance_matches_class : Bool :=
 #[test]
 def test_build_scope_then_resolve_def : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "add") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "add") List.empty) in
     let def_decl : Def := Def.mk def_name Term.hole Term.hole List.empty List.empty Visibility.package_private List.empty in
     let decl_list : List Decl := List.cons (Decl.def_d def_decl) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
@@ -573,9 +573,9 @@ def test_build_scope_then_resolve_def : Bool :=
 #[test]
 def test_build_scope_then_resolve_constructor : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
-    let true_name : NamePath := NamePath.npath (List.cons (Identifier.id "true") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Bool") List.empty) in
+    let true_name : NamePath := NamePath.mk (List.cons (Identifier.id "true") List.empty) in
     let empty_params : List Param := List.empty in
     let true_cn : InductConstructor := InductConstructor.mk true_name empty_params (sort_n 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
@@ -608,7 +608,7 @@ def test_build_scope_then_resolve_constructor : Bool :=
 
 #[test]
 def test_instance_key_matches_type_args : Bool :=
-    let cls_name : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
+    let cls_name : NamePath := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
     let i64_typ : Term := sort_n 1 in
     let bool_typ : Term := sort_n 1 in
     let show_i64 : Instance := Instance.mk
@@ -634,7 +634,7 @@ def test_instance_key_matches_type_args : Bool :=
     // so `first_matching_instance`'s scan needs this exact order to
     // still return `show_i64` first, matching this test's intent.
     let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty show_bool) show_i64 in
-    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -657,7 +657,7 @@ def test_instance_key_matches_type_args : Bool :=
 
 #[test]
 def test_instance_key_matches_wrong_type_args : Bool :=
-    let cls_name : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
+    let cls_name : NamePath := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
     let i64_typ : Term := sort_n 1 in
     let string_typ : Term := sort_n 2 in  // different from type_1
     let show_i64 : Instance := Instance.mk
@@ -670,7 +670,7 @@ def test_instance_key_matches_wrong_type_args : Bool :=
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
     let sd : ScopeData := scope_data_add_instance scope_data_empty show_i64 in
-    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -692,9 +692,9 @@ def test_instance_key_matches_wrong_type_args : Bool :=
 
 #[test]
 def test_find_inductive_by_constructor_found : Bool :=
-    let ind_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
-    let some_np : NamePath := NamePath.npath (List.cons (Identifier.id "some") List.empty) in
-    let none_np : NamePath := NamePath.npath (List.cons (Identifier.id "none") List.empty) in
+    let ind_name : NamePath := NamePath.mk (List.cons (Identifier.id "Maybe") List.empty) in
+    let some_np : NamePath := NamePath.mk (List.cons (Identifier.id "some") List.empty) in
+    let none_np : NamePath := NamePath.mk (List.cons (Identifier.id "none") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk some_np List.empty (sort_n 1) in
     let none_cn : InductConstructor := InductConstructor.mk none_np List.empty (sort_n 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
@@ -703,7 +703,7 @@ def test_find_inductive_by_constructor_found : Bool :=
     // std.map {}` doc comment) — built via `scope_data_add_inductive` on
     // top of `scope_data_empty` rather than a hand-written literal.
     let sd : ScopeData := scope_data_add_inductive scope_data_empty ind in
-    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -721,15 +721,15 @@ def test_find_inductive_by_constructor_found : Bool :=
 
 #[test]
 def test_find_inductive_by_constructor_not_found : Bool :=
-    let ind_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
-    let some_np : NamePath := NamePath.npath (List.cons (Identifier.id "some") List.empty) in
+    let ind_name : NamePath := NamePath.mk (List.cons (Identifier.id "Maybe") List.empty) in
+    let some_np : NamePath := NamePath.mk (List.cons (Identifier.id "some") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk some_np List.empty (sort_n 1) in
     let ind : Inductive := Inductive.mk ind_name List.empty (sort_n 1) [some_cn] List.empty Visibility.package_private in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_inductive` on
     // top of `scope_data_empty` rather than a hand-written literal.
     let sd : ScopeData := scope_data_add_inductive scope_data_empty ind in
-    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -737,7 +737,7 @@ def test_find_inductive_by_constructor_not_found : Bool :=
         incomplete_match_ok := false,
     } in
     // Look up by "nope" constructor — should NOT find
-    let nope_np : NamePath := NamePath.npath (List.cons (Identifier.id "nope") List.empty) in
+    let nope_np : NamePath := NamePath.mk (List.cons (Identifier.id "nope") List.empty) in
     match scope_find_inductive_by_constructor nope_np s {
         Option.some _ => false,
         Option.none => true,
@@ -760,7 +760,7 @@ def test_find_inductive_by_constructor_not_found : Bool :=
 /// (`CoreTerm::Hole`, `core_check_module`).
 #[test]
 def test_dict_param_type_is_hole : Bool :=
-    let add_cls : NamePath := NamePath.npath (List.cons (Identifier.id "Add") List.empty) in
+    let add_cls : NamePath := NamePath.mk (List.cons (Identifier.id "Add") List.empty) in
     let constraint : TypeConstraint := TypeConstraint.mk add_cls (List.cons (Identifier.id "A") List.empty) in
     let constraints : List TypeConstraint := List.cons constraint List.empty in
     // The body's `Add.add` reference is what `qualifying_dict_constraints`
@@ -768,7 +768,7 @@ def test_dict_param_type_is_hole : Bool :=
     // with `"Add."`) to qualify the constraint for a leading dict param.
     let add_add_ref : Term := Term.var (-1) (DebugName.named (Identifier.id "Add.add")) in
     let body : Term := Term.app add_add_ref (Term.var (-1) (DebugName.named (Identifier.id "a"))) in
-    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "HAdd_A_A_A_add") List.empty) in
+    let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "HAdd_A_A_A_add") List.empty) in
     let empty_attrs : List Attribute := List.empty in
     let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private List.empty in
     match add_constraint_dict_params df {
@@ -794,9 +794,9 @@ def test_dict_param_type_is_hole : Bool :=
 /// fallback is what has to answer.
 #[test]
 def test_scope_resolve_qualified_name : Bool :=
-    let mod_path : ModulePath := ModulePath.mp
+    let mod_path : ModulePath := ModulePath.mk
         (List.cons (Identifier.id "std") (List.cons (Identifier.id "process") List.empty)) in
-    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "process_id") List.empty) in
+    let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "process_id") List.empty) in
     let def_entry : ScopeDef := {
         name := def_name,
         module := mod_path,
@@ -806,7 +806,7 @@ def test_scope_resolve_qualified_name : Bool :=
     } in
     let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
     let s : Scope := {
-        module_id := ModulePath.mp (List.cons (Identifier.id "Main") List.empty),
+        module_id := ModulePath.mk (List.cons (Identifier.id "Main") List.empty),
         scope := sd,
         parent := Option.none,
         incomplete_match_ok := false,
@@ -824,9 +824,9 @@ def test_scope_resolve_qualified_name : Bool :=
 /// decoration and a typo silently becomes a working reference.
 #[test]
 def test_scope_qualified_wrong_module_does_not_resolve : Bool :=
-    let mod_path : ModulePath := ModulePath.mp
+    let mod_path : ModulePath := ModulePath.mk
         (List.cons (Identifier.id "std") (List.cons (Identifier.id "process") List.empty)) in
-    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "process_id") List.empty) in
+    let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "process_id") List.empty) in
     let def_entry : ScopeDef := {
         name := def_name,
         module := mod_path,
@@ -836,12 +836,12 @@ def test_scope_qualified_wrong_module_does_not_resolve : Bool :=
     } in
     let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
     let s : Scope := {
-        module_id := ModulePath.mp (List.cons (Identifier.id "Main") List.empty),
+        module_id := ModulePath.mk (List.cons (Identifier.id "Main") List.empty),
         scope := sd,
         parent := Option.none,
         incomplete_match_ok := false,
     } in
-    let wrong : ModulePath := ModulePath.mp
+    let wrong : ModulePath := ModulePath.mk
         (List.cons (Identifier.id "std") (List.cons (Identifier.id "nosuch") List.empty)) in
     let qn : QualifiedName := { qmod := wrong, qname := def_name } in
     let empty_parent : Option LocalScope := Option.none in
@@ -932,7 +932,7 @@ def list_of (t : Term) : Term := Term.app (var_named "List") t
 def only_instance (ins : Instance) : List Instance := List.cons ins List.empty
 
 def beq_cls : NamePath :=
-    NamePath.npath (List.cons (Identifier.id "BEq") List.empty)
+    NamePath.mk (List.cons (Identifier.id "BEq") List.empty)
 
 /// `instance [BEq A] BEq (List A)`, in the shape the parser produces it.
 def beq_list_instance : Instance :=
@@ -947,8 +947,8 @@ def beq_list_instance : Instance :=
 /// no progress at all, so nothing may be read from it.
 def show_a_instance : Instance :=
     Instance.mk (Identifier.id "Show_A")
-        (NamePath.npath (List.cons (Identifier.id "Show") List.empty))
-        (List.cons (TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty)) List.empty)
+        (NamePath.mk (List.cons (Identifier.id "Show") List.empty))
+        (List.cons (TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty)) List.empty)
         (List.cons (var_named "A") List.empty)
         Visibility.package_private
         [param_many (Identifier.id "A") (sort_n 1)]
@@ -973,7 +973,7 @@ def test_constraint_bound_carrier_is_the_bound_element : Bool :=
 /// progress, so it is skipped rather than resolved at.
 #[test]
 def test_constraint_bound_carrier_skips_no_progress : Bool :=
-    String.beq (bound_carrier_slug show_a_instance (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) (var_named "A")) "<none>"
+    String.beq (bound_carrier_slug show_a_instance (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) (var_named "A")) "<none>"
 
 /// A candidate that matches no instance at all yields nothing.
 #[test]

@@ -354,7 +354,7 @@ def test_global_table_basic_access : Bool :=
   let table : GlobalTable :=
     GlobalTable.global_table [
       GlobalDef.gd_constructor 0 2,
-      GlobalDef.gd_unresolved (ModulePath.mp [Identifier.id "Foo"]),
+      GlobalDef.gd_unresolved (ModulePath.mk [Identifier.id "Foo"]),
     ]
   in
   I64.beq (global_table_len table) 2

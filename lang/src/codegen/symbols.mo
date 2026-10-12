@@ -138,7 +138,7 @@ def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64
 
 #[partial]
 def module_path_to_str (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => mangle_identifiers ids,
+    ModulePath.mk ids => mangle_identifiers ids,
 }
 
 /// `module_path_to_str`'s `NamePath` twin, for the positions where the
@@ -148,7 +148,7 @@ def module_path_to_str (mp : ModulePath) : String := match mp {
 /// table -- only which of the two roles the path plays changed.
 #[partial]
 def name_path_to_str (np : NamePath) : String := match np {
-    NamePath.npath ids => mangle_identifiers ids,
+    NamePath.mk ids => mangle_identifiers ids,
 }
 
 /// Join a module path's segments with `__` for use in an LLVM symbol
@@ -239,7 +239,7 @@ def string_find_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
 
 #[partial]
 def bare_modpath (name : String) : ModulePath :=
-    ModulePath.mp (List.cons (Identifier.id name) List.empty)
+    ModulePath.mk (List.cons (Identifier.id name) List.empty)
 
 /// `bare_modpath`'s `NamePath` twin: one literal text as a one-segment
 /// name path. The qualified-names split gave a `NamePath` to every place
@@ -248,4 +248,4 @@ def bare_modpath (name : String) : ModulePath :=
 /// for `bare_modpath`.
 #[partial]
 def bare_npath (name : String) : NamePath :=
-    NamePath.npath (List.cons (Identifier.id name) List.empty)
+    NamePath.mk (List.cons (Identifier.id name) List.empty)

@@ -33,7 +33,7 @@ def build_scope_for_file (file_path : String) (mod_name : String) : IO Bool := d
 def build_scope_of_source (content : String) (mod_name : String) : Bool :=
     match parse_all_decls content {
         success _ decls =>
-            let path := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
+            let path := ModulePath.mk (List.cons (Identifier.id mod_name) List.empty) in
             let sd := build_scope_from_decls path decls in
             let scope := make_scope path sd in
             let type_ref := name_ref "Type" in

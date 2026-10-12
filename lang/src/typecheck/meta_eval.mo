@@ -32,7 +32,7 @@ use lib::lower_core_ir {LowerCtx, LowerError, lower_ctx_from_decls, lower_root}
 use lang::types {
   DebugName, Decl, Identifier, ModulePath, NamePath, Term, app, binder_explicit, hole,
   i64, lam,
-  lit, mk, named, ntv, num, package_private, show_name_path, var,
+  lit, named, ntv, num, package_private, show_name_path, var,
 }
 
 def show_lower_error_debug (e : LowerError) : String :=
@@ -73,10 +73,10 @@ def meta_eval_invoke (dispatched_decls : List Decl) (meta_def_name : NamePath) (
 /// `Scope.module_id` (irrelevant to name RESOLUTION, which is always by
 /// full path, see `lang/scope.mo`'s `scope_resolve_name`), never
 /// resolved against directly.
-def meta_eval_root : ModulePath := ModulePath.mp (List.cons (Identifier.id "__meta_eval__") List.empty)
+def meta_eval_root : ModulePath := ModulePath.mk (List.cons (Identifier.id "__meta_eval__") List.empty)
 
 def show_module_path_ (mp : ModulePath) : String :=
-    match mp { ModulePath.mp ids => join_ids ids }
+    match mp { ModulePath.mk ids => join_ids ids }
 
 #[partial]
 def join_ids (ids : List Identifier) : String :=
@@ -157,7 +157,7 @@ pub def show_core_eval_error_debug (e : CoreEvalError) : String :=
 
 def sentinel_ : I64 := -1
 
-def np1 (s : String) : NamePath := NamePath.npath (List.cons (Identifier.id s) List.empty)
+def np1 (s : String) : NamePath := NamePath.mk (List.cons (Identifier.id s) List.empty)
 
 def named_ (s : String) : DebugName := DebugName.named (Identifier.id s)
 

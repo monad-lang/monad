@@ -57,7 +57,7 @@ use lang::types {ModulePath, Scope, ScopeData, Term, id, level_const}
 // `ScopeData`, and bound to its own def rather than inlined into the
 // record literal -- the same shape `lang`'s own test scopes use.
 def proof_synthetic_path : ModulePath :=
-    ModulePath.mp (List.cons (Identifier.id "proofs_synthetic") List.empty)
+    ModulePath.mk (List.cons (Identifier.id "proofs_synthetic") List.empty)
 
 def proof_scope_data : ScopeData := build_scope_from_decls proof_synthetic_path List.empty
 

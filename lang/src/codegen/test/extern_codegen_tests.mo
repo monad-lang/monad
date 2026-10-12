@@ -1,5 +1,5 @@
 use lang::types {
-  Term, TypeConstraint, binder_named, group, hole, lam, named, npath,
+  Term, TypeConstraint, binder_named, group, hole, lam, named, 
   package_private, sort_n,
   str, var,
 }
@@ -33,7 +33,7 @@ def string_term : Term := Term.var 0 (named (id "String"))
 def mk_puts_def : Def :=
     let s_id := id "s" in
     let attrs := List.cons (Attribute.mk (id "extern") (List.cons (AttrArg.str "c") List.empty)) List.empty in
-    Def.mk (NamePath.npath (List.cons (id "puts_ffi") List.empty))
+    Def.mk (NamePath.mk (List.cons (id "puts_ffi") List.empty))
         (Term.var 0 (named (id "I32")))
         (Term.lam (binder_named s_id) string_term Term.hole)
         ([] : List TypeConstraint) attrs Visibility.package_private List.empty
@@ -77,7 +77,7 @@ def mk_strlen_def : Def :=
     let c_arg := AttrArg.str "c" in
     let ext_args := List.cons c_arg (List.cons link_arg List.empty) in
     let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.npath (List.cons (id "strlen") List.empty))
+    Def.mk (NamePath.mk (List.cons (id "strlen") List.empty))
         (Term.var 0 (named (id "I64")))
         (Term.lam (binder_named s_id) string_term Term.hole)
         ([] : List TypeConstraint) attrs Visibility.package_private List.empty
@@ -109,7 +109,7 @@ def mk_sin_def : Def :=
     let c_arg := AttrArg.str "c" in
     let ext_args := List.cons c_arg List.empty in
     let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.npath (List.cons (id "sin") List.empty))
+    Def.mk (NamePath.mk (List.cons (id "sin") List.empty))
         (Term.var 0 (named (id "F64")))
         (Term.lam (binder_named x_id) (Term.var 0 (named (id "F64"))) Term.hole)
         ([] : List TypeConstraint) attrs Visibility.package_private List.empty
@@ -136,7 +136,7 @@ def mk_abs_def : Def :=
     let c_arg := AttrArg.str "c" in
     let ext_args := List.cons c_arg List.empty in
     let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.npath (List.cons (id "abs") List.empty))
+    Def.mk (NamePath.mk (List.cons (id "abs") List.empty))
         (Term.var 0 (named (id "I32")))
         (Term.lam (binder_named x_id) (Term.var 0 (named (id "I32"))) Term.hole)
         ([] : List TypeConstraint) attrs Visibility.package_private List.empty
@@ -171,7 +171,7 @@ def mk_sin_def_grouped : Def :=
     let c_arg := AttrArg.str "c" in
     let ext_args := List.cons c_arg (List.cons link_group List.empty) in
     let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.npath (List.cons (id "sin") List.empty))
+    Def.mk (NamePath.mk (List.cons (id "sin") List.empty))
         (Term.var 0 (named (id "F64")))
         (Term.lam (binder_named x_id) (Term.var 0 (named (id "F64"))) Term.hole)
         ([] : List TypeConstraint) attrs Visibility.package_private List.empty
@@ -187,7 +187,7 @@ def test_extern_link_name_grouped_attr : Bool :=
 def mk_plain_def : Def :=
     let x_id := id "x" in
     let body := Term.var 0 (named x_id) in
-    Def.mk (NamePath.npath (List.cons (id "plain") List.empty))
+    Def.mk (NamePath.mk (List.cons (id "plain") List.empty))
         (sort_n 1) body
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty
 
@@ -209,7 +209,7 @@ def mk_ctx_new_def : Def :=
     let c_arg := AttrArg.str "c" in
     let ext_args := List.cons c_arg List.empty in
     let attrs := List.cons (Attribute.mk (id "extern") ext_args) List.empty in
-    Def.mk (NamePath.npath (List.cons (id "ctx_new_ffi") List.empty))
+    Def.mk (NamePath.mk (List.cons (id "ctx_new_ffi") List.empty))
         ptr_term
         (Term.lam (binder_named m_id) ptr_term Term.hole)
         ([] : List TypeConstraint) attrs Visibility.package_private List.empty

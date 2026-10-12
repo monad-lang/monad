@@ -208,7 +208,7 @@ def classify_test_defs (display_prefix : String) (defs : List Def) : List TestSp
 #[partial]
 def display_prefix_of (mp : ModulePath) : String :=
     match mp {
-        ModulePath.mp ids => List.intercalate "::" (List.map show_identifier ids) ++ "::",
+        ModulePath.mk ids => List.intercalate "::" (List.map show_identifier ids) ++ "::",
     }
 
 /// Rename a target module's own top-level `main`, if it has one.
@@ -614,7 +614,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     // module's; it also lets `qualify_modules` see it, since
                     // its body calls real library defs (`I64.to_string`,
                     // `++`) by bare name.
-                    let driver_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "__test_driver") List.empty);
+                    let driver_mp : ModulePath := ModulePath.mk (List.cons (Identifier.id "__test_driver") List.empty);
                     let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
                     let aliased_mods := resolve_open_aliases_in_modules (List.append (get_loaded_all loaded) (List.cons driver_mod List.empty));
                     // A target file may define its own `main` alongside its
@@ -745,11 +745,11 @@ def test_attr : List Attribute := List.cons (Attribute.mk (Identifier.id "test")
 /// (`test_discover_test_defs_ignores_non_def_decls` builds a `Decl.use_d`
 /// with it, and `Decl.use_d` is the one decl form that kept a real
 /// `ModulePath` through the qualified-names split).
-def dummy_path (name : String) : ModulePath := ModulePath.mp (List.cons (Identifier.id name) List.empty)
+def dummy_path (name : String) : ModulePath := ModulePath.mk (List.cons (Identifier.id name) List.empty)
 
 /// The DEF-name role of the same one-segment shape -- `Def.name` is a
 /// `NamePath`, so the fixtures below cannot reuse `dummy_path`.
-def dummy_npath (name : String) : NamePath := NamePath.npath (List.cons (Identifier.id name) List.empty)
+def dummy_npath (name : String) : NamePath := NamePath.mk (List.cons (Identifier.id name) List.empty)
 
 def dummy_def (name : String) (attrs : List Attribute) : Def :=
     Def.mk (dummy_npath name) Term.hole (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty attrs Visibility.package_private List.empty
@@ -811,7 +811,7 @@ def test_classify_test_def_display_name_uses_prefix : Bool :=
 
 #[test]
 def test_display_prefix_of_joins_with_colons : Bool :=
-    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) in
+    let mp : ModulePath := ModulePath.mk (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) in
     String.beq (display_prefix_of mp) "a::b::"
 
 /// `rename_user_main` must rename `main` and nothing else -- a def

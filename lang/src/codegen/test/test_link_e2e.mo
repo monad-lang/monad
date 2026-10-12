@@ -1,6 +1,6 @@
 open IO {println, write_file}
 use std::process {exec_cmd, process_id}
-use lang::types {Def, i64, id, lit, npath, num, package_private, sort_n}
+use lang::types {Def, i64, id, lit, num, package_private, sort_n}
 use llvm::ir {emit_module}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
@@ -19,7 +19,7 @@ def build_main42 : List Def :=
     let id := Identifier.id "main" in
     let body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let def_ := Def.mk
-        (NamePath.npath (List.cons id List.empty))
+        (NamePath.mk (List.cons id List.empty))
         (sort_n 1)
         body
         List.empty

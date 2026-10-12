@@ -2534,7 +2534,7 @@ Key patterns when writing self-hosted Monad code:
 
 22. **`MatchCase` is a BINDING FORM -- a fourth one, easy to miss
     (2026-09-02).** `Term.lam`/`forall`/`pi` are the obvious de Bruijn
-    binders, but a match arm's own pattern bindings (`MatchCase.mc`'s
+    binders, but a match arm's own pattern bindings (`MatchCase.mk`'s
     `args`) bind over its BODY too: the body sits `List.length args`
     binders deeper than the enclosing `Literal.match_` node. All three
     walkers in `lang/src/typecheck/subst.mo` (`term_shift_go`,

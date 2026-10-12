@@ -943,7 +943,7 @@ def find_inductive_for_cases (cases : List MatchCase) (scrutinee_term : Term) (s
 def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match type_head_name scrutinee_typ {
         Option.some id =>
-            match scope_find_inductive (NamePath.npath (List.cons id List.empty)) scope {
+            match scope_find_inductive (NamePath.mk (List.cons id List.empty)) scope {
                 // Cross-check the cases before committing, exactly as the
                 // `con_owner_name` path above already does -- `type_head_
                 // name` yields a BARE name and `scope_find_inductive` keys
@@ -1006,11 +1006,11 @@ def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term
 def find_inductive_by_call_return_type_or_scan (cases : List MatchCase) (scrutinee_term : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match call_head_def_name scrutinee_term {
         Option.some id =>
-            match scope_find_def_return_type (NamePath.npath (List.cons id List.empty)) scope {
+            match scope_find_def_return_type (NamePath.mk (List.cons id List.empty)) scope {
                 Option.some ret_typ =>
                     match type_head_name ret_typ {
                         Option.some tid =>
-                            match scope_find_inductive (NamePath.npath (List.cons tid List.empty)) scope {
+                            match scope_find_inductive (NamePath.mk (List.cons tid List.empty)) scope {
                                 ok ind => ok (Option.some ind),
                                 err _ => find_inductive_for_cases_by_constructor cases scope,
                             },
@@ -1130,7 +1130,7 @@ def con_owner_name (t : Term) : Option NamePath :=
                     match id {
                         Identifier.id s =>
                             match dotted_qualifier s {
-                                Option.some qual => Option.some (NamePath.npath (List.cons (Identifier.id qual) List.empty)),
+                                Option.some qual => Option.some (NamePath.mk (List.cons (Identifier.id qual) List.empty)),
                                 Option.none => Option.none,
                             }
                     },
@@ -1160,7 +1160,7 @@ pub def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope 
         List.empty => ok Option.none,
         List.cons hd rest =>
             match hd {
-                MatchCase.mc name _ _ _ =>
+                MatchCase.mk name _ _ _ =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     // A bare field-pattern case's own name is the parser's
                     // empty-string placeholder (`{ .. }`, `plans/
@@ -1175,7 +1175,7 @@ pub def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope 
                     if Similar.similar name wildcard_id || String.beq (show_identifier name) ""
                     then find_inductive_for_cases_by_constructor rest scope
                     else
-                        let con_mp : NamePath := NamePath.npath (List.cons name List.empty) in
+                        let con_mp : NamePath := NamePath.mk (List.cons name List.empty) in
                         match scope_find_all_inductives_by_constructor con_mp scope {
                             List.empty => ok Option.none,
                             List.cons only more =>
@@ -1212,7 +1212,7 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
         List.empty => ok true,
         List.cons hd rest =>
             match hd {
-                MatchCase.mc name _ _ fp =>
+                MatchCase.mk name _ _ fp =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     match fp {
                         Option.some _ => validate_cases_against_inductive rest ind,
@@ -1220,7 +1220,7 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
                             if Similar.similar name wildcard_id
                             then validate_cases_against_inductive rest ind
                             else
-                                let con_mp : NamePath := NamePath.npath (List.cons name List.empty) in
+                                let con_mp : NamePath := NamePath.mk (List.cons name List.empty) in
                                 if inductive_has_constructor ind con_mp
                                 then validate_cases_against_inductive rest ind
                                 else err (TypeError.custom "constructor not found in inductive"),
@@ -1289,7 +1289,7 @@ def match_has_wildcard_case (cases : List MatchCase) : Bool :=
         List.empty => false,
         List.cons hd rest =>
             match hd {
-                MatchCase.mc name _ _ _ =>
+                MatchCase.mk name _ _ _ =>
                     if match_is_wildcard_name name then true else match_has_wildcard_case rest,
             },
     }
@@ -1311,7 +1311,7 @@ def case_names_cover_constructor (cases : List MatchCase) (cname : NamePath) : B
         List.empty => false,
         List.cons hd rest =>
             match hd {
-                MatchCase.mc name _ _ _ =>
+                MatchCase.mk name _ _ _ =>
                     if case_name_covers name cname then true
                     else case_names_cover_constructor rest cname,
             },
@@ -1454,7 +1454,7 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
             // checked): only by now is every arm either a `_` or a real
             // resolved constructor name, because
             // `type_check_field_pattern_case` rewires a field-pattern arm
-            // into `MatchCase.mc resolved_name ... Option.none`. That is also
+            // into `MatchCase.mk resolved_name ... Option.none`. That is also
             // what makes a field pattern cover its constructor for free.
             match validate_match_coverage reversed maybe_ind scope {
                 err e => err e,
@@ -1477,7 +1477,7 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
 /// the way a written positional case's `args` order is.
 def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
-        MatchCase.mc name args body fp =>
+        MatchCase.mk name args body fp =>
             match fp {
                 Option.some field_pattern =>
                     type_check_field_pattern_case name args body field_pattern scrutinee_typ maybe_ind expected_type scope local_types locals,
@@ -1681,7 +1681,7 @@ def resolve_field_pattern_case (case_name : Identifier) (fp : FieldPattern) (scr
                 if String.beq (show_identifier case_name) "" then
                     resolve_bare_field_pattern fp ind
                 else
-                    match find_constructor_in_inductive ind (NamePath.npath (List.cons case_name List.empty)) {
+                    match find_constructor_in_inductive ind (NamePath.mk (List.cons case_name List.empty)) {
                         Option.none => err (TypeError.custom "unknown constructor in field pattern"),
                         Option.some ctor => resolve_field_pattern_against_constructor case_name ctor fp,
                     } in
@@ -1759,7 +1759,7 @@ def resolve_bare_field_pattern (fp : FieldPattern) (ind : Inductive) : Result Ty
 #[partial]
 def constructor_bare_name (np : NamePath) : Identifier :=
     match np {
-        NamePath.npath ids =>
+        NamePath.mk ids =>
             match List.last ids {
                 Option.some last_id => last_id,
                 Option.none => Identifier.id "",
@@ -1916,7 +1916,7 @@ def index_of_identifier (target : Identifier) (names : List Identifier) (i : I64
 def arg_types_for_case (case_name : Identifier) (maybe_ind : Option Inductive) (scrutinee_typ : Term) : List Term :=
     match maybe_ind {
         Option.some ind =>
-            let con_mp : NamePath := NamePath.npath (List.cons case_name List.empty) in
+            let con_mp : NamePath := NamePath.mk (List.cons case_name List.empty) in
             match find_constructor_in_inductive ind con_mp {
                 Option.some ctor =>
                     match ctor { InductConstructor.mk _ params _ =>
@@ -2059,7 +2059,7 @@ def type_check_case_body_checked (name : Identifier) (args : List Identifier) (b
             let body_term : Term := body_tt.term in
             let body_typ : Term := body_tt.typ in
             let no_fp : Option FieldPattern := Option.none in
-            let new_case : MatchCase := MatchCase.mc name args body_term no_fp in
+            let new_case : MatchCase := MatchCase.mk name args body_term no_fp in
             // Annotated local first -- see the matching comment in
             // `type_check`'s `Term.hole` arm.
             let cc : CheckedCase := { case_ := new_case, body_typ_ := body_typ } in
@@ -2170,7 +2170,7 @@ def identifiers_of_segments (segs : List String) : List Identifier :=
 /// arm, where the honest answer is `unknown variable 'Map.get'` and not a
 /// field of a class.
 def dotted_head_names_class (head : String) (scope : Scope) : Bool :=
-    match scope_find_class (NamePath.npath (List.cons (Identifier.id head) List.empty)) scope {
+    match scope_find_class (NamePath.mk (List.cons (Identifier.id head) List.empty)) scope {
         Option.some _ => true,
         Option.none => false,
     }
@@ -2181,7 +2181,7 @@ def dotted_head_names_class (head : String) (scope : Scope) : Bool :=
 /// under their bare name only, so the inductive's own name is exactly the
 /// qualifier that must fall through.
 def dotted_head_names_inductive (head : String) (scope : Scope) : Bool :=
-    match scope_find_inductive (NamePath.npath (List.cons (Identifier.id head) List.empty)) scope {
+    match scope_find_inductive (NamePath.mk (List.cons (Identifier.id head) List.empty)) scope {
         ok _ => true,
         err _ => false,
     }
@@ -2368,7 +2368,7 @@ def try_global_field_access (id : Identifier) (expected_type : Term) (scope : Sc
 /// `expected_type` is the only real type information available here.
 def type_check_free_var_con (id : Identifier) (expected_type : Term) (dbg : DebugName) (scope : Scope) : Result TypeError TypedTerm :=
     let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
-    let con_mp : NamePath := NamePath.npath (List.cons bare_name List.empty) in
+    let con_mp : NamePath := NamePath.mk (List.cons bare_name List.empty) in
     match scope_find_inductive_by_constructor con_mp scope {
         Option.some ind =>
             match find_constructor_in_inductive ind con_mp {
@@ -2424,7 +2424,7 @@ def con_ref_result_type (id : Identifier) (expected_type : Term) (scope : Scope)
             Identifier.id s =>
                 match dotted_qualifier s {
                     Option.some qual =>
-                        let qual_mp : NamePath := NamePath.npath (List.cons (Identifier.id qual) List.empty) in
+                        let qual_mp : NamePath := NamePath.mk (List.cons (Identifier.id qual) List.empty) in
                         match scope_find_inductive qual_mp scope {
                             // The params check must be on the inductive
                             // actually being NAMED (`qual_ind`, from the
@@ -2435,7 +2435,7 @@ def con_ref_result_type (id : Identifier) (expected_type : Term) (scope : Scope)
                             // share a constructor name, which is the whole
                             // scenario this path exists for.
                             ok qual_ind =>
-                                con_owner_type qual_ind (NamePath.npath (List.cons (Identifier.id (last_dotted_segment s)) List.empty)) expected_type,
+                                con_owner_type qual_ind (NamePath.mk (List.cons (Identifier.id (last_dotted_segment s)) List.empty)) expected_type,
                             err _ => expected_type,
                         },
                     Option.none => bare_con_ref_result_type s expected_type scope,
@@ -2478,13 +2478,13 @@ def apply_holes (head : Term) (params : List Param) : Term :=
 /// A bare constructor (`true` after `open Bool`) names its type only when
 /// exactly one ground inductive owns it.
 def bare_con_ref_result_type (name : String) (expected_type : Term) (scope : Scope) : Term :=
-    match scope_find_all_inductives_by_constructor (NamePath.npath (List.cons (Identifier.id name) List.empty)) scope {
+    match scope_find_all_inductives_by_constructor (NamePath.mk (List.cons (Identifier.id name) List.empty)) scope {
         List.empty => expected_type,
         List.cons only rest =>
             match rest {
                 List.cons _ _ => expected_type,
                 List.empty =>
-                    con_owner_type only (NamePath.npath (List.cons (Identifier.id name) List.empty)) expected_type,
+                    con_owner_type only (NamePath.mk (List.cons (Identifier.id name) List.empty)) expected_type,
             },
     }
 
@@ -2563,8 +2563,8 @@ def qualified_con_ref_typ (dbg : DebugName) (sig : Term) (scope : Scope) : Term 
                     Identifier.id s =>
                         match dotted_qualifier s {
                             Option.some qual =>
-                                let qual_mp : NamePath := NamePath.npath (List.cons (Identifier.id qual) List.empty) in
-                                let bare_mp : NamePath := NamePath.npath (List.cons (Identifier.id (last_dotted_segment s)) List.empty) in
+                                let qual_mp : NamePath := NamePath.mk (List.cons (Identifier.id qual) List.empty) in
+                                let bare_mp : NamePath := NamePath.mk (List.cons (Identifier.id (last_dotted_segment s)) List.empty) in
                                 match scope_find_inductive qual_mp scope {
                                     ok qual_ind =>
                                         match find_constructor_in_inductive qual_ind bare_mp {
@@ -2734,7 +2734,7 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                     let clsd_result : Result ScopeError ScopeClassDef :=
                         if ref_names_class_method id scope
                         then scope_find_class_def_for_ref id bare_id scope
-                        else err (ScopeError.class_not_found (NamePath.npath (List.cons bare_id List.empty))) in
+                        else err (ScopeError.class_not_found (NamePath.mk (List.cons bare_id List.empty))) in
                     match clsd_result {
                         ok cd =>
                             match resolve_class_method cd expected_type scope locals {
@@ -3509,13 +3509,13 @@ def ctor_field_domain (f : Term) (expected_type : Term) (scope : Scope) : Option
                             if not (I64.beq idx sentinel) then Option.none
                             else
                                 let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
-                                let con_mp : NamePath := NamePath.npath (List.cons bare_name List.empty) in
+                                let con_mp : NamePath := NamePath.mk (List.cons bare_name List.empty) in
                                 let owner : Option Inductive :=
                                     match id {
                                         Identifier.id s =>
                                             match dotted_qualifier s {
                                                 Option.some qual =>
-                                                    match scope_find_inductive (NamePath.npath (List.cons (Identifier.id qual) List.empty)) scope {
+                                                    match scope_find_inductive (NamePath.mk (List.cons (Identifier.id qual) List.empty)) scope {
                                                         ok ind => Option.some ind,
                                                         err _ => scope_find_inductive_by_constructor con_mp scope,
                                                     },
@@ -4076,7 +4076,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                     ClassMethodRef.mk cls method_name =>
                                         match cls {
                                             Class.mk cname _ _ _ _ =>
-                                                Option.some (Pair.pair (NamePath.npath (List.cons cname List.empty)) method_name),
+                                                Option.some (Pair.pair (NamePath.mk (List.cons cname List.empty)) method_name),
                                         },
                                 },
                             Option.none =>
@@ -5465,13 +5465,13 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
     match c {
         mk cname typ_name num_args args =>
             match typ_name {
-                NamePath.npath ids =>
-                    let full_name : NamePath := NamePath.npath (list_append ids (List.cons cname List.empty)) in
+                NamePath.mk ids =>
+                    let full_name : NamePath := NamePath.mk (list_append ids (List.cons cname List.empty)) in
                     // The lookup key is the BARE name: both
                     // `build_scope_struct` and the parser register a
                     // constructor under a one-segment path (`[mk]`), never
                     // `[Type, mk]`. `full_name` is for the diagnostics only.
-                    let bare_con : NamePath := NamePath.npath (List.cons cname List.empty) in
+                    let bare_con : NamePath := NamePath.mk (List.cons cname List.empty) in
                     match scope_find_inductive typ_name scope {
                         err _ =>
                             match check_con_args_untyped args scope local_types locals {
@@ -5561,7 +5561,7 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
         Option.none =>
             err (TypeError.custom "cannot infer struct type for struct literal (no `: StructName` annotation and no expected type from context)"),
         Option.some sname =>
-            let typ_mp : NamePath := NamePath.npath (List.cons sname List.empty) in
+            let typ_mp : NamePath := NamePath.mk (List.cons sname List.empty) in
             match scope_find_inductive typ_mp scope {
                 err _ => err (TypeError.unknown_type (NameRef.nnp typ_mp)),
                 ok ind =>
@@ -5602,12 +5602,12 @@ def struct_lit_head_name (type_name : Option Term) (expected_type : Term) : Opti
     }
 
 /// `InductConstructor.mk`'s own `name` field is a full `NamePath`
-/// (`build_scope_struct` registers it as `NamePath.npath [mk]`) --
+/// (`build_scope_struct` registers it as `NamePath.mk [mk]`) --
 /// `Con.mk` wants just the bare constructor `Identifier`, same as
 /// every other constructor-application site in this file.
 def struct_lit_con_name (np : NamePath) : Identifier :=
     match np {
-        NamePath.npath ids =>
+        NamePath.mk ids =>
             match list_last ids {
                 Option.some id => id,
                 Option.none => Identifier.id "mk",
@@ -5743,7 +5743,7 @@ def struct_literal_arg_matches_expected (a : Term) (a_expected : Term) (scope : 
             match type_head_name a_expected {
                 Option.none => true,
                 Option.some sname =>
-                    let typ_mp : NamePath := NamePath.npath (List.cons sname List.empty) in
+                    let typ_mp : NamePath := NamePath.mk (List.cons sname List.empty) in
                     match scope_find_inductive typ_mp scope {
                         err _ => true,
                         ok ind =>
@@ -5823,7 +5823,7 @@ def inductive_bare_name (ind : Inductive) : Identifier :=
     match ind {
         Inductive.mk name _ _ _ _ _ =>
             match name {
-                NamePath.npath ids =>
+                NamePath.mk ids =>
                     match list_last ids {
                         Option.some id => id,
                         Option.none => Identifier.id "?",
@@ -5925,7 +5925,7 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
             match dbg {
                 DebugName.named id =>
                     let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
-                    let con_mp : NamePath := NamePath.npath (List.cons bare_name List.empty) in
+                    let con_mp : NamePath := NamePath.mk (List.cons bare_name List.empty) in
                     match scope_find_inductive_by_constructor con_mp scope {
                         Option.some ind =>
                             match find_constructor_in_inductive ind con_mp {
@@ -6133,7 +6133,7 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
             match type_head_name base_typ {
                 Option.none => struct_update_fallback base_term fields base_typ,
                 Option.some sname =>
-                    let typ_mp : NamePath := NamePath.npath (List.cons sname List.empty) in
+                    let typ_mp : NamePath := NamePath.mk (List.cons sname List.empty) in
                     match scope_find_inductive typ_mp scope {
                         err _ => struct_update_fallback base_term fields base_typ,
                         ok ind =>
@@ -6161,7 +6161,7 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                                             let args : List (Option Term) := struct_update_arm_args elab_overrides binders n 0 in
                                                             let body : Term := Term.con (Con.mk mk_name typ_mp n args) in
                                                             let no_fp : Option FieldPattern := Option.none in
-                                                            let case_ : MatchCase := MatchCase.mc mk_name binders body no_fp in
+                                                            let case_ : MatchCase := MatchCase.mk mk_name binders body no_fp in
                                                             ok (mk_typed (Term.lit (Literal.match_ base_term (List.cons case_ List.empty))) base_typ),
                                                     },
                                             }
@@ -6365,16 +6365,16 @@ def type_check_ntv (n : Native) (expected_type : Term) (scope : Scope) (local_ty
 // just infer and return, ignoring `expected_type` — a literal argument
 // would trivially "pass" any declared param type, proving nothing).
 
-def box_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box") List.empty)
+def box_module_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Box") List.empty)
 
-def box_ctor_path : NamePath := NamePath.npath (List.cons (Identifier.id "Box") List.empty)
+def box_ctor_path : NamePath := NamePath.mk (List.cons (Identifier.id "Box") List.empty)
 
 /// A constructor's registered path is its BARE name -- what
 /// `build_scope_struct` (`lang/scope.mo`) and the parser both write.
 /// This fixture used to register `[Box, box]`, which only ever matched
 /// `type_check_con`'s own (wrong) `typ_name ++ [cname]` lookup key, so
 /// the two agreed with each other and with nothing else.
-def box_ctor_bare_path : NamePath := NamePath.npath (List.cons (Identifier.id "box") List.empty)
+def box_ctor_bare_path : NamePath := NamePath.mk (List.cons (Identifier.id "box") List.empty)
 
 def box_param : Param := Param.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
@@ -6446,7 +6446,7 @@ def test_type_check_con_unregistered_inductive_falls_back : Bool :=
     // `typ_name` refers to an inductive that isn't in scope at all —
     // still individually checks present args (a bad one is still
     // caught), just without field-type correlation.
-    let unknown_typ : NamePath := NamePath.npath (List.cons (Identifier.id "NoSuchType") List.empty) in
+    let unknown_typ : NamePath := NamePath.mk (List.cons (Identifier.id "NoSuchType") List.empty) in
     let good_arg : Term := Term.sort (SortLevel.concrete 1) in
     let c_ok : Con := Con.mk (Identifier.id "whatever") unknown_typ 1 (List.cons (Option.some good_arg) List.empty) in
     match type_check_con c_ok Term.hole box_scope empty_local_types empty_locals {
@@ -6462,11 +6462,11 @@ def test_type_check_con_unregistered_inductive_falls_back : Bool :=
 // y : T }` declaration (type path `[Point]`, single synthetic
 // constructor path `[mk]`).
 
-def point_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Point") List.empty)
+def point_module_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Point") List.empty)
 
-def point_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Point") List.empty)
+def point_type_path : NamePath := NamePath.mk (List.cons (Identifier.id "Point") List.empty)
 
-def point_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
+def point_mk_path : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty)
 
 def point_x_param : Param := Param.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
@@ -6606,7 +6606,7 @@ def match_first_case_arity (t : Term) : I64 :=
             match l {
                 Literal.match_ _ cases =>
                     match cases {
-                        List.cons c _ => match c { MatchCase.mc _ cargs _ _ => List.length cargs },
+                        List.cons c _ => match c { MatchCase.mk _ cargs _ _ => List.length cargs },
                         List.empty => -1,
                     },
                 _ => -1,
@@ -6742,11 +6742,11 @@ def test_type_check_struct_lit_extra_unknown_field_ignored : Bool :=
 
 def point_mk_var : Term := Term.var sentinel (DebugName.named (Identifier.id "mk"))
 
-def solo_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Solo") List.empty)
+def solo_module_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Solo") List.empty)
 
-def solo_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Solo") List.empty)
+def solo_type_path : NamePath := NamePath.mk (List.cons (Identifier.id "Solo") List.empty)
 
-def solo_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
+def solo_mk_path : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty)
 
 def solo_n_param : Param := Param.mk (Identifier.id "n") (Term.sort (SortLevel.concrete 2)) Multiplicity.many Option.none List.empty
 
@@ -6859,9 +6859,9 @@ def test_type_check_app_resolves_named_call_end_to_end : Bool :=
 // literal) so this exercises the actual `def_params_of_term`/`scope_
 // data_add_def_params` registration path, not just its consumer.
 
-def scale_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "scale") List.empty)
+def scale_module_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "scale") List.empty)
 
-def scale_def_name : NamePath := NamePath.npath (List.cons (Identifier.id "scale") List.empty)
+def scale_def_name : NamePath := NamePath.mk (List.cons (Identifier.id "scale") List.empty)
 
 def scale_def_body : Term :=
     Term.lam (binder_named (Identifier.id "factor")) (Term.sort (SortLevel.concrete 2))
@@ -7047,7 +7047,7 @@ def struct_update_arm_body (t : Term) : Option Term :=
     match t {
         Term.lit l => match l {
             Literal.match_ _scrut cases => match cases {
-                List.cons c _ => match c { MatchCase.mc _n _a body _fp => Option.some body },
+                List.cons c _ => match c { MatchCase.mk _n _a body _fp => Option.some body },
                 List.empty => Option.none,
             },
             _ => Option.none,
@@ -7103,11 +7103,11 @@ def test_type_check_struct_update_unresolvable_base_falls_back : Bool :=
 // structurally-unrelated shape (a bare sort) has somewhere real to
 // conflict with.
 
-def wrap_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Wrap") List.empty)
+def wrap_module_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Wrap") List.empty)
 
-def wrap_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Wrap") List.empty)
+def wrap_type_path : NamePath := NamePath.mk (List.cons (Identifier.id "Wrap") List.empty)
 
-def wrap_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
+def wrap_mk_path : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty)
 
 def wrap_v_param : Param := Param.mk (Identifier.id "v") point_type_ref Multiplicity.many Option.none List.empty
 
@@ -7154,7 +7154,7 @@ def test_type_check_struct_update_rejects_mismatched_field_type : Bool :=
 /// a concrete type name, and resolution is the only discriminator), so
 /// registering `A` here would make every assertion below vacuous.
 def pi_ret_test_scope : Scope := {
-    module_id := ModulePath.mp (List.cons (Identifier.id "PiRetTest") List.empty),
+    module_id := ModulePath.mk (List.cons (Identifier.id "PiRetTest") List.empty),
     scope := scope_data_empty,
     parent := Option.none,
     incomplete_match_ok := false,

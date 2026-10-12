@@ -87,7 +87,7 @@ def probe_copy_resolution_in_a_real_scope : IO Bool := do {
             },
             Result.ok em => do {
                 let i64_type : Term := Term.var 0 (DebugName.named (Identifier.id "I64"));
-                let copy_name : NamePath := NamePath.npath (List.cons (Identifier.id "Copy") List.empty);
+                let copy_name : NamePath := NamePath.mk (List.cons (Identifier.id "Copy") List.empty);
                 let candidates : I64 := List.length (scope_instance_candidates (scope_globals em.scope) copy_name);
                 println ("Copy instance candidates in scope: " ++ I64.to_string candidates);
                 println ("verdict for I64: " ++
@@ -102,11 +102,11 @@ def probe_copy_resolution_in_a_real_scope : IO Bool := do {
     }
 }
 #[partial]
-def np1 (nm : String) : NamePath := NamePath.npath (List.cons (Identifier.id nm) List.empty)
+def np1 (nm : String) : NamePath := NamePath.mk (List.cons (Identifier.id nm) List.empty)
 
 #[partial]
 def np3 (a : String) (b : String) (c : String) : NamePath :=
-    NamePath.npath (List.cons (Identifier.id a) (List.cons (Identifier.id b) (List.cons (Identifier.id c) List.empty)))
+    NamePath.mk (List.cons (Identifier.id a) (List.cons (Identifier.id b) (List.cons (Identifier.id c) List.empty)))
 
 #[test]
 def probe_instance_buckets_in_a_real_scope : IO Bool := do {

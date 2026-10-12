@@ -159,7 +159,7 @@ def test_elaborate_type_no_free_vars : Bool :=
 def test_elaborate_def_free_var : Bool :=
     let typ : Term := pi binder_anon v_A v_A in
     let body : Term := var 0 (named (Identifier.id "x")) in
-    let mp : NamePath := NamePath.npath (List.cons (Identifier.id "f") List.empty) in
+    let mp : NamePath := NamePath.mk (List.cons (Identifier.id "f") List.empty) in
     let d : Def := Def.mk mp typ body empty_constraints empty_attrs Visibility.package_private List.empty in
     let elaborated : Def := elaborate_def d no_ids in
     match elaborated {
@@ -182,10 +182,10 @@ def test_elaborate_def_free_var : Bool :=
 def test_elaborate_def_constraint_only_var : Bool :=
     let typ : Term := sort_n 1 in
     let body : Term := Term.hole in
-    let show_cls : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
+    let show_cls : NamePath := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
     let constraint : TypeConstraint := TypeConstraint.mk show_cls (List.cons id_A List.empty) in
     let constraints : List TypeConstraint := List.cons constraint List.empty in
-    let mp : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
+    let mp : NamePath := NamePath.mk (List.cons (Identifier.id "foo") List.empty) in
     let d : Def := Def.mk mp typ body constraints empty_attrs Visibility.package_private List.empty in
     let elaborated : Def := elaborate_def d no_ids in
     match elaborated {
@@ -244,7 +244,7 @@ def test_elaborate_decls_empty : Bool :=
 
 #[test]
 def test_names_of_decl_def : Bool :=
-    let mp : NamePath := NamePath.npath (List.cons (Identifier.id "f") List.empty) in
+    let mp : NamePath := NamePath.mk (List.cons (Identifier.id "f") List.empty) in
     let d : Def := Def.mk mp (sort_n 1) Term.hole empty_constraints empty_attrs Visibility.package_private List.empty in
     let decl : Decl := Decl.def_d d in
     let names : List Identifier := names_of_decl decl in
@@ -271,7 +271,7 @@ def test_names_of_decl_class : Bool :=
 
 #[test]
 def test_names_of_decl_use_empty : Bool :=
-    let mp : ModulePath := ModulePath.mp no_ids in
+    let mp : ModulePath := ModulePath.mk no_ids in
     let decl : Decl := Decl.use_d mp UseFilter.use_bare false in
     let names : List Identifier := names_of_decl decl in
     match names {
@@ -283,8 +283,8 @@ def test_names_of_decl_use_empty : Bool :=
 
 #[test]
 def test_names_of_decls_multiple : Bool :=
-    let mp_f : NamePath := NamePath.npath (List.cons (Identifier.id "f") List.empty) in
-    let mp_g : NamePath := NamePath.npath (List.cons (Identifier.id "g") List.empty) in
+    let mp_f : NamePath := NamePath.mk (List.cons (Identifier.id "f") List.empty) in
+    let mp_g : NamePath := NamePath.mk (List.cons (Identifier.id "g") List.empty) in
     let d1 : Decl := Decl.def_d (Def.mk mp_f (sort_n 1) Term.hole empty_constraints empty_attrs Visibility.package_private List.empty) in
     let d2 : Decl := Decl.def_d (Def.mk mp_g (sort_n 1) Term.hole empty_constraints empty_attrs Visibility.package_private List.empty) in
     let decl_list : List Decl := List.cons d1 (List.cons d2 List.empty) in

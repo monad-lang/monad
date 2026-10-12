@@ -43,7 +43,7 @@ use lang::typecheck::infer {
 }
 
 def ctx_peel_synthetic_path : ModulePath :=
-    ModulePath.mp (List.cons (Identifier.id "ctx_peel_tests") List.empty)
+    ModulePath.mk (List.cons (Identifier.id "ctx_peel_tests") List.empty)
 
 /// A location to wrap terms in. Every field is a real value: an unset
 /// one would make a pin pass or fail for reasons unrelated to peeling.

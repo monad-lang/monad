@@ -11,7 +11,7 @@ use lang::types {
   binder_level, binder_name, binder_named, cubical_prim_of_name, dict_hint_marker_prefix,
   f32, f64, i16, i32,
   i64, i8, id_eq, id_member,
-  many, mk, name_path_similar, open_all, open_only, package_private, param_many,
+  many, name_path_similar, open_all, open_only, package_private, param_many,
   priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
   term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
   use_name, use_rename, use_sub, use_sub_rename,
@@ -371,7 +371,7 @@ def alias_def (acc : ScopeData) (real_path : NamePath) (alias_name : Identifier)
         Option.some sd =>
             match sd {
                 mk _ module_ sig body vis =>
-                    let alias_np : NamePath := NamePath.npath (List.cons alias_name List.empty) in
+                    let alias_np : NamePath := NamePath.mk (List.cons alias_name List.empty) in
                     let aliased : ScopeDef := {
                         name := alias_np,
                         module := module_,
@@ -388,7 +388,7 @@ def alias_def (acc : ScopeData) (real_path : NamePath) (alias_name : Identifier)
 
 def path_extend (path : ModulePath) (name : Identifier) : ModulePath :=
     match path {
-        ModulePath.mp ids => ModulePath.mp (list_append ids (List.cons name List.empty))
+        ModulePath.mk ids => ModulePath.mk (list_append ids (List.cons name List.empty))
     }
 
 /// A `use` module path widened to the `NamePath` the def-keyed tables
@@ -396,7 +396,7 @@ def path_extend (path : ModulePath) (name : Identifier) : ModulePath :=
 /// split (`Decl.use_d`), def names don't.
 def npath_of (path : ModulePath) : NamePath :=
     match path {
-        ModulePath.mp ids => NamePath.npath ids
+        ModulePath.mk ids => NamePath.mk ids
     }
 
 /// The inverse boundary conversion: a `NamePath` handed to a position
@@ -406,14 +406,14 @@ def npath_of (path : ModulePath) : NamePath :=
 /// Rust host's `impl From<NamePath> for ModulePath`.
 def modpath_of (np : NamePath) : ModulePath :=
     match np {
-        NamePath.npath ids => ModulePath.mp ids
+        NamePath.mk ids => ModulePath.mk ids
     }
 
 /// `path_extend`'s NamePath-in, NamePath-out sibling -- `open` paths
 /// are NamePaths now (`Decl.open_d`).
 def npath_extend (np : NamePath) (name : Identifier) : NamePath :=
     match np {
-        NamePath.npath ids => NamePath.npath (list_append ids (List.cons name List.empty))
+        NamePath.mk ids => NamePath.mk (list_append ids (List.cons name List.empty))
     }
 
 def apply_open_filter (acc : ScopeData) (path : NamePath) (filter : OpenFilter) : ScopeData :=
@@ -769,7 +769,7 @@ def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path :
 def build_scope_struct (s : Struct) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match s {
         Struct.mk name fields _attrs vis =>
-            let type_np : NamePath := NamePath.npath (List.cons name List.empty) in
+            let type_np : NamePath := NamePath.mk (List.cons name List.empty) in
             let type_sd : ScopeDef := {
                 name := type_np,
                 module := path,
@@ -778,7 +778,7 @@ def build_scope_struct (s : Struct) (path : ModulePath) (acc : ScopeData) : Scop
                 vis := vis,
             } in
             let with_type_def : ScopeData := scope_data_add_def acc type_sd in
-            let mk_np : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty) in
+            let mk_np : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty) in
             let mk_params : List Param := struct_fields_to_params fields in
             let mk_con : InductConstructor := InductConstructor.mk mk_np mk_params Term.hole in
             let synthetic_ind : Inductive := Inductive.mk type_np List.empty Term.hole (List.cons mk_con List.empty) List.empty vis in
@@ -800,7 +800,7 @@ def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : Scop
     match cls {
         mk clsname _ _ methods _vis =>
             let name_list : List Identifier := List.cons clsname List.empty in
-            let cls_np : NamePath := NamePath.npath name_list in
+            let cls_np : NamePath := NamePath.mk name_list in
             let with_cls : ScopeData := scope_data_add_class acc cls in
             add_class_methods with_cls methods cls_np
     }
@@ -815,10 +815,10 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_np : NamePat
             match m {
                 mk method_name _ _ =>
                     match cls_np {
-                        NamePath.npath cls_ids =>
+                        NamePath.mk cls_ids =>
                             let method_id_list : List Identifier := List.cons method_name List.empty in
                             let method_ids : List Identifier := List.append cls_ids method_id_list in
-                            let full_name : NamePath := NamePath.npath method_ids in
+                            let full_name : NamePath := NamePath.mk method_ids in
                             let scd : ScopeClassDef := {
                                 class_name := cls_np,
                                 full_name := full_name,
@@ -991,7 +991,7 @@ def scope_find_class_def_by_name (method_name : Identifier) (s : Scope) : Result
     match result {
         Option.some cd => ok cd,
         Option.none =>
-            let np : NamePath := NamePath.npath (List.cons method_name List.empty) in
+            let np : NamePath := NamePath.mk (List.cons method_name List.empty) in
             err (ScopeError.class_not_found np)
     }
 
@@ -1063,8 +1063,8 @@ def resolve_name_in_locals (nref : NameRef) (locals : LocalScope) : Option Scope
                     match lv {
                         LocalVar.mk lvname lvtyp _ =>
                             let empty_id_list : List Identifier := List.empty in
-                            let lv_np : NamePath := NamePath.npath (List.cons lvname empty_id_list) in
-                            let empty_mp : ModulePath := ModulePath.mp empty_id_list in
+                            let lv_np : NamePath := NamePath.mk (List.cons lvname empty_id_list) in
+                            let empty_mp : ModulePath := ModulePath.mk empty_id_list in
                             let sd : ScopeDef := {
                                 name := lv_np,
                                 module := empty_mp,
@@ -1142,8 +1142,8 @@ def split_qualified_identifier (i : Identifier) : Option QualifiedName :=
         if String.beq module_text "" then Option.none
         else if String.beq name_text "" then Option.none
         else
-            let qmod : ModulePath := ModulePath.mp (split_ids module_text 58u8 true) in
-            let qname : NamePath := NamePath.npath (split_ids name_text 46u8 false) in
+            let qmod : ModulePath := ModulePath.mk (split_ids module_text 58u8 true) in
+            let qname : NamePath := NamePath.mk (split_ids name_text 46u8 false) in
             // Annotated local, NOT a bare `Option.some { .. }`: a struct
             // literal in argument position never desugars to a
             // constructor and silently compiles to a void placeholder
@@ -1189,7 +1189,7 @@ def resolve_name_in_scope (nref : NameRef) (s : Scope) : Result ScopeError Scope
         // qualified path and broke class resolution
         // (`no instance found for BEq.beq`).
         NameRef.nid i =>
-            let name : NamePath := NamePath.npath (List.cons i List.empty) in
+            let name : NamePath := NamePath.mk (List.cons i List.empty) in
             match resolve_def_in_scope_by_name name s {
                 Result.ok d => Result.ok d,
                 Result.err e =>
@@ -1229,9 +1229,9 @@ def qualified_name_to_name_path (qn : QualifiedName) : NamePath :=
     match qn {
         mk qmod qname =>
             match qmod {
-                ModulePath.mp mids =>
+                ModulePath.mk mids =>
                     match qname {
-                        NamePath.npath nids => NamePath.npath (list_append mids nids),
+                        NamePath.mk nids => NamePath.mk (list_append mids nids),
                     },
             },
     }
@@ -1250,7 +1250,7 @@ def resolve_def_in_scope_by_module (qn : QualifiedName) (s : Scope) : Result Sco
 ///
 /// Both halves compare RENDERED (`.`-joined) strings, not segments. The
 /// name half is the reason: a DECLARED name is built by `dotted_def_name`
-/// -> `Identifier.id` -> `NamePath.npath [id]` (lang/parser.mo's
+/// -> `Identifier.id` -> `NamePath.mk [id]` (lang/parser.mo's
 /// `def_kw`), so `pub def String.concat` is ONE segment holding an
 /// embedded dot, while a ref's name half is `split_ids`-split per dot
 /// into `[String; concat]` -- two segments. `name_path_similar` is
@@ -1448,14 +1448,14 @@ def add_builtins (sd : ScopeData) : ScopeData :=
 def add_builtin_type (sd : ScopeData) : ScopeData :=
     let type_id : Identifier := Identifier.id "Type" in
     let empty_id_list : List Identifier := List.empty in
-    let type_name : NamePath := NamePath.npath (List.cons type_id empty_id_list) in
+    let type_name : NamePath := NamePath.mk (List.cons type_id empty_id_list) in
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let type_ind : Inductive := Inductive.mk type_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let type_sd : ScopeDef := {
         name := type_name,
-        module := ModulePath.mp empty_id_list,
+        module := ModulePath.mk empty_id_list,
         sig := Term.hole,
         body := Term.hole,
         vis := Visibility.pub_,
@@ -1466,14 +1466,14 @@ def add_builtin_type (sd : ScopeData) : ScopeData :=
 def add_builtin_prop (sd : ScopeData) : ScopeData :=
     let prop_id : Identifier := Identifier.id "Prop" in
     let empty_id_list : List Identifier := List.empty in
-    let prop_name : NamePath := NamePath.npath (List.cons prop_id empty_id_list) in
+    let prop_name : NamePath := NamePath.mk (List.cons prop_id empty_id_list) in
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let prop_ind : Inductive := Inductive.mk prop_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let prop_sd : ScopeDef := {
         name := prop_name,
-        module := ModulePath.mp empty_id_list,
+        module := ModulePath.mk empty_id_list,
         sig := Term.hole,
         body := Term.hole,
         vis := Visibility.pub_,
@@ -1484,14 +1484,14 @@ def add_builtin_prop (sd : ScopeData) : ScopeData :=
 def add_builtin_sort (sd : ScopeData) : ScopeData :=
     let sort_id : Identifier := Identifier.id "Sort" in
     let empty_id_list : List Identifier := List.empty in
-    let sort_name : NamePath := NamePath.npath (List.cons sort_id empty_id_list) in
+    let sort_name : NamePath := NamePath.mk (List.cons sort_id empty_id_list) in
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let sort_ind : Inductive := Inductive.mk sort_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let sort_sd : ScopeDef := {
         name := sort_name,
-        module := ModulePath.mp empty_id_list,
+        module := ModulePath.mk empty_id_list,
         sig := Term.hole,
         body := Term.hole,
         vis := Visibility.pub_,
@@ -1502,14 +1502,14 @@ def add_builtin_sort (sd : ScopeData) : ScopeData :=
 def add_builtin_pred (sd : ScopeData) : ScopeData :=
     let pred_id : Identifier := Identifier.id "Pred" in
     let empty_id_list : List Identifier := List.empty in
-    let pred_name : NamePath := NamePath.npath (List.cons pred_id empty_id_list) in
+    let pred_name : NamePath := NamePath.mk (List.cons pred_id empty_id_list) in
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let pred_ind : Inductive := Inductive.mk pred_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let pred_sd : ScopeDef := {
         name := pred_name,
-        module := ModulePath.mp empty_id_list,
+        module := ModulePath.mk empty_id_list,
         sig := Term.hole,
         body := Term.hole,
         vis := Visibility.pub_,
@@ -2222,10 +2222,10 @@ def resolve_open_alias_match_cases (names : HashMap String String) (bound : List
 #[partial]
 def resolve_open_alias_match_case (names : HashMap String String) (bound : List String) (c : MatchCase) : MatchCase :=
     match c {
-        MatchCase.mc name args body fp =>
+        MatchCase.mk name args body fp =>
             let bound1 := push_bound_names bound args in
             let bound2 := push_bound_field_pattern bound1 fp in
-            MatchCase.mc name args (resolve_open_alias_term_scoped names bound2 body) fp,
+            MatchCase.mk name args (resolve_open_alias_term_scoped names bound2 body) fp,
     }
 
 #[partial]
@@ -2432,7 +2432,7 @@ def find_class_by_name (classes : List Class) (cls_name : NamePath) : Option Cla
         List.cons cls rest =>
             match cls {
                 Class.mk cname _ _ _ _ =>
-                    if class_name_eq (NamePath.npath (List.cons cname List.empty)) cls_name
+                    if class_name_eq (NamePath.mk (List.cons cname List.empty)) cls_name
                     then Option.some cls
                     else find_class_by_name rest cls_name,
             },
@@ -2459,7 +2459,7 @@ def find_instance_method (defs : List Def) (method_name : Identifier) : Option D
 #[partial]
 def instance_method_name_matches (dname : NamePath) (method_name : Identifier) : Bool :=
     match dname {
-        NamePath.npath ids =>
+        NamePath.mk ids =>
             match ids {
                 List.cons only_id rest =>
                     match rest {
@@ -2572,7 +2572,7 @@ pub def mangle_instance_method_name (insname : Identifier) (cls_name : NamePath)
     let full0 := String.concat (String.concat cls_str sep_args) (String.concat "_" (show_identifier method_name)) in
     let ins_str := instance_bare_name insname in
     let full := if String.beq ins_str "_" then full0 else String.concat full0 (String.concat "_" ins_str) in
-    NamePath.npath (List.cons (Identifier.id (with_module_prefix (instance_module_prefix insname) full)) List.empty)
+    NamePath.mk (List.cons (Identifier.id (with_module_prefix (instance_module_prefix insname) full)) List.empty)
 
 /// The mangled name of an instance's own dictionary VALUE def. A NAMED
 /// instance (`instance ShowA : Show I64`) appends its own name: two named
@@ -2589,7 +2589,7 @@ pub def mangle_instance_dict_name (insname : Identifier) (cls_name : NamePath) (
         if String.beq ins_str "_"
         then String.concat (String.concat "__Dict_" cls_str) sep_args
         else String.concat (String.concat (String.concat "__Dict_" cls_str) sep_args) (String.concat "_" ins_str) in
-    NamePath.npath (List.cons (Identifier.id (with_module_prefix (instance_module_prefix insname) full)) List.empty)
+    NamePath.mk (List.cons (Identifier.id (with_module_prefix (instance_module_prefix insname) full)) List.empty)
 
 /// Builds one instance's promoted method Decls (real top-level defs,
 /// renamed via `mangle_instance_method_name`) plus its own dictionary
@@ -2809,7 +2809,7 @@ def method_available (cls : Class) (defs : List Def) (mname : Identifier) : Bool
 #[partial]
 def mangled_to_identifier (np : NamePath) : Identifier :=
     match np {
-        NamePath.npath ids =>
+        NamePath.mk ids =>
             match ids {
                 List.cons only_id rest =>
                     match rest {
@@ -2998,7 +2998,7 @@ def match_cases_reference_class (cls_str : String) (cases : List MatchCase) : Bo
     match cases {
         List.empty => false,
         List.cons c rest =>
-            match c { MatchCase.mc _ _ body _ => def_references_class cls_str body || match_cases_reference_class cls_str rest },
+            match c { MatchCase.mk _ _ body _ => def_references_class cls_str body || match_cases_reference_class cls_str rest },
     }
 
 #[partial]
@@ -3377,7 +3377,7 @@ def type_head_name_local (t : Term) : Option Identifier :=
 /// registers a lambda param's declared type into `env` (see
 /// `resolve_class_call_term`'s `Literal.match_` case below). `ctor_name`
 /// is the constructor's bare name (`last_segment`), matching
-/// `CtorOwner`'s own convention -- `MatchCase.mc`'s own `name` field is
+/// `CtorOwner`'s own convention -- `MatchCase.mk`'s own `name` field is
 /// bare too, with no type-qualification available structurally at this
 /// syntactic pass.
 /// `owner` -- the owning inductive's own name path -- is what makes the
@@ -3428,7 +3428,7 @@ def collect_ctor_field_types (decl_list : List Decl) : List CtorFieldTypes :=
 def ctor_field_types_of_struct (s : Struct) : List CtorFieldTypes :=
     match s {
         Struct.mk name fields _attrs _vis =>
-            let owner : NamePath := NamePath.npath (List.cons name List.empty) in
+            let owner : NamePath := NamePath.mk (List.cons name List.empty) in
             let field_types : List Term := param_types_of (struct_fields_to_params fields) in
             List.cons (CtorFieldTypes.mk (Identifier.id "mk") owner List.empty field_types) List.empty,
     }
@@ -3785,7 +3785,7 @@ def term_head_identifier (t : Term) : Option Identifier :=
 #[partial]
 def match_arm_env (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (scrutinee : Term) (case_ : MatchCase) : List LocalTypeBinding :=
     match case_ {
-        MatchCase.mc cname cargs _body _fp =>
+        MatchCase.mk cname cargs _body _fp =>
             match lookup_ctor_field_types_for ctor_field_types cname (scrutinee_type_head env ctor_owners def_types ctor_field_types scrutinee) {
                 Option.some entry =>
                     match entry {
@@ -3821,7 +3821,7 @@ def collect_ctor_owners (decl_list : List Decl) : List CtorOwner :=
 def struct_ctor_owners (s : Struct) : List CtorOwner :=
     match s {
         Struct.mk name _fields _attrs _vis =>
-            List.cons (CtorOwner.mk (Identifier.id "mk") (NamePath.npath (List.cons name List.empty))) List.empty,
+            List.cons (CtorOwner.mk (Identifier.id "mk") (NamePath.mk (List.cons name List.empty))) List.empty,
     }
 
 /// Collects EVERY constructor's owner, not just the 0-arg ones: a
@@ -3932,7 +3932,7 @@ def qualifier_of (id : Identifier) : Option Identifier :=
 #[partial]
 def last_segment (np : NamePath) : Identifier :=
     match np {
-        NamePath.npath ids => last_segment_of ids,
+        NamePath.mk ids => last_segment_of ids,
     }
 
 #[partial]
@@ -5934,7 +5934,7 @@ def class_method_ref (classes : List Class) (id : Identifier) : Option ClassMeth
     match class_prefix_of text {
         Option.none => Option.none,
         Option.some cls_str =>
-            match find_class_by_name classes (NamePath.npath (List.cons (Identifier.id cls_str) List.empty)) {
+            match find_class_by_name classes (NamePath.mk (List.cons (Identifier.id cls_str) List.empty)) {
                 Option.none => Option.none,
                 Option.some cls =>
                     match method_suffix_of text {
@@ -5963,7 +5963,7 @@ pub def scope_find_class_def_for_ref (id : Identifier) (bare_id : Identifier) (s
                     let g : ScopeData := scope_globals s in
                     match cls {
                         Class.mk cname _ _ _ _ =>
-                            match find_class_def_of (NamePath.npath (List.cons cname List.empty)) method g.class_defs {
+                            match find_class_def_of (NamePath.mk (List.cons cname List.empty)) method g.class_defs {
                                 Option.some cd => ok cd,
                                 Option.none => scope_find_class_def_by_name bare_id s,
                             },
@@ -6178,7 +6178,7 @@ pub def validate_dict_hints (callee : Identifier) (resolved : Option NamePath) (
 /// Class name's own `Identifier` -> the `Class`'s own declared name.
 #[partial]
 def class_own_name (cls : Class) : NamePath :=
-    match cls { Class.mk cname _ _ _ _ => NamePath.npath (List.cons cname List.empty) }
+    match cls { Class.mk cname _ _ _ _ => NamePath.mk (List.cons cname List.empty) }
 
 #[partial]
 def find_matching_instance_any (instances : List Instance) (cls_name : NamePath) (carriers : List Term) : Option Instance :=
@@ -6538,7 +6538,7 @@ def build_dict_field_projection (cls : Class) (dict_id : Identifier) (method_nam
     let method_names := class_method_names cls in
     let pattern_vars := dict_match_pattern_vars method_names method_name in
     let call := rebuild_call (Term.var 0 (DebugName.named method_name)) real_args in
-    let case_ := MatchCase.mc (Identifier.id "mk") pattern_vars call Option.none in
+    let case_ := MatchCase.mk (Identifier.id "mk") pattern_vars call Option.none in
     Term.lit (Literal.match_ (Term.var 0 (DebugName.named dict_id)) (List.cons case_ List.empty))
 
 /// Checker-facing sibling of `build_dict_field_projection` (D5 dict-
@@ -6563,7 +6563,7 @@ def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (me
     let method_names := class_method_names cls in
     let pattern_vars := dict_match_pattern_vars method_names method_name in
     let call := rebuild_call (Term.var free_var_sentinel (DebugName.named method_name)) real_args in
-    let case_ := MatchCase.mc (Identifier.id "mk") pattern_vars call Option.none in
+    let case_ := MatchCase.mk (Identifier.id "mk") pattern_vars call Option.none in
     Term.lit (Literal.match_ (Term.var free_var_sentinel (DebugName.named dict_id)) (List.cons case_ List.empty))
 
 /// The main per-term rewrite -- `term_map_children`-driven fallback for
@@ -7370,9 +7370,9 @@ def resolve_class_call_cases (classes : List Class) (instances : List Instance) 
 #[partial]
 def resolve_class_call_case (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
     match c {
-        MatchCase.mc name args body fp =>
+        MatchCase.mk name args body fp =>
             let new_env := match_arm_env ctor_field_types env ctor_owners def_types scrutinee c in
-            MatchCase.mc name args (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp,
+            MatchCase.mk name args (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp,
     }
 
 /// D5-first, D4-fallback resolution for one class-method call, given
@@ -7590,7 +7590,7 @@ def first_param_default (params : List Param) : Option Term :=
 
 #[partial]
 def monad_class_name : NamePath :=
-    NamePath.npath (List.cons (Identifier.id "Monad") List.empty)
+    NamePath.mk (List.cons (Identifier.id "Monad") List.empty)
 
 #[partial]
 def resolve_class_method_call_with_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) (extra_carriers : List Term) : Term :=
@@ -7752,7 +7752,7 @@ def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List
 def dict_binding_class_of (id : Identifier) : Option NamePath :=
     let text := show_identifier id in
     if String.starts_with "__dict_" text
-    then Option.some (NamePath.npath (List.cons (Identifier.id (String.drop (String.length "__dict_") text)) List.empty))
+    then Option.some (NamePath.mk (List.cons (Identifier.id (String.drop (String.length "__dict_") text)) List.empty))
     else Option.none
 
 /// Top-level Phase 4 driver -- applies `resolve_class_call_term` (empty
@@ -7943,7 +7943,7 @@ def find_unresolved_class_calls_cases (classes : List Class) (cases : List Match
     List.empty => acc,
     List.cons c rest =>
         match c {
-            MatchCase.mc _name _args body _fp => find_unresolved_class_calls_cases classes rest (find_unresolved_class_calls_term classes body acc),
+            MatchCase.mk _name _args body _fp => find_unresolved_class_calls_cases classes rest (find_unresolved_class_calls_term classes body acc),
         },
 }
 
@@ -8090,7 +8090,7 @@ def find_minted_name_sep (s : String) (i : I64) (n : I64) : I64 :=
 /// ordinary, unconstrained call.
 #[partial]
 def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (hints : List String) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
-    match lookup_def_constraints def_constraints (NamePath.npath (List.cons id List.empty)) {
+    match lookup_def_constraints def_constraints (NamePath.mk (List.cons id List.empty)) {
         Option.none => rebuild_call head resolved_args,
         Option.some constraints =>
             if arg_is_dict resolved_args
@@ -8268,7 +8268,7 @@ def list_append_go {A : Type} (xs : List A) (ys : List A) : List A :=
 #[test]
 def test_scope_data_empty_lookup_misses : Bool :=
     let sd := scope_data_empty in
-    match scope_data_find_def sd (NamePath.npath List.empty) {
+    match scope_data_find_def sd (NamePath.mk List.empty) {
         Option.some _ => false,
         Option.none => true
     }
@@ -8286,8 +8286,8 @@ def test_scope_data_empty_lookup_misses : Bool :=
 // the crashing path did.
 #[test]
 def test_find_all_inductives_by_constructor_matches_scope_data_arity : Bool :=
-    let ind_name : NamePath := NamePath.npath (List.cons (Identifier.id "Pair2") List.empty) in
-    let con_name : NamePath := NamePath.npath (List.cons (Identifier.id "both") List.empty) in
+    let ind_name : NamePath := NamePath.mk (List.cons (Identifier.id "Pair2") List.empty) in
+    let con_name : NamePath := NamePath.mk (List.cons (Identifier.id "both") List.empty) in
     let cn : InductConstructor := InductConstructor.mk con_name List.empty (Term.sort (SortLevel.concrete 1)) in
     let ind : Inductive := Inductive.mk ind_name List.empty (Term.sort (SortLevel.concrete 1))
         (List.cons cn List.empty) List.empty Visibility.package_private in
@@ -8314,13 +8314,13 @@ def dummy_macro_call_decl : Decl :=
     Decl.macro_call_d name no_args
 
 def dummy_def_macro_decl : Decl :=
-    let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
+    let np : NamePath := NamePath.mk (List.cons (Identifier.id "foo") List.empty) in
     let no_constraints : List TypeConstraint := List.empty in
     let no_attrs : List Attribute := List.empty in
     Decl.def_macro_d (Def.mk np Term.hole Term.hole no_constraints no_attrs Visibility.package_private List.empty)
 
 def dummy_decl_gen_decl : Decl :=
-    let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
+    let np : NamePath := NamePath.mk (List.cons (Identifier.id "foo") List.empty) in
     let no_params : List Param := List.empty in
     let no_decls : List Decl := List.empty in
     let no_attrs : List Attribute := List.empty in
@@ -8329,9 +8329,9 @@ def dummy_decl_gen_decl : Decl :=
 #[test]
 def test_build_scope_one_decl_macro_call_d_is_noop : Bool :=
     let sd := scope_data_empty in
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let sd2 := build_scope_one_decl dummy_macro_call_decl path sd in
-    match scope_data_find_def sd2 (NamePath.npath (List.cons (Identifier.id "foo") List.empty)) {
+    match scope_data_find_def sd2 (NamePath.mk (List.cons (Identifier.id "foo") List.empty)) {
         Option.some _ => false,
         Option.none => true
     }
@@ -8339,9 +8339,9 @@ def test_build_scope_one_decl_macro_call_d_is_noop : Bool :=
 #[test]
 def test_build_scope_one_decl_def_macro_d_is_noop : Bool :=
     let sd := scope_data_empty in
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let sd2 := build_scope_one_decl dummy_def_macro_decl path sd in
-    match scope_data_find_def sd2 (NamePath.npath (List.cons (Identifier.id "foo") List.empty)) {
+    match scope_data_find_def sd2 (NamePath.mk (List.cons (Identifier.id "foo") List.empty)) {
         Option.some _ => false,
         Option.none => true
     }
@@ -8349,9 +8349,9 @@ def test_build_scope_one_decl_def_macro_d_is_noop : Bool :=
 #[test]
 def test_build_scope_one_decl_decl_gen_d_is_noop : Bool :=
     let sd := scope_data_empty in
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let sd2 := build_scope_one_decl dummy_decl_gen_decl path sd in
-    match scope_data_find_def sd2 (NamePath.npath (List.cons (Identifier.id "foo") List.empty)) {
+    match scope_data_find_def sd2 (NamePath.mk (List.cons (Identifier.id "foo") List.empty)) {
         Option.some _ => false,
         Option.none => true
     }
@@ -8359,7 +8359,7 @@ def test_build_scope_one_decl_decl_gen_d_is_noop : Bool :=
 // --- Infix operator resolution tests ---
 
 def dummy_infixes : List Infix :=
-    let plus : Infix := { operator := Operator.operator "+", name := NamePath.npath (List.cons (Identifier.id "I64") (List.cons (Identifier.id "add") List.empty)) } in
+    let plus : Infix := { operator := Operator.mk "+", name := NamePath.mk (List.cons (Identifier.id "I64") (List.cons (Identifier.id "add") List.empty)) } in
     List.cons plus List.empty
 
 #[test]
@@ -8444,8 +8444,8 @@ def test_resolve_infix_term_non_operator_var_unchanged : Bool :=
 
 #[test]
 def test_collect_infixes_finds_declared_operator : Bool :=
-    let op := Operator.operator "+" in
-    let target := NamePath.npath (List.cons (Identifier.id "I64") (List.cons (Identifier.id "add") List.empty)) in
+    let op := Operator.mk "+" in
+    let target := NamePath.mk (List.cons (Identifier.id "I64") (List.cons (Identifier.id "add") List.empty)) in
     let decl_list : List Decl := List.cons (Decl.infix_d op target Visibility.package_private) List.empty in
     match collect_infixes decl_list {
         List.cons inf rest =>
@@ -8468,7 +8468,7 @@ def test_resolve_infix_decls_rewrites_def_body : Bool :=
     let n_var : Term := Term.var 0 (DebugName.named (Identifier.id "n")) in
     let one_lit : Term := Term.lit (Literal.num 1 NumSuffix.i64) in
     let body : Term := Term.app (Term.app op_var n_var) one_lit in
-    let name : NamePath := NamePath.npath (List.cons (Identifier.id "helper") List.empty) in
+    let name : NamePath := NamePath.mk (List.cons (Identifier.id "helper") List.empty) in
     let d := Def.mk name Term.hole body List.empty List.empty Visibility.package_private List.empty in
     let decl_list : List Decl := List.cons (Decl.def_d d) List.empty in
     match resolve_infix_decls dummy_infixes decl_list {
@@ -8512,9 +8512,9 @@ def dummy_beq_class : Class :=
 /// Fixture: `instance BEq Bool { def beq := <true_body> }`.
 #[partial]
 def dummy_beq_bool_instance : Instance :=
-    let cls_name := NamePath.npath (List.cons (Identifier.id "BEq") List.empty) in
+    let cls_name := NamePath.mk (List.cons (Identifier.id "BEq") List.empty) in
     let bool_arg := Term.var 0 (DebugName.named (Identifier.id "Bool")) in
-    let beq_name := NamePath.npath (List.cons (Identifier.id "beq") List.empty) in
+    let beq_name := NamePath.mk (List.cons (Identifier.id "beq") List.empty) in
     let true_body := Term.var 0 (DebugName.named (Identifier.id "true")) in
     let beq_def := Def.mk beq_name Term.hole true_body List.empty List.empty Visibility.package_private List.empty in
     Instance.mk (Identifier.id "_") cls_name List.empty (List.cons bool_arg List.empty)
@@ -8551,8 +8551,8 @@ def test_promote_instance_defs_missing_method_skips_instance : Bool :=
     let extra_method := ClassDef.mk (Identifier.id "extra") Term.hole Option.none in
     let cls := Class.mk (Identifier.id "Show") List.empty List.empty
         (List.cons show_method (List.cons extra_method List.empty)) Visibility.package_private in
-    let cls_name := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
-    let show_name := NamePath.npath (List.cons (Identifier.id "show") List.empty) in
+    let cls_name := NamePath.mk (List.cons (Identifier.id "Show") List.empty) in
+    let show_name := NamePath.mk (List.cons (Identifier.id "show") List.empty) in
     let show_def := Def.mk show_name Term.hole (mk_i64_dummy 1) List.empty List.empty Visibility.package_private List.empty in
     let ins := Instance.mk (Identifier.id "_") cls_name List.empty List.empty
         Visibility.package_private List.empty (List.cons show_def List.empty) in
@@ -8573,9 +8573,9 @@ def dummy_cmp_class : Class :=
 
 #[partial]
 def dummy_cmp_bool_decls : List Decl :=
-    let cls_name := NamePath.npath (List.cons (Identifier.id "Cmp") List.empty) in
+    let cls_name := NamePath.mk (List.cons (Identifier.id "Cmp") List.empty) in
     let bool_arg := Term.var (0 - 1) (DebugName.named (Identifier.id "Bool")) in
-    let lt_name := NamePath.npath (List.cons (Identifier.id "lt") List.empty) in
+    let lt_name := NamePath.mk (List.cons (Identifier.id "lt") List.empty) in
     let lt_def := Def.mk lt_name Term.hole (mk_i64_dummy 1) List.empty List.empty Visibility.package_private List.empty in
     let ins := Instance.mk (Identifier.id "_") cls_name List.empty (List.cons bool_arg List.empty)
         Visibility.package_private List.empty (List.cons lt_def List.empty) in
@@ -8612,7 +8612,7 @@ def swap_decls : List Decl :=
     let cls := Class.mk (Identifier.id "Swap")
         (List.cons (param_many (Identifier.id "A") ty) (List.cons (param_many (Identifier.id "B") ty) List.empty))
         List.empty (List.cons pick List.empty) Visibility.package_private in
-    let cls_name := NamePath.npath (List.cons (Identifier.id "Swap") List.empty) in
+    let cls_name := NamePath.mk (List.cons (Identifier.id "Swap") List.empty) in
     let ins := Instance.mk (Identifier.id "_") cls_name List.empty
         (List.cons b_ref (List.cons a_ref List.empty))
         Visibility.package_private List.empty List.empty in
@@ -8711,8 +8711,8 @@ def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
     let show_call := Term.app (Term.var 1 (DebugName.named (Identifier.id "Show.show"))) (Term.var 0 (DebugName.named (Identifier.id "x"))) in
     let orig_term := Term.lam (binder_named (Identifier.id "x")) Term.hole show_call in
     let orig_typ := Term.pi binder_anon Term.hole (Term.sort (SortLevel.concrete 1)) in
-    let constraint := TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
-    let d := Def.mk (NamePath.npath (List.cons (Identifier.id "show_twice") List.empty)) orig_typ orig_term
+    let constraint := TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
+    let d := Def.mk (NamePath.mk (List.cons (Identifier.id "show_twice") List.empty)) orig_typ orig_term
         (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
     let d2 := add_constraint_dict_params d in
     match d2 {
@@ -8732,8 +8732,8 @@ def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
     // A [Show A] constraint whose body never actually calls Show.show
     // -- no dict param should be added (a phantom/unused constraint).
     let unrelated_body := Term.lit (Literal.num 42 NumSuffix.i64) in
-    let constraint := TypeConstraint.mk (NamePath.npath (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
-    let d := Def.mk (NamePath.npath [Identifier.id "unrelated"]) (Term.sort (SortLevel.concrete 1)) unrelated_body
+    let constraint := TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
+    let d := Def.mk (NamePath.mk [Identifier.id "unrelated"]) (Term.sort (SortLevel.concrete 1)) unrelated_body
         (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
     let d2 := add_constraint_dict_params d in
     match d2 {
@@ -8763,19 +8763,19 @@ def test_def_references_class_false_for_unrelated_var : Bool :=
 // `IO.println` (undefined `@Monad_bind` at link time).
 #[test]
 def test_last_segment_splits_dotted_single_segment_name : Bool :=
-    let mp := NamePath.npath (List.cons (Identifier.id "IO.println") List.empty) in
+    let mp := NamePath.mk (List.cons (Identifier.id "IO.println") List.empty) in
     Similar.similar (last_segment mp) (Identifier.id "println")
 
 #[test]
 def test_last_segment_leaves_undotted_single_segment_name_unchanged : Bool :=
-    let mp := NamePath.npath (List.cons (Identifier.id "greet") List.empty) in
+    let mp := NamePath.mk (List.cons (Identifier.id "greet") List.empty) in
     Similar.similar (last_segment mp) (Identifier.id "greet")
 
 #[test]
 def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
     let println_typ := Term.pi binder_anon (Term.var 0 (DebugName.named (Identifier.id "String")))
         (Term.app (Term.var 0 (DebugName.named (Identifier.id "IO"))) (Term.var 0 (DebugName.named (Identifier.id "Unit")))) in
-    let dname : NamePath := NamePath.npath (List.cons (Identifier.id "IO.println") List.empty) in
+    let dname : NamePath := NamePath.mk (List.cons (Identifier.id "IO.println") List.empty) in
     let d : Def := {
         name := dname,
         typ := println_typ,
@@ -9050,9 +9050,9 @@ def test_split_qualified_module_renders_back : Bool :=
 /// through the re-split when the def's own registered name is bare.
 #[test]
 def test_nid_arm_resolves_flattened_qualified : Bool :=
-    let mod_path : ModulePath := ModulePath.mp
+    let mod_path : ModulePath := ModulePath.mk
         (List.cons (Identifier.id "std") (List.cons (Identifier.id "process") List.empty)) in
-    let def_name : NamePath := NamePath.npath (List.cons (Identifier.id "process_id") List.empty) in
+    let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "process_id") List.empty) in
     let def_entry : ScopeDef := {
         name := def_name,
         module := mod_path,
@@ -9062,7 +9062,7 @@ def test_nid_arm_resolves_flattened_qualified : Bool :=
     } in
     let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
     let s : Scope := {
-        module_id := ModulePath.mp (List.cons (Identifier.id "Main") List.empty),
+        module_id := ModulePath.mk (List.cons (Identifier.id "Main") List.empty),
         scope := sd,
         parent := Option.none,
         incomplete_match_ok := false,

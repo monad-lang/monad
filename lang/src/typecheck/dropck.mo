@@ -157,7 +157,7 @@ def drop_leaves_cases (ctors : HashMap String Bool) (borrows : HashMap String Bo
 /// walkers all apply.
 def drop_leaves_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (target : I64) (c : MatchCase) : List Bool :=
     match c {
-        MatchCase.mc _name args body _fp => drop_leaves ctors borrows (target + List.length args) body,
+        MatchCase.mk _name args body _fp => drop_leaves ctors borrows (target + List.length args) body,
     }
 
 // ─── Per-binder collection ─────────────────────────────────────────
@@ -256,7 +256,7 @@ def collect_drop_cases (ctors : HashMap String Bool) (borrows : HashMap String B
 #[partial]
 def collect_drop_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (c : MatchCase) (acc : List DropInfo) : List DropInfo :=
     match c {
-        MatchCase.mc _name args body _fp =>
+        MatchCase.mk _name args body _fp =>
             let n : I64 := List.length args in
             let with_args : List DropInfo := collect_drop_case_args ctors borrows args 0 n body acc in
             collect_drop_term ctors borrows body with_args,
@@ -417,7 +417,7 @@ def test_match_arm_binder_shifts_depth_correctly : Bool :=
     let args : List Identifier :=
         List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty) in
     let body : Term := Term.var 2 dbg_x in
-    let arm : MatchCase := MatchCase.mc (Identifier.id "c") args body no_fp in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "c") args body no_fp in
     let t : Term := Term.lit (Literal.match_ Term.hole (List.cons arm List.empty)) in
     // Target 0 here is the OUTER binder -- after the match's own two
     // pattern binders are crossed, it sits at index 2, which `var 2`
@@ -462,7 +462,7 @@ def test_always_drop_requires_every_leaf : Bool :=
 /// A single-arg constructor application, `P <arg>` -- matches
 /// `usage.mo`'s own `con_of` helper, arity 1 instead of 2.
 def con_of_p (arg : Option Term) : Term :=
-    let nm : NamePath := NamePath.npath (List.cons (Identifier.id "P") List.empty) in
+    let nm : NamePath := NamePath.mk (List.cons (Identifier.id "P") List.empty) in
     Term.con (Con.mk (Identifier.id "P") nm 1 (List.cons arg List.empty))
 
 #[test]
@@ -490,7 +490,7 @@ def test_scrutinee_owning_use_is_not_double_dropped : Bool :=
     // the arm's own body never references it, so its one leaf must read
     // `false`, not `true`.
     let cond : Term := con_of_p (Option.some t_var0) in
-    let arm : MatchCase := MatchCase.mc (Identifier.id "_") List.empty Term.hole Option.none in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "_") List.empty Term.hole Option.none in
     let t : Term := Term.lit (Literal.match_ cond (List.cons arm List.empty)) in
     let leaves : List Bool := drop_leaves empty_ctors str_map_empty 0 t in
     match leaves {

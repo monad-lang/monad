@@ -114,7 +114,7 @@ def free_names_of_cases (bound : List Identifier) (cases : List MatchCase) : Lis
     List.empty => List.empty,
     List.cons case_ rest =>
         match case_ {
-            MatchCase.mc _name args body_ field_pattern =>
+            MatchCase.mk _name args body_ field_pattern =>
                 let bound2 := add_field_pattern_bound (List.append args bound) field_pattern in
                 List.append (free_names_of_term bound2 body_) (free_names_of_cases bound rest),
         },
@@ -228,7 +228,7 @@ def collect_referenced_names_cases (cases : List MatchCase) (acc : List String) 
     List.empty => acc,
     List.cons c rest =>
         match c {
-            MatchCase.mc name _args body _fp =>
+            MatchCase.mk name _args body _fp =>
                 collect_referenced_names_cases rest (List.cons (symbol_identifier name) (collect_referenced_names body acc)),
         },
 }

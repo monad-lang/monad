@@ -223,7 +223,7 @@ def show_match_cases (cases : List MatchCase) : String :=
 
 #[partial]
 def show_match_case (c : MatchCase) : String := match c {
-    MatchCase.mc name args body _fp =>
+    MatchCase.mk name args body _fp =>
         let name_str := show_identifier name in
         let body_str := show_term body in
         match args {
@@ -474,7 +474,7 @@ def show_use_pub_prefix (public : Bool) : String :=
 /// flipping it would rename every compiled symbol.
 def show_use_path (path : ModulePath) : String :=
     match path {
-        ModulePath.mp ids => List.intercalate "::" (List.map show_identifier ids)
+        ModulePath.mk ids => List.intercalate "::" (List.map show_identifier ids)
     }
 
 #[partial]
@@ -709,7 +709,7 @@ def test_show_con_named_args : Bool :=
     let args := List.cons (Option.some (Term.var 0 DebugName.unnamed))
                          List.empty in
     let con := Con.mk (Identifier.id "some")
-                      (NamePath.npath (List.cons (Identifier.id "Option") List.empty))
+                      (NamePath.mk (List.cons (Identifier.id "Option") List.empty))
                       (1i64)
                       args in
     let t := Term.con con in
@@ -718,7 +718,7 @@ def test_show_con_named_args : Bool :=
 #[test]
 def test_show_con_no_args : Bool :=
     let con := Con.mk (Identifier.id "true_")
-                      (NamePath.npath (List.cons (Identifier.id "Bool") List.empty))
+                      (NamePath.mk (List.cons (Identifier.id "Bool") List.empty))
                       (0i64)
                       List.empty in
     let t := Term.con con in
@@ -760,7 +760,7 @@ def test_show_literal_match : Bool :=
     let case_args := List.cons case_arg List.empty in
     let case_body := Term.var 0 (DebugName.named (Identifier.id "v")) in
     let no_fp : Option FieldPattern := Option.none in
-    let mc := MatchCase.mc case_name case_args case_body no_fp in
+    let mc := MatchCase.mk case_name case_args case_body no_fp in
     let cases := List.cons mc List.empty in
     let t := Term.lit (Literal.match_ scrutinee cases) in
     show_term t == "match x {\n some v => v\n}"
@@ -771,16 +771,16 @@ def test_show_identifier : Bool :=
 
 #[test]
 def test_show_operator : Bool :=
-    show_operator (Operator.operator ">>=") == ">>="
+    show_operator (Operator.mk ">>=") == ">>="
 
 #[test]
 def test_show_module_path_single : Bool :=
-    show_module_path (ModulePath.mp (List.cons (Identifier.id "List") List.empty)) == "List"
+    show_module_path (ModulePath.mk (List.cons (Identifier.id "List") List.empty)) == "List"
 
 #[test]
 def test_show_module_path_multi : Bool :=
     let ids := List.cons (Identifier.id "List") (List.cons (Identifier.id "append") List.empty) in
-    show_module_path (ModulePath.mp ids) == "List.append"
+    show_module_path (ModulePath.mk ids) == "List.append"
 
 #[test]
 def test_show_num_suffix_i8 : Bool :=
@@ -854,45 +854,45 @@ def test_show_debug_name_unnamed : Bool :=
 
 #[test]
 def test_show_decl_use : Bool :=
-    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) UseFilter.use_bare false in
+    let d := Decl.use_d (ModulePath.mk (List.cons (Identifier.id "prelude") List.empty)) UseFilter.use_bare false in
     show_decl d == "use prelude"
 
 #[test]
 def test_show_decl_use_pub : Bool :=
-    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "init") List.empty)) UseFilter.use_bare true in
+    let d := Decl.use_d (ModulePath.mk (List.cons (Identifier.id "init") List.empty)) UseFilter.use_bare true in
     show_decl d == "pub use init"
 
 #[test]
 def test_show_decl_open : Bool :=
-    let d := Decl.open_d (NamePath.npath (List.cons (Identifier.id "IO") List.empty)) OpenFilter.open_all in
+    let d := Decl.open_d (NamePath.mk (List.cons (Identifier.id "IO") List.empty)) OpenFilter.open_all in
     show_decl d == "open IO"
 
 #[test]
 def test_show_decl_use_glob : Bool :=
     let items := List.cons UseItem.use_glob List.empty in
-    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "init") (List.cons (Identifier.id "io") List.empty))) (UseFilter.use_items items) false in
+    let d := Decl.use_d (ModulePath.mk (List.cons (Identifier.id "init") (List.cons (Identifier.id "io") List.empty))) (UseFilter.use_items items) false in
     show_decl d == "use init::io {*}"
 
 #[test]
 def test_show_decl_open_filtered : Bool :=
     let names := List.cons (Identifier.id "println") List.empty in
-    let d := Decl.open_d (NamePath.npath (List.cons (Identifier.id "IO") List.empty)) (OpenFilter.open_only names) in
+    let d := Decl.open_d (NamePath.mk (List.cons (Identifier.id "IO") List.empty)) (OpenFilter.open_only names) in
     show_decl d == "open IO {println}"
 
 #[test]
 def test_show_decl_scoped_open : Bool :=
-    let inner := Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty Visibility.package_private List.empty) in
-    let d := Decl.scoped_open_d (NamePath.npath (List.cons (Identifier.id "Nat") List.empty)) OpenFilter.open_all inner in
+    let inner := Decl.def_d (Def.mk (NamePath.mk (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty Visibility.package_private List.empty) in
+    let d := Decl.scoped_open_d (NamePath.mk (List.cons (Identifier.id "Nat") List.empty)) OpenFilter.open_all inner in
     show_decl d == "open Nat in def z : _ := _"
 
 #[test]
 def test_show_decl_infix : Bool :=
-    let d := Decl.infix_d (Operator.operator ">>=") (NamePath.npath (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))) Visibility.package_private in
+    let d := Decl.infix_d (Operator.mk ">>=") (NamePath.mk (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))) Visibility.package_private in
     show_decl d == "infix: >>= := Monad.bind"
 
 #[test]
 def test_show_decl_def : Bool :=
-    let name := NamePath.npath (List.cons (Identifier.id "id") List.empty) in
+    let name := NamePath.mk (List.cons (Identifier.id "id") List.empty) in
     let path := Identifier.id "x" in
     let var_t := Term.var 0 (DebugName.named path) in
     let lam := Term.lam (binder_named path) (Term.sort (SortLevel.concrete 1)) var_t in
@@ -919,9 +919,9 @@ def test_show_decl_struct : Bool :=
 
 #[test]
 def test_show_decl_inductive : Bool :=
-    let name := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
-    let ct1 := InductConstructor.mk (NamePath.npath [Identifier.id "true"]) List.empty (Term.sort (SortLevel.concrete 1)) in
-    let ct2 := InductConstructor.mk (NamePath.npath [Identifier.id "false"]) List.empty (Term.sort (SortLevel.concrete 1)) in
+    let name := NamePath.mk (List.cons (Identifier.id "Bool") List.empty) in
+    let ct1 := InductConstructor.mk (NamePath.mk [Identifier.id "true"]) List.empty (Term.sort (SortLevel.concrete 1)) in
+    let ct2 := InductConstructor.mk (NamePath.mk [Identifier.id "false"]) List.empty (Term.sort (SortLevel.concrete 1)) in
     let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.sort (SortLevel.concrete 1)) [ct1, ct2] List.empty Visibility.package_private) in
     show_decl decl == "type Bool {\n  true,\n  false\n}"
 
@@ -929,7 +929,7 @@ def test_show_decl_inductive : Bool :=
 /// self-contained `def`, same shape `test_show_decl_def` above uses).
 #[partial]
 def simple_def_decl (name_str : String) : Decl :=
-    let name := NamePath.npath (List.cons (Identifier.id name_str) List.empty) in
+    let name := NamePath.mk (List.cons (Identifier.id name_str) List.empty) in
     let d := Def.mk name (Term.sort (SortLevel.concrete 1)) (Term.sort (SortLevel.concrete 1)) List.empty List.empty Visibility.package_private List.empty in
     Decl.def_d d
 

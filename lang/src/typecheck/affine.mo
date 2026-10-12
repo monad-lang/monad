@@ -195,7 +195,7 @@ def check_binders_go (scope : Scope) (us : List BinderUse) (acc : List TypeError
 // `bench/src/affine_report.mo` exercises against the real corpus.
 
 def probe_scope : Scope :=
-    { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
+    { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
       scope := scope_data_empty,
       parent := Option.none,
       incomplete_match_ok := false }

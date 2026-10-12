@@ -4,7 +4,7 @@ use lang::types {
   InductConstructor, Inductive, Instance, MatchCase, ModulePath, NamePath, Param,
   Similar, SortLevel, Struct, StructLitField, Term, TypeConstraint, binder_binder,
   binder_info_of, binder_is_level, binder_level, binder_name, char, flt, id_eq,
-  id_member, if_, match_, npath, num, package_private, sentinel, show_identifier,
+  id_member, if_, match_, num, package_private, sentinel, show_identifier,
   str, struct_lit, struct_update, union_ids,
 }
 // `HashMap` is what this file reaches from `std.map`, named like any
@@ -92,7 +92,7 @@ def free_vars_of_cases (cases : List MatchCase) (known_names : List Identifier) 
     match cases {
         List.cons elem rest =>
             match elem {
-                MatchCase.mc _ _ body _ =>
+                MatchCase.mk _ _ body _ =>
                     let body_vars := free_vars body known_names in
                     let acc_ := union_ids acc body_vars in
                     free_vars_of_cases rest known_names acc_,
@@ -352,7 +352,7 @@ def elaborate_struct (s : Struct) (known_names : List Identifier) : Struct :=
 /// `Identifier`; a multi-segment or empty name yields `Option.none`.
 def np_to_maybe_id (np : NamePath) : Option Identifier :=
     match np {
-        NamePath.npath ids => match ids {
+        NamePath.mk ids => match ids {
             List.cons x rest => match rest {
                 List.empty => Option.some x,
                 _ => Option.none,
@@ -508,13 +508,13 @@ def elaborate_test_macro_call_decl : Decl :=
     Decl.macro_call_d name no_args
 
 def elaborate_test_def_macro_decl : Decl :=
-    let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
+    let np : NamePath := NamePath.mk (List.cons (Identifier.id "foo") List.empty) in
     let no_constraints : List TypeConstraint := List.empty in
     let no_attrs : List Attribute := List.empty in
     Decl.def_macro_d (Def.mk np Term.hole Term.hole no_constraints no_attrs Visibility.package_private List.empty)
 
 def elaborate_test_decl_gen_decl : Decl :=
-    let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
+    let np : NamePath := NamePath.mk (List.cons (Identifier.id "foo") List.empty) in
     let no_params : List Param := List.empty in
     let no_decls : List Decl := List.empty in
     let no_attrs : List Attribute := List.empty in
@@ -546,7 +546,7 @@ def test_elaborate_decl_decl_gen_d_passthrough : Bool :=
 
 #[partial]
 def name_path_head (np : NamePath) : Identifier :=
-    match np { NamePath.npath ids => match ids { List.cons hd _ => hd } }
+    match np { NamePath.mk ids => match ids { List.cons hd _ => hd } }
 
 /// Map elaborate_decl over a list of decl_list with a fixed known_names set.
 def elaborate_decls_map (decl_list : List Decl) (known_names : List Identifier) : List Decl :=

@@ -40,8 +40,7 @@ use lib::scope {struct_fields_to_params}
 use lang::types {
   Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
   NamePath, Param, Struct, Term, TypeConstraint, binder_anon, binder_named, i64, if_,
-  many, match_, mk,
-  named, no_attrs, npath, num, package_private, sentinel, show_name_path, str,
+  many, match_, named, no_attrs, num, package_private, sentinel, show_name_path, str,
   unnamed,
 }
 
@@ -96,8 +95,8 @@ def collect_inductives (decl_list : List Decl) : List Inductive :=
 def struct_to_inductive (s : Struct) : Inductive :=
     match s {
         Struct.mk name fields _attrs vis =>
-            let type_np : NamePath := NamePath.npath (List.cons name List.empty) in
-            let mk_np : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty) in
+            let type_np : NamePath := NamePath.mk (List.cons name List.empty) in
+            let mk_np : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty) in
             let mk_params : List Param := struct_fields_to_params fields in
             let mk_con : InductConstructor := InductConstructor.mk mk_np mk_params Term.hole in
             Inductive.mk type_np List.empty Term.hole (List.cons mk_con List.empty) List.empty vis,
@@ -577,7 +576,7 @@ def reify_match_arm (locals : List String) (v : Value) : Result String MatchCase
                                                     match reify_expr_value (push_locals binder_names locals) body_val {
                                                         Result.err e => Result.err e,
                                                         Result.ok body_term =>
-                                                            Result.ok (MatchCase.mc (Identifier.id ctor_name) (identifiers_of binder_names) body_term Option.none),
+                                                            Result.ok (MatchCase.mk (Identifier.id ctor_name) (identifiers_of binder_names) body_term Option.none),
                                                     },
                                             },
                                     },
@@ -699,7 +698,7 @@ def reify_d_def (args : List Value) : Result String Def :=
                                                                         Result.err e => Result.err e,
                                                                         Result.ok body_term =>
                                                                             Result.ok (Def.mk
-                                                                                (NamePath.npath (List.cons (Identifier.id name) List.empty))
+                                                                                (NamePath.mk (List.cons (Identifier.id name) List.empty))
                                                                                 (build_pi_chain params ret_term)
                                                                                 (build_lam_chain params body_term)
                                                                                 no_constraints no_attrs Visibility.package_private List.empty),
@@ -742,7 +741,7 @@ def reify_d_instance (args : List Value) : Result String Decl :=
                                                         Result.ok defs =>
                                                             Result.ok (Decl.instance_d (Instance.mk
                                                                 (Identifier.id "_")
-                                                                (NamePath.npath (List.cons (Identifier.id class_name) List.empty))
+                                                                (NamePath.mk (List.cons (Identifier.id class_name) List.empty))
                                                                 no_constraints
                                                                 (List.cons target_term List.empty)
                                                                 Visibility.package_private
@@ -859,11 +858,11 @@ def field_param (name : String) (typ_name : String) : Param :=
     Param.mk (Identifier.id name) (Term.var sentinel (DebugName.named (Identifier.id typ_name))) Multiplicity.many Option.none List.empty
 
 def point_ctor : InductConstructor :=
-    InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
+    InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "mk") List.empty))
         (List.cons (field_param "x" "I64") (List.cons (field_param "y" "I64") List.empty)) Term.hole
 
 def point_ind : Inductive :=
-    Inductive.mk (NamePath.npath (List.cons (Identifier.id "Point") List.empty)) List.empty Term.hole
+    Inductive.mk (NamePath.mk (List.cons (Identifier.id "Point") List.empty)) List.empty Term.hole
         (List.cons point_ctor List.empty) List.empty Visibility.package_private
 
 #[partial]
@@ -954,7 +953,7 @@ def test_reify_e_lam_and_match_arm_first_binder_index : Bool :=
                                     match cases {
                                         List.cons case_ _ =>
                                             match case_ {
-                                                MatchCase.mc _ _ case_body _ =>
+                                                MatchCase.mk _ _ case_body _ =>
                                                     match case_body {
                                                         Term.var idx _ => I64.beq idx 1, // "x", first-declared
                                                         _ => false,
@@ -1000,7 +999,7 @@ def test_reify_e_ctor_args_reference_correct_outer_and_field_indices : Bool :=
                                             match cases {
                                                 List.cons case_ _ =>
                                                     match case_ {
-                                                        MatchCase.mc _ _ case_body _ =>
+                                                        MatchCase.mk _ _ case_body _ =>
                                                             match case_body {
                                                                 // Point.mk v y -- App(App(Var "Point.mk"), Var v), Var y
                                                                 Term.app applied_v_term y_term =>
@@ -1059,7 +1058,7 @@ def test_reify_decl_value_d_def_zero_params : Bool :=
                 Decl.def_d def_ =>
                     match def_ {
                         Def.mk {name, typ := _typ, term := _term, constraints := _c, attrs := _a, vis := _v, ..} =>
-                            match name { NamePath.npath ids => match ids { List.cons id _ => id_is id "Point.x", List.empty => false } },
+                            match name { NamePath.mk ids => match ids { List.cons id _ => id_is id "Point.x", List.empty => false } },
                     },
                 _ => false,
             },
@@ -1114,7 +1113,7 @@ def test_reify_decl_value_d_instance_wraps_methods : Bool :=
                 Decl.instance_d ins =>
                     match ins {
                         Instance.mk _name cls _c _args _vis _ip defs =>
-                            (match cls { NamePath.npath ids => match ids { List.cons id _ => id_is id "Debug", List.empty => false } })
+                            (match cls { NamePath.mk ids => match ids { List.cons id _ => id_is id "Debug", List.empty => false } })
                             && match defs { List.cons _ rest => (match rest { List.empty => true, List.cons _ _ => false }), List.empty => false },
                     },
                 _ => false,

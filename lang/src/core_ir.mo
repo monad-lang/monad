@@ -200,7 +200,7 @@ def test_ntv_construction : Bool :=
 #[test]
 def test_match_fail_construction : Bool :=
   let mf : CoreIr :=
-    CoreIr.match_fail (ModulePath.mp [Identifier.id "Option"]) (Identifier.id "some")
+    CoreIr.match_fail (ModulePath.mk [Identifier.id "Option"]) (Identifier.id "some")
   in
   match mf {
     CoreIr.match_fail _ ctor => id_eq ctor (Identifier.id "some"),

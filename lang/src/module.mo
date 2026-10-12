@@ -84,15 +84,15 @@ open IO {file_exists, is_dir, list_dir, println, read_file}
 open ParseResult {fail, success}
 
 /// Module path for the prelude
-def prelude_module_path : ModulePath := ModulePath.mp [Identifier.id "prelude"]
+def prelude_module_path : ModulePath := ModulePath.mk [Identifier.id "prelude"]
 
-def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
+def init_module_path : ModulePath := ModulePath.mk [Identifier.id "init"]
 
-def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
+def std_module_path : ModulePath := ModulePath.mk [Identifier.id "std"]
 
 /// `std.test` -- the module path `test_elaborate_loaded_modules_...` below
 /// resolves to a file rather than naming one.
-def std_test_module_path : ModulePath := ModulePath.mp [Identifier.id "std", Identifier.id "test"]
+def std_test_module_path : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "test"]
 
 /// Parse all declarations from source text.
 ///
@@ -225,7 +225,7 @@ def instance_decl_name (i : Instance) : Identifier := i.name
 /// A declaration's display name and its kind, for an outline.
 ///
 /// `Decl.to_name` cannot serve here: it answers "what does this DECLARE",
-/// and returns the EMPTY name (`npath []`) for every kind but `def_d`, by
+/// and returns the EMPTY name (`NamePath.mk []`) for every kind but `def_d`, by
 /// design. An outline wants the opposite -- something printable for every
 /// kind, even when that is only the module a `use` names.
 ///
@@ -398,7 +398,7 @@ def decl_carried_names (d : Decl) : List String :=
 /// Constructor names, as DECLARED: bare (`cons`, `mk`).
 ///
 /// This side's parser already stores them single-segment
-/// (`NamePath.npath [name]`, `lang/parser.mo`) and `build_scope_inductive`
+/// (`NamePath.mk [name]`, `lang/parser.mo`) and `build_scope_inductive`
 /// (`lang/scope.mo`) binds each one under that bare name, so
 /// `use M {cons}` really does bind `cons` here. The Rust host stores the
 /// same constructor as two segments (`List.cons`,
@@ -433,12 +433,12 @@ def identifier_to_string (id : Identifier) : String :=
 #[terminating]
 def module_path_to_file (mp : ModulePath) : String :=
     match mp {
-        ModulePath.mp ids =>
+        ModulePath.mk ids =>
             match ids {
                 List.empty => "",
                 List.cons hd rest =>
                     let hd_str : String := identifier_to_string hd in
-                    let rest_str : String := module_path_to_file (ModulePath.mp rest) in
+                    let rest_str : String := module_path_to_file (ModulePath.mk rest) in
                     if String.beq rest_str ""
                     then hd_str
                     else String.concat (String.concat hd_str "/") rest_str
@@ -459,7 +459,7 @@ pub def file_path_to_module_path (path : String) : ModulePath :=
             String.slice file_name 0 (String.length file_name - 3)
         else
             file_name in
-    ModulePath.mp [Identifier.id name_without_ext]
+    ModulePath.mk [Identifier.id name_without_ext]
 
 /// Find the last index of the '/' character in a string, returning -1 if not found
 def string_find_last_slash (s : String) : I64 :=
@@ -633,7 +633,7 @@ def first_existing (candidates : List String) : IO (Option String) := do {
 /// trio's `resolve_ambient_file` takes segments rather than a literal.
 def mote_segments (mp : ModulePath) : List String :=
     match mp {
-        ModulePath.mp ids =>
+        ModulePath.mk ids =>
             match ids {
                 List.empty => List.empty,
                 List.cons hd rest =>
@@ -642,7 +642,7 @@ def mote_segments (mp : ModulePath) : List String :=
                         List.empty => [mote, "src", "lib.mo"],
                         List.cons _ _ =>
                             [mote, "src",
-                             String.concat (module_path_to_file (ModulePath.mp rest)) ".mo"]
+                             String.concat (module_path_to_file (ModulePath.mk rest)) ".mo"]
                     }
             }
     }
@@ -1050,7 +1050,7 @@ def manifest_candidates (m : MoteManifest) (mp : ModulePath) : IO (List String) 
 #[partial]
 def mote_dep_files (m : MoteManifest) (mp : ModulePath) : IO (List String) := do {
     match mp {
-        ModulePath.mp ids =>
+        ModulePath.mk ids =>
             match ids {
                 List.empty => return List.empty,
                 List.cons hd rest =>
@@ -1070,7 +1070,7 @@ def mote_dep_files (m : MoteManifest) (mp : ModulePath) : IO (List String) := do
                         return xs
                     }
                     else return (mote_dep_file_of m (identifier_to_string hd)
-                             (module_path_to_file (ModulePath.mp rest)))
+                             (module_path_to_file (ModulePath.mk rest)))
             }
     }
 }
@@ -1137,7 +1137,7 @@ def mote_lib_file_of (m : MoteManifest) : String :=
 /// mote's library root. `Option.none` when the path does not name this mote.
 def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
     match mp {
-        ModulePath.mp ids =>
+        ModulePath.mk ids =>
             match ids {
                 List.empty => Option.none,
                 List.cons hd rest =>
@@ -1148,7 +1148,7 @@ def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
                             List.empty => Option.some (mote_lib_file_of m),
                             List.cons _ _ =>
                                 Option.some (String.concat root
-                                    (String.concat (module_path_to_file (ModulePath.mp rest)) ".mo"))
+                                    (String.concat (module_path_to_file (ModulePath.mk rest)) ".mo"))
                         }
                     else Option.none
             }
@@ -3314,8 +3314,8 @@ def test_parse_all_decls_empty : Bool :=
 /// literal) is what makes this catch the NEXT forgotten field too.
 #[test]
 def test_merge_scope_data_preserves_def_sigs : Bool :=
-    let name_a : NamePath := NamePath.npath [Identifier.id "a_def"] in
-    let name_b : NamePath := NamePath.npath [Identifier.id "b_def"] in
+    let name_a : NamePath := NamePath.mk [Identifier.id "a_def"] in
+    let name_b : NamePath := NamePath.mk [Identifier.id "b_def"] in
     let sig_a : Term := Term.pi binder_anon Term.hole (Term.sort (SortLevel.concrete 1)) in
     let sig_b : Term := Term.sort (SortLevel.concrete 1) in
     let sd_a : ScopeData := scope_data_add_def_sig scope_data_empty name_a sig_a in
@@ -3335,7 +3335,7 @@ def test_merge_scope_data_preserves_def_sigs : Bool :=
 
 #[test]
 def test_parse_def_resolve : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def foo : Bool := true" in
     match result {
         ParseResult.success _ decl_list =>
@@ -3363,7 +3363,7 @@ def test_parse_def_resolve : Bool :=
 
 #[test]
 def test_parse_type_resolve_inductive : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
     match result {
         ParseResult.success _ decl_list =>
@@ -3375,7 +3375,7 @@ def test_parse_type_resolve_inductive : Bool :=
                 parent := no_parent,
                 incomplete_match_ok := false,
             } in
-            let color_path : NamePath := NamePath.npath [Identifier.id "Color"] in
+            let color_path : NamePath := NamePath.mk [Identifier.id "Color"] in
             match scope_find_inductive color_path scope {
                 Result.ok _ => true,
                 Result.err _ => false
@@ -3385,7 +3385,7 @@ def test_parse_type_resolve_inductive : Bool :=
 
 #[test]
 def test_parse_type_constructor_resolves : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
     match result {
         ParseResult.success _ decl_list =>
@@ -3413,7 +3413,7 @@ def test_parse_type_constructor_resolves : Bool :=
 
 #[test]
 def test_parse_if_body_def_resolves : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def test_bool_true : Bool := if true then true else false" in
     match result {
         ParseResult.success _ decl_list =>
@@ -3441,7 +3441,7 @@ def test_parse_if_body_def_resolves : Bool :=
 
 #[test]
 def test_parse_multiple_decls_resolve : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def a : Bool := true type T { mk }" in
     match result {
         ParseResult.success _ decl_list =>
@@ -3469,7 +3469,7 @@ def test_parse_multiple_decls_resolve : Bool :=
 
 #[test]
 def test_parse_module_builds_scope : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def hello : Bool := true" in
     match result {
         ParseResult.success _ decl_list =>
@@ -3497,7 +3497,7 @@ def test_parse_module_builds_scope : Bool :=
 
 #[test]
 def test_parse_use_decl_ignored_in_scope : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
+    let path : ModulePath := ModulePath.mk List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "use prelude def bar : Bool := true" in
     match result {
         ParseResult.success _ decl_list =>
@@ -3833,7 +3833,7 @@ def has_lib_use (decls : List Decl) : Bool :=
 
 def is_lib_alias (mp : ModulePath) : Bool :=
     match mp {
-        ModulePath.mp ids =>
+        ModulePath.mk ids =>
             match ids {
                 List.empty => false,
                 List.cons hd _ => String.beq (identifier_to_string hd) "lib"
@@ -3858,12 +3858,12 @@ def rewrite_lib_use_decl (mote : String) (d : Decl) : Decl :=
 /// that mote's `src/lib.mo` like any other one-segment mote reference.
 def lib_alias_path (mote : String) (mp : ModulePath) : ModulePath :=
     match mp {
-        ModulePath.mp ids =>
+        ModulePath.mk ids =>
             match ids {
                 List.empty => mp,
                 List.cons hd rest =>
                     if String.beq (identifier_to_string hd) "lib"
-                    then ModulePath.mp (List.cons (Identifier.id mote) rest)
+                    then ModulePath.mk (List.cons (Identifier.id mote) rest)
                     else mp
             }
     }
@@ -4250,7 +4250,7 @@ def check_one_use_declared (m : MoteManifest) (info : ModuleInfo) (u : ModulePat
 /// mote name can occupy.
 def use_head_mote (u : ModulePath) : Option String :=
     match u {
-        ModulePath.mp ids =>
+        ModulePath.mk ids =>
             match ids {
                 List.empty => Option.none,
                 List.cons hd rest =>
@@ -4343,7 +4343,7 @@ def check_use_sub (infos : List ModuleInfo) (info : ModuleInfo) (path : ModulePa
 /// `ModulePath` plus one segment, the path a `use_sub` item addresses.
 def use_sub_path (path : ModulePath) (n : Identifier) : ModulePath :=
     match path {
-        ModulePath.mp ids => ModulePath.mp (list_append ids (List.cons n List.empty))
+        ModulePath.mk ids => ModulePath.mk (list_append ids (List.cons n List.empty))
     }
 
 def check_one_use_name (info : ModuleInfo) (path : ModulePath) (names : List String) (n : Identifier) : List String :=
@@ -4420,7 +4420,7 @@ def use_name_hint (p : String) (n : String) (dotted : Option String) : String :=
 
 /// The segments of a `use` path, as plain strings.
 def use_segment_names (u : ModulePath) : List String :=
-    match u { ModulePath.mp ids => List.map identifier_to_string ids }
+    match u { ModulePath.mk ids => List.map identifier_to_string ids }
 
 /// Whether a `use` path names the ambient prelude -- bare `prelude`, or
 /// `init::prelude`, its one other spelling.
@@ -4590,29 +4590,29 @@ def bare_use_hint (head : String) (owner : Option String) : String :=
 /// spellings and nothing else.
 def probe_module_info (source : String) : ModuleInfo :=
     match try_parse_decls source {
-        Option.some decls => ModuleInfo.mk (ModulePath.mp [Identifier.id "probe"]) "probe.mo" decls,
-        Option.none => ModuleInfo.mk (ModulePath.mp [Identifier.id "probe"]) "probe.mo" List.empty
+        Option.some decls => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) "probe.mo" decls,
+        Option.none => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) "probe.mo" List.empty
     }
 
 #[test]
 def test_use_head_mote_of_a_qualified_path_is_the_mote : Bool :=
-    match use_head_mote (ModulePath.mp [Identifier.id "init", Identifier.id "io"]) {
+    match use_head_mote (ModulePath.mk [Identifier.id "init", Identifier.id "io"]) {
         Option.some h => String.beq h "init",
         Option.none => false
     }
 
 #[test]
 def test_use_head_mote_of_a_bare_name_is_none : Bool :=
-    match use_head_mote (ModulePath.mp [Identifier.id "io"]) {
+    match use_head_mote (ModulePath.mk [Identifier.id "io"]) {
         Option.none => true,
         Option.some _ => false
     }
 
 #[test]
 def test_use_names_the_ambient_prelude_in_both_spellings : Bool :=
-    use_names_ambient_prelude (ModulePath.mp [Identifier.id "prelude"]) &&
-    use_names_ambient_prelude (ModulePath.mp [Identifier.id "init", Identifier.id "prelude"]) &&
-    Bool.not (use_names_ambient_prelude (ModulePath.mp [Identifier.id "init", Identifier.id "io"]))
+    use_names_ambient_prelude (ModulePath.mk [Identifier.id "prelude"]) &&
+    use_names_ambient_prelude (ModulePath.mk [Identifier.id "init", Identifier.id "prelude"]) &&
+    Bool.not (use_names_ambient_prelude (ModulePath.mk [Identifier.id "init", Identifier.id "io"]))
 
 #[test]
 def test_bare_use_hint_names_the_owning_mote : Bool :=
@@ -4698,7 +4698,7 @@ def probe_use_names (targets : List (Pair ModulePath String)) (importing_src : S
 /// AGENTS.md's bare-struct-literal trap covers, and there is nothing to
 /// gain here by testing it.
 def probe_list_names (target_src : String) (importing_src : String) : List String :=
-    let path : ModulePath := ModulePath.mp [Identifier.id "probe", Identifier.id "list"] in
+    let path : ModulePath := ModulePath.mk [Identifier.id "probe", Identifier.id "list"] in
     let target : Pair ModulePath String := Pair.pair path target_src in
     probe_use_names (List.cons target List.empty) importing_src
 
@@ -4765,8 +4765,8 @@ def test_a_rename_checks_the_name_not_the_alias : Bool :=
 /// outer path would accept `inner {g}` and fail here.
 #[test]
 def test_a_sub_list_is_checked_against_the_extended_path : Bool :=
-    let outer_path : ModulePath := ModulePath.mp [Identifier.id "probe", Identifier.id "outer"] in
-    let inner_path : ModulePath := ModulePath.mp [Identifier.id "probe", Identifier.id "outer", Identifier.id "inner"] in
+    let outer_path : ModulePath := ModulePath.mk [Identifier.id "probe", Identifier.id "outer"] in
+    let inner_path : ModulePath := ModulePath.mk [Identifier.id "probe", Identifier.id "outer", Identifier.id "inner"] in
     let outer : Pair ModulePath String := Pair.pair outer_path "def g : I64 := 1" in
     let inner : Pair ModulePath String := Pair.pair inner_path "def f : I64 := 1" in
     let world : List (Pair ModulePath String) := [outer, inner] in
@@ -5204,7 +5204,7 @@ def report_missing_toolchain (base_dir : String) : IO Unit := do {
 def load_file_modules_cached_go (file_path : String) (source : Option String) (cache : ModuleInfoCache) (verbose : Bool) : IO LoadedAndCache {
     let base_dir : String := extract_directory file_path;
     let module_name : String := module_name_from_path file_path;
-    let mp : ModulePath := ModulePath.mp [Identifier.id module_name];
+    let mp : ModulePath := ModulePath.mk [Identifier.id module_name];
     module_line verbose module_name;
     let module <- load_target_module base_dir mp source;
     match module {
@@ -5459,10 +5459,10 @@ def decl_is_priv (d : Decl) : Bool :=
 // --- Tests: priv filtering at the flatten ---
 
 def priv_module_info : ModuleInfo :=
-    let owner : ModulePath := ModulePath.mp [Identifier.id "Owner"] in
-    let hidden : Def := Def.mk (NamePath.npath [Identifier.id "hidden"]) Term.hole Term.hole
+    let owner : ModulePath := ModulePath.mk [Identifier.id "Owner"] in
+    let hidden : Def := Def.mk (NamePath.mk [Identifier.id "hidden"]) Term.hole Term.hole
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.priv_ List.empty in
-    let shown : Def := Def.mk (NamePath.npath [Identifier.id "shown"]) Term.hole Term.hole
+    let shown : Def := Def.mk (NamePath.mk [Identifier.id "shown"]) Term.hole Term.hole
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty in
     { path := owner,
       file_path := "Owner.mo",
@@ -5474,14 +5474,14 @@ def priv_flatten_names (target : ModulePath) : List String :=
 
 #[test]
 def test_flatten_drops_priv_from_other_modules : Bool :=
-    let names : List String := priv_flatten_names (ModulePath.mp [Identifier.id "Other"]) in
+    let names : List String := priv_flatten_names (ModulePath.mk [Identifier.id "Other"]) in
     if List.any (fn (n : String) => String.beq n "shown") names
     then not (List.any (fn (n : String) => String.beq n "hidden") names)
     else false
 
 #[test]
 def test_flatten_keeps_priv_in_its_own_module : Bool :=
-    let names : List String := priv_flatten_names (ModulePath.mp [Identifier.id "Owner"]) in
+    let names : List String := priv_flatten_names (ModulePath.mk [Identifier.id "Owner"]) in
     List.any (fn (n : String) => String.beq n "hidden") names
 
 /// Forall-wrap each `def_d`'s declared type via `elaborate_def`
@@ -5620,7 +5620,7 @@ def resolve_one_reflect_call (inds : List Inductive) (dispatched : List Decl) (d
                                                     match build_type_info_value ind {
                                                         Result.err e => Result.err e,
                                                         Result.ok type_info_v =>
-                                                            match meta_eval_invoke dispatched (NamePath.npath (List.cons (Identifier.id meta_name) List.empty)) type_info_v {
+                                                            match meta_eval_invoke dispatched (NamePath.mk (List.cons (Identifier.id meta_name) List.empty)) type_info_v {
                                                                 Result.err e => Result.err e,
                                                                 Result.ok result_v => reify_decls_value_to_decls result_v,
                                                             },
@@ -6107,7 +6107,7 @@ pub def elaborate_loaded_modules (file_path : String) (check_deps : Bool) (verbo
 
 #[test]
 def test_check_module_with_scope_all_pass : IO Bool := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef c : Color := red";
     match result {
         ParseResult.success _ decl_list => do {
@@ -6133,7 +6133,7 @@ def test_check_module_with_scope_all_pass : IO Bool := do {
 /// declaration shape, just with a parametrized inductive instead.
 #[test]
 def test_check_module_with_scope_paramed_inductive : IO Bool := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let result : ParseResult (List Decl) := parse_all_decls "type Box A { mk (a : A) : Box A }";
     match result {
         ParseResult.success _ decl_list => do {
@@ -6163,7 +6163,7 @@ def test_check_module_with_scope_paramed_inductive : IO Bool := do {
 /// the hole-in-infer-position tests in the section after next, which is why
 /// this trio is named for the checker rather than for either rule.
 def check_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
-    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty);
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id module_name) List.empty);
     match parse_all_decls src {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
@@ -6204,7 +6204,7 @@ def diags_lack (needle : String) (diags : List String) : Bool :=
 /// gate). Without this the helper checks the raw decl list and the
 /// dict-value gate has nothing to gate.
 def check_affine_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
-    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty);
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id module_name) List.empty);
     match parse_all_decls src {
         ParseResult.success _ decl_list => do {
             let promoted : List Decl := promote_instance_defs decl_list;
@@ -6523,7 +6523,7 @@ def test_hole_in_infer_position_accepts_named_callee_lam_arg : IO Bool := do {
 /// fine, and doesn't stop the walk from completing.
 #[test]
 def test_check_module_with_scope_accumulates_failures : IO Bool := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef good : Color := red\ndef bad : Color := nonexistent_name";
     match result {
         ParseResult.success _ decl_list => do {
@@ -6553,7 +6553,7 @@ def test_check_module_with_scope_accumulates_failures : IO Bool := do {
 /// `test_check_module_with_scope_all_pass` above.
 #[test]
 def test_check_module_with_scope_dot_field_access_resolves : IO Bool := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let src : String := "type Color { red, green }\nstruct Point { x : Color, y : Color }\ndef getx (p : Point) : Color := p.x";
     let result : ParseResult (List Decl) := parse_all_decls src;
     match result {
@@ -6576,7 +6576,7 @@ def test_check_module_with_scope_dot_field_access_resolves : IO Bool := do {
 /// self-hosted pipeline, not just a single field.
 #[test]
 def test_check_module_with_scope_chained_dot_field_access_resolves : IO Bool := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let src : String := "type Color { red, green }\nstruct Point { x : Color, y : Color }\nstruct Line { from : Point, to : Point }\ndef getx (l : Line) : Color := l.to.x";
     let result : ParseResult (List Decl) := parse_all_decls src;
     match result {
@@ -6599,7 +6599,7 @@ def test_check_module_with_scope_chained_dot_field_access_resolves : IO Bool := 
 /// `variable_try_path_global`'s fallback branch).
 #[test]
 def test_check_module_with_scope_dotted_module_path_still_resolves : IO Bool := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let src : String := "type Color { red, green }\ndef c : Color := Color.red";
     let result : ParseResult (List Decl) := parse_all_decls src;
     match result {
@@ -7040,7 +7040,7 @@ def reports_missing_file (result : FileCheckAndCache) : Bool :=
 /// O(N·D) whole-prelude-reload cost.
 #[partial]
 def check_synthetic_source (src : String) : IO (List String) := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let result : ParseResult (List Decl) := parse_all_decls src;
     match result {
         ParseResult.success _ decl_list => do {
@@ -7061,7 +7061,7 @@ def check_synthetic_source (src : String) : IO (List String) := do {
 /// checker hands to codegen, with no syntactic class-call pass in between.
 #[partial]
 def elaborate_synthetic_source (src : String) : IO String := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let result : ParseResult (List Decl) := parse_all_decls src;
     match result {
         ParseResult.success _ decl_list => do {
@@ -7083,7 +7083,7 @@ def elaborate_synthetic_source (src : String) : IO String := do {
 /// produces -- the build's re-check of the checker's own output.
 #[partial]
 def recheck_elaborated_source (src : String) : IO (List String) := do {
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let result : ParseResult (List Decl) := parse_all_decls src;
     match result {
         ParseResult.success _ decl_list => do {
@@ -7230,7 +7230,7 @@ def test_elaborate_module_decls_rewrites_class_method_call : IO Bool := do {
         "type Dog { woof }\n" ++
         "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
         "def greet (d : Dog) : String := Speak.say d";
-    let path : ModulePath := ModulePath.mp List.empty;
+    let path : ModulePath := ModulePath.mk List.empty;
     let result : ParseResult (List Decl) := parse_all_decls src;
     match result {
         ParseResult.success _ decl_list => do {
@@ -7668,8 +7668,8 @@ def test_mote_dep_files_qualified_path_names_the_dep_file : IO Bool := do {
     match Mote.parse_manifest "" lang_manifest_fixture {
         Option.none => return false,
         Option.some m => do {
-            let list_xs <- mote_dep_files m (ModulePath.mp [Identifier.id "std", Identifier.id "list"]);
-            let ir_xs <- mote_dep_files m (ModulePath.mp [Identifier.id "llvm", Identifier.id "ir"]);
+            let list_xs <- mote_dep_files m (ModulePath.mk [Identifier.id "std", Identifier.id "list"]);
+            let ir_xs <- mote_dep_files m (ModulePath.mk [Identifier.id "llvm", Identifier.id "ir"]);
             return (sole_candidate_is list_xs "../std/src/list.mo"
                     && sole_candidate_is ir_xs "../llvm/src/ir.mo")
         }
@@ -7684,7 +7684,7 @@ def test_mote_dep_files_is_empty_for_an_undeclared_mote : IO Bool := do {
     match Mote.parse_manifest "" lang_manifest_fixture {
         Option.none => return false,
         Option.some m => do {
-            let xs <- mote_dep_files m (ModulePath.mp [Identifier.id "jsonschema", Identifier.id "schema"]);
+            let xs <- mote_dep_files m (ModulePath.mk [Identifier.id "jsonschema", Identifier.id "schema"]);
             return (List.is_empty xs)
         }
     }
@@ -7771,7 +7771,7 @@ def segments_are_three (segs : List String) (x : String) (y : String) (z : Strin
 /// about both.
 #[test]
 def test_mote_segments_read_a_qualified_module : Bool :=
-    let mp : ModulePath := ModulePath.mp [Identifier.id "std", Identifier.id "map"] in
+    let mp : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "map"] in
     segments_are_three (mote_segments mp) "std" "src" "map.mo"
 
 /// A lone name is that mote's LIBRARY root, not `<name>.mo` -- the rule
@@ -7785,7 +7785,7 @@ def test_mote_segments_of_a_bare_name_is_its_lib_root : Bool :=
 /// `mote_path` candidate.
 #[test]
 def test_mote_relative_file_joins_the_segments : Bool :=
-    let ir : ModulePath := ModulePath.mp [Identifier.id "llvm", Identifier.id "ir"] in
+    let ir : ModulePath := ModulePath.mk [Identifier.id "llvm", Identifier.id "ir"] in
     if String.beq (mote_relative_file ir) "llvm/src/ir.mo"
     then String.beq (mote_relative_file init_module_path) "init/src/lib.mo"
     else false
@@ -7951,8 +7951,8 @@ def test_undeclared_mote_error_names_working_directory_paths : Bool :=
         Option.none => false,
         Option.some m =>
             let info : ModuleInfo :=
-                ModuleInfo.mk (ModulePath.mp [Identifier.id "lib"]) "src/lib.mo" List.empty in
-            let u : ModulePath := ModulePath.mp [Identifier.id "foo", Identifier.id "lib"] in
+                ModuleInfo.mk (ModulePath.mk [Identifier.id "lib"]) "src/lib.mo" List.empty in
+            let u : ModulePath := ModulePath.mk [Identifier.id "foo", Identifier.id "lib"] in
             let msg : String := undeclared_mote_error m info u "foo" "foo" in
             if String.contains msg "to mote.toml"
             then (if String.contains msg "which is at `foo`"
@@ -7971,8 +7971,8 @@ def test_undeclared_mote_error_names_a_nested_manifest : Bool :=
         Option.none => false,
         Option.some m =>
             let info : ModuleInfo :=
-                ModuleInfo.mk (ModulePath.mp [Identifier.id "lib"]) "greet/src/lib.mo" List.empty in
-            let u : ModulePath := ModulePath.mp [Identifier.id "foo", Identifier.id "lib"] in
+                ModuleInfo.mk (ModulePath.mk [Identifier.id "lib"]) "greet/src/lib.mo" List.empty in
+            let u : ModulePath := ModulePath.mk [Identifier.id "foo", Identifier.id "lib"] in
             let msg : String := undeclared_mote_error m info u "foo" "foo" in
             if String.contains msg "to greet/mote.toml"
             then String.contains msg "path = \"../foo\""
@@ -8044,7 +8044,7 @@ def test_load_module_decls_at_reads_the_path_it_is_given : IO Bool := do {
     match resolved {
         Option.none => return false,
         Option.some p => do {
-            let decls <- load_module_decls_at p (ModulePath.mp [Identifier.id "definitely_not_prelude"]);
+            let decls <- load_module_decls_at p (ModulePath.mk [Identifier.id "definitely_not_prelude"]);
             match decls {
                 Option.none => return false,
                 Option.some ds => return (I64.gt (List.length ds) 0)

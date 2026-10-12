@@ -42,7 +42,7 @@ use lang::types {
   Attribute, Binder, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, Literal, MatchCase, ModulePath, Native, Param, Struct,
   StructField, StructLitField, Term, TypeConstraint, concrete, id_eq, level_const,
-  named, npath, package_private, sentinel, unnamed, use_bare, binder_name, list_reverse, binder_named,
+  named, package_private, sentinel, unnamed, use_bare, binder_name, list_reverse, binder_named,
 }
 use lib::typecheck::traverse {con_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, term_map_children}
 
@@ -111,8 +111,8 @@ def close_named_cases (stack : List Identifier) (cases : List MatchCase) : List 
         List.empty => List.empty,
         List.cons c rest =>
             match c {
-                MatchCase.mc name args body fp =>
-                    List.cons (MatchCase.mc name args (close_named_vars (List.append (list_reverse args) stack) body) fp)
+                MatchCase.mk name args body fp =>
+                    List.cons (MatchCase.mk name args (close_named_vars (List.append (list_reverse args) stack) body) fp)
                         (close_named_cases stack rest),
             },
     }
@@ -419,7 +419,7 @@ def test_name_subst_decl_def_d_substitutes_typ_and_term : Bool :=
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let d : Decl :=
-        Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id "make") List.empty)) (named_ref t_ident) (named_ref t_ident) empty_constraints empty_attrs Visibility.package_private List.empty) in
+        Decl.def_d (Def.mk (NamePath.mk (List.cons (Identifier.id "make") List.empty)) (named_ref t_ident) (named_ref t_ident) empty_constraints empty_attrs Visibility.package_private List.empty) in
     match name_subst_decl t_ident replacement d {
         Decl.def_d d_val =>
             match d_val {
@@ -436,7 +436,7 @@ def test_name_subst_decl_decl_gen_d_recurses_into_nested_decls : Bool :=
     let replacement : Term := Term.sort (SortLevel.concrete 11) in
     let nested_call : Decl := Decl.macro_call_d (Identifier.id "reflect_type_info") (List.cons (named_ref t_ident) List.empty) in
     let template : Decl :=
-        Decl.decl_gen_d (NamePath.npath (List.cons (Identifier.id "derive_lens") List.empty)) List.empty (List.cons nested_call List.empty) List.empty in
+        Decl.decl_gen_d (NamePath.mk (List.cons (Identifier.id "derive_lens") List.empty)) List.empty (List.cons nested_call List.empty) List.empty in
     match name_subst_decl t_ident replacement template {
         Decl.decl_gen_d _ _ decl_list _ =>
             match decl_list {
@@ -457,7 +457,7 @@ def test_name_subst_decl_use_d_passthrough_unchanged : Bool :=
     // must pass through completely unchanged (mirrors the reference's
     // own `subst_decl_var` no-op arms for these same decl kinds).
     let replacement : Term := Term.sort (SortLevel.concrete 1) in
-    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "std") List.empty) in
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id "std") List.empty) in
     let d : Decl := Decl.use_d path UseFilter.use_bare true in
     match name_subst_decl t_ident replacement d {
         Decl.use_d _ _ public => public,

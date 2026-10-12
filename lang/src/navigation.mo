@@ -368,7 +368,7 @@ def nav_module_file (mp : ModulePath) (cache : ModuleInfoCache) : Option String 
 /// exist and misses the one that does.
 #[partial]
 def nav_lookup_keys (ident : Identifier) : List NamePath :=
-  let bare : NamePath := NamePath.npath (List.cons ident List.empty) in
+  let bare : NamePath := NamePath.mk (List.cons ident List.empty) in
   match split_qualified_identifier ident {
     Option.some qn => List.cons bare (List.cons (qualified_name_to_name_path qn) List.empty),
     Option.none => List.cons bare List.empty,
@@ -461,7 +461,7 @@ def nav_class_detail (name : String) (scope : Scope) : String :=
 /// worse answer than a signature and a much better one than nothing.
 #[partial]
 def nav_def_detail (name : String) (scope : Scope) : String :=
-  let np : NamePath := NamePath.npath (List.cons (Identifier.id name) List.empty) in
+  let np : NamePath := NamePath.mk (List.cons (Identifier.id name) List.empty) in
   match scope_find_def_sig np scope {
     Option.some t => "def " ++ name ++ " : " ++ show_term t,
     Option.none =>

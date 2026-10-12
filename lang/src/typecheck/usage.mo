@@ -137,7 +137,7 @@ def uses_of_cases (target : I64) (cases : List MatchCase) : I64 :=
 #[partial]
 def uses_of_case (target : I64) (c : MatchCase) : I64 :=
     match c {
-        MatchCase.mc _name args body _fp => uses_of (target + List.length args) body,
+        MatchCase.mk _name args body _fp => uses_of (target + List.length args) body,
     }
 
 /// Struct-literal field values all run, so they SUM.
@@ -406,7 +406,7 @@ def head_is_borrow_of (borrows : HashMap String Bool) (t : Term) : Bool :=
 /// `ctor_field_type` above already fails closed on, so a same-named `of`
 /// on some other type is no longer counted as a borrow.
 pub def borrow_of_name_set (s : Scope) : HashMap String Bool :=
-    let of_id : NamePath := NamePath.npath (List.cons (Identifier.id "of") List.empty) in
+    let of_id : NamePath := NamePath.mk (List.cons (Identifier.id "of") List.empty) in
     let dotted : HashMap String Bool := str_map_insert "Borrow.of" true str_map_empty in
     match scope_find_all_inductives_by_constructor of_id s {
         List.empty => dotted,
@@ -528,7 +528,7 @@ def borrow_aware_cases (borrows : HashMap String Bool) (borrowed_here : Bool) (t
 #[partial]
 def borrow_aware_case (borrows : HashMap String Bool) (borrowed_here : Bool) (target : I64) (c : MatchCase) : I64 :=
     match c {
-        MatchCase.mc _name args body _fp =>
+        MatchCase.mk _name args body _fp =>
             borrow_aware_at borrows borrowed_here (target + List.length args) body,
     }
 
@@ -640,7 +640,7 @@ def owning_at_cases (ctors : HashMap String Bool) (borrows : HashMap String Bool
 #[partial]
 def owning_at_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx : UsePos) (target : I64) (c : MatchCase) : I64 :=
     match c {
-        MatchCase.mc _name args body _fp => owning_at ctors borrows ctx (target + List.length args) body,
+        MatchCase.mk _name args body _fp => owning_at ctors borrows ctx (target + List.length args) body,
     }
 
 #[partial]
@@ -828,7 +828,7 @@ def collect_uses_cases (ctors : HashMap String Bool) (borrows : HashMap String B
 #[partial]
 def collect_uses_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
     match c {
-        MatchCase.mc name args body _fp =>
+        MatchCase.mk name args body _fp =>
             let n : I64 := List.length args in
             let with_args : List BinderUse := collect_case_args ctors borrows name args 0 n body acc in
             collect_uses_term ctors borrows body with_args,
@@ -956,7 +956,7 @@ def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
 def ctor_field_type (s : Scope) (ctor : Identifier) (pos : I64) : Option Term :=
     if I64.lt pos 0 then Option.none
     else
-        let con_mp : NamePath := NamePath.npath (List.cons ctor List.empty) in
+        let con_mp : NamePath := NamePath.mk (List.cons ctor List.empty) in
         match scope_find_all_inductives_by_constructor con_mp s {
             List.empty => Option.none,
             List.cons ind rest =>
@@ -1041,8 +1041,8 @@ def test_uses_of_takes_max_across_match_arms : Bool :=
     // Two zero-binder arms, each using `x` once. Rule 1: one, not two.
     let no_fp : Option FieldPattern := Option.none in
     let no_args : List Identifier := List.empty in
-    let arm1 : MatchCase := MatchCase.mc (Identifier.id "a") no_args t_var0 no_fp in
-    let arm2 : MatchCase := MatchCase.mc (Identifier.id "b") no_args t_var0 no_fp in
+    let arm1 : MatchCase := MatchCase.mk (Identifier.id "a") no_args t_var0 no_fp in
+    let arm2 : MatchCase := MatchCase.mk (Identifier.id "b") no_args t_var0 no_fp in
     let arms : List MatchCase := List.cons arm1 (List.cons arm2 List.empty) in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
     I64.beq (uses_of 0 t) 1
@@ -1056,7 +1056,7 @@ def test_uses_of_shifts_past_match_arm_binders : Bool :=
     let args : List Identifier :=
         List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty) in
     let body : Term := Term.var 2 dbg_x in
-    let arm : MatchCase := MatchCase.mc (Identifier.id "c") args body no_fp in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "c") args body no_fp in
     let arms : List MatchCase := List.cons arm List.empty in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
     I64.beq (uses_of 0 t) 1
@@ -1099,14 +1099,14 @@ def test_uses_of_counts_constructor_args : Bool :=
     // Constructor argument slots all run, so they sum.
     let args : List (Option Term) :=
         List.cons (Option.some t_var0) (List.cons (Option.some t_var0) List.empty) in
-    let c : Con := Con.mk (Identifier.id "P") (NamePath.npath (List.cons (Identifier.id "P") List.empty)) 2 args in
+    let c : Con := Con.mk (Identifier.id "P") (NamePath.mk (List.cons (Identifier.id "P") List.empty)) 2 args in
     I64.beq (uses_of 0 (Term.con c)) 2
 
 #[test]
 def test_uses_of_skips_unsaturated_constructor_slots : Bool :=
     let args : List (Option Term) :=
         List.cons (Option.some t_var0) (List.cons Option.none List.empty) in
-    let c : Con := Con.mk (Identifier.id "P") (NamePath.npath (List.cons (Identifier.id "P") List.empty)) 2 args in
+    let c : Con := Con.mk (Identifier.id "P") (NamePath.mk (List.cons (Identifier.id "P") List.empty)) 2 args in
     I64.beq (uses_of 0 (Term.con c)) 1
 
 #[test]
@@ -1150,7 +1150,7 @@ def test_collect_skips_implicit_pi_binders : Bool :=
 // ─── Tests: type attribution ───────────────────────────────────────
 
 def empty_scope : Scope :=
-    { module_id := ModulePath.mp (List.cons (Identifier.id "probe") List.empty),
+    { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
       scope := scope_data_empty,
       parent := Option.none,
       incomplete_match_ok := false }
@@ -1231,7 +1231,7 @@ def test_collect_records_the_constructor_and_position : Bool :=
     let no_fp : Option FieldPattern := Option.none in
     let args : List Identifier :=
         List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty) in
-    let arm : MatchCase := MatchCase.mc (Identifier.id "pair") args (Term.var 0 dbg_x) no_fp in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "pair") args (Term.var 0 dbg_x) no_fp in
     let arms : List MatchCase := List.cons arm List.empty in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
     match collect_binder_uses probe_ctors str_map_empty t {
@@ -1249,7 +1249,7 @@ def test_collect_records_the_constructor_and_position : Bool :=
 /// A constructor term with `n` slots filled by `t_var0`, for testing
 /// that an owning store is recognised as one.
 def con_of (args : List (Option Term)) : Term :=
-    let nm : NamePath := NamePath.npath (List.cons (Identifier.id "P") List.empty) in
+    let nm : NamePath := NamePath.mk (List.cons (Identifier.id "P") List.empty) in
     Term.con (Con.mk (Identifier.id "P") nm 2 args)
 
 #[test]
@@ -1269,7 +1269,7 @@ def test_owning_ignores_a_call_argument : Bool :=
 def test_owning_ignores_a_match_scrutinee : Bool :=
     // Matching inspects a value; it does not consume it.
     let no_fp : Option FieldPattern := Option.none in
-    let arm : MatchCase := MatchCase.mc (Identifier.id "a") List.empty Term.hole no_fp in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "a") List.empty Term.hole no_fp in
     let t : Term := Term.lit (Literal.match_ t_var0 (List.cons arm List.empty)) in
     I64.beq (owning_uses probe_ctors str_map_empty 0 t) 0
 
@@ -1315,10 +1315,10 @@ def probe_borrows_of : HashMap String Bool :=
 /// registered, for testing `borrow_of_name_set` itself end-to-end.
 def scope_with_borrow : Scope :=
     let con : InductConstructor :=
-        InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "of") List.empty))
+        InductConstructor.mk (NamePath.mk (List.cons (Identifier.id "of") List.empty))
             List.empty Term.hole in
     let ind : Inductive :=
-        Inductive.mk (NamePath.npath (List.cons (Identifier.id "Borrow") List.empty))
+        Inductive.mk (NamePath.mk (List.cons (Identifier.id "Borrow") List.empty))
             List.empty Term.hole (List.cons con List.empty) List.empty Visibility.package_private in
     let sd0 : ScopeData := scope_globals empty_scope in
     { empty_scope with scope := { sd0 with inductives := str_map_insert "Borrow" ind sd0.inductives } }

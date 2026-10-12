@@ -26,7 +26,7 @@ use parsec::core {fail, success}
 use lib::scope {build_scope_from_decls, scope_find_cubical_prim}
 use std::list {List.length}
 
-def synthetic_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "synthetic") List.empty)
+def synthetic_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "synthetic") List.empty)
 
 /// The twelve Stage 1+2+3+4+5 declarations, spelled the way the real ones
 /// are declared (the `with Cubical` block in `init/src/prelude.mo`), minus
@@ -68,7 +68,7 @@ def scope_of (source : String) : Scope :=
 
 /// A one-segment `NamePath`, the shape a top-level def of this synthetic
 /// module is registered under.
-def name_of (nm : String) : NamePath := NamePath.npath (List.cons (Identifier.id nm) List.empty)
+def name_of (nm : String) : NamePath := NamePath.mk (List.cons (Identifier.id nm) List.empty)
 
 /// Does `scope` bind `nm` to exactly `p`?
 def binds (s : Scope) (nm : String) (p : CubicalPrim) : Bool :=

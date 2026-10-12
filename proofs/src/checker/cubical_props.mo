@@ -38,7 +38,7 @@ use lang::types {
 use init::borrow {Borrow}
 
 def checker_synthetic_path : ModulePath :=
-    ModulePath.mp (List.cons (Identifier.id "proofs_checker") List.empty)
+    ModulePath.mk (List.cons (Identifier.id "proofs_checker") List.empty)
 
 /// The twelve Stage 1+2+3+4+5 declarations, spelled as the prelude's
 /// `with Cubical` block declares them (minus the wrapper and prefixes).

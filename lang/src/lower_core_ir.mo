@@ -205,7 +205,7 @@ def intern_path (path : NamePath) (acc : LowerAcc) : Pair I64 LowerAcc :=
       },
   }
 
-def single_segment_npath (id : Identifier) : NamePath := NamePath.npath [id]
+def single_segment_npath (id : Identifier) : NamePath := NamePath.mk [id]
 
 // ─── The Result-plus-threaded-accumulator "monad" this module runs in ──
 
@@ -455,7 +455,7 @@ def inductive_path_str (ind : Inductive) : String :=
   match ind { Inductive.mk ind_name _ _ _ _ _ => show_name_path ind_name }
 
 /// A `match`'s `MatchCase`s don't carry the scrutinee's inductive path
-/// directly (`MatchCase.mc`'s `name` is a bare `Identifier`, per
+/// directly (`MatchCase.mk`'s `name` is a bare `Identifier`, per
 /// `lang/parser.mo`'s own doc comment on `match_case_name`) -- resolve it
 /// by finding which inductive in scope owns a constructor named after the
 /// first case. Well-typed, exhaustive matches always have at least one
@@ -466,13 +466,13 @@ def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Induct
     List.empty => Option.none,
     List.cons c _ =>
       match c {
-        MatchCase.mc name _ _ _ => find_inductive_by_case_name (scope_all_inductives scope) name,
+        MatchCase.mk name _ _ _ => find_inductive_by_case_name (scope_all_inductives scope) name,
       },
   }
 
 def is_wildcard_case (c : MatchCase) : Bool :=
   match c {
-    MatchCase.mc name _ _ _ =>
+    MatchCase.mk name _ _ _ =>
       match name {
         Identifier.id s => String.beq s "_",
       },
@@ -484,7 +484,7 @@ def find_case_for_ctor (ctor : InductConstructor) (cases : List MatchCase) : Opt
     List.empty => Option.none,
     List.cons c rest =>
       match c {
-        MatchCase.mc name _ _ _ =>
+        MatchCase.mk name _ _ _ =>
           if constructor_simple_name_eq ctor name
           then Option.some c
           else find_case_for_ctor ctor rest,
@@ -506,7 +506,7 @@ def ctor_name (ctor : InductConstructor) : Identifier :=
 
 def npath_last_id (np : NamePath) : Identifier :=
   match np {
-    NamePath.npath ids => list_last_or_empty ids,
+    NamePath.mk ids => list_last_or_empty ids,
   }
 
 #[partial]
@@ -543,7 +543,7 @@ def lower_explicit_match_case
     (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match found_case {
-    MatchCase.mc _ case_args case_body _ =>
+    MatchCase.mk _ case_args case_body _ =>
       lower_then (lower_term ctx case_body acc) (fn bir => fn acc1 =>
         k (MatchArm.arm (List.length case_args) bir) acc1),
   }
@@ -554,7 +554,7 @@ def lower_wildcard_match_case
     (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match wc {
-    MatchCase.mc _ _ wc_body _ =>
+    MatchCase.mk _ _ wc_body _ =>
       lower_then (lower_term ctx wc_body acc) (fn bir => fn acc1 =>
         k (MatchArm.arm 0 bir) acc1),
   }
@@ -587,7 +587,7 @@ def lower_match (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : 
   if is_dict_projection_scrutinee value then lower_dict_projection ctx value cases acc
   else
   match find_case_inductive (ctx_scope ctx) cases {
-    Option.none => lower_err (LowerError.le_unknown_inductive (ModulePath.mp List.empty)) acc,
+    Option.none => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
     Option.some ind =>
       lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
         lower_match_arms ctx ind cases acc1 (fn arms => fn acc2 =>
@@ -601,7 +601,7 @@ def lower_dict_projection (ctx : LowerCtx) (value : Term) (cases : List MatchCas
       lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
         lower_explicit_match_case ctx c acc1 (fn arm => fn acc2 =>
           lower_ok (CoreIr.match_ vir [arm]) acc2)),
-    List.empty => lower_err (LowerError.le_unknown_inductive (ModulePath.mp List.empty)) acc,
+    List.empty => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
   }
 
 #[partial]
@@ -684,7 +684,7 @@ def lower_con_with_inductive
         Option.some tag =>
           lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
             lower_ok (CoreIr.con tag num_args present_args) acc1),
-        Option.none => lower_err (LowerError.le_unknown_constructor (ModulePath.mp [name])) acc,
+        Option.none => lower_err (LowerError.le_unknown_constructor (ModulePath.mk [name])) acc,
       },
   }
 
@@ -963,14 +963,14 @@ def decls_to_defs (decl_list : List Decl) : List Def :=
 
 #[test]
 def test_npath_index_finds_existing : Bool :=
-  let a : NamePath := NamePath.npath [Identifier.id "A"] in
-  let b : NamePath := NamePath.npath [Identifier.id "B"] in
+  let a : NamePath := NamePath.mk [Identifier.id "A"] in
+  let b : NamePath := NamePath.mk [Identifier.id "B"] in
   I64.beq (Option.get_or_default (-1) (npath_index b [a, b])) 1
 
 #[test]
 def test_npath_index_missing_is_none : Bool :=
-  let a : NamePath := NamePath.npath [Identifier.id "A"] in
-  let z : NamePath := NamePath.npath [Identifier.id "Z"] in
+  let a : NamePath := NamePath.mk [Identifier.id "A"] in
+  let z : NamePath := NamePath.mk [Identifier.id "Z"] in
   match npath_index z [a] {
     Option.none => true,
     Option.some _ => false,
@@ -978,7 +978,7 @@ def test_npath_index_missing_is_none : Bool :=
 
 #[test]
 def test_intern_path_reuses_existing_index : Bool :=
-  let a : NamePath := NamePath.npath [Identifier.id "A"] in
+  let a : NamePath := NamePath.mk [Identifier.id "A"] in
   match intern_path a lower_acc_empty {
     Pair.pair idx0 acc1 =>
       match intern_path a acc1 {
@@ -988,8 +988,8 @@ def test_intern_path_reuses_existing_index : Bool :=
 
 #[test]
 def test_intern_path_assigns_fresh_indices : Bool :=
-  let a : NamePath := NamePath.npath [Identifier.id "A"] in
-  let b : NamePath := NamePath.npath [Identifier.id "B"] in
+  let a : NamePath := NamePath.mk [Identifier.id "A"] in
+  let b : NamePath := NamePath.mk [Identifier.id "B"] in
   match intern_path a lower_acc_empty {
     Pair.pair idx_a acc1 =>
       match intern_path b acc1 {
@@ -1065,4 +1065,4 @@ def irlit_is_num (l : IrLit) (expected : I64) : Bool :=
 def dummy_ctx : LowerCtx := LowerCtx.lower_ctx dummy_scope List.empty
 
 def dummy_scope : Scope :=
-  Scope.mk (ModulePath.mp List.empty) scope_data_empty Option.none false
+  Scope.mk (ModulePath.mk List.empty) scope_data_empty Option.none false

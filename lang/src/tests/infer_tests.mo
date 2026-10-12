@@ -24,7 +24,7 @@ open TypeError {not_a_type, unknown_var}
 
 // --- Test scope setup: empty decl_list with builtins (Type, Prop) ---
 
-def empty_path : ModulePath := ModulePath.mp List.empty
+def empty_path : ModulePath := ModulePath.mk List.empty
 def test_sd : ScopeData := build_scope_from_decls empty_path List.empty
 def test_scope : Scope := {
     module_id := empty_path,
@@ -356,7 +356,7 @@ def test_match_empty_cases : Bool :=
 def test_match_single_case : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "x") List.empty body Option.none in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "x") List.empty body Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -373,8 +373,8 @@ def test_match_multi_case_bodies_ok : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body1 : Term := sort_n 1 in
     let body2 : Term := sort_n 1 in
-    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
-    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 Option.none in
+    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none in
+    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty body2 Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -390,8 +390,8 @@ def test_match_multi_case_second_fails : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body1 : Term := sort_n 1 in
     let bad_var : Term := Term.var sentinel (DebugName.named (Identifier.id "no_such")) in
-    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
-    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty bad_var Option.none in
+    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none in
+    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty bad_var Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -409,7 +409,7 @@ def test_match_case_args_bound : Bool :=
     let scrutinee : Term := sort_n 1 in
     let arg_id : Identifier := Identifier.id "x" in
     let body : Term := Term.var sentinel (DebugName.named arg_id) in
-    let case_ : MatchCase := MatchCase.mc
+    let case_ : MatchCase := MatchCase.mk
         (Identifier.id "some")
         (List.cons arg_id List.empty)
         body
@@ -427,14 +427,14 @@ def test_match_case_args_bound : Bool :=
 // Maybe has constructors: some (with one field), none (no fields).
 def maybe_scope : Scope :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Maybe") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "some") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "some") List.empty))
         List.empty
         (sort_n 1) in
     let none_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "none") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "none") List.empty))
         List.empty
         (sort_n 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
@@ -453,7 +453,7 @@ def maybe_scope : Scope :=
 
 #[test]
 def test_match_inductive_in_scope : Bool :=
-    match scope_find_inductive (NamePath.npath (List.cons (Identifier.id "Maybe") List.empty)) maybe_scope {
+    match scope_find_inductive (NamePath.mk (List.cons (Identifier.id "Maybe") List.empty)) maybe_scope {
         ok _ => true,
         err _ => false,
     }
@@ -464,7 +464,7 @@ def test_match_inductive_in_scope : Bool :=
 def test_match_valid_constructor : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_some : MatchCase := MatchCase.mc
+    let case_some : MatchCase := MatchCase.mk
         (Identifier.id "some")
         List.empty
         body
@@ -473,7 +473,7 @@ def test_match_valid_constructor : Bool :=
     // (strict-exhaustiveness.md) a `Maybe` match omitting `none` is a
     // coverage ERROR, so this arm is what keeps the pin about VALID
     // constructor names rather than about exhaustiveness.
-    let case_none : MatchCase := MatchCase.mc
+    let case_none : MatchCase := MatchCase.mk
         (Identifier.id "none")
         List.empty
         body
@@ -498,12 +498,12 @@ def test_match_valid_constructor : Bool :=
 def test_match_invalid_constructor : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_some : MatchCase := MatchCase.mc
+    let case_some : MatchCase := MatchCase.mk
         (Identifier.id "some")
         List.empty
         body
         Option.none in
-    let case_bogus : MatchCase := MatchCase.mc
+    let case_bogus : MatchCase := MatchCase.mk
         (Identifier.id "bogus")
         List.empty
         body
@@ -523,7 +523,7 @@ def test_match_invalid_constructor : Bool :=
 def test_match_wildcard : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_ : MatchCase := MatchCase.mc
+    let case_ : MatchCase := MatchCase.mk
         (Identifier.id "_")
         List.empty
         body
@@ -542,7 +542,7 @@ def test_match_wildcard : Bool :=
 def test_match_wildcard_rejects_args : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_ : MatchCase := MatchCase.mc
+    let case_ : MatchCase := MatchCase.mk
         (Identifier.id "_")
         (List.cons (Identifier.id "x") List.empty)
         body
@@ -563,7 +563,7 @@ def test_match_wildcard_rejects_args : Bool :=
 def test_match_bound_scrutinee : Bool :=
     let scrutinee : Term := Term.var 0 (DebugName.unnamed) in
     let body : Term := sort_n 1 in
-    let case_ : MatchCase := MatchCase.mc
+    let case_ : MatchCase := MatchCase.mk
         (Identifier.id "x")
         List.empty
         body
@@ -587,8 +587,8 @@ def test_match_branch_type_conflict : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body1 : Term := sort_n 1 in
     let body2 : Term := sort_n 0 in
-    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
-    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 Option.none in
+    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none in
+    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty body2 Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -610,13 +610,13 @@ def test_match_branch_type_conflict : Bool :=
 /// -- which is the order the diagnostic must list them in.
 def cov_ctor (n : String) : InductConstructor :=
     InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id n) List.empty))
+        (NamePath.mk (List.cons (Identifier.id n) List.empty))
         List.empty
         (sort_n 1)
 
 def cov_ind : Inductive :=
     Inductive.mk
-        (NamePath.npath (List.cons (Identifier.id "T") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "T") List.empty))
         List.empty
         (sort_n 1)
         [cov_ctor "c", cov_ctor "d", cov_ctor "e"]
@@ -624,7 +624,7 @@ def cov_ind : Inductive :=
         Visibility.package_private
 
 def cov_case (n : String) : MatchCase :=
-    MatchCase.mc (Identifier.id n) List.empty (sort_n 1) Option.none
+    MatchCase.mk (Identifier.id n) List.empty (sort_n 1) Option.none
 
 // These drive `match_coverage_warning`, the rule's pure QUERY, and not
 // `validate_match_coverage`: the rule is a WARNING now, so the latter
@@ -678,7 +678,7 @@ def test_match_zero_constructor_inductive_needs_no_empty_match : Bool :=
     // naming nothing real is caught by `validate_cases_against_inductive`
     // instead; coverage itself is vacuously satisfied with no constructors.
     let voidish : Inductive := Inductive.mk
-        (NamePath.npath (List.cons (Identifier.id "V") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "V") List.empty))
         List.empty (sort_n 1) List.empty List.empty Visibility.package_private in
     match match_coverage_warning [cov_case "c"] (Option.some voidish) test_scope {
         Option.none => true,
@@ -720,7 +720,7 @@ def test_match_missing_arm_does_not_fail_the_check_end_to_end : Bool :=
     // test and fixing the corpus in the same change.
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_some : MatchCase := MatchCase.mc (Identifier.id "some") List.empty body Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none in
     let cases : List MatchCase := List.cons case_some List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -733,14 +733,14 @@ def test_match_missing_arm_does_not_fail_the_check_end_to_end : Bool :=
 /// nothing would satisfy the pin above and be worthless.
 #[test]
 def test_match_missing_arm_is_still_reported_end_to_end : Bool :=
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Maybe") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "some") List.empty)) List.empty (sort_n 1) in
+        (NamePath.mk (List.cons (Identifier.id "some") List.empty)) List.empty (sort_n 1) in
     let none_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "none") List.empty)) List.empty (sort_n 1) in
+        (NamePath.mk (List.cons (Identifier.id "none") List.empty)) List.empty (sort_n 1) in
     let ind : Inductive := Inductive.mk
         type_name List.empty (sort_n 1) [some_cn, none_cn] List.empty Visibility.package_private in
-    let case_some : MatchCase := MatchCase.mc (Identifier.id "some") List.empty (sort_n 1) Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty (sort_n 1) Option.none in
     match match_coverage_warning [case_some] (Option.some ind) test_scope {
         Option.some msg => String.contains msg "`Maybe.none`",
         Option.none => false,
@@ -750,8 +750,8 @@ def test_match_missing_arm_is_still_reported_end_to_end : Bool :=
 def test_match_exhaustive_arms_check_end_to_end : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_some : MatchCase := MatchCase.mc (Identifier.id "some") List.empty body Option.none in
-    let case_none : MatchCase := MatchCase.mc (Identifier.id "none") List.empty body Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none in
+    let case_none : MatchCase := MatchCase.mk (Identifier.id "none") List.empty body Option.none in
     let cases : List MatchCase := List.cons case_some (List.cons case_none List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -767,11 +767,11 @@ def test_match_exhaustive_arms_check_end_to_end : Bool :=
 /// A named single-constructor inductive with NAMED fields (`Maybe`
 /// above has none) -- needed to exercise real field-pattern resolution.
 def point_ind : Inductive :=
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Point") List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Point") List.empty) in
     let x_param : Param := Param.mk (Identifier.id "x") (sort_n 1) Multiplicity.many Option.none List.empty in
     let y_param : Param := Param.mk (Identifier.id "y") (sort_n 1) Multiplicity.many Option.none List.empty in
     let mk_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "mk") List.empty))
         (List.cons x_param (List.cons y_param List.empty))
         (sort_n 1) in
     let cns : List InductConstructor := List.cons mk_cn List.empty in
@@ -781,7 +781,7 @@ def point_ind : Inductive :=
 
 def point_scope : Scope :=
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let decl_list : List Decl := List.cons (Decl.inductive_d point_ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     {
@@ -815,14 +815,14 @@ def test_field_pattern_bare_reordered_fields_permutes_body_correctly : Bool :=
     let fp : FieldPattern := FieldPattern.mk (List.cons y_entry (List.cons x_entry List.empty)) false in
     let args : List Identifier := List.cons (Identifier.id "y") (List.cons (Identifier.id "x") List.empty) in
     let body : Term := Term.var 0 DebugName.unnamed in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "") args body (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args body (Option.some fp) in
     match type_check_match_case case_ point_typed_scrutinee (Term.var sentinel (DebugName.named (Identifier.id "Point"))) (Option.some point_ind) Term.hole point_scope point_typed_local_types empty_locals {
         err _ => false,
         ok checked =>
             match checked {
                 mk resolved_case _typ =>
                     match resolved_case {
-                        MatchCase.mc resolved_name resolved_args resolved_body resolved_fp =>
+                        MatchCase.mk resolved_name resolved_args resolved_body resolved_fp =>
                             Similar.similar resolved_name (Identifier.id "mk")
                                 && I64.beq (List.length resolved_args) 2
                                 && (match resolved_body { Term.var idx _ => I64.beq idx 1, _ => false })
@@ -840,7 +840,7 @@ def test_field_pattern_named_multi_constructor_via_named_form : Bool :=
     let fp : FieldPattern := FieldPattern.mk (List.cons x_entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "x") List.empty in
     let body : Term := Term.var 0 DebugName.unnamed in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") args body (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") args body (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
@@ -857,11 +857,11 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
     // resolve to a real (multi-constructor) inductive rather than
     // `Option.none` short-circuiting with an unrelated error message).
     let mod_id : Identifier := Identifier.id "Test" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Shape") List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
+    let type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Shape") List.empty) in
     let r_param : Param := Param.mk (Identifier.id "r") (sort_n 1) Multiplicity.many Option.none List.empty in
-    let circle_cn : InductConstructor := InductConstructor.mk (NamePath.npath [Identifier.id "circle"]) [r_param] (sort_n 1) in
-    let square_cn : InductConstructor := InductConstructor.mk (NamePath.npath [Identifier.id "square"]) [r_param] (sort_n 1) in
+    let circle_cn : InductConstructor := InductConstructor.mk (NamePath.mk [Identifier.id "circle"]) [r_param] (sort_n 1) in
+    let square_cn : InductConstructor := InductConstructor.mk (NamePath.mk [Identifier.id "square"]) [r_param] (sort_n 1) in
     let cns : List InductConstructor := List.cons circle_cn (List.cons square_cn List.empty) in
     let empty_params : List Param := List.empty in
     let empty_attrs : List Attribute := List.empty in
@@ -872,7 +872,7 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Shape"))) List.empty in
     let fp : FieldPattern := FieldPattern.mk List.empty true in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "") List.empty (sort_n 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") List.empty (sort_n 1) (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole shape_scope types empty_locals {
@@ -883,7 +883,7 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
 #[test]
 def test_field_pattern_unknown_field_is_an_error : Bool :=
     let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "z") (Identifier.id "z")) List.empty) true in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") [Identifier.id "z"] (sort_n 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") [Identifier.id "z"] (sort_n 1) (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
@@ -895,7 +895,7 @@ def test_field_pattern_unknown_field_is_an_error : Bool :=
 def test_field_pattern_missing_field_without_rest_is_an_error : Bool :=
     // Only "x" is listed, no `..` -- "y" is uncovered.
     let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "x") (Identifier.id "x")) List.empty) false in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") [Identifier.id "x"] (sort_n 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") [Identifier.id "x"] (sort_n 1) (Option.some fp) in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
@@ -933,16 +933,16 @@ def term_is_named_var (t : Term) (name : String) : Bool :=
     }
 
 def pair_ind : Inductive :=
-    let type_name : NamePath := NamePath.npath [Identifier.id "P"] in
+    let type_name : NamePath := NamePath.mk [Identifier.id "P"] in
     let a_param : Param := Param.mk (Identifier.id "A") (sort_n 1) Multiplicity.many Option.none List.empty in
     let b_param : Param := Param.mk (Identifier.id "B") (sort_n 1) Multiplicity.many Option.none List.empty in
     let first_param : Param := Param.mk (Identifier.id "first") (named_free_var "A") Multiplicity.many Option.none List.empty in
     let second_param : Param := Param.mk (Identifier.id "second") (named_free_var "B") Multiplicity.many Option.none List.empty in
-    let ctor : InductConstructor := InductConstructor.mk (NamePath.npath [Identifier.id "mk"]) [first_param, second_param] (sort_n 1) in
+    let ctor : InductConstructor := InductConstructor.mk (NamePath.mk [Identifier.id "mk"]) [first_param, second_param] (sort_n 1) in
     Inductive.mk type_name [a_param, b_param] (sort_n 1) [ctor] List.empty Visibility.package_private
 
 def pair_scope : Scope :=
-    let mod_path : ModulePath := ModulePath.mp [Identifier.id "Test"] in
+    let mod_path : ModulePath := ModulePath.mk [Identifier.id "Test"] in
     let sd : ScopeData := build_scope_from_decls mod_path [Decl.inductive_d pair_ind] in
     {
         module_id := mod_path,
@@ -964,7 +964,7 @@ def test_field_pattern_first_field_type_comes_from_the_scrutinee : Bool :=
     let entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "first") (Identifier.id "first") in
     let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "first") List.empty in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
     match type_check_match_case case_ (Term.var 0 DebugName.unnamed) pair_scrutinee_typ (Option.some pair_ind) Term.hole pair_scope pair_typed_local_types empty_locals {
         err _ => false,
         ok checked =>
@@ -980,7 +980,7 @@ def test_field_pattern_second_field_type_comes_from_the_scrutinee : Bool :=
     let entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "second") (Identifier.id "second") in
     let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "second") List.empty in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
     match type_check_match_case case_ (Term.var 0 DebugName.unnamed) pair_scrutinee_typ (Option.some pair_ind) Term.hole pair_scope pair_typed_local_types empty_locals {
         err _ => false,
         ok checked =>
@@ -999,7 +999,7 @@ def test_field_pattern_bare_scrutinee_head_leaves_declared_types : Bool :=
     let entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "first") (Identifier.id "first") in
     let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "first") List.empty in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
     match type_check_match_case case_ (Term.var 0 DebugName.unnamed) (named_free_var "P") (Option.some pair_ind) Term.hole pair_scope (List.cons (named_free_var "P") List.empty) empty_locals {
         err _ => false,
         ok checked =>
@@ -1155,8 +1155,8 @@ def test_pi_of_pi : Bool :=
 // Scope with a single class method "beq" with type signature Type.
 def classdef_scope : Scope :=
     let beq_id : Identifier := Identifier.id "beq" in
-    let beq_class : NamePath := NamePath.npath (List.cons (Identifier.id "BEq") List.empty) in
-    let beq_np : NamePath := NamePath.npath (List.cons beq_id List.empty) in
+    let beq_class : NamePath := NamePath.mk (List.cons (Identifier.id "BEq") List.empty) in
+    let beq_np : NamePath := NamePath.mk (List.cons beq_id List.empty) in
     let scd : ScopeClassDef := {
         class_name := beq_class,
         full_name := beq_np,
@@ -1226,17 +1226,17 @@ def test_char_literal_types_as_char : Bool :=
 // `lang/types.mo`'s `Decl` and `init/meta.mo`'s `Decl` are such a pair.
 // Both orders are asserted so the fallback is exercised whichever wins.
 
-def dup_type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Dup") List.empty)
+def dup_type_name : NamePath := NamePath.mk (List.cons (Identifier.id "Dup") List.empty)
 
 /// A `Dup` whose constructors do NOT cover the match below -- stands in
 /// for `init/meta.mo`'s `Decl` (`d_def`/`d_instance`/`d_error`).
 def dup_other_ind : Inductive :=
     let p : Param := Param.mk (Identifier.id "p") (sort_n 1) Multiplicity.many Option.none List.empty in
     let a_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "d_other_a") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "d_other_a") List.empty))
         [p] (sort_n 1) in
     let b_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "d_other_b") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "d_other_b") List.empty))
         [p] (sort_n 1) in
     let cns : List InductConstructor := List.cons a_cn (List.cons b_cn List.empty) in
     let empty_params : List Param := List.empty in
@@ -1248,7 +1248,7 @@ def dup_other_ind : Inductive :=
 def dup_wanted_ind : Inductive :=
     let p : Param := Param.mk (Identifier.id "p") (sort_n 1) Multiplicity.many Option.none List.empty in
     let w_cn : InductConstructor := InductConstructor.mk
-        (NamePath.npath (List.cons (Identifier.id "d_wanted") List.empty))
+        (NamePath.mk (List.cons (Identifier.id "d_wanted") List.empty))
         [p] (sort_n 1) in
     let cns : List InductConstructor := List.cons w_cn List.empty in
     let empty_params : List Param := List.empty in
@@ -1259,12 +1259,12 @@ def dup_wanted_ind : Inductive :=
 /// `Dup`s in the given order.
 def dup_match_checks (decl_list : List Decl) : Bool :=
     let mod_id : Identifier := Identifier.id "DupTest" in
-    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     let dup_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none, incomplete_match_ok := false } in
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Dup"))) List.empty in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "d_wanted") [Identifier.id "p"] (sort_n 1) Option.none in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "d_wanted") [Identifier.id "p"] (sort_n 1) Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole dup_scope types empty_locals {

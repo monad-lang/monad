@@ -204,21 +204,20 @@ def test_attr_args_missing_is_none_but_argless_is_some_empty : Bool :=
             Option.none => true,
         }
 
-type Operator {
-    operator String
+struct Operator {
+    symbol: String,
 }
 
-pub type ModulePath {
-    mp (List Identifier)
+pub struct ModulePath {
+    segments: List Identifier,
 }
 
 /// A term-level dotted name path (`Foo.bar.baz`) — a DECL name or a
 /// legacy dotted reference. Distinct from `ModulePath` (a FILE path,
 /// `use`d with `::`) since the qualified-names split; see
-/// plans/implementations/qualified-names.md. Constructor `npath`
-/// (`mp` is taken by `ModulePath.mp`).
-pub type NamePath {
-    npath (List Identifier)
+/// plans/implementations/qualified-names.md.
+pub struct NamePath {
+    segments: List Identifier,
 }
 
 /// A module-qualified term reference (`std::list::List.cons`) — the
@@ -244,11 +243,11 @@ def char_to_string (c : Char) : String := match c {
 }
 
 def show_operator (op : Operator) : String := match op {
-    Operator.operator s => s,
+    Operator.mk s => s,
 }
 
 pub def show_module_path (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => join_identifiers ids,
+    ModulePath.mk ids => join_identifiers ids,
 }
 
 /// A `NamePath` rendered `.`-joined (`Foo.bar`). The RENDERING matches
@@ -256,7 +255,7 @@ pub def show_module_path (mp : ModulePath) : String := match mp {
 /// path), not in this one spelling — while `use` module paths render
 /// `::`-joined in source (`module_path_to_string`, lang/parser.mo).
 pub def show_name_path (np : NamePath) : String := match np {
-    NamePath.npath ids => join_identifiers ids,
+    NamePath.mk ids => join_identifiers ids,
 }
 
 /// `std::list::List.cons` — module half `::`-joined, then `::`, then
@@ -276,7 +275,7 @@ pub def show_qualified_name (qn : QualifiedName) : String :=
 /// Distinct from the general `module_path_to_string` (lang/parser.mo)
 /// only to avoid a circular parser->types import; the two agree.
 pub def module_path_to_string_colon (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => List.intercalate "::" (List.map show_identifier ids),
+    ModulePath.mk ids => List.intercalate "::" (List.map show_identifier ids),
 }
 
 /// Join a module path's segments with `.` (`[Foo, bar]` -> `Foo.bar`).
@@ -365,8 +364,12 @@ pub struct LocatedSpan {
 }
 
 // Canonical Param uses de Bruijn Term; `ParseParam` is the parser's.
-pub type Param {
-    mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term) (attrs: List Attribute)
+pub struct Param {
+    name: Identifier,
+    type_: Term,
+    mult: Multiplicity,
+    default: Option Term,
+    attrs: List Attribute,
 }
 
 /// Create a canonical Param with multiplicity=Many, no default value, and
@@ -426,8 +429,11 @@ pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute
 // `Option.none` -- every OTHER consumer (`lang/lower_core_ir.mo`,
 // `lang/codegen/emit.mo`, `lang/pretty.mo`'s runtime-facing paths) only
 // ever sees `Option.none` here.
-type MatchCase {
-    mc (name: Identifier) (args: List Identifier) (body: Term) (field_pattern: Option FieldPattern)
+struct MatchCase {
+    name: Identifier,
+    args: List Identifier,
+    body: Term,
+    field_pattern: Option FieldPattern,
 }
 
 /// One `{ field, other := binder, .. }` pattern -- mirrors the Rust
@@ -436,8 +442,9 @@ type MatchCase {
 /// `field_name` when punned (`{ x }`). `rest` is `true` when a trailing
 /// `..` is present (unlisted fields are discarded, not brought into
 /// scope).
-pub type FieldPattern {
-    mk (fields: List FieldPatternEntry) (rest: Bool)
+pub struct FieldPattern {
+    fields: List FieldPatternEntry,
+    rest: Bool,
 }
 
 /// One `field` or `field := binder` entry inside a `FieldPattern` --
@@ -445,8 +452,9 @@ pub type FieldPattern {
 /// `name`/`value` shape) rather than a generic `Pair`, so this file
 /// doesn't need a cross-module dependency on `init/prelude.mo`'s `Pair`
 /// for its own canonical AST.
-pub type FieldPatternEntry {
-    mk (field: Identifier) (binder: Identifier)
+pub struct FieldPatternEntry {
+    field: Identifier,
+    binder: Identifier,
 }
 
 /// Nested bare-form field-pattern `Match` chain desugaring a dotted-path
@@ -475,7 +483,7 @@ pub def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term 
             let entry : FieldPatternEntry := FieldPatternEntry.mk field field in
             let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
             let binders : List Identifier := List.cons field List.empty in
-            let case_ : MatchCase := MatchCase.mc (Identifier.id "") binders value (Option.some fp) in
+            let case_ : MatchCase := MatchCase.mk (Identifier.id "") binders value (Option.some fp) in
             Term.lit (Literal.match_ scrutinee (List.cons case_ List.empty)),
     }
 
@@ -579,16 +587,22 @@ type Literal {
 /// `Param` list, see `build_scope_struct`) is what determines the
 /// final constructor-argument order once `type_check_lit` resolves
 /// this into a `Term.con`.
-pub type StructLitField {
-    mk (name: Identifier) (value: Term)
+pub struct StructLitField {
+    name: Identifier,
+    value: Term,
 }
 
-pub type Con {
-    mk (name: Identifier) (typ_name: NamePath) (num_args: I64) (args: List (Option Term))
+pub struct Con {
+    name: Identifier,
+    typ_name: NamePath,
+    num_args: I64,
+    args: List (Option Term),
 }
 
-pub type Native {
-    mk (native_name: Identifier) (num_args: I64) (args: List (Option Term))
+pub struct Native {
+    native_name: Identifier,
+    num_args: I64,
+    args: List (Option Term),
 }
 
 // ─── Cubical primitives ────────────────────────────────────────────────
@@ -1218,12 +1232,17 @@ pub struct ParseStructLitField {
     value : ParseTerm,
 }
 
-pub type ParseCon {
-    mk (name: Identifier) (typ_name: NamePath) (num_args: I64) (args: List (Option ParseTerm))
+pub struct ParseCon {
+    name: Identifier,
+    typ_name: NamePath,
+    num_args: I64,
+    args: List (Option ParseTerm),
 }
 
-pub type ParseNative {
-    mk (native_name: Identifier) (num_args: I64) (args: List (Option ParseTerm))
+pub struct ParseNative {
+    native_name: Identifier,
+    num_args: I64,
+    args: List (Option ParseTerm),
 }
 
 // The universe level of a sort. `Prop`/`Type`/`Sort n` are `concrete n`; a
@@ -1608,8 +1627,9 @@ type EvalError {
     custom (msg: String),
 }
 
-pub type TypeConstraint {
-    mk (cls: NamePath) (vars: List Identifier)
+pub struct TypeConstraint {
+    cls: NamePath,
+    vars: List Identifier,
 }
 
 /// Canonical Def uses de Bruijn Term. DefV0 is the legacy V0 variant.
@@ -1626,45 +1646,64 @@ pub struct Def {
 pub def Def.name (d : Def) : NamePath := d.name
 
 // Canonical InductConstructor uses de Bruijn Term. InductConstructorV0 is the legacy V0 variant.
-pub type InductConstructor {
-    mk (name: NamePath) (params: List Param) (typ: Term)
+pub struct InductConstructor {
+    name: NamePath,
+    params: List Param,
+    typ: Term,
 }
 
 // Canonical Inductive uses de Bruijn Term. InductiveV0 is the legacy V0 variant.
-pub type Inductive {
-    mk (name: NamePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List Attribute) (vis: Visibility)
+pub struct Inductive {
+    name: NamePath,
+    params: List Param,
+    typ: Term,
+    constructors: List InductConstructor,
+    attrs: List Attribute,
+    vis: Visibility,
 }
 
 // Canonical ClassDef uses de Bruijn Term. ClassDefV0 is the legacy V0 variant.
-pub type ClassDef {
-    mk (name: Identifier) (typ: Term) (default: Option Term)
+pub struct ClassDef {
+    name: Identifier,
+    typ: Term,
+    default: Option Term,
 }
 
 // Canonical Class uses de Bruijn Term. ClassV0 is the legacy V0 variant.
-pub type Class {
-    mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef) (vis: Visibility)
+pub struct Class {
+    name: Identifier,
+    params: List Param,
+    constraints: List TypeConstraint,
+    methods: List ClassDef,
+    vis: Visibility,
 }
 
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
-pub type StructField {
+pub struct StructField {
     /// `mult` mirrors the Rust reference's `StructField.mult`
     /// (core/src/term.rs): `!name : T` (Linear, must be consumed exactly
     /// once), `?name : T` (Affine, at most once), `%name : T` (Zero /
     /// Erased), or no prefix at all (Many, the default — the common
     /// case). See examples/structs.mo's `Buffer.data` for a live `!` use.
-    mk (name: Identifier) (typ: Term) (default: Option Term) (mult: Multiplicity)
+    name: Identifier,
+    typ: Term,
+    default: Option Term,
+    mult: Multiplicity,
 }
 
 
 // Canonical Struct uses de Bruijn Term. StructV0 is the legacy V0 variant.
-pub type Struct {
+pub struct Struct {
     /// `attrs` mirrors `Inductive`'s own slot: the `#[...]` attributes
     /// written above the declaration, preserved through lowering so the
     /// macro-expansion pass can still see a `#[derive ...]`/
     /// `#[derive_cli]` request at the point where decl-gen macros are
     /// resolved (`lang/typecheck/macro_queue.mo`) — the attribute itself
     /// is not a term or a type, so nothing else could carry it.
-    mk (name: Identifier) (fields: List StructField) (attrs: List Attribute) (vis: Visibility)
+    name: Identifier,
+    fields: List StructField,
+    attrs: List Attribute,
+    vis: Visibility,
 }
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors the
@@ -1748,11 +1787,11 @@ pub type Decl {
 def Decl.to_name (d : Decl) : NamePath :=
     match d {
         def_d def_ => Def.name def_,
-        _ => NamePath.npath []
+        _ => NamePath.mk []
     }
 
 // Canonical Instance uses de Bruijn Term. InstanceV0 is the legacy V0 variant.
-pub type Instance {
+pub struct Instance {
     /// `implicit_params` holds any `{Name : Type}` binders written right
     /// after `instance` (before the optional `[constraints]` and the class
     /// name), e.g. `instance {A : Type} Show A { ... }`. Mirrors the Rust
@@ -1775,7 +1814,13 @@ pub type Instance {
     /// class method's own abstract signature. See
     /// plans/bootstrapping/self-hosted-compiler.md's dictionary-passing
     /// plan (Phase 1) for the full context.
-    mk (name: Identifier) (cls: NamePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility) (implicit_params: List Param) (defs: List Def)
+    name: Identifier,
+    cls: NamePath,
+    constraints: List TypeConstraint,
+    args: List Term,
+    vis: Visibility,
+    implicit_params: List Param,
+    defs: List Def,
 }
 
 // --- Do-notation ---
@@ -1832,8 +1877,8 @@ instance Similar Identifier {
 instance Similar Operator {
     def similar (a : Operator) (b : Operator) : Bool :=
         match a {
-            operator s1 => match b {
-                operator s2 => String.beq s1 s2
+            Operator.mk s1 => match b {
+                Operator.mk s2 => String.beq s1 s2
             }
         }
 }
@@ -1905,8 +1950,8 @@ def opt_db_term_list_similar (a : List (Option Term)) (b : List (Option Term)) :
 instance Similar ModulePath {
     def similar (a : ModulePath) (b : ModulePath) : Bool :=
         match a {
-            ModulePath.mp ids1 => match b {
-                ModulePath.mp ids2 => id_list_similar ids1 ids2,
+            ModulePath.mk ids1 => match b {
+                ModulePath.mk ids2 => id_list_similar ids1 ids2,
                 _ => false
             },
             _ => false
@@ -1961,8 +2006,8 @@ instance Similar NameRef {
 /// structural like `id_list_similar`).
 pub def name_path_similar (a : NamePath) (b : NamePath) : Bool :=
     match a {
-        NamePath.npath ids1 => match b {
-            NamePath.npath ids2 => id_list_similar ids1 ids2
+        NamePath.mk ids1 => match b {
+            NamePath.mk ids2 => id_list_similar ids1 ids2
         }
     }
 
@@ -2045,8 +2090,8 @@ instance Similar Native {
 instance Similar MatchCase {
     def similar (a : MatchCase) (b : MatchCase) : Bool :=
         match a {
-            mc name1 args1 body1 => match b {
-                mc name2 args2 body2 =>
+            MatchCase.mk name1 args1 body1 _ => match b {
+                MatchCase.mk name2 args2 body2 _ =>
                     Similar.similar name1 name2 && id_list_similar args1 args2 && Similar.similar body1 body2
             }
         }
@@ -2861,11 +2906,11 @@ def test_term_ntv : Bool :=
 
 #[test]
 def test_term_con : Bool :=
-    // Work around Con.mk/NamePath.npath forall-inference bugs with List.empty
+    // Work around Con.mk/NamePath.mk forall-inference bugs with List.empty
     // by using non-empty lists
     let none_opt : Option Term := Option.none in
     let args : List (Option Term) := List.cons none_opt List.empty in
-    let mod_path : NamePath := NamePath.npath (List.cons (Identifier.id "Test") List.empty) in
+    let mod_path : NamePath := NamePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let con_val : Con := Con.mk (Identifier.id "Bar") mod_path 0 args in
     let c : Term := Term.con con_val in
     true
