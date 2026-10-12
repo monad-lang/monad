@@ -2417,15 +2417,58 @@ def con_ref_result_type (id : Identifier) (expected_type : Term) (scope : Scope)
                             // share a constructor name, which is the whole
                             // scenario this path exists for.
                             ok qual_ind =>
-                                if inductive_has_params qual_ind
-                                then expected_type
-                                else Term.var sentinel (DebugName.named (inductive_bare_name qual_ind)),
+                                con_owner_type qual_ind (NamePath.npath (List.cons (Identifier.id (last_dotted_segment s)) List.empty)) expected_type,
                             err _ => expected_type,
                         },
-                    Option.none => expected_type,
+                    Option.none => bare_con_ref_result_type s expected_type scope,
                 },
         }
     else expected_type
+
+/// The type a constructor reference has before any argument is applied:
+/// the owning inductive when it is ground; `T _ _` for a NULLARY
+/// constructor of a parameterized one (`BTreeMap.empty`), so a class call
+/// can still read its carrier off the argument; otherwise `fallback`.
+def con_owner_type (ind : Inductive) (con_mp : NamePath) (fallback : Term) : Term :=
+    match ind {
+        Inductive.mk _ params _ _ _ _ =>
+            let head : Term := Term.var sentinel (DebugName.named (inductive_bare_name ind)) in
+            match params {
+                List.empty => head,
+                List.cons _ _ =>
+                    match find_constructor_in_inductive ind con_mp {
+                        Option.none => fallback,
+                        Option.some ctor =>
+                            match ctor {
+                                InductConstructor.mk _ fields _ =>
+                                    match fields {
+                                        List.empty => apply_holes head params,
+                                        List.cons _ _ => fallback,
+                                    },
+                            },
+                    },
+            },
+    }
+
+#[partial]
+def apply_holes (head : Term) (params : List Param) : Term :=
+    match params {
+        List.empty => head,
+        List.cons _ rest => apply_holes (Term.app head Term.hole) rest,
+    }
+
+/// A bare constructor (`true` after `open Bool`) names its type only when
+/// exactly one ground inductive owns it.
+def bare_con_ref_result_type (name : String) (expected_type : Term) (scope : Scope) : Term :=
+    match scope_find_all_inductives_by_constructor (NamePath.npath (List.cons (Identifier.id name) List.empty)) scope {
+        List.empty => expected_type,
+        List.cons only rest =>
+            match rest {
+                List.cons _ _ => expected_type,
+                List.empty =>
+                    con_owner_type only (NamePath.npath (List.cons (Identifier.id name) List.empty)) expected_type,
+            },
+    }
 
 /// Whether a constructor reference's ambient expected type carries no
 /// real information about its RESULT, so inferring the owning inductive
@@ -2506,15 +2549,13 @@ def qualified_con_ref_typ (dbg : DebugName) (sig : Term) (scope : Scope) : Term 
                                 let bare_mp : NamePath := NamePath.npath (List.cons (Identifier.id (last_dotted_segment s)) List.empty) in
                                 match scope_find_inductive qual_mp scope {
                                     ok qual_ind =>
-                                        if inductive_has_params qual_ind then sig
-                                        else
-                                            match find_constructor_in_inductive qual_ind bare_mp {
-                                                Option.some _ => Term.var sentinel (DebugName.named (inductive_bare_name qual_ind)),
-                                                Option.none => sig,
-                                            },
+                                        match find_constructor_in_inductive qual_ind bare_mp {
+                                            Option.some _ => con_owner_type qual_ind bare_mp sig,
+                                            Option.none => sig,
+                                        },
                                     err _ => sig,
                                 },
-                            Option.none => sig,
+                            Option.none => bare_con_ref_result_type s sig scope,
                         },
                 },
             DebugName.unnamed => sig,
@@ -3409,6 +3450,105 @@ def recheck_unresolved_class_calls (arg : Term) (a_tt : TypedTerm) (a_expected :
                 ok b_tt => if mentions_class_method_ref b_tt.term scope locals then a_tt else b_tt,
             }
 
+/// An argument checked with no expectation (`J.arr [a, b]`: a constructor is no
+/// def call) can leave a class-method call whose carrier only the callee's
+/// parameter type supplies. Re-check it against that domain, with the callee's
+/// own type variables solved from the call's expected result where it names them.
+#[partial]
+def recheck_against_callee_domain (f : Term) (arg : Term) (a_tt : TypedTerm) (a_expected : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : TypedTerm :=
+    if not (is_hole a_expected) then a_tt
+    else if not (mentions_class_method_ref a_tt.term scope locals) then a_tt
+    else
+        match ctor_field_domain f expected_type scope {
+            Option.some dom => recheck_unresolved_class_calls arg a_tt dom scope local_types locals,
+            Option.none =>
+                match type_check f Term.hole scope local_types locals {
+                    err _ => a_tt,
+                    ok f_tt =>
+                        match pi_domain_of f_tt.typ {
+                            Option.none => a_tt,
+                            Option.some dom =>
+                                let solved : List (Pair Identifier Term) :=
+                                    solve_typevars scope (final_result_type f_tt.typ) (final_result_type expected_type) List.empty in
+                                recheck_unresolved_class_calls arg a_tt (subst_typevars_term dom solved) scope local_types locals
+                        },
+                },
+        }
+
+/// The declared type of the field a constructor application's next argument
+/// fills (`J.arr` in `J.arr xs`: `List J`), with the inductive's own parameters
+/// solved from the call's expected result. A constructor has no stored
+/// signature, so `type_check` of its name says nothing about its fields.
+#[partial]
+def ctor_field_domain (f : Term) (expected_type : Term) (scope : Scope) : Option Term :=
+    match flatten_call_spine f {
+        CallSpine.mk head args =>
+            match term_peel head {
+                Term.var idx dbg =>
+                    match dbg {
+                        DebugName.unnamed => Option.none,
+                        DebugName.named id =>
+                            if not (I64.beq idx sentinel) then Option.none
+                            else
+                                let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
+                                let con_mp : NamePath := NamePath.npath (List.cons bare_name List.empty) in
+                                let owner : Option Inductive :=
+                                    match id {
+                                        Identifier.id s =>
+                                            match dotted_qualifier s {
+                                                Option.some qual =>
+                                                    match scope_find_inductive (NamePath.npath (List.cons (Identifier.id qual) List.empty)) scope {
+                                                        ok ind => Option.some ind,
+                                                        err _ => scope_find_inductive_by_constructor con_mp scope,
+                                                    },
+                                                Option.none => scope_find_inductive_by_constructor con_mp scope,
+                                            },
+                                    } in
+                                match owner {
+                                    Option.none => Option.none,
+                                    Option.some ind =>
+                                        match find_constructor_in_inductive ind con_mp {
+                                            Option.none => Option.none,
+                                            Option.some ctor =>
+                                                match ctor {
+                                                    InductConstructor.mk _ fields _ =>
+                                                        match nth_type (List.length args) (List.map param_type fields) {
+                                                            Option.none => Option.none,
+                                                            Option.some field_ty =>
+                                                                Option.some (subst_typevars_term field_ty (ctor_param_solution ind scope expected_type)),
+                                                        },
+                                                },
+                                        },
+                                },
+                    },
+                _ => Option.none,
+            },
+    }
+
+def param_type (p : Param) : Term :=
+    match p {
+        Param.mk _ t _ _ _ => t,
+    }
+
+#[partial]
+def apply_param_vars (head : Term) (params : List Param) : Term :=
+    match params {
+        List.empty => head,
+        List.cons p rest =>
+            match p {
+                Param.mk n _ _ _ _ => apply_param_vars (Term.app head (Term.var sentinel (DebugName.named n))) rest,
+            },
+    }
+
+/// The inductive's own parameters (`K`, `V` of `BT K V`) read off the call's
+/// expected result type.
+def ctor_param_solution (ind : Inductive) (scope : Scope) (expected_type : Term) : List (Pair Identifier Term) :=
+    match ind {
+        Inductive.mk _ params _ _ _ _ =>
+            let applied : Term := apply_param_vars (Term.var sentinel (DebugName.named (inductive_bare_name ind))) params in
+            solve_typevars scope applied (final_result_type expected_type) List.empty
+    }
+
 /// Does `t` still hold a reference that is a class method and nothing else
 /// (`FromListLiteral.cons`, not its mangled `FromListLiteral_List_cons`)?
 #[partial]
@@ -3811,7 +3951,8 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
         Option.none =>
     let a_expected : Term := app_arg_expected_type_from_callee f a expected_type scope local_types locals in
     match type_check a a_expected scope local_types locals {
-        ok a_tt =>
+        ok a_tt0 =>
+            let a_tt : TypedTerm := recheck_against_callee_domain f a a_tt0 a_expected expected_type scope local_types locals in
             if not (struct_literal_arg_matches_expected a a_expected scope) then
                 // The argument's ordinary check SUCCEEDED, but only
                 // vacuously -- see `struct_literal_arg_matches_expected`.

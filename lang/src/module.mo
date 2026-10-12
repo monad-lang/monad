@@ -8079,6 +8079,47 @@ def test_elaborate_list_literal_resolves : IO Bool := do {
     return (not (String.contains out "FromListLiteral.cons") && not (String.contains out "FromListLiteral.empty"))
 }
 
+/// A constructor has no stored signature, so a list literal or a `Map` call in its
+/// argument position takes its carrier from the declared field type.
+#[test]
+def test_elaborate_ctor_argument_class_calls_resolve : IO Bool := do {
+    let src : String :=
+        "type List (A : Type) { empty, cons (a : A) (List A) }\n" ++
+        "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) (L A) : L A\n def empty : L A }\n" ++
+        "instance FromListLiteral List { def cons (a : A) (l : List A) : List A := List.cons a l\n def empty : List A := List.empty }\n" ++
+        "type BT K V { bt_empty, bt_node (key : K) (val : V) (l : BT K V) }\n" ++
+        "class Map (M : (K : Type) -> (V : Type) -> Type := BT) { def insert (key : K) (val : V) (m : M K V) : M K V }\n" ++
+        "instance Map BT { def insert (key : K) (val : V) (m : BT K V) : BT K V := BT.bt_node key val m }\n" ++
+        "type J { arr (xs : List J), obj (m : BT I64 J), num (n : I64) }\n" ++
+        "def a1 : J := J.arr [J.num 1, J.num 2]\n" ++
+        "def a2 : J := J.obj (Map.insert 1 (J.num 1) BT.bt_empty)\n";
+    let out <- elaborate_synthetic_source src;
+    let diags <- recheck_elaborated_source src;
+    return (List.is_empty diags && not (String.contains out "FromListLiteral.cons") && not (String.contains out "Map.insert") &&
+        String.contains out "FromListLiteral_List_cons" && String.contains out "Map_BT_insert")
+}
+
+/// A bare constructor (`tt` after `open Bl`) names its type, and a nullary constructor of a
+/// parameterized one (`BT.bt_empty`) still lets a class call read its carrier off the argument.
+#[test]
+def test_elaborate_constructor_reference_types_resolve_class_calls : IO Bool := do {
+    let src : String :=
+        "type Bl { tt, ff }\n" ++
+        "open Bl {tt, ff}\n" ++
+        "type BT K V { bt_empty, bt_node (key : K) (val : V) (l : BT K V) }\n" ++
+        "type J { obj (m : BT I64 J), num (n : I64) }\n" ++
+        "class Ser S { def ser (v : S) : J }\n" ++
+        "instance Ser Bl { def ser (b : Bl) : J := J.num 1 }\n" ++
+        "class Map (M : (K : Type) -> (V : Type) -> Type := BT) { def insert (key : K) (val : V) (m : M K V) : M K V }\n" ++
+        "instance Map BT { def insert (key : K) (val : V) (m : BT K V) : BT K V := BT.bt_node key val m }\n" ++
+        "def bare : J := Ser.ser tt\n" ++
+        "def unannotated : J := let e := Map.insert 1 (J.num 1) BT.bt_empty in J.obj e\n";
+    let out <- elaborate_synthetic_source src;
+    let diags <- recheck_elaborated_source src;
+    return (List.is_empty diags && not (String.contains out "Ser.ser") && not (String.contains out "Map.insert") &&
+        String.contains out "Ser_Bl_ser tt" && String.contains out "Map_BT_insert")
+}
+
 /// A constraint of another class than the matched instance's own
 /// (`[Add A] HAdd A A A`) is resolved by the checker, not left to the syntactic pass.
 #[test]
