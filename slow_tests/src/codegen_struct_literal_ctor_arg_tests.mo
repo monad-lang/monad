@@ -22,10 +22,6 @@
 /// `check` stays completely silent about this, and so does `llc` --
 /// only RUNNING a compiled binary finds it, which is why this test
 /// compiles, links and executes rather than inspecting IR text.
-use lang::codegen::emit {compile_loaded_modules_to_ir}
-use lang::module {load_file_modules}
-open IO {println}
-use std::process {process_id}
 use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 /// The safe form, and the one every site in `lang/` now uses: bind the
@@ -102,8 +98,7 @@ def main (args : List String) : IO I64 := do {
 /// the garbage tail until the 16MB stack was gone. `compile`/`check`
 /// only typecheck the TARGET file, so a dependency module's literal
 /// never reached `type_check_struct_lit` at all.
-/// `validate_no_undesugared_struct_lits` now rejects the bare form (see
-/// the fail-fast test below); this one pins the fix.
+/// This one pins the annotated form; the bare form is the last test here.
 ///
 /// Exit code 7 means both levels round-tripped.
 #[test]
@@ -131,52 +126,31 @@ def main (args : List String) : IO I64 := do {
 "# in
     compile_source_run_expect source "struct_lit_annotated_nested" 7
 
-/// The fail-fast half: the BARE form must now be rejected by
-/// `validate_no_undesugared_struct_lits` (lang/codegen/emit.mo) with a
-/// message naming the enclosing def, instead of compiling to a void
-/// placeholder that only a running binary can catch.
+/// The BARE form of the nested literal: the checker elaborates it to real
+/// constructors from the expected type (`IO Outer`, then `Outer.result`), so it
+/// no longer needs the annotated locals above. `validate_no_undesugared_struct_lits`
+/// stays as the backstop for a literal the checker could not resolve.
 ///
-/// The literal must be reachable from `main` -- the validator runs over
-/// the reachable decls only, same as `validate_no_unwired_natives`.
+/// Exit code 7 means both levels round-tripped.
 #[test]
-def test_bare_nested_struct_literal_fails_fast : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
-    let src_path := output_dir ++ "/undesugared_struct_lit.mo";
+def test_bare_nested_struct_literal_round_trips : IO Bool :=
     let source := r#"struct Inner { path : String, diagnostics : List String }
 struct Outer { result : Inner, cache : I64 }
 def make (fp : String) (ds : List String) : IO Outer := do {
     return { result := { path := fp, diagnostics := ds }, cache := 7 }
 }
 def main (args : List String) : IO I64 := do {
-    make "examples/hello.mo" [];
-    return 0
-}
-"#;
-    exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file (Path.path src_path) source;
-
-    let loaded_result <- load_file_modules src_path false;
-    match loaded_result {
-        Result.err e => do {
-            println ("test_bare_nested_struct_literal_fails_fast: failed to load: " ++ e);
-            return false
-        },
-        Result.ok loaded => do {
-            let mod_result <- compile_loaded_modules_to_ir loaded false;
-            exec_cmd "rm" ["-f", src_path];
-            match mod_result {
-                Result.err msg =>
-                    if String.contains msg "make" && String.contains msg "struct literal"
-                    then return true
-                    else do {
-                        println ("test_bare_nested_struct_literal_fails_fast: error message missing def name / reason: " ++ msg);
-                        return false
-                    },
-                Result.ok _ => do {
-                    println "test_bare_nested_struct_literal_fails_fast: compile SUCCEEDED, expected a fail-fast error";
-                    return false
-                },
+    let o <- make "examples/hello.mo" [];
+    match o {
+        Outer.mk r c =>
+            match r {
+                Inner.mk p ds =>
+                    match ds {
+                        List.empty => return (if String.beq p "examples/hello.mo" then c else 1),
+                        List.cons _ _ => return 1,
+                    }
             }
-        },
     }
 }
+"# in
+    compile_source_run_expect source "struct_lit_bare_nested" 7
