@@ -7145,6 +7145,41 @@ def test_elaborate_qualified_class_method_beats_same_named_method : IO Bool := d
     return (not (String.contains out "Monad.bind") && not (String.contains out "Monad.pure"))
 }
 
+/// The caller's own rigid `A` and the method's `A` share a spelling: `bind`
+/// solves its `A` to `One` from the first operand and its `B` to the caller's
+/// `A` from the continuation, and the second solution must not be rewritten by
+/// the first (it made `std.concurrent.combine.race` report `IO Unit` vs `IO A`).
+#[test]
+def test_class_method_solution_does_not_rewrite_the_callers_same_named_variable : IO Bool := do {
+    let src : String :=
+        "type Box (A : Type) { box (a : A) }\n" ++
+        "type Two { left, right }\n" ++
+        "type One { one }\n" ++
+        "class Monad (M : Type -> Type) { def bind (ma : M A) (f : A -> M B) : M B\n def pure (a : A) : M A }\n" ++
+        "instance Monad Box { def bind (ma : Box A) (f : A -> Box B) : Box B := match ma { Box.box a => f a }\n def pure (a : A) : Box A := Box.box a }\n" ++
+        "def unit_box : Box One := Box.box One.one\n" ++
+        "def g (t : Two) (b : Box A) : Box A := match t { Two.left => Monad.bind unit_box (fn u => b), Two.right => b }";
+    let diags <- check_synthetic_source src;
+    return (match diags { List.empty => true, List.cons _ _ => false })
+}
+
+/// A constraint whose evidence the method body never uses gets no dict
+/// parameter on the promoted def, so the checker's call site must not pass one
+/// (it applied a dict to the nullary `Map_BTreeMap_empty` and crashed the test
+/// driver of every file that builds a `BTreeMap`).
+#[test]
+def test_class_method_call_passes_only_the_dicts_the_def_carries : IO Bool := do {
+    let src : String :=
+        "type Box (A : Type) { box (a : A), none }\n" ++
+        "class Keyed (A : Type) { def key (a : A) : I64 }\n" ++
+        "instance Keyed I64 { def key (a : I64) : I64 := 1 }\n" ++
+        "class Empty (M : Type -> Type) { def empty : M A }\n" ++
+        "instance [Keyed A] Empty Box { def empty : Box A := Box.none }\n" ++
+        "def g : Box I64 := Empty.empty";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "Empty.empty") && not (String.contains out "Empty_Box_empty __Dict_Keyed"))
+}
+
 /// D4: a class-method call at a CONCRETE carrier with a real matching
 /// instance resolves cleanly -- `Speak.say d` (`d : Dog`) dispatches to
 /// the promoted `Speak_Dog_say`, proving `resolve_class_method`'s new
@@ -8165,7 +8200,7 @@ def test_elaborate_list_literal_class_call_argument_resolves : IO Bool := do {
         "instance FromListLiteral List { def cons (a : A) (l : List A) : List A := List.cons a l\n def empty : List A := List.empty }\n" ++
         "class Ser S { def ser (v : S) : J }\n" ++
         "instance Ser I64 { def ser (b : I64) : J := J.num 1 }\n" ++
-        "instance [Ser A] Ser (List A) { def ser (xs : List A) : J := J.num 2 }\n" ++
+        "instance [Ser A] Ser (List A) { def ser (xs : List A) : J := match xs { List.empty => J.num 2, List.cons h _ => Ser.ser h } }\n" ++
         "def direct : J := Ser.ser [1, 2, 3]\n" ++
         "def bound : J := let xs := [1] in Ser.ser xs\n";
     let out <- elaborate_synthetic_source src;
@@ -8202,7 +8237,7 @@ def test_elaborate_map_class_calls_resolve : IO Bool := do {
         "instance BOrd I64 { def lt (a b : I64) : Bl := Bl.tt }\n" ++
         "type BT K V { bt_empty, bt_node (key : K) (val : V) (l : BT K V) }\n" ++
         "class Map (M : (K : Type) -> (V : Type) -> Type := BT) { def insert (key : K) (val : V) (m : M K V) : M K V\n def lookup (key : K) (m : M K V) : Opt V }\n" ++
-        "instance [BOrd K] Map BT { def insert (key : K) (val : V) (m : BT K V) : BT K V := BT.bt_node key val m\n def lookup (key : K) (m : BT K V) : Opt V := Opt.no_opt }\n" ++
+        "instance [BOrd K] Map BT { def insert (key : K) (val : V) (m : BT K V) : BT K V := match BOrd.lt key key { Bl.tt => BT.bt_node key val m, Bl.ff => m }\n def lookup (key : K) (m : BT K V) : Opt V := match BOrd.lt key key { Bl.tt => Opt.no_opt, Bl.ff => Opt.no_opt } }\n" ++
         "def ins (k : I64) (v : I64) (acc : BT I64 I64) : BT I64 I64 := Map.insert k v acc\n" ++
         "def look (k : I64) (acc : BT I64 I64) : Opt I64 := Map.lookup k acc\n" ++
         "def ins2 (p : Pr I64 I64) (acc : BT I64 I64) : BT I64 I64 := match p { Pr.mk_pr k v => Map.insert k v acc }\n";

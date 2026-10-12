@@ -21,7 +21,7 @@ use lang::scope {
   class_default_carrier, class_name_eq,
   class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
   method_carrier_hint, method_sig_carrier,
-  dict_hint_marker_terms, dict_hint_name, dict_param_name,
+  dict_hint_marker_terms, dict_hint_name, dict_param_name, emitted_dict_constraints,
   find_constructor_in_inductive, find_matching_instance,
   flatten_call_spine, inductive_has_constructor, instance_module_prefix,
   instance_wildcard_names, list_append, mangle_instance_dict_name,
@@ -663,7 +663,7 @@ def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifi
         Option.some ins =>
             let bindings : List (Pair Identifier Term) :=
                 carrier_bindings (instance_wildcard_names ins) ins.args carrier in
-            resolve_class_method_d4 ins.name ins.cls method_name ins.constraints ins.args carrier bindings expected_type scope locals,
+            resolve_class_method_d4 ins.name ins.cls method_name (emitted_dict_constraints (scope_data_classes (scope_globals scope)) ins method_name) ins.args carrier bindings expected_type scope locals,
     }
 
 /// The carrier a call INSIDE a dictionary-carrying scope must be resolved
@@ -3865,13 +3865,47 @@ def is_scope_type_name (vid : Identifier) (scope : Scope) : Bool :=
 /// target shape is exactly how a signature's implicit type parameter
 /// appears in its parameter and return types (see `SigInfo`'s doc
 /// comment above).
+///
+/// SIMULTANEOUS: a replacement is never rescanned by a later entry. With one
+/// entry after another, `B := A` (the caller's own rigid `A`) followed by
+/// `A := Unit` (the callee's `A`) rewrote the caller's `A` as well, and
+/// `Monad.bind (ca rest) (fn _ => await_fiber f) : IO A` came back `IO Unit`.
 #[partial]
 def subst_typevars_term (t : Term) (subst : List (Pair Identifier Term)) : Term :=
     match subst {
         List.empty => t,
         List.cons entry rest =>
+            match rest {
+                List.empty =>
+                    match entry {
+                        Pair.pair vid replacement => name_subst_term vid replacement t,
+                    },
+                _ => release_typevars (stash_typevars t subst 0) subst 0,
+            },
+    }
+
+def typevar_stash_ref (n : I64) : Term :=
+    Term.var sentinel (DebugName.named (Identifier.id (String.concat "subst_tv_" (I64.to_string n))))
+
+/// Phase 1 of `subst_typevars_term`: each solved variable becomes its own placeholder.
+#[partial]
+def stash_typevars (t : Term) (subst : List (Pair Identifier Term)) (n : I64) : Term :=
+    match subst {
+        List.empty => t,
+        List.cons entry rest =>
             match entry {
-                Pair.pair vid replacement => subst_typevars_term (name_subst_term vid replacement t) rest,
+                Pair.pair vid _ => stash_typevars (name_subst_term vid (typevar_stash_ref n) t) rest (n + 1),
+            },
+    }
+
+/// Phase 2: each placeholder becomes its replacement, which no later step rescans.
+#[partial]
+def release_typevars (t : Term) (subst : List (Pair Identifier Term)) (n : I64) : Term :=
+    match subst {
+        List.empty => t,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair _ replacement => release_typevars (name_subst_term (Identifier.id (String.concat "subst_tv_" (I64.to_string n))) replacement t) rest (n + 1),
             },
     }
 
@@ -4070,7 +4104,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                 Option.none => err (TypeError.custom (String.concat "no instance named '" (String.concat hint "'"))),
                                 Option.some ins =>
                                     match ins {
-                                        Instance.mk insname ins_cls ins_constraints ins_args _ _ _ =>
+                                        Instance.mk insname ins_cls _ ins_args _ _ _ =>
                                             if not (class_name_eq ins_cls owner_cls)
                                             then err (TypeError.custom (String.concat "instance '" (String.concat hint (String.concat "' is not an instance of the class owning '" (String.concat (show_identifier id) "'")))))
                                             else
@@ -4091,7 +4125,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                                     } in
                                                 let bindings : List (Pair Identifier Term) :=
                                                     carrier_bindings (instance_wildcard_names ins) ins_args hint_carrier in
-                                                resolve_class_method_d4 insname ins_cls method_name ins_constraints ins_args hint_carrier bindings expected_type scope locals,
+                                                resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_classes (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
                                     },
                             },
                             },
