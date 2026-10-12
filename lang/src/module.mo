@@ -69,7 +69,7 @@ use lib::typecheck::affine {check_def}
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
 use std::log {module_line, timing_line}
-use std::list {List.any, List.contains_by, List.intercalate, List.length, Show}
+use std::list {List.any, List.contains_by, List.filter, List.intercalate, List.length, Show}
 use std::show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
 // `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
