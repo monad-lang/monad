@@ -6966,6 +6966,37 @@ def method_carrier_hint (cls : Class) (method_name : Identifier) (hint : Option 
             },
     }
 
+/// `method_carrier_hint`'s sibling for a method whose RESULT does not mention the
+/// carrier (`Map.lookup : K -> M K V -> Option V`): the class's first parameter bound
+/// against the whole signature, domain by domain, with `expected` walked as the same
+/// Pi chain. A hole in `expected` binds nothing.
+#[partial]
+def method_sig_carrier (cls : Class) (method_name : Identifier) (expected : Term) : Option Term :=
+    match class_method_declared_type cls method_name {
+        Option.none => Option.none,
+        Option.some sig =>
+            match class_first_param_name cls {
+                Option.none => Option.none,
+                Option.some carrier_name =>
+                    match lookup_binding (bind_sig_vars (class_method_var_names cls sig) sig expected List.empty) carrier_name {
+                        Option.none => Option.none,
+                        Option.some found => match found { Term.hole => Option.none, _ => Option.some found },
+                    },
+            },
+    }
+
+#[partial]
+def bind_sig_vars (wildcards : List Identifier) (shape : Term) (actual : Term) (bindings : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match term_peel shape {
+        Term.pi _ s_arg s_ret =>
+            match term_peel actual {
+                Term.pi _ a_arg a_ret =>
+                    bind_sig_vars wildcards s_ret a_ret (bind_term_vars wildcards s_arg a_arg bindings),
+                _ => bindings,
+            },
+        _ => bindings,
+    }
+
 /// The candidates `method_carrier_hint` contributes for one call: the
 /// projection of `hint`, and (when they differ) of the enclosing def's
 /// own declared return type. Both are `Option Term`s already, so this is

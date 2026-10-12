@@ -8071,3 +8071,22 @@ def test_elaborate_cross_class_instance_constraint_resolves : IO Bool := do {
     let out <- elaborate_synthetic_source src;
     return (not (String.contains out "HAdd.add") && String.contains out "__Dict_Add_N")
 }
+
+/// `Map`'s carrier `M` stands in the `m : M K V` argument, not in the first
+/// argument (`K`) or the result (`Option V`), and `[BOrd K]` on `Map BT` binds `K`
+/// from the call's own signature -- including through a match arm whose binders are untyped.
+#[test]
+def test_elaborate_map_class_calls_resolve : IO Bool := do {
+    let src : String :=
+        "class BOrd K { def lt : K -> K -> Bool }\n" ++
+        "instance BOrd I64 { def lt (a b : I64) : Bool := true }\n" ++
+        "type BT K V { bt_empty, bt_node (key : K) (val : V) (l : BT K V) }\n" ++
+        "class Map (M : (K : Type) -> (V : Type) -> Type := BT) { def insert (key : K) (val : V) (m : M K V) : M K V\n def lookup (key : K) (m : M K V) : Option V }\n" ++
+        "instance [BOrd K] Map BT { def insert (key : K) (val : V) (m : BT K V) : BT K V := BT.bt_node key val m\n def lookup (key : K) (m : BT K V) : Option V := Option.none }\n" ++
+        "def ins (k : I64) (v : I64) (acc : BT I64 I64) : BT I64 I64 := Map.insert k v acc\n" ++
+        "def look (k : I64) (acc : BT I64 I64) : Option I64 := Map.lookup k acc\n" ++
+        "def ins2 (p : Pair I64 I64) (acc : BT I64 I64) : BT I64 I64 := match p { Pair.pair k v => Map.insert k v acc }\n";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "Map.insert") && not (String.contains out "Map.lookup") &&
+        String.contains out "Map_BT_insert __Dict_BOrd_I64" && String.contains out "Map_BT_lookup __Dict_BOrd_I64")
+}

@@ -20,7 +20,7 @@ use lang::scope {
   build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
   class_name_eq,
   class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
-  method_carrier_hint,
+  method_carrier_hint, method_sig_carrier,
   dict_hint_marker_terms, dict_hint_name, dict_param_name,
   find_constructor_in_inductive, find_matching_instance,
   flatten_call_spine, inductive_has_constructor, instance_module_prefix,
@@ -500,7 +500,12 @@ def resolve_class_method_d4
                     // its side. The bindings themselves are computed at
                     // the CALL SITE (`resolve_class_method`), which is
                     // where the matched `Instance` is in hand.
-                    match resolve_dict_args classes instances dict_env List.empty bindings carrier List.empty ins_constraints {
+                    // A constraint on a variable the instance head does not bind
+                    // (`[BOrd K]` on `Map BTreeMap`) is read off the call's own
+                    // signature: `K` is whatever the expected type puts there.
+                    let call_bindings : List (Pair Identifier Term) :=
+                        List.append bindings (solve_typevars scope real_sig expected_type List.empty) in
+                    match resolve_dict_args classes instances dict_env List.empty call_bindings carrier List.empty ins_constraints {
                         Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
                         Option.some dict_args =>
                             // Refuse the self-match -- see
@@ -569,16 +574,23 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                             match class_has_single_param cls {
                                 false => direct,
                                 true =>
-                                    match method_carrier_hint cls method_name (Option.some (final_result_type expected_type)) {
-                                        Option.none => direct,
-                                        Option.some carrier =>
-                                            match resolve_class_method_carrier class_name method_name carrier expected_type scope locals {
-                                                ok tt => ok (open_method_vars cls method_name tt),
-                                                err _ => direct,
-                                            },
-                                    },
+                                    resolve_with_carrier_hint class_name cls method_name expected_type scope locals
+                                        (method_carrier_hint cls method_name (Option.some (final_result_type expected_type)))
+                                        (resolve_with_carrier_hint class_name cls method_name expected_type scope locals
+                                            (method_sig_carrier cls method_name expected_type) direct),
                             },
                     },
+            },
+    }
+
+/// `hint` as the carrier when it resolves, `otherwise` when it is absent or does not.
+def resolve_with_carrier_hint (class_name : NamePath) (cls : Class) (method_name : Identifier) (expected_type : Term) (scope : Scope) (locals : LocalScope) (hint : Option Term) (otherwise : Result TypeError TypedTerm) : Result TypeError TypedTerm :=
+    match hint {
+        Option.none => otherwise,
+        Option.some carrier =>
+            match resolve_class_method_carrier class_name method_name carrier expected_type scope locals {
+                ok tt => ok (open_method_vars cls method_name tt),
+                err _ => otherwise,
             },
     }
 
