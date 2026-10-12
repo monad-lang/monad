@@ -7115,6 +7115,21 @@ def test_elaborate_return_only_carrier_resolves : IO Bool := do {
     return (not (String.contains out "Pure.pure_ 3"))
 }
 
+/// A partial expectation (`IO _`) handed to a do-bind's first operand fixes the
+/// carrier but not the method's own variables; a `match` operand's arms must still
+/// agree, so the inner bind's result variable may not stay a rigid `B`.
+#[test]
+def test_elaborate_partial_expectation_opens_method_vars : IO Bool := do {
+    let src : String :=
+        "type Box (A : Type) { box (a : A) }\n" ++
+        "type Two { left, right }\n" ++
+        "class Monad (M : Type -> Type) { def bind (ma : M A) (f : A -> M B) : M B\n def pure (a : A) : M A }\n" ++
+        "instance Monad Box { def bind (ma : Box A) (f : A -> Box B) : Box B := match ma { Box.box a => f a }\n def pure (a : A) : Box A := Box.box a }\n" ++
+        "def g (t : Two) (n : I64) : Box I64 := Monad.bind (match t { Two.left => Monad.pure 1, Two.right => Monad.bind (Monad.pure n) (fn x => Monad.pure 2) }) (fn y => Monad.pure y)";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "Monad.bind") && not (String.contains out "Monad.pure"))
+}
+
 /// `Monad.bind`/`Monad.pure` name their class: `IndexedMonad` declares the same
 /// method names later, and a bare-name scan used to pick it, leaving every
 /// do-block bind unresolved for `resolve_class_calls_decls`.

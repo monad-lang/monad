@@ -585,7 +585,7 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                                 resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
                         } in
                     match direct {
-                        ok _ => direct,
+                        ok tt => if mentions_hole expected_type then ok (open_method_vars cls method_name tt) else direct,
                         err _ =>
                             match class_has_single_param cls {
                                 false => direct,
@@ -620,6 +620,22 @@ def open_method_vars (cls : Class) (method_name : Identifier) (tt : TypedTerm) :
         Option.none => tt,
         Option.some sig =>
             TypedTerm.mk tt.term (fill_unsolved_vars (class_method_var_names cls sig) tt.typ),
+    }
+
+/// Whether `t` still has a hole: a partial expectation (`IO _`) fixes the
+/// carrier but not the method's own variables.
+#[partial]
+def mentions_hole (t : Term) : Bool :=
+    match t {
+        Term.hole => true,
+        _ => any_mentions_hole (term_children t),
+    }
+
+#[partial]
+def any_mentions_hole (ts : List Term) : Bool :=
+    match ts {
+        List.empty => false,
+        List.cons x rest => if mentions_hole x then true else any_mentions_hole rest,
     }
 
 /// A heterogeneous class (`HAdd A B C`) has no single carrier to read off a
