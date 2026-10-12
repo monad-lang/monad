@@ -348,6 +348,20 @@ def strip_n_pis (typ : Term) (n : I64) : Term :=
             _ => typ,
         }
 
+/// Drop the `n` leading hole-typed dictionary Pis of a promoted method's signature.
+#[partial]
+def strip_dict_pis (typ : Term) (n : I64) : Term :=
+    if I64.lt n 1 then typ
+    else
+        match typ {
+            Term.pi _b dom ret =>
+                match dom {
+                    Term.hole => strip_dict_pis ret (n - 1),
+                    _ => typ,
+                },
+            _ => typ,
+        }
+
 /// Does this call's own nested constraint dictionary reference the
 /// ENCLOSING instance's own dictionary -- `BEq (Option A)`'s element
 /// constraint resolving back to `__Dict_BEq_Option_A`?
@@ -451,8 +465,11 @@ def resolve_class_method_d4
             // `term_matches_carrier` (`lang/scope.mo`) that P6 owns.
             // Verified together: P5 + that match closes
             // `std/src/sha256.mo` at both check and runner level.
-            let inst_sig : Term :=
-                subst_typevars_term real_sig (solve_typevars scope real_sig expected_type List.empty) in
+            // The leading dictionary parameters (hole-typed) are not arguments of the
+            // call being solved, and would shift every later domain by one.
+            let solved : List (Pair Identifier Term) :=
+                solve_typevars scope (strip_dict_pis real_sig (List.length ins_constraints)) expected_type List.empty in
+            let inst_sig : Term := subst_typevars_term real_sig solved in
             let mangled_ref : Term := Term.var sentinel (DebugName.named mangled_id) in
             match ins_constraints {
                 List.empty => ok (mk_typed mangled_ref inst_sig),
@@ -503,8 +520,7 @@ def resolve_class_method_d4
                     // A constraint on a variable the instance head does not bind
                     // (`[BOrd K]` on `Map BTreeMap`) is read off the call's own
                     // signature: `K` is whatever the expected type puts there.
-                    let call_bindings : List (Pair Identifier Term) :=
-                        List.append bindings (solve_typevars scope real_sig expected_type List.empty) in
+                    let call_bindings : List (Pair Identifier Term) := List.append bindings solved in
                     match resolve_dict_args classes instances dict_env List.empty call_bindings carrier List.empty ins_constraints {
                         Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
                         Option.some dict_args =>

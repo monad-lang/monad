@@ -7079,6 +7079,28 @@ def elaborate_synthetic_source (src : String) : IO String := do {
     }
 }
 
+/// What `check_module_with_scope` says about the decls `elaborate_synthetic_source`
+/// produces -- the build's re-check of the checker's own output.
+#[partial]
+def recheck_elaborated_source (src : String) : IO (List String) := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let sd : ScopeData := build_scope_from_decls path dict_paramed;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let report : BestEffortElab := elaborate_module_decls_reporting scope dict_paramed locals;
+            check_module_with_scope scope (best_effort_decls report) locals Option.none false
+        },
+        ParseResult.fail _ => do { return ["parse failed"] },
+    }
+}
+
 /// Return-only carrier: `Pure.pure_ 3` has no argument mentioning `M`, so the
 /// carrier must come from the expected result type through the method's own
 /// signature. The checker used to leave this call for `resolve_class_calls_decls`.
@@ -8078,15 +8100,19 @@ def test_elaborate_cross_class_instance_constraint_resolves : IO Bool := do {
 #[test]
 def test_elaborate_map_class_calls_resolve : IO Bool := do {
     let src : String :=
-        "class BOrd K { def lt : K -> K -> Bool }\n" ++
-        "instance BOrd I64 { def lt (a b : I64) : Bool := true }\n" ++
+        "type Opt V { no_opt, some_opt (v : V) }\n" ++
+        "type Pr A B { mk_pr (a : A) (b : B) }\n" ++
+        "type Bl { tt, ff }\n" ++
+        "class BOrd K { def lt : K -> K -> Bl }\n" ++
+        "instance BOrd I64 { def lt (a b : I64) : Bl := Bl.tt }\n" ++
         "type BT K V { bt_empty, bt_node (key : K) (val : V) (l : BT K V) }\n" ++
-        "class Map (M : (K : Type) -> (V : Type) -> Type := BT) { def insert (key : K) (val : V) (m : M K V) : M K V\n def lookup (key : K) (m : M K V) : Option V }\n" ++
-        "instance [BOrd K] Map BT { def insert (key : K) (val : V) (m : BT K V) : BT K V := BT.bt_node key val m\n def lookup (key : K) (m : BT K V) : Option V := Option.none }\n" ++
+        "class Map (M : (K : Type) -> (V : Type) -> Type := BT) { def insert (key : K) (val : V) (m : M K V) : M K V\n def lookup (key : K) (m : M K V) : Opt V }\n" ++
+        "instance [BOrd K] Map BT { def insert (key : K) (val : V) (m : BT K V) : BT K V := BT.bt_node key val m\n def lookup (key : K) (m : BT K V) : Opt V := Opt.no_opt }\n" ++
         "def ins (k : I64) (v : I64) (acc : BT I64 I64) : BT I64 I64 := Map.insert k v acc\n" ++
-        "def look (k : I64) (acc : BT I64 I64) : Option I64 := Map.lookup k acc\n" ++
-        "def ins2 (p : Pair I64 I64) (acc : BT I64 I64) : BT I64 I64 := match p { Pair.pair k v => Map.insert k v acc }\n";
+        "def look (k : I64) (acc : BT I64 I64) : Opt I64 := Map.lookup k acc\n" ++
+        "def ins2 (p : Pr I64 I64) (acc : BT I64 I64) : BT I64 I64 := match p { Pr.mk_pr k v => Map.insert k v acc }\n";
     let out <- elaborate_synthetic_source src;
-    return (not (String.contains out "Map.insert") && not (String.contains out "Map.lookup") &&
+    let diags <- recheck_elaborated_source src;
+    return (List.is_empty diags && not (String.contains out "Map.insert") && not (String.contains out "Map.lookup") &&
         String.contains out "Map_BT_insert __Dict_BOrd_I64" && String.contains out "Map_BT_lookup __Dict_BOrd_I64")
 }
