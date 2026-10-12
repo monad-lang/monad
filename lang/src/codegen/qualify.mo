@@ -17,7 +17,7 @@ use std::bench {Bench.now}
 use lang::types {
   Attribute, Decl, Def, Identifier, ModulePath, NamePath, StructField,
   TypeConstraint, hole, many, named, package_private, sentinel,
-  show_identifier, show_module_path, show_name_path, use_items, use_name, var,
+  module_path_to_string_colon, show_identifier, show_module_path, show_name_path, use_items, use_name, var,
 }
 use lib::module {ModuleInfo, bench_step}
 use lib::scope {
@@ -221,9 +221,9 @@ def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports :
         match explicit {
             List.empty => Result.ok mpath,
             List.cons e _ =>
-                Result.err (String.concat "module " (String.concat (show_module_path mpath)
+                Result.err (String.concat "module " (String.concat (module_path_to_string_colon mpath)
                     (String.concat " both declares `" (String.concat name
-                    (String.concat "` and imports it from " (String.concat (show_module_path e)
+                    (String.concat "` and imports it from " (String.concat (module_path_to_string_colon e)
                     " -- drop one, they are not interchangeable")))))),
         }
     else match explicit {
@@ -259,7 +259,7 @@ def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports :
 #[partial]
 def ambiguous_owner_msg (mpath : ModulePath) (name : String) (candidates : List ModulePath) : String :=
     String.concat "`" (String.concat name
-        (String.concat "` is referenced from " (String.concat (show_module_path mpath)
+        (String.concat "` is referenced from " (String.concat (module_path_to_string_colon mpath)
         (String.concat " but declared in " (String.concat (join_modpaths candidates)
         " -- add an explicit `use <module> {"
         )))))
@@ -267,7 +267,7 @@ def ambiguous_owner_msg (mpath : ModulePath) (name : String) (candidates : List 
 
 #[partial]
 def join_modpaths (ps : List ModulePath) : String :=
-    List.intercalate ", " (List.map show_module_path ps)
+    List.intercalate ", " (List.map module_path_to_string_colon ps)
 
 /// Every declared def name across the whole program, deduplicated.
 #[partial]
@@ -931,3 +931,12 @@ def test_unqualify_recovers_the_source_name : Bool :=
         then String.beq (unqualify_def_name "cli.main::main") "main"
         else false
     else false
+
+/// Diagnostics spell module paths the way source does (`a::b`), not with
+/// the internal dot-joined key spelling.
+#[test]
+def test_ambiguous_owner_msg_spells_module_paths_with_colons : Bool :=
+    let a : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "io"] in
+    let b : ModulePath := ModulePath.mk [Identifier.id "std", Identifier.id "fs"] in
+    String.beq (ambiguous_owner_msg a "read" [b])
+        "`read` is referenced from std::io but declared in std::fs -- add an explicit `use <module> {read}` to say which"

@@ -12,7 +12,7 @@ use std::concurrent::fiber {Fiber, await_fiber, forkIO}
 use parsec::number {parse_i64}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {
-  Decl, LocalScope, ModulePath, NamePath, id, show_identifier, show_module_path,
+  Decl, LocalScope, ModulePath, NamePath, id, module_path_to_string_colon, show_identifier, show_module_path,
 }
 use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir}
@@ -789,7 +789,7 @@ def eval_file_lowered (ir : CoreIr) (globals : GlobalTable) : IO I64 {
 def show_lower_error (e : LowerError) : String :=
     match e {
         LowerError.le_unresolved_name name => String.concat "unresolved name " (show_identifier name),
-        LowerError.le_unresolved_module_path path => String.concat "unresolved module path " (show_module_path path),
+        LowerError.le_unresolved_module_path path => String.concat "unresolved module path " (module_path_to_string_colon path),
         LowerError.le_unknown_inductive path => String.concat "unknown inductive " (show_module_path path),
         LowerError.le_unknown_constructor path => String.concat "unknown constructor " (show_module_path path),
         LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
