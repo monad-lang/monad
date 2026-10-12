@@ -43,7 +43,7 @@
 /// `std/src/concurrent/combine_test.mo`; they stay deferred until a
 /// self-hosted async runtime exists.
 use lang::codegen::decls {filter_reachable_decls}
-use lang::codegen::qualify {qualified_def_name_str, qualify_modules}
+use lang::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang::types {
   Attribute, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
   show_identifier, use_bare,
@@ -56,7 +56,10 @@ use lang::codegen::symbols {
   bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
 use parsec::number {parse_i64}
-use lib::codegen::validate {report_elab_stats, strict_elab_enabled, validate_no_unwired_natives}
+use lib::codegen::validate {
+  report_elab_stats, strict_elab_enabled, validate_no_colliding_def_symbols,
+  validate_no_undesugared_struct_lits, validate_no_unwired_natives
+}
 use llvm::ir {LLVMModule}
 use lang::module {
   BestEffortElab, LoadedModules, ModuleInfo, best_effort_errors, get_loaded_all,
@@ -680,7 +683,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     // same file from running).
                     let strict_elab : Bool <- strict_elab_enabled;
                     let dispatched_classes := collect_classes dispatched_decls;
-                    match gate_then (validate_reachable_elaborated strict_elab elab_report reachable) (validate_no_unresolved_class_calls dispatched_classes reachable) {
+                    match test_driver_gates (validate_reachable_elaborated strict_elab elab_report reachable) dispatched_classes reachable {
                         Result.err e => return (Result.err e),
                         Result.ok _ =>
                             // The same fail-fast gate the real compile
@@ -701,6 +704,16 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                             },
                     }
 }
+
+/// The checker-handoff gates the test driver runs over its reachable decls,
+/// in `compile_loaded_modules_to_ir`'s order; the first failure wins.
+#[partial]
+def test_driver_gates (elab_gate : Result String (List Decl)) (classes : List Class) (reachable : List Decl) : Result String (List Decl) :=
+    gate_then
+        (gate_then
+            (gate_then elab_gate (validate_no_unresolved_class_calls classes reachable))
+            (validate_no_undesugared_struct_lits reachable))
+        (validate_no_colliding_def_symbols reachable)
 
 /// Apply `rename_user_main` to the module whose path is `target_mp`,
 /// leaving every other loaded module untouched.
@@ -1161,3 +1174,32 @@ def test_driver_source_io_result_test_binds_then_matches : Bool :=
 def test_driver_source_bool_test_has_no_match : Bool :=
     let src : String := synthesize_test_driver_source (List.cons (bool_spec "t") List.empty) "m.mo" test_result_path in
     Bool.not (String.contains src "match __q0")
+
+#[test]
+def test_driver_gates_reject_an_undesugared_struct_literal : Bool :=
+    let lit_def := Decl.def_d (Def.mk (dummy_npath "f") Term.hole (Term.lit (Literal.struct_lit List.empty Option.none)) List.empty no_attrs Visibility.package_private List.empty) in
+    match test_driver_gates (Result.ok List.empty) List.empty (List.cons lit_def List.empty) {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_driver_gates_reject_two_defs_on_one_symbol : Bool :=
+    match test_driver_gates (Result.ok List.empty) List.empty (List.cons (qtest_def "dup" "x") (List.cons (qtest_def "dup" "y") List.empty)) {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_driver_gates_accept_a_clean_program : Bool :=
+    match test_driver_gates (Result.ok List.empty) List.empty (List.cons (qtest_def "a::f" "x") (List.cons (qtest_def "b::f" "y") List.empty)) {
+        Result.err _ => false,
+        Result.ok _ => true,
+    }
+
+#[test]
+def test_driver_gates_report_the_elaboration_failure_first : Bool :=
+    match test_driver_gates (Result.err "elab") List.empty (List.cons (qtest_def "dup" "x") (List.cons (qtest_def "dup" "y") List.empty)) {
+        Result.err e => e == "elab",
+        Result.ok _ => false,
+    }
