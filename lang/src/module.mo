@@ -5078,30 +5078,45 @@ def gate_mote_targets (r : Result String LoadedModules) : IO (Result String Load
 /// manifest the same way Cargo keeps `-l` flags out of `extern "C"`.
 #[partial]
 pub def collect_link_libs (infos : List ModuleInfo) : IO (List String) := do {
-    let all : List String <- link_libs_of_modules infos;
+    let all : List String <- link_field_of_modules manifest_link_libs infos;
     return (dedup_link_libs all List.empty)
 }
 
+/// The pkg-config packages a whole program's link resolves its library
+/// search paths from: the union of every loaded module's mote's
+/// `[link] pkg-config`, over the same closure and with the same dedup as
+/// `collect_link_libs` -- a program depending on `motes/tls` needs
+/// openssl's `-L` for the same reason it needs its `-lssl`.
 #[partial]
-def link_libs_of_modules (infos : List ModuleInfo) : IO (List String) :=
+pub def collect_link_pkgs (infos : List ModuleInfo) : IO (List String) := do {
+    let all : List String <- link_field_of_modules manifest_link_pkgs infos;
+    return (dedup_link_libs all List.empty)
+}
+
+def manifest_link_libs (m : MoteManifest) : List String := m.link_libs
+
+def manifest_link_pkgs (m : MoteManifest) : List String := m.link_pkgs
+
+#[partial]
+def link_field_of_modules (field : MoteManifest -> List String) (infos : List ModuleInfo) : IO (List String) :=
     match infos {
         List.empty => do { return List.empty },
         List.cons info rest => do {
-            let here : List String <- link_libs_of_module info;
-            let later : List String <- link_libs_of_modules rest;
+            let here : List String <- link_field_of_module field info;
+            let later : List String <- link_field_of_modules field rest;
             return (List.append here later)
         }
     }
 
 #[partial]
-def link_libs_of_module (info : ModuleInfo) : IO (List String) := do {
+def link_field_of_module (field : MoteManifest -> List String) (info : ModuleInfo) : IO (List String) := do {
     // `mote_of_module`, not `Mote.discover`: an inline `#![mote { libs :=
-    // [...] }]` declares the same `[link] libs` a manifest does, so a file
+    // [...] }]` declares the same `[link]` keys a manifest does, so a file
     // with no `mote.toml` must still reach the linker's flags through it.
     let mote <- mote_of_module info;
     match mote {
         Option.none => return List.empty,
-        Option.some m => return m.link_libs
+        Option.some m => return (field m)
     }
 }
 

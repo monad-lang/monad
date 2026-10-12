@@ -9,9 +9,15 @@ edition = "2026"
 # PACKAGE (`ffi_example`'s `[link] libs = ["m"]` convention). `collect_link_libs`
 # unions these into every program that declares a dependency on this mote,
 # and nothing else: a program that does not depend on `motes/tls` links no
-# `-lssl`. devenv.nix's `openssl` puts the include/lib paths on clang's
-# search path, so no store paths appear here.
+# `-lssl`.
+#
+# `pkg-config` names where those libraries live: the link asks
+# `pkg-config --libs-only-L openssl` and passes the `-L` itself, so no store
+# path appears here and the link does not depend on the caller's
+# environment carrying openssl's search path (the store-built compiler's
+# wrapper overwrites `NIX_LDFLAGS`, which is how CI lost `-lssl`).
 #
 # No `[dependencies]` entry: `prelude`/`init`/`std` are ambient.
 [link]
 libs = ["ssl", "crypto"]
+pkg-config = ["openssl"]

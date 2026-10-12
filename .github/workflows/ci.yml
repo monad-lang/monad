@@ -371,28 +371,25 @@ jobs:
       # devenv-tasks captures a task's stdout and shows it only on failure, and
       # here the output IS the diagnostic -- the compile's --verbose per-module
       # stage trace and the sweep's per-file verdicts.
-      # `--profile` exists for ONE failure, and it is not cosmetic. `nix
-      # develop` realizes the devshell but registers NO gc root, so every path
-      # the env only references -- `NIX_LDFLAGS`' `-L.../openssl-3.6.3/lib`
-      # among them -- stays deletable by a garbage collection that fires while
-      # the job runs. The public runner hit exactly that, three runs in a row
-      # (from 38045526832 on): mid-sweep its driver links started failing with
-      # `ld.bfd: cannot find -lssl` for motes/tls and motes/moose -- the only
-      # corpus files whose `[link] libs` reach past `-lgc` -- while every other
-      # driver beside them linked `-lgc` fine, on a runner whose own ladder
-      # log showed the openssl `-L` present in the env the whole time. What
-      # divided them was reachability: boehm-gc is in the store-cached rung-1's
-      # closure (a binary that RUNS all sweep long) and nothing rooted
-      # openssl, so the GC took one and left the other. The same commit's sweep
-      # passed on the private fleet, and the same machine had passed these
-      # files twelve hours earlier, so the code was never the variable.
-      # `--profile` installs the devshell into a profile, which nix registers
-      # under /nix/var/nix/gcroots/auto -- a root the GC respects for the
-      # profile's lifetime, pinning clang, llc, boehm-gc AND openssl for the
-      # whole job. The profile lives outside the checkout so generations
-      # accumulate as profile generations (self-pruning) rather than as
-      # checkout residue; the store stays warm between jobs for free. Both
-      # compiled steps below share it for the same reason.
+      # `--profile` pins the devshell for the job: `nix develop` realizes it
+      # but registers NO gc root, so every path the env only references could
+      # in principle be collected mid-job. `--profile` installs it into a
+      # profile under /nix/var/nix/gcroots/auto, rooting clang, llc, boehm-gc
+      # and openssl for the whole job. The profile lives outside the checkout
+      # so generations accumulate as profile generations (self-pruning)
+      # rather than as checkout residue. Both compiled steps below share it.
+      #
+      # It was added for the public runner's `ld.bfd: cannot find -lssl`
+      # (motes/tls and motes/moose, from 38045526832 on) and did NOT fix it
+      # (38172396496 failed the same way with it in place): no collection ran
+      # and openssl was in the store throughout. The cause was the store-built
+      # rung-1 that scripts/bootstrap-compile.sh reuses when it is valid --
+      # its wrapper SET `NIX_LDFLAGS` to libgc's directory alone, erasing the
+      # devshell's openssl `-L` for every link the sweep did, which is also
+      # why it came and went with whether that rung-1 was in the store. The
+      # wrapper now `--prefix`es (nix/monad.nix), and a mote's libraries reach
+      # the link through `[link] pkg-config` (llvm/src/link.mo's
+      # `pkg_config_link_flags`) rather than through the environment at all.
       - name: Bootstrap ladder and self-hosted sweep
         run: |
           nix develop --no-pure-eval --accept-flake-config \

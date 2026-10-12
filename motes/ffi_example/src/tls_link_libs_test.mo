@@ -22,7 +22,7 @@
 /// modules (they pass under the Rust host too).
 
 use std::process {process_id}
-use lang::module {collect_link_libs, get_loaded_all, load_file_modules}
+use lang::module {collect_link_libs, collect_link_pkgs, get_loaded_all, load_file_modules}
 
 /// The fixture: a module with no externs, in a mote whose manifest
 /// declares no libraries — the shape of every program that does not use
@@ -77,6 +77,23 @@ def test_link_libs_tls_manifest_yields_ssl_and_crypto : IO Bool := do {
     Result.ok l => do {
       let libs <- collect_link_libs (get_loaded_all l);
       return (Bool.and (lib_listed "ssl" libs) (lib_listed "crypto" libs))
+    }
+  }
+}
+
+/// The tls mote names WHERE its libraries live as well as which: its
+/// `[link] pkg-config = ["openssl"]` is what `link_ir` turns into
+/// openssl's `-L`, so `-lssl` resolves whatever the caller's environment
+/// carries. Without it the link fell back to `NIX_LDFLAGS`, which the
+/// store-built compiler's wrapper overwrites -- CI's `cannot find -lssl`.
+#[test]
+def test_link_pkgs_tls_manifest_yields_openssl : IO Bool := do {
+  let loaded <- load_file_modules "motes/tls/src/ffi.mo" false;
+  match loaded {
+    Result.err _ => return false,
+    Result.ok l => do {
+      let pkgs <- collect_link_pkgs (get_loaded_all l);
+      return (lib_listed "openssl" pkgs)
     }
   }
 }

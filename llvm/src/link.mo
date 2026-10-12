@@ -129,6 +129,78 @@ pub def map_dash_l (libs : List String) : List String := match libs {
     List.cons hd tl => List.cons (String.concat "-l" hd) (map_dash_l tl),
 }
 
+/// The `-L` flags for a program's `[link] pkg-config` packages (the
+/// closure's union, `lang.module`'s `collect_link_pkgs`), as
+/// `pkg-config --libs-only-L` reports them.
+///
+/// This is what makes WHERE a mote's libs live the compiler's business
+/// rather than the environment's. Leaving it to the nix cc-wrapper's
+/// `NIX_LDFLAGS` broke `-lssl` in CI: the store-built rung-1's wrapper
+/// SETS `NIX_LDFLAGS` to libgc's directory alone, so the devshell's
+/// openssl `-L` never reached the linker, while every other link (only
+/// `-lgc`) went through fine.
+///
+/// No packages, no fork, and the argv stays exactly what it was. A failed
+/// query (pkg-config missing, or a package it does not know) warns with
+/// the names and links on with no extra flags: the toolchain's own search
+/// path may still find the libs, and when it does not, ld's
+/// `cannot find -l...` follows a line saying why.
+#[partial]
+pub def pkg_config_link_flags (pkgs : List String) : IO (List String) := match pkgs {
+    List.empty => do { return List.empty },
+    List.cons _ _ => do {
+        let r <- Proc.capture "pkg-config" (List.cons "--libs-only-L" pkgs);
+        match r {
+            Pair.pair code out =>
+                if code == 0
+                then return (split_ws_bytes (String.to_list out) List.empty)
+                else do {
+                    fail_line ("pkg-config could not resolve [link] pkg-config = " ++ ws_join pkgs ++ "; linking with the toolchain's default search path");
+                    return List.empty
+                }
+        }
+    }
+}
+
+/// Whitespace-separated words, empty ones dropped. `cur` is the word
+/// being read, reversed.
+#[partial]
+def split_ws_bytes (bytes : List U8) (cur : List U8) : List String := match bytes {
+    List.empty => ws_word cur,
+    List.cons b rest =>
+        if U8.beq b 32u8 || U8.beq b 9u8 || U8.beq b 10u8 || U8.beq b 13u8
+        then List.append (ws_word cur) (split_ws_bytes rest List.empty)
+        else split_ws_bytes rest (List.cons b cur),
+}
+
+#[partial]
+def ws_join (xs : List String) : String := match xs {
+    List.empty => "",
+    List.cons hd tl => match tl {
+        List.empty => hd,
+        List.cons _ _ => hd ++ " " ++ ws_join tl,
+    },
+}
+
+def ws_word (rev : List U8) : List String := match rev {
+    List.empty => List.empty,
+    List.cons _ _ => [String.from_list (List.reverse rev)],
+}
+
+#[test]
+def test_split_ws_bytes_reads_pkg_config_output : Bool :=
+    match split_ws_bytes (String.to_list "-L/a/lib  -L/b/lib \n") List.empty {
+        List.cons a rest => match rest {
+            List.cons b tail => String.beq a "-L/a/lib" && String.beq b "-L/b/lib" && List.is_empty tail,
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
+#[test]
+def test_split_ws_bytes_of_blank_output_is_empty : Bool :=
+    List.is_empty (split_ws_bytes (String.to_list " \n") List.empty)
+
 /// `-v`, or NOTHING AT ALL. An empty STRING in argv is a FILENAME, not an
 /// absent flag -- the wrapped native clang tolerates `clang -c "" x.c`, which
 /// is why this went unnoticed, while a cross gcc refuses the whole command
@@ -202,6 +274,10 @@ pub def build_commit_define (from_env : Option String) (compiler_commit : String
 /// declaring `libs = ["m"]` actually link libm. Empty preserves the original
 /// no-extra-flags behaviour.
 ///
+/// `link_pkgs` is the same union over `[link] pkg-config`: where those
+/// libs live, resolved to `-L` flags by `pkg_config_link_flags` rather
+/// than left to the environment.
+///
 /// `compiler_commit` is the revision of the COMPILER doing the linking
 /// (`cli/src/main.mo`'s `build_commit` native, the same string `monad
 /// version` prints), which is what gets stamped into the linked program
@@ -216,7 +292,7 @@ pub def build_commit_define (from_env : Option String) (compiler_commit : String
 /// where the "compile_file total minus compile_loaded_modules_to_ir total"
 /// remainder actually goes, before guessing at a fix.
 #[partial]
-pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 {
+pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 {
     // `Path.join` here is THE fix for the mangled-double-slash bug this
     // whole `Path` type exists to prevent: if `output_name` is already
     // absolute, it replaces `output_dir` outright instead of naively
@@ -307,7 +383,10 @@ pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output
             // ahead of the verbose flag. An empty `link_libs` leaves the
             // argv exactly as it was.
             let dash_l : List String := map_dash_l link_libs;
-            let link_flags : List String := List.append dash_l (verbose_argv verbose);
+            // `-L` before the `-l`s it serves; `link_objects` puts both
+            // after the objects.
+            let pkg_flags : List String <- pkg_config_link_flags link_pkgs;
+            let link_flags : List String := List.append pkg_flags (List.append dash_l (verbose_argv verbose));
             let result <- link_objects [obj_path_s, runtime_obj_s] output_path_s link_flags;
             if verbose then do {
                 Bench.report_since "link_ir: clang link" t_link;

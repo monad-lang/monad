@@ -65,6 +65,9 @@
         pkgs.clang
         pkgs.bash
         pkgs.coreutils
+        # `llvm/src/link.mo`'s `pkg_config_link_flags`: a mote's
+        # `[link] pkg-config` is resolved to `-L` flags at link time.
+        pkgs.pkg-config
       ];
 
       # The install step both derivations share. `$PWD/monad` is where each
@@ -82,6 +85,13 @@
       # reads neither -- nixpkgs' wrapper overwrites `LIBRARY_PATH` and drops a
       # hand-set `NIX_LDFLAGS`, measured -- which is why a cross leg's shim
       # carries the same two flags as argv (`crossMonadFor`).
+      #
+      # `--prefix`, never `--set`: the gc paths are ADDED to whatever the
+      # caller's environment carries. `--set` replaced it, so inside a dev
+      # shell the store-built rung-1 erased openssl's `-L` from `NIX_LDFLAGS`
+      # and every `motes/tls` link in CI's sweep died on `cannot find -lssl`.
+      # (A mote's own libs now reach the link through `[link] pkg-config`
+      # regardless; this keeps the wrapper from fighting anything else.)
       #
       # `extraFlag` is spliced in as the LAST continuation of the `makeWrapper`
       # call, and it is either another `makeWrapper` argument or the empty
@@ -110,10 +120,10 @@
         install -Dm755 "$PWD/monad" $out/share/monad/monad
         makeWrapper $out/share/monad/monad $out/bin/monad \
           --prefix PATH : ${extraPath}${runtimePath} \
-          --set NIX_LDFLAGS "-L${lib.getLib gc}/lib" \
-          --set NIX_CFLAGS_COMPILE "-isystem ${lib.getDev gc}/include" \
-          --set LIBRARY_PATH "${lib.getLib gc}/lib" \
-          --set CPATH "${lib.getDev gc}/include" \
+          --prefix NIX_LDFLAGS " " "-L${lib.getLib gc}/lib" \
+          --prefix NIX_CFLAGS_COMPILE " " "-isystem ${lib.getDev gc}/include" \
+          --prefix LIBRARY_PATH : "${lib.getLib gc}/lib" \
+          --prefix CPATH : "${lib.getDev gc}/include" \
           ${extraFlag}
         runHook postInstall
       '';

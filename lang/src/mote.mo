@@ -50,6 +50,13 @@ pub struct MoteManifest {
     /// but what the linker is handed is the mote's, the same way Cargo
     /// keeps `-l` flags out of `extern "C"` blocks.
     link_libs : List String,
+    /// pkg-config packages that say WHERE `link_libs` live, from
+    /// `[link] pkg-config = [...]`. `llvm.link`'s `link_ir` asks
+    /// `pkg-config --libs-only-L` for these and passes the `-L` flags
+    /// itself, so a mote's link does not depend on the caller's
+    /// environment happening to carry the right search path. The names in
+    /// `link_libs` still supply the `-l` flags.
+    link_pkgs : List String,
     /// Where this mote's library root would be: `[lib] path`, else the
     /// conventional `src/lib.mo`. `none` only for an inline mote, which has
     /// no `src/` tree at all.
@@ -519,6 +526,7 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
                 (Mote.table_dep_dirs dir (Toml.table_get "dependencies" root))
                 (Mote.table_dep_dirs dir (Toml.table_get "dev-dependencies" root)) in
             let libs := Mote.table_string_array (Toml.table_get "link" root) "libs" in
+            let pkgs := Mote.table_string_array (Toml.table_get "link" root) "pkg-config" in
             let lib_path := Mote.lib_target_path dir root in
             let bins := Mote.bin_targets dir name root in
             let m : MoteManifest := {
@@ -527,6 +535,7 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
                 deps := deps,
                 dep_dirs := dep_dirs,
                 link_libs := libs,
+                link_pkgs := pkgs,
                 lib_path := lib_path,
                 bins := bins,
             } in
@@ -1103,7 +1112,7 @@ def mote_attr_keys_of (entries : List AttrArg) (acc : List String) : List String
 
 /// The keys the inline annotation understands.
 def mote_attr_known_keys : List String :=
-    List.cons "name" (List.cons "deps" (List.cons "libs" List.empty))
+    List.cons "name" (List.cons "deps" (List.cons "libs" (List.cons "pkg_config" List.empty)))
 
 /// Keys the annotation sets that no reader consumes — one error per key,
 /// each naming the accepted set.
@@ -1156,6 +1165,7 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
                 // ("declared, resolved by convention").
                 dep_dirs := List.empty,
                 link_libs := Mote.mote_attr_list attr "libs",
+                link_pkgs := Mote.mote_attr_list attr "pkg_config",
                 // An inline mote declares no targets: the annotation's own
                 // file IS the binary, and `build` already takes a file.
                 // `none`/empty rather than the conventional defaults, for
@@ -1307,6 +1317,31 @@ def test_manifest_without_link_table_has_no_libs : Bool :=
     match Mote.parse_manifest "lang" mote_manifest_fixture {
         Option.none => false,
         Option.some m => match m.link_libs { List.empty => true, List.cons _ _ => false }
+    }
+
+/// `[link] pkg-config` names where the libs live, beside the `libs` that
+/// name what to link -- the shape `motes/tls` declares.
+def link_pkg_config_manifest_fixture : String :=
+  "[mote]\nname = \"tls\"\nversion = \"0.1.0\"\n\n[link]\nlibs = [\"ssl\", \"crypto\"]\npkg-config = [\"openssl\"]\n"
+
+#[test]
+def test_manifest_reads_link_pkg_config : Bool :=
+    match Mote.parse_manifest "tls" link_pkg_config_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            match m.link_pkgs {
+                List.empty => false,
+                List.cons a rest => String.beq a "openssl" && List.is_empty rest,
+            }
+    }
+
+/// `libs` without `pkg-config` resolves no packages: the link stays on the
+/// toolchain's own search path, exactly as before the key existed.
+#[test]
+def test_manifest_link_libs_alone_has_no_pkg_config : Bool :=
+    match Mote.parse_manifest "ffi" link_manifest_fixture {
+        Option.none => false,
+        Option.some m => match m.link_pkgs { List.empty => true, List.cons _ _ => false }
     }
 
 /// A dev-dependency counts as declared -- this is how `init` stays free of

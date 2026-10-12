@@ -286,9 +286,10 @@ mote it belongs to inline, with a file-level `#![mote { … }]` annotation whose
 #![mote { name := "structs", deps := [init, std] }]
 ```
 
-Three keys are accepted: `name`, `deps` and `libs` (the last mirroring a
-manifest's `[link] libs`). Anything else is an `unknown_mote_key_error` — an
-inline annotation never silently swallows a misspelled key.
+Four keys are accepted: `name`, `deps`, `libs` and `pkg_config` (the last two
+mirroring a manifest's `[link] libs` and `[link] pkg-config`). Anything else is
+an `unknown_mote_key_error` — an inline annotation never silently swallows a
+misspelled key.
 
 There is still no search-path *flag*; that belongs to the
 [bootstrap host](./bootstrap-host.md#packages-motes). Resolution itself does

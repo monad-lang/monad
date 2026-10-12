@@ -29,6 +29,10 @@
     # story as boehmgc: include/lib paths land on clang's search path, so
     # the mote's `[link] libs = ["ssl", "crypto"]` needs no store paths.
     openssl
+    # Resolves a mote's `[link] pkg-config` (tls: `openssl`) to explicit `-L`
+    # flags at link time (`llvm/src/link.mo`'s `pkg_config_link_flags`), so
+    # the link does not hinge on `NIX_LDFLAGS` surviving to the linker.
+    pkg-config
 
     # The docs/ book. `.github/workflows/mdbook.yml` installs its own copy
     # to publish monad-lang.org; this is so a docs change can be previewed
