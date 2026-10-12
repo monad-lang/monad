@@ -45,8 +45,8 @@
 use lang::codegen::decls {filter_reachable_decls}
 use lang::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang::types {
-  Attribute, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
-  show_identifier, use_bare,
+  Attribute, Class, DebugName, Decl, Def, ModulePath, NamePath, Term, has_attr, i64, id, no_attrs, num, package_private,
+  show_identifier, struct_lit, use_bare,
 }
 use lib::codegen::emit {
   CompileInput, compile_db_module_with_debug, compile_input_of_modules, emit_type_head_is_io,
