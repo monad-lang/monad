@@ -8137,6 +8137,28 @@ def test_elaborate_dotted_class_name_resolves : IO Bool := do {
         String.contains out "Json.Serializer_Bl_serialize tt")
 }
 
+/// A list literal handed straight to a class method has no expected type to name its
+/// collection; the class's declared default carrier (`L := List`) is the checker's choice.
+#[test]
+def test_elaborate_list_literal_class_call_argument_resolves : IO Bool := do {
+    let src : String :=
+        "type Bl { tt, ff }\n" ++
+        "open Bl {tt, ff}\n" ++
+        "type J { num (n : I64) }\n" ++
+        "type List (A : Type) { empty, cons (a : A) (List A) }\n" ++
+        "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) (L A) : L A\n def empty : L A }\n" ++
+        "instance FromListLiteral List { def cons (a : A) (l : List A) : List A := List.cons a l\n def empty : List A := List.empty }\n" ++
+        "class Ser S { def ser (v : S) : J }\n" ++
+        "instance Ser I64 { def ser (b : I64) : J := J.num 1 }\n" ++
+        "instance [Ser A] Ser (List A) { def ser (xs : List A) : J := J.num 2 }\n" ++
+        "def direct : J := Ser.ser [1, 2, 3]\n" ++
+        "def bound : J := let xs := [1] in Ser.ser xs\n";
+    let out <- elaborate_synthetic_source src;
+    let diags <- recheck_elaborated_source src;
+    return (List.is_empty diags && not (String.contains out "Ser.ser") && not (String.contains out "FromListLiteral.cons") &&
+        String.contains out "Ser_List_A_ser __Dict_Ser_I64")
+}
+
 /// A constraint of another class than the matched instance's own
 /// (`[Add A] HAdd A A A`) is resolved by the checker, not left to the syntactic pass.
 #[test]

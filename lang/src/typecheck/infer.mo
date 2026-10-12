@@ -18,7 +18,7 @@ use lang::types {
 use lang::scope {
   ClassMethodRef, DictBinding, build_dict_field_projection_checked,
   build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
-  class_name_eq,
+  class_default_carrier, class_name_eq,
   class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
   method_carrier_hint, method_sig_carrier,
   dict_hint_marker_terms, dict_hint_name, dict_param_name,
@@ -593,7 +593,9 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                                     resolve_with_carrier_hint class_name cls method_name expected_type scope locals
                                         (method_carrier_hint cls method_name (Option.some (final_result_type expected_type)))
                                         (resolve_with_carrier_hint class_name cls method_name expected_type scope locals
-                                            (method_sig_carrier cls method_name expected_type) direct),
+                                            (method_sig_carrier cls method_name expected_type)
+                                            (resolve_with_carrier_hint class_name cls method_name expected_type scope locals
+                                                (class_default_carrier cls) direct)),
                             },
                     },
             },

@@ -7577,7 +7577,7 @@ def resolve_class_method_call_d4_default_carrier (classes : List Class) (instanc
 /// (e.g. `L` in `class FromListLiteral (L : Type -> Type := List)`,
 /// `Param.default`). Only ever consulted as the LAST-resort fallback
 /// above.
-def class_default_carrier (cls : Class) : Option Term :=
+pub def class_default_carrier (cls : Class) : Option Term :=
     match cls {
         Class.mk _name params _constraints _methods _vis => first_param_default params,
     }
