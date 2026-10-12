@@ -1400,7 +1400,7 @@ def scope_add_to_instances (insts : List ScopeInstance) (cls_name : NamePath) (i
         List.cons si rest =>
             match si {
                 mk cn ins_list =>
-                    if npath_eq cn cls_name
+                    if class_name_eq cn cls_name
                     then
                         let new_ins_list : List Instance := List.cons ins ins_list in
                         let new_si : ScopeInstance := {
@@ -1603,7 +1603,7 @@ def scope_add_instances_to_group (insts : List ScopeInstance) (cls_name : NamePa
         List.cons existing rest =>
             match existing {
                 mk cn existing_list =>
-                    if npath_eq cn cls_name
+                    if class_name_eq cn cls_name
                     then
                         let merged_list : List Instance := list_append existing_list ins_list in
                         let new_si : ScopeInstance := {
@@ -4044,7 +4044,7 @@ def lookup_dict_binding (dict_env : List DictBinding) (cls_name : NamePath) : Op
         List.cons b rest =>
             match b {
                 DictBinding.mk bcls bid =>
-                    if npath_eq bcls cls_name
+                    if class_name_eq bcls cls_name
                     then Option.some bid
                     else lookup_dict_binding rest cls_name,
             },
@@ -8192,7 +8192,7 @@ def find_instances_by_class (insts : List ScopeInstance) (cls_name : NamePath) :
         List.cons si rest =>
             match si {
                 mk cn ins_list =>
-                    if npath_eq cn cls_name
+                    if class_name_eq cn cls_name
                     then list_append ins_list (find_instances_by_class rest cls_name)
                     else find_instances_by_class rest cls_name
             }

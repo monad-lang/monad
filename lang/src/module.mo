@@ -8120,6 +8120,23 @@ def test_elaborate_constructor_reference_types_resolve_class_calls : IO Bool := 
         String.contains out "Ser_Bl_ser tt" && String.contains out "Map_BT_insert")
 }
 
+/// A dotted class name (`Json.Serializer`) is one class-name segment but a multi-segment
+/// instance head; instance lookup compares them by rendered name, not element-wise.
+#[test]
+def test_elaborate_dotted_class_name_resolves : IO Bool := do {
+    let src : String :=
+        "type Bl { tt, ff }\n" ++
+        "open Bl {tt, ff}\n" ++
+        "type J { num (n : I64) }\n" ++
+        "class Json.Serializer S { def serialize (v : S) : J }\n" ++
+        "instance Json.Serializer Bl { def serialize (b : Bl) : J := J.num 1 }\n" ++
+        "def t : J := Json.Serializer.serialize tt\n";
+    let out <- elaborate_synthetic_source src;
+    let diags <- recheck_elaborated_source src;
+    return (List.is_empty diags && not (String.contains out "Json.Serializer.serialize") &&
+        String.contains out "Json.Serializer_Bl_serialize tt")
+}
+
 /// A constraint of another class than the matched instance's own
 /// (`[Add A] HAdd A A A`) is resolved by the checker, not left to the syntactic pass.
 #[test]
