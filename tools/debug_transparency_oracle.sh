@@ -70,47 +70,6 @@ if [ ! -x "$MONAD_BIN" ]; then
   exit 1
 fi
 
-# Known gaps: these do not compile through the self-hosted pipeline yet.
-# Each is a TODO, not a transparency failure -- the oracle has nothing to
-# compare, because no IR is produced at all. Delete an entry the moment
-# its gap closes. Do NOT add one to quiet a new failure: that is the exact
-# silence this oracle's skip-to-FAIL change removed.
-#
-#   derive    -- `#[derive BEq ...]` does not expand. The ATTRIBUTE itself
-#                parses (lang/parser.mo's own
-#                test_attribute_parser_multi_ident_args covers it) and a
-#                bare `struct` parses; `expand_decls` (lang/module.mo) has
-#                no derive-macro expansion, so parse_all_decls stops at the
-#                attribute. Reproduced identically against a worktree of
-#                `main` -- pre-existing, not a branch regression.
-#   json      -- native `f64_to_string` is not wired into the LLVM backend.
-#   sha256    -- 11 unwired natives: u8_add, u32_{and,add,xor,sub,or,shl,
-#                shr}, u8_to_u32, i64_to_u32, u32_to_u8.
-#   structs   -- named-call param defaults (`def scale {factor : I64 := 2,
-#                ...}`) are unsupported: named_call_check_missing_fields
-#                (lang/typecheck/infer.mo) requires every declared param,
-#                and its own doc comment says no default mechanism exists.
-#   test_mote -- the mote system is Rust-host only (build_default_search_paths,
-#                core/src/lib.rs); the self-hosted loader cannot resolve
-#                `use greet {greet}` against motes/example/mote.toml.
-KNOWN_GAPS="derive json sha256 structs test_mote"
-gap_reason() {
-  case "$1" in
-    derive)    echo "\`#[derive ...]\` does not expand in the self-hosted \`expand_decls\`" ;;
-    json)      echo "native \`f64_to_string\` is not wired into the LLVM backend" ;;
-    sha256)    echo "11 unwired natives (u8_add, u32_{and,add,xor,sub,or,shl,shr}, u8_to_u32, i64_to_u32, u32_to_u8)" ;;
-    structs)   echo "named-call param defaults (\`{factor : I64 := 2}\`) unsupported by the self-hosted typechecker" ;;
-    test_mote) echo "the mote system is Rust-host only; no self-hosted resolution for \`use greet {greet}\`" ;;
-    *)         echo "listed in KNOWN_GAPS" ;;
-  esac
-}
-is_known_gap() {
-  for g in $KNOWN_GAPS; do
-    [ "$1" = "$g" ] && return 0
-  done
-  return 1
-}
-
 # The build store, moved out of the way for the duration.
 #
 # `build` is the only verb left (the `compile` verb this oracle used to
@@ -142,12 +101,9 @@ MONAD_TARGET_DIR="$(mktemp -d "$SP/store.XXXXXX")"
 export MONAD_TARGET_DIR
 
 norm() { awk 'BEGIN{n=0}{l[n++]=$0}END{while(n>0&&l[n-1]=="")n--;for(i=0;i<n;i++)print l[i]}' "$1"; }
-pass=0; fail=0; todo=0
+pass=0; fail=0
 for f in "$@"; do
   b=$(basename "$f" .mo)
-  if is_known_gap "$b"; then
-    echo "TODO  $f ($(gap_reason "$b"))"; todo=$((todo+1)); continue
-  fi
   # `--release`, not a bare build: debug info is ON by default since
   # stage 5, so a bare build is itself a --debug build and comparing
   # it to `--debug` passes vacuously.
@@ -173,8 +129,5 @@ for f in "$@"; do
     echo "FAIL  $f  ($(diff "$SP/o_$b.norm" "$SP/d_$b.norm" | grep -c '^[<>]') differing lines)"; fail=$((fail+1))
   fi
 done
-echo "--- oracle: $pass ok, $fail FAIL, $todo TODO (known gaps)"
-if [ "$todo" -gt 0 ]; then
-  echo "--- TODO: $KNOWN_GAPS -- see KNOWN_GAPS in $0"
-fi
+echo "--- oracle: $pass ok, $fail FAIL"
 [ "$fail" -eq 0 ]
