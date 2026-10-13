@@ -5,37 +5,34 @@
 /// specific API actually sends and expects. `ToolCall.arguments` stays
 /// the raw JSON STRING the wire sends -- decoding it a second time is a
 /// harness-level concern (`motes/shuttle`'s adapter), not this mote's.
+///
+/// `ToolCall`/`ToolDef` and their HAND-WRITTEN codecs live in the
+/// sibling `tool.mo`, not here: the wire nests both under a
+/// `"function"` key (`{"type":"function","function":{...}}`), which
+/// the derive cannot emit or read, and a hand-written def in the SAME
+/// file as a `reflect_type_info!` invocation (every derive below is
+/// one) cannot reference the file's own constructors or use
+/// `{ .. }` struct patterns. See `tool.mo`'s header for the
+/// live-verified reason the nested shape is load-bearing.
 use json::json {Json}
 use json::serde_backend {derive_json_serialize, derive_json_deserialize}
-
-pub struct ToolCall {
-    id : String,
-    name : String,
-    arguments : String,
-}
-
-derive_json_serialize! ToolCall
-derive_json_deserialize! ToolCall
+use openai::tool {ToolCall, ToolDef}
 
 pub struct ChatMessage {
     role : String,
     content : Option String,
-    tool_calls : List ToolCall,
+    /// Defaults to empty on decode: a plain-text assistant turn carries
+    /// NO `tool_calls` key on the wire (a real Ollama body), and the
+    /// derive's absent-key rule is "declared default, else `none` for
+    /// `Option` fields, else a hard decode error" -- this default is
+    /// what keeps the live loop from dying on every non-tool turn.
+    tool_calls : List ToolCall := List.empty,
     tool_call_id : Option String,
     name : Option String,
 }
 
 derive_json_serialize! ChatMessage
 derive_json_deserialize! ChatMessage
-
-pub struct ToolDef {
-    name : String,
-    description : String,
-    parameters : Json,
-}
-
-derive_json_serialize! ToolDef
-derive_json_deserialize! ToolDef
 
 pub struct ChatRequest {
     model : String,

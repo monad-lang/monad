@@ -2,7 +2,8 @@ use shuttle::wire::openai {OpenAI.encode_request, OpenAI.decode_response}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Turn}
 use shuttle::tool {ToolSpec}
-use openai::types {ChatRequest, ChatMessage, ChatResponse, Choice, ApiUsage, ToolCall}
+use openai::types {ChatRequest, ChatMessage, ChatResponse, Choice, ApiUsage}
+use openai::tool {ToolCall}
 use json::json {Json}
 use std::list {List.length}
 
@@ -75,6 +76,17 @@ def test_decode_response_finish_reason_stop_maps_to_end_turn : Bool :=
             match turn { Turn.mk _ _ stop => match stop { StopReason.end_turn => true, _ => false } },
         Result.err _ => false,
     }
+
+/// A request carrying tools must serialize each tool entry in the
+/// nested `{"type":"function","function":{...}}` shape -- the flat
+/// shape loses the function name on Ollama's OpenAI-compat layer
+/// (live-verified; see `motes/openai/src/types.mo`).
+#[test]
+def test_encode_request_tools_entry_is_nested_function_shape : Bool :=
+    let spec : ToolSpec := { name := "read", description := "read a file", schema := Json.null } in
+    let req := OpenAI.encode_request "qwen" 100 "sys" [spec] [] in
+    let s := Json.to_string (ChatRequest.serialize_json req) in
+    String.contains s "\"type\":\"function\"" && String.contains s "\"name\":\"read\""
 
 #[test]
 def test_construct_and_match_chat_response_directly : Bool :=

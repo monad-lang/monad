@@ -9,7 +9,8 @@
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Usage, Turn}
 use shuttle::tool {ToolSpec}
-use openai::types {ChatMessage, ChatRequest, ChatResponse, Choice, ToolCall, ToolDef}
+use openai::types {ChatMessage, ChatRequest, ChatResponse, Choice}
+use openai::tool {ToolCall, ToolDef}
 use openai::client {ApiUsage.tokens}
 use json::json {Json, Json.ParseError.to_string}
 

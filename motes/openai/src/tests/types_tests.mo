@@ -1,4 +1,5 @@
-use openai::types {ChatMessage, ChatRequest, ChatResponse, Choice, ToolCall, ToolDef, ApiUsage}
+use openai::types {ChatMessage, ChatRequest, ChatResponse, Choice, ApiUsage}
+use openai::tool {ToolCall, ToolDef}
 use json::json {Json}
 
 #[test]
@@ -35,6 +36,26 @@ def test_tool_def_with_json_parameters_roundtrip : Bool :=
         Result.err _ => false,
     }
 
+/// The response direction: a plain-text assistant turn carries NO
+/// `tool_calls` key at all (a real Ollama body) -- the decoder must
+/// default it to empty, not error. This is the exact gap that
+/// short-circuited the first live e2e run.
+#[test]
+def test_chat_message_deserialize_defaults_missing_tool_calls : Bool :=
+    let body := r#"{"role":"assistant","content":"hi"}"# in
+    match Json.parse body {
+        Result.err _ => false,
+        Result.ok j =>
+            match ChatMessage.deserialize_json j {
+                Result.err _ => false,
+                Result.ok m =>
+                    match m {
+                        ChatMessage.mk role content tool_calls tool_call_id name =>
+                            String.beq role "assistant" && List.is_empty tool_calls,
+                    },
+            },
+    }
+
 #[test]
 def test_chat_response_decode : Bool :=
     let body := "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hi\",\"tool_calls\":[],\"tool_call_id\":null,\"name\":null},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}" in
@@ -53,4 +74,34 @@ def test_chat_response_decode : Bool :=
                 Result.err _ => false,
             },
         Result.err _ => false,
+    }
+
+/// The request direction: OpenAI's API wraps every tool definition in
+/// `{"type":"function","function":{...}}` -- the flat shape the derive
+/// emits is one Ollama's OpenAI-compat layer parses with the function
+/// name stripped (verified live: `function.name` came back empty).
+#[test]
+def test_tool_def_serialize_wraps_in_function_shape : Bool :=
+    let td : ToolDef := { name := "read", description := "read a file", parameters := Json.null } in
+    let s := Json.to_string (ToolDef.serialize_json td) in
+    String.contains s "\"type\":\"function\"" && String.contains s "\"function\"" && String.contains s "\"name\":\"read\""
+
+/// The response direction: a real Ollama/OpenAI response nests the
+/// tool call's name and arguments under `function`, and carries
+/// `index`/`type` keys a decoder must skip, not choke on. This body is
+/// a recorded shape from `localhost:11434/v1/chat/completions`.
+#[test]
+def test_tool_call_deserialize_reads_wire_nested_function : Bool :=
+    let body := r#"{"id":"call_1","index":0,"type":"function","function":{"name":"read","arguments":"{\"path\":\"/tmp/x\"}"}}"# in
+    match Json.parse body {
+        Result.err _ => false,
+        Result.ok j =>
+            match ToolCall.deserialize_json j {
+                Result.err _ => false,
+                Result.ok tc =>
+                    match tc {
+                        ToolCall.mk id n args =>
+                            String.beq id "call_1" && String.beq n "read" && String.beq args "{\"path\":\"/tmp/x\"}",
+                    },
+            },
     }
