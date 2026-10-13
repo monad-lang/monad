@@ -93,6 +93,27 @@
       # (A mote's own libs now reach the link through `[link] pkg-config`
       # regardless; this keeps the wrapper from fighting anything else.)
       #
+      # And every `--prefix` value must be ONE word, which is why the include
+      # is `-I<dir>` GLUED and never `-isystem <dir>`. `makeWrapper`'s
+      # `--prefix ENV SEP VAL` splits VAL on the separator and, for EACH word,
+      # removes the first ` SEP <word> SEP ` already in the variable before
+      # prepending -- a `PATH`-style de-dup. `-isystem <dir>` is TWO words, so
+      # it de-dups twice against whatever the caller carries: the `<dir>` word
+      # eats a live ` <dir> ` out of the inherited list (gluing its
+      # neighbours), and the `-isystem` word eats the first ` -isystem `,
+      # orphaning whatever dir it introduced. Inside this repo's own dev shell
+      # the result was a `NIX_CFLAGS_COMPILE` with two BARE include dirs in it
+      # (lld's and gc's own): clang drops those with a warning at `-c`, but at
+      # LINK time it passes them to ld as input files, and ld.bfd's script
+      # lexer cannot read a directory -- `read in flex scanner failed`, every
+      # link dead. That was CI run 38432093049, whose `compiler-checks` job
+      # took its release rung-1 from the store (`rung 1: re-using the store
+      # build`) and so ran the WRAPPED binary inside the dev shell for the
+      # first time; a rung-1 built from source is the raw binary and links
+      # fine, which is why the debug ladder passed in the same run. `-I` glued
+      # is one word, de-dups only against itself, and `clang` reads it
+      # identically.
+      #
       # `extraFlag` is spliced in as the LAST continuation of the `makeWrapper`
       # call, and it is either another `makeWrapper` argument or the empty
       # string: `.#monad` passes `--set MONAD_BUILD_COMMIT <rev>`, and `rung1`
@@ -121,7 +142,7 @@
         makeWrapper $out/share/monad/monad $out/bin/monad \
           --prefix PATH : ${extraPath}${runtimePath} \
           --prefix NIX_LDFLAGS " " "-L${lib.getLib gc}/lib" \
-          --prefix NIX_CFLAGS_COMPILE " " "-isystem ${lib.getDev gc}/include" \
+          --prefix NIX_CFLAGS_COMPILE " " "-I${lib.getDev gc}/include" \
           --prefix LIBRARY_PATH : "${lib.getLib gc}/lib" \
           --prefix CPATH : "${lib.getDev gc}/include" \
           ${extraFlag}
