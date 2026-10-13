@@ -627,9 +627,16 @@ def test_comonad_id_extract : Bool :=
 def test_comonad_id_duplicate_is_the_same_context_twice : Bool :=
     Id.run (Id.run (Comonad.duplicate (Id.id 42))) == 42
 
+// The lambda parameter is annotated -- its carrier is only known from the
+// call's SECOND argument, which the checker has not inferred yet when it
+// checks this one, so an unannotated `a` stays a hole and `+` resolves
+// against the wildcard-headed `instance [Add A] HAdd A A A` bridge, which
+// then calls itself until the driver dies by signal (the same class of bug
+// `app_arg_expected_type_from_callee`'s doc comment records for
+// `Foldable.foldr`).
 #[test]
 def test_comonad_id_extend_maps_over_the_context : Bool :=
-    Id.run (Comonad.extend (fn a => Id.run a + 1) (Id.id 41)) == 42
+    Id.run (Comonad.extend (fn (a : Id I64) => Id.run a + 1) (Id.id 41)) == 42
 
 #[test]
 def test_comonad_pair_extract_is_the_second_component : Bool :=
@@ -643,8 +650,10 @@ def test_comonad_pair_duplicate_carries_the_environment_into_both : Bool :=
         }
     }
 
+// Same reason as `test_comonad_id_extend_maps_over_the_context` above: the
+// lambda parameter needs an explicit annotation.
 #[test]
 def test_comonad_pair_extend_applies_with_the_environment_in_scope : Bool :=
-    match Comonad.extend (fn w => Comonad.extract w + 1) (Pair.pair 10 3) {
+    match Comonad.extend (fn (w : Pair I64 I64) => Comonad.extract w + 1) (Pair.pair 10 3) {
         Pair.pair e b => e == 10 && b == 4
     }
