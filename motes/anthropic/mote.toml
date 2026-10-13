@@ -1,0 +1,23 @@
+# A standalone, typed client for the Anthropic Messages API --
+# faithful to the wire shape (not shuttle's own Message/Turn normal
+# form), mirroring `motes/openai`'s own split: the wire types and
+# codecs live in `src/types.mo`, the HTTP call in `src/client.mo`.
+[mote]
+name = "anthropic"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.json]
+path = "../json"
+
+[dependencies.http]
+path = "../http"
+
+[dependencies.moose]
+path = "../moose"

@@ -26,3 +26,6 @@ path = "../moose"
 
 [dependencies.openai]
 path = "../openai"
+
+[dependencies.anthropic]
+path = "../anthropic"
