@@ -5,12 +5,16 @@
 /// gating pattern. Trivially passes when the env var is unset, so it
 /// never runs in the offline sweep.
 ///
+/// Run it with MONAD_SHUTTLE_OLLAMA_TESTS=1 and a self-hosted/compiled
+/// `monad` binary; the model comes from SHUTTLE_OLLAMA_MODEL (default
+/// qwen2.5-coder) and must be one whose /api/tags entry lists the
+/// `tools` capability (qwen3:latest verified 2026-10-13).
+///
 /// Even gated off, this file does not currently LOWER under the Rust
 /// host: calling `Loop.run` from any file outside `loop.mo` hits the
 /// same `MatchTraversalMismatch` documented in that module's own
-/// header, with no mitigation found. Verifying this file at all
-/// -- gate on or off -- needs the self-hosted/compiled toolchain,
-/// not `monad check`/`monad test` on this host.
+/// header, with no mitigation found -- a Rust-host lowering gap only;
+/// the loop is verified live under the self-hosted toolchain.
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content}
 use shuttle::message {Message}

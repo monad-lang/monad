@@ -6,20 +6,23 @@
 /// `ResultT` throughout -- real do-notation, not the continuation-chain
 /// style `motes/moose/src/client.mo` uses by hand.
 ///
-/// KNOWN GAP: `dispatch_all`/`Loop.run` `monad check` clean (0 errors),
-/// but calling `dispatch_all` from ANY file outside this one -- even
-/// the trivial empty-list base case, with no tool actually dispatched
-/// -- fails at LOWERING with `MatchTraversalMismatch { expected: [Monad],
-/// found: [mk] }`, the same class of checker/lowering desync documented
-/// for `StateT.bind` (`init/src/transformers_tests.mo`) and probed for
-/// `ResultT`/`OptionT` (`plans/implementations/agent-skills.md`). Unlike
-/// those, no split-`def`/rename mitigation found here closed it -- it
+/// KNOWN GAP (Rust host only): `dispatch_all`/`Loop.run` `monad check`
+/// clean (0 errors), but calling `dispatch_all` from any file outside
+/// this one -- even the trivial empty-list base case, with no tool
+/// actually dispatched -- fails at LOWERING on the RUST host with
+/// `MatchTraversalMismatch { expected: [Monad], found: [mk] }`, the
+/// same class of checker/lowering desync documented for `StateT.bind`
+/// (`init/src/transformers_tests.mo`) and probed for `ResultT`/
+/// `OptionT` (`plans/implementations/agent-skills.md`). Unlike those,
+/// no split-`def`/rename mitigation found here closed it -- it
 /// reproduces even with the dispatch target empty and every struct
-/// literal bound through an annotated `let` first. Live verification of
-/// this loop is deferred to the compiled Ollama e2e test
-/// (`tests/ollama_e2e_tests.mo`), which may not hit the same Rust-host
-/// lowering path. `monad check motes/shuttle` passing is NOT, by this
-/// module's own header rule, proof that `Loop.run` executes correctly.
+/// literal bound through an annotated `let` first.
+/// VERIFIED LIVE under the SELF-HOSTED compiled backend (2026-10-13,
+/// `tests/ollama_e2e_tests.mo` with `MONAD_SHUTTLE_OLLAMA_TESTS=1`
+/// against a real local Ollama, rung-1 `monad` binary): tool_use ->
+/// `run_tool` read -> tool_result -> final answer containing the
+/// fixture sentinel, 4 turns. The loop itself is correct; only the
+/// Rust host's `lower_core_ir` path cannot compile a cross-file caller.
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Turn}
