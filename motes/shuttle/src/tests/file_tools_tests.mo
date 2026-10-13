@@ -1,4 +1,6 @@
 use shuttle::tools::file {read_run, write_run, edit_run}
+use shuttle::tools::file_tools {ReadTool.spec, WriteTool.spec, EditTool.spec}
+use shuttle::tool {ToolSpec}
 use shuttle::tools::file_args {ReadArgs, WriteArgs, EditArgs}
 use shuttle::message_types {Content}
 use json::json {Json}
@@ -89,3 +91,20 @@ def test_edit_succeeds_with_fresh_read : IO Bool := do {
         },
     }
 }
+
+/// A tool whose implementation requires an argument must DECLARE that
+/// argument in its schema: with `schema := Json.null` the model has no
+/// contract to follow and guesses the argument key (live-verified
+/// against Ollama: `file_path` instead of `path`, with the function
+/// name stripped into the bargain).
+#[test]
+def test_tool_specs_declare_parameter_schemas : Bool :=
+    let read_spec : ToolSpec := ReadTool.spec in
+    let write_spec : ToolSpec := WriteTool.spec in
+    let edit_spec : ToolSpec := EditTool.spec in
+    let read_s := Json.to_string read_spec.schema in
+    let write_s := Json.to_string write_spec.schema in
+    let edit_s := Json.to_string edit_spec.schema in
+    String.contains read_s "\"path\"" &&
+    String.contains write_s "\"content\"" &&
+    String.contains edit_s "\"expected_content\""

@@ -39,8 +39,13 @@ def write_fixture : IO Unit := do {
 
 def e2e_registry : ToolRegistry := ToolRegistry.register ReadTool.impl ToolRegistry.empty
 
-def e2e_config : ProviderConfig :=
-    { base_url := "http://localhost:11434", model := "qwen2.5-coder", api_key_env := "SHUTTLE_UNUSED_API_KEY", max_tokens := 512, wire := Wire.openai }
+/// The model is parameterized via `SHUTTLE_OLLAMA_MODEL` so a machine
+/// with a different local pull can run the e2e without a multi-GB
+/// blind pull; the default keeps the model this test was written
+/// against. Tool calling needs a model whose /api/tags entry lists
+/// the `tools` capability.
+def e2e_config (model : String) : ProviderConfig :=
+    { base_url := "http://localhost:11434", model := model, api_key_env := "SHUTTLE_UNUSED_API_KEY", max_tokens := 512, wire := Wire.openai }
 
 def e2e_task_message : Message :=
     { role := Role.user, content := [Content.text (String.concat "Use the read tool to read " fixture_path)] }
@@ -60,7 +65,12 @@ def content_mentions_sentinel (c : Content) : Bool :=
 
 def run_e2e : IO Bool := do {
     write_fixture;
-    let r <- ResultT.run (Loop.run e2e_config e2e_registry "You are a helpful coding assistant with a read tool." [e2e_task_message] 6);
+    let model_opt <- IO.get_env "SHUTTLE_OLLAMA_MODEL";
+    let model := match model_opt {
+        Option.some m => m,
+        Option.none => "qwen2.5-coder",
+    };
+    let r <- ResultT.run (Loop.run (e2e_config model) e2e_registry "You are a helpful coding assistant with a read tool." [e2e_task_message] 6);
     return (match r {
         Result.ok history => history_mentions_sentinel history,
         Result.err _ => false,
