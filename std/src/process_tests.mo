@@ -250,3 +250,26 @@ def test_spawn_of_a_missing_command_is_an_error : IO Bool := do {
         }
     }
 }
+
+/// A line is BOUNDED: 2 MB with no newline at all must be `Result.err`
+/// (the read failing at the bound), not a 2 MB "line" -- a peer that
+/// withholds its newline is a flood, and the flood must fail, not
+/// grow. Both backends carry the same number, and this is the pin that
+/// keeps them agreeing.
+#[test]
+def test_spawn_read_line_is_bounded : IO Bool := do {
+    let r <- Proc.spawn "sh" ["-c", "head -c 2000000 /dev/zero | tr '\\0' 'a'"];
+    match r {
+        Result.err _ => return false,
+        Result.ok c => do {
+            let l <- Proc.read_line c;
+            // The child exits on its own once the pipe closes; the
+            // verdict is the read's, so `wait` is cleanup either way.
+            let _code <- Proc.wait c;
+            return (match l {
+                Result.err _ => true,
+                Result.ok _ => false,
+            })
+        }
+    }
+}

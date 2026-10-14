@@ -82,6 +82,10 @@ priv def proc_write (c : Child) (s : String) : RawIO (Result String U64)
 /// Payload's `Option.none` is end of stream; a final line truncated by
 /// EOF is DISCARDED rather than half-delivered, because a JSON-RPC
 /// frame without its newline is a truncated message, not a message.
+/// A line is BOUNDED: content beyond 1048576 bytes (one mebibyte) is
+/// `Result.err` -- a peer that withholds its newline must fail the
+/// read rather than grow it without limit. Both backends carry the
+/// same number; the caller should treat the peer as broken.
 #[native "proc_read"]
 priv def proc_read (c : Child) (stream : I64) : RawIO (Result String (Option String))
 
@@ -113,7 +117,8 @@ pub def Proc.write (c : Child) (s : String) : IO (Result String U64) :=
 /// "line" per concern). `Option.none` is end of stream; a final line
 /// truncated by EOF is DISCARDED rather than half-delivered, because
 /// a JSON-RPC frame without its newline is a truncated message, not a
-/// message.
+/// message. A line whose content exceeds one mebibyte is `Result.err`
+/// (see `proc_read`'s own contract for the bound).
 pub def Proc.read_line (c : Child) : IO (Result String (Option String)) :=
     IO.mk (proc_read c Proc.stdout_flag)
 

@@ -1934,17 +1934,56 @@ fn proc_write(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
 /// DISCARDED: JSON-RPC-over-stdio frames are newline-terminated by
 /// specification, so those bytes are a truncated message, not a
 /// message -- surfacing them as one would fabricate a frame the peer
-/// never finished writing. `BufRead::read_line` only returns without a
-/// newline at EOF, so the `ends_with` check IS the EOF-mid-message
-/// test, and both backends agree on the answer.
+/// never finished writing. Both backends agree on the answer.
+///
+/// A line is BOUNDED (`PROC_MAX_LINE`): a peer that withholds its
+/// newline would otherwise grow the buffer without limit, and one
+/// caller of `Proc.read_line` is the shell tool, whose peer is an
+/// arbitrary command, not a trusted protocol server. The bound is
+/// checked against the line's CONTENT (the newline does not count), a
+/// line of more than a mebibyte errors, and the check runs on each
+/// chunk BEFORE it is accumulated -- so a flood fails the read at the
+/// bound, it does not grow to the bound first. `runtime.c`'s
+/// `proc_read_line_off` carries the same number and the same message.
+const PROC_MAX_LINE: usize = 1024 * 1024;
+
 fn proc_line<R: std::io::BufRead>(r: &mut R) -> std::io::Result<Option<String>> {
-  let mut s = String::new();
-  let n = r.read_line(&mut s)?;
-  if n == 0 || !s.ends_with('\n') {
-    return Ok(None);
+  let mut buf: Vec<u8> = Vec::new();
+  // `fill_buf`/`consume` rather than `read_line`: `read_line` reads
+  // the WHOLE line before any caller-side check could fire, which is
+  // exactly the unbounded read the bound exists to stop.
+  loop {
+    let available = r.fill_buf()?;
+    if available.is_empty() {
+      // EOF: `buf` may hold a partial line, which is discarded per the
+      // contract above.
+      return Ok(None);
+    }
+    match available.iter().position(|&b| b == b'\n') {
+      Some(i) => {
+        buf.extend_from_slice(&available[..=i]);
+        r.consume(i + 1);
+        break;
+      }
+      None => {
+        if buf.len() + available.len() > PROC_MAX_LINE {
+          return Err(std::io::Error::other("line longer than 1048576 bytes"));
+        }
+        buf.extend_from_slice(available);
+        let n = available.len();
+        r.consume(n);
+      }
+    }
   }
-  s.pop();
-  Ok(Some(s))
+  if buf.len() - 1 > PROC_MAX_LINE {
+    return Err(std::io::Error::other("line longer than 1048576 bytes"));
+  }
+  buf.pop(); // the '\n'
+  match String::from_utf8(buf) {
+    Ok(s) => Ok(Some(s)),
+    // The message `BufRead::read_line` itself used for the same case.
+    Err(_) => Err(std::io::Error::other("stream did not contain valid UTF-8")),
+  }
 }
 
 /// `Proc.read_line`/`Proc.read_stderr_line : Child -> IO (Result String
@@ -1976,7 +2015,15 @@ fn proc_read_stream<T: std::io::Read>(
     None => Err(std::io::Error::other("stream already closed")),
     Some(reader) => proc_line(reader),
   };
-  if r.is_ok() && taken.is_some() {
+  // Put the reader back whether the read succeeded OR failed. The
+  // lock must not be held across the blocking read (the registry's own
+  // comment), but a FAILED read is not a dead stream: the underlying
+  // fd is unchanged and a later read can still make progress, so
+  // dropping the reader on one error would close the stream for good.
+  // (When the slot itself is gone -- a concurrent `proc_wait` took the
+  // child -- the put-back finds no home, and `taken` dropping closes
+  // the fd, which is what `wait` wants anyway.)
+  if taken.is_some() {
     let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
     if let Some(pc) = reg.get_mut(slot - 1).and_then(|o| o.as_mut()) {
       put(pc, taken);

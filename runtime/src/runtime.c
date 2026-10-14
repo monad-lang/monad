@@ -1782,7 +1782,15 @@ void* monad_proc_write(int64_t handle, char* s) {
  * per-slot buffer state and a growth path -- and protocol lines are
  * small (this is the same call the lsp server's own reader makes, see
  * that file's header). `Option.some` is tag 4 arity 1, `Option.none`
- * tag 3 arity 0, the fixed prelude tags `monad_get_env` already uses. */
+ * tag 3 arity 0, the fixed prelude tags `monad_get_env` already uses.
+ *
+ * A line is BOUNDED (PROC_MAX_LINE below): without a bound the growth
+ * loop doubles forever, and one caller is the shell tool, whose peer
+ * is an arbitrary command, not a trusted protocol server -- a
+ * newline-free flood must fail the read, not grow it. An over-long
+ * line is `Result.err`, in both backends, with the same message. */
+#define PROC_MAX_LINE (1024 * 1024)
+
 static void* proc_read_line_off(int fd, const char* who) {
     size_t cap = 256, len = 0;
     char* buf = (char*)malloc(cap);
@@ -1808,6 +1816,10 @@ static void* proc_read_line_off(int fd, const char* who) {
             Constructor* some = (Constructor*)alloc_constructor(4, 1);
             if (some) some->fields[0] = copy;
             return tcp_ok(some);
+        }
+        if (len >= PROC_MAX_LINE) {
+            free(buf);
+            return tcp_err_pair(who, "line longer than 1048576 bytes", 0);
         }
         if (len + 2 > cap) {
             cap *= 2;
