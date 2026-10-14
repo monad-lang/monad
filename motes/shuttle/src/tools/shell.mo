@@ -24,9 +24,29 @@
 /// BLOCKS on an empty pipe, and nothing in the current native set can
 /// interrupt it. A command that runs forever WITHOUT printing (e.g.
 /// `sleep infinity`) hangs the tool until the process that hosts it goes
-/// away. The line-count cap bounds only the OUTPUT, not the runtime. A
+/// away. The caps below bound only the OUTPUT, not the runtime. A
 /// timeout needs a pollable read or a timer signal, both new natives --
 /// deliberately out of scope for Phase 4.
+///
+/// `Proc.kill` SIGKILLs `sh` itself, not its descendants (there is no
+/// process group): a grandchild that keeps running without touching the
+/// pipe survives the "command killed" marker, orphaned. Reaping the
+/// whole tree needs session handling in `proc_spawn` -- the same
+/// follow-up native work as the timeout.
+///
+/// The caps are TWO, because output floods two ways: a LINE cap (200)
+/// and a BYTE cap (64 KiB) on the accumulated output. The line cap
+/// alone is bypassed by output with newlines missing or sparse -- and
+/// a line that never ends is bounded at the NATIVE layer
+/// (`Proc.read_line`'s one-mebibyte contract), whose failure lands in
+/// this tool's read-error exit. Together: many short lines stop at
+/// 200, few long lines stop at 64 KiB, one unending line stops at the
+/// native bound.
+///
+/// A final line WITHOUT a trailing newline is discarded by the native
+/// contract (`Proc.read_line`'s own doc), so `printf abc` reports
+/// EMPTY output with `is_error := false` and the child's real exit
+/// status -- half a line is a truncated message, not a message.
 ///
 /// Every stage below is its own top-level def with at most one monadic
 /// bind: a `let x <- ...` inside a do-block in a match arm is a shape the
@@ -47,9 +67,17 @@ def tool_ok (id : String) (msg : String) : Content := Content.tool_result id msg
 /// prompt), not to serve the model, so the model does not get a vote.
 def shell_max_lines : I64 := 200
 
+/// The output cap, in BYTES, on the accumulated result -- the line cap's
+/// partner against output whose newlines are sparse or absent (see the
+/// module doc for how the two caps and the native bound compose).
+def shell_max_bytes : I64 := 65536
+
 /// The truncation marker's tail, named so the test can assert on the same
 /// spelling without re-deriving the whole message.
 def shell_truncated_marker : String := "[output truncated after "
+
+/// The byte cap's marker, same naming reason.
+def shell_byte_truncated_marker : String := "[output truncated at "
 
 pub def shell_run (id : String) (j : Json) : ResultT String IO Content :=
     match ShellArgs.deserialize_json j {
@@ -82,13 +110,23 @@ def shell_spawn (id : String) (command : String) : IO Content := do {
 def shell_read (id : String) (c : Child) (count : I64) (acc : String) : IO Content := do {
     let ln <- Proc.read_line c;
     match ln {
-        Result.err e => return (tool_err id ("shell: read failed: " ++ e)),
+        Result.err e => shell_read_err id c e,
         Result.ok opt => shell_got_line id c count acc opt,
     }
 }
 
-/// EOF ends the loop (wait for the exit status); a line under the cap
-/// accumulates and reads on; a line AT the cap truncates.
+/// The read itself failed (a native error -- e.g. the one-mebibyte line
+/// bound, or a broken pipe): the child is in an unknown state, so kill+reap
+/// it before reporting. This is the one exit that previously leaked the
+/// child alive.
+def shell_read_err (id : String) (c : Child) (e : String) : IO Content := do {
+    let _killed <- Proc.kill c;
+    return (tool_err id ("shell: read failed: " ++ e))
+}
+
+/// EOF ends the loop (wait for the exit status); a line under the line cap
+/// goes through `shell_grow` (which owns the byte cap); a line AT the line
+/// cap truncates.
 #[partial]
 def shell_got_line (id : String) (c : Child) (count : I64) (acc : String) (opt : Option String) : IO Content :=
     match opt {
@@ -96,8 +134,18 @@ def shell_got_line (id : String) (c : Child) (count : I64) (acc : String) (opt :
         Option.some s =>
             if Bool.not (I64.lt count shell_max_lines)
             then shell_truncate id c acc
-            else shell_read id c (count + 1) (acc ++ s ++ "\n"),
+            else shell_grow id c count acc s,
     }
+
+/// Accumulate one more line and check the BYTE cap before reading on. The
+/// check runs on the accumulated string, so a 500-byte-per-line command
+/// still trips at 64 KiB even though it never reaches the line cap.
+#[partial]
+def shell_grow (id : String) (c : Child) (count : I64) (acc : String) (s : String) : IO Content :=
+    let grown := acc ++ s ++ "\n" in
+    if Bool.not (I64.lt (String.length grown) shell_max_bytes)
+    then shell_truncate_bytes id c grown
+    else shell_read id c (count + 1) grown
 
 /// Clean end of stream: the child exited on its own, so `is_error` is
 /// exactly its exit status.
@@ -114,4 +162,13 @@ def shell_eof (id : String) (c : Child) (acc : String) : IO Content := do {
 def shell_truncate (id : String) (c : Child) (acc : String) : IO Content := do {
     let _killed <- Proc.kill c;
     return (tool_err id (acc ++ shell_truncated_marker ++ I64.to_string shell_max_lines ++ " lines; command killed]\n"))
+}
+
+/// The byte cap fired: same teardown and rationale as `shell_truncate` --
+/// kill, reap, error -- but the marker names the byte budget. `acc` already
+/// includes the line that crossed it (the caller checks the grown string),
+/// so the reported output is the whole budget's worth.
+def shell_truncate_bytes (id : String) (c : Child) (acc : String) : IO Content := do {
+    let _killed <- Proc.kill c;
+    return (tool_err id (acc ++ shell_byte_truncated_marker ++ I64.to_string shell_max_bytes ++ " bytes; command killed]\n"))
 }

@@ -68,3 +68,28 @@ def test_shell_infinite_output_is_truncated_and_killed : IO Bool := do {
         Result.err _ => false,
     })
 }
+
+/// A flood with NO newlines cannot trip the line cap: the native
+/// one-mebibyte line bound stops it instead, and that read error is the
+/// exit that must kill the child (the regression: the read-error arm used
+/// to return the error without reaping, leaking a live `sh`).
+#[test]
+def test_shell_newline_free_flood_fails_read_and_kills : IO Bool := do {
+    let r <- shell_command_result "yes | head -c 3000000 | tr -d '\\n'; sleep 30";
+    return (match r {
+        Result.ok c => content_check c true "shell: read failed",
+        Result.err _ => false,
+    })
+}
+
+/// The byte cap: 351-byte lines cross the 65536-byte budget at line ~187,
+/// well under the 200-line cap, so the BYTE marker is the one that fires
+/// -- the test pins that the two caps are independently reachable.
+#[test]
+def test_shell_byte_budget_truncates_before_line_cap : IO Bool := do {
+    let r <- shell_command_result "yes \"$(head -c 350 /dev/zero | tr '\\0' 'a')\"";
+    return (match r {
+        Result.ok c => content_check c true "[output truncated at ",
+        Result.err _ => false,
+    })
+}
