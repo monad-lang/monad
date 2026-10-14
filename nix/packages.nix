@@ -63,5 +63,12 @@
     # The push side of the binary cache (scripts/push-to-cache.sh): the
     # self-hosted runner host has no cachix of its own.
     cachix
+    # The docs-check host's installer (scripts/monadup, run from ci.yml's
+    # pre-commit-checks): it downloads a nightly with `curl` and reads the
+    # release JSON with `jq` (its python3 fallback is no more present on the
+    # runner than jq is). The runner service's own PATH carries bash, git,
+    # tar and coreutils only, so both have to come from here.
+    curl
+    jq
   ];
 }

@@ -157,6 +157,29 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # docs-check, one of the hooks the step below runs, type-checks the
+      # book's ```monad blocks with the host scripts/check-docs.sh defaults to:
+      # the bare name `monad`, i.e. the monadup-managed self-hosted nightly --
+      # not anything this pipeline builds (the flake host is `monad-rs`, and
+      # nothing here compiles a self-hosted binary ahead of the hooks). No
+      # runner has a nightly: the runner service's HOME is under /run, empty
+      # from boot, so without this step the hook exits 1 on check-docs's "no
+      # 'monad' binary on PATH" (run 38599479483, the first whose tree carried
+      # the monad default). `scripts/monadup` is in the checkout and needs
+      # only curl/jq/tar beyond coreutils -- curl and jq from the dev shell
+      # (nix/packages.nix), because the runner host's PATH has neither -- and
+      # `default` installs the latest nightly and sets it active,
+      # idempotently on a runner that is warm since its last boot.
+      #
+      # GITHUB_PATH, not GITHUB_ENV: the hook resolves `monad` through PATH
+      # inside `nix develop -c devenv tasks run ...`, and the dev shell
+      # inherits the step's environment, so the directory has to be ON the
+      # path rather than exported as a variable.
+      - name: Install the monad nightly (docs-check host)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c scripts/monadup default
+          echo "$HOME/.monad/bin" >> "$GITHUB_PATH"
+
       # The one step that stays a devenv task rather than calling a script
       # directly: `devenv:git-hooks:run` is `prek run -a` against
       # .pre-commit-config.yaml, which is gitignored and generated at run time
