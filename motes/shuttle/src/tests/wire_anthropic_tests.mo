@@ -204,3 +204,42 @@ def test_encode_assistant_tool_use_history : Bool :=
                 List.empty => false,
             },
     }
+
+/// An API-authored thinking block carries a `signature` that must ride
+/// the whole loop -- response body to normal form to the NEXT request
+/// body -- because the API rejects replayed thinking without it. The
+/// full path is the claim: decode to `Content.thinking`, re-encode, and
+/// the wire still spells the signature.
+#[test]
+def test_thinking_signature_round_trips_the_adapter : Bool :=
+    let body := r#"{"content":[{"type":"thinking","thinking":"reasoning here","signature":"sig_abc"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"# in
+    match Json.parse body {
+        Result.err _ => false,
+        Result.ok j =>
+            match MessagesResponse.deserialize_json j {
+                Result.err _ => false,
+                Result.ok resp =>
+                    match Anthropic.decode_response resp {
+                        Result.err _ => false,
+                        Result.ok turn =>
+                            match turn {
+                                Turn.mk message _ _ =>
+                                    match message {
+                                        Message.mk _ content =>
+                                            match content {
+                                                List.cons c _ =>
+                                                    match c {
+                                                        Content.thinking _ signature =>
+                                                            let asst : Message := { role := Role.assistant, content := [c] } in
+                                                            let req := Anthropic.encode_request "claude-opus-5" 512 "sys" [] [asst] in
+                                                            String.beq signature "sig_abc"
+                                                                && String.contains (Json.to_string (MessagesRequest.serialize_json req)) "\"signature\":\"sig_abc\"",
+                                                        _ => false,
+                                                    },
+                                                List.empty => false,
+                                            },
+                                    },
+                            },
+                    },
+            },
+    }

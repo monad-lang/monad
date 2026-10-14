@@ -30,7 +30,9 @@ use json::json {Json}
 def content_to_block (c : Content) : Block :=
     match c {
         Content.text s => Block.text s false,
-        Content.thinking s => Block.thinking s false,
+        // The signature rides straight through: replaying an API-authored
+        // thinking block without it is a 400 on the next request.
+        Content.thinking s signature => Block.thinking s signature false,
         Content.tool_use id name input => Block.tool_use id name input false,
         // `call_id` is the normal form's name; the wire field is
         // `tool_use_id`. This is the one rename in either direction.
@@ -141,7 +143,7 @@ def stop_reason_of (s : String) : StopReason :=
 def block_to_content (b : Block) : Content :=
     match b {
         Block.text s _ => Content.text s,
-        Block.thinking s _ => Content.thinking s,
+        Block.thinking s signature _ => Content.thinking s signature,
         // `input` is a decoded `Json` object already -- no second
         // parse, unlike the OpenAI wire's string-encoded arguments.
         Block.tool_use id name input _ => Content.tool_use id name input,

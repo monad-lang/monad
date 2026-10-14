@@ -53,7 +53,7 @@ pub type Content {
     text (s : String),
     tool_use (id : String) (name : String) (input : Json),
     tool_result (call_id : String) (output : String) (is_error : Bool),
-    thinking (s : String),
+    thinking (s : String) (signature : String),
 }
 
 def content_field (name : String) (obj : BTreeMap String Json) : Result String Json :=
@@ -82,8 +82,11 @@ pub def Content.serialize_json (c : Content) : Json :=
                 (Map.insert "call_id" (Json.make_str call_id)
                 (Map.insert "output" (Json.make_str output)
                 (Map.insert "is_error" (Json.make_bool is_error) BTreeMap.empty)))),
-        Content.thinking s =>
-            Json.make_object (Map.insert "type" (Json.make_str "thinking") (Map.insert "text" (Json.make_str s) BTreeMap.empty)),
+        Content.thinking s signature =>
+            let base :=
+                Map.insert "type" (Json.make_str "thinking") (Map.insert "text" (Json.make_str s) BTreeMap.empty) in
+            Json.make_object
+                (if String.beq signature "" then base else Map.insert "signature" (Json.make_str signature) base),
     }
 
 def content_tool_use_of (obj : BTreeMap String Json) : Result String Content :=
@@ -118,13 +121,27 @@ def content_tool_result_of (obj : BTreeMap String Json) : Result String Content 
             },
     }
 
+/// A thinking block's `signature` is optional on this wire: `""` is the
+/// harness-authored case (serialize omits the field), and decode reads
+/// absent, null, or wrong-tag as `""` so a session reload never fails on
+/// it. Session files round-trip API-authored signatures through here.
+def content_sig_or_empty (obj : BTreeMap String Json) : String :=
+    match Json.object_get "signature" obj {
+        Option.none => "",
+        Option.some j =>
+            match Json.get_str j {
+                Result.ok s => s,
+                Result.err _ => "",
+            },
+    }
+
 def content_of_tagged_obj (tag : String) (obj : BTreeMap String Json) : Result String Content :=
     if tag == "text" then
         match content_str_field "text" obj { Result.err e => Result.err e, Result.ok s => Result.ok (Content.text s) }
     else if tag == "tool_use" then content_tool_use_of obj
     else if tag == "tool_result" then content_tool_result_of obj
     else if tag == "thinking" then
-        match content_str_field "text" obj { Result.err e => Result.err e, Result.ok s => Result.ok (Content.thinking s) }
+        match content_str_field "text" obj { Result.err e => Result.err e, Result.ok s => Result.ok (Content.thinking s (content_sig_or_empty obj)) }
     else Result.err (String.concat "unknown content type: " tag)
 
 pub def Content.deserialize_json (j : Json) : Result String Content :=

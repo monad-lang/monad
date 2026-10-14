@@ -28,7 +28,10 @@ def tool_spec_to_def (spec : ToolSpec) : ToolDef :=
 def content_text_of (c : Content) : Option String :=
     match c {
         Content.text s => Option.some s,
-        Content.thinking s => Option.some s,
+        // OpenAI's reasoning field carries TEXT only -- there is no
+        // signature to forward, so it is dropped here and re-synthesized
+        // as "" on the way back through the anthropic wire.
+        Content.thinking s _ => Option.some s,
         _ => Option.none,
     }
 

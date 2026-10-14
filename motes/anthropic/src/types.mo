@@ -41,10 +41,14 @@ use std::map {BTreeMap}
 /// expresses a prompt-cache breakpoint as an extra `cache_control`
 /// object ON a block (or a tool), and a wire-faithful type must be
 /// able to represent one anywhere the API allows it, not just where
-/// the harness happens to set one today.
+/// the harness happens to set one today. `thinking` additionally
+/// carries the API's `signature` (the attestation the API attaches to
+/// its own thinking blocks and checks on verbatim replay): a
+/// harness-authored thinking block has none (`""`), serialize omits
+/// the field when empty, and decode reads a missing one leniently.
 pub type Block {
     text (s : String) (cache : Bool),
-    thinking (s : String) (cache : Bool),
+    thinking (s : String) (signature : String) (cache : Bool),
     tool_use (id : String) (name : String) (input : Json) (cache : Bool),
     tool_result (tool_use_id : String) (content : String) (is_error : Bool) (cache : Bool),
 }
@@ -94,6 +98,21 @@ def obj_int_or_zero (name : String) (obj : BTreeMap String Json) : I64 :=
         Option.none => 0,
     }
 
+/// Same absent-means-default convention for strings: `signature` is
+/// present on every API-authored thinking block but on no harness-
+/// authored one (the API only accepts thinking blocks back as verbatim
+/// replay), and `stop_reason` is typed nullable by the API -- so decode
+/// reads absent, null, or wrong-tag as `dflt` rather than failing.
+def obj_str_or_default (name : String) (dflt : String) (obj : BTreeMap String Json) : String :=
+    match Json.object_get name obj {
+        Option.none => dflt,
+        Option.some j =>
+            match Json.get_str j {
+                Result.ok s => s,
+                Result.err _ => dflt,
+            },
+    }
+
 /// `cache_control` is an object, but only one shape exists today
 /// (`{"type":"ephemeral"}`, optionally with a `ttl`); a Bool captures
 /// breakpoint presence without inventing a ttl model nothing sets.
@@ -140,11 +159,15 @@ pub def Block.serialize_json (b : Block) : Json :=
                 (Map.insert "type" (Json.make_str "text")
                 (Map.insert "text" (Json.make_str s)
                 BTreeMap.empty))),
-        Block.thinking s cache =>
-            Json.make_object (with_cache cache
-                (Map.insert "type" (Json.make_str "thinking")
+        Block.thinking s signature cache =>
+            let base :=
+                Map.insert "type" (Json.make_str "thinking")
                 (Map.insert "thinking" (Json.make_str s)
-                BTreeMap.empty))),
+                BTreeMap.empty) in
+            let with_sig :=
+                if String.beq signature "" then base
+                else Map.insert "signature" (Json.make_str signature) base in
+            Json.make_object (with_cache cache with_sig),
         Block.tool_use id name input cache =>
             Json.make_object (with_cache cache
                 (Map.insert "type" (Json.make_str "tool_use")
@@ -172,7 +195,7 @@ def block_text_of (obj : BTreeMap String Json) : Result String Block :=
 def block_thinking_of (obj : BTreeMap String Json) : Result String Block :=
     match obj_str_field "thinking" obj {
         Result.err e => Result.err e,
-        Result.ok s => Result.ok (Block.thinking s (block_cache_of obj)),
+        Result.ok s => Result.ok (Block.thinking s (obj_str_or_default "signature" "" obj) (block_cache_of obj)),
     }
 
 def block_tool_use_of (obj : BTreeMap String Json) : Result String Block :=
@@ -212,6 +235,42 @@ pub def Block.deserialize_json (j : Json) : Result String Block :=
                     else if tag == "tool_result" then block_tool_result_of obj
                     else Result.err (String.concat "unknown block type: " tag),
             },
+    }
+
+/// The four tags this mote models. The API grows new block types
+/// (`redacted_thinking` is already in the wild), and response decode
+/// must not lose a WHOLE turn because one block's tag is unfamiliar.
+def block_tag_known (tag : String) : Bool :=
+    tag == "text" || tag == "thinking" || tag == "tool_use" || tag == "tool_result"
+
+/// Response-side leniency: `Option.none` for any block whose `type` is
+/// not a known tag, so the caller can filter instead of failing.
+/// Deliberate trade-off -- skipped content (a redacted thinking block)
+/// is lost to the harness, but with thinking off by default that is
+/// the safe direction; a hard error would turn every API addition into
+/// an outage. `Block.deserialize_json` itself stays strict: requests
+/// the HARNESS builds must round-trip exactly.
+pub def Block.deserialize_or_skip (j : Json) : Result String (Option Block) :=
+    match Json.get_object j {
+        Result.err e => Result.err e,
+        Result.ok obj =>
+            match obj_str_field "type" obj {
+                Result.err e => Result.err e,
+                Result.ok tag => block_skip_verdict tag j,
+            },
+    }
+
+def block_skip_verdict (tag : String) (j : Json) : Result String (Option Block) :=
+    if block_tag_known tag
+    then block_wrap (Block.deserialize_json j)
+    else Result.ok Option.none
+
+/// A KNOWN tag that still fails its own decode is a real error (a
+/// `tool_use` without an `id` is broken wire, not an unknown type).
+def block_wrap (r : Result String Block) : Result String (Option Block) :=
+    match r {
+        Result.err e => Result.err e,
+        Result.ok b => Result.ok (Option.some b),
     }
 
 // ─── Request side ───
@@ -328,21 +387,36 @@ pub struct MessagesResponse {
     usage : AnthropicUsage,
 }
 
+/// Response decode is lenient per block (see `deserialize_or_skip`):
+/// unknown block types are filtered out, and only a KNOWN block that
+/// fails its own decode is an error.
 #[partial]
 def deserialize_blocks (js : List Json) : Result String (List Block) :=
     match js {
         List.empty => Result.ok List.empty,
         List.cons j rest =>
-            match Block.deserialize_json j {
+            match Block.deserialize_or_skip j {
                 Result.err e => Result.err e,
-                Result.ok b =>
+                Result.ok opt =>
                     match deserialize_blocks rest {
                         Result.err e => Result.err e,
-                        Result.ok bs => Result.ok (List.cons b bs),
+                        Result.ok bs => blocks_cons opt bs,
                     },
             },
     }
 
+def blocks_cons (opt : Option Block) (bs : List Block) : Result String (List Block) :=
+    match opt {
+        Option.some b => Result.ok (List.cons b bs),
+        Option.none => Result.ok bs,
+    }
+
+/// `stop_reason` is typed NULLABLE by the API (absent on some stream
+/// tails and error bodies): a missing or null verdict decodes as
+/// `"end_turn"` -- `stop_reason_of`'s mapping for it ends the turn,
+/// which is the safe reading of a response that never said otherwise.
+/// A PRESENT but unrecognized string still flows through unchanged
+/// for the adapter to decide on.
 pub def MessagesResponse.deserialize_json (j : Json) : Result String MessagesResponse :=
     match Json.get_object j {
         Result.err e => Result.err e,
@@ -356,19 +430,19 @@ pub def MessagesResponse.deserialize_json (j : Json) : Result String MessagesRes
                             match deserialize_blocks block_js {
                                 Result.err e => Result.err e,
                                 Result.ok blocks =>
-                                    match obj_str_field "stop_reason" obj {
-                                        Result.err e => Result.err e,
-                                        Result.ok stop_reason =>
-                                            match obj_field "usage" obj {
-                                                Result.err e => Result.err e,
-                                                Result.ok usage_j =>
-                                                    match AnthropicUsage.deserialize_json usage_j {
-                                                        Result.err e => Result.err e,
-                                                        Result.ok usage => Result.ok (MessagesResponse.mk blocks stop_reason usage),
-                                                    },
-                                            },
-                                    },
+                                    let stop_reason := obj_str_or_default "stop_reason" "end_turn" obj in
+                                    response_usage obj blocks stop_reason,
                             },
                     },
+            },
+    }
+
+def response_usage (obj : BTreeMap String Json) (blocks : List Block) (stop_reason : String) : Result String MessagesResponse :=
+    match obj_field "usage" obj {
+        Result.err e => Result.err e,
+        Result.ok usage_j =>
+            match AnthropicUsage.deserialize_json usage_j {
+                Result.err e => Result.err e,
+                Result.ok usage => Result.ok (MessagesResponse.mk blocks stop_reason usage),
             },
     }
