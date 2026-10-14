@@ -5,7 +5,7 @@
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content}
 use shuttle::message {Message}
-use shuttle::provider {ProviderConfig, Wire}
+use shuttle::presets {ProviderConfig.ollama}
 use shuttle::registry {ToolRegistry}
 use shuttle::loop {Loop.run}
 use shuttle::tools::file_tools {ReadTool.impl}
@@ -19,14 +19,11 @@ def default_registry : ToolRegistry :=
             (ToolRegistry.register GrepTool.impl
                 (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))
 
-def ollama_config (model : String) : ProviderConfig :=
-    { base_url := "http://localhost:11434", model := model, api_key_env := "SHUTTLE_UNUSED_API_KEY", max_tokens := 1024, wire := Wire.openai }
-
 def user_message (task : String) : Message :=
     { role := Role.user, content := [Content.text task] }
 
 def run_task (task : String) (model : String) : IO I64 := do {
-    let r <- ResultT.run (Loop.run (ollama_config model) default_registry "You are a helpful coding assistant." [user_message task] 10);
+    let r <- ResultT.run (Loop.run (ProviderConfig.ollama model) default_registry "You are a helpful coding assistant." [user_message task] 10);
     match r {
         Result.ok _ => do { IO.println "done"; return 0 },
         Result.err e => do { IO.write_stderr (String.concat "error: " e); return 1 },
