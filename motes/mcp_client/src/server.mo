@@ -74,22 +74,35 @@ def server_connect_pair (p : Pair McpStdio String) : IO (Result String McpServer
   }
 
 /// The handshake body's verdict: a decode error, or who the server is.
+/// The decode error is the one handshake exit `Stdio.request`'s own
+/// teardown does NOT cover -- the request succeeded and returned a
+/// transport -- so this arm disposes it itself (the module doc's
+/// failure-is-teardown contract).
 def server_connect_decode (s1 : McpStdio) (body : String) : IO (Result String McpServer) :=
   match mcp_decode_initialize body {
-    Result.err e => return (Result.err e),
+    Result.err e => server_connect_decode_err s1 e,
     Result.ok info => server_connect_initialized s1 info,
   }
+
+/// A handshake response that does not decode: kill and reap the child,
+/// then report.
+def server_connect_decode_err (s1 : McpStdio) (e : String) : IO (Result String McpServer) := do {
+  let _dead <- Stdio.dispose s1;
+  return (Result.err e)
+}
 
 /// Send `notifications/initialized` -- the handshake's second half.
 def server_connect_initialized (s1 : McpStdio) (info : McpServerInfo) : IO (Result String McpServer) := do {
   let sent <- Stdio.send s1 mcp_initialized_notification;
-  server_connect_finish info sent
+  server_connect_finish s1 info sent
 }
 
 /// The notification's verdict: the session is mounted, or it never was.
-def server_connect_finish (info : McpServerInfo) (sent : Result String McpStdio) : IO (Result String McpServer) :=
+/// The send failure is a RAW `Stdio.send` error (not `Stdio.request`), so
+/// this arm owns the child's teardown too -- `s1` rides along for it.
+def server_connect_finish (s1 : McpStdio) (info : McpServerInfo) (sent : Result String McpStdio) : IO (Result String McpServer) :=
   match sent {
-    Result.err e => return (Result.err e),
+    Result.err e => server_connect_send_err s1 e,
     Result.ok s2 =>
       // Annotated local: a bare struct literal in argument position is
       // the recorded self-hosted checker gap.
@@ -97,14 +110,24 @@ def server_connect_finish (info : McpServerInfo) (sent : Result String McpStdio)
       return (Result.ok m),
   }
 
+/// The `notifications/initialized` send failed: kill and reap the child,
+/// then report.
+def server_connect_send_err (s1 : McpStdio) (e : String) : IO (Result String McpServer) := do {
+  let _dead <- Stdio.dispose s1;
+  return (Result.err e)
+}
+
 /// The id for the next request, and the session with that id consumed.
 def server_fresh_id (m : McpServer) : Pair McpServer Json :=
   let m2 : McpServer := { io := m.io, info := m.info, next_id := I64.add m.next_id 1 } in
   Pair.pair m2 (server_id m.next_id)
 
-/// `tools/list`, decoded to the catalogue. The returned session has the
-/// id consumed even on failure -- a failed request still used its id,
-/// and reusing it would match the WRONG response later.
+/// `tools/list`, decoded to the catalogue. On SUCCESS the returned session
+/// has the id consumed; on FAILURE the error carries no session at all, so
+/// the caller's ORIGINAL value (id not yet consumed) is the only one left.
+/// That is safe because a failed request has already killed the transport
+/// (see `stdio.mo`'s failure-is-teardown contract) -- there is no live
+/// conversation for a reissued id to collide with.
 pub def Server.list_tools (m : McpServer) : IO (Result String (Pair McpServer (List McpTool))) :=
   match server_fresh_id m {
     Pair.pair m2 id => server_list_request m2 id,
@@ -138,8 +161,9 @@ def server_list_decode (m2 : McpServer) (s2 : McpStdio) (body : String) : IO (Re
       return (Result.ok (Pair.pair m3 tools)),
   }
 
-/// `tools/call`, decoded to the result. Same id contract as
-/// `list_tools`: consumed whether or not the call succeeded.
+/// `tools/call`, decoded to the result. Same id contract as `list_tools`:
+/// consumed on success, and on failure the caller's original value is the
+/// one that survives -- safe for the same reason (the transport is dead).
 pub def Server.call (m : McpServer) (tool : String) (args : Json) : IO (Result String (Pair McpServer McpCallResult)) :=
   match server_fresh_id m {
     Pair.pair m2 id => server_call_request m2 id tool args,

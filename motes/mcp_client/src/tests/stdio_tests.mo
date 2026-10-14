@@ -134,7 +134,9 @@ def test_stdio_request_skips_a_malformed_line : IO Bool := do {
 /// A response carrying the WRONG id is not skipped and not answered:
 /// this client sends one request at a time, so a mismatch means the peer
 /// is confused about the conversation, and waiting past it would turn a
-/// protocol break into a hang.
+/// protocol break into a hang. The mismatch is also an error exit, so it
+/// TEARS THE CHILD DOWN: the stale transport's next read reports
+/// "no such child" -- the module doc's failure-is-teardown contract.
 #[test]
 def test_stdio_request_rejects_a_mismatched_id : IO Bool := do {
   let started <- Stdio.start "sh" ["-c", "read _; echo '{\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}'"];
@@ -142,8 +144,34 @@ def test_stdio_request_rejects_a_mismatched_id : IO Bool := do {
     Result.err _e => return false,
     Result.ok s0 => do {
       let rr <- Stdio.request s0 ms_id ms_list_body;
-      let code <- Stdio.close s0;
-      return (Bool.and (ms_err_is rr "response id does not match the request") (I64.beq code 0))
+      let fr <- Stdio.read_frame s0;
+      return (Bool.and (ms_err_is rr "response id does not match the request")
+        (match fr {
+          Result.err e => String.contains e "no such child",
+          Result.ok _p => false,
+        }))
+    }
+  }
+}
+
+/// A peer that exits before answering is every dead-server story at
+/// once: the request fails with the mid-message EOF, and the failure
+/// itself is the teardown -- the child was killed and reaped inside the
+/// failed request, so the stale transport reports "no such child"
+/// rather than hanging (or silently reading a recycled slot).
+#[test]
+def test_stdio_failed_request_tears_down_the_child : IO Bool := do {
+  let started <- Stdio.start "sh" ["-c", "read _; exit 0"];
+  match started {
+    Result.err _e => return false,
+    Result.ok s0 => do {
+      let rr <- Stdio.request s0 ms_id ms_list_body;
+      let fr <- Stdio.read_frame s0;
+      return (Bool.and (ms_err_is rr "connection closed mid-message")
+        (match fr {
+          Result.err e => String.contains e "no such child",
+          Result.ok _p => false,
+        }))
     }
   }
 }

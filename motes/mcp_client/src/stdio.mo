@@ -21,6 +21,20 @@
 /// `Stdio.read_log` is how a caller drains those logs without touching
 /// the protocol stream. That separation is `std/src/process.mo`'s own
 /// stated reason the piped natives exist.
+///
+/// FAILURE IS TEARDOWN: every error exit from `Stdio.request` (and the
+/// handshake paths in `server.mo`) kills and reaps the child before the
+/// error is returned. A request that failed has no recoverable state --
+/// half a conversation is not a conversation -- so the contract is: a
+/// failed request leaves the child dead, and any stale `McpStdio` /
+/// `McpServer` values still naming it report "no such child" if used.
+/// That is what makes request failure leak-free.
+///
+/// The response wait is a BLOCKING read with no timeout (a poll or timer
+/// read is new native surface, deliberately out of scope): a server that
+/// never answers, or that floods stderr past the spawn pipe's own buffers
+/// before answering, hangs the client. Accepted for a trusted,
+/// single-flight client; the poll/timeout read is the named follow-up.
 use json::json {Json}
 use std::map {BTreeMap}
 use std::process {Child, Proc.kill, Proc.read_line, Proc.read_stderr_line, Proc.spawn, Proc.wait, Proc.write}
@@ -111,6 +125,11 @@ def stdio_frame_on_option (c : Child) (buf : String) (o : Option String) : IO (R
 /// confused about the conversation, and silently waiting past it would
 /// turn a protocol break into a hang.
 ///
+/// Every error exit below KILLS AND REAPS the child before returning
+/// (see the module doc's failure-is-teardown contract): the send failure,
+/// the read failure, and the id mismatch. The one non-error exit that
+/// can lose the child -- clean `Stdio.close` -- is the caller's.
+///
 /// Ids are compared as rendered JSON (`Json.to_string`) rather than
 /// structurally: the id this client sent is a node IT built, and the id
 /// in the response is whatever the server spelled -- identical text is
@@ -119,17 +138,36 @@ def stdio_frame_on_option (c : Child) (buf : String) (o : Option String) : IO (R
 pub def Stdio.request (s : McpStdio) (id : Json) (body : String) : IO (Result String (Pair McpStdio String)) := do {
   let w <- Stdio.send s body;
   match w {
-    Result.err e => return (Result.err e),
+    Result.err e => stdio_send_err s e,
     Result.ok s2 => stdio_response_loop s2 (Json.to_string id),
   }
 }
 
-/// Read frames until one parses as a response carrying `want`.
+/// The send failed (EPIPE, most likely): the peer is gone, so tear the
+/// child down before handing the error back.
+def stdio_send_err (s : McpStdio) (e : String) : IO (Result String (Pair McpStdio String)) := do {
+  let _dead <- Stdio.dispose s;
+  return (Result.err e)
+}
+
+/// Read frames until one parses as a response carrying `want`. A failed
+/// read is dispose-then-error, same contract as the send above.
 #[partial]
 #[terminating]
 def stdio_response_loop (s : McpStdio) (want : String) : IO (Result String (Pair McpStdio String)) := do {
   let fr <- Stdio.read_frame s;
-  stdio_response_step want fr
+  match fr {
+    Result.err e => stdio_read_err s e,
+    Result.ok _ => stdio_response_step want fr,
+  }
+}
+
+/// The read failed (EOF mid-message, broken pipe, or a frame past
+/// `Proc.read_line`'s line bound): the child is in an unknown state, so
+/// kill and reap it before reporting.
+def stdio_read_err (s : McpStdio) (e : String) : IO (Result String (Pair McpStdio String)) := do {
+  let _dead <- Stdio.dispose s;
+  return (Result.err e)
 }
 
 /// One frame's verdict: the answer, or keep looking. The transport in
@@ -171,8 +209,17 @@ def stdio_response_obj (s : McpStdio) (want : String) (body : String) (obj : BTr
     Option.some idj =>
       if String.beq (Json.to_string idj) want
       then return (Result.ok (Pair.pair s body))
-      else return (Result.err "response id does not match the request"),
+      else stdio_response_mismatch s,
   }
+
+/// A frame arrived with the WRONG id: the peer is confused about the
+/// conversation, and waiting past it would turn a protocol break into a
+/// hang -- so error out, tearing the child down first (same contract as
+/// every other error exit from `Stdio.request`).
+def stdio_response_mismatch (s : McpStdio) : IO (Result String (Pair McpStdio String)) := do {
+  let _dead <- Stdio.dispose s;
+  return (Result.err "response id does not match the request")
+}
 
 /// One line of the server's stderr -- its log stream, NOT part of the
 /// frame stream. `Option.none` is end of stream; the `Result.err` case is
