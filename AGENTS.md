@@ -70,11 +70,12 @@ to an unmarked declaration warns — mark it `pub` or reconsider the import.
 
 ## Building and Running
 
-`monad` is the standard binary: a nightly is installed at `~/.monad/bin/monad`,
-and `monad build cli` (or `scripts/build-self-hosted.sh`) builds the
-self-hosted compiler from `cli/src/main.mo` as `monad`. `cargo run --release --`
-(or `monad-rs`) is the Rust host — use it when iterating on the Rust compiler
-itself.
+`monad` is the standard binary: `monadup` installs a nightly at
+`~/.monad/bin/monad` (`monadup default` installs the latest and makes it
+active — run it before self-compile work). `monad build cli` (or
+`scripts/build-self-hosted.sh`) builds the self-hosted compiler from
+`cli/src/main.mo` as `monad`. `cargo run --release --` (or `monad-rs`) is the
+Rust host — use it when iterating on the Rust compiler itself.
 
 ```bash
 monad run examples/hello.mo            # compile and run a file
@@ -89,6 +90,10 @@ cargo test -p monad-core <name>        # one Rust test
 - Use `--release` for self-hosted workloads (anything running
   `cli/src/main.mo` against large files) — the debug build is several times
   slower.
+- Prefer the `monad` binary as the host when self-compiling:
+  `MONAD_HOST_BIN=monad scripts/build-self-hosted.sh <out>` compiles
+  `cli/src/main.mo` at native speed, much faster than the default
+  `cargo run --release --` host interpreting it.
 - `bootstrap` (devenv) / `scripts/bootstrap-compile.sh` / `devenv tasks run
   monad:bootstrap-compile` self-compiles the compiler; CI runs it after
   every change to `lang/`, `runtime/`, `init/` or `std/` because those are
@@ -290,7 +295,7 @@ signature differs). Wiring only the first two compiles and fails at runtime.
    helpers (the function generated code calls).
 4. **Codegen**: `lang/src/codegen/natives.mo` — `native_op_table` (only for
    natives whose direct calls should inline), `native_runtime_fn_name` (the
-   `NativeWrapKind` — below), and `runtime_declarations` (the `declare`, or
+:   `NativeWrapKind` — below), and `runtime_declarations` (the `declare`, or
    the call-target gate fails the compile).
 5. **Verify in BOTH backends** — `validate_no_unwired_natives` catches a
    missing `natives.mo` entry at compile time, but NOTHING catches a missing
@@ -327,7 +332,7 @@ signature differs). Wiring only the first two compiles and fails at runtime.
 
 ## Style Conventions
 
-2-space indent, lowercase for functions/variables, uppercase for
+4-space indent, lowercase for functions/variables, uppercase for
 types/classes, `//` comments.
 
 1. **Single-constructor types are `struct`s**, not `type X { mk ... }` —
@@ -355,46 +360,6 @@ types/classes, `//` comments.
 
 Doc comments (`///`) are parsed and kept for tooling. Write them on public
 declarations.
-
-## Known Pitfalls
-
-- **The global name table is not module-scoped**: two top-level defs with
-  the same bare name in different modules silently collide — one wins
-  registration. When extracting/moving a module, add explicit `use`s for
-  everything it calls, and check for same-name collisions before adding a
-  top-level def (`grep -rn "^def <name>" --include="*.mo"`).
-- **`init/` and parts of `std/` are EMBEDDED in the Rust binary**
-  (`include_str!` in `core/src/term/module.rs`): `prelude`, `id`, `io`,
-  `number`, `math`, `string`, `list`, `init/lib.mo`, `std/path.mo`,
-  `std/io.mo`, `std/process.mo`, `std/lib.mo`. Edits are invisible to
-  `cargo run` until `cargo build --release`. `monad-rs check` also SKIPS
-  `init/` ("0 file(s) checked") — validate an `init/` edit with a `#[test]`.
-- **Attribute/doc-comment edits can silently truncate the SELF-HOSTED
-  parse** of a whole file while the Rust host reports 0 errors — two
-  attributes straddling a `///`, or a def inserted between an attribute and
-  its `def`, derail `decls_parser`. After such edits, grep for
-  `#\[[a-z_]+\]\n(?=///)` and run `slow_tests/src/parser_file_tests.mo`.
-  Fast reproducer: `monad run cli/src/main.mo check <file>`.
-- **A candidate's cost at small scale says nothing at large scale** —
-  profile the workload you actually care about, or compare two sizes and
-  look at the ratio. Likewise measure data-structure choices end-to-end: a
-  `BTreeMap` beat a `List`+scan on paper and lost 25x in the interpreter.
-  Measure A/B interleaved in one loop; machine load distorts minutes-apart
-  readings.
-- **A per-operation cost ~1000x its plausible floor means the data
-  structure is broken, not the loop** (see: a hashmap probe costing 1.17ms —
-  a signed `U64.mod` had collapsed half of every map into one bucket).
-- **A compiled binary and the interpreter have different primitive
-  asymptotics** (`String.slice` is O(1) host / malloc+memcpy compiled): a
-  host profile cannot see a compiled-only quadratic. Check what the
-  primitive does on each runtime before reusing an old conclusion.
-- **Self-hosted codegen hazards**: a `#[test]` def with a direct field
-  access can miscompile its return type (visible only in the compiled
-  runner); avoid nested differently-typed matches inside one test def by
-  extracting helpers.
-- **Struct-literal/positional-match runtime traps** (see Gotchas) are
-  silent in dependency modules: run the real test suite after converting a
-  widely-used `type` to `struct` — `check` alone will not surface them.
 
 ## Workflow
 
