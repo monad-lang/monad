@@ -55,7 +55,7 @@ def run_tool (id : String) (impl : ToolImpl) (input : Json) : ResultT String IO 
     match impl {
         ToolImpl.mk spec run =>
             ResultT.mk (do {
-                let r <- ResultT.run (run input);
+                let r <- ResultT.run (run id input);
                 return (Result.ok (match r {
                     Result.ok content => content,
                     Result.err msg => Content.tool_result id msg true,

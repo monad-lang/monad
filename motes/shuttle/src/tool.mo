@@ -20,7 +20,13 @@ derive_json_deserialize! ToolSpec
 /// Content`: a tool failure is a `Result.err` short-circuit through the
 /// loop's own `ResultT`, not an ad hoc `Content.tool_result.is_error`
 /// flag threaded by hand at every call site.
+///
+/// `run` takes the model's `tool_use` id FIRST, before the input JSON:
+/// the tool_result it returns must echo that id (both wires map it
+/// straight to the wire's `tool_use_id`/`tool_call_id`, and both APIs
+/// validate the pairing against the assistant turn), so the impl needs
+/// the real id, not a name hardcoded at registration.
 pub struct ToolImpl {
     spec : ToolSpec,
-    run : Json -> ResultT String IO Content,
+    run : String -> Json -> ResultT String IO Content,
 }

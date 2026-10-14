@@ -9,10 +9,10 @@ pub def GrepTool.spec : ToolSpec :=
     { name := "grep", description := "Search file contents recursively for a pattern.", schema := Json.null }
 
 pub def GrepTool.impl : ToolImpl :=
-    { spec := GrepTool.spec, run := grep_run "grep" }
+    { spec := GrepTool.spec, run := grep_run }
 
 pub def GlobTool.spec : ToolSpec :=
     { name := "glob", description := "Find files by name pattern.", schema := Json.null }
 
 pub def GlobTool.impl : ToolImpl :=
-    { spec := GlobTool.spec, run := glob_run "glob" }
+    { spec := GlobTool.spec, run := glob_run }

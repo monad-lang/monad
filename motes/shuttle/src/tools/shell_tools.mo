@@ -44,4 +44,4 @@ pub def ShellTool.spec : ToolSpec :=
     { name := "shell", description := "Run a shell command and return its merged output.", schema := params_schema shell_params }
 
 pub def ShellTool.impl : ToolImpl :=
-    { spec := ShellTool.spec, run := shell_run "shell" }
+    { spec := ShellTool.spec, run := shell_run }

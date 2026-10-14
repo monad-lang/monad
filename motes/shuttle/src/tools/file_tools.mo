@@ -52,16 +52,16 @@ pub def ReadTool.spec : ToolSpec :=
     { name := "read", description := "Read a file's contents with line numbers.", schema := params_schema read_params }
 
 pub def ReadTool.impl : ToolImpl :=
-    { spec := ReadTool.spec, run := read_run "read" }
+    { spec := ReadTool.spec, run := read_run }
 
 pub def WriteTool.spec : ToolSpec :=
     { name := "write", description := "Write a file's full contents.", schema := params_schema write_params }
 
 pub def WriteTool.impl : ToolImpl :=
-    { spec := WriteTool.spec, run := write_run "write" }
+    { spec := WriteTool.spec, run := write_run }
 
 pub def EditTool.spec : ToolSpec :=
     { name := "edit", description := "Replace a file's contents, failing if it changed since last read.", schema := params_schema edit_params }
 
 pub def EditTool.impl : ToolImpl :=
-    { spec := EditTool.spec, run := edit_run "edit" }
+    { spec := EditTool.spec, run := edit_run }
