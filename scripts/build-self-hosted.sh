@@ -1,11 +1,35 @@
 #!/usr/bin/env bash
 # usage: build-self-hosted.sh <out-dir> [compiler flags...]
-# Builds <out-dir>/monad from cli/src/main.mo with the Rust host interpreter
-# (rung 1). Skips the build when the binary is newer than every input.
+# Builds <out-dir>/monad from cli/src/main.mo. Skips the build when the
+# binary is newer than every input.
 #
 # The host is `cargo run --release --`, or whatever MONAD_HOST_BIN names --
 # for a builder that has a built host rather than a cargo tree:
 #   MONAD_HOST_BIN=/nix/store/.../bin/monad-rs scripts/build-self-hosted.sh ...
+# The compiled `monad` binary is supported too, and is much faster when
+# all you need is a current binary from this tree's sources -- keep it
+# current with `monadup default`:
+#   MONAD_HOST_BIN=monad scripts/build-self-hosted.sh ...
+#
+# The two hosts need different COMMAND SHAPES, because the self-hosted
+# `run` takes no program arguments: `monad run <path> [flags]` compiles
+# and executes the file with a fixed EMPTY argv, so the two-rung
+# `run cli/src/main.mo build ...` below would compile this tree's
+# compiler and start it with no arguments -- it prints help, links
+# nothing, and the closing `test -x` fails. A `monad` host therefore
+# compiles in ONE rung (`monad build cli/src/main.mo -o <out>`) -- the
+# same sources, the same output, at native speed instead of the Rust
+# host interpreting the whole compiler through core_eval. Measured on
+# this tree: ~64s monad host against several minutes for `cargo run`.
+#
+# Which host to pick: the monad host is for getting a current binary
+# FAST. It is NOT the bootstrap ladder's rung 1 -- bootstrap-compile.sh's
+# fixpoint asserts that the INTERPRETED tree-compiler's IR and the native
+# tree-compiler's are byte-identical, and a nightly-built rung 1 would
+# compare the nightly's IR against the tree's instead, failing loudly on
+# any branch that changes codegen. Keep the cargo host (or the packaged
+# monadHost) for the ladder; take the monad host for test binaries.
+#
 # A packaged host needs its stdlib pointed at this checkout as well -- its
 # compiled-in default is a path that exists only in the build that made it; see
 # the MONAD_STDLIB note at the definition below.
@@ -127,6 +151,21 @@ if [ -n "$needs_build" ]; then
     MONAD_BUILD_COMMIT="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || true)"
     export MONAD_BUILD_COMMIT
   fi
-  $MONAD_HOST_BIN run cli/src/main.mo build cli/src/main.mo -o "$out/monad" "$@"
+  # ONE rung for a `monad` host, TWO for everything else -- the header
+  # above says why: the self-hosted `run` cannot pass `build ...` argv on
+  # to the program it runs, so the monad host compiles directly. The
+  # dispatch is on the host command's first word (MONAD_HOST_BIN may be a
+  # multi-word command, like the default `cargo run --release --`), so a
+  # bare `monad`, a PATH-found `monad`, and an absolute path ending in
+  # `monad` all take the one-rung shape while `monad-rs` and `cargo ...`
+  # keep the two-rung one.
+  case "$(basename "${MONAD_HOST_BIN%%[[:space:]]*}")" in
+    monad)
+      $MONAD_HOST_BIN build cli/src/main.mo -o "$out/monad" "$@"
+      ;;
+    *)
+      $MONAD_HOST_BIN run cli/src/main.mo build cli/src/main.mo -o "$out/monad" "$@"
+      ;;
+  esac
 fi
 test -x "$out/monad"
