@@ -105,3 +105,20 @@ def test_tool_call_deserialize_reads_wire_nested_function : Bool :=
                     },
             },
     }
+
+/// The history echo: an assistant message's prior tool calls ride the
+/// NEXT request nested under `function`, the same wrapper the tool
+/// TABLE needs (verified live, see `tool.mo`'s header). Pinned at the
+/// MESSAGE level because `ChatMessage.serialize_json` is DERIVED -- a
+/// derive regression would flatten the nesting the live loop depends
+/// on, and only a wire-text assertion catches it.
+#[test]
+def test_chat_message_serialize_wraps_tool_calls_in_function_shape : Bool :=
+    let tc : ToolCall := { id := "call_1", name := "read", arguments := "{\"path\":\"a\"}" } in
+    let msg : ChatMessage := { role := "assistant", content := Option.none, tool_calls := [tc], tool_call_id := Option.none, name := Option.none } in
+    let s := Json.to_string (ChatMessage.serialize_json msg) in
+    String.contains s "\"tool_calls\":[{"
+        && String.contains s "\"type\":\"function\""
+        && String.contains s "\"function\":{\""
+        && String.contains s "\"name\":\"read\""
+        && String.contains s "\"arguments\":\"{\\\"path\\\":\\\"a\\\"}\""
