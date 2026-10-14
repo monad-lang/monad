@@ -1,0 +1,40 @@
+# The MCP CLIENT: `initialize`/`tools/list`/`tools/call` over newline-
+# framed JSON-RPC on a piped subprocess -- agent-skills.md Phase 4.
+#
+# Deliberately not named `mcp`: self-hosted-tooling.md Phase 3 owns that
+# name for the MCP SERVER (`monad mcp`). Client and server share
+# `motes/toolkit`'s `jsonrpc.mo` and `framing.mo`, and nothing else.
+[mote]
+name = "mcp_client"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+# `Json` is the value type everywhere: tool arguments, tool schemas,
+# response decoding. There is no second JSON-shaped ADT and there will
+# not be one.
+[dependencies.json]
+path = "../json"
+
+# The shared protocol substrate: `framing.mo`'s newline-delimited mode
+# (where a message ends) and `jsonrpc.mo`'s request encoders (how a
+# request is spelled). `framing` and `jsonrpc` are leaf modules -- their
+# own imports resolve inside `json` and `std`, both declared above, so
+# this mote needs no edge on toolkit's heavier siblings.
+[dependencies.toolkit]
+path = "../toolkit"
+
+# The language runtime whose C functions this mote's compiled binaries
+# link (`monad_proc_*` from the piped-subprocess natives). Declared so a
+# checkout of this mote OUTSIDE any workspace still finds the runtime
+# whose functions its code calls; inside a workspace the workspace tier
+# of `resolve_runtime_src` would find the same file anyway. toolkit's
+# own manifest is the precedent for a mote declaring the toolchain's
+# runtime explicitly.
+[dependencies.runtime]
+path = "../../runtime"

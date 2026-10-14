@@ -41,6 +41,7 @@ members = [
   "motes/http",
   "motes/json",
   "motes/lsp",
+  "motes/mcp_client",
   "motes/moon",
   "motes/moose",
   "motes/parsec",
