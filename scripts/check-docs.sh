@@ -54,15 +54,20 @@
 # feature, not a limitation -- a reader copying one block into a file gets
 # exactly what the checker saw.
 #
-# Two modes. The default uses the Rust bootstrap host, which is fast and is
-# what the pre-commit hook runs:
+# One host, overridable. The default is the SELF-HOSTED `monad` binary --
+# the one `monadup` manages, normally ~/.monad/bin/monad -- because the
+# book documents the self-hosted compiler (so that binary is the stricter
+# check) and because it checks the same blocks in a fraction of the time
+# the Rust bootstrap host takes. Keep it current with `monadup default`;
+# when it is missing the script says so rather than silently falling
+# back:
 #
 #   scripts/check-docs.sh
 #
-# The book documents the SELF-HOSTED compiler, though, so the stricter check is
-# to point MONAD_BIN at a bootstrapped `monad` binary:
+# The Rust bootstrap host still works as an explicit override, for a
+# machine with a cargo tree but no installed nightly:
 #
-#   MONAD_BIN=/path/to/monad scripts/check-docs.sh
+#   MONAD_BIN="cargo run --release --quiet --" scripts/check-docs.sh
 #
 # Both binaries take the same `check <paths>...` shape and the same exit codes,
 # so no other change is needed. The self-hosted run is expected to be GREEN:
@@ -84,9 +89,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Overridable so local runs can use an already-installed `monad-rs` instead
-# of paying for a cargo rebuild: MONAD_BIN=monad-rs scripts/check-docs.sh
-MONAD_BIN=${MONAD_BIN:-"cargo run --release --quiet --"}
+# The default host is the `monadup`-managed self-hosted binary. Overridable so
+# a cargo-tree machine can fall back to the Rust bootstrap host:
+# MONAD_BIN="cargo run --release --quiet --" scripts/check-docs.sh
+MONAD_BIN=${MONAD_BIN:-monad}
+if [ "$MONAD_BIN" = monad ] && ! command -v monad >/dev/null 2>&1; then
+  echo "check-docs: no 'monad' binary on PATH -- install one with 'monadup default'," >&2
+  echo "  or point MONAD_BIN at another host (e.g. the Rust bootstrap one:" >&2
+  echo "  MONAD_BIN=\"cargo run --release --quiet --\" scripts/check-docs.sh)" >&2
+  exit 1
+fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
