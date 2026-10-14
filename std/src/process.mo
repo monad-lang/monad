@@ -9,6 +9,133 @@ pub def exec_cmd (cmd : String) (args : List String) : IO I64
 #[native "process_id"]
 pub def process_id : I64
 
+// ── Piped subprocesses (agent-skills.md Phase 4 / Design 6) ────────────
+//
+// `exec_cmd` and `Proc.capture` (below) wait for the child and return
+// only what it already wrote; a PROTOCOL peer -- an MCP server on
+// stdio -- needs the opposite: write its stdin while it runs, read its
+// stdout line by line, keep stderr separate, and be able to kill it.
+// That needs child state to OUTLIVE a single call, which no
+// composition of `exec_cmd` can hold, so unlike `Proc.capture` these
+// ARE natives -- the one place in this file the "deliberately not a
+// native" rule below gives way, for the reason that rule states: the
+// wiring cost buys a capability nothing else here can express.
+//
+// Four natives, not six: the former read/read-stderr and wait/kill
+// twins are merged behind I64 flags -- `proc_read`'s second argument
+// picks the stream, `proc_wait`'s picks plain reap vs
+// SIGKILL-then-reap. The natives return `RawIO _`, the raw payload
+// layer; the `IO.mk` wrap happens HERE, in the pub wrappers -- the
+// same split `IO.pure`/`RawIO.pure` use, so the Rust and C sides stay
+// raw payload producers while every user-facing operation is `IO _`.
+// The wrappers are the public API; the natives are `priv` so no other
+// module can reach past them.
+//
+// `Child` is opaque the way `Socket` is (std/src/io.mo): the
+// constructor exists so the checker can see a type; the runtime value
+// is a registry handle, never a constructor. Nothing may pattern-match,
+// compare or print one. It is `pub` because `motes/mcp_client`
+// (a separate mote) holds children.
+//
+// stdout and stderr stay SEPARATE pipes here on purpose. `Proc.
+// capture` merges them, which is right for toolchain probes (see its
+// own doc) and wrong for a protocol stream: a server's log line on
+// stderr must not land inside the JSON-RPC framing. `read_stderr_line`
+// exists so a caller can drain those logs without touching the frame
+// stream.
+
+pub type Child {
+  child
+}
+
+/// `proc_read`'s stream flag: 0 = stdout. Named so the wrappers read
+/// as intent rather than as a magic number, and dotted so the
+/// whole-program bare-name table does not gain a `stdout`.
+priv def Proc.stdout_flag : I64 := 0
+
+/// `proc_read`'s stream flag: 1 = stderr.
+priv def Proc.stderr_flag : I64 := 1
+
+/// `proc_wait`'s kill flag: 0 = plain reap.
+priv def Proc.reap_flag : I64 := 0
+
+/// `proc_wait`'s kill flag: 1 = SIGKILL first, then reap.
+priv def Proc.kill_flag : I64 := 1
+
+/// Fork+exec `cmd args` with all three standard streams piped.
+/// Payload is `Result.err` (with the OS message) rather than a native
+/// failure when the child could not be spawned -- a caller composes
+/// the error through `ResultT` like every other failure here.
+#[native "proc_spawn"]
+priv def proc_spawn (cmd : String) (args : List String) : RawIO (Result String Child)
+
+/// Write `s` to the child's stdin and flush. Payload is `Result.err`
+/// when the child is gone (a dead peer's EPIPE surfaces here -- that
+/// is the signal to stop talking to it), `Result.ok` with the byte
+/// count otherwise.
+#[native "proc_write"]
+priv def proc_write (c : Child) (s : String) : RawIO (Result String U64)
+
+/// One line of the child's chosen stream (`stream`: 0 = stdout, 1 =
+/// stderr) WITHOUT its trailing newline (any `\r` stays -- toolkit's
+/// framing trims it, keeping one definition of "line" per concern).
+/// Payload's `Option.none` is end of stream; a final line truncated by
+/// EOF is DISCARDED rather than half-delivered, because a JSON-RPC
+/// frame without its newline is a truncated message, not a message.
+#[native "proc_read"]
+priv def proc_read (c : Child) (stream : I64) : RawIO (Result String (Option String))
+
+/// Close the pipes, reap the child, and free its slot, returning the
+/// exit status -- or -1 if it died on a signal, `exec_cmd`'s own
+/// convention. With `kill` set, SIGKILL first, so one call is the whole
+/// "kill, then reap" teardown. Killing an already-exited child is not
+/// an error either way -- a disposer must be idempotent. The handle
+/// dies with the child: nothing may use it after `proc_wait`.
+#[native "proc_wait"]
+priv def proc_wait (c : Child) (kill : I64) : RawIO I64
+
+/// Fork+exec `cmd args` with all three standard streams piped.
+/// `Result.err` (with the OS message) rather than a native failure
+/// when the child could not be spawned -- a caller composes the error
+/// through `ResultT` like every other failure here.
+pub def Proc.spawn (cmd : String) (args : List String) : IO (Result String Child) :=
+    IO.mk (proc_spawn cmd args)
+
+/// Write `s` to the child's stdin and flush. `Result.err` when the
+/// child is gone (a dead peer's EPIPE surfaces here -- that is the
+/// signal to stop talking to it), `Result.ok` with the byte count
+/// otherwise.
+pub def Proc.write (c : Child) (s : String) : IO (Result String U64) :=
+    IO.mk (proc_write c s)
+
+/// One line of the child's stdout WITHOUT its trailing newline (any
+/// `\r` stays -- toolkit's framing trims it, keeping one definition of
+/// "line" per concern). `Option.none` is end of stream; a final line
+/// truncated by EOF is DISCARDED rather than half-delivered, because
+/// a JSON-RPC frame without its newline is a truncated message, not a
+/// message.
+pub def Proc.read_line (c : Child) : IO (Result String (Option String)) :=
+    IO.mk (proc_read c Proc.stdout_flag)
+
+/// `Proc.read_line`'s contract, over the child's stderr -- the log
+/// stream a server writes while its protocol stream stays clean.
+pub def Proc.read_stderr_line (c : Child) : IO (Result String (Option String)) :=
+    IO.mk (proc_read c Proc.stderr_flag)
+
+/// Close the pipes, reap the child, and return its exit status -- or
+/// -1 if it died on a signal, `exec_cmd`'s own convention. The handle
+/// dies with the child: nothing may use it after `wait`.
+pub def Proc.wait (c : Child) : IO I64 :=
+    IO.mk (proc_wait c Proc.reap_flag)
+
+/// SIGKILL the child, then reap it and free its slot -- one call is the
+/// whole teardown, so no caller needs a `wait` after `kill`. Killing
+/// an already-exited child is not an error (a disposer must be
+/// idempotent); a `wait` AFTER `kill` returns -1 because the slot is
+/// already freed, not because the kill failed to reap.
+pub def Proc.kill (c : Child) : IO Unit :=
+    IO.mk (RawIO.bind (proc_wait c Proc.kill_flag) (fn _ => RawIO.pure Unit.unit))
+
 // ── Capturing a command's output ────────────────────────────────────────
 // `exec_cmd` above hands back an exit status and nothing else:
 // `monad_exec_cmd` (runtime/src/runtime.c) is fork + execvp + waitpid

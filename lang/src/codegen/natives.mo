@@ -158,6 +158,13 @@ type NativeWrapKind {
     // treats a native-sourced C string as a valid `String` value with no
     // extra boxing.
     io_passthrough (rt_fn_name : String),
+    // `RawIO A`-returning natives (the piped-subprocess family): call,
+    // then wrap the raw result ONCE as `RawIO.io raw` -- no outer
+    // `IO.mk`. The `.mo` wrappers in std/src/process.mo build the
+    // user-facing `IO` type themselves (`IO.mk (proc_read c 0)`), the
+    // same split `IO.pure`/`RawIO.pure` use, so the C side stays a raw
+    // payload producer and the naming/defaults live in Monad source.
+    raw_io_passthrough (rt_fn_name : String),
     // `IO Bool`-returning natives using the "truthy pointer" C
     // convention (`monad_file_exists`/`monad_is_dir` -- non-null
     // pointer for true, `NULL` for false, NOT already 0/1 like
@@ -518,6 +525,24 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // it, so without it a self-compiled compiler can never run
             // its own `compile` command at all.
             else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.io_passthrough "monad_exec_cmd")
+            // The piped-subprocess family (std/process.mo,
+            // agent-skills.md Phase 4) -- `proc_spawn`/`write`/`read`/
+            // `wait`. All four are `RawIO`-returning C functions in
+            // `runtime.c` that build their own `Result`/`Option`/`I64`
+            // payloads from the fixed prelude tags, so all four take
+            // `raw_io_passthrough`: one `RawIO.io` wrap, with the
+            // user-facing `IO` built by the `Proc.*` wrappers in
+            // process.mo. `proc_read`'s second arg picks the stream
+            // (0 = stdout, 1 = stderr) and `proc_wait`'s picks the
+            // disposition (0 = reap, 1 = SIGKILL-then-reap) -- twin
+            // natives merged behind an I64 flag rather than duplicated.
+            // Deliberately no `native_op_table` entries, for the same
+            // reason the raw-stdio group above has none: a bare key in
+            // that table hijacks every same-named textual callee.
+            else if String.beq target "proc_spawn" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_spawn")
+            else if String.beq target "proc_write" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_write")
+            else if String.beq target "proc_read" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_read")
+            else if String.beq target "proc_wait" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_wait")
             else if String.beq target "list_dir" then Option.some (NativeWrapKind.io_passthrough "monad_list_dir")
             // `IO.get_env` (std/io.mo) -- `IO (Option String)`: the raw
             // result is a real `Option` Constructor built in runtime.c
@@ -869,13 +894,28 @@ def runtime_declarations : List LLVMDeclaration :=
     // `monad_bytebuf_len` (runtime.c) -- `ByteBuf.length`'s backing
     // function: the element count recorded in the `BufObj`.
     let d87 := mk_decl "monad_bytebuf_len" (List.cons "i64" List.empty) "i64" in
+    // The piped-subprocess family (runtime.c) -- every handle, string
+    // and `List String` is one i64 word under the uniform boxed
+    // convention (`Child` is an opaque registry index, `Socket`'s own
+    // trick), and every result is i64: the `Result`/`Option`/`I64`
+    // values these return are constructor POINTERS, and
+    // `raw_io_passthrough` types the call's result as i64 and wraps
+    // that word ONCE as `RawIO.io` (the `.mo` wrappers add the
+    // `IO.mk`) -- the same "declare i64, not the struct you'd expect"
+    // note the three `IO Unit` natives above carry. `monad_proc_read`'s
+    // and `monad_proc_wait`'s second i64 are the stream/kill flags.
+    let d88 := mk_decl "monad_proc_spawn" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d89 := mk_decl "monad_proc_write" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d90 := mk_decl "monad_proc_read" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d91 := mk_decl "monad_proc_wait" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d68, d69, d70, d71, d72,
-     d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d86, d87]
+     d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d86, d87,
+     d88, d89, d90, d91]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

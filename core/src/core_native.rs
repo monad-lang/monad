@@ -326,6 +326,12 @@ pub fn exec_native(
     "flush_stdout" => flush_stdout(natives),
     "write_stderr" => write_stderr(args, natives),
     "exec_cmd" => exec_cmd(args, natives),
+    // The piped-subprocess family (`std/src/process.mo`, agent-skills.md
+    // Phase 4) -- IO-returning, so none of them belongs in PURE_NATIVES.
+    "proc_spawn" => proc_spawn(args, natives),
+    "proc_write" => proc_write(args, natives),
+    "proc_read" => proc_read(args, natives),
+    "proc_wait" => proc_wait(args, natives),
     "fork_io" => fork_io(args, natives),
     // `await_fiber` is NOT dispatched here — it needs `globals`/`cache`
     // (not just `natives`) to actually run the fiber's deferred action;
@@ -420,6 +426,46 @@ fn make_bool(natives: &NativeTable, v: bool) -> Result<Value, CoreEvalError> {
     tag: ctor.tag,
     args: std::sync::Arc::new(Vec::new().into()),
   })
+}
+
+/// `Result.ok <payload>` as a `Value`, via the well-known ctor tags.
+fn make_result_ok(natives: &NativeTable, payload: Value) -> Result<Value, CoreEvalError> {
+  let ok = require_ctor(natives.well_known.result_ok, "Result.ok")?;
+  Ok(Value::Con {
+    tag: ok.tag,
+    args: std::sync::Arc::new(vec![payload].into()),
+  })
+}
+
+/// `Result.err <message>` as a `Value`.
+fn make_result_err(natives: &NativeTable, msg: String) -> Result<Value, CoreEvalError> {
+  let err = require_ctor(natives.well_known.result_err, "Result.err")?;
+  Ok(Value::Con {
+    tag: err.tag,
+    args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(msg.into()))].into()),
+  })
+}
+
+/// `Option.some`/`Option.none` as a `Value` (`Option.some`'s fixed runtime
+/// tag matches `runtime.c`'s, but the interpreter resolves it from the
+/// program like every native-built ctor here).
+fn make_option(natives: &NativeTable, v: Option<Value>) -> Result<Value, CoreEvalError> {
+  match v {
+    Some(inner) => {
+      let some = require_ctor(natives.well_known.option_some, "Option.some")?;
+      Ok(Value::Con {
+        tag: some.tag,
+        args: std::sync::Arc::new(vec![inner].into()),
+      })
+    }
+    None => {
+      let none = require_ctor(natives.well_known.option_none, "Option.none")?;
+      Ok(Value::Con {
+        tag: none.tag,
+        args: std::sync::Arc::new(Vec::new().into()),
+      })
+    }
+  }
 }
 
 /// `int_binop` for operations whose operands are genuinely unsigned: the
@@ -868,15 +914,25 @@ fn string_drop(args: &[Value]) -> Result<Value, CoreEvalError> {
 /// is the opaque native constructor. Both tags are resolved from
 /// `NativeTable::well_known`.
 fn io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> {
-  let raw_io = require_ctor(natives.well_known.raw_io_io, "RawIO.io")?;
+  let raw_val = raw_io_wrap(natives, inner)?;
   let io_mk = require_ctor(natives.well_known.io_mk, "IO.mk")?;
-  let raw_val = Value::Con {
-    tag: raw_io.tag,
-    args: std::sync::Arc::new(vec![inner].into()),
-  };
   Ok(Value::Con {
     tag: io_mk.tag,
     args: std::sync::Arc::new(vec![raw_val].into()),
+  })
+}
+
+/// Wrap a raw value into a `RawIO` value: `RawIO.io inner` -- ONE layer,
+/// not the two-layer `IO.mk (RawIO.io ...)` that `io_wrap` produces. The
+/// `IO.mk` wrapping is done by the `.mo` wrappers in `std/src/process.mo`
+/// (`IO.mk (proc_read c 0)`), exactly the way `IO.pure` does it for
+/// `RawIO.pure` -- the interpreter-side counterpart of codegen's
+/// `NativeWrapKind.raw_io_passthrough`.
+fn raw_io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> {
+  let raw_io = require_ctor(natives.well_known.raw_io_io, "RawIO.io")?;
+  Ok(Value::Con {
+    tag: raw_io.tag,
+    args: std::sync::Arc::new(vec![inner].into()),
   })
 }
 
@@ -890,11 +946,7 @@ fn io_pure(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
     .first()
     .cloned()
     .ok_or_else(|| CoreEvalError::NativeArgError("io_pure needs 1 arg".into()))?;
-  let raw_io = require_ctor(natives.well_known.raw_io_io, "RawIO.io")?;
-  Ok(Value::Con {
-    tag: raw_io.tag,
-    args: std::sync::Arc::new(vec![inner].into()),
-  })
+  raw_io_wrap(natives, inner)
 }
 
 /// `io_bind (a : RawIO A) (f : A -> RawIO B) : RawIO B` — unwraps a
@@ -1020,17 +1072,9 @@ fn array_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   let elems = array_elems(&args[0])?;
   let idx = extract_int(&args[1])?;
   if idx < 0 || idx as usize >= elems.len() {
-    let none = require_ctor(natives.well_known.option_none, "Option.none")?;
-    return Ok(Value::Con {
-      tag: none.tag,
-      args: std::sync::Arc::new(Vec::new().into()),
-    });
+    return make_option(natives, None);
   }
-  let some = require_ctor(natives.well_known.option_some, "Option.some")?;
-  Ok(Value::Con {
-    tag: some.tag,
-    args: std::sync::Arc::new(vec![elems[idx as usize].clone()].into()),
-  })
+  make_option(natives, Some(elems[idx as usize].clone()))
 }
 
 /// `array_with (a : Array A) (i : I64) (v : A) : Array A` -- the
@@ -1120,18 +1164,10 @@ fn string_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
   let idx = extract_int(&args[1])?;
   let bytes = s.as_bytes();
   if idx < 0 || idx as usize >= bytes.len() {
-    let none = require_ctor(natives.well_known.option_none, "Option.none")?;
-    return Ok(Value::Con {
-      tag: none.tag,
-      args: std::sync::Arc::new(Vec::new().into()),
-    });
+    return make_option(natives, None);
   }
-  let some = require_ctor(natives.well_known.option_some, "Option.some")?;
   let byte = bytes[idx as usize] as i64;
-  Ok(Value::Con {
-    tag: some.tag,
-    args: std::sync::Arc::new(vec![Value::Lit(IrLit::Num(byte, NumSuffix::U8))].into()),
-  })
+  make_option(natives, Some(Value::Lit(IrLit::Num(byte, NumSuffix::U8))))
 }
 
 /// `String.get_char (s : String) (i : I64) : Option Char` — indexes by
@@ -1147,17 +1183,9 @@ fn string_get_char(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
   let idx = extract_int(&args[1])?;
   let chars: Vec<char> = s.chars().collect();
   if idx < 0 || idx as usize >= chars.len() {
-    let none = require_ctor(natives.well_known.option_none, "Option.none")?;
-    return Ok(Value::Con {
-      tag: none.tag,
-      args: std::sync::Arc::new(Vec::new().into()),
-    });
+    return make_option(natives, None);
   }
-  let some = require_ctor(natives.well_known.option_some, "Option.some")?;
-  Ok(Value::Con {
-    tag: some.tag,
-    args: std::sync::Arc::new(vec![Value::Lit(IrLit::Char(chars[idx as usize]))].into()),
-  })
+  make_option(natives, Some(Value::Lit(IrLit::Char(chars[idx as usize]))))
 }
 
 /// `IO.read_file (path : String) : IO String` — `Monad.bind`'s own `IO`
@@ -1267,20 +1295,8 @@ fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
   }
   let name = extract_string(&args[0])?;
   let opt = match std::env::var(name) {
-    Ok(value) => {
-      let some = require_ctor(natives.well_known.option_some, "Option.some")?;
-      Value::Con {
-        tag: some.tag,
-        args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(value.into()))].into()),
-      }
-    }
-    Err(_) => {
-      let none = require_ctor(natives.well_known.option_none, "Option.none")?;
-      Value::Con {
-        tag: none.tag,
-        args: std::sync::Arc::new(Vec::new().into()),
-      }
-    }
+    Ok(value) => make_option(natives, Some(Value::Lit(IrLit::Str(value.into()))))?,
+    Err(_) => make_option(natives, None)?,
   };
   io_wrap(natives, opt)
 }
@@ -1348,21 +1364,13 @@ fn read_line(natives: &NativeTable) -> Result<Value, CoreEvalError> {
     .read_until(b'\n', &mut buf)
     .map_err(|e| CoreEvalError::NativeArgError(format!("read_line failed: {e}")))?;
   let opt = if n == 0 {
-    let none = require_ctor(natives.well_known.option_none, "Option.none")?;
-    Value::Con {
-      tag: none.tag,
-      args: std::sync::Arc::new(Vec::new().into()),
-    }
+    make_option(natives, None)?
   } else {
     if buf.last() == Some(&b'\n') {
       buf.pop();
     }
     let line = String::from_utf8_lossy(&buf).into_owned();
-    let some = require_ctor(natives.well_known.option_some, "Option.some")?;
-    Value::Con {
-      tag: some.tag,
-      args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(line.into()))].into()),
-    }
+    make_option(natives, Some(Value::Lit(IrLit::Str(line.into()))))?
   };
   io_wrap(natives, opt)
 }
@@ -1760,6 +1768,291 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
     .map_err(|e| CoreEvalError::NativeArgError(format!("exec_cmd \"{cmd}\" failed: {e}")))?;
   let exit_code = status.code().unwrap_or(-1) as i64;
   io_wrap(natives, Value::Lit(IrLit::Num(exit_code, NumSuffix::I64)))
+}
+
+// ── Piped subprocesses (std/src/process.mo, agent-skills.md Phase 4) ──
+//
+// `exec_cmd` waits and returns only an exit status; a protocol peer
+// (the MCP client's stdio transport) needs to WRITE the child's stdin,
+// READ its stdout/stderr line by line while it runs, and kill it. That
+// requires state that outlives a single native call, so each child
+// lives in a registry and the `Child` value handed to Monad is the
+// 1-based slot index -- the same opaque-word trick `Socket` uses in
+// the compiled backend (`runtime.c`), never a constructor. The
+// compiled backend keeps its OWN registry beside `monad_exec_cmd` in
+// `runtime.c`; the two agree on the surface (`std/src/process.mo`) but
+// not on the handle VALUES, which are opaque and never cross a
+// process boundary.
+//
+// The four natives here return `RawIO <payload>` -- a SINGLE
+// `RawIO.io` layer via `raw_io_wrap`, not the two-layer `io_wrap` --
+// and the `Proc.*` wrappers in `std/src/process.mo` build the
+// user-facing `IO` type with `IO.mk`, the same split `IO.pure`/
+// `RawIO.pure` already use. That keeps the payload building here and
+// the naming/defaults in `.mo` source, and it is what codegen's
+// `NativeWrapKind.raw_io_passthrough` emits compiled.
+//
+// `Mutex` because `run_tests_parallel` runs `#[test]` defs on real
+// threads that all reach this one table. The lock is per native call,
+// never per byte, and `proc_read` does its blocking `read_line`
+// OUTSIDE the lock (it takes the `BufReader` out, reads, puts it back)
+// -- holding the lock across a blocking read would deadlock every
+// other test thread's proc native against a child that never writes.
+
+/// One live child with its three pipe ends. `stdin` is `Option`
+/// because `Child::wait` wants it dropped before reaping (a child
+/// blocked on stdin-EOF would otherwise hang `wait`); `out`/`err` are
+/// `BufReader`s so a line costs one `read` per buffer, not per byte.
+struct ProcChild {
+  child: std::process::Child,
+  stdin: Option<std::process::ChildStdin>,
+  out: Option<std::io::BufReader<std::process::ChildStdout>>,
+  err: Option<std::io::BufReader<std::process::ChildStderr>>,
+}
+
+static PROC_CHILDREN: std::sync::LazyLock<std::sync::Mutex<Vec<Option<ProcChild>>>> =
+  std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+fn proc_registry() -> Result<std::sync::MutexGuard<'static, Vec<Option<ProcChild>>>, CoreEvalError>
+{
+  PROC_CHILDREN
+    .lock()
+    .map_err(|_| CoreEvalError::NativeArgError("proc registry poisoned".into()))
+}
+
+/// `Proc.spawn (cmd : String) (args : List String) : RawIO (Result String
+/// Child)` -- fork+exec with all three standard streams piped. stdout
+/// and stderr are SEPARATE pipes (unlike `Proc.capture`'s merged
+/// redirect): a protocol stream must not have a server's log lines
+/// spliced into its JSON frames. Errors before the child exists are
+/// `Result.err` rather than a native failure, matching the surface
+/// the compiled backend's `monad_proc_spawn` returns.
+fn proc_spawn(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "proc_spawn needs 2 args".into(),
+    ));
+  }
+  let cmd = extract_string(&args[0])?;
+  let cmd_args = extract_string_list(&args[1], natives)?;
+  // The child inherits nothing (all three streams are pipes), so the
+  // stdout-flush `exec_cmd` needs does not apply -- but flushing keeps
+  // our own pending output ahead of anything the child writes to a
+  // shared terminal in a non-piped context, and costs nothing.
+  {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+  }
+  let spawned = std::process::Command::new(cmd)
+    .args(&cmd_args)
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .spawn();
+  let mut child = match spawned {
+    Ok(c) => c,
+    Err(e) => {
+      return raw_io_wrap(
+        natives,
+        make_result_err(natives, format!("proc_spawn \"{cmd}\" failed: {e}"))?,
+      );
+    }
+  };
+  let stdin = child.stdin.take();
+  let out = child.stdout.take().map(std::io::BufReader::new);
+  let err = child.stderr.take().map(std::io::BufReader::new);
+  let handle = {
+    let mut reg = proc_registry()?;
+    reg.push(Some(ProcChild {
+      child,
+      stdin,
+      out,
+      err,
+    }));
+    reg.len() as i64
+  };
+  raw_io_wrap(
+    natives,
+    make_result_ok(natives, Value::Lit(IrLit::Num(handle, NumSuffix::I64)))?,
+  )
+}
+
+/// The slot index for a `Child` handle, or a `Result.err` message --
+/// shared by every handle-taking native below.
+fn proc_handle(args: &[Value], name: &'static str) -> Result<usize, CoreEvalError> {
+  let h = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError(format!("{name} needs 1 arg")))?,
+  )?;
+  if h < 1 {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "{name}: not a child handle: {h}"
+    )));
+  }
+  Ok(h as usize)
+}
+
+/// `Proc.write (c : Child) (s : String) : RawIO (Result String U64)` --
+/// bytes written, or `Result.err` (a dead child's EPIPE arrives here,
+/// which is the caller's signal the peer is gone).
+fn proc_write(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "proc_write needs 2 args".into(),
+    ));
+  }
+  let slot = proc_handle(args, "proc_write")?;
+  let s = extract_string(&args[1])?;
+  let outcome = {
+    let mut reg = proc_registry()?;
+    match reg.get_mut(slot - 1) {
+      Some(Some(pc)) => match pc.stdin.as_mut() {
+        None => Err("proc_write: child's stdin is closed".to_string()),
+        Some(w) => {
+          use std::io::Write;
+          w.write_all(s.as_bytes())
+            .and_then(|()| w.flush())
+            .map_err(|e| format!("proc_write: {e}"))
+        }
+      },
+      _ => Err("proc_write: no such child".to_string()),
+    }
+  };
+  let value = match outcome {
+    Err(msg) => make_result_err(natives, msg)?,
+    Ok(()) => make_result_ok(
+      natives,
+      Value::Lit(IrLit::Num(s.len() as i64, NumSuffix::U64)),
+    )?,
+  };
+  raw_io_wrap(natives, value)
+}
+
+/// One complete, newline-terminated line off `r`, or `None` at end of
+/// stream. A partial line at EOF (bytes with no trailing newline) is
+/// DISCARDED: JSON-RPC-over-stdio frames are newline-terminated by
+/// specification, so those bytes are a truncated message, not a
+/// message -- surfacing them as one would fabricate a frame the peer
+/// never finished writing. `BufRead::read_line` only returns without a
+/// newline at EOF, so the `ends_with` check IS the EOF-mid-message
+/// test, and both backends agree on the answer.
+fn proc_line<R: std::io::BufRead>(r: &mut R) -> std::io::Result<Option<String>> {
+  let mut s = String::new();
+  let n = r.read_line(&mut s)?;
+  if n == 0 || !s.ends_with('\n') {
+    return Ok(None);
+  }
+  s.pop();
+  Ok(Some(s))
+}
+
+/// `Proc.read_line`/`Proc.read_stderr_line : Child -> IO (Result String
+/// (Option String))` -- `Option.none` is end of stream (or a truncated
+/// final line), `Option.some line` is one line WITHOUT its trailing
+/// newline but WITH any `\r` (toolkit's framing trims that -- the same
+/// split of responsibilities the compiled backend uses).
+///
+/// The take-out, blocking-read, put-back dance shared by the stdout
+/// and stderr readers. `take` pulls the stream out of the slot (so the
+/// registry lock is NOT held across a blocking read -- see the
+/// registry's own comment), `put` returns it; the two closures exist
+/// only because `BufReader<ChildStdout>` and `BufReader<ChildStderr>`
+/// are different types that no single field access could name. A panic
+/// between take and put-back loses the slot, which a test crash
+/// already abandons.
+fn proc_read_stream<T: std::io::Read>(
+  slot: usize,
+  take: impl Fn(&mut ProcChild) -> Option<std::io::BufReader<T>>,
+  put: impl Fn(&mut ProcChild, Option<std::io::BufReader<T>>),
+) -> std::io::Result<Option<String>> {
+  let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
+  let mut taken = match reg.get_mut(slot - 1) {
+    Some(Some(pc)) => take(pc),
+    _ => return Err(std::io::Error::other("no such child")),
+  };
+  drop(reg);
+  let r = match &mut taken {
+    None => Err(std::io::Error::other("stream already closed")),
+    Some(reader) => proc_line(reader),
+  };
+  if r.is_ok() && taken.is_some() {
+    let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(pc) = reg.get_mut(slot - 1).and_then(|o| o.as_mut()) {
+      put(pc, taken);
+    }
+  }
+  r
+}
+
+/// `Proc.read (c : Child) (stream : I64) : RawIO (Result String (Option
+/// String))` -- one line of the child's chosen stream (`stream` 0 =
+/// stdout, 1 = stderr), the former `read_line`/`read_stderr_line` twins
+/// merged behind one flag. `Option.none` is end of stream (or a
+/// truncated final line), `Option.some line` is one line WITHOUT its
+/// trailing newline but WITH any `\r` (toolkit's framing trims that --
+/// the same split of responsibilities the compiled backend uses). See
+/// `proc_read_stream`'s own doc for why the lock is not held across
+/// the blocking read.
+fn proc_read(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "proc_read needs 2 args".into(),
+    ));
+  }
+  let slot = proc_handle(args, "proc_read")?;
+  let stderr = extract_int(&args[1])? != 0;
+  let outcome = if stderr {
+    proc_read_stream(slot, |pc| pc.err.take(), |pc, r| pc.err = r)
+  } else {
+    proc_read_stream(slot, |pc| pc.out.take(), |pc, r| pc.out = r)
+  };
+  let value = match outcome {
+    Err(e) => make_result_err(natives, format!("proc_read: {e}"))?,
+    Ok(opt) => make_result_ok(
+      natives,
+      make_option(natives, opt.map(|s| Value::Lit(IrLit::Str(s.into()))))?,
+    )?,
+  };
+  raw_io_wrap(natives, value)
+}
+
+/// `Proc.wait (c : Child) (kill : I64) : RawIO I64` -- close the pipes,
+/// reap the child, FREE the slot (the handle dies with it; a stale
+/// handle may alias a later child's, so nothing may use one after
+/// `wait`), and return `WEXITSTATUS`, or -1 on a signal -- `exec_cmd`'s
+/// own convention. With `kill` set, SIGKILL the child first, so one
+/// call is the whole "kill, then reap" teardown (the former separate
+/// `proc_kill` never reaped, which left every caller hand-rolling the
+/// same kill-then-wait pair). Killing an already-exited child is not
+/// an error either way -- a disposer must be idempotent.
+fn proc_wait(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "proc_wait needs 2 args".into(),
+    ));
+  }
+  let slot = proc_handle(args, "proc_wait")?;
+  let kill_first = extract_int(&args[1])? != 0;
+  let taken = {
+    let mut reg = proc_registry()?;
+    match reg.get_mut(slot - 1) {
+      Some(Some(_)) => reg.get_mut(slot - 1).and_then(|o| o.take()),
+      _ => None,
+    }
+  };
+  let code = match taken {
+    None => -1,
+    Some(mut pc) => {
+      // Drop stdin FIRST: a child blocked on stdin-EOF would hang here.
+      pc.stdin.take();
+      if kill_first {
+        let _ = pc.child.kill();
+      }
+      pc.child.wait().ok().and_then(|s| s.code()).unwrap_or(-1) as i64
+    }
+  };
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(code, NumSuffix::I64)))
 }
 
 /// `IO.current_time` (std/io.mo). `IO.io`-wrapped, like every other

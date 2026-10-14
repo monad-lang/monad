@@ -28,10 +28,12 @@
 #include <dirent.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 typedef struct {
     _Atomic(int64_t) refcount;
@@ -1476,6 +1478,31 @@ char* monad_f64_to_string(int64_t v) {
     return res;
 }
 
+/* A NULL-terminated argv for `execvp(cmd, argv)`: argv[0] = cmd, then one
+ * entry per `List String` cons cell (tag 6: head field 0, tail field 1),
+ * then NULL. malloc'd, never GC'd -- the callers free it (or, in
+ * `monad_proc_spawn`'s child half, the `_exit` makes that moot). Shared
+ * by `monad_exec_cmd` and `monad_proc_spawn`, which used to carry two
+ * verbatim copies of the same two-pass walk (count, then fill). Returns
+ * NULL only on malloc failure. */
+static char** monad_build_argv(char* cmd, void* args) {
+    int64_t argc = 0;
+    for (void* cur = args; cur && monad_get_tag(cur) == 6; ) {
+        argc++;
+        cur = monad_get_field(cur, 1);
+    }
+    char** argv = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
+    if (!argv) return NULL;
+    argv[0] = cmd;
+    int64_t i = 1;
+    for (void* cur = args; cur && monad_get_tag(cur) == 6; ) {
+        argv[i++] = (char*)monad_get_field(cur, 0);
+        cur = monad_get_field(cur, 1);
+    }
+    argv[i] = NULL;
+    return argv;
+}
+
 /* `#[native "exec_cmd"]` (std/process.mo, `exec_cmd : String -> List
    String -> IO I64`). THE load-bearing native for the bootstrap ladder:
    lang/codegen/link.mo shells out to `llc` and `clang` through this, so
@@ -1489,20 +1516,8 @@ char* monad_f64_to_string(int64_t v) {
    reference's `status.code().unwrap_or(-1)`. The wrapper
    (native_runtime_fn_name's io_passthrough kind) does the IO boxing. */
 int64_t monad_exec_cmd(char* cmd, void* args) {
-    int64_t argc = 0;
-    for (void* cur = args; cur && monad_get_tag(cur) == 6; ) {
-        argc++;
-        cur = monad_get_field(cur, 1);
-    }
-    char** argv = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
+    char** argv = monad_build_argv(cmd, args);
     if (!argv) return -1;
-    argv[0] = cmd;
-    int64_t i = 1;
-    for (void* cur = args; cur && monad_get_tag(cur) == 6; ) {
-        argv[i++] = (char*)monad_get_field(cur, 0);
-        cur = monad_get_field(cur, 1);
-    }
-    argv[i] = NULL;
 
     /* The child inherits this process's stdout. When that stdout is a
        pipe or a file rather than a terminal, libc block-buffers it, so
@@ -1521,6 +1536,325 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     }
     int status = 0;
     free(argv);
+    if (waitpid(pid, &status, 0) < 0) return -1;
+    return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
+}
+
+/* The runtime's Result-value helpers, shared by the piped-subprocess
+   section below and the tcp section below it -- the `tcp_` names
+   predate the second user. `Result.ok` is tag 10, `Result.err` tag 11
+   and `Unit.unit` tag 0 -- `lang/src/codegen/ctors.mo`'s fixed prelude
+   tags, the same table the generated `rt_tag_*` helpers mirror. The
+   ok field holds a raw word, so one `tcp_ok` serves an fd, a byte count,
+   a child slot and a `List U8` pointer alike. */
+static void* tcp_ok(void* payload) {
+    Constructor* ok = (Constructor*)alloc_constructor(10, 1);
+    if (ok) ok->fields[0] = payload;
+    return ok;
+}
+
+/* `Result.err` (tag 11) carrying `<a>: <b>`, or `<a>: <b> (os error
+   <n>)` when `errnum` is positive. The message is COPIED into a
+   GC-visible buffer: `strerror`'s storage is libc's and a format
+   string is the caller's, and every other `String` here is an owned
+   char* (same reasoning as `monad_get_env` above). */
+static void* tcp_err_pair(const char* a, const char* b, int errnum) {
+    char buf[512];
+    if (errnum != 0) {
+        snprintf(buf, sizeof(buf), "%s: %s (os error %d)", a, b, errnum);
+    } else {
+        snprintf(buf, sizeof(buf), "%s: %s", a, b);
+    }
+    size_t len = strlen(buf);
+    char* copy = (char*)monad_alloc_atomic(len + 1);
+    if (copy) memcpy(copy, buf, len + 1);
+    Constructor* err = (Constructor*)alloc_constructor(11, 1);
+    if (err) err->fields[0] = copy;
+    return err;
+}
+
+/* `<op>: <strerror> (os error <errno>)` -- the shape the deleted Rust
+   implementation got from `std::io::Error`'s own Display. Nothing in
+   the corpus asserts on the text; keeping the shape keeps a familiar
+   debugging aid. */
+static void* tcp_os_err(const char* op, int errnum) {
+    return tcp_err_pair(op, strerror(errnum), errnum);
+}
+
+/* `Unit.unit` (tag 0). The nullary cache makes this the same instance
+   every call. */
+static void* tcp_unit(void) {
+    return alloc_constructor(0, 0);
+}
+
+/* ── Piped subprocesses (std/process.mo, agent-skills.md Phase 4) ──────
+ *
+ * `monad_exec_cmd` waits and returns a status; the MCP client's stdio
+ * transport needs a child that STAYS alive between native calls --
+ * write its stdin, read its stdout a line at a time, keep stderr
+ * separate, kill it. Each live child therefore lives in the registry
+ * below and the `Child` value Monad holds is the 1-based slot index
+ * (never a constructor -- `Socket`'s own trick, in the same file).
+ * The Rust host keeps its own registry in `core_native.rs`; the two
+ * agree on the surface (`std/src/process.mo`), not on handle values,
+ * which are opaque and never cross a process boundary.
+ *
+ * No lock: this registry is only ever touched from the one thread that
+ * drives the interpreter loop, the same assumption `monad_exec_cmd`'s
+ * own fork already makes. */
+#define MONAD_PROC_MAX 64
+
+typedef struct {
+    pid_t pid;
+    int in_fd;   /* parent's write end of the child's stdin */
+    int out_fd;  /* parent's read end of the child's stdout */
+    int err_fd;  /* parent's read end of the child's stderr */
+    int live;
+} ProcChild;
+
+static ProcChild proc_registry[MONAD_PROC_MAX];
+
+static ProcChild* proc_slot(int64_t handle) {
+    if (handle < 1 || handle > MONAD_PROC_MAX) return NULL;
+    ProcChild* pc = &proc_registry[handle - 1];
+    return pc->live ? pc : NULL;
+}
+
+/* `proc_spawn : String -> List String -> RawIO (Result String Child)`
+ * -- argv via `monad_build_argv` (the same builder `monad_exec_cmd`
+ * uses), then TWO pipes per stream direction: stdin's parent end is a
+ * WRITE fd, stdout's and stderr's are READ fds, and stdout/stderr never
+ * merge (the opposite of `Proc.capture`'s merged `2>&1`, which is right
+ * for a toolchain probe and wrong for a protocol stream -- a server's
+ * stderr log line must not land inside the JSON-RPC framing).
+ *
+ * The natives in this section return the RAW payload (a `Result`/
+ * `Option`/`I64`); the `raw_io_passthrough` wrapper emitted by codegen
+ * wraps it once as `RawIO.io`, and the `.mo` wrappers in std/process.mo
+ * build the user-facing `IO` type on top.
+ *
+ * EXEC FAILURE IS AN ERROR, not a child that exits 127: a fourth pipe,
+ * both ends `O_CLOEXEC`, is the handshake. The child writes one errno
+ * byte only if `execvp` fails and exits; a SUCCESSFUL exec closes the
+ * write end automatically, so the parent's single `read` answers EOF
+ * ("running") or one byte ("could not run, and why") -- the same
+ * `Result.err` the Rust host's `Command::spawn` already reports, which
+ * is the contract `std/src/process.mo` declares. */
+void* monad_proc_spawn(char* cmd, void* args) {
+    char** argv = monad_build_argv(cmd, args);
+    if (!argv) return tcp_err_pair("proc_spawn", "out of memory", 0);
+
+    int in_pipe[2], out_pipe[2], err_pipe[2];
+    if (pipe(in_pipe) < 0) {
+        free(argv);
+        return tcp_os_err("proc_spawn", errno);
+    }
+    if (pipe(out_pipe) < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        free(argv);
+        return tcp_os_err("proc_spawn", errno);
+    }
+    if (pipe(err_pipe) < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        free(argv);
+        return tcp_os_err("proc_spawn", errno);
+    }
+    int status_pipe[2];
+    if (pipe(status_pipe) < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        free(argv);
+        return tcp_os_err("proc_spawn", errno);
+    }
+    /* FD_CLOEXEC by hand rather than pipe2(2): this file defines no
+     * _GNU_SOURCE, and both ends must close on a successful exec for
+     * the one-read handshake below to work. */
+    fcntl(status_pipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC);
+
+    fflush(NULL); /* same ordering concern as `monad_exec_cmd` */
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(status_pipe[0]); close(status_pipe[1]);
+        free(argv);
+        return tcp_os_err("proc_spawn", errno);
+    }
+    if (pid == 0) {
+        dup2(in_pipe[0], 0);
+        dup2(out_pipe[1], 1);
+        dup2(err_pipe[1], 2);
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(status_pipe[0]);
+        execvp(cmd, argv);
+        unsigned char exec_errno = (errno > 0 && errno < 256) ? (unsigned char)errno : 127;
+        ssize_t ignored = write(status_pipe[1], &exec_errno, 1);
+        (void)ignored;
+        _exit(127); /* exec failed -- conventional shell code */
+    }
+    free(argv);
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    close(err_pipe[1]);
+    close(status_pipe[1]);
+
+    /* The exec verdict: EOF is success (the CLOEXEC write end died with
+     * the exec), one byte is the errno of a spawn that never happened.
+     * A failed spawn leaves no registry entry and no fds -- the child
+     * is reaped before the error is returned, so nothing leaks. */
+    unsigned char exec_errno = 0;
+    ssize_t n;
+    do {
+        n = read(status_pipe[0], &exec_errno, 1);
+    } while (n < 0 && errno == EINTR);
+    close(status_pipe[0]);
+    if (n == 1) {
+        close(in_pipe[1]); close(out_pipe[0]); close(err_pipe[0]);
+        waitpid(pid, NULL, 0);
+        return tcp_os_err("proc_spawn", exec_errno);
+    }
+
+    int slot = -1;
+    for (int k = 0; k < MONAD_PROC_MAX; k++) {
+        if (!proc_registry[k].live) { slot = k; break; }
+    }
+    if (slot < 0) {
+        /* Refuse rather than hand back a child nobody could ever reap:
+         * the registry's size is the bound on leaked children, and a
+         * spawn that cannot be recorded is torn down on the spot. */
+        kill(pid, SIGKILL);
+        close(in_pipe[1]); close(out_pipe[0]); close(err_pipe[0]);
+        waitpid(pid, NULL, 0);
+        return tcp_err_pair("proc_spawn", "child registry full", 0);
+    }
+    proc_registry[slot].pid = pid;
+    proc_registry[slot].in_fd = in_pipe[1];
+    proc_registry[slot].out_fd = out_pipe[0];
+    proc_registry[slot].err_fd = err_pipe[0];
+    proc_registry[slot].live = 1;
+    return tcp_ok((void*)(int64_t)(slot + 1));
+}
+
+/* `proc_write : Child -> String -> IO (Result String U64)` -- write_all
+ * with EINTR retries; EPIPE lands in the `Result.err`, which is the
+ * caller's signal the peer is gone. */
+void* monad_proc_write(int64_t handle, char* s) {
+    ProcChild* pc = proc_slot(handle);
+    if (!pc) return tcp_err_pair("proc_write", "no such child", 0);
+    size_t len = strlen(s);
+    size_t done = 0;
+    while (done < len) {
+        ssize_t w = write(pc->in_fd, s + done, len - done);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return tcp_os_err("proc_write", errno);
+        }
+        done += (size_t)w;
+    }
+    return tcp_ok((void*)(int64_t)(uint64_t)done);
+}
+
+/* One line off `fd`: `Result.ok (Option.some <line>)` without the
+ * trailing newline (any `\r` stays -- toolkit's framing trims it),
+ * `Result.ok (Option.none)` at end of stream. A partial line cut off
+ * by EOF is DISCARDED, for the reason `std/src/process.mo`'s own
+ * `read_line` doc records: a frame without its newline is a truncated
+ * message, not a message, and the Rust host's `proc_line` agrees.
+ *
+ * Deliberately NOT shared with `monad_read_line` below, its one
+ * near-twin in this file: the two differ on exactly three policies that
+ * would all have to become flags -- a partial line at EOF (discarded
+ * here, delivered there), a read error (`Result.err` here, EOF there),
+ * and buffer ownership (malloc + copy into GC memory here, because the
+ * payload is wrapped in a `Result`; the buffer itself is handed back
+ * there, because nothing wraps it). A shared core with three policy
+ * flags would be longer than the two readers.
+ *
+ * Byte-at-a-time, deliberately: a per-slot pushback buffer would make
+ * this one syscall per line instead of per byte, at the cost of
+ * per-slot buffer state and a growth path -- and protocol lines are
+ * small (this is the same call the lsp server's own reader makes, see
+ * that file's header). `Option.some` is tag 4 arity 1, `Option.none`
+ * tag 3 arity 0, the fixed prelude tags `monad_get_env` already uses. */
+static void* proc_read_line_off(int fd, const char* who) {
+    size_t cap = 256, len = 0;
+    char* buf = (char*)malloc(cap);
+    if (!buf) return tcp_err_pair(who, "out of memory", 0);
+    for (;;) {
+        char c;
+        ssize_t r = read(fd, &c, 1);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            free(buf);
+            return tcp_os_err(who, errno);
+        }
+        if (r == 0) {
+            free(buf);
+            return tcp_ok(alloc_constructor(3, 0)); /* Option.none */
+        }
+        if (c == '\n') {
+            buf[len] = '\0';
+            char* copy = (char*)monad_alloc_atomic(len + 1);
+            if (copy) memcpy(copy, buf, len + 1);
+            free(buf);
+            if (!copy) return tcp_err_pair(who, "out of memory", 0);
+            Constructor* some = (Constructor*)alloc_constructor(4, 1);
+            if (some) some->fields[0] = copy;
+            return tcp_ok(some);
+        }
+        if (len + 2 > cap) {
+            cap *= 2;
+            char* grown = (char*)realloc(buf, cap);
+            if (!grown) {
+                free(buf);
+                return tcp_err_pair(who, "out of memory", 0);
+            }
+            buf = grown;
+        }
+        buf[len++] = c;
+    }
+}
+
+/* `proc_read : Child -> I64 -> RawIO (Result String (Option String))`
+ * -- one line of the child's chosen stream, `stream` 0 = stdout (the
+ * protocol stream) and 1 = stderr (the log stream). One entry point,
+ * one line reader, one flag: the two former twins (`proc_read_line` /
+ * `proc_read_stderr_line`) differed only in which fd they handed
+ * `proc_read_line_off`. */
+void* monad_proc_read(int64_t handle, int64_t stream) {
+    ProcChild* pc = proc_slot(handle);
+    if (!pc) return tcp_err_pair("proc_read", "no such child", 0);
+    return proc_read_line_off(stream ? pc->err_fd : pc->out_fd, "proc_read");
+}
+
+/* `proc_wait : Child -> I64 -> RawIO I64` -- close the pipes, free the
+ * slot (the handle dies with the child; a stale handle may alias a later
+ * child, so nothing may use one after `wait`), reap, and return
+ * `WEXITSTATUS` or -1 on a signal -- `monad_exec_cmd`'s convention.
+ * With `kill_first` set, SIGKILL the child FIRST, so one call is the
+ * whole "kill, then reap" teardown a mounted server's disposer needs
+ * (the former separate `proc_kill` never reaped, which left every
+ * caller hand-rolling the same kill-then-wait pair). Killing an
+ * already-exited child is not an error either way -- a disposer must
+ * be idempotent -- and the child is reaped before the slot is freed, so
+ * the pid cannot have been recycled. */
+int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
+    ProcChild* pc = proc_slot(handle);
+    if (!pc) return -1;
+    if (kill_first) kill(pc->pid, SIGKILL);
+    close(pc->in_fd);
+    close(pc->out_fd);
+    close(pc->err_fd);
+    pc->live = 0;
+    pid_t pid = pc->pid;
+    int status = 0;
     if (waitpid(pid, &status, 0) < 0) return -1;
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
 }
@@ -1699,51 +2033,6 @@ void* monad_get_env(char* name) {
        write to a peer that already closed would otherwise kill the
        process instead of returning `Result.err`.
 */
-
-/* Build `Result.ok <word>`. `Result.ok` is tag 10, `Result.err` tag 11
-   and `Unit.unit` tag 0 -- `lang/src/codegen/ctors.mo`'s fixed prelude
-   tags, the same table the generated `rt_tag_*` helpers mirror. The
-   field holds a raw word, so one `tcp_ok` serves an fd, a byte count
-   and a `List U8` pointer alike. */
-static void* tcp_ok(void* payload) {
-    Constructor* ok = (Constructor*)alloc_constructor(10, 1);
-    if (ok) ok->fields[0] = payload;
-    return ok;
-}
-
-/* `Result.err` (tag 11) carrying `<a>: <b>`, or `<a>: <b> (os error
-   <n>)` when `errnum` is positive. The message is COPIED into a
-   GC-visible buffer: `strerror`'s storage is libc's and a format
-   string is the caller's, and every other `String` here is an owned
-   char* (same reasoning as `monad_get_env` above). */
-static void* tcp_err_pair(const char* a, const char* b, int errnum) {
-    char buf[512];
-    if (errnum != 0) {
-        snprintf(buf, sizeof(buf), "%s: %s (os error %d)", a, b, errnum);
-    } else {
-        snprintf(buf, sizeof(buf), "%s: %s", a, b);
-    }
-    size_t len = strlen(buf);
-    char* copy = (char*)monad_alloc_atomic(len + 1);
-    if (copy) memcpy(copy, buf, len + 1);
-    Constructor* err = (Constructor*)alloc_constructor(11, 1);
-    if (err) err->fields[0] = copy;
-    return err;
-}
-
-/* `<op>: <strerror> (os error <errno>)` -- the shape the deleted Rust
-   implementation got from `std::io::Error`'s own Display. Nothing in
-   the corpus asserts on the text; keeping the shape keeps a familiar
-   debugging aid. */
-static void* tcp_os_err(const char* op, int errnum) {
-    return tcp_err_pair(op, strerror(errnum), errnum);
-}
-
-/* `Unit.unit` (tag 0). The nullary cache makes this the same instance
-   every call. */
-static void* tcp_unit(void) {
-    return alloc_constructor(0, 0);
-}
 
 /* Count a `List U8` cons chain -- `monad_string_from_list`'s own walk,
    split out because `tcp_write` needs the length before it needs the
@@ -2096,7 +2385,8 @@ int64_t monad_bytebuf_len(int64_t b) {
    Byte-at-a-time deliberately: anything that reads a block ahead would
    consume bytes belonging to the caller's NEXT read. A line is short,
    so the syscall per byte costs nothing worth optimizing against a
-   desynchronized protocol stream. */
+   desynchronized protocol stream. Its near-twin `proc_read_line_off`
+   (above) explains why the two readers stay separate. */
 char* monad_read_line(void) {
     size_t cap = 64;
     size_t len = 0;

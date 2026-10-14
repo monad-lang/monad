@@ -4207,6 +4207,29 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                             },
                     },
             },
+        NativeWrapKind.raw_io_passthrough rt_fn_name =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 raw_temp =>
+                    match fresh_temp ctx1 {
+                        CtxStrPair.mk ctx2 raw_io_temp =>
+                            let call_val := LLVMValue.call rt_fn_name LLVMType.i64_ (parm_values_for params) false in
+                            let raw_instr := LLVMInstruction.assign raw_temp call_val in
+                            // ONE layer only: RawIO.io raw_temp. The outer
+                            // `IO.mk` is deliberately absent -- the `.mo`
+                            // wrappers in std/src/process.mo add it, the
+                            // same split `IO.pure`/`RawIO.pure` use, so the
+                            // native stays a raw payload producer.
+                            let raw_alloc := LLVMValue.alloc_constructor (constructor_tag c "RawIO.io") (List.cons (LLVMValue.var_ raw_temp) List.empty) in
+                            let raw_alloc_instr := LLVMInstruction.assign raw_io_temp raw_alloc in
+                            match build_set_field_instrs (LLVMValue.var_ raw_io_temp) (List.cons (LLVMValue.var_ raw_temp) List.empty) 0 ctx2 {
+                                { ctx := ctx_set, instrs := raw_set_instrs } =>
+                                    let entry_instrs := List.cons raw_instr (List.cons raw_alloc_instr (List.append raw_set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ raw_io_temp)) List.empty))) in
+                                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
+                                    { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty },
+                            },
+                    },
+            },
         NativeWrapKind.io_truthy_ptr_bool_result rt_fn_name =>
             match fresh_temp c {
                 CtxStrPair.mk ctx1 raw_temp =>
@@ -5526,6 +5549,36 @@ def test_native_i64_family_entries_are_wired : Bool :=
         && native_wrap_is_some (native_attr "i64_lt")
         && native_wrap_is_some (native_attr "i64_gt")
 
+/// `raw_io_passthrough`, not `io_passthrough`: the proc natives return
+/// the `RawIO` payload ALONE -- exactly ONE `alloc_constructor` (the
+/// inner `RawIO.io`), where `io_passthrough` would emit TWO (inner
+/// `RawIO.io` plus the outer `IO.mk`). The outer `IO.mk` layer is the
+/// `.mo` wrappers' job (`std/src/process.mo`), the same split
+/// `IO.pure`/`RawIO.pure` use. An exact count is the only way to tell
+/// the two wrap kinds apart in the emitted IR: both call the same
+/// runtime fn and both allocate. `proc_read` is pinned; the other
+/// three share its wrap kind and are pinned, as a group, by
+/// `test_native_proc_family_entries_are_wired` below.
+#[test]
+def test_native_proc_read_wraps_raw_io_not_io : Bool :=
+    let text := compile_native_def_fixture_text "Proc.read" "proc_read" in
+    if check_contains text "call i64 @monad_proc_read"
+    then if I64.beq (check_count text "@alloc_constructor") 1
+        then not (check_contains text "@alloc_constructor(i64 0, i64 0)")
+        else false
+    else false
+
+/// All four proc natives must have a `native_runtime_fn_name` entry --
+/// without one, a value-position reference compiles to the Unit stub,
+/// silently (the same gap `test_native_i64_family_entries_are_wired`
+/// pins for the `I64` family).
+#[test]
+def test_native_proc_family_entries_are_wired : Bool :=
+    native_wrap_is_some (native_attr "proc_spawn")
+        && native_wrap_is_some (native_attr "proc_write")
+        && native_wrap_is_some (native_attr "proc_read")
+        && native_wrap_is_some (native_attr "proc_wait")
+
 /// `Option.some _ => true` -- a presence test without needing a `BEq`
 /// instance for `NativeWrapKind` (there is none, and deriving one just to
 /// compare against `Option.none` would be the tail wagging the dog).
@@ -5729,6 +5782,16 @@ def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true
     else check_contains (String.slice text 1 (String.length text - 1)) needle
+
+/// `check_contains`'s counting sibling -- for tests that must pin an
+/// occurrence count EXACTLY (e.g. one `alloc_constructor`, where a
+/// wrong wrap kind would emit two) rather than detect mere presence.
+#[partial]
+def check_count (text : String) (needle : String) : I64 :=
+    if String.beq text "" then 0
+    else if String.beq (String.slice text 0 (String.length needle)) needle
+    then 1 + check_count (String.slice text 1 (String.length text - 1)) needle
+    else check_count (String.slice text 1 (String.length text - 1)) needle
 
 // === Multi-module compilation ===
 
