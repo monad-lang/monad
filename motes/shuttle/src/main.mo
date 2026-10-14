@@ -10,12 +10,14 @@ use shuttle::registry {ToolRegistry}
 use shuttle::loop {Loop.run}
 use shuttle::tools::file_tools {ReadTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
+use shuttle::tools::shell_tools {ShellTool.impl}
 use std::io {IO.println, IO.write_stderr}
 
 def default_registry : ToolRegistry :=
-    ToolRegistry.register GlobTool.impl
-        (ToolRegistry.register GrepTool.impl
-            (ToolRegistry.register ReadTool.impl ToolRegistry.empty))
+    ToolRegistry.register ShellTool.impl
+        (ToolRegistry.register GlobTool.impl
+            (ToolRegistry.register GrepTool.impl
+                (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))
 
 def ollama_config (model : String) : ProviderConfig :=
     { base_url := "http://localhost:11434", model := model, api_key_env := "SHUTTLE_UNUSED_API_KEY", max_tokens := 1024, wire := Wire.openai }
