@@ -17,6 +17,17 @@
 /// no split-`def`/rename mitigation found here closed it -- it
 /// reproduces even with the dispatch target empty and every struct
 /// literal bound through an annotated `let` first.
+/// NARROWER THAN IT READS, in the other direction (probed 2026-10-14):
+/// the mismatch is a property of IMPORTING these modules, not of any
+/// cross-file CALL -- a test file whose whole body is
+/// `String.beq (I64.to_string 3) "3"` fails identically with ONLY
+/// `use shuttle::loop {Loop.run}` present, and the same trivial body
+/// fails identically with ONLY `use shuttle::provider
+/// {ProviderConfig}` present. So `provider.mo` carries its own
+/// instance of the same desync, independent of this file, and every
+/// test importing either module (presets_tests.mo, all three e2e
+/// files) inherits the failure. The Rust host therefore cannot run
+/// ANY of those files; the self-hosted compiled backend runs them all.
 /// VERIFIED LIVE under the SELF-HOSTED compiled backend (2026-10-13,
 /// `tests/ollama_e2e_tests.mo` with `MONAD_SHUTTLE_OLLAMA_TESTS=1`
 /// against a real local Ollama, rung-1 `monad` binary): tool_use ->
