@@ -783,13 +783,23 @@ def first_on_disk (candidates : List String) : IO (Option String) := do {
     }
 }
 
-/// The runtime C source, located from the first candidate that exists: the
-/// target mote's own declared `[dependencies.runtime] path`, an installed
-/// toolchain root, the workspace root above the working directory, and
-/// finally `Runtime.c_path`.
+/// The runtime C source, located from the first candidate that exists:
+/// the target mote's own declared `[dependencies.runtime] path`, the
+/// workspace root above the working directory, an installed toolchain
+/// root, and finally `Runtime.c_path`.
 ///
-/// The first two are ABSOLUTE by construction -- a manifest `path` may be
-/// absolute, a toolchain root is -- and that matters because `clang`
+/// The WORKSPACE tier outranks the installed toolchain, and the order
+/// is the lesson that taught it: `~/.monad/active` names a NIGHTLY, and
+/// a dev checkout testing natives its own `runtime.c` adds (the proc
+/// family, 2026-10-14) silently linked the nightly's stale C and failed
+/// at `undefined reference` -- the same staleness this repo's build
+/// script's own input scan exists to stop. Reaching the workspace tier
+/// at all means a workspace marker (`[workspace]` members) was found,
+/// which only a checkout of this very toolchain has; an end user's
+/// project has none, and keeps getting the installed runtime.
+///
+/// The first tier is ABSOLUTE by construction -- a manifest `path` may
+/// be absolute -- and that matters because `clang`
 /// resolves this argument against the COMPILER's own CWD. Only a relative
 /// spelling is CWD-sensitive, so an absolute candidate sidesteps the
 /// question the last two exist to answer. Those two stay relative: the
@@ -829,17 +839,17 @@ pub def resolve_runtime_src (base_dir : String) : IO String := do {
             Option.some dep_dir => runtime_c_in dep_dir
         }
     };
-    let root <- Mote.toolchain_root;
-    let installed := match root {
-        Option.none => List.empty,
-        Option.some r => Mote.toolchain_candidates r ["runtime", "src", "runtime.c"]
-    };
     let ws <- find_workspace_root "" 32;
     let walked := match ws {
         Option.none => List.empty,
         Option.some r => [raw_path_join r "runtime/src/runtime.c"]
     };
-    let found <- first_on_disk (List.append declared (List.append installed walked));
+    let root <- Mote.toolchain_root;
+    let installed := match root {
+        Option.none => List.empty,
+        Option.some r => Mote.toolchain_candidates r ["runtime", "src", "runtime.c"]
+    };
+    let found <- first_on_disk (List.append declared (List.append walked installed));
     match found {
         Option.none => return Runtime.c_path,
         Option.some p => return p
