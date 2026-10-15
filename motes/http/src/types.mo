@@ -242,14 +242,18 @@ def Transport.close (t : Transport) : IO Unit :=
 // returned, and treating that number as a frame is how a client ends up
 // waiting for a body the server is never going to send. `until_eof` is the
 // HTTP/1.0 read-to-close case, where the end of the body is the end of the
-// connection and is only known once the peer closes it.
+// connection and is only known once the peer closes it. `chunked` is
+// `Transfer-Encoding: chunked`: the body is a sequence of hex-sized chunks
+// terminated by a zero chunk, so the end is knowable in-stream without
+// either a length or a close.
 
 type Framing {
   content_length (len : I64),
+  chunked,
   until_eof,
   no_body
 }
-open Framing { content_length, until_eof, no_body }
+open Framing { content_length, chunked, until_eof, no_body }
 
 // ── Request / Response ──────────────────────────────────────────────────
 

@@ -8,10 +8,10 @@ use http::body {Body.length, Body.to_bytes_pure}
 use http::wire {
   Wire.body_bytes, Wire.content_length_of, Wire.drop_bytes, Wire.format_request,
   Wire.format_response, Wire.frame_request, Wire.frame_response,
-  Wire.parse_content_length, Wire.parse_method, Wire.parse_request,
-  Wire.parse_response, Wire.parse_response_with_method, Wire.parse_u16,
-  Wire.parse_version, Wire.request_target, Wire.response_has_body,
-  Wire.split_lines, Wire.take_bytes,
+  Wire.parse_chunk_size, Wire.parse_content_length, Wire.parse_method,
+  Wire.parse_request, Wire.parse_response, Wire.parse_response_with_method,
+  Wire.parse_u16, Wire.parse_version, Wire.request_target,
+  Wire.response_has_body, Wire.split_lines, Wire.take_bytes,
 }
 
 def expect_ok_req (got : Result String Request) (want_method : Method) (want_path : String) : Bool :=
@@ -458,14 +458,126 @@ def test_content_length_negative : Bool :=
 def test_content_length_overflow : Bool :=
   w_cl_fails (w_cl "99999999999999999999999999")
 
-/// Chunked framing is not implemented, so a message that declares it cannot be
-/// framed by this parser at all -- guessing a length here would read a chunk
-/// size as body bytes.
+/// `parse_content_length` is the length question alone: any
+/// `Transfer-Encoding` is a rejection there even now that the response
+/// path decodes chunked, and a request declaring one is still refused.
 #[test]
 def test_content_length_with_transfer_encoding : Bool :=
   Bool.and
     (w_cl_fails (Headers.set "Transfer-Encoding" "chunked" (w_cl "5")))
     (w_cl_fails (Headers.set "Transfer-Encoding" "chunked" Headers.empty))
+
+// ── chunked ─────────────────────────────────────────────────────────────
+//
+// `Transfer-Encoding: chunked` on a RESPONSE is decoded (RFC 9110 §7.1) --
+// the shape Ollama and friends switch to once an answer outgrows a buffer.
+// On a request it stays the rejection it always was.
+
+/// True when the size line parses to `want`.
+def w_size_is (line : String) (want : I64) : Bool :=
+  match Wire.parse_chunk_size (String.to_list line) {
+    Result.err _ => false,
+    Result.ok n => n == want
+  }
+
+/// True when the size line is rejected.
+def w_size_bad (line : String) : Bool :=
+  match Wire.parse_chunk_size (String.to_list line) {
+    Result.err _ => true,
+    Result.ok _ => false
+  }
+
+/// A chunked response head with the body bytes appended raw.
+def w_chunked_res (body : String) : List U8 :=
+  String.to_list (String.concat "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" body)
+
+#[test]
+def test_chunk_size_decimal_digits : Bool :=
+  w_size_is "5" 5
+
+/// Hex, not decimal -- `10` is sixteen bytes, not ten.
+#[test]
+def test_chunk_size_is_hex : Bool :=
+  Bool.and (w_size_is "a" 10) (w_size_is "A" 10)
+
+/// Chunk extensions follow a `;` and are tolerated, not parsed.
+#[test]
+def test_chunk_size_stops_at_extension : Bool :=
+  w_size_is "5;name=value" 5
+
+/// A size is what the whole frame hangs off: no hex digits is an error,
+/// not a zero-size chunk.
+#[test]
+def test_chunk_size_empty_is_error : Bool :=
+  Bool.and (w_size_bad "") (w_size_bad ";ext=1")
+
+#[test]
+def test_chunk_size_non_hex_is_error : Bool :=
+  w_size_bad "zz"
+
+/// A size past `I64.max` must not wrap to a small one.
+#[test]
+def test_chunk_size_overflow_is_error : Bool :=
+  w_size_bad "FFFFFFFFFFFFFFFFF"
+
+/// One chunk, terminal chunk, done: the frame ends where the terminal
+/// chunk's CRLF does, and the body is the decoded data.
+#[test]
+def test_frame_response_chunked_single : Bool :=
+  w_res_frames_to (w_chunked_res "5\r\nhello\r\n0\r\n\r\n") Method.GET "hello" ""
+
+/// Several chunks concatenate in order.
+#[test]
+def test_frame_response_chunked_multi : Bool :=
+  w_res_frames_to (w_chunked_res "3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n") Method.GET "abcde" ""
+
+/// Uppercase hex sizes are legal on the wire.
+#[test]
+def test_frame_response_chunked_uppercase : Bool :=
+  w_res_frames_to (w_chunked_res "A\r\n0123456789\r\n0\r\n\r\n") Method.GET "0123456789" ""
+
+/// Trailer lines after the terminal chunk are consumed, not parsed, and
+/// cost the frame nothing.
+#[test]
+def test_frame_response_chunked_trailers : Bool :=
+  w_res_frames_to (w_chunked_res "3\r\nabc\r\n0\r\nX-Checksum: 1\r\n\r\n") Method.GET "abc" ""
+
+/// The body is still arriving: a size line without its CRLF yet.
+#[test]
+def test_frame_response_chunked_size_line_split : Bool :=
+  w_res_frame_incomplete (w_chunked_res "2") Method.GET
+
+/// The size line is complete but the data is not all here.
+#[test]
+def test_frame_response_chunked_data_pending : Bool :=
+  w_res_frame_incomplete (w_chunked_res "5\r\nhel") Method.GET
+
+/// The terminal chunk arrived but the trailer section has not.
+#[test]
+def test_frame_response_chunked_terminal_pending : Bool :=
+  w_res_frame_incomplete (w_chunked_res "5\r\nhello\r\n0\r\n") Method.GET
+
+/// EOF before the terminal chunk is a truncation, not a short body.
+#[test]
+def test_parse_chunked_short_body_fails : Bool :=
+  w_res_parse_fails (w_chunked_res "5\r\nhel")
+
+/// A size line that is not hex is reported, not guessed around.
+#[test]
+def test_parse_chunked_bad_size_fails : Bool :=
+  w_res_parse_fails (w_chunked_res "zz\r\nhello\r\n0\r\n\r\n")
+
+/// A transfer coding other than chunked is still refused: the chunks
+/// would decode to bytes still encoded.
+#[test]
+def test_frame_response_te_other_is_error : Bool :=
+  w_res_frame_bad (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nx") Method.GET
+
+/// Stacked codings are refused for the same reason -- `chunked` must be
+/// the only one for the decoded bytes to be the body.
+#[test]
+def test_frame_response_te_stacked_is_error : Bool :=
+  w_res_frame_bad (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\nx") Method.GET
 
 // ── request framing ────────────────────────────────────────────────────
 

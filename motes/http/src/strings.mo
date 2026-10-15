@@ -165,6 +165,26 @@ def Strings.hex_value (c : U8) : Option U8 :=
   else if U8.lt c 103u8 then Option.some (U8.sub c 87u8)
   else Option.none
 
+/// A hex nibble (0..15, what `hex_value` yields) as an `I64`. Spelled out
+/// digit by digit like `i64_of_digit` -- no U8→I64 conversion exists.
+def Strings.i64_of_nibble (v : U8) : I64 :=
+  if v == 0u8 then 0i64
+  else if v == 1u8 then 1i64
+  else if v == 2u8 then 2i64
+  else if v == 3u8 then 3i64
+  else if v == 4u8 then 4i64
+  else if v == 5u8 then 5i64
+  else if v == 6u8 then 6i64
+  else if v == 7u8 then 7i64
+  else if v == 8u8 then 8i64
+  else if v == 9u8 then 9i64
+  else if v == 10u8 then 10i64
+  else if v == 11u8 then 11i64
+  else if v == 12u8 then 12i64
+  else if v == 13u8 then 13i64
+  else if v == 14u8 then 14i64
+  else 15i64
+
 def Strings.decode_hex_pair (h1 : U8) (h2 : U8) : Result String U8 :=
   match Strings.hex_value h1 {
     Option.none => Result.err "invalid hex digit",

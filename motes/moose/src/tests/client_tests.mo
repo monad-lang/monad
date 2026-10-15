@@ -428,6 +428,83 @@ def test_truncated_response_fails : IO Bool := do {
   }
 }
 
+// ── chunked responses ─────────────────────────────────────────────────────
+//
+// Servers switch to `Transfer-Encoding: chunked` once an answer outgrows a
+// buffer, so the buffered reader has to complete a chunked body the same way
+// it completes a `Content-Length` one: keep reading until the terminal chunk
+// frames the message.
+
+/// A chunked 200 written in two pieces: the data chunk, then the terminal
+/// chunk. The reader keeps reading until the second piece frames the message.
+#[test]
+def test_chunked_response_roundtrip : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res : Result String Connection <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          IO.tcp_close_listener listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              Client.write_request conn (get_req port);
+              IO.tcp_read sock 8192u64;
+              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n");
+              IO.tcp_write sock (String.to_list "0\r\n\r\n");
+              IO.tcp_close sock;
+              let resp : Result String Response <- Client.read_response conn.socket Method.GET;
+              Client.close conn;
+              return (resp_ok resp Status.ok "hello")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// EOF before the terminal chunk: the read reports a truncation rather than
+/// handing back the bytes decoded so far as a complete body.
+#[test]
+def test_chunked_response_eof_mid_chunk_fails : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res : Result String Connection <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          IO.tcp_close_listener listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              Client.write_request conn (get_req port);
+              IO.tcp_read sock 8192u64;
+              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel");
+              IO.tcp_close sock;
+              let resp : Result String Response <- Client.read_response conn.socket Method.GET;
+              Client.close conn;
+              match resp {
+                Result.err _ => return true,
+                Result.ok _ => return false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 // ── redirect policy ─────────────────────────────────────────────────────
 //
 // Pure: `Client.redirect_request` is the whole decision, so every status can

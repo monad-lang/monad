@@ -11,7 +11,8 @@
 /// half, or two -- and only the caller knows which it is asking.
 
 use http::strings {
-  Strings.parse_i64, Strings.parse_u16_bounded, Strings.split_at_byte,
+  Strings.hex_value, Strings.i64_of_nibble, Strings.parse_i64,
+  Strings.parse_u16_bounded, Strings.split_at_byte,
   Strings.split_at_byte_opt,
 }
 use lib::types {Body, Framing, Headers, HttpVersion, Method, Request, Response, Uri}
@@ -326,10 +327,11 @@ def Wire.drop_leading_space (bytes : List U8) : List U8 :=
 /// The body length a `Content-Length` declares, or `Option.none` when the head
 /// declares none.
 ///
-/// Errors rather than guesses when the head is ambiguous. A
-/// `Transfer-Encoding` means chunked framing, which this library does not
-/// implement -- mis-framing it as a length would read a chunk-size line as
-/// body bytes. Two `Content-Length` values that disagree are the classic
+/// Errors rather than guesses when the head is ambiguous. This is the
+/// LENGTH question alone, so any `Transfer-Encoding` is still a rejection
+/// here -- the response path decodes chunked itself (`Wire.response_framing`),
+/// and a request declaring one is a request this library will not frame.
+/// Two `Content-Length` values that disagree are the classic
 /// request-smuggling shape, where one hop honours the first value and the next
 /// honours the second. A value that is not a plain non-negative number is an
 /// error too, including one that overflows, so an absurd length cannot arrive
@@ -372,6 +374,149 @@ def Wire.request_framing (headers : Headers) : Result String Framing :=
       }
   }
 
+// ── chunked decoding ───────────────────────────────────────────────────
+//
+// A `Transfer-Encoding: chunked` body is a sequence of `size CRLF data
+// CRLF` chunks closed by a `0`-size chunk and a trailer section (RFC 9110
+// §7.1). One walk serves both questions the framing section asks of it:
+// how many bytes the body spans (`message_total`) and what the decoded
+// bytes are (`body_at`) -- two answers from one parser is the whole point
+// of sharing `decode_chunked`, since a frame and a body that disagree is
+// a client handing its caller body bytes a length did not vouch for.
+
+/// The offset of the first CRLF in `bytes`, or none when there is none.
+#[terminating]
+def Wire.find_crlf (bytes : List U8) (idx : I64) : Option I64 :=
+  match bytes {
+    List.empty => Option.none,
+    List.cons x rest =>
+      if x == 13u8
+      then
+        match rest {
+          List.empty => Option.none,
+          List.cons y _ =>
+            if y == 10u8
+            then Option.some idx
+            else Wire.find_crlf rest (I64.add idx 1i64)
+        }
+      else Wire.find_crlf rest (I64.add idx 1i64)
+  }
+
+/// The chunk size in a size line: hex digits, stopping at `;` -- chunk
+/// extensions are tolerated, not parsed. A size is what the whole frame
+/// hangs off, so an empty size line and one that overflows `I64` are
+/// errors rather than guesses (an absurd size wrapped to a small one is a
+/// body boundary the server never sent).
+def Wire.parse_chunk_size (line : List U8) : Result String I64 :=
+  Wire.parse_chunk_size_go line 0i64 false
+
+/// `seen` tells the empty case from a leading `;`: an extension with no
+/// size in front of it is a malformed line, not a zero-size chunk.
+#[terminating]
+def Wire.parse_chunk_size_go (line : List U8) (acc : I64) (seen : Bool) : Result String I64 :=
+  match line {
+    List.empty =>
+      if seen then Result.ok acc else Result.err "empty chunk size",
+    List.cons b rest =>
+      if b == 59u8
+      then
+        if seen then Result.ok acc else Result.err "empty chunk size"
+      else
+        match Strings.hex_value b {
+          Option.none => Result.err "invalid chunk size",
+          Option.some nib =>
+            let d : I64 := Strings.i64_of_nibble nib in
+            if Wire.chunk_size_overflows acc d
+            then Result.err "chunk size overflows"
+            else Wire.parse_chunk_size_go rest (I64.add (I64.mul acc 16i64) d) true
+        }
+  }
+
+/// Would `acc * 16 + digit` exceed `I64.max`? The same pre-multiply
+/// discipline as `Strings.i64_overflows`, base 16.
+def Wire.chunk_size_overflows (acc : I64) (digit : I64) : Bool :=
+  if I64.gt acc 576460752303423487i64
+  then true
+  else if acc == 576460752303423487i64
+  then I64.gt digit 7i64
+  else false
+
+/// Walk a whole chunked body. `ok none` is "not all here yet", which a
+/// single socket read hits routinely; `err` is a body that cannot be
+/// decoded (a size line that is not hex, a data chunk not CRLF-terminated);
+/// `ok some` carries the number of bytes the body spans and the decoded
+/// data, trailers excluded.
+def Wire.decode_chunked (bytes : List U8) : Result String (Option (Pair I64 (List U8))) :=
+  Wire.decode_chunk_size_line bytes 0i64 List.empty
+
+/// Read the next chunk's size line (up to its CRLF) and dispatch on the
+/// size. `offset` counts bytes consumed so far; `acc` holds decoded data.
+#[terminating]
+def Wire.decode_chunk_size_line (bytes : List U8) (offset : I64) (acc : List U8) : Result String (Option (Pair I64 (List U8))) :=
+  match Wire.find_crlf bytes 0i64 {
+    Option.none => Result.ok Option.none,
+    Option.some idx =>
+      match Wire.parse_chunk_size (Wire.take_bytes idx bytes) {
+        Result.err e => Result.err e,
+        Result.ok size =>
+          let consumed := I64.add offset (I64.add idx 2i64) in
+          Wire.decode_chunk_dispatch size (Wire.drop_bytes (I64.add idx 2i64) bytes) consumed acc
+      }
+  }
+
+/// A zero-size chunk is the terminator: what follows is a trailer section.
+/// Anything else has `size` bytes of data waiting behind it.
+#[terminating]
+def Wire.decode_chunk_dispatch (size : I64) (rest : List U8) (offset : I64) (acc : List U8) : Result String (Option (Pair I64 (List U8))) :=
+  if size == 0i64
+  then Wire.decode_chunk_trailers rest offset acc
+  else Wire.decode_chunk_data size rest offset acc
+
+/// Consume `size` bytes of data plus the CRLF behind them, then continue
+/// with the next chunk. Less than `size + 2` bytes buffered is "not here
+/// yet", not an error -- the CRLF may still be in flight.
+#[terminating]
+def Wire.decode_chunk_data (size : I64) (rest : List U8) (offset : I64) (acc : List U8) : Result String (Option (Pair I64 (List U8))) :=
+  if I64.gt size (I64.sub (List.length rest) 2i64)
+  then Result.ok Option.none
+  else
+    let data := Wire.take_bytes size rest in
+    let after := Wire.drop_bytes size rest in
+    Wire.decode_chunk_data_crlf data after (I64.add offset size) acc
+
+/// Check the CRLF that closes a chunk's data, then recurse into the next
+/// size line.
+#[terminating]
+def Wire.decode_chunk_data_crlf (data : List U8) (after : List U8) (offset : I64) (acc : List U8) : Result String (Option (Pair I64 (List U8))) :=
+  match after {
+    List.empty => Result.ok Option.none,
+    List.cons cr lf_rest =>
+      if cr == 13u8
+      then
+        match lf_rest {
+          List.empty => Result.ok Option.none,
+          List.cons lf more =>
+            if lf == 10u8
+            then Wire.decode_chunk_size_line more (I64.add offset 2i64) (List.append acc data)
+            else Result.err "chunk data not CRLF-terminated"
+        }
+      else Result.err "chunk data not CRLF-terminated"
+  }
+
+/// The trailer section after the terminal chunk: zero or more `field:
+/// value CRLF` lines, closed by a bare CRLF. The trailer lines themselves
+/// are consumed, not parsed -- this library keeps no fields a trailer
+/// would carry.
+#[terminating]
+def Wire.decode_chunk_trailers (rest : List U8) (offset : I64) (acc : List U8) : Result String (Option (Pair I64 (List U8))) :=
+  match Wire.find_crlf rest 0i64 {
+    Option.none => Result.ok Option.none,
+    Option.some idx =>
+      if idx == 0i64
+      then Result.ok (Option.some (Pair.pair (I64.add offset 2i64) acc))
+      else Wire.decode_chunk_trailers (Wire.drop_bytes (I64.add idx 2i64) rest) (I64.add offset (I64.add idx 2i64)) acc
+  }
+
 /// Whether a response to `method` with `status` may carry a body at all.
 /// `HEAD` answers the request with the headers the `GET` would have produced,
 /// `Content-Length` included and no body behind it; 1xx, 204 and 304 are the
@@ -385,17 +530,53 @@ def Wire.response_has_body (method : Method) (status : U16) : Bool :=
   then false
   else Bool.not (U16.beq status 304u16)
 
+/// Whether the head declares exactly `Transfer-Encoding: chunked` -- the
+/// one transfer coding this library decodes. `Option.none` when no
+/// `Transfer-Encoding` is present at all; `Option.some false` when it names
+/// anything else, or stacks codings (`gzip, chunked`), which stays the error
+/// it has always been: the chunks would decode to bytes still encoded, and
+/// handing those to the caller as a body is a lie with a `Content-Length`'s
+/// confidence.
+def Wire.chunked_declared (headers : Headers) : Option Bool :=
+  match Headers.get_all "transfer-encoding" headers {
+    List.empty => Option.none,
+    List.cons first rest =>
+      // Bound step by step rather than nested: `(String.trim x) == "chunked"
+      // "chunked"` -- a call inside a call's argument -- miscompiles in the
+      // compiled backend, and this answer decides whether a body is decoded
+      // at all.
+      let trimmed : String := String.trim first in
+      let is_chunked : Bool := String.beq trimmed "chunked" in
+      let only : Bool := List.is_empty rest in
+      Option.some (Bool.and only is_chunked)
+  }
+
 /// The framing a response's head declares, given the method it answers.
+/// A chunked response is framed by its terminal chunk; a length, when both
+/// are absent, means read-to-close.
+///
+/// The `chunked_declared` result matches a VARIABLE pattern and the Bool
+/// is dispatched with an `if` below: constructor-with-literal patterns
+/// (`Option.some true => ...`) on a cross-module call result misdispatch
+/// in the compiled backend, and this is the decision that picks whether a
+/// body is decoded at all.
 def Wire.response_framing (method : Method) (status : U16) (headers : Headers) : Result String Framing :=
   if Bool.not (Wire.response_has_body method status)
   then Result.ok Framing.no_body
   else
-    match Wire.parse_content_length headers {
-      Result.err e => Result.err e,
-      Result.ok opt =>
-        match opt {
-          Option.none => Result.ok Framing.until_eof,
-          Option.some n => Result.ok (Framing.content_length n)
+    match Wire.chunked_declared headers {
+      Option.some chunked =>
+        if chunked
+        then Result.ok Framing.chunked
+        else Result.err "Transfer-Encoding is not supported",
+      Option.none =>
+        match Wire.parse_content_length headers {
+          Result.err e => Result.err e,
+          Result.ok opt =>
+            match opt {
+              Option.none => Result.ok Framing.until_eof,
+              Option.some n => Result.ok (Framing.content_length n)
+            }
         }
     }
 
@@ -405,11 +586,23 @@ def Wire.response_framing (method : Method) (status : U16) (headers : Headers) :
 /// `Option.none` means the message is not all here yet, which a single `read`
 /// on a socket hits routinely; the caller reads more and asks again.
 /// Read-to-close messages span everything buffered, because it is the close
-/// and not a number that will end them.
+/// and not a number that will end them. A chunked body that cannot be
+/// decoded also answers `none` here -- the frame has no error channel, and
+/// the EOF parse (`body_at`) is where the malformed size line is reported
+/// rather than guessed around.
 def Wire.message_total (body_start : I64) (framing : Framing) (bytes : List U8) : Option I64 :=
   match framing {
     Framing.no_body => Option.some body_start,
     Framing.until_eof => Option.some (List.length bytes),
+    Framing.chunked =>
+      match Wire.decode_chunked (Wire.drop_bytes body_start bytes) {
+        Result.err _ => Option.none,
+        Result.ok opt =>
+          match opt {
+            Option.none => Option.none,
+            Option.some pr => Option.some (I64.add body_start pr.first)
+          }
+      },
     Framing.content_length n =>
       let total := I64.add body_start n in
       if I64.gt total (List.length bytes) then Option.none else Option.some total
@@ -423,6 +616,15 @@ def Wire.body_at (body_start : I64) (framing : Framing) (bytes : List U8) : Resu
   match framing {
     Framing.no_body => Result.ok Body.empty,
     Framing.until_eof => Result.ok (Wire.body_of (Wire.drop_bytes body_start bytes)),
+    Framing.chunked =>
+      match Wire.decode_chunked (Wire.drop_bytes body_start bytes) {
+        Result.err e => Result.err e,
+        Result.ok opt =>
+          match opt {
+            Option.none => Result.err "chunked body ended before the terminal chunk",
+            Option.some pr => Result.ok (Wire.body_of pr.second)
+          }
+      },
     Framing.content_length n =>
       if I64.gt (I64.add body_start n) (List.length bytes)
       then Result.err "body shorter than Content-Length"
