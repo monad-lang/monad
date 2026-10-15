@@ -23,7 +23,7 @@ use json::json {Json, Json.make_array, Json.make_str, Json.to_string}
 use std::io {IO.write_file}
 use std::path {Path.of}
 use std::process {process_id}
-use std::list {List.any}
+use std::list {List.any, List.length}
 
 def sentinel : String := "SHUTTLE_MOCK_SENTINEL_7"
 

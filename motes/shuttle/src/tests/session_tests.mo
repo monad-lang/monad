@@ -10,6 +10,7 @@ use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use json::json {Json}
 use std::process {process_id}
+use std::list {List.any, List.length}
 
 def session_path : String :=
     String.concat "/tmp/shuttle_session_test_" (String.concat (I64.to_string process_id) ".json")

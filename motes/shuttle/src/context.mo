@@ -11,6 +11,7 @@ use shuttle::message {Message, Usage}
 use shuttle::message_types {Content}
 use shuttle::tool {ToolSpec}
 use json::json {Json}
+use std::list {List.length}
 
 /// The identity for `usage_add`: a turn that cost nothing.
 pub def usage_zero : Usage := { input_tokens := 0, output_tokens := 0, cached_tokens := 0 }

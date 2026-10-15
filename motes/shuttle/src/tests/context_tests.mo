@@ -5,10 +5,12 @@ use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use shuttle::tool {ToolSpec}
 use json::json {Json}
+use std::list {List.length}
 
 #[test]
 def test_usage_zero_is_all_zero : Bool :=
-    usage_zero.input_tokens == 0 && usage_zero.output_tokens == 0 && usage_zero.cached_tokens == 0
+    let u : Usage := usage_zero in
+    u.input_tokens == 0 && u.output_tokens == 0 && u.cached_tokens == 0
 
 #[test]
 def test_usage_add_sums_fields : Bool :=
