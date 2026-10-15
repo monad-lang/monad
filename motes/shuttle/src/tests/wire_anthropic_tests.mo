@@ -138,7 +138,7 @@ def test_encode_folds_tool_results_into_one_user_message : Bool :=
     let tool_msg : Message := { role := Role.tool, content := [Content.tool_result "toolu_1" "out1" false, Content.tool_result "toolu_2" "out2" false] } in
     let req := Anthropic.encode_request "claude-opus-5" 512 "sys" [] [tool_msg] in
     match req {
-        MessagesRequest.mk _ _ _ messages _ _ _ =>
+        MessagesRequest.mk _ _ _ messages _ _ _ _ =>
             match messages {
                 List.cons m _ =>
                     match m {
@@ -159,7 +159,7 @@ def test_encode_system_folds_top_level : Bool :=
     let user_msg : Message := { role := Role.user, content := [Content.text "hi"] } in
     let req := Anthropic.encode_request "claude-opus-5" 512 "base system" [] [sys_msg, user_msg] in
     match req {
-        MessagesRequest.mk _ _ system messages _ _ _ =>
+        MessagesRequest.mk _ _ system messages _ _ _ _ =>
             List.length system == 2
                 && List.length messages == 1
                 && match messages {
@@ -190,7 +190,7 @@ def test_encode_assistant_tool_use_history : Bool :=
     let asst : Message := { role := Role.assistant, content := [Content.tool_use "toolu_1" "read" input] } in
     let req := Anthropic.encode_request "claude-opus-5" 512 "sys" [] [asst] in
     match req {
-        MessagesRequest.mk _ _ _ messages _ _ _ =>
+        MessagesRequest.mk _ _ _ messages _ _ _ _ =>
             match messages {
                 List.cons m _ =>
                     match m {

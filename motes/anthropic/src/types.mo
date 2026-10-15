@@ -320,6 +320,10 @@ pub struct MessagesRequest {
     tools : List AnthropicTool,
     thinking : Bool,
     effort : Option String,
+    /// `true` switches the endpoint to SSE streaming. Serialized ONLY
+    /// when true -- the wire's convention for optional request segments
+    /// is omission, not a false literal (same as `system`/`tools`).
+    stream : Bool := false,
 }
 
 /// Positional destructure, matching the corpus's hand-written-codec
@@ -330,7 +334,7 @@ pub struct MessagesRequest {
 /// outer `Map.insert` call.
 pub def MessagesRequest.serialize_json (r : MessagesRequest) : Json :=
     match r {
-        MessagesRequest.mk model max_tokens system messages tools thinking effort =>
+        MessagesRequest.mk model max_tokens system messages tools thinking effort stream =>
             let base :=
                 Map.insert "model" (Json.make_str model)
                 (Map.insert "max_tokens" (Json.make_num_int max_tokens)
@@ -355,7 +359,11 @@ pub def MessagesRequest.serialize_json (r : MessagesRequest) : Json :=
                     Map.insert "thinking" tval with_tools
                 else
                     with_tools in
-            effort_to_json effort with_thinking,
+            let with_stream :=
+                if stream
+                then Map.insert "stream" (Json.make_bool true) with_thinking
+                else with_thinking in
+            effort_to_json effort with_stream,
     }
 
 // ─── Response side ───
