@@ -72,7 +72,7 @@ def run_e2e : IO Bool := do {
     };
     let r <- ResultT.run (Loop.run (e2e_config model) e2e_registry "You are a helpful coding assistant with a read tool." [e2e_task_message] 6);
     return (match r {
-        Result.ok history => history_mentions_sentinel history,
+        Result.ok session => history_mentions_sentinel session.history,
         Result.err _ => false,
     })
 }

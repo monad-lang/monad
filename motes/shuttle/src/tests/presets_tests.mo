@@ -10,7 +10,7 @@
 /// `loop.mo`'s own header documents -- probed 2026-10-14 with a test
 /// body of just `String.beq (I64.to_string 3) "3"`. Passes 8/8 under
 /// the self-hosted compiled backend, which is the gate that matters.
-use shuttle::presets {ProviderConfig.mistral, ProviderConfig.openrouter, ProviderConfig.ollama}
+use shuttle::presets {ProviderConfig.mistral, ProviderConfig.openrouter, ProviderConfig.ollama, ProviderConfig.anthropic}
 use shuttle::provider {ProviderConfig, Wire}
 
 /// Every field read goes through a bound local rather than
@@ -66,5 +66,24 @@ def test_ollama_preset_uses_the_openai_wire : Bool :=
     let w := c.wire in
     match w {
         Wire.openai => true,
+        _ => false,
+    }
+
+#[test]
+def test_anthropic_preset_points_at_anthropic : Bool :=
+    let c := ProviderConfig.anthropic "claude-opus-5" in
+    c.base_url == "https://api.anthropic.com"
+
+#[test]
+def test_anthropic_preset_reads_anthropic_api_key : Bool :=
+    let c := ProviderConfig.anthropic "m" in
+    c.api_key_env == "ANTHROPIC_API_KEY"
+
+#[test]
+def test_anthropic_preset_uses_the_anthropic_wire : Bool :=
+    let c := ProviderConfig.anthropic "m" in
+    let w := c.wire in
+    match w {
+        Wire.anthropic => true,
         _ => false,
     }

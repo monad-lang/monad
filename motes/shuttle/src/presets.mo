@@ -5,16 +5,16 @@
 /// buys is not having to know them -- which host, which env var, and
 /// which wire each provider speaks.
 ///
-/// Both live providers here speak the OpenAI wire (`Wire.openai`):
+/// Mistral and OpenRouter speak the OpenAI wire (`Wire.openai`):
 /// Mistral's `https://api.mistral.ai` and OpenRouter's
 /// `https://openrouter.ai/api` are both OpenAI-compatible chat
-/// completions endpoints, so `motes/openai` + `wire/openai.mo` already
-/// cover them and no new wire adapter is involved.
+/// completions endpoints, so `motes/openai` + `wire/openai.mo` cover
+/// them and no new wire adapter is involved. Anthropic is the one live
+/// preset on `Wire.anthropic` (`motes/anthropic` + `wire/anthropic.mo`).
 ///
-/// HTTPS, and therefore both live presets, wait on
-/// `library-ideas/tls.md` exactly like the Anthropic one
-/// (`provider.mo`'s own header note). The presets exist now so that
-/// "switch to Mistral" is a one-line change the day TLS lands.
+/// HTTPS for all three live presets rides `motes/tls` (landed
+/// 2026-10-08): `moose` opens a TLS stream for any `https` base_url, so
+/// the presets are reachable, not placeholders.
 ///
 /// A MISSING API KEY IS NOT REJECTED HERE, deliberately: the openai
 /// wire path treats an absent key as an unauthenticated local server
@@ -23,7 +23,8 @@
 /// asymmetry at the wrong layer. A mistral/openrouter call with no key
 /// therefore fails at the SERVER, with a 401, rather than locally --
 /// legible enough, and it keeps `ProviderConfig` one shape for every
-/// provider.
+/// provider. (The anthropic wire is the exception that DOES require its
+/// key, named, at send time -- see `anthropic_send_step`.)
 use shuttle::provider {ProviderConfig, Wire}
 
 /// A local Ollama daemon -- no key by default. `api_key_env` names a
@@ -48,3 +49,11 @@ pub def ProviderConfig.mistral (model : String) : ProviderConfig :=
 /// appends `/v1/chat/completions` itself.
 pub def ProviderConfig.openrouter (model : String) : ProviderConfig :=
     { base_url := "https://openrouter.ai/api", model := model, api_key_env := "OPENROUTER_API_KEY", max_tokens := 512, wire := Wire.openai }
+
+/// Anthropic's hosted Messages API -- the one live preset on
+/// `Wire.anthropic`. Key in `ANTHROPIC_API_KEY` (their convention, and
+/// required at send time). `model` is a parameter because model names
+/// churn; the CLI's default is `claude-opus-5`, the wire adapter's own
+/// documented default.
+pub def ProviderConfig.anthropic (model : String) : ProviderConfig :=
+    { base_url := "https://api.anthropic.com", model := model, api_key_env := "ANTHROPIC_API_KEY", max_tokens := 512, wire := Wire.anthropic }

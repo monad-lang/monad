@@ -1,46 +1,38 @@
-/// The tool-use loop -- agent-skills.md Phase 2: build request, send,
-/// decode, and on `tool_use_stop` dispatch every `tool_use` and append
-/// ALL `tool_result`s in one message before recursing (Design 3's
-/// parallel-tool-call requirement: splitting them across messages is
-/// accepted by providers and silently degrades parallel tool calling).
-/// `ResultT` throughout -- real do-notation, not the continuation-chain
-/// style `motes/moose/src/client.mo` uses by hand.
+/// The tool-use loop -- agent-skills.md Phases 2 and 5. Phase 2's shape
+/// is unchanged (build request, send, decode, and on `tool_use_stop`
+/// dispatch every `tool_use`, append ALL `tool_result`s in one message
+/// before recursing -- Design 3's parallel-tool-call requirement), and
+/// the sequencing is now the indexed `Agent` monad (`agent.mo`):
+/// `Loop.send` is `Agent Idle Answered Turn`, dispatch is `Agent
+/// Answered Executing`, so the phase order ask-then-dispatch is a
+/// type-level fact, not a discipline. Phase 5 also threads the
+/// accumulated `Usage` through the run (the session's `spent`), which
+/// the old loop dropped on the floor.
 ///
-/// KNOWN GAP (Rust host only): `dispatch_all`/`Loop.run` `monad check`
-/// clean (0 errors), but calling `dispatch_all` from any file outside
-/// this one -- even the trivial empty-list base case, with no tool
-/// actually dispatched -- fails at LOWERING on the RUST host with
-/// `MatchTraversalMismatch { expected: [Monad], found: [mk] }`, the
-/// same class of checker/lowering desync documented for `StateT.bind`
-/// (`init/src/transformers_tests.mo`) and probed for `ResultT`/
-/// `OptionT` (`plans/implementations/agent-skills.md`). Unlike those,
-/// no split-`def`/rename mitigation found here closed it -- it
-/// reproduces even with the dispatch target empty and every struct
-/// literal bound through an annotated `let` first.
-/// NARROWER THAN IT READS, in the other direction (probed 2026-10-14):
-/// the mismatch is a property of IMPORTING these modules, not of any
-/// cross-file CALL -- a test file whose whole body is
-/// `String.beq (I64.to_string 3) "3"` fails identically with ONLY
-/// `use shuttle::loop {Loop.run}` present, and the same trivial body
-/// fails identically with ONLY `use shuttle::provider
-/// {ProviderConfig}` present. So `provider.mo` carries its own
-/// instance of the same desync, independent of this file, and every
-/// test importing either module (presets_tests.mo, all three e2e
-/// files) inherits the failure. The Rust host therefore cannot run
-/// ANY of those files; the self-hosted compiled backend runs them all.
-/// VERIFIED LIVE under the SELF-HOSTED compiled backend (2026-10-13,
-/// `tests/ollama_e2e_tests.mo` with `MONAD_SHUTTLE_OLLAMA_TESTS=1`
-/// against a real local Ollama, rung-1 `monad` binary): tool_use ->
-/// `run_tool` read -> tool_result -> final answer containing the
-/// fixture sentinel, 4 turns. The loop itself is correct; only the
-/// Rust host's `lower_core_ir` path cannot compile a cross-file caller.
+/// A tool failure (the implementation's own `ResultT` erring) becomes
+/// an `is_error := true` tool_result, not a short-circuit of the whole
+/// loop -- the model gets to see the failure and adapt.
+///
+/// KNOWN GAP (Rust host only): these modules `monad check` clean, but
+/// the Rust host's `lower_core_ir` path fails on files importing them
+/// with `MatchTraversalMismatch { expected: [Monad], found: [mk] }` --
+/// the same checker/lowering desync documented in the Phase 2/4
+/// changelogs of `plans/implementations/agent-skills.md`. The
+/// self-hosted compiled backend runs everything; the Rust host is
+/// bootstrap-only and not a verification surface for this mote.
+/// VERIFIED LIVE under the SELF-HOSTED compiled backend (Phase 2:
+/// `tests/ollama_e2e_tests.mo` against a real local Ollama; Phase 5:
+/// `tests/mock_e2e_tests.mo`, the scripted offline loop).
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content, StopReason}
-use shuttle::message {Message, Turn}
+use shuttle::message {Message, Turn, Usage}
 use shuttle::provider {ProviderConfig}
 use shuttle::provider {Provider.send}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
+use shuttle::session {Session}
+use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone}
+use shuttle::context {usage_zero, usage_add}
 use json::json {Json}
 
 /// A tool failure (the implementation's own `ResultT` erring) becomes
@@ -95,36 +87,105 @@ pub def dispatch_all (reg : ToolRegistry) (cs : List Content) : ResultT String I
         }
     }
 
-#[terminating]
-def continue_after_tools (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (asst_message : Message) (tool_content : List Content) : ResultT String IO (List Message) :=
-    let tool_message : Message := { role := Role.tool, content := tool_content } in
-    let next_history := List.append history (List.cons asst_message (List.cons tool_message List.empty)) in
-    Loop.run cfg reg system next_history (turns_left - 1)
-
-def finish (history : List Message) (asst_message : Message) : ResultT String IO (List Message) :=
-    ResultT.mk (return (Result.ok (List.append history (List.cons asst_message List.empty))))
-
-def handle_turn (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (turn : Turn) : ResultT String IO (List Message) :=
-    match turn {
-        Turn.mk asst_message usage stop =>
-            match stop {
-                StopReason.tool_use_stop => do {
-                    let tool_content <- dispatch_all reg (turn_content asst_message);
-                    continue_after_tools cfg reg system history turns_left asst_message tool_content
-                },
-                _ => finish history asst_message,
-            }
-    }
-
 def turn_content (m : Message) : List Content :=
     match m { Message.mk role content => content }
 
-#[terminating]
-pub def Loop.run (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) : ResultT String IO (List Message) :=
-    if turns_left < 1 then
-        ResultT.mk (return (Result.err "turn cap reached"))
-    else do {
-        let specs : List ToolSpec := ToolRegistry.specs reg;
-        let turn <- Provider.send cfg system specs history;
-        handle_turn cfg reg system history turns_left turn
+// ── The indexed phase steps ────────────────────────────────────────────
+
+/// Idle -> Answered: ask the model for one turn. Consumes one unit of
+/// the turn budget and accumulates the turn's `Usage` into the
+/// session's `spent` (Phase 5's accounting -- the old loop dropped it).
+pub def Loop.send : Agent AgentIdle AgentAnswered Turn :=
+    Agent.agent agent_send_step
+
+def agent_send_step (s : RunState) : ResultT String IO (Pair RunState Turn) :=
+    if s.turns_left < 1 then ResultT.mk (return (Result.err "turn cap reached"))
+    else agent_send_run s
+
+def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do {
+    let specs : List ToolSpec := ToolRegistry.specs s.reg;
+    let turn <- Provider.send s.session.config s.session.system_prompt specs s.session.history;
+    let base : Session := s.session;
+    let spent2 : Usage := usage_add s.session.spent turn.usage;
+    let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2 };
+    let s2 : RunState := { s with session := session2, turns_left := s.turns_left - 1 };
+    ResultT.mk (return (Result.ok (Pair.pair s2 turn)))
+}
+
+/// Answered -> Executing: run every `tool_use` the turn asked for.
+pub def Loop.dispatch (turn : Turn) : Agent AgentAnswered AgentExecuting (List Content) :=
+    Agent.agent (fn (s : RunState) => agent_dispatch_run turn s)
+
+def agent_dispatch_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunState (List Content)) := do {
+    let results <- dispatch_all s.reg (turn_content turn.message);
+    ResultT.mk (return (Result.ok (Pair.pair s results)))
+}
+
+/// Executing -> Idle: append the assistant message and the one tool
+/// message carrying all results, and hand control back to `send` for
+/// the next model call. One tool message, never several -- Design 3.
+pub def Loop.append_results (turn : Turn) (results : List Content) : Agent AgentExecuting AgentIdle Unit :=
+    Agent.agent (fn (s : RunState) => agent_append_run turn results s)
+
+def agent_append_run (turn : Turn) (results : List Content) (s : RunState) : ResultT String IO (Pair RunState Unit) := do {
+    let tool_message : Message := { role := Role.tool, content := results };
+    let history2 : List Message := List.append s.session.history [turn.message, tool_message];
+    let base : Session := s.session;
+    let session2 : Session := { base with history := history2 };
+    let s2 : RunState := { s with session := session2 };
+    ResultT.mk (return (Result.ok (Pair.pair s2 unit)))
+}
+
+/// Answered -> Done: append the final assistant message.
+pub def Loop.finish (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
+    Agent.agent (fn (s : RunState) => agent_finish_run turn s)
+
+def agent_finish_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunState Unit) := do {
+    let history2 : List Message := List.append s.session.history [turn.message];
+    let base : Session := s.session;
+    let session2 : Session := { base with history := history2 };
+    let s2 : RunState := { s with session := session2 };
+    ResultT.mk (return (Result.ok (Pair.pair s2 unit)))
+}
+
+/// One full iteration: ask, then either dispatch-and-loop or finish.
+/// The two arms agree on `Agent Answered Done Unit`, which is what
+/// lets the value-level branch on the stop reason live INSIDE one
+/// indexed program -- the tool arm loops back to Idle via
+/// `append_results`, so the recursion closes at the same indices.
+def loop_after_send (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
+    match turn.stop {
+        StopReason.tool_use_stop =>
+            Agent.bind (Loop.dispatch turn) (fn (results : List Content) => Agent.and_then (Loop.append_results turn results) Loop.iterate),
+        _ => Loop.finish turn,
     }
+
+#[terminating]
+pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
+    Agent.bind Loop.send (fn (turn : Turn) => loop_after_send turn)
+
+// ── Entry points ───────────────────────────────────────────────────────
+
+/// Build the initial run state: a fresh session over the given config
+/// and history, zero turns taken, nothing spent.
+pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) : RunState :=
+    let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left } in
+    st
+
+def runstate_of_pair (p : Pair RunState Unit) : RunState :=
+    match p { Pair.pair st _ => st }
+
+/// Drive the loop from an explicit run state and return the FINAL
+/// session -- transcript, accumulated usage and turn count all live
+/// there, so this is both the result the caller reads and the value
+/// `Session.save` checkpoints.
+pub def Loop.run_state (st : RunState) : ResultT String IO Session := do {
+    let p <- Agent.exec Loop.iterate st;
+    let final : RunState := runstate_of_pair p;
+    ResultT.mk (return (Result.ok final.session))
+}
+
+/// Drive the loop: fresh session, up to `turns_left` model calls.
+pub def Loop.run (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) : ResultT String IO Session :=
+    Loop.run_state (Loop.initial_state cfg reg system history turns_left)
