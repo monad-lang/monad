@@ -14,7 +14,7 @@
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Usage, Turn}
-use shuttle::provider {ProviderConfig, Wire}
+use shuttle::provider {ProviderConfig, Wire, Provider.silent_emit}
 use shuttle::registry {ToolRegistry}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::loop {Loop.run}
@@ -107,7 +107,7 @@ def session_shape_ok (s : Session) : Bool :=
 #[test]
 def test_mock_loop_dispatches_tool_and_finishes : IO Bool := do {
     write_script;
-    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6);
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit);
     return (match r {
         Result.ok s => session_shape_ok s,
         Result.err _ => false,
@@ -139,7 +139,7 @@ def write_script_with_unknown : IO Unit := do {
 #[test]
 def test_mock_loop_answers_unknown_tool_with_is_error : IO Bool := do {
     write_script_with_unknown;
-    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6);
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit);
     return (match r {
         Result.ok s => history_mentions "unknown tool: not_a_tool" s.history,
         Result.err _ => false,

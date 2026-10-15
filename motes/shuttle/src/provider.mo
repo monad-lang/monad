@@ -19,9 +19,9 @@ use json::json {
     Json.get_object, Json.get_str, Json.get_num_i64, Json.object_get,
 }
 use std::map {BTreeMap}
-use openai::client {OpenAI.complete}
+use openai::client {OpenAI.complete_stream}
 use shuttle::wire::openai {OpenAI.encode_request, OpenAI.decode_response}
-use anthropic::client {Anthropic.complete}
+use anthropic::client {Anthropic.complete_stream}
 use anthropic::types {MessagesRequest, MessagesResponse}
 use shuttle::wire::anthropic {Anthropic.encode_request, Anthropic.decode_response}
 use shuttle::wire::mock {Mock.send}
@@ -121,37 +121,47 @@ pub def ProviderConfig.deserialize_json (j : Json) : Result String ProviderConfi
         Result.ok obj => config_of_object obj,
     }
 
-def send_openai (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) : ResultT String IO Turn := do {
+def send_openai (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn := do {
     let api_key <- ResultT.lift (IO.get_env cfg.api_key_env);
     let req := OpenAI.encode_request cfg.model cfg.max_tokens system tools history;
-    let resp <- OpenAI.complete cfg.base_url api_key req;
+    let resp <- OpenAI.complete_stream cfg.base_url api_key req emit;
     ResultT.mk (return (OpenAI.decode_response resp))
 }
 
 /// The anthropic key is REQUIRED, not `Option` -- a missing env var
 /// errors here, named, rather than sending an empty `x-api-key` the
 /// wire would reject with a less legible 401.
-def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : MessagesRequest) : ResultT String IO MessagesResponse :=
+def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : MessagesRequest) (emit : String -> IO Unit) : ResultT String IO MessagesResponse :=
     match key_opt {
         Option.none =>
             ResultT.mk (return (Result.err (String.concat "anthropic: no API key in env: " cfg.api_key_env))),
-        Option.some key => Anthropic.complete cfg.base_url key req,
+        Option.some key => Anthropic.complete_stream cfg.base_url key req emit,
     }
 
-def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) : ResultT String IO Turn := do {
+def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn := do {
     let key_opt <- ResultT.lift (IO.get_env cfg.api_key_env);
     let req := Anthropic.encode_request cfg.model cfg.max_tokens system tools history;
-    let resp <- anthropic_send_step cfg key_opt req;
+    let resp <- anthropic_send_step cfg key_opt req emit;
     ResultT.mk (return (Anthropic.decode_response resp))
 }
 
-/// Send one turn's request through `cfg.wire`. The mock arm serves the
-/// scripted provider (`wire/mock.mo`) rather than erroring: the mock
-/// wire is the loop's offline backend and the only one the loop tests
-/// can drive without a network.
-pub def Provider.send (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) : ResultT String IO Turn :=
+/// The null text sink: a caller with no live-output use (tests, the
+/// CLI's non-stream mode) passes this and the stream accumulates
+/// silently. The wire ALWAYS streams -- the one-shot bodies are gone
+/// -- so this is how "not streaming" is spelled now.
+pub def Provider.silent_emit (t : String) : IO Unit :=
+    return unit
+
+/// Send one turn's request through `cfg.wire`, streaming: every text
+/// fragment the model produces goes to `emit` as it arrives, and the
+/// returned `Turn` carries the same assembled content the one-shot
+/// path produced. The mock arm serves the scripted provider
+/// (`wire/mock.mo`) -- it emits the scripted turn's text once, so the
+/// loop's offline tests see the same callback contract the real
+/// wires implement.
+pub def Provider.send (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn :=
     match cfg.wire {
-        Wire.openai => send_openai cfg system tools history,
-        Wire.anthropic => send_anthropic cfg system tools history,
-        Wire.mock => Mock.send tools history,
+        Wire.openai => send_openai cfg system tools history emit,
+        Wire.anthropic => send_anthropic cfg system tools history emit,
+        Wire.mock => Mock.send tools history emit,
     }

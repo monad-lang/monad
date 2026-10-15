@@ -104,7 +104,7 @@ def agent_send_step (s : RunState) : ResultT String IO (Pair RunState Turn) :=
 
 def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do {
     let specs : List ToolSpec := ToolRegistry.specs s.reg;
-    let turn <- Provider.send s.session.config s.session.system_prompt specs s.session.history;
+    let turn <- Provider.send s.session.config s.session.system_prompt specs s.session.history s.emit;
     let base : Session := s.session;
     let spent2 : Usage := usage_add s.session.spent turn.usage;
     let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2 };
@@ -167,10 +167,12 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 // ── Entry points ───────────────────────────────────────────────────────
 
 /// Build the initial run state: a fresh session over the given config
-/// and history, zero turns taken, nothing spent.
-pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) : RunState :=
+/// and history, zero turns taken, nothing spent, `emit` the live-text
+/// sink every provider call streams through (`Provider.silent_emit`
+/// for a caller that wants no live output).
+pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=
@@ -187,5 +189,5 @@ pub def Loop.run_state (st : RunState) : ResultT String IO Session := do {
 }
 
 /// Drive the loop: fresh session, up to `turns_left` model calls.
-pub def Loop.run (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) : ResultT String IO Session :=
-    Loop.run_state (Loop.initial_state cfg reg system history turns_left)
+pub def Loop.run (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) : ResultT String IO Session :=
+    Loop.run_state (Loop.initial_state cfg reg system history turns_left emit)

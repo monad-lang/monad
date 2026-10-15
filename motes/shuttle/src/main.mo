@@ -20,11 +20,11 @@ use parsec::number {parse_i64}
 use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
 use std::ansi {colored, Color}
-use std::io {IO.println, IO.write_stderr}
+use std::io {IO.println, IO.write_stderr, IO.write_stdout, IO.flush_stdout}
 use std::list {List.intercalate}
 use shuttle::message_types {Role, Content}
 use shuttle::message {Message}
-use shuttle::provider {ProviderConfig}
+use shuttle::provider {ProviderConfig, Provider.silent_emit}
 use shuttle::presets {
     ProviderConfig.ollama, ProviderConfig.mistral,
     ProviderConfig.openrouter, ProviderConfig.anthropic,
@@ -45,6 +45,7 @@ def usage : String :=
         "  --model <name>    (defaults: ollama qwen2.5-coder, mistral mistral-large-latest,",
         "                    anthropic claude-opus-5; openrouter requires it)",
         "  --max-turns <n>   (default 10, total across a save/resume)",
+        "  --stream, -s      (print assistant text live as it arrives)",
         "  --mcp <exe>       (repeatable; bare executable, no arguments yet)",
         "  --resume <file>   (continue a saved session)",
         "  --save <file>     (checkpoint the final session)",
@@ -75,6 +76,7 @@ struct CliArgs {
     save : String,
     mcps : List String,
     task : String,
+    stream : Bool,
     error : String,
 }
 
@@ -86,61 +88,68 @@ struct RunPlan {
     save : String,
     mcps : List String,
     task : String,
+    stream : Bool,
 }
 
 /// Flags first, each `take_opt` stripping its tokens so the next stage
 /// sees the rest; `--mcp` loops until it stops finding one; the task is
-/// the positional left after every flag is gone.
+/// the positional left after every flag is gone. `--stream`/`-s` is a
+/// Bool flag, taken before everything else.
 def parse_args (args : List String) : CliArgs :=
+    match Cli.take_flag "stream" "s" args {
+        Cli.FlagResult.flag_result stream rest => parse_provider stream rest,
+    }
+
+def parse_provider (stream : Bool) (args : List String) : CliArgs :=
     match Cli.take_opt "provider" "" "ollama" args {
-        Cli.OptResult.opt_result provider rest => parse_model provider rest,
+        Cli.OptResult.opt_result provider rest => parse_model stream provider rest,
     }
 
-def parse_model (provider : String) (args : List String) : CliArgs :=
+def parse_model (stream : Bool) (provider : String) (args : List String) : CliArgs :=
     match Cli.take_opt "model" "" "" args {
-        Cli.OptResult.opt_result model rest => parse_max_turns provider model rest,
+        Cli.OptResult.opt_result model rest => parse_max_turns stream provider model rest,
     }
 
-def parse_max_turns (provider : String) (model : String) (args : List String) : CliArgs :=
+def parse_max_turns (stream : Bool) (provider : String) (model : String) (args : List String) : CliArgs :=
     match Cli.take_opt "max-turns" "" "10" args {
-        Cli.OptResult.opt_result n rest => parse_resume provider model n rest,
+        Cli.OptResult.opt_result n rest => parse_resume stream provider model n rest,
     }
 
-def parse_resume (provider : String) (model : String) (max_turns_str : String) (args : List String) : CliArgs :=
+def parse_resume (stream : Bool) (provider : String) (model : String) (max_turns_str : String) (args : List String) : CliArgs :=
     match Cli.take_opt "resume" "" "" args {
-        Cli.OptResult.opt_result resume rest => parse_save provider model max_turns_str resume rest,
+        Cli.OptResult.opt_result resume rest => parse_save stream provider model max_turns_str resume rest,
     }
 
-def parse_save (provider : String) (model : String) (max_turns_str : String) (resume : String) (args : List String) : CliArgs :=
+def parse_save (stream : Bool) (provider : String) (model : String) (max_turns_str : String) (resume : String) (args : List String) : CliArgs :=
     match Cli.take_opt "save" "" "" args {
-        Cli.OptResult.opt_result save rest => parse_mcps provider model max_turns_str resume save [] rest,
+        Cli.OptResult.opt_result save rest => parse_mcps stream provider model max_turns_str resume save [] rest,
     }
 
 /// Repeatable `--mcp`: keep taking until absent. Accumulated in order
 /// with `List.append` (there is no `List.reverse`), which is fine at
 /// the size a command line can hold.
 #[partial]
-def parse_mcps (provider : String) (model : String) (max_turns_str : String) (resume : String) (save : String) (mcps : List String) (args : List String) : CliArgs :=
+def parse_mcps (stream : Bool) (provider : String) (model : String) (max_turns_str : String) (resume : String) (save : String) (mcps : List String) (args : List String) : CliArgs :=
     match Cli.take_opt "mcp" "" "" args {
         Cli.OptResult.opt_result v rest =>
             if String.is_empty v
-            then parse_task provider model max_turns_str resume save mcps rest
-            else parse_mcps provider model max_turns_str resume save (List.append mcps [v]) rest,
+            then parse_task stream provider model max_turns_str resume save mcps rest
+            else parse_mcps stream provider model max_turns_str resume save (List.append mcps [v]) rest,
     }
 
-def parse_task (provider : String) (model : String) (max_turns_str : String) (resume : String) (save : String) (mcps : List String) (args : List String) : CliArgs :=
+def parse_task (stream : Bool) (provider : String) (model : String) (max_turns_str : String) (resume : String) (save : String) (mcps : List String) (args : List String) : CliArgs :=
     match Cli.take_positional args {
-        Cli.PosResult.pos_result task rest => parse_extra provider model max_turns_str resume save mcps task rest,
+        Cli.PosResult.pos_result task rest => parse_extra stream provider model max_turns_str resume save mcps task rest,
     }
 
 /// A second positional is a typo, not a task; it lands in `error`.
-def parse_extra (provider : String) (model : String) (max_turns_str : String) (resume : String) (save : String) (mcps : List String) (task : Option String) (args : List String) : CliArgs :=
+def parse_extra (stream : Bool) (provider : String) (model : String) (max_turns_str : String) (resume : String) (save : String) (mcps : List String) (task : Option String) (args : List String) : CliArgs :=
     match Cli.take_positional args {
         Cli.PosResult.pos_result extra _ =>
             let c : CliArgs := {
                 provider := provider, model := model, max_turns_str := max_turns_str,
                 resume := resume, save := save, mcps := mcps,
-                task := task_of task, error := extra_error extra,
+                task := task_of task, stream := stream, error := extra_error extra,
             } in
             c,
     }
@@ -203,7 +212,7 @@ def plan_of_turns (c : CliArgs) (cfg : ProviderConfig) (n : I64) : Result String
 def plan_done (c : CliArgs) (cfg : ProviderConfig) (n : I64) : Result String RunPlan :=
     let p : RunPlan := {
         cfg := cfg, max_turns := n, resume := c.resume, save := c.save,
-        mcps := c.mcps, task := c.task,
+        mcps := c.mcps, task := c.task, stream := c.stream,
     } in
     Result.ok p
 
@@ -307,6 +316,22 @@ def user_message (task : String) : Message :=
     let m : Message := { role := Role.user, content := [Content.text task] } in
     m
 
+// ── Live output ───────────────────────────────────────────────────────
+
+/// One text fragment to stdout, flushed per fragment: a fragment is
+/// the unit the user watches for, and an unflushed buffer would
+/// batch them back into one silent lump.
+def stdout_emit (t : String) : IO Unit := do {
+    IO.write_stdout t;
+    IO.flush_stdout
+}
+
+/// The run's text sink. `--stream` prints fragments live (and the
+/// final answer is then NOT reprinted); without it the run stays
+/// quiet and the final answer prints once at the end.
+def plan_emit (plan : RunPlan) : String -> IO Unit :=
+    if plan.stream then stdout_emit else Provider.silent_emit
+
 pub def main (args : List String) : IO I64 :=
     match args {
         List.cons hd rest =>
@@ -346,7 +371,7 @@ def start_run (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServer) :
     else run_resumed plan reg servers
 
 def run_fresh (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
-    let r <- ResultT.run (Loop.run plan.cfg reg system_prompt [user_message plan.task] plan.max_turns);
+    let r <- ResultT.run (Loop.run plan.cfg reg system_prompt [user_message plan.task] plan.max_turns (plan_emit plan));
     finish_run plan servers r
 }
 
@@ -369,7 +394,7 @@ def resumed_budget (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServ
 
 def resumed_state (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServer) (s : Session) (budget : I64) : IO I64 := do {
     let s2 : Session := { s with history := List.append s.history [user_message plan.task] };
-    let st : RunState := { session := s2, reg := reg, turns_left := budget };
+    let st : RunState := { session := s2, reg := reg, turns_left := budget, emit := plan_emit plan };
     let r <- ResultT.run (Loop.run_state st);
     finish_run plan servers r
 }
@@ -405,14 +430,21 @@ def report_saved (plan : RunPlan) (servers : List McpServer) (session : Session)
     }
 
 def report_print (plan : RunPlan) (servers : List McpServer) (session : Session) : IO I64 := do {
-    let answer := last_assistant session.history;
-    if String.is_empty answer
-    then IO.println "(no assistant reply)"
-    else IO.println answer;
+    if plan.stream then IO.pure unit else print_answer session;
     let dim <- colored (usage_line session) Color.bright_black;
     IO.println dim;
     let _ <- dispose_all servers;
     return 0
+}
+
+/// The final answer print that is NOT made in stream mode: the text
+/// already reached stdout fragment by fragment through `emit`, so
+/// reprinting it whole would double every answer.
+def print_answer (session : Session) : IO Unit := do {
+    let answer := last_assistant session.history;
+    if String.is_empty answer
+    then IO.println "(no assistant reply)"
+    else IO.println answer
 }
 
 /// `[turns: N | tokens in/out/cached]` from the session's own

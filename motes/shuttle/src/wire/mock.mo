@@ -17,7 +17,7 @@
 /// human driver can point the env var anywhere.
 use json::json {Json, Json.parse, Json.ParseError.to_string, Json.get_array}
 use shuttle::message {Message, Turn}
-use shuttle::message_types {Role}
+use shuttle::message_types {Role, Content}
 use shuttle::tool {ToolSpec}
 use init::transformers {ResultT}
 use std::io {IO.get_env, IO.read_file, IO.file_exists}
@@ -38,6 +38,35 @@ def mock_script_path : IO String := do {
 def is_assistant (m : Message) : Bool :=
     match m {
         { role, .. } => match role { Role.assistant => true, _ => false },
+    }
+
+def content_text (c : Content) : String :=
+    match c {
+        Content.text s => s,
+        _ => "",
+    }
+
+/// The scripted turn's visible text, the same string a real wire's
+/// stream would emit fragment by fragment.
+#[partial]
+def mock_turn_text (t : Turn) : String :=
+    match t {
+        Turn.mk message _ _ => String.concat_all (List.map content_text message.content)
+    }
+
+/// A scripted turn is one atomic payload, so its whole text is
+/// emitted ONCE -- the callback contract the real wires implement,
+/// with nothing to interleave. A turn with no text (a pure tool_use
+/// script entry) emits nothing, the same way a real stream's
+/// tool-only fragments never reach `emit`.
+def mock_emit_turn (emit : String -> IO Unit) (r : Result String Turn) : IO (Result String Turn) :=
+    match r {
+        Result.err e => return (Result.err e),
+        Result.ok t =>
+            let text := mock_turn_text t in
+            if String.is_empty text
+            then return (Result.ok t)
+            else Monad.bind (emit text) (fn _ => Monad.pure (Result.ok t)),
     }
 
 #[partial]
@@ -98,7 +127,8 @@ def mock_decode (loaded : Result String String) (index : I64) : Result String Tu
         Result.ok text => mock_parse text index,
     }
 
-/// Serve the next scripted turn. `tools` is accepted and ignored: the
+/// Serve the next scripted turn, emitting its visible text to `emit`
+/// once (see `mock_emit_turn`). `tools` is accepted and ignored: the
 /// script author decides what the model "asks for", including tool_use
 /// blocks naming tools the caller did not register (the loop's
 /// unknown-tool path is part of what this wire can exercise).
@@ -106,9 +136,10 @@ def mock_decode (loaded : Result String String) (index : I64) : Result String Tu
 /// `loop.mo`'s `run_tool`, and NOT a `ResultT` do-block: its binds
 /// dispatch `Monad (ResultT String IO)` at run time, which the test
 /// driver's synthesis failed to resolve for this module.
-pub def Mock.send (tools : List ToolSpec) (history : List Message) : ResultT String IO Turn :=
+pub def Mock.send (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn :=
     ResultT.mk (do {
         let file <- mock_script_path;
         let loaded <- mock_load file;
-        return (mock_decode loaded (assistant_count history))
+        let turn <- mock_emit_turn emit (mock_decode loaded (assistant_count history));
+        return turn
     })

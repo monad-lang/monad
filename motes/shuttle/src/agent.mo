@@ -30,13 +30,16 @@ type AgentAnswered {}
 type AgentExecuting {}
 type AgentDone {}
 
-/// Everything a running loop carries: the serializable `Session` plus
-/// the tool registry (closures -- checkpoint the session, never this)
-/// and the remaining turn budget.
+/// Everything a running loop carries: the serializable `Session`, the
+/// tool registry, the remaining turn budget, and the live-text sink.
+/// Registry and `emit` are closures -- checkpoint the session, never
+/// this -- and `emit` is never read by the loop's own logic, only
+/// handed to the provider, so the session codec is untouched.
 pub struct RunState {
     session : Session,
     reg : ToolRegistry,
     turns_left : I64,
+    emit : String -> IO Unit,
 }
 
 /// One agent step from phase `I` to phase `J` producing `A`.

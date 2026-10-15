@@ -27,7 +27,7 @@
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content}
 use shuttle::message {Message}
-use shuttle::provider {ProviderConfig}
+use shuttle::provider {ProviderConfig, Provider.silent_emit}
 use shuttle::presets {ProviderConfig.mistral, ProviderConfig.openrouter}
 use shuttle::registry {ToolRegistry}
 use shuttle::loop {Loop.run}
@@ -71,7 +71,7 @@ def content_mentions_sentinel (c : Content) : Bool :=
 
 def run_e2e (cfg : ProviderConfig) : IO Bool := do {
     write_fixture;
-    let r <- ResultT.run (Loop.run cfg e2e_registry "You are a helpful coding assistant with a read tool." [e2e_task_message] 6);
+    let r <- ResultT.run (Loop.run cfg e2e_registry "You are a helpful coding assistant with a read tool." [e2e_task_message] 6 Provider.silent_emit);
     return (match r {
         Result.ok session => history_mentions_sentinel session.history,
         Result.err _ => false,

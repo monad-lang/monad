@@ -25,6 +25,7 @@ usage: shuttle run "<task>"
   --model <name>    (defaults: ollama qwen2.5-coder, mistral mistral-large-latest,
                     anthropic claude-opus-5; openrouter requires it)
   --max-turns <n>   (default 10, total across a save/resume)
+  --stream, -s      (print assistant text live as it arrives)
   --mcp <exe>       (repeatable; bare executable, no arguments yet)
   --resume <file>   (continue a saved session)
   --save <file>     (checkpoint the final session)
@@ -52,10 +53,12 @@ context.mo                      token estimation, history trimming, prefix
 main.mo                         the CLI: parse, mount, run, report
 ```
 
-The loop is turn-by-turn, not streaming (`http.md` still owes chunked
-transfer encoding): a long response is a long silence. A tool failure
-becomes an `is_error := true` tool_result the model can see and adapt
-to, not a short-circuit of the run.
+Every provider call streams on the wire; the loop hands each text
+fragment to an `emit` sink as it arrives. `--stream` wires that sink
+to stdout (and suppresses the end-of-run reprint of the final
+answer); without it the sink is silent and the answer prints once at
+the end. A tool failure becomes an `is_error := true` tool_result
+the model can see and adapt to, not a short-circuit of the run.
 
 ## Providers
 
