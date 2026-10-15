@@ -457,11 +457,11 @@ def Client.post_stream_sent {S : Type} (conn : Connection) (write_res : Result S
   match write_res {
     Result.err e => do { Client.close conn; return (Result.err e) },
     Result.ok _ =>
-      Monad.bind (Client.stream_response conn.socket Method.POST init on_bytes) (fn res =>
+      Monad.bind (Client.stream_response Method.POST conn.socket init on_bytes) (fn res =>
         Client.post_stream_close conn res)
   }
 
-def Client.post_stream_close (conn : Connection) (res : Result String (Pair S Response)) : IO (Result String (Pair S Response)) :=
+def Client.post_stream_close {S : Type} (conn : Connection) (res : Result String (Pair S Response)) : IO (Result String (Pair S Response)) :=
   do {
     Client.close conn;
     return res
