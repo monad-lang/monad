@@ -29,3 +29,12 @@ path = "../openai"
 
 [dependencies.anthropic]
 path = "../anthropic"
+
+[dependencies.clap]
+path = "../clap"
+
+[dependencies.parsec]
+path = "../parsec"
+
+[dependencies.mcp_client]
+path = "../mcp_client"
