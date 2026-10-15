@@ -39,6 +39,11 @@ pub struct ChatRequest {
     messages : List ChatMessage,
     tools : List ToolDef,
     max_tokens : Option I64,
+    /// `true` switches the endpoint to SSE streaming. Defaults to false on
+    /// decode for the same reason as `ChatMessage.tool_calls`: a real
+    /// non-streaming request body carries no `stream` key, and the
+    /// derive's absent-key rule is "declared default, else error".
+    stream : Bool := false,
 }
 
 derive_json_serialize! ChatRequest

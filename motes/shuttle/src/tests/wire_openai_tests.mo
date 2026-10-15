@@ -11,7 +11,7 @@ use std::list {List.length}
 def test_encode_request_system_message_first : Bool :=
     let req := OpenAI.encode_request "qwen" 100 "be helpful" [] [] in
     match req {
-        ChatRequest.mk model messages tools max_tokens =>
+        ChatRequest.mk model messages tools max_tokens stream =>
             match messages {
                 List.cons m _ =>
                     match m { ChatMessage.mk role content tool_calls tool_call_id name => String.beq role "system" },
@@ -27,7 +27,7 @@ def test_encode_request_splits_multiple_tool_results : Bool :=
     let msg : Message := { role := Role.tool, content := [Content.tool_result "c1" "out1" false, Content.tool_result "c2" "out2" false] } in
     let req := OpenAI.encode_request "qwen" 100 "sys" [] [msg] in
     match req {
-        ChatRequest.mk model messages tools max_tokens => List.length messages == 3,
+        ChatRequest.mk model messages tools max_tokens stream => List.length messages == 3,
     }
 
 /// `tool_calls[].function.arguments` is a JSON STRING that must be
