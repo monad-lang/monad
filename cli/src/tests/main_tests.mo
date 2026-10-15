@@ -346,6 +346,63 @@ def test_from_args_test_no_files_is_a_test_command : Bool :=
         _ => false,
     }
 
+// ─── run: program arguments after the path ───
+//
+// Everything after the path positional is the compiled program's own
+// argv: a single LEADING `--` is the separator convention and is dropped
+// once (a later `--` is a literal program argument); tokens after the
+// path with no separator are forwarded unchanged. No `BEq` instance
+// for lists is in scope here, and the parser takes no nested
+// constructor patterns, so the args are asserted one cons layer at a
+// time rather than with `==`.
+
+#[partial]
+def same_args (want : List String) (args : List String) : Bool :=
+    match want {
+        List.empty => List.is_empty args,
+        List.cons w wr =>
+            match args {
+                List.cons a ar => w == a && same_args wr ar,
+                List.empty => false,
+            },
+    }
+
+#[test]
+def test_from_args_run_forwards_args_after_separator : Bool :=
+    match Command.from_args ["run", "a.mo", "--", "x", "y"] {
+        Command.run path _verbose _debug args =>
+            Path.to_string path == "a.mo" && same_args ["x", "y"] args,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_run_forwards_args_without_separator : Bool :=
+    match Command.from_args ["run", "a.mo", "x"] {
+        Command.run path _verbose _debug args =>
+            Path.to_string path == "a.mo" && same_args ["x"] args,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_run_with_no_args_is_empty : Bool :=
+    match Command.from_args ["run", "a.mo"] {
+        Command.run path _verbose _debug args =>
+            Path.to_string path == "a.mo" && same_args List.empty args,
+        _ => false,
+    }
+
+// The caveat pinned as a test: clap's `take_flag` is position-independent,
+// so a token that literally matches one of run's own flags is consumed by
+// monad even when it was meant for the program -- the `--` separator does
+// not fence it off.
+#[test]
+def test_from_args_run_flags_are_position_independent : Bool :=
+    match Command.from_args ["run", "a.mo", "--verbose", "--", "x"] {
+        Command.run path verbose _debug args =>
+            Path.to_string path == "a.mo" && verbose == true && same_args ["x"] args,
+        _ => false,
+    }
+
 #[test]
 def test_from_args_help_on_empty : Bool :=
     match Command.from_args [] {

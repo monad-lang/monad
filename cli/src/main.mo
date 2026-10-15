@@ -657,7 +657,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
 /// llc+clang), then `exec_cmd` the binary. Returns the binary's exit
 /// code, or 1 if compilation failed.
 #[partial]
-def run_file (file_path : String) (output_dir : Path) (verbose : Bool) (debug : Bool) : IO I64 {
+def run_file (file_path : String) (output_dir : Path) (verbose : Bool) (debug : Bool) (program_args : List String) : IO I64 {
     let out_name : Path := Path.path "run_out";
     // `Option.none`: a `run` is not a cache entry, so there is no key to
     // name the IR by -- the output-derived `run_out.ll` is what this path
@@ -671,7 +671,7 @@ def run_file (file_path : String) (output_dir : Path) (verbose : Bool) (debug : 
         return 1
     } else do {
         let bin_path := Path.to_string (Path.join output_dir out_name);
-        let exit_code <- exec_cmd bin_path [];
+        let exit_code <- exec_cmd bin_path program_args;
         return exit_code
     }
 }
@@ -1892,7 +1892,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
 // though — same argv-munging primitives either way.
 type Command {
     build (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (debug: Bool) (no_cache: Bool) (target: String),
-    run (file: Path) (verbose: Bool) (debug: Bool),
+    run (file: Path) (verbose: Bool) (debug: Bool) (args: List String),
     eval (file: Path) (verbose: Bool),
     pretty (file: String),
     check (files: List String) (opts: CheckOptions),
@@ -1915,6 +1915,20 @@ type Command {
     version,
     help
 }
+
+/// Everything after the file path is the compiled program's own argv.
+/// A single LEADING `--` is the separator convention and is dropped
+/// (once, leading only -- a `--` later in the list is a literal
+/// program argument); tokens after the path with no separator are
+/// forwarded unchanged too. One caveat inherited from clap's
+/// position-independent flag scan: an argument that literally matches
+/// one of run's own flags (--verbose/-v/--debug/-g/--release) is
+/// consumed by monad wherever it sits.
+def after_separator (args : List String) : List String :=
+    match args {
+        List.cons hd tl => if hd == "--" then tl else args,
+        List.empty => List.empty,
+    }
 
 /// `compile <path> [name]` (original positional form) and `compile <path>
 /// [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]` (flag
@@ -2020,12 +2034,12 @@ def Command.from_args (args : List String) : Command :=
                                     Cli.FlagResult.flag_result release rest1b =>
                                         let debug := if debug_explicit then true else not release in
                                         match Cli.take_positional rest1b {
-                                            Cli.PosResult.pos_result path_opt _ =>
+                                            Cli.PosResult.pos_result path_opt rest1c =>
                                                 match path_opt {
                                                     Option.some path =>
                                                         match Path.of path {
                                                             err _ => Command.help,
-                                                            ok p => Command.run p verbose debug,
+                                                            ok p => Command.run p verbose debug (after_separator rest1c),
                                                         },
                                                     Option.none => Command.help,
                                                 },
@@ -2208,8 +2222,8 @@ def main (args : List String) : IO I64 {
                 },
             }
         },
-        run file_path verbose debug => do {
-            run_file (Path.to_string file_path) default_output_dir verbose debug
+        run file_path verbose debug program_args => do {
+            run_file (Path.to_string file_path) default_output_dir verbose debug program_args
         },
         eval file_path verbose => do {
             eval_file (Path.to_string file_path) verbose
