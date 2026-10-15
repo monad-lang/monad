@@ -20,7 +20,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::loop {Loop.run}
 use shuttle::session {Session}
 use json::json {Json, Json.make_array, Json.make_str, Json.to_string}
-use std::io {IO.write_file}
+use std::io {IO.write_file, IO.read_file}
 use std::path {Path.of}
 use std::process {process_id}
 use std::list {List.any, List.length}
@@ -144,4 +144,77 @@ def test_mock_loop_answers_unknown_tool_with_is_error : IO Bool := do {
         Result.ok s => history_mentions "unknown tool: not_a_tool" s.history,
         Result.err _ => false,
     })
+}
+
+// ── Streaming through the loop, offline ────────────────────────────────
+
+/// The tap-file `emit` sink, `openai/src/tests/stream_tests.mo`'s
+/// pattern: append the fragment to the tap. Read-modify-write because
+/// `std::io` has no append mode and no `IORef` -- a single-threaded
+/// test makes the race moot.
+def tap_path : String :=
+    String.concat "/tmp/shuttle_mock_tap_" (String.concat (I64.to_string process_id) ".txt")
+
+def emit_tap (t : String) : IO Unit :=
+    match Path.of tap_path {
+        Result.ok p =>
+            Monad.bind (IO.read_file p) (fn old => IO.write_file p (String.concat old t)),
+        Result.err _ => return unit,
+    }
+
+def reset_tap : IO Unit :=
+    match Path.of tap_path {
+        Result.ok p => IO.write_file p "",
+        Result.err _ => return unit,
+    }
+
+def read_tap : IO String :=
+    match Path.of tap_path {
+        Result.ok p => IO.read_file p,
+        Result.err _ => return "TAP-READ-FAILED",
+    }
+
+def turn_2_text : String := String.concat "the echo tool said: " sentinel
+
+/// The emission contract, end to end through the whole loop: the
+/// tool_use turn emits NOTHING (only text reaches `emit`), the final
+/// turn's text is emitted exactly once and whole, and nothing else.
+/// The mock wire's one-shot-per-turn emission makes "exactly once"
+/// checkable as plain string equality against the tap.
+#[test]
+def test_mock_loop_emits_text_turn_only : IO Bool := do {
+    write_script;
+    reset_tap;
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_tap);
+    match r {
+        Result.err _ => return false,
+        Result.ok _ => do {
+            let tap <- read_tap;
+            return (tap == turn_2_text)
+        },
+    }
+}
+
+/// The regression guard for the sink being observation-only: a run
+/// with a live `emit` and a silent one must produce byte-identical
+/// sessions -- the callback contract must never leak into the loop's
+/// own accounting, history or serialization.
+#[test]
+def test_mock_loop_streamed_and_silent_sessions_identical : IO Bool := do {
+    write_script;
+    reset_tap;
+    let r1 <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_tap);
+    match r1 {
+        Result.err _ => return false,
+        Result.ok s1 => do {
+            let r2 <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit);
+            match r2 {
+                Result.err _ => return false,
+                Result.ok s2 =>
+                    let j1 : String := Json.to_string (Session.serialize_json s1) in
+                    let j2 : String := Json.to_string (Session.serialize_json s2) in
+                    return (j1 == j2),
+            }
+        }
+    }
 }

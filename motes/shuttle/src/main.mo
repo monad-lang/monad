@@ -430,7 +430,7 @@ def report_saved (plan : RunPlan) (servers : List McpServer) (session : Session)
     }
 
 def report_print (plan : RunPlan) (servers : List McpServer) (session : Session) : IO I64 := do {
-    if plan.stream then IO.pure unit else print_answer session;
+    if plan.stream then IO.write_stdout "\n" else print_answer session;
     let dim <- colored (usage_line session) Color.bright_black;
     IO.println dim;
     let _ <- dispose_all servers;
@@ -439,7 +439,9 @@ def report_print (plan : RunPlan) (servers : List McpServer) (session : Session)
 
 /// The final answer print that is NOT made in stream mode: the text
 /// already reached stdout fragment by fragment through `emit`, so
-/// reprinting it whole would double every answer.
+/// reprinting it whole would double every answer. Stream mode only
+/// ends the answer's line -- a fragment stream cannot know which
+/// fragment is the last, so the newline belongs to the reporter.
 def print_answer (session : Session) : IO Unit := do {
     let answer := last_assistant session.history;
     if String.is_empty answer
