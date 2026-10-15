@@ -20,9 +20,18 @@
     # `link_ir` can just say `-lgc` and `runtime.c` can just say
     # `#include <gc.h>` with no store paths hardcoded anywhere.
     #
+    # `enableStatic = true` ships `libgc.a` alongside `libgc.so`, so
+    # `monad build` can link gc statically (`link_objects` in
+    # `llvm/src/link.mo` passes `-Wl,-Bstatic -lgc -Wl,-Bdynamic` on
+    # Linux, or the `.a` by path on Darwin). The parens are load-bearing:
+    # a list element parses at select depth, so without them
+    # `boehmgc.override { enableStatic = true; }` is TWO elements -- the
+    # bare `override` lambda and the attrset -- and devenv's `packages`
+    # type check dies on the function.
+    #
     # DELIBERATELY TEMPORARY -- see
     # plans/bootstrapping/linear-types-memory.md.
-    boehmgc
+    (boehmgc.override { enableStatic = true; })
     # OpenSSL for `motes/tls`'s `#[extern "c"]` binding. Same cc-wrapper
     # story as boehmgc: include/lib paths land on clang's search path, so
     # the mote's `[link] libs = ["ssl", "crypto"]` needs no store paths.

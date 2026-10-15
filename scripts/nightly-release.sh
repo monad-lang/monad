@@ -89,12 +89,11 @@ install -m755 "$out/share/monad/monad" "$bin"
 test -x "$bin"
 file "$bin"
 
-# A published Mac binary must load no library out of the store it was copied
+# A published binary must load no library out of the store it was copied
 # from: the one that did died in dyld before `main` on every machine without
 # that exact path, while every check below passed -- they run HERE, where the
-# store is. `nix/monad.nix` links libgc statically on darwin for this reason.
-# Only darwin, because a Linux binary from the store names a store path as its
-# ELF interpreter, which is a separate fix this guard would fail on.
+# store is. `nix/monad.nix` links libgc statically on every target and adds
+# `-static` on Linux for this reason.
 case "$MONAD_PLATFORM" in
   *-darwin)
     # Captured, not piped into `grep -q`: under pipefail an early-exiting grep
@@ -102,6 +101,18 @@ case "$MONAD_PLATFORM" in
     linked="$(otool -L "$bin")"
     printf '%s\n' "$linked"
     if printf '%s\n' "$linked" | tail -n +2 | grep '/nix/store/' >/dev/null; then
+      echo "nightly-release: $bin links a library from /nix/store, so it cannot run" >&2
+      echo "  on a machine without that store path" >&2
+      exit 1
+    fi
+    ;;
+  *-linux)
+    # A static binary has no dynamic dependencies. `ldd` reports
+    # "not a dynamic executable" for a fully static binary; any line
+    # naming a /nix/store path means a library slipped through.
+    ldd_output="$(ldd "$bin" 2>&1)" || true
+    printf '%s\n' "$ldd_output"
+    if printf '%s\n' "$ldd_output" | grep '/nix/store/' >/dev/null; then
       echo "nightly-release: $bin links a library from /nix/store, so it cannot run" >&2
       echo "  on a machine without that store path" >&2
       exit 1

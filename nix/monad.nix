@@ -48,9 +48,23 @@
 { commit, monadVersion }:
 {
   perSystem =
-    { pkgs, config, lib, ... }:
+    {
+      pkgs,
+      config,
+      lib,
+      ...
+    }:
     let
       monadHost = config.packages.monadHost;
+
+      # The collector, with its static archive. Every link in this file goes
+      # through either `gcLink`'s archive-by-path or `llvm/src/link.mo`'s
+      # `-Wl,-Bstatic -lgc -Wl,-Bdynamic` (the self-compiles: rung1's own
+      # build runs the compiler that link_objects serves), and both need
+      # `libgc.a` on the linker path -- the default boehmgc ships only the
+      # shared object, which is how CI's rung-1 link died on `cannot find
+      # -lgc` / "have you installed the static version of the gc library".
+      gcStatic = pkgs.boehmgc.override { enableStatic = true; };
 
       # What the packaged compiler needs at RUNTIME, as opposed to at build
       # time: every `monad build` shells out to `llc` and `clang` by bare
@@ -74,8 +88,9 @@
       # buildPhase leaves the binary, and the wrapper supplies the runtime PATH
       # and the gc paths exactly as the single derivation always did.
       #
-      # `gc` is the collector the binary was linked against -- `pkgs.boehmgc`
-      # natively, and that target's own on a cross leg. The generated runtime
+      # `gc` is the collector the binary was linked against -- the static
+      # override natively (`gcStatic` above), and that target's own on a
+      # cross leg. The generated runtime
       # includes `<gc.h>` and links `-lgc`, so both the header and the library
       # have to be reachable from a bare `clang`, and they are passed TWO ways
       # on purpose: the `NIX_*` variables are what nixpkgs' wrapped clang
@@ -145,6 +160,7 @@
           --prefix NIX_CFLAGS_COMPILE " " "-I${lib.getDev gc}/include" \
           --prefix LIBRARY_PATH : "${lib.getLib gc}/lib" \
           --prefix CPATH : "${lib.getDev gc}/include" \
+          --prefix PKG_CONFIG_PATH : "${lib.getDev gc}/lib/pkgconfig" \
           ${extraFlag}
         runHook postInstall
       '';
@@ -212,35 +228,38 @@
             ../scripts/build-self-hosted.sh
             (lib.fileset.fileFilter (f: f.hasExt "sh") ../scripts/lib)
           ]
-          ++ map (
-            tree:
-            lib.fileset.fileFilter
-              (f: f.hasExt "mo" || f.hasExt "c" || f.hasExt "h" || f.name == "mote.toml")
-              (../. + "/${tree}")
-          ) [
-            "init"
-            "std"
-            "lang"
-            "cli"
-            "llvm"
-            "runtime"
-            "build"
-            # Compiler inputs -- see THE RULE above. `clap` arrives through
-            # `cli`, whose `main.mo` parses its own argv with it;
-            # `lsp`/`toolkit` arrive through `cli` too (its `lsp` subcommand),
-            # and `json` through `lsp`, which speaks JSON-RPC; `parsec` and
-            # `toml` arrive through `lang` itself, which parses with one and
-            # reads every manifest with the other. Not the rest of `motes/`:
-            # those are consumers of the compiler, not part of it, and keeping
-            # them out is what stops an unrelated mote's edit from
-            # invalidating a 20-minute interpretation.
-            "motes/clap"
-            "motes/json"
-            "motes/lsp"
-            "motes/parsec"
-            "motes/toml"
-            "motes/toolkit"
-          ]
+          ++
+            map
+              (
+                tree:
+                lib.fileset.fileFilter (f: f.hasExt "mo" || f.hasExt "c" || f.hasExt "h" || f.name == "mote.toml") (
+                  ../. + "/${tree}"
+                )
+              )
+              [
+                "init"
+                "std"
+                "lang"
+                "cli"
+                "llvm"
+                "runtime"
+                "build"
+                # Compiler inputs -- see THE RULE above. `clap` arrives through
+                # `cli`, whose `main.mo` parses its own argv with it;
+                # `lsp`/`toolkit` arrive through `cli` too (its `lsp` subcommand),
+                # and `json` through `lsp`, which speaks JSON-RPC; `parsec` and
+                # `toml` arrive through `lang` itself, which parses with one and
+                # reads every manifest with the other. Not the rest of `motes/`:
+                # those are consumers of the compiler, not part of it, and keeping
+                # them out is what stops an unrelated mote's edit from
+                # invalidating a 20-minute interpretation.
+                "motes/clap"
+                "motes/json"
+                "motes/lsp"
+                "motes/parsec"
+                "motes/toml"
+                "motes/toolkit"
+              ]
         );
       };
 
@@ -280,7 +299,7 @@
           pkgs.bash
           pkgs.coreutils
         ];
-        buildInputs = [ pkgs.boehmgc ];
+        buildInputs = [ gcStatic ];
 
         # The script below is entered by its shebang, exactly as CI enters it,
         # and a nix build has no `/usr/bin/env` to resolve that shebang with.
@@ -311,7 +330,7 @@
         # phase, hooks and all, and `install` needs none of them.
         installPhase = ''
           install -Dm644 "$PWD/monad.ll" $out/share/monad/monad.ll
-          ${installPhaseWith pkgs.boehmgc "" ""}
+          ${installPhaseWith gcStatic "" ""}
         '';
 
         meta = {
@@ -369,99 +388,124 @@
       #   * `checkPhase`: how to prove the result RUNS, for a target this
       #     machine cannot execute directly. Null for the native target, which
       #     runs in front of whoever built it.
-      monadFor = {
-        gc ? pkgs.boehmgc,
-        gcLink ? "-lgc",
-        llcFlags ? "",
-        ccPath ? null,
-        checkPhase ? null,
-      }: pkgs.stdenv.mkDerivation ({
-        pname = "monad";
-        version = monadVersion;
+      monadFor =
+        {
+          gc ? pkgs.boehmgc,
+          gcLink ? "-lgc",
+          llcFlags ? "",
+          ccPath ? null,
+          checkPhase ? null,
+          # Extra flags for the final link step only (not `clang -c`).
+          # Linux passes `" -static"` so the published binary carries no
+          # /nix/store library paths; Darwin leaves this empty because
+          # libSystem is always dynamic (platform convention).
+          linkFlags ? "",
+          # The -static archives of the libc the link targets: the native
+          # leg's own on a native build, the cross leg's on a cross one
+          # (`crossMonadFor`). stdenv puts its `lib` dir on the wrapped
+          # clang's `-L` path, which is the only way `-static` finds
+          # `libc.a` -- the default glibc output has no archives.
+          glibcStatic ? pkgs.glibc.static,
+        }:
+        pkgs.stdenv.mkDerivation (
+          {
+            pname = "monad";
+            version = monadVersion;
 
-        src = compilerSrc;
+            src = compilerSrc;
 
-        # No `git` here either (see nix/host.nix): a store copy has no `.git`,
-        # so nothing in this build could name the revision from the tree it is
-        # building. MONAD_BUILD_COMMIT below is the answer instead -- it wins
-        # over the compiler's own revision in `build_commit_define`, which is
-        # what makes the packaged compiler report the revision it was built
-        # from rather than the one its host happens to have.
-        #
-        # `monadHost` is NOT here: this derivation never runs the interpreter.
-        # It reads `rung1`'s output instead, which is the whole point.
-        nativeBuildInputs = [
-          pkgs.llvm
-          pkgs.clang
-          pkgs.lld
-          pkgs.makeWrapper
-          pkgs.bash
-          pkgs.coreutils
-        ];
-        buildInputs = [ gc ];
+            # No `git` here either (see nix/host.nix): a store copy has no `.git`,
+            # so nothing in this build could name the revision from the tree it is
+            # building. MONAD_BUILD_COMMIT below is the answer instead -- it wins
+            # over the compiler's own revision in `build_commit_define`, which is
+            # what makes the packaged compiler report the revision it was built
+            # from rather than the one its host happens to have.
+            #
+            # `monadHost` is NOT here: this derivation never runs the interpreter.
+            # It reads `rung1`'s output instead, which is the whole point.
+            nativeBuildInputs = [
+              pkgs.llvm
+              pkgs.clang
+              pkgs.lld
+              pkgs.makeWrapper
+              pkgs.bash
+              pkgs.coreutils
+            ]
+            # Static glibc libraries (libc.a, libpthread.a, etc.) are needed
+            # when linking with -static. The default stdenv only provides
+            # shared glibc; glibcStatic provides the .a archives.
+            ++ lib.optionals (linkFlags != "") [ glibcStatic ];
+            buildInputs = [ gc ];
 
-        buildPhase = ''
-          runHook preBuild
+            buildPhase = ''
+              runHook preBuild
 
-          # Rung 1's IR, linked here with this commit's revision. `rung1` is a
-          # build input and not a runtime one: the `.ll` is copied out of its
-          # store path, and `llc` records the path it was GIVEN -- this build
-          # directory -- so the finished binary should name no store path of
-          # rung 1's. That is checked after the build with `nix-store -q
-          # --references` on this derivation's output, not asserted here.
-          ${lib.optionalString (ccPath != null) "export PATH=${ccPath}:$PATH\n"}install -Dm644 ${rung1}/share/monad/monad.ll "$PWD/monad.ll"
+              # Rung 1's IR, linked here with this commit's revision. `rung1` is a
+              # build input and not a runtime one: the `.ll` is copied out of its
+              # store path, and `llc` records the path it was GIVEN -- this build
+              # directory -- so the finished binary should name no store path of
+              # rung 1's. That is checked after the build with `nix-store -q
+              # --references` on this derivation's output, not asserted here.
+              ${
+                lib.optionalString (ccPath != null) "export PATH=${ccPath}:$PATH\n"
+              }install -Dm644 ${rung1}/share/monad/monad.ll "$PWD/monad.ll"
 
-          llc -filetype=obj${llcFlags} "$PWD/monad.ll" -o "$PWD/monad.o"
-          clang -pthread -c runtime/src/runtime.c \
-            "-DMONAD_BUILD_COMMIT=\"${commit}\"" \
-            -o "$PWD/monad_runtime.o"
-          clang -pthread "$PWD/monad.o" "$PWD/monad_runtime.o" ${gcLink} -o "$PWD/monad"
+              llc -filetype=obj${llcFlags} "$PWD/monad.ll" -o "$PWD/monad.o"
+              clang -pthread -c runtime/src/runtime.c \
+                "-DMONAD_BUILD_COMMIT=\"${commit}\"" \
+                -o "$PWD/monad_runtime.o"
+              clang${linkFlags} -pthread "$PWD/monad.o" "$PWD/monad_runtime.o" ${gcLink} -o "$PWD/monad"
 
-          runHook postBuild
-        '';
+              runHook postBuild
+            '';
 
-        installPhase = installPhaseWith gc "--set MONAD_BUILD_COMMIT ${commit}"
-          (lib.optionalString (ccPath != null) "${ccPath}:");
+            installPhase = installPhaseWith gc "--set MONAD_BUILD_COMMIT ${commit}" (
+              lib.optionalString (ccPath != null) "${ccPath}:"
+            );
 
-        meta = {
-          description = "The self-hosted Monad compiler";
-          homepage = "https://monad-lang.org";
-          license = lib.licenses.asl20;
-          mainProgram = "monad";
-        };
-      } // lib.optionalAttrs (checkPhase != null) {
-        # `//` on the ARGUMENT and not on the derivation: `doCheck` and
-        # `checkPhase` are read out of the environment mkDerivation builds, so
-        # setting them on its RESULT would put them outside the derivation and
-        # the check would never run.
-        doCheck = true;
-        inherit checkPhase;
-      });
+            meta = {
+              description = "The self-hosted Monad compiler";
+              homepage = "https://monad-lang.org";
+              license = lib.licenses.asl20;
+              mainProgram = "monad";
+            };
+          }
+          // lib.optionalAttrs (checkPhase != null) {
+            # `//` on the ARGUMENT and not on the derivation: `doCheck` and
+            # `checkPhase` are read out of the environment mkDerivation builds, so
+            # setting them on its RESULT would put them outside the derivation and
+            # the check would never run.
+            doCheck = true;
+            inherit checkPhase;
+          }
+        );
 
       # The native target, spelled as the empty spec: every default is the
       # answer that leaves the native phase and the wrapper byte-identical.
       #
-      # Except on darwin, where the collector is linked STATICALLY. A dynamic
-      # `-lgc` there records libgc's absolute install name -- a `/nix/store`
-      # path -- in the binary, and `scripts/nightly-release.sh` publishes the
-      # bare binary out of the store, so the nightly died in dyld before
-      # `main` on every Mac without that exact store path ("Library not
-      # loaded: /nix/store/...-boehm-gc-8.2.12/lib/libgc.1.dylib", exit 134).
-      # Linux has the same store-path problem in its ELF interpreter, which
-      # static libgc alone would not fix, so its argv is left as it was.
+      # Static gc on every target. Darwin already needed it (dyld loads the
+      # .dylib's absolute install name -- a /nix/store path -- and the nightly
+      # publishes the bare binary); Linux needs it so the published binary
+      # carries no /nix/store library paths. The archive is passed BY PATH
+      # rather than as `-lgc`: ld64 prefers a `.dylib` over a `.a` in the same
+      # directory, and `enableStatic` builds both. `gc` is the same override
+      # so the header the runtime is compiled against comes from the build
+      # that produced the archive.
       #
-      # The archive is passed BY PATH rather than as `-lgc`: ld64 prefers a
-      # `.dylib` over a `.a` in the same directory, and `enableStatic` builds
-      # both. `gc` is the same override so the header the runtime is compiled
-      # against comes from the build that produced the archive. Measured on an
-      # arm64 Mac with Homebrew's identical bdw-gc 8.2.12: `otool -L` names
-      # only libSystem, and `monad check cli/src/main.mo` passes.
-      monad = monadFor (lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin (
-        let gcStatic = pkgs.boehmgc.override { enableStatic = true; }; in {
+      # Linux additionally passes `-static` to the final link, producing a
+      # fully static binary (glibc + gc + pthread, no dynamic linker at all).
+      # Darwin does NOT: libSystem is always dynamic (platform convention),
+      # and `-static` is not supported the same way there. Only gc is static
+      # on Darwin.
+      monad = monadFor (
+        {
           gc = gcStatic;
           gcLink = "${lib.getLib gcStatic}/lib/libgc.a";
         }
-      ));
+        // lib.optionalAttrs (!pkgs.stdenv.hostPlatform.isDarwin) {
+          linkFlags = " -static";
+        }
+      );
 
       # A cross target: the same three commands, with llc told the triple the
       # IR is FOR -- rung 1's header says this machine's, because that is where
@@ -482,13 +526,35 @@
       # be shown to RUN -- and to allocate, because a mis-detected cross
       # collector fails at run time rather than at build time.
       crossMonadFor =
-        { crossPkgs, triple, llcFlags }:
+        {
+          crossPkgs,
+          triple,
+          llcFlags,
+        }:
         let
-          gc = crossPkgs.boehmgc;
+          gc = crossPkgs.boehmgc.override { enableStatic = true; };
+          # The cross cc wrapper drops a hand-set NIX_LDFLAGS, so the target
+          # libc's `-static` archives reach the link as argv, like gc's.
+          glibcStatic = crossPkgs.glibc.static;
+          # `-L` of those archives only when `-static` is on the line. An
+          # unconditional one sits ahead of the cc's own libc dir in the
+          # `-L` order, and ld then resolves a DYNAMIC link's `-lc` from the
+          # static-only dir too (`-Bdynamic` accepts a `.a` that is the only
+          # match in the first dir searched): every user program the
+          # compiler links -- the qemu allocprobe included, which is how
+          # this was measured -- came out with static glibc inside a
+          # dynamic binary and died on SIGSEGV.
           shim = pkgs.writeShellScriptBin "clang" ''
+            staticFlags=""
+            for arg in "$@"; do
+              if [ "$arg" = "-static" ]; then
+                staticFlags="-L${glibcStatic}/lib"
+              fi
+            done
             exec ${crossPkgs.stdenv.cc}/bin/${crossPkgs.stdenv.cc.targetPrefix}cc \
               -isystem ${lib.getDev gc}/include \
               -L${lib.getLib gc}/lib \
+              $staticFlags \
               "$@"
           '';
           # qemu, which is the CROSS platform's `emulator` applied to the
@@ -498,7 +564,9 @@
           emulator = crossPkgs.stdenv.hostPlatform.emulator pkgs;
         in
         monadFor {
-          inherit gc llcFlags;
+          inherit gc llcFlags glibcStatic;
+          gcLink = "${lib.getLib gc}/lib/libgc.a";
+          linkFlags = " -static";
           ccPath = "${shim}/bin";
           checkPhase = ''
             runHook preCheck
@@ -585,7 +653,8 @@
         # compiler's sources, and it is where the `.ll` that ladder compares
         # against now comes from.
         monadRung1 = rung1;
-      } // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+      }
+      // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
         # Named for the platform they are FOR, which is not one this flake
         # declares: they are cross-built, so they belong to the system that
         # builds them, and to that system alone.

@@ -57,17 +57,29 @@ pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (ob
     exec_cmd "clang" (List.append ["-pthread", "-c", runtime_c] (List.append inc (List.append extra_flags ["-o", obj_path])))
 }
 
-/// Link objects into an executable. `-lgc`: the generated runtime's heap is
-/// collected (see `monad_alloc` in runtime/src/runtime.c, and
-/// plans/bootstrapping/linear-types-memory.md for why that is temporary).
-/// The include and library search paths come from the nix cc-wrapper via
-/// `boehmgc` in nix/packages.nix, so nothing here hardcodes a store path; on
-/// macOS, from pkg-config (`darwin_gc_flag`).
+/// Link objects into an executable. Boehm GC is linked statically when
+/// the static archive (`libgc.a`) is available: on Linux via
+/// `-Wl,-Bstatic -lgc -Wl,-Bdynamic` (the linker searches its `-L` paths
+/// for the `.a`, then switches back to dynamic for user libraries that
+/// follow in `extra_flags`); on Darwin by passing the archive's full path
+/// (ld64 does not support `-Bstatic`, so the `.a` is named directly). When
+/// pkg-config cannot find the gc libdir on Darwin, the link falls back to
+/// dynamic `-lgc`. The nix dev shell and the packaged `monad` both ship
+/// `libgc.a` via `boehmgc.override { enableStatic = true; }`
+/// (nix/packages.nix, nix/monad.nix).
+///
 /// `-pthread` here for the same reason as `compile_runtime_obj` above.
 #[partial]
 pub def link_objects (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
-    let lib <- darwin_gc_flag "-L" "libdir";
-    exec_cmd "clang" (List.append ["-pthread"] (List.append objs (List.append lib (List.append ["-lgc"] (List.append extra_flags ["-o", output])))))
+    let darwin <- os_is_darwin;
+    let gc_args <- if darwin then do {
+        let dir <- capture_line "pkg-config" ["--variable=libdir", "bdw-gc"];
+        return (match dir {
+            Option.some d => [d ++ "/libgc.a"],
+            Option.none => ["-lgc"]
+        })
+    } else return ["-Wl,-Bstatic", "-lgc", "-Wl,-Bdynamic"];
+    exec_cmd "clang" (List.append ["-pthread"] (List.append objs (List.append gc_args (List.append extra_flags ["-o", output]))))
 }
 
 /// `<flag><dir>` for Boehm GC's `var` directory (`includedir`, `libdir`)
