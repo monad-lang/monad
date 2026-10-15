@@ -9,13 +9,15 @@ mounted as first-class tools. Owns `plans/implementations/agent-skills.md`.
 ```bash
 monad build motes/shuttle/src/main.mo -o ./shuttle   # self-hosted compiled backend
 ./shuttle run "list the files here" --provider ollama --model qwen3:latest
+monad run motes/shuttle/src/main.mo -- run "list the files here" --provider ollama --model qwen3:latest
 ```
 
-`monad run` does not forward program arguments on the current CLI, so
-build the binary and run it directly. Anything networked is
-compiled-path only: the `tcp_*` natives have no Rust-host interpreter,
-so the Rust host (`monad-rs`) is not a verification surface for this
-mote.
+`monad run <file> -- args` forwards program arguments after the path (a
+leading `--` is the separator; it is dropped once), so either invocation
+above works -- building the binary first just skips the recompile.
+Anything networked is compiled-path only: the `tcp_*` natives have no
+Rust-host interpreter, so the Rust host (`monad-rs`) is not a
+verification surface for this mote.
 
 ```
 usage: shuttle run "<task>"

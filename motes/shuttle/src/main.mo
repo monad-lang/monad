@@ -9,9 +9,10 @@
 /// `--max-turns` is the budget for the WHOLE session, both halves of a
 /// save/resume.
 ///
-/// Verification surface: the self-hosted compiled backend (`monad build`
-/// then run the binary -- `monad run` does not forward program args).
-/// The Rust host is bootstrap-only; see loop.mo's KNOWN GAP.
+/// Verification surface: the self-hosted compiled backend (`monad run
+/// <file> -- args`, which forwards program arguments after the path, or
+/// `monad build` then run the binary). The Rust host is bootstrap-only;
+/// see loop.mo's KNOWN GAP.
 use init::transformers {ResultT}
 use json::json {Json}
 use clap::args {*}
