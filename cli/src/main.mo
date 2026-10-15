@@ -527,40 +527,72 @@ def choose_bin_target (manifest : MoteManifest) (path : String) (wanted : String
     }
 }
 
-def build_target (path : String) (out_name : String) (bin : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (spec : TargetSpec) : IO I64 := do {
+/// The source a build-shaped command compiles, and the name it lands as --
+/// the half of `build_target` that `run` needs too, split out so both verbs
+/// answer "file or mote?" the same way.
+///
+/// `label` is the "building mote ..." line `build` prints for a mote input;
+/// empty for a file, whose compile speaks for itself via `compile_file`'s
+/// own "compiling:" line.
+struct BuildInput {
+    src : String,
+    name : String,
+    label : String,
+}
+
+/// A FILE compiles directly under the caller's requested name (`"source"`
+/// is `from_args`' literal for "no name given"). A DIRECTORY is read as a
+/// mote: `Mote.discover` walks up for a manifest, `choose_bin_target` picks
+/// the `[[bin]]` target, and the source is that target's path with the
+/// name `compile_out_name` derives -- so `run` and `build` produce the
+/// same binary in the same place, sharing one cache entry. The error
+/// messages are `build`'s existing ones; `run` inherits them because they
+/// describe the input, not the verb.
+def resolve_build_input (path : String) (bin : String) (out_name : String) : IO (Result String BuildInput) := do {
     let is_a_dir : Bool <- IO.is_dir (Path.path path);
     if Bool.not is_a_dir
-    then build_cached { src := path, dest_name := (Path.path out_name),
-        verbose := verbose, debug := debug, no_cache := no_cache,
-        target := spec }
+    then return (Result.ok { src := path, name := out_name, label := "" })
     else do {
         let m <- Mote.discover path;
         match m {
             Option.none => do {
-                println ("error: " ++ path ++ " is a directory, and no mote.toml was found in it or above it");
-                println "hint: `monad build <file.mo>` builds a single file";
-                return 1
+                return (Result.err (String.concat_all [
+                    "error: ", path, " is a directory, and no mote.toml was found in it or above it",
+                    "\nhint: `monad build <file.mo>` builds a single file",
+                ]))
             },
             Option.some manifest => do {
                 let chosen <- choose_bin_target manifest path bin;
                 match chosen {
-                    Result.err msg => do {
-                        println msg;
-                        return 1
-                    },
+                    Result.err msg => return (Result.err msg),
                     Result.ok target => do {
                         let src := BinTarget.target_path target;
                         let name : String := compile_out_name out_name target;
-                        println (String.concat_all [
+                        let label : String := String.concat_all [
                             "building mote `", manifest.name, "`'s [[bin]] target `",
                             BinTarget.target_name target, "`: ", src,
-                        ]);
-                        build_cached { src := src,
-                            dest_name := (Path.path name), verbose := verbose,
-                            debug := debug, no_cache := no_cache, target := spec }
+                        ];
+                        return (Result.ok { src := src, name := name, label := label })
                     }
                 }
             }
+        }
+    }
+}
+
+def build_target (path : String) (out_name : String) (bin : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (spec : TargetSpec) : IO I64 := do {
+    let resolved <- resolve_build_input path bin out_name;
+    match resolved {
+        Result.err msg => do {
+            println msg;
+            return 1
+        },
+        Result.ok input => do {
+            if Bool.not (String.is_empty input.label) then println input.label
+            else return unit;
+            build_cached { src := input.src, dest_name := (Path.path input.name),
+                verbose := verbose, debug := debug, no_cache := no_cache,
+                target := spec }
         }
     }
 }
@@ -651,28 +683,40 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
     }
 }
 
-/// Compile a source file and execute the resulting native binary.
-/// Mirrors the Rust host's `monad-rs run <file>` — compile through
-/// `compile_file` (which type-checks, generates LLVM IR, and links via
-/// llc+clang), then `exec_cmd` the binary. Returns the binary's exit
-/// code, or 1 if compilation failed.
+/// Compile a source file (or a mote's `[[bin]]` target) and execute the
+/// resulting native binary. Mirrors the Rust host's `monad-rs run <file>` —
+/// but through `build_cached`, so a `run` is a cache entry exactly like a
+/// `build`'s: the binary lands where `build` would put it
+/// (`<target-dir>/<profile>/<name>`), the key ignores the output name, and
+/// the second identical `run` prints `cached:` and skips the compile.
+/// `program_args` are forwarded to the binary after the `--`.
 #[partial]
-def run_file (file_path : String) (output_dir : Path) (verbose : Bool) (debug : Bool) (program_args : List String) : IO I64 {
-    let out_name : Path := Path.path "run_out";
-    // `Option.none`: a `run` is not a cache entry, so there is no key to
-    // name the IR by -- the output-derived `run_out.ll` is what this path
-    // has always used and it stays out of anything stored.
+def run_file (path : String) (verbose : Bool) (debug : Bool) (program_args : List String) : IO I64 {
     let native <- TargetSpec.native;
-    let compile_result <- compile_file { file_path := file_path,
-        output_dir := output_dir, output_name := out_name, ir := Option.none,
-        verbose := verbose, debug := debug, target := native };
-    if not (compile_result == 0) then do {
-        println "run: compilation failed";
-        return 1
-    } else do {
-        let bin_path := Path.to_string (Path.join output_dir out_name);
-        let exit_code <- exec_cmd bin_path program_args;
-        return exit_code
+    let resolved <- resolve_build_input path "" "source";
+    match resolved {
+        Result.err msg => do {
+            println msg;
+            return 1
+        },
+        Result.ok input => do {
+            let rc <- build_cached { src := input.src,
+                dest_name := (Path.path input.name), verbose := verbose,
+                debug := debug, no_cache := false, target := native };
+            if not (rc == 0) then do {
+                println "run: compilation failed";
+                return 1
+            } else do {
+                // The same two steps `build_cached` took to name the
+                // destination, retraced here to exec it: which mote owns
+                // the source, then `<target-dir>/<profile>`.
+                let target_dir <- Build.target_dir_for input.src;
+                let dest_dir : String := build_dest_dir target_dir debug;
+                let bin_path : String := Path.to_string (Path.join (Path.path dest_dir) (Path.path input.name));
+                let exit_code <- exec_cmd bin_path program_args;
+                return exit_code
+            }
+        }
     }
 }
 
@@ -2223,7 +2267,7 @@ def main (args : List String) : IO I64 {
             }
         },
         run file_path verbose debug program_args => do {
-            run_file (Path.to_string file_path) default_output_dir verbose debug program_args
+            run_file (Path.to_string file_path) verbose debug program_args
         },
         eval file_path verbose => do {
             eval_file (Path.to_string file_path) verbose
