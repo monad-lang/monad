@@ -517,6 +517,74 @@ def Wire.decode_chunk_trailers (rest : List U8) (offset : I64) (acc : List U8) :
       else Wire.decode_chunk_trailers (Wire.drop_bytes (I64.add idx 2i64) rest) (I64.add offset (I64.add idx 2i64)) acc
   }
 
+// ── incremental chunked decoding ───────────────────────────────────────
+//
+// `decode_chunked` answers the buffered question ("is the whole body here
+// yet?"); a streaming client needs the other one: given what arrived since
+// last time, which body bytes are newly decoded? `chunk_step` folds
+// `incoming` into `pending` (the undecoded remainder the previous step left)
+// and walks every chunk that is fully buffered, answering the done flag, the
+// bytes this step decoded, and the remainder to carry into the next step.
+// The terminal chunk sets done without waiting for the trailer section:
+// trailers carry no field this library keeps (see `decode_chunk_trailers`)
+// and no body byte exists behind them, so waiting would only delay the
+// caller's completion for bytes it will drop.
+
+/// One incremental chunked decode. `ok ((done, decoded), pending')`:
+/// `done` at the terminal chunk, `decoded` the body bytes this step produced
+/// (possibly empty, also on the done path -- a step can decode data and then
+/// meet the terminal chunk), `pending'` the bytes the next step starts from.
+/// `err` for a body that cannot be decoded at all.
+def Wire.chunk_step (pending : List U8) (incoming : List U8) : Result String (Pair (Pair Bool (List U8)) (List U8)) :=
+  Wire.chunk_step_go (List.append pending incoming) List.empty
+
+#[terminating]
+def Wire.chunk_step_go (buf : List U8) (out : List U8) : Result String (Pair (Pair Bool (List U8)) (List U8)) :=
+  match Wire.find_crlf buf 0i64 {
+    Option.none => Result.ok (Pair.pair (Pair.pair false out) buf),
+    Option.some idx =>
+      match Wire.parse_chunk_size (Wire.take_bytes idx buf) {
+        Result.err e => Result.err e,
+        Result.ok size => Wire.chunk_step_size size buf (Wire.drop_bytes (I64.add idx 2i64) buf) out
+      }
+  }
+
+/// Dispatch on a chunk size: zero is the terminator, anything else needs
+/// `size` data bytes plus their CRLF before it can contribute. `buf` (the
+/// walk's unconsumed bytes, size line included) is passed along so an
+/// incomplete chunk returns it as the pending remainder instead of losing the
+/// size line it had already read.
+#[terminating]
+def Wire.chunk_step_size (size : I64) (buf : List U8) (rest : List U8) (out : List U8) : Result String (Pair (Pair Bool (List U8)) (List U8)) :=
+  if size == 0i64
+  then Result.ok (Pair.pair (Pair.pair true out) List.empty)
+  else
+    if I64.gt size (I64.sub (List.length rest) 2i64)
+    then Result.ok (Pair.pair (Pair.pair false out) buf)
+    else Wire.chunk_step_data size rest out
+
+/// Consume one data chunk's bytes plus the CRLF behind them, then continue
+/// with the next size line. The length test in `chunk_step_size` guarantees
+/// the CRLF is buffered, so it is checked rather than waited for.
+#[terminating]
+def Wire.chunk_step_data (size : I64) (rest : List U8) (out : List U8) : Result String (Pair (Pair Bool (List U8)) (List U8)) :=
+  let data : List U8 := Wire.take_bytes size rest in
+  let after : List U8 := Wire.drop_bytes size rest in
+  match after {
+    List.cons cr more1 =>
+      match more1 {
+        List.cons lf more2 =>
+          if cr == 13u8
+          then
+            if lf == 10u8
+            then Wire.chunk_step_go more2 (List.append out data)
+            else Result.err "chunk data not CRLF-terminated"
+          else Result.err "chunk data not CRLF-terminated",
+        List.empty => Result.err "chunk data not CRLF-terminated"
+      },
+    List.empty => Result.err "chunk data not CRLF-terminated"
+  }
+
 /// Whether a response to `method` with `status` may carry a body at all.
 /// `HEAD` answers the request with the headers the `GET` would have produced,
 /// `Content-Length` included and no body behind it; 1xx, 204 and 304 are the

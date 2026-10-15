@@ -8,6 +8,13 @@
 ///              closes after. `get` follows redirects; `post` doesn't
 ///              (the caller decides, via `Client.request_with`).
 ///
+///   Streaming: `Client.post_stream url headers body init on_bytes` — the
+///              same one-shot POST with the decoded body handed to `on_bytes`
+///              as it arrives, and reassembled into the returned `Response`.
+///              `Client.stream_response` is the read half on an open
+///              transport, for callers (and tests) staging the socket
+///              themselves.
+///
 ///   Keep-alive: `Client.connect url` → `Client.send conn req` → `Client.close conn`
 ///              — reuses one TCP connection across multiple `send` calls.
 ///              Requires `Content-Length` in responses to delimit bodies.
@@ -26,13 +33,15 @@
 /// schemes share one request/response path.
 
 use http::types {
-  Body, Headers, Method, Request, Response, Status.found,
+  Body, Framing, Headers, Method, Request, Response, Status.found,
   Status.moved_permanently, Status.permanent_redirect, Status.see_other,
   Status.temporary_redirect, Transport, Uri, http1_1,
 }
 use tls::stream {Tls.Stream, Tls.close, Tls.connect, Tls.read, Tls.write}
 use http::wire {
-  Wire.format_request, Wire.frame_response, Wire.parse_response_with_method,
+  Wire.body_of, Wire.chunk_step, Wire.drop_bytes, Wire.find_body_start,
+  Wire.format_request, Wire.frame_response, Wire.head_headers,
+  Wire.head_status, Wire.parse_response_with_method, Wire.response_framing,
   Wire.take_bytes,
 }
 use http::body {}
@@ -400,3 +409,365 @@ def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Res
     { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
   in
   Client.request_with 0i64 req
+
+// ── streaming response bodies ───────────────────────────────────────────
+//
+// `Client.post_stream` is the one-shot POST with the body handed to the
+// caller as it arrives: every decoded byte run reaches `on_bytes` while the
+// response is still in flight, and the same bytes accumulate into the
+// `Response` the call finally returns -- so a caller that streams text to a
+// terminal and one that only wants the assembled body run the same code.
+// The caller's state `S` threads through the callbacks untouched by the
+// client itself; a callback that answers `Result.err` aborts the stream with
+// that error, and the connection closes on every exit path.
+//
+// The streaming read is split out as `Client.stream_response` on an open
+// transport (no connect, write or close), for the same reason
+// `Client.read_response` is: a single-threaded test cannot interleave with a
+// one-shot call whose read blocks, so the socket dance is staged by the
+// caller there.
+
+/// One-shot streaming POST: connect, send, stream the decoded body to
+/// `on_bytes` as it arrives, close, and return the caller's final state with
+/// the whole response (the streamed bytes reassembled as its body).
+def Client.post_stream {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  let req : Request :=
+    { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
+  in
+  match Wire.format_request (Client.prepare_request req) {
+    Result.err e => return (Result.err e),
+    Result.ok bytes =>
+      Monad.bind (Client.connect (Uri.format u)) (fn conn_res =>
+        Client.post_stream_conn bytes conn_res init on_bytes)
+  }
+
+/// After connecting: write the request, then stream the response, then close.
+def Client.post_stream_conn {S : Type} (bytes : List U8) (conn_res : Result String Connection) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  match conn_res {
+    Result.err e => return (Result.err e),
+    Result.ok conn =>
+      Monad.bind (Transport.write conn.socket bytes) (fn write_res =>
+        Client.post_stream_sent conn write_res init on_bytes)
+  }
+
+/// After the write: stream, then close on every exit path. A failed write
+/// closes too -- the connection is open, and its socket is this call's to
+/// reap.
+def Client.post_stream_sent {S : Type} (conn : Connection) (write_res : Result String U64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  match write_res {
+    Result.err e => do { Client.close conn; return (Result.err e) },
+    Result.ok _ =>
+      Monad.bind (Client.stream_response conn.socket Method.POST init on_bytes) (fn res =>
+        Client.post_stream_close conn res)
+  }
+
+def Client.post_stream_close (conn : Connection) (res : Result String (Pair S Response)) : IO (Result String (Pair S Response)) :=
+  do {
+    Client.close conn;
+    return res
+  }
+
+/// Stream one response from an open transport: read the head, decode the
+/// body incrementally, and answer the caller's final state plus the whole
+/// response. Does not own the transport -- the caller opens and closes it
+/// (`Client.post_stream` is the one-shot composition).
+def Client.stream_response {S : Type} (method : Method) (t : Transport) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  Monad.bind (Client.read_head t List.empty) (fn head =>
+    Client.stream_response_head method t head init on_bytes)
+
+/// The framed half of the stream: dispatch the head's framing and hand the
+/// body bytes (carry included) to the right walker.
+def Client.stream_response_head {S : Type} (method : Method) (t : Transport) (head : Result String (Pair (Pair U16 Headers) (List U8))) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  match head {
+    Result.err e => return (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair sh carry =>
+          match sh {
+            Pair.pair status headers =>
+              match Wire.response_framing method status headers {
+                Result.err e => return (Result.err e),
+                Result.ok framing => Client.stream_body method t status headers framing carry init on_bytes
+              }
+          }
+      }
+  }
+
+/// One framing, one walker: `no_body` answers immediately (nothing will be
+/// sent to feed), a length counts down, chunked decodes chunks as they
+/// complete, read-to-close ends at EOF. The carry -- body bytes that arrived
+/// with the head -- is fed first in every body case.
+def Client.stream_body {S : Type} (method : Method) (t : Transport) (status : U16) (headers : Headers) (framing : Framing) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  match framing {
+    Framing.no_body =>
+      let resp : Response :=
+        { status := status, headers := headers, version := HttpVersion.http1_1, body := Body.empty } in
+      return (Result.ok (Pair.pair init resp)),
+    Framing.content_length n => Client.stream_length_carry t status headers n carry init on_bytes,
+    Framing.chunked => Client.stream_chunked_carry t status headers carry init on_bytes,
+    Framing.until_eof => Client.stream_eof_carry t status headers carry init on_bytes
+  }
+
+/// Wrap a walker's answer: the streamed bytes become the response body.
+def Client.stream_finish {S : Type} (status : U16) (headers : Headers) (body_res : Result String (Pair S (List U8))) : IO (Result String (Pair S Response)) :=
+  match body_res {
+    Result.err e => return (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair s body_bytes =>
+          let body : Body := Wire.body_of body_bytes in
+          let resp : Response :=
+            { status := status, headers := headers, version := HttpVersion.http1_1, body := body } in
+          return (Result.ok (Pair.pair s resp))
+      }
+  }
+
+/// Hand one decoded byte run to the callback and the accumulator. Empty runs
+/// are the common case at chunk boundaries (a read that completed only a
+/// size line) and are skipped rather than passed on.
+def Client.feed {S : Type} (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (bytes : List U8) : IO (Result String (Pair S (List U8))) := do {
+  if List.is_empty bytes
+  then return (Result.ok (Pair.pair s acc))
+  else do {
+    let fed <- on_bytes s bytes;
+    match fed {
+      Result.err e => return (Result.err e),
+      Result.ok pr =>
+        match pr {
+          Pair.pair s2 _ => return (Result.ok (Pair.pair s2 (List.append acc bytes)))
+        }
+    }
+  }
+}
+
+// ── reading the response head incrementally ─────────────────────────────
+//
+// The buffered reader reads until `Wire.frame_response` can see the whole
+// message; the streaming reader cannot wait for the message -- the body is
+// what arrives live -- so it reads only until the head's blank line, then
+// hands the head and the body bytes that came with it to the framing walk.
+
+/// Read until the head ends: its status and headers, plus the body bytes that
+/// arrived in the same reads (the carry the body walkers start from).
+#[terminating]
+def Client.read_head (t : Transport) (carry : List U8) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
+  match Wire.find_body_start carry {
+    Option.none => do {
+      let read_res <- Transport.read t 4096u64;
+      Client.read_head_step t carry read_res
+    },
+    Option.some head_end => Client.parse_head head_end carry
+  }
+
+/// One read's answer while the head is still incomplete. EOF before the
+/// blank line is a truncation, not an empty head.
+#[terminating]
+def Client.read_head_step (t : Transport) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
+  match read_res {
+    Result.err e => return (Result.err e),
+    Result.ok chunk =>
+      if List.is_empty chunk
+      then return (Result.err "response head ended before the blank line")
+      else Client.read_head t (List.append carry chunk)
+  }
+
+/// The head is buffered: its status, its headers, and the carry behind it.
+def Client.parse_head (head_end : I64) (carry : List U8) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
+  match Wire.head_status head_end carry {
+    Result.err e => return (Result.err e),
+    Result.ok status =>
+      match Wire.head_headers head_end carry {
+        Result.err e => return (Result.err e),
+        Result.ok headers =>
+          let body_carry : List U8 := Wire.drop_bytes head_end carry in
+          return (Result.ok (Pair.pair (Pair.pair status headers) body_carry))
+      }
+  }
+
+// ── body walkers ─────────────────────────────────────────────────────────
+//
+// One per framing, each answering `Result String (Pair S (List U8))`: the
+// caller's threaded state and the whole body, accumulated. Reads are handed
+// to the callback DECODED (a chunked body's framing lines never reach
+// `on_bytes`), and the same bytes build the final body, so the two agree by
+// construction.
+
+/// The first `n` bytes of `xs`, or all of them when there are fewer: a read
+/// (or a head carry) that overruns what a length vouches for contributes
+/// only that much -- the excess would be the next message's, not this
+/// body's.
+def Client.take_min (n : I64) (xs : List U8) : List U8 :=
+  if I64.gt (List.length xs) n then Wire.take_bytes n xs else xs
+
+/// `Content-Length`: feed the carry (sliced to the declared length), then
+/// read exactly what remains of the length.
+def Client.stream_length_carry {S : Type} (t : Transport) (status : U16) (headers : Headers) (n : I64) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+  let head_bytes : List U8 := Client.take_min n carry;
+  let fed <- Client.feed on_bytes init List.empty head_bytes;
+  Client.stream_length_fed t status headers n fed on_bytes
+}
+
+def Client.stream_length_fed {S : Type} (t : Transport) (status : U16) (headers : Headers) (n : I64) (fed : Result String (Pair S (List U8))) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  match fed {
+    Result.err e => return (Result.err e),
+    Result.ok pr => Client.stream_length_fed_ok t status headers n pr on_bytes
+  }
+
+def Client.stream_length_fed_ok {S : Type} (t : Transport) (status : U16) (headers : Headers) (n : I64) (pr : Pair S (List U8)) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+  let fed_state : S := pr.first;
+  let fed_acc : List U8 := pr.second;
+  let remaining : I64 := I64.sub n (List.length fed_acc);
+  let body_res <- Client.stream_length t on_bytes fed_state fed_acc remaining;
+  Client.stream_finish status headers body_res
+}
+
+/// Count a `Content-Length` down to zero. EOF before zero is a truncation,
+/// reported rather than answered as a complete body.
+#[terminating]
+def Client.stream_length {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) : IO (Result String (Pair S (List U8))) := do {
+  if Bool.not (I64.gt remaining 0i64)
+  then return (Result.ok (Pair.pair s acc))
+  else do {
+    let read_res <- Transport.read t 4096u64;
+    Client.stream_length_step t on_bytes s acc remaining read_res
+  }
+}
+
+def Client.stream_length_step {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
+  match read_res {
+    Result.err e => return (Result.err e),
+    Result.ok chunk =>
+      if List.is_empty chunk
+      then return (Result.err "body shorter than Content-Length")
+      else Client.stream_length_feed t on_bytes s acc remaining chunk
+  }
+
+/// A read that overruns the remaining length feeds only what the length
+/// vouches for -- the excess would be the next message's, not this body's.
+#[terminating]
+def Client.stream_length_feed {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) (chunk : List U8) : IO (Result String (Pair S (List U8))) := do {
+  let feed : List U8 := Client.take_min remaining chunk;
+  let remaining2 : I64 := I64.sub remaining (List.length feed);
+  let fed <- Client.feed on_bytes s acc feed;
+  Client.stream_length_fed2 t on_bytes remaining2 fed
+}
+
+def Client.stream_length_fed2 {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (remaining : I64) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
+  match fed {
+    Result.err e => return (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair s2 acc2 => Client.stream_length t on_bytes s2 acc2 remaining
+      }
+  }
+
+/// Read-to-close: every byte until EOF, which is the body's only end.
+def Client.stream_eof_carry {S : Type} (t : Transport) (status : U16) (headers : Headers) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+  let fed <- Client.feed on_bytes init List.empty carry;
+  Client.stream_eof_fed t status headers fed on_bytes
+}
+
+def Client.stream_eof_fed {S : Type} (t : Transport) (status : U16) (headers : Headers) (fed : Result String (Pair S (List U8))) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  match fed {
+    Result.err e => return (Result.err e),
+    Result.ok pr => Client.stream_eof_fed_ok t status headers pr on_bytes
+  }
+
+def Client.stream_eof_fed_ok {S : Type} (t : Transport) (status : U16) (headers : Headers) (pr : Pair S (List U8)) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+  let fed_state : S := pr.first;
+  let fed_acc : List U8 := pr.second;
+  let body_res <- Client.stream_eof t on_bytes fed_state fed_acc;
+  Client.stream_finish status headers body_res
+}
+
+#[terminating]
+def Client.stream_eof {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) : IO (Result String (Pair S (List U8))) := do {
+  let read_res <- Transport.read t 4096u64;
+  Client.stream_eof_step t on_bytes s acc read_res
+}
+
+/// EOF is the end of a read-to-close body, not an error.
+#[terminating]
+def Client.stream_eof_step {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
+  match read_res {
+    Result.err e => return (Result.err e),
+    Result.ok chunk =>
+      if List.is_empty chunk
+      then return (Result.ok (Pair.pair s acc))
+      else do {
+        let fed <- Client.feed on_bytes s acc chunk;
+        Client.stream_eof_fed2 t on_bytes fed
+      }
+  }
+
+def Client.stream_eof_fed2 {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
+  match fed {
+    Result.err e => return (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair s2 acc2 => Client.stream_eof t on_bytes s2 acc2
+      }
+  }
+
+/// Chunked: decode with `Wire.chunk_step` as reads arrive, feeding each
+/// step's decoded bytes. EOF before the terminal chunk is a truncation.
+def Client.stream_chunked_carry {S : Type} (t : Transport) (status : U16) (headers : Headers) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+  let body_res <- Client.stream_chunked t on_bytes init List.empty carry;
+  Client.stream_finish status headers body_res
+}
+
+#[terminating]
+def Client.stream_chunked {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) : IO (Result String (Pair S (List U8))) :=
+  match Wire.chunk_step pending List.empty {
+    Result.err e => return (Result.err e),
+    Result.ok pr => Client.stream_chunked_decoded t on_bytes s acc pr
+  }
+
+/// One step's answer: feed what it decoded (also on the done path -- a step
+/// can decode data and then meet the terminal chunk), then finish or read.
+#[terminating]
+def Client.stream_chunked_decoded {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pr : Pair (Pair Bool (List U8)) (List U8)) : IO (Result String (Pair S (List U8))) :=
+  match pr {
+    Pair.pair step pending2 =>
+      match step {
+        Pair.pair done decoded => do {
+          let fed <- Client.feed on_bytes s acc decoded;
+          Client.stream_chunked_fed t on_bytes pending2 done fed
+        }
+      }
+  }
+
+#[terminating]
+def Client.stream_chunked_fed {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (pending : List U8) (done : Bool) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
+  match fed {
+    Result.err e => return (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair s2 acc2 =>
+          if done
+          then return (Result.ok (Pair.pair s2 acc2))
+          else Client.stream_chunked_read t on_bytes s2 acc2 pending
+      }
+  }
+
+#[terminating]
+def Client.stream_chunked_read {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) : IO (Result String (Pair S (List U8))) := do {
+  let read_res <- Transport.read t 4096u64;
+  Client.stream_chunked_step t on_bytes s acc pending read_res
+}
+
+def Client.stream_chunked_step {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
+  match read_res {
+    Result.err e => return (Result.err e),
+    Result.ok chunk =>
+      if List.is_empty chunk
+      then return (Result.err "chunked body ended before the terminal chunk")
+      else Client.stream_chunked_more t on_bytes s acc pending chunk
+  }
+
+#[terminating]
+def Client.stream_chunked_more {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) (chunk : List U8) : IO (Result String (Pair S (List U8))) :=
+  match Wire.chunk_step pending chunk {
+    Result.err e => return (Result.err e),
+    Result.ok pr => Client.stream_chunked_decoded t on_bytes s acc pr
+  }

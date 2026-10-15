@@ -8,7 +8,8 @@
 
 use moose::client {
   Client.close, Client.connect, Client.get, Client.host_port,
-  Client.read_response, Client.redirect_request, Client.write_request, Connection,
+  Client.read_response, Client.redirect_request, Client.stream_response,
+  Client.write_request, Connection,
 }
 use http::types {
   Body.is_empty, GET, HEAD, Headers, Headers.empty, Headers.get, Headers.set,
@@ -623,3 +624,150 @@ def test_redirect_cross_origin_drops_credentials : Bool :=
 def test_redirect_cross_origin_keeps_other_headers : Bool :=
   let r := Client.redirect_request (rp_post (rp_origin 80u16)) Status.temporary_redirect (rp_origin 8080u16) in
   h_is "Content-Type" "text/plain" r.headers
+
+// ── streaming responses ──────────────────────────────────────────────────
+//
+// `Client.stream_response` is the staged half of `Client.post_stream`,
+// split out for the same reason `Client.read_response` is: the fake server
+// is single-threaded, so the client's reads happen after the server's
+// writes, never interleaved with them. The invariant the tests pin is that
+// the bytes the callback saw and the body the client assembled are the same
+// bytes -- whatever the read boundaries turn out to be.
+
+/// An `on_bytes` that concatenates everything it saw, so a test can compare
+/// the deltas against the assembled body. A top-level def, not a lambda: a
+/// closure in argument position is a compiled-backend miscompile family.
+def seen_concat (seen : String) (bytes : List U8) : IO (Result String (Pair String Unit)) :=
+  return (Result.ok (Pair.pair (String.concat seen (String.from_list bytes)) unit))
+
+/// An `on_bytes` that refuses: a callback's error must abort the stream with
+/// that error rather than being swallowed into a "successful" short body.
+def seen_fail (seen : String) (bytes : List U8) : IO (Result String (Pair String Unit)) :=
+  return (Result.err "callback-failed")
+
+/// A chunked SSE-ish body in two chunks, written in three pieces so the
+/// walker's reads and the chunk boundaries do not align.
+#[test]
+def test_stream_response_chunked : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res : Result String Connection <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          IO.tcp_close_listener listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              let init_seen : String := "";
+              Client.write_request conn (get_req port);
+              IO.tcp_read sock 8192u64;
+              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n8\r\ndata: a\n");
+              IO.tcp_write sock (String.to_list "\r\n9\r\ndata: b\n\n");
+              IO.tcp_write sock (String.to_list "\r\n0\r\n\r\n");
+              IO.tcp_close sock;
+              let res <- Client.stream_response Method.GET conn.socket init_seen seen_concat;
+              Client.close conn;
+              match res {
+                Result.err _ => return false,
+                Result.ok pr =>
+                  match pr {
+                    Pair.pair seen resp =>
+                      let body : String := String.from_list (Body.to_bytes_pure resp.body) in
+                      return (Bool.and (body == "data: a\ndata: b\n\n") (seen == "data: a\ndata: b\n\n"))
+                  }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A `Content-Length` body split across writes: the length counts the read
+/// down and the callback sees the same bytes the assembled body holds.
+#[test]
+def test_stream_response_content_length : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res : Result String Connection <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          IO.tcp_close_listener listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              let init_seen : String := "";
+              Client.write_request conn (get_req port);
+              IO.tcp_read sock 8192u64;
+              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\ndata: a\n");
+              IO.tcp_write sock (String.to_list "data: b\n\n");
+              IO.tcp_close sock;
+              let res <- Client.stream_response Method.GET conn.socket init_seen seen_concat;
+              Client.close conn;
+              match res {
+                Result.err _ => return false,
+                Result.ok pr =>
+                  match pr {
+                    Pair.pair seen resp =>
+                      let body : String := String.from_list (Body.to_bytes_pure resp.body) in
+                      return (Bool.and (body == "data: a\ndata: b\n\n") (seen == "data: a\ndata: b\n\n"))
+                  }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A callback error aborts the stream with that error, rather than the
+/// stream reporting a successful (short) body the caller rejected.
+#[test]
+def test_stream_response_callback_error_aborts : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res : Result String Connection <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          IO.tcp_close_listener listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              let init_seen : String := "";
+              Client.write_request conn (get_req port);
+              IO.tcp_read sock 8192u64;
+              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n8\r\ndata: a\n\r\n0\r\n\r\n");
+              IO.tcp_close sock;
+              let res <- Client.stream_response Method.GET conn.socket init_seen seen_fail;
+              Client.close conn;
+              match res {
+                Result.err e => return (e == "callback-failed"),
+                Result.ok _ => return false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+

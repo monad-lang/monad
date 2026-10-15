@@ -6,12 +6,13 @@ use http::types {
 }
 use http::body {Body.length, Body.to_bytes_pure}
 use http::wire {
-  Wire.body_bytes, Wire.content_length_of, Wire.drop_bytes, Wire.format_request,
-  Wire.format_response, Wire.frame_request, Wire.frame_response,
-  Wire.parse_chunk_size, Wire.parse_content_length, Wire.parse_method,
-  Wire.parse_request, Wire.parse_response, Wire.parse_response_with_method,
-  Wire.parse_u16, Wire.parse_version, Wire.request_target,
-  Wire.response_has_body, Wire.split_lines, Wire.take_bytes,
+  Wire.chunk_step, Wire.body_bytes, Wire.content_length_of, Wire.drop_bytes,
+  Wire.format_request, Wire.format_response, Wire.frame_request,
+  Wire.frame_response, Wire.parse_chunk_size, Wire.parse_content_length,
+  Wire.parse_method, Wire.parse_request, Wire.parse_response,
+  Wire.parse_response_with_method, Wire.parse_u16, Wire.parse_version,
+  Wire.request_target, Wire.response_has_body, Wire.split_lines,
+  Wire.take_bytes,
 }
 
 def expect_ok_req (got : Result String Request) (want_method : Method) (want_path : String) : Bool :=
@@ -795,4 +796,70 @@ def test_parse_response_never_produces_stream : Bool :=
   match Wire.parse_response (String.to_list "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello") {
     Result.err _ => false,
     Result.ok res => Bool.not (w_is_stream res.body)
+  }
+
+// ── incremental chunked decoding ─────────────────────────────────────────
+//
+// `chunk_step` is the streaming half of the chunked decoder: pending +
+// incoming in, done/decoded/pending' out. The pinned triple is the whole
+// contract -- a streaming client reassembles exactly these answers.
+
+/// One `chunk_step` call, pinned: the done flag, the decoded bytes, and the
+/// leftover pending.
+def cs_ok (pending : String) (incoming : String) (want_done : Bool) (want_decoded : String) (want_pending : String) : Bool :=
+  match Wire.chunk_step (String.to_list pending) (String.to_list incoming) {
+    Result.err _ => false,
+    Result.ok pr =>
+      match pr {
+        Pair.pair step pending2 =>
+          match step {
+            Pair.pair done decoded =>
+              Bool.and (if want_done then done else Bool.not done)
+                (Bool.and (String.from_list decoded == want_decoded)
+                  (String.from_list pending2 == want_pending))
+          }
+      }
+  }
+
+/// A fully-buffered chunk decodes, and the walk keeps waiting (not done).
+#[test]
+def test_chunk_step_decodes_complete_chunk : Bool :=
+  cs_ok "" "5\r\nhello\r\n" false "hello" ""
+
+/// A chunk split across steps: the first half stays pending, the second
+/// completes it -- the size line is never re-read from a lost buffer.
+#[test]
+def test_chunk_step_split_across_steps : Bool :=
+  Bool.and
+    (cs_ok "" "5\r\nhel" false "" "5\r\nhel")
+    (cs_ok "5\r\nhel" "lo\r\n" false "hello" "")
+
+/// The terminal chunk sets done, and its trailer section is neither waited
+/// for nor carried.
+#[test]
+def test_chunk_step_terminal_chunk : Bool :=
+  cs_ok "" "0\r\n\r\n" true "" ""
+
+/// Data and the terminal chunk in one step: the decoded bytes ride along
+/// with done rather than being lost behind it.
+#[test]
+def test_chunk_step_data_then_terminal : Bool :=
+  cs_ok "" "5\r\nhello\r\n0\r\n\r\n" true "hello" ""
+
+/// Two chunks in one step, decoded in order.
+#[test]
+def test_chunk_step_two_chunks : Bool :=
+  cs_ok "" "3\r\nabc\r\n3\r\ndef\r\n" false "abcdef" ""
+
+/// Nothing in, nothing out: not done, nothing decoded, nothing pending.
+#[test]
+def test_chunk_step_empty : Bool :=
+  cs_ok "" "" false "" ""
+
+/// A size line that is not hex is reported, not guessed around.
+#[test]
+def test_chunk_step_bad_size_is_error : Bool :=
+  match Wire.chunk_step List.empty (String.to_list "zz\r\nhello") {
+    Result.err _ => true,
+    Result.ok _ => false
   }
