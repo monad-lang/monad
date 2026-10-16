@@ -83,14 +83,17 @@ pub def Anthropic.complete (base_url : String) (api_key : String) (req : Message
 
 /// The streaming fold state: the SSE line discipline plus what one
 /// response accumulates. `blocks` is indexed by the wire's
-/// `content_block` index -- a block is appended by
-/// `content_block_start` and patched in place by each delta. Usage
-/// starts zeroed: `message_start` carries the input half, and
+/// `content_block` index -- every `content_block_start` appends EXACTLY
+/// one entry: a decoded block, or `Option.none` for a type this mote
+/// does not model (which keeps every later delta's wire index aligned
+/// while the block itself is absent from the assembled response).
+/// Usage starts zeroed: `message_start` carries the input half (its
+/// `output_tokens` is a placeholder and is zeroed here), and
 /// `message_delta` the output half, so either may legitimately never
 /// arrive.
 struct AnthropicAcc {
     sse : SseState,
-    blocks : List Block,
+    blocks : List (Option Block),
     stop : String,
     usage : AnthropicUsage,
 }
@@ -136,16 +139,34 @@ def anthropic_partial_of (input : Json) : String :=
     }
 
 /// Patch the block at `idx` with one delta object. A delta for a block
-/// that never started is dropped -- lenient, same reasoning as every
+/// that never started -- or for one this mote does not model -- lands
+/// on `Option.none` and is dropped: lenient, same reasoning as every
 /// skip in this fold.
 #[terminating]
-def anthropic_patch_at (blocks : List Block) (idx : I64) (dobj : BTreeMap String Json) : List Block :=
+def anthropic_patch_at (blocks : List (Option Block)) (idx : I64) (dobj : BTreeMap String Json) : List (Option Block) :=
     match blocks {
         List.empty => blocks,
-        List.cons b rest =>
+        List.cons ob rest =>
             if idx == 0
-            then List.cons (anthropic_block_delta b dobj) rest
-            else List.cons b (anthropic_patch_at rest (I64.sub idx 1) dobj)
+            then List.cons (anthropic_patch_option ob dobj) rest
+            else List.cons ob (anthropic_patch_at rest (I64.sub idx 1) dobj)
+    }
+
+def anthropic_patch_option (ob : Option Block) (dobj : BTreeMap String Json) : Option Block :=
+    match ob {
+        Option.some b => Option.some (anthropic_block_delta b dobj),
+        Option.none => Option.none,
+    }
+
+/// The block the wire opened at `idx`, if it started and this mote
+/// models it -- the lookup a delta's REPORT decision is tied to, so
+/// `on_text` can never emit text the assembled response lacks.
+#[terminating]
+def anthropic_block_at (blocks : List (Option Block)) (idx : I64) : Option Block :=
+    match blocks {
+        List.empty => Option.none,
+        List.cons ob rest =>
+            if idx == 0 then ob else anthropic_block_at rest (I64.sub idx 1)
     }
 
 def anthropic_block_delta (b : Block) (dobj : BTreeMap String Json) : Block :=
@@ -218,7 +239,11 @@ def anthropic_block_input (b : Block) (dobj : BTreeMap String Json) : Block :=
             },
     }
 
-/// `message_start`: the input usage half.
+/// `message_start`: the input usage half. The wire's `output_tokens`
+/// here is a placeholder (a token or two); the real output count
+/// arrives in `message_delta`'s usage, so the placeholder is zeroed --
+/// a stream that ends without `message_delta` reports zero output, not
+/// the placeholder.
 def anthropic_apply_message_start (acc : AnthropicAcc) (obj : BTreeMap String Json) : AnthropicAcc :=
     match Json.object_get "message" obj {
         Option.none => acc,
@@ -228,32 +253,57 @@ def anthropic_apply_message_start (acc : AnthropicAcc) (obj : BTreeMap String Js
                 Result.ok mobj =>
                     match Json.object_get "usage" mobj {
                         Option.none => acc,
-                        Option.some uj => AnthropicAcc.mk acc.sse acc.blocks acc.stop (anthropic_usage_of uj),
+                        Option.some uj =>
+                            match anthropic_usage_of uj {
+                                AnthropicUsage.mk in_t _ cached =>
+                                    { acc with usage := AnthropicUsage.mk in_t 0 cached }
+                            }
                     }
-            },
+            }
     }
 
-/// `content_block_start`: append the block the wire opens. The block
-/// JSON is exactly a wire block -- decode it with the one-shot path.
+/// `content_block_start`: append the block the wire opens -- EXACTLY
+/// one entry, whatever it is. A known block decodes with the one-shot
+/// path; a type this mote does not model (`redacted_thinking` is
+/// already in the wild) appends `Option.none`: an entry that keeps
+/// every later delta's wire index aligned while the block itself stays
+/// absent from the assembled response -- the streaming counterpart of
+/// the one-shot decode's per-block `deserialize_or_skip` leniency.
 def anthropic_apply_block_start (acc : AnthropicAcc) (obj : BTreeMap String Json) : AnthropicAcc :=
     match Json.object_get "content_block" obj {
         Option.none => acc,
         Option.some bj =>
-            match Block.deserialize_json bj {
-                Result.err _ => acc,
-                Result.ok b => AnthropicAcc.mk acc.sse (List.append acc.blocks (List.singleton b)) acc.stop acc.usage,
-            },
+            { acc with blocks := List.append acc.blocks (List.singleton (anthropic_block_entry bj)) }
     }
 
-/// The text a delta emits to `on_text` -- only `text_delta` ever
-/// reports; thinking and tool-input fragments accumulate silently.
-def anthropic_text_of (dobj : BTreeMap String Json) : String :=
-    match anthropic_str_of "type" dobj {
-        Option.some tag =>
-            if String.beq tag "text_delta"
-            then match anthropic_str_of "text" dobj { Option.some s => s, Option.none => "" }
-            else "",
+def anthropic_block_entry (bj : Json) : Option Block :=
+    match Block.deserialize_or_skip bj {
+        Result.err _ => Option.none,
+        Result.ok ob => ob,
+    }
+
+/// The text a delta reports to `on_text`: only `text_delta` ever
+/// reports (thinking and tool-input fragments accumulate silently),
+/// and only when the block it patches is a text block that really
+/// started -- the live output can never diverge from the assembled
+/// response.
+def anthropic_delta_text (blocks : List (Option Block)) (idx : I64) (dobj : BTreeMap String Json) : String :=
+    match anthropic_block_at blocks idx {
+        Option.some b => anthropic_delta_text_of b dobj,
         Option.none => "",
+    }
+
+def anthropic_delta_text_of (b : Block) (dobj : BTreeMap String Json) : String :=
+    match b {
+        Block.text _ _ =>
+            match anthropic_str_of "type" dobj {
+                Option.some tag =>
+                    if tag == "text_delta"
+                    then match anthropic_str_of "text" dobj { Option.some s => s, Option.none => "" }
+                    else "",
+                Option.none => "",
+            },
+        _ => "",
     }
 
 /// `content_block_delta`: patch the block at the wire's index.
@@ -265,8 +315,9 @@ def anthropic_apply_block_delta_event (acc : AnthropicAcc) (obj : BTreeMap Strin
             match Json.get_object dj {
                 Result.err _ => Pair.pair acc "",
                 Result.ok dobj =>
-                    Pair.pair (AnthropicAcc.mk acc.sse (anthropic_patch_at acc.blocks idx dobj) acc.stop acc.usage) (anthropic_text_of dobj)
-            },
+                    Pair.pair { acc with blocks := anthropic_patch_at acc.blocks idx dobj }
+                        (anthropic_delta_text acc.blocks idx dobj)
+            }
     }
 
 /// `message_delta`'s `delta.stop_reason` -- null until the last one.
@@ -279,9 +330,9 @@ def anthropic_delta_stop (acc : AnthropicAcc) (obj : BTreeMap String Json) : Ant
                 Result.ok dobj =>
                     match anthropic_str_of "stop_reason" dobj {
                         Option.none => acc,
-                        Option.some s => AnthropicAcc.mk acc.sse acc.blocks s acc.usage,
+                        Option.some s => { acc with stop := s }
                     }
-            },
+            }
     }
 
 /// `message_delta`'s top-level `usage` -- the output half only; the
@@ -295,7 +346,7 @@ def anthropic_delta_usage (acc : AnthropicAcc) (obj : BTreeMap String Json) : An
                 Result.ok uobj =>
                     match acc.usage {
                         AnthropicUsage.mk in_t _ cached =>
-                            AnthropicAcc.mk acc.sse acc.blocks acc.stop (AnthropicUsage.mk in_t (anthropic_int_of "output_tokens" uobj) cached)
+                            { acc with usage := AnthropicUsage.mk in_t (anthropic_int_of "output_tokens" uobj) cached }
                     }
             },
     }
@@ -350,9 +401,11 @@ def anthropic_apply_events (acc : AnthropicAcc) (events : List SseEvent) (out : 
 
 /// A tool input's accumulated `partial_json` text back to a real JSON
 /// object, matching the one-shot wire (`input` is an object, never a
-/// string). Empty stays the block-start `{}`; a parse failure falls
-/// back to `{}` rather than killing the stream -- the same leniency
-/// trade-off `Block.deserialize_or_skip` documents.
+/// string). Empty stays the block-start `{}`. A NON-empty text that
+/// does not parse never reaches this fallback on the stream path:
+/// `anthropic_bad_input` refuses the turn first (executing a tool
+/// with guessed-empty arguments is worse than failing the turn), so
+/// this `{}` arm serves only a direct `anthropic_assemble` caller.
 def anthropic_finalize_input (input : Json) : Json :=
     match input {
         Json.str s =>
@@ -372,6 +425,68 @@ def anthropic_finalize_block (b : Block) : Block :=
         _ => b,
     }
 
+/// The blocks that started and that this mote models, in wire order --
+/// what the assembled response carries. `Option.none` entries (unknown
+/// block types) are absent here exactly as the one-shot decode's
+/// per-block skip omits them.
+#[terminating]
+def anthropic_present (blocks : List (Option Block)) : List Block :=
+    match blocks {
+        List.empty => List.empty,
+        List.cons ob rest =>
+            match ob {
+                Option.some b => List.cons b (anthropic_present rest),
+                Option.none => anthropic_present rest,
+            }
+    }
+
+/// A tool input whose accumulated `partial_json` text does not parse:
+/// the stream ended mid-fragment (a dropped connection, a truncated
+/// chunk). Handing the harness a tool call with guessed-empty
+/// arguments to execute is worse than failing the turn, so the stream
+/// boundary refuses it, named, before assembly.
+def anthropic_input_unparsed (input : Json) : Option String :=
+    match input {
+        Json.str s =>
+            if s == ""
+            then Option.none
+            else
+                match Json.parse s {
+                    Result.err _ => Option.some s,
+                    Result.ok _ => Option.none,
+                },
+        _ => Option.none,
+    }
+
+#[terminating]
+def anthropic_bad_input (blocks : List (Option Block)) : Option String :=
+    match blocks {
+        List.empty => Option.none,
+        List.cons ob rest =>
+            match anthropic_bad_input_entry ob {
+                Option.some e => Option.some e,
+                Option.none => anthropic_bad_input rest
+            }
+    }
+
+def anthropic_bad_input_entry (ob : Option Block) : Option String :=
+    match ob {
+        Option.none => Option.none,
+        Option.some b => anthropic_bad_input_block b
+    }
+
+def anthropic_bad_input_block (b : Block) : Option String :=
+    match b {
+        Block.tool_use _ name input _ =>
+            match anthropic_input_unparsed input {
+                Option.some s =>
+                    Option.some (String.concat "anthropic: tool input for '"
+                        (String.concat name (String.concat "' did not parse: " s))),
+                Option.none => Option.none,
+            },
+        _ => Option.none,
+    }
+
 /// Assemble the accumulated stream into the SAME `MessagesResponse`
 /// shape `Anthropic.complete` returns. `stop_reason` defaults to
 /// `"end_turn"` exactly as the one-shot decode's absent-or-null rule.
@@ -384,7 +499,7 @@ def anthropic_assemble (acc : AnthropicAcc) : MessagesResponse :=
             false => acc.stop
         } in
     let resp : MessagesResponse :=
-        { content := List.map (fn (b : Block) => anthropic_finalize_block b) acc.blocks, stop_reason := stop, usage := acc.usage } in
+        { content := List.map (fn (b : Block) => anthropic_finalize_block b) (anthropic_present acc.blocks), stop_reason := stop, usage := acc.usage } in
     resp
 
 /// The moose `on_bytes` callback: bytes in, SSE events out, each text
@@ -394,7 +509,7 @@ def anthropic_assemble (acc : AnthropicAcc) : MessagesResponse :=
 def anthropic_stream_bytes (on_text : String -> IO Unit) (acc : AnthropicAcc) (bytes : List U8) : IO (Result String (Pair AnthropicAcc Unit)) :=
     match Sse.push acc.sse bytes {
         Pair.pair sse2 events =>
-            let acc2 : AnthropicAcc := AnthropicAcc.mk sse2 acc.blocks acc.stop acc.usage in
+            let acc2 : AnthropicAcc := { acc with sse := sse2 } in
             match anthropic_apply_events acc2 events List.empty {
                 Pair.pair acc3 deltas =>
                     Monad.bind (anthropic_emit_all on_text deltas) (fn _ =>
@@ -416,7 +531,11 @@ def anthropic_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_te
         Result.err e => Result.err e,
         Result.ok pr =>
             match pr {
-                Pair.pair acc _ => Result.ok (anthropic_assemble acc)
+                Pair.pair acc _ =>
+                    match anthropic_bad_input acc.blocks {
+                        Option.some e => Result.err e,
+                        Option.none => Result.ok (anthropic_assemble acc)
+                    }
             }
     })
 }

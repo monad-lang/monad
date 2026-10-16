@@ -9,7 +9,7 @@
 /// `signature_delta` for signed thinking, `input_json_delta`
 /// fragments for tool inputs, usage split between `message_start`
 /// (input half) and `message_delta` (output half).
-use anthropic::client {AnthropicAcc, anthropic_apply_event, anthropic_assemble, anthropic_stream_bytes}
+use anthropic::client {AnthropicAcc, anthropic_apply_event, anthropic_assemble, anthropic_bad_input, anthropic_stream_bytes}
 use anthropic::types {AnthropicMessage, MessagesRequest, MessagesResponse, AnthropicUsage, Block}
 use json::json {Json, Json.to_string, Json.parse}
 use http::sse {Sse.init}
@@ -140,6 +140,25 @@ def test_stream_tool_input_fragments_assemble : Bool :=
             }
     }
 
+#[partial]
+def text_at (blocks : List Block) (i : I64) : String :=
+    match blocks {
+        List.cons b rest =>
+            if i == 0
+            then match b { Block.text s _ => s, _ => "" }
+            else text_at rest (I64.sub i 1),
+        List.empty => "",
+    }
+
+/// The first assembled text block's text, for the IO-level test that
+/// asserts the folded accumulator matches what the tap captured (the
+/// accumulator's `blocks` are `Option Block` entries -- wire-index
+/// slots -- so the assertion goes through the assembled response).
+def assembled_text_of (acc : AnthropicAcc) : String :=
+    match anthropic_assemble acc {
+        MessagesResponse.mk blocks _ _ => text_at blocks 0
+    }
+
 /// An unparseable payload is skipped whole -- the stream survives a
 /// garbled event and keeps everything before and after it.
 #[test]
@@ -153,6 +172,72 @@ def test_stream_unparseable_event_is_skipped : Bool :=
                 List.cons b _ => match b { Block.text s _ => s == "ok", _ => false },
                 List.empty => false,
             }
+    }
+
+/// A block type this mote does not model (`redacted_thinking` is
+/// already in the wild) occupies its wire index as `Option.none`: the
+/// block is absent from the assembled response, and every LATER
+/// delta still patches the block ITS index names -- the streaming
+/// counterpart of the one-shot decode's per-block skip.
+#[test]
+def test_stream_unknown_block_keeps_delta_alignment : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"# in
+    let a2 := fold_event a1 r#"{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"[encrypted]"}}"# in
+    let a3 := fold_event a2 r#"{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}"# in
+    let a4 := fold_event a3 r#"{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"tail"}}"# in
+    match anthropic_assemble a4 {
+        MessagesResponse.mk blocks _ _ =>
+            Bool.and (List.length blocks == 2)
+                (Bool.and (text_at blocks 0 == "")
+                    (text_at blocks 1 == "tail"))
+    }
+
+/// A truncated tool input (the stream dropped mid-fragment) must be
+/// REFUSED at the stream boundary, not assembled as `{}` -- the
+/// harness would otherwise execute a tool with guessed-empty
+/// arguments. The decision def is pure, so the refusal is testable
+/// without a transport.
+#[test]
+def test_stream_truncated_tool_input_is_refused : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"read","input":{}}}"# in
+    let a2 := fold_event a1 r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"# in
+    match anthropic_bad_input a2.blocks {
+        Option.some e => String.contains e "did not parse",
+        Option.none => false,
+    }
+
+/// A completed tool input is not refused: the same walk that flags a
+/// truncated fragment passes a whole one.
+#[test]
+def test_stream_complete_tool_input_is_not_refused : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"read","input":{}}}"# in
+    let a2 := fold_event a1 r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"# in
+    let a3 := fold_event a2 r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"/tmp\"}"}}"# in
+    match anthropic_bad_input a3.blocks {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+/// `message_start`'s `output_tokens` is a placeholder; the real output
+/// count arrives in `message_delta`. A stream that ends without one
+/// reports ZERO output, not the placeholder.
+#[test]
+def test_stream_usage_output_zero_until_message_delta : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":1}}}"# in
+    match anthropic_assemble a1 {
+        MessagesResponse.mk _ _ usage =>
+            match usage {
+                AnthropicUsage.mk in_t out_t _ => Bool.and (in_t == 10) (out_t == 0)
+            }
+    }
+
+/// A `text_delta` for a block that never started (or one this mote
+/// does not model) reports nothing to `on_text` -- the live output
+/// can never diverge from the assembled response.
+#[test]
+def test_stream_delta_for_unstarted_block_reports_no_text : Bool :=
+    match anthropic_apply_event stream_acc0 r#"{"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"orphan"}}"# {
+        Pair.pair _ delta => delta == ""
     }
 
 /// The request half: `stream` is serialized ONLY when true -- the
@@ -216,10 +301,7 @@ def test_stream_bytes_emits_deltas_in_wire_order : IO Bool := do {
                                 Pair.pair acc2 _ => do {
                                     let tapped <- read_tap;
                                     return (Bool.and (tapped == "Hello!")
-                                        (match acc2.blocks {
-                                            List.cons b _ => match b { Block.text s _ => String.beq s "Hello!", _ => false },
-                                            List.empty => false,
-                                        }))
+                                        (assembled_text_of acc2 == "Hello!"))
                                 }
                             }
                     }
