@@ -23,8 +23,8 @@
 /// arrives, so `data: a\n` pushed alone is buffered whole and re-parsed
 /// after the push that completes it.
 
-use http::strings {Strings.split_at_byte_opt}
-use http::wire {Wire.drop_bytes, Wire.take_bytes}
+use http::strings {Strings.drop_bytes, Strings.split_at_byte_opt}
+use http::wire {Wire.take_bytes}
 use std::list {List.intercalate}
 
 struct SseState { buf : List U8 }
@@ -50,8 +50,8 @@ def Sse.push_go (buf : List U8) (out : List SseEvent) : Pair SseState (List SseE
       match pr {
         Pair.pair block_end next_start =>
           match Sse.parse_block (Wire.take_bytes block_end buf) {
-            Option.none => Sse.push_go (Wire.drop_bytes next_start buf) out,
-            Option.some ev => Sse.push_go (Wire.drop_bytes next_start buf) (List.cons ev out)
+            Option.none => Sse.push_go (Strings.drop_bytes next_start buf) out,
+            Option.some ev => Sse.push_go (Strings.drop_bytes next_start buf) (List.cons ev out)
           }
       }
   }

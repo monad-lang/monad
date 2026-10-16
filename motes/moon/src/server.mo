@@ -36,8 +36,9 @@ use http::types {
   Body, Headers, Request, Response, Status.bad_request,
   Status.internal_server_error, Status.not_found, Status.ok, http1_0, http1_1,
 }
+use http::strings {Strings.drop_bytes}
 use http::wire {
-  Wire.drop_bytes, Wire.format_response, Wire.frame_request, Wire.parse_request,
+  Wire.format_response, Wire.frame_request, Wire.parse_request,
   Wire.take_bytes,
 }
 
@@ -89,7 +90,7 @@ def Server.read_message (frame_of : List U8 -> Result String (Option I64)) (sock
     Result.err e => return (Result.err e),
     Result.ok opt =>
       match opt {
-        Option.some n => return (Result.ok (Option.some (Pair.pair (Wire.take_bytes n carry) (Wire.drop_bytes n carry)))),
+        Option.some n => return (Result.ok (Option.some (Pair.pair (Wire.take_bytes n carry) (Strings.drop_bytes n carry)))),
         Option.none => do {
           let read_res <- IO.tcp_read sock 4096u64;
           Server.read_message_step frame_of sock carry read_res

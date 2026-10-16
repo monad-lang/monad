@@ -38,8 +38,9 @@ use http::types {
   Status.temporary_redirect, Transport, Uri, http1_1,
 }
 use tls::stream {Tls.Stream, Tls.close, Tls.connect, Tls.read, Tls.write}
+use http::strings {Strings.drop_bytes}
 use http::wire {
-  Wire.body_of, Wire.chunk_step, Wire.drop_bytes, Wire.find_body_start,
+  Wire.body_of, Wire.chunk_step, Wire.find_body_start,
   Wire.format_request, Wire.frame_response, Wire.head_headers,
   Wire.head_status, Wire.parse_response_with_method, Wire.response_framing,
   Wire.take_bytes,
@@ -579,7 +580,7 @@ def Client.parse_head (head_end : I64) (carry : List U8) : IO (Result String (Pa
       match Wire.head_headers head_end carry {
         Result.err e => return (Result.err e),
         Result.ok headers =>
-          let body_carry : List U8 := Wire.drop_bytes head_end carry in
+          let body_carry : List U8 := Strings.drop_bytes head_end carry in
           return (Result.ok (Pair.pair (Pair.pair status headers) body_carry))
       }
   }

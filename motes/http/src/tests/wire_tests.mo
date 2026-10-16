@@ -5,8 +5,9 @@ use http::types {
   Status.not_found, Status.not_modified, Status.ok, Uri, http1_0, http1_1,
 }
 use http::body {Body.length, Body.to_bytes_pure}
+use http::strings {Strings.drop_bytes}
 use http::wire {
-  Wire.chunk_step, Wire.body_bytes, Wire.content_length_of, Wire.drop_bytes,
+  Wire.chunk_step, Wire.body_bytes, Wire.content_length_of,
   Wire.format_request, Wire.format_response, Wire.frame_request,
   Wire.frame_response, Wire.parse_chunk_size, Wire.parse_content_length,
   Wire.parse_method, Wire.parse_request, Wire.parse_response,
@@ -283,7 +284,7 @@ def w_body_is (b : Body) (want : String) : Bool :=
 /// True when `n` bytes of `bytes` parse as a message whose body is
 /// `want_body`, leaving exactly `want_rest` behind.
 def w_framed_ok (n : I64) (bytes : List U8) (want_body : String) (want_rest : String) : Bool :=
-  if Bool.not (String.beq (String.from_list (Wire.drop_bytes n bytes)) want_rest)
+  if Bool.not (String.from_list (Strings.drop_bytes n bytes) == want_rest)
   then false
   else
     match Wire.parse_request (Wire.take_bytes n bytes) {
@@ -336,7 +337,7 @@ def w_parse_fails (bytes : List U8) : Bool :=
 /// True when `n` bytes of `bytes` parse as a response to `method` whose body is
 /// `want_body`, leaving exactly `want_rest` behind.
 def w_res_framed_ok (n : I64) (bytes : List U8) (method : Method) (want_body : String) (want_rest : String) : Bool :=
-  if Bool.not (String.beq (String.from_list (Wire.drop_bytes n bytes)) want_rest)
+  if Bool.not (String.from_list (Strings.drop_bytes n bytes) == want_rest)
   then false
   else
     match Wire.parse_response_with_method (Wire.take_bytes n bytes) method {

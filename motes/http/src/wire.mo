@@ -11,7 +11,7 @@
 /// half, or two -- and only the caller knows which it is asking.
 
 use http::strings {
-  Strings.hex_value, Strings.i64_of_nibble, Strings.parse_i64,
+  Strings.drop_bytes, Strings.hex_value, Strings.i64_of_nibble, Strings.parse_i64,
   Strings.parse_u16_bounded, Strings.split_at_byte,
   Strings.split_at_byte_opt,
 }
@@ -263,16 +263,6 @@ def Wire.take_bytes (n : I64) (bytes : List U8) : List U8 :=
       List.cons x rest => List.cons x (Wire.take_bytes (I64.sub n 1i64) rest)
     }
 
-#[terminating]
-def Wire.drop_bytes (n : I64) (bytes : List U8) : List U8 :=
-  if I64.beq n 0
-  then bytes
-  else
-    match bytes {
-      List.empty => List.empty,
-      List.cons _ rest => Wire.drop_bytes (I64.sub n 1i64) rest
-    }
-
 // ── parse header lines into Headers ───────────────────────────────────
 
 def Wire.parse_header_lines (lines : List (List U8)) : Result String Headers :=
@@ -460,7 +450,7 @@ def Wire.decode_chunk_size_line (bytes : List U8) (offset : I64) (acc : List U8)
         Result.err e => Result.err e,
         Result.ok size =>
           let consumed := I64.add offset (I64.add idx 2i64) in
-          Wire.decode_chunk_dispatch size (Wire.drop_bytes (I64.add idx 2i64) bytes) consumed acc
+          Wire.decode_chunk_dispatch size (Strings.drop_bytes (I64.add idx 2i64) bytes) consumed acc
       }
   }
 
@@ -481,7 +471,7 @@ def Wire.decode_chunk_data (size : I64) (rest : List U8) (offset : I64) (acc : L
   then Result.ok Option.none
   else
     let data := Wire.take_bytes size rest in
-    let after := Wire.drop_bytes size rest in
+    let after := Strings.drop_bytes size rest in
     Wire.decode_chunk_data_crlf data after (I64.add offset size) acc
 
 /// Check the CRLF that closes a chunk's data, then recurse into the next
@@ -514,7 +504,7 @@ def Wire.decode_chunk_trailers (rest : List U8) (offset : I64) (acc : List U8) :
     Option.some idx =>
       if idx == 0i64
       then Result.ok (Option.some (Pair.pair (I64.add offset 2i64) acc))
-      else Wire.decode_chunk_trailers (Wire.drop_bytes (I64.add idx 2i64) rest) (I64.add offset (I64.add idx 2i64)) acc
+      else Wire.decode_chunk_trailers (Strings.drop_bytes (I64.add idx 2i64) rest) (I64.add offset (I64.add idx 2i64)) acc
   }
 
 // ── incremental chunked decoding ───────────────────────────────────────
@@ -545,7 +535,7 @@ def Wire.chunk_step_go (buf : List U8) (out : List U8) : Result String (Pair (Pa
     Option.some idx =>
       match Wire.parse_chunk_size (Wire.take_bytes idx buf) {
         Result.err e => Result.err e,
-        Result.ok size => Wire.chunk_step_size size buf (Wire.drop_bytes (I64.add idx 2i64) buf) out
+        Result.ok size => Wire.chunk_step_size size buf (Strings.drop_bytes (I64.add idx 2i64) buf) out
       }
   }
 
@@ -569,7 +559,7 @@ def Wire.chunk_step_size (size : I64) (buf : List U8) (rest : List U8) (out : Li
 #[terminating]
 def Wire.chunk_step_data (size : I64) (rest : List U8) (out : List U8) : Result String (Pair (Pair Bool (List U8)) (List U8)) :=
   let data : List U8 := Wire.take_bytes size rest in
-  let after : List U8 := Wire.drop_bytes size rest in
+  let after : List U8 := Strings.drop_bytes size rest in
   match after {
     List.cons cr more1 =>
       match more1 {
@@ -666,7 +656,7 @@ def Wire.message_total (body_start : I64) (framing : Framing) (bytes : List U8) 
     Framing.no_body => Option.some body_start,
     Framing.until_eof => Option.some (List.length bytes),
     Framing.chunked =>
-      match Wire.decode_chunked (Wire.drop_bytes body_start bytes) {
+      match Wire.decode_chunked (Strings.drop_bytes body_start bytes) {
         Result.err _ => Option.none,
         Result.ok opt =>
           match opt {
@@ -686,9 +676,9 @@ def Wire.message_total (body_start : I64) (framing : Framing) (bytes : List U8) 
 def Wire.body_at (body_start : I64) (framing : Framing) (bytes : List U8) : Result String Body :=
   match framing {
     Framing.no_body => Result.ok Body.empty,
-    Framing.until_eof => Result.ok (Wire.body_of (Wire.drop_bytes body_start bytes)),
+    Framing.until_eof => Result.ok (Wire.body_of (Strings.drop_bytes body_start bytes)),
     Framing.chunked =>
-      match Wire.decode_chunked (Wire.drop_bytes body_start bytes) {
+      match Wire.decode_chunked (Strings.drop_bytes body_start bytes) {
         Result.err e => Result.err e,
         Result.ok opt =>
           match opt {
@@ -699,7 +689,7 @@ def Wire.body_at (body_start : I64) (framing : Framing) (bytes : List U8) : Resu
     Framing.content_length n =>
       if I64.gt (I64.add body_start n) (List.length bytes)
       then Result.err "body shorter than Content-Length"
-      else Result.ok (Wire.body_of (Wire.take_bytes n (Wire.drop_bytes body_start bytes)))
+      else Result.ok (Wire.body_of (Wire.take_bytes n (Strings.drop_bytes body_start bytes)))
   }
 
 def Wire.body_of (data : List U8) : Body :=

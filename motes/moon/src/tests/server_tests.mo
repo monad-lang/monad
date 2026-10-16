@@ -17,8 +17,9 @@ use http::types {
   Status.bad_request, Status.not_found, Status.ok, Uri, empty, http1_0, http1_1,
   text,
 }
+use http::strings {Strings.drop_bytes}
 use http::wire {
-  Wire.drop_bytes, Wire.format_request, Wire.frame_response, Wire.parse_response,
+  Wire.format_request, Wire.frame_response, Wire.parse_response,
   Wire.take_bytes,
 }
 use http::body {Body.from_text, Body.to_bytes_pure}
@@ -396,7 +397,7 @@ def client_read_n (sock : Socket) (want : I64) (got_n : I64) (acc : List U8) (go
           Option.some n =>
             match Wire.parse_response (Wire.take_bytes n acc) {
               Result.err e => return (Result.err e),
-              Result.ok res => client_read_n sock want (I64.add got_n 1) (Wire.drop_bytes n acc) (List.append got (List.cons res List.empty))
+              Result.ok res => client_read_n sock want (I64.add got_n 1) (Strings.drop_bytes n acc) (List.append got (List.cons res List.empty))
             },
           Option.none => do {
             let read_res <- IO.tcp_read sock 4096u64;
