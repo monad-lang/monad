@@ -12,6 +12,10 @@
 
 use lib::types { TextStyle, LayoutSize }
 use lib::core { style_default }
+// The stateful widgets' pure state machines (Phase 5). One-directional:
+// those modules never import this one.
+use lib::widgets::input { InputState }
+use lib::widgets::list { ListState }
 
 /// Box-drawing style for the `border` decorator. The actual glyphs live in
 /// `render.mo` (`border_chars`) — this type only carries the choice.
@@ -36,10 +40,13 @@ instance BEq BorderStyle {
 
 /// A widget with no children. `label` draws its text; `spacer` reserves a
 /// fixed length along the layout axis without painting; `blank` paints
-/// nothing (used to clear a region when stacked under others).
+/// nothing (used to clear a region when stacked under others);
+/// `text_input`/`list` draw their state machines' current state.
 pub type LeafWidget {
     label (text : String),
     spacer (size : I64),
+    text_input (state : InputState),
+    list (state : ListState),
     blank
 }
 
@@ -91,6 +98,16 @@ pub def spacer (size : I64) : Widget :=
 /// Paint nothing (transparent; lets a stacked sibling show through).
 pub def blank : Widget :=
     Widget.leaf LeafWidget.blank
+
+/// A single-line text field showing `st` (cursor underlined, placeholder
+/// dimmed when the value is empty -- render.mo's `text_input` arm).
+pub def text_input (st : InputState) : Widget :=
+    Widget.leaf (LeafWidget.text_input st)
+
+/// A single-choice list showing `st`'s visible window (selected row
+/// marked `"> "` and bolded -- render.mo's `list` arm).
+pub def list (st : ListState) : Widget :=
+    Widget.leaf (LeafWidget.list st)
 
 /// Draw a box of `bs` around `child` (renderer insets the child by 1).
 pub def border (bs : BorderStyle) (child : Widget) : Widget :=

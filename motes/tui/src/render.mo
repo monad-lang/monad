@@ -22,13 +22,17 @@ use lib::core {
     style_default, style_merge, style_to_ansi, mk_rect, clamp
 }
 use lib::layout { layout_row, layout_column, pad_rect }
+// The Phase 5 stateful widgets' states -- matched on in the new
+// `LeafWidget` arms below.
+use lib::widgets::input { InputState }
+use lib::widgets::list { ListState }
 // `LeafWidget`/`DecoratorKind` are matched on, never named in a term, so the
 // unused-import analysis reports them as unused -- the same blind spot
 // `docs/src/macros.md` records for macro-name dispatch. Removing them makes
 // `MONAD_USE_COMPLETENESS=error` fail on the bare `spacer`/`styled` patterns.
 use lib::widget {
     Widget, BorderStyle, SizedWidget, LeafWidget, DecoratorKind,
-    label, sized, border, padding, with_style, blank
+    label, sized, border, padding, with_style, blank, text_input, list
 }
 
 // ==================== Cells ====================
@@ -119,6 +123,83 @@ def draw_border (area : Rect) (bs : BorderStyle) (screen : Screen) (active : Tex
     let bottom := draw_h_edge area (area.y + area.height - 1) bc.bl bc.h bc.br top active in
     draw_v_edges area (area.y + 1) (area.y + area.height - 1) bc.v bottom active
 
+// ==================== Text input & list (Phase 5) ====================
+
+/// Re-underline the cell at `(row, col)`: merge `underline := true` into
+/// the cell's own style, whatever it is. The cursor's visual is a style,
+/// not a glyph, so it composes with any character under it.
+def underline_at (screen : Screen) (row : I64) (col : I64) : Screen :=
+    match screen_get_cell screen row col {
+        some c =>
+            let u : TextStyle := { style_default with underline := true } in
+            screen_set_cell screen row col { c with style := style_merge c.style u },
+        none => screen
+    }
+
+/// One text field. The value scrolls horizontally to keep the cursor
+/// inside the field (the visible window starts at the cursor minus the
+/// last column), the cursor cell is underlined (a space underlined when
+/// the cursor sits past the value's end), and an empty value shows the
+/// placeholder dimmed, with no cursor. Single-line: `area.height < 1`
+/// is a no-op, extra height is ignored.
+def render_text_input (st : InputState) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    if area.height < 1
+    then screen
+    else
+        let len := String.length st.value in
+        let cur := clamp st.cursor 0 len in
+        if len == 0 && Bool.not (st.placeholder == "")
+        then
+            // The `: TextStyle` annotation is load-bearing on struct-update
+            // literals flowing into style_merge (see the note on
+            // test_style_to_ansi_bold_red_combines_one_sequence in core.mo).
+            let dim : TextStyle := { style_default with dim := true } in
+            render_label st.placeholder area screen (style_merge active dim)
+        else
+            // Window start: 0 while the cursor fits, else pinned to the
+            // cursor one column from the right edge.
+            let win := if cur < area.width then 0 else cur - area.width + 1 in
+            let vis := clamp (len - win) 0 area.width in
+            let drawn := render_label_chars st.value win area.x area.y (win + vis) screen active in
+            underline_at drawn area.y (area.x + (cur - win))
+
+/// One list row per line of `area`, starting at `st.offset`: the selected
+/// row gets the `"> "` marker and a bold style, other rows a two-space
+/// indent and the ambient style. Rows stop at the shorter of the item
+/// list and the area's height.
+#[terminating]
+def render_list_rows (items : List String) (selected : I64) (index : I64) (area : Rect) (row : I64) (screen : Screen) (active : TextStyle) : Screen :=
+    match items {
+        empty => screen,
+        cons item rest =>
+            if Bool.not (row < area.y + area.height)
+            then screen
+            else
+                let sel := index == selected in
+                let line := (if sel then "> " else "  ") ++ item in
+                let row_style :=
+                    if sel
+                    then
+                        let bold : TextStyle := { style_default with bold := true } in
+                        style_merge active bold
+                    else active in
+                let drawn := render_label line (mk_rect area.x row area.width 1) screen row_style in
+                render_list_rows rest selected (index + 1) area (row + 1) drawn active
+    }
+
+/// The visible window of a list's state, starting at `st.offset`. The
+/// stdlib has no `List.drop`, so the skip is a local walk: `render_list_rows`
+/// labels the list head with `index`, so it must be handed the sublist that
+/// starts at `st.offset`, not the full `items`.
+#[terminating]
+def drop_strings (n : I64) (xs : List String) : List String :=
+    if n < 1
+    then xs
+    else match xs { empty => xs, cons _ rest => drop_strings (n - 1) rest }
+
+def render_list (st : ListState) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    render_list_rows (drop_strings st.offset st.items) st.selected st.offset area area.y screen active
+
 // ==================== Renderer ====================
 
 /// Render `w` into `area` of `screen` with the default style.
@@ -140,6 +221,8 @@ pub def render_with (w : Widget) (area : Rect) (screen : Screen) (active : TextS
             match kind {
                 LeafWidget.label text => render_label text area screen active,
                 LeafWidget.spacer _ => screen,
+                LeafWidget.text_input st => render_text_input st area screen active,
+                LeafWidget.list st => render_list st area screen active,
                 LeafWidget.blank => screen
             },
         Widget.decorator kind child =>
@@ -360,6 +443,67 @@ def test_render_border_then_styled_compose : Bool :=
     // border corners are NOT bold (drawn before the styled child); the inner
     // "x" IS bold.
     cell_bold_is s 0 0 false && cell_bold_is s 1 1 true
+
+/// The cell at `(row,col)` has `underline` set to the given Bool.
+def cell_underline_is (screen : Screen) (row : I64) (col : I64) (want : Bool) : Bool :=
+    match screen_get_cell screen row col {
+        some c => c.style.underline == want,
+        none => false
+    }
+
+#[test]
+def test_render_text_input_writes_value_and_underlines_cursor : Bool :=
+    let st : InputState := { value := "ab", cursor := 1, placeholder := "" } in
+    let s := render (text_input st) (mk_rect 0 0 3 1) (mk_screen 1 3) in
+    cell_is s 0 0 "a" && cell_is s 0 1 "b"
+    && cell_underline_is s 0 0 false
+    && cell_underline_is s 0 1 true
+    && cell_underline_is s 0 2 false
+
+#[test]
+def test_render_text_input_cursor_at_end_underlines_trailing_space : Bool :=
+    let st : InputState := { value := "ab", cursor := 2, placeholder := "" } in
+    let s := render (text_input st) (mk_rect 0 0 3 1) (mk_screen 1 3) in
+    cell_is s 0 2 " " && cell_underline_is s 0 2 true
+
+#[test]
+def test_render_text_input_scrolls_long_value_to_cursor : Bool :=
+    // 10 chars, cursor at 9, width 3: window starts at 7, showing "hij"
+    // with the cursor on the last column.
+    let st : InputState := { value := "abcdefghij", cursor := 9, placeholder := "" } in
+    let s := render (text_input st) (mk_rect 0 0 3 1) (mk_screen 1 3) in
+    cell_is s 0 0 "h" && cell_is s 0 1 "i" && cell_is s 0 2 "j"
+    && cell_underline_is s 0 2 true
+
+#[test]
+def test_render_text_input_empty_shows_dim_placeholder : Bool :=
+    let st : InputState := { value := "", cursor := 0, placeholder := "Search" } in
+    let s := render (text_input st) (mk_rect 0 0 6 1) (mk_screen 1 6) in
+    cell_is s 0 0 "S"
+    && (match screen_get_cell s 0 0 { some c => c.style.dim, none => false })
+
+#[test]
+def test_render_list_marks_and_bolds_selected_row : Bool :=
+    let st : ListState := { items := ["a", "b", "c"], selected := 1, offset := 0 } in
+    let s := render (list st) (mk_rect 0 0 4 3) (mk_screen 3 4) in
+    cell_is s 0 0 " " && cell_is s 0 1 " " && cell_is s 0 2 "a"
+    && cell_is s 1 0 ">" && cell_is s 1 1 " " && cell_is s 1 2 "b"
+    && cell_bold_is s 0 2 false && cell_bold_is s 1 2 true && cell_bold_is s 2 2 false
+
+#[test]
+def test_render_list_starts_at_offset : Bool :=
+    // offset 1: rows show items "b" and "c"; the "> " marker follows the
+    // selection, not the window.
+    let st : ListState := { items := ["a", "b", "c"], selected := 2, offset := 1 } in
+    let s := render (list st) (mk_rect 0 0 4 2) (mk_screen 2 4) in
+    cell_is s 0 2 "b" && cell_is s 1 0 ">" && cell_is s 1 2 "c"
+
+#[test]
+def test_render_list_clips_to_area_height : Bool :=
+    // 3 items, 1-row area: only the first item paints.
+    let st : ListState := { items := ["a", "b", "c"], selected := 0, offset := 0 } in
+    let s := render (list st) (mk_rect 0 0 4 1) (mk_screen 1 4) in
+    cell_is s 0 2 "a" && cell_is s 0 3 " "
 
 #[test]
 def test_diff_one_changed_cell : Bool :=

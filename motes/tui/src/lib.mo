@@ -12,11 +12,13 @@
 // One type group per module, which is the rule `build/src/lib.mo` set. The
 // functions are reached by naming the module (`use tui::render {render}`);
 // this file's job is to make `use tui` resolve. No `{*}` globs: a glob here
-// would pull five namespaces into every importer's scope.
+// would pull six namespaces into every importer's scope.
 
 pub use lib::types {Rect, TextStyle, Cell, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta}
 pub use lib::core {}
 pub use lib::layout {}
 pub use lib::terminal {}
-pub use lib::widget {BorderStyle, LeafWidget, SizedWidget, DecoratorKind, Widget}
+pub use lib::widgets::input {InputState, input_state, handle_input_key}
+pub use lib::widgets::list {ListState, list_state, handle_list_key}
+pub use lib::widget {BorderStyle, LeafWidget, SizedWidget, DecoratorKind, Widget, text_input, list}
 pub use lib::render {BorderChars}
