@@ -1,8 +1,26 @@
 // The weaver mote's library root -- bare `use weaver` resolves here.
 //
-// Weaver's surface is its policy (`policy.mo`); the later phases add
-// the interactive gate, the command table, the settings and the dumb
-// loop as they land. Re-exported by name, no `{*}` globs, the same
-// discipline as `motes/json/src/lib.mo`.
+// Weaver's surface, re-exported by name (no `{*}` globs, the same
+// discipline as `motes/json/src/lib.mo`): the policy engine and the
+// mode vocabulary it decided on, the interactive gate built from a
+// mode, the settings resolution, the slash-command table and the
+// state it carries, the dumb loop that drives it all, the diff
+// renderer behind write/edit approvals, and the provider presets.
+// A consumer (a plugin, the Phase 4 TUI, a test harness) gets the
+// whole mote through this one import.
 
-pub use lib::policy {Mode, Decision, Policy.decide}
+pub use lib::policy {
+    Mode, Decision, Policy.decide,
+    Mode.parse, Mode.show, Mode.approve_plan, Mode.warns_auto,
+}
+pub use lib::gate {cap_name, Gate.weaver}
+pub use lib::settings {
+    Settings, Settings.empty, Settings.merge, Settings.load,
+    Settings.load_of_path, Settings.cap_of, parse_settings, parse_cap,
+}
+pub use lib::commands {
+    WeaverState, Effect, Effect.ok, SlashCommand, command_table, Commands.dispatch,
+}
+pub use lib::dumb {Dumb.run}
+pub use lib::diff {Diff.lines, Diff.render, Diff.for_input}
+pub use lib::providers {Weaver.preset, Weaver.default_model, Weaver.mock_config}

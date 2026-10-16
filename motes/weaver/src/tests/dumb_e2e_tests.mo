@@ -22,7 +22,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {EditTool.impl}
-use weaver::commands {State}
+use weaver::commands {WeaverState}
 use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.to_string}
@@ -216,7 +216,7 @@ def budget : I64 := 6
 /// The offline twin of main.mo's `initial_state`, parameterized by the
 /// registry: test 1 stamps with a side-effect-free `write`-cap tool,
 /// test 2 runs shuttle's real `edit` against a real file.
-def state_of (reg : ToolRegistry) : State := {
+def state_of (reg : ToolRegistry) : WeaverState := {
     run := run_of reg,
     mode := Mode.manual,
     provider := "mock",
@@ -278,7 +278,7 @@ def mode_is_plan (m : Mode) : Bool :=
 /// reached the transcript as `denied:`/`STAMPED` tool_results, the plan
 /// refusal is the policy's own reason, the cursor proves the plan pick
 /// consumed no input, and the tap proves the gate actually prompted.
-def final_state_ok (st : State) (cursor : I64) (tap : String) : Bool :=
+def final_state_ok (st : WeaverState) (cursor : I64) (tap : String) : Bool :=
     mode_is_plan st.mode
         && Bool.not st.quit
         && st.run.session.turns == budget
@@ -354,7 +354,7 @@ def mode_is_manual (m : Mode) : Bool :=
 /// whole loop -- the approval prompt shows the old -> new diff, the
 /// approved tool actually changes the file, and the transcript carries
 /// the tool's own result.
-def diff_session_ok (st : State) (cursor : I64) (tap : String) (file : String) : Bool :=
+def diff_session_ok (st : WeaverState) (cursor : I64) (tap : String) (file : String) : Bool :=
     mode_is_manual st.mode
         && Bool.not st.quit
         && st.run.session.turns == 2

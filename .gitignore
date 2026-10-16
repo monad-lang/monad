@@ -38,6 +38,11 @@ dist/
 # Plans directory for implementation planning
 plans
 
+# Weaver's project-local settings (motes/weaver/src/settings.mo reads
+# .weaver/config.toml from the working directory); a per-project config
+# is user state, never source.
+.weaver
+
 # Agents
 .opencode
 .ori

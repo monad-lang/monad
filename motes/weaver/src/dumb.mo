@@ -8,7 +8,7 @@
 /// budget spanning them.
 ///
 /// Elm state threading throughout (no `IORef`, there is none): the
-/// whole session lives in `commands.mo`'s `State` and every step
+/// whole session lives in `commands.mo`'s `WeaverState` and every step
 /// returns the advanced one. The read/write seams are PARAMETERS --
 /// production passes stdin and a flushed stdout, the e2e passes a
 /// scripted pair, and the gate answers through the same seams.
@@ -17,7 +17,7 @@ use shuttle::loop {Loop.iterate}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
-use weaver::commands {State, Effect, Commands.dispatch}
+use weaver::commands {WeaverState, Effect, Commands.dispatch}
 use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use init::transformers {ResultT}
@@ -25,7 +25,7 @@ use init::transformers {ResultT}
 /// One loop step's outcome: the advanced state, and whether the loop
 /// continues. EOF and `/quit` are the only things that end a session.
 struct Step {
-    state : State,
+    state : WeaverState,
     again : Bool,
 }
 
@@ -44,14 +44,14 @@ struct Step {
 /// `#[terminating]`: the recursion is on the (external) input stream,
 /// which no structural measure sees.
 #[terminating]
-pub def Dumb.run (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : State) : IO State := do {
+pub def Dumb.run (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) : IO WeaverState := do {
     let _ <- write (prompt_line st);
     let line <- read unit;
     let step <- step_of read write st line;
     if step.again then Dumb.run read write step.state else IO.pure step.state
 }
 
-def step_of (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : State) (line : Option String) : IO Step :=
+def step_of (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (line : Option String) : IO Step :=
     match line {
         Option.none => IO.pure (mk_step st false),
         Option.some s => route read write st (String.trim s),
@@ -59,14 +59,14 @@ def step_of (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st 
 
 /// Empty input re-prompts; `/` goes to the command table; anything
 /// else is one model turn.
-def route (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : State) (s : String) : IO Step :=
+def route (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (s : String) : IO Step :=
     if String.is_empty s then IO.pure (mk_step st true)
     else if String.starts_with "/" s then command_turn write st s
     else model_turn read write st s
 
 // ── The command half ───────────────────────────────────────────────────
 
-def command_turn (write : String -> IO Unit) (st : State) (line : String) : IO Step := do {
+def command_turn (write : String -> IO Unit) (st : WeaverState) (line : String) : IO Step := do {
     let e <- Commands.dispatch line st;
     let _ <- write (String.concat e.output "\n");
     command_step e
@@ -74,7 +74,7 @@ def command_turn (write : String -> IO Unit) (st : State) (line : String) : IO S
 
 /// `/quit`'s flag ends the loop; every other command continues it.
 def command_step (e : Effect) : IO Step :=
-    let st2 : State := e.state in
+    let st2 : WeaverState := e.state in
     IO.pure (mk_step st2 (Bool.not st2.quit))
 
 // ── The model half ─────────────────────────────────────────────────────
@@ -83,20 +83,20 @@ def command_step (e : Effect) : IO Step :=
 /// several model calls when tools dispatch (the mock wire's script
 /// indexes by assistant message, so a scripted turn 1 tool call plus a
 /// scripted turn 2 answer is ONE input's worth of loop).
-def model_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : State) (text : String) : IO Step :=
+def model_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : IO Step :=
     if st.run.turns_left < 1 then budget_step write st else drive_turn read write st text
 
-def budget_step (write : String -> IO Unit) (st : State) : IO Step := do {
+def budget_step (write : String -> IO Unit) (st : WeaverState) : IO Step := do {
     let _ <- write "turn budget spent -- /clear or restart with --max-turns\n";
     IO.pure (mk_step st true)
 }
 
-def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : State) (text : String) : IO Step := do {
+def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : IO Step := do {
     let r <- ResultT.run (drive read write st text);
     turn_result write st r
 }
 
-def turn_result (write : String -> IO Unit) (st : State) (r : Result String RunState) : IO Step :=
+def turn_result (write : String -> IO Unit) (st : WeaverState) (r : Result String RunState) : IO Step :=
     match r {
         Result.err e => turn_err write st e,
         Result.ok run2 => turn_ok write st run2,
@@ -104,7 +104,7 @@ def turn_result (write : String -> IO Unit) (st : State) (r : Result String RunS
 
 /// A provider or wire failure keeps the session as it was: the input
 /// is not lost to the transcript, the user simply retries.
-def turn_err (write : String -> IO Unit) (st : State) (e : String) : IO Step := do {
+def turn_err (write : String -> IO Unit) (st : WeaverState) (e : String) : IO Step := do {
     let _ <- write (String.concat "error: " (String.concat e "\n"));
     IO.pure (mk_step st true)
 }
@@ -113,20 +113,20 @@ def turn_err (write : String -> IO Unit) (st : State) (e : String) : IO Step := 
 /// left here is ending its line and returning the advanced state.
 /// (The struct update lives in `advance_run`, not here: `{ x with
 /// .. }` parses only in a plain body, not inside a do-block.)
-def turn_ok (write : String -> IO Unit) (st : State) (run2 : RunState) : IO Step := do {
+def turn_ok (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
     let _ <- write "\n";
     IO.pure (mk_step (advance_run st run2) true)
 }
 
-def advance_run (st : State) (run2 : RunState) : State :=
-    let st2 : State := { st with run := run2 } in
+def advance_run (st : WeaverState) (run2 : RunState) : WeaverState :=
+    let st2 : WeaverState := { st with run := run2 } in
     st2
 
 /// Append the user message, rebuild the gate for the CURRENT mode (the
 /// gate closes over the mode it was built with), and drive the loop to
 /// the end of the turn -- the returned `RunState` carries the advanced
 /// session, the spent budget and the grown always-cache.
-def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : State) (text : String) : ResultT String IO RunState := do {
+def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT String IO RunState := do {
     let gated : RunState := gate_for st.mode read write st.run;
     let ready : RunState := append_user gated text;
     drive_loop ready
@@ -160,7 +160,7 @@ def append_user (run : RunState) (text : String) : RunState :=
 /// status bar: the `auto` warning (the trust setting must never pass
 /// unremarked), the mode, the provider/model, the turn budget, and the
 /// token spend from the session's own accounting.
-def prompt_line (st : State) : String :=
+def prompt_line (st : WeaverState) : String :=
     auto_warning st.mode
         ++ "["
         ++ Mode.show st.mode
@@ -187,6 +187,6 @@ def auto_warning (mode : Mode) : String :=
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
-def mk_step (st : State) (again : Bool) : Step :=
+def mk_step (st : WeaverState) (again : Bool) : Step :=
     let s : Step := { state := st, again := again } in
     s

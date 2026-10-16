@@ -11,7 +11,7 @@
 /// contract; proxy tools are tagged `exec` (a server's catalogue is
 /// arbitrary code), the conservative default Weaver's settings
 /// (Phase 6) override per server.
-use clap::args {}
+use clap::args {Cli.take_opt, Cli.take_positional, opt_result, pos_result}
 use parsec::number {parse_i64}
 use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
@@ -26,7 +26,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
-use weaver::commands {State}
+use weaver::commands {WeaverState}
 use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
 use weaver::providers {Weaver.preset}
@@ -311,10 +311,10 @@ def dispose_all (servers : List McpServer) : IO Unit :=
 /// history), the whole budget ahead, the settings' mode (manual is the
 /// safe default; `/mode` changes it), and a gate rebuilt from the mode
 /// before every turn -- `Gate.auto` here is never consulted.
-def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) : State :=
+def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) : WeaverState :=
     let session : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
     let run : RunState := { session := session, reg := reg, turns_left := p.max_turns, emit := stdout_write, gate := Gate.auto, always := List.empty } in
-    let st : State := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, quit := false } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, quit := false } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -353,7 +353,7 @@ def mounted_plan (p : Plan) (s : Settings) (r : Result String (Pair ToolRegistry
 /// on stdin, `/quit`, or a crashed loop -- the mounted MCP servers come
 /// down on every path.
 def start_loop (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
-    let st : State := initial_state p reg s;
+    let st : WeaverState := initial_state p reg s;
     let _ <- Dumb.run (fn (_ : Unit) => IO.read_line) stdout_write st;
     let _ <- dispose_all servers;
     return 0

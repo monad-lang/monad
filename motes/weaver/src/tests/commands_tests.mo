@@ -13,7 +13,7 @@ use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
-use weaver::commands {State, Effect, Commands.dispatch}
+use weaver::commands {WeaverState, Effect, Commands.dispatch}
 use weaver::policy {Mode}
 use json::json {Json}
 use std::process {process_id}
@@ -38,7 +38,7 @@ def budget : I64 := 6
 
 /// The state each dispatch starts from: mode and `mcps` are the two
 /// knobs the commands under test actually read.
-def state_of (mode : Mode) (mcps : List String) : State := {
+def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     run := run_of,
     mode := mode,
     provider := "mock",
@@ -66,10 +66,10 @@ def session_of : Session := {
 }
 
 /// A session that has already taken `n` turns -- what `/save` writes.
-def with_turns (st : State) (n : I64) : State :=
+def with_turns (st : WeaverState) (n : I64) : WeaverState :=
     let s2 : Session := { (st.run.session) with turns := n } in
     let run2 : RunState := { (st.run) with session := s2 } in
-    let st2 : State := { st with run := run2 } in
+    let st2 : WeaverState := { st with run := run2 } in
     st2
 
 // ── Equality pins ──────────────────────────────────────────────────────
