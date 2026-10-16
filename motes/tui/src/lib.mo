@@ -18,6 +18,7 @@ pub use lib::types {Rect, TextStyle, Cell, LayoutSize, MouseButton, Key, MouseEv
 pub use lib::core {}
 pub use lib::layout {}
 pub use lib::terminal {}
+pub use lib::input {Input.decode, Input.pending_escape}
 pub use lib::widgets::input {InputState, input_state, handle_input_key}
 pub use lib::widgets::list {ListState, list_state, handle_list_key}
 pub use lib::widget {BorderStyle, LeafWidget, SizedWidget, DecoratorKind, Widget, text_input, list}
