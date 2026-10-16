@@ -84,10 +84,12 @@ pub def OpenAI.complete (base_url : String) (api_key : Option String) (req : Cha
 /// zeroed because a streaming server often never sends usage at all --
 /// the live Ollama probe (2026-10-13) carried none, and the one-shot
 /// path's callers tolerate a zeroed usage better than a parse error.
+/// Each tool entry carries the wire `index` it was opened at, so
+/// fragments merge by CLAIMED index, never by list position.
 struct OpenaiAcc {
     sse : SseState,
     text : String,
-    tools : List ToolCall,
+    tools : List (Pair I64 ToolCall),
     finish : String,
     usage : ApiUsage,
 }
@@ -173,23 +175,29 @@ def openai_tool_patch (t : ToolCall) (obj : BTreeMap String Json) : ToolCall :=
         } in
     ToolCall.mk id name args
 
-/// Merge one tool-call delta into the list at its claimed index.
-/// `index` == the list's length appends a fresh entry; below it patches
-/// in place; past it (a gap the server should not send) appends anyway
-/// -- lenient, the alternative is dropping a real tool call.
+/// Merge one tool-call delta into the accumulator at its CLAIMED wire
+/// index: an entry stored under that index is patched (`id`/`name`
+/// override, `arguments` fragments concatenate -- the wire contract);
+/// anything else appends a fresh entry TAGGED with the index. Matching
+/// by the STORED index, not by list position, is what keeps a gap (a
+/// server that opens index 2 before 1) or an out-of-order fragment from
+/// fanning one tool call out into several half-built ones.
 #[terminating]
-def openai_tools_step (tools : List ToolCall) (idx : I64) (obj : BTreeMap String Json) : List ToolCall :=
+def openai_tools_step (tools : List (Pair I64 ToolCall)) (idx : I64) (obj : BTreeMap String Json) : List (Pair I64 ToolCall) :=
     match tools {
-        List.empty => List.singleton (openai_tool_fresh obj),
-        List.cons t rest =>
-            if I64.beq idx 0
-            then List.cons (openai_tool_patch t obj) rest
-            else List.cons t (openai_tools_step rest (I64.sub idx 1) obj)
+        List.empty => List.singleton (Pair.pair idx (openai_tool_fresh obj)),
+        List.cons entry rest =>
+            match entry {
+                Pair.pair i t =>
+                    if idx == i
+                    then List.cons (Pair.pair idx (openai_tool_patch t obj)) rest
+                    else List.cons entry (openai_tools_step rest idx obj)
+            }
     }
 
 /// Fold a `delta.tool_calls` array into the accumulator's tool list.
 #[terminating]
-def openai_tools_walk (tools : List ToolCall) (entries : List Json) : List ToolCall :=
+def openai_tools_walk (tools : List (Pair I64 ToolCall)) (entries : List Json) : List (Pair I64 ToolCall) :=
     match entries {
         List.empty => tools,
         List.cons e rest =>
@@ -199,11 +207,19 @@ def openai_tools_walk (tools : List ToolCall) (entries : List Json) : List ToolC
             }
     }
 
-/// The `usage` of a whole event, if it carries one (most carry null).
+/// The `usage` of a whole event, if it carries a real one. `usage: null`
+/// is the wire's usual filler (the live Ollama probe sends it on every
+/// chunk); a null or malformed usage is SKIPPED, never zeroed over a
+/// captured one -- a trailing `usage: null` after the real object must
+/// not wipe the accounting.
 def openai_apply_usage (acc : OpenaiAcc) (obj : BTreeMap String Json) : OpenaiAcc :=
     match Json.object_get "usage" obj {
         Option.none => acc,
-        Option.some uj => OpenaiAcc.mk acc.sse acc.text acc.tools acc.finish (openai_usage_of uj)
+        Option.some uj =>
+            match Json.get_object uj {
+                Result.err _ => acc,
+                Result.ok _ => { acc with usage := openai_usage_of uj }
+            }
     }
 
 /// The `finish_reason` of the event's choice, if it carries one (null
@@ -211,7 +227,7 @@ def openai_apply_usage (acc : OpenaiAcc) (obj : BTreeMap String Json) : OpenaiAc
 def openai_apply_finish (acc : OpenaiAcc) (cobj : BTreeMap String Json) : OpenaiAcc :=
     match openai_tc_field cobj "finish_reason" {
         Option.none => acc,
-        Option.some fr => OpenaiAcc.mk acc.sse acc.text acc.tools fr acc.usage
+        Option.some fr => { acc with finish := fr }
     }
 
 /// The `tool_calls` half of a delta, if it carries one.
@@ -221,7 +237,7 @@ def openai_apply_delta_tools (acc : OpenaiAcc) (dobj : BTreeMap String Json) : O
         Option.some tj =>
             match Json.get_array tj {
                 Result.err _ => acc,
-                Result.ok entries => OpenaiAcc.mk acc.sse acc.text (openai_tools_walk acc.tools entries) acc.finish acc.usage
+                Result.ok entries => { acc with tools := openai_tools_walk acc.tools entries }
             }
     }
 
@@ -232,13 +248,15 @@ def openai_apply_delta (acc : OpenaiAcc) (dobj : BTreeMap String Json) : Pair Op
     match openai_tc_field dobj "content" {
         Option.none => Pair.pair (openai_apply_delta_tools acc dobj) "",
         Option.some s =>
-            let acc2 : OpenaiAcc := OpenaiAcc.mk acc.sse (String.concat acc.text s) acc.tools acc.finish acc.usage in
+            let acc2 : OpenaiAcc := { acc with text := String.concat acc.text s } in
             Pair.pair (openai_apply_delta_tools acc2 dobj) s
     }
 
-/// The event's single choice: finish reason first, then the delta.
+/// The event's single choice: finish reason, then the delta. `usage`
+/// is a TOP-LEVEL field of the event object -- `openai_apply_event`
+/// applies it there; a choice object never carries one.
 def openai_apply_choice (acc : OpenaiAcc) (cobj : BTreeMap String Json) : Pair OpenaiAcc String :=
-    let acc1 : OpenaiAcc := openai_apply_finish (openai_apply_usage acc cobj) cobj in
+    let acc1 : OpenaiAcc := openai_apply_finish acc cobj in
     match Json.object_get "delta" cobj {
         Option.none => Pair.pair acc1 "",
         Option.some dj =>
@@ -302,7 +320,7 @@ def openai_apply_events (acc : OpenaiAcc) (events : List SseEvent) (out : List S
 def openai_stream_bytes (on_text : String -> IO Unit) (acc : OpenaiAcc) (bytes : List U8) : IO (Result String (Pair OpenaiAcc Unit)) :=
     match Sse.push acc.sse bytes {
         Pair.pair sse2 events =>
-            let acc2 : OpenaiAcc := OpenaiAcc.mk sse2 acc.text acc.tools acc.finish acc.usage in
+            let acc2 : OpenaiAcc := { acc with sse := sse2 } in
             let stepped := openai_apply_events acc2 events List.empty in
             match stepped {
                 Pair.pair acc3 deltas =>
@@ -316,6 +334,18 @@ def openai_emit_all (on_text : String -> IO Unit) (deltas : List String) : IO Un
     match deltas {
         List.empty => Monad.pure Unit.unit,
         List.cons d rest => Monad.bind (on_text d) (fn _ => openai_emit_all on_text rest)
+    }
+
+/// The calls the stream assembled, in arrival order, stripped of the
+/// wire indices that merged them.
+#[terminating]
+def openai_tools_of (tools : List (Pair I64 ToolCall)) : List ToolCall :=
+    match tools {
+        List.empty => List.empty,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair _ t => List.cons t (openai_tools_of rest)
+            }
     }
 
 /// Assemble the accumulated stream into the SAME `ChatResponse` shape
@@ -334,7 +364,7 @@ def openai_assemble (acc : OpenaiAcc) : ChatResponse :=
             true => "stop",
             false => acc.finish
         } in
-    let msg : ChatMessage := { role := "assistant", content := content, tool_calls := acc.tools, tool_call_id := Option.none, name := Option.none } in
+    let msg : ChatMessage := { role := "assistant", content := content, tool_calls := openai_tools_of acc.tools, tool_call_id := Option.none, name := Option.none } in
     let choice : Choice := { message := msg, finish_reason := finish } in
     let resp : ChatResponse := { choices := List.singleton choice, usage := acc.usage } in
     resp

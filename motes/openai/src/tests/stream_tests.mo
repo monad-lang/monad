@@ -121,6 +121,42 @@ def test_stream_tool_call_fragments_merge_by_index : Bool :=
         (Bool.and (tool_matches tcs 0 "call_1" "read" "{\"path\":")
             (tool_matches tcs 1 "call_2" "write" "{\"pattern\":\"x\"}"))
 
+/// An index GAP (the server opens 2 before 1) or an out-of-order
+/// fragment must not fan one tool call out into duplicates: fragments
+/// merge by the index they CLAIM, and a later fragment of the same
+/// index patches the entry that index opened, wherever it sits.
+#[test]
+def test_stream_tool_call_index_gap_merges : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""}}]}}]}"# in
+    let a2 := fold_event a1 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":2,"id":"call_2","type":"function","function":{"name":"write","arguments":"{\"a\":"}}]}}]}"# in
+    let a3 := fold_event a2 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":2,"function":{"arguments":"1}"}}]}}]}"# in
+    let a4 := fold_event a3 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":2,"function":{"arguments":"//tail"}}]}}]}"# in
+    let tcs := assembled_tool_calls a4 in
+    Bool.and (List.length tcs == 2)
+        (Bool.and (tool_matches tcs 0 "call_1" "read" "")
+            (tool_matches tcs 1 "call_2" "write" "{\"a\":1}//tail"))
+
+/// `usage: null` AFTER a real usage object must not wipe what was
+/// captured -- null is the wire's filler, not a zero to apply.
+#[test]
+def test_stream_usage_null_after_real_keeps_real : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"# in
+    let a2 := fold_event a1 r#"{"choices":[{"index":0,"delta":{"content":"ok"}}],"usage":null}"# in
+    match openai_assemble a2 {
+        ChatResponse.mk _ usage =>
+            match usage {
+                ApiUsage.mk pt ct => Bool.and (pt == 7) (ct == 3)
+            }
+    }
+
+/// A tool-call fragment is not text: the fold reports no `on_text`
+/// delta for it, exactly like the tool turns a real stream serves.
+#[test]
+def test_stream_tool_call_fragment_reports_no_text : Bool :=
+    match openai_apply_event stream_acc0 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}"# {
+        Pair.pair _ delta => delta == ""
+    }
+
 /// `usage: null` on every chunk (the live Ollama shape), a real usage
 /// object on a choices-empty event, an unparseable payload, and the
 /// `[DONE]` sentinel -- all four must be survived, the usage kept.
