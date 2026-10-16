@@ -472,6 +472,11 @@ def Client.post_stream_close {S : Type} (conn : Connection) (res : Result String
 /// body incrementally, and answer the caller's final state plus the whole
 /// response. Does not own the transport -- the caller opens and closes it
 /// (`Client.post_stream` is the one-shot composition).
+///
+/// Bytes the framing does not claim -- an overrun past the terminal chunk
+/// or past `Content-Length` -- are dropped rather than carried, the same
+/// remainder policy as `Client.read_response`: a client asks for one
+/// response at a time and is not sent a second one ahead of its request.
 def Client.stream_response {S : Type} (method : Method) (t : Transport) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   Monad.bind (Client.read_head t List.empty) (fn head =>
     Client.stream_response_head method t head init on_bytes)

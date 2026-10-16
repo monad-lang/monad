@@ -768,6 +768,3 @@ def test_stream_response_callback_error_aborts : IO Bool := do {
     }
   }
 }
-
-
-
