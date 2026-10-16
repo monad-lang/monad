@@ -18,7 +18,7 @@ use shuttle::session {Session, Session.save, Session.load}
 use shuttle::agent {RunState}
 use shuttle::context {usage_zero}
 use shuttle::tool {ToolSpec}
-use weaver::policy {Mode, Mode.show, Mode.parse}
+use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset}
 use std::map {BTreeMap}
@@ -28,12 +28,14 @@ use std::list {List.intercalate}
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
 /// always-cache) so the whole turn loop advances it; `budget` is the
 /// TOTAL for the session (what `/resume` recomputes `turns_left`
-/// against); `quit` is the `/quit` flag the loop ends on.
+/// against); `mcps` is the mounted `--mcp` servers' commands (what
+/// `/mcp` lists); `quit` is the `/quit` flag the loop ends on.
 pub struct State {
     run : RunState,
     mode : Mode,
     provider : String,
     budget : I64,
+    mcps : List String,
     quit : Bool,
 }
 
@@ -53,19 +55,21 @@ pub def Effect.ok (st : State) (output : String) : Effect :=
     let e : Effect := { state := st, output := output } in
     e
 
-/// The command table. `/mcp` and `/plan` join in Phase 6 (settings
-/// and mounts), not yet.
+/// The command table -- the whole `/`-surface, weaver.md Phase 6's
+/// final shape.
 pub def command_table : BTreeMap String Command :=
     Map.insert "/clear" (Command.mk cmd_clear)
         (Map.insert "/help" (Command.mk cmd_help)
+        (Map.insert "/mcp" (Command.mk cmd_mcp)
         (Map.insert "/mode" (Command.mk cmd_mode)
         (Map.insert "/model" (Command.mk cmd_model)
+        (Map.insert "/plan" (Command.mk cmd_plan)
         (Map.insert "/provider" (Command.mk cmd_provider)
         (Map.insert "/quit" (Command.mk cmd_quit)
         (Map.insert "/resume" (Command.mk cmd_resume)
         (Map.insert "/save" (Command.mk cmd_save)
         (Map.insert "/tools" (Command.mk cmd_tools)
-            BTreeMap.empty))))))))
+            BTreeMap.empty))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -161,6 +165,73 @@ def tool_line (reg : ToolRegistry) (spec : ToolSpec) : String :=
         Option.none => spec.name,
     }
 
+/// `/mcp`: the mounted `--mcp` servers, or the hint for mounting one.
+def cmd_mcp (arg : String) (st : State) : IO Effect :=
+    IO.pure (Effect.ok st (mcp_line st.mcps))
+
+def mcp_line (mcps : List String) : String :=
+    if strings_empty mcps
+    then "mcp: none mounted (--mcp <executable>, repeatable)"
+    else String.concat "mcp: " (List.intercalate ", " mcps)
+
+def strings_empty (xs : List String) : Bool :=
+    match xs { List.empty => true, _ => false }
+
+/// `/plan` with no argument is the plan-mode status line; `/plan
+/// approve [manual|allow_edit]` is the one CONSTRAINED mode transition
+/// (policy.mo's `Mode.approve_plan`): plan mode ends at the mode the
+/// approving user names, and any other mode has no plan to approve.
+def cmd_plan (arg : String) (st : State) : IO Effect :=
+    if String.is_empty arg
+    then IO.pure (Effect.ok st (plan_status st.mode))
+    else plan_arg arg st
+
+def plan_status (m : Mode) : String :=
+    match m {
+        Mode.plan => "plan mode: only read tools run; produce the plan, then /plan approve [manual|allow_edit]",
+        _ => String.concat "not in plan mode (mode: " (String.concat (Mode.show m) "); switch with /mode plan"),
+    }
+
+def plan_arg (arg : String) (st : State) : IO Effect :=
+    match split_command arg {
+        Pair.pair word rest =>
+            if word == "approve"
+            then plan_approve (String.trim rest) st
+            else IO.pure (Effect.ok st "usage: /plan | /plan approve [manual|allow_edit]"),
+    }
+
+/// The approval itself: only `manual` and `allow_edit` are acceptable
+/// landings -- `/plan approve auto` would be a one-word trust
+/// escalation, and the gate's whole point is that it costs more than
+/// that.
+def plan_approve (target : String) (st : State) : IO Effect :=
+    if Bool.not (is_landing target)
+    then IO.pure (Effect.ok st "plan approval drops to manual or allow_edit")
+    else approve_to (landing target) st
+
+def is_landing (target : String) : Bool :=
+    String.is_empty target || target == "manual" || target == "allow_edit"
+
+def landing (target : String) : Mode :=
+    match Mode.parse target {
+        Option.some m => m,
+        Option.none => Mode.manual,
+    }
+
+def approve_to (target : Mode) (st : State) : IO Effect :=
+    let st2 : State := set_mode st (Mode.approve_plan target st.mode) in
+    if mode_eq st.mode Mode.plan
+    then IO.pure (Effect.ok st2 (String.concat "plan approved -- mode: " (Mode.show target)))
+    else IO.pure (Effect.ok st2 (String.concat "no plan to approve -- mode: " (Mode.show st2.mode)))
+
+def mode_eq (a : Mode) (b : Mode) : Bool :=
+    match a {
+        Mode.manual => match b { Mode.manual => true, _ => false },
+        Mode.plan => match b { Mode.plan => true, _ => false },
+        Mode.allow_edit => match b { Mode.allow_edit => true, _ => false },
+        Mode.auto => match b { Mode.auto => true, _ => false },
+    }
+
 /// `/save <file>`: checkpoint the session (shuttle's `Session.save`).
 def cmd_save (arg : String) (st : State) : IO Effect :=
     if String.is_empty arg
@@ -195,7 +266,7 @@ def resume_result (file : String) (st : State) (r : Result String Session) : IO 
 
 def resume_ok (file : String) (st : State) (s : Session) : IO Effect :=
     let remaining : I64 := st.budget - s.turns in
-    let st2 : State := set_session st s remaining in
+    let st2 : State := set_session st s st.budget in
     if remaining < 1
     then IO.pure (Effect.ok st2 (String.concat "resumed " (String.concat file " -- the whole turn budget is already spent")))
     else IO.pure (Effect.ok st2 (String.concat "resumed " file))
@@ -223,7 +294,9 @@ def help_text : String :=
         "/mode [manual|plan|allow_edit|auto]  show or set the approval mode",
         "/model [name]                        show or set the model",
         "/provider [ollama|mistral|openrouter|anthropic|mock]  show or set the provider",
+        "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
         "/tools                               list tools with their capability tags",
+        "/mcp                                 list mounted MCP servers",
         "/save <file>                         checkpoint the session",
         "/resume <file>                       continue a saved session (budget spans both halves)",
         "/clear                               drop the transcript and reset the budget",

@@ -221,6 +221,7 @@ def state_of (reg : ToolRegistry) : State := {
     mode := Mode.manual,
     provider := "mock",
     budget := budget,
+    mcps := List.empty,
     quit := false,
 }
 
