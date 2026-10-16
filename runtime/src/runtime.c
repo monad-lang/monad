@@ -1022,6 +1022,14 @@ int64_t monad_string_gt(char* a, char* b) {
     return strcmp(sa, sb) > 0 ? 1 : 0;
 }
 
+/* A UTF-8 continuation byte (0x80..0xBF) -- the byte AFTER one of the
+   0xC0..0xF7 lead bytes and BEFORE the character's last byte. Position
+   `i` lands in the MIDDLE of a character exactly when the byte at `i`
+   is one of these. */
+static int monad_utf8_continuation(char c) {
+    return ((unsigned char)c & 0xC0) == 0x80;
+}
+
 /* `#[native string_slice]` (init/string.mo's `String.slice`) -- another
    previously-unwired gap: `#[native]` with no real body silently
    compiled to the generic "return Unit" stub, discarding every argument
@@ -1032,13 +1040,20 @@ int64_t monad_string_gt(char* a, char* b) {
    until the native stack overflowed instead of terminating once `s`
    became empty.
 
-   Byte-oriented (not UTF-8-char-aware) and clamps rather than errors on
-   any out-of-range input, bit-for-bit matching the Rust host's own
-   reference semantics (`core/src/core_native.rs`'s `string_slice`,
-   `SharedStr::subslice`) so compiled and interpreted execution agree:
-   `start` clamps into `[0, strlen(s)]`, `len` clamps to `>= 0` and to
-   whatever remains after `start`, and a NULL `s` yields `""` -- never a
-   panic/OOB read for a bad boundary or an over-long `len`.
+   Byte-oriented and clamps rather than errors on any out-of-range
+   input, bit-for-bit matching the Rust host's own reference semantics
+   (`core/src/core_native.rs`'s `string_slice`, `SharedStr::subslice`)
+   so compiled and interpreted execution agree: `start` clamps into
+   `[0, strlen(s)]`, `len` clamps to `>= 0` and to whatever remains
+   after `start`, and a NULL `s` yields `""` -- never a panic/OOB read
+   for a bad boundary or an over-long `len`. This INCLUDES subslice's
+   UTF-8 character-boundary rule: a slice whose start or end byte lands
+   in the middle of a multi-byte character is `""`, not the raw bytes
+   (`SharedStr::subslice` falls back to empty on a non-boundary offset).
+   Without this, a compiled TUI input decoder probing byte offsets of
+   "é" read continuation bytes as standalone one-byte strings while the
+   same code interpreted read `""` (see motes/tui/src/input.mo's
+   byte-first walk, which is built around the `""` behavior).
 
    BOTH CLAMPS ARE WALKS BOUNDED BY THE ARGUMENTS, NOT A `strlen`. The
    previous body opened with `strlen(s)`, which made every slice cost
@@ -1062,14 +1077,23 @@ int64_t monad_string_gt(char* a, char* b) {
    find `start`'s clamp point, and use `memchr` -- the bounded form of
    the `strlen` this replaces -- to find `len`'s. Stopping at NUL is what
    replaces the bounds check `strlen` provided, and the walk cannot read
-   past the NUL because it stops there. Cost is O(start + len); the
-   bytes produced are unchanged. */
+   past the NUL because it stops there. The two boundary checks below are
+   single-byte reads and do not change the O(start + len) cost; the
+   bytes produced are unchanged for every whole-character slice. */
 char* monad_string_slice(char* s, int64_t start_in, int64_t len_in) {
     if (!s) s = "";
     size_t start = 0;
     if (start_in > 0) {
         size_t want = (size_t)start_in;
         while (start < want && s[start] != '\0') start++;
+    }
+    /* start lands mid-character: the byte there is a continuation byte
+       (a NUL here is the end of the string, which IS a boundary). */
+    if (s[start] != '\0' && monad_utf8_continuation(s[start])) {
+        char* out = (char*)monad_alloc_atomic(1);
+        if (!out) return NULL;
+        out[0] = '\0';
+        return out;
     }
     size_t len = len_in < 0 ? 0 : (size_t)len_in;
     if (len == 0) {
@@ -1080,6 +1104,15 @@ char* monad_string_slice(char* s, int64_t start_in, int64_t len_in) {
     }
     const void* nul = memchr(s + start, '\0', len);
     size_t avail = nul ? (size_t)((const char*)nul - (s + start)) : len;
+    /* The slice ends mid-character: the byte just past its last byte is
+       a continuation byte (a NUL means the slice ran to the string's
+       end, which IS a boundary). */
+    if (s[start + avail] != '\0' && monad_utf8_continuation(s[start + avail])) {
+        char* out = (char*)monad_alloc_atomic(1);
+        if (!out) return NULL;
+        out[0] = '\0';
+        return out;
+    }
     char* out = (char*)monad_alloc_atomic(avail + 1);
     if (!out) return NULL;
     if (avail) memcpy(out, s + start, avail);
@@ -1090,7 +1123,10 @@ char* monad_string_slice(char* s, int64_t start_in, int64_t len_in) {
 /* `#[native string_drop]` (init/string.mo's `String.drop`) -- same
    reference semantics as `core/src/core_native.rs`'s `string_drop`/
    `SharedStr::drop_prefix`: drops the first `n` bytes (clamped to
-   `[0, strlen(s)]`), never errors on an out-of-range `n`.
+   `[0, strlen(s)]`), never errors on an out-of-range `n`. Like
+   `monad_string_slice` above, `n` landing in the middle of a multi-byte
+   character yields `""` (drop_prefix routes through subslice's
+   boundary rule), not the raw remaining bytes.
    ZERO-COPY: returns a pointer INTO `s` rather than a fresh buffer.
    This is sound because strings in this runtime are immutable
    NUL-terminated `char*` and nothing ever mutates or frees one
@@ -1112,10 +1148,18 @@ char* monad_string_slice(char* s, int64_t start_in, int64_t len_in) {
 char* monad_string_drop(int64_t n, char* s) {
     if (!s) return NULL;
     if (n <= 0) return s;
-    for (size_t i = 0; i < (size_t)n; i++) {
-        if (s[i] == '\0') return s + i;
+    size_t i = 0;
+    while (i < (size_t)n && s[i] != '\0') i++;
+    /* The drop point lands mid-character: a continuation byte (a NUL
+       is the string's end, which IS a boundary and yields the empty
+       tail). */
+    if (s[i] != '\0' && monad_utf8_continuation(s[i])) {
+        char* out = (char*)monad_alloc_atomic(1);
+        if (!out) return NULL;
+        out[0] = '\0';
+        return out;
     }
-    return s + n;
+    return s + i;
 }
 
 char* monad_read_file(char* path) {

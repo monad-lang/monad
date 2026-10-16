@@ -244,6 +244,29 @@ def test_string_drop_none : Bool :=
 def test_string_drop_all : Bool :=
     String.drop 10 "hi" == ""
 
+// UTF-8 boundary tests: slice/drop are byte-oriented but return "" when
+// the requested range does not land on whole characters -- both backends
+// must agree (the compiled runtime's slice/drop used to hand back raw
+// mid-character bytes).
+
+#[test]
+def test_string_slice_mid_char_empty : Bool :=
+    String.slice "\u{e9}" 0 1 == "" && String.slice "\u{e9}" 1 1 == ""
+
+#[test]
+def test_string_slice_whole_char : Bool :=
+    String.slice "\u{e9}" 0 2 == "\u{e9}"
+        && String.slice "a\u{e9}b" 1 2 == "\u{e9}"
+        && String.slice "\u{20ac}" 0 2 == ""
+
+#[test]
+def test_string_drop_mid_char_empty : Bool :=
+    String.drop 1 "\u{e9}" == ""
+
+#[test]
+def test_string_drop_past_char : Bool :=
+    String.drop 3 "\u{20ac}x" == "x" && String.drop 2 "\u{20ac}x" == ""
+
 // String starts_with tests
 
 #[test]
