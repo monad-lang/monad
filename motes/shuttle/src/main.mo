@@ -42,13 +42,15 @@ use shuttle::wire::mock {is_assistant, content_text}
 def usage : String :=
     List.intercalate "\n" [
         "usage: shuttle run \"<task>\"",
-        "  --provider ollama|mistral|openrouter|anthropic  (default ollama)",
+        "  --provider ollama|mistral|openrouter|anthropic  (default ollama; on --resume it",
+        "                    overrides the loaded session's provider)",
         "  --model <name>    (defaults: ollama qwen2.5-coder, mistral mistral-large-latest,",
-        "                    anthropic claude-opus-5; openrouter requires it)",
+        "                    anthropic claude-opus-5; openrouter requires it; on --resume it",
+        "                    overrides the loaded session's model)",
         "  --max-turns <n>   (default 10, total across a save/resume)",
         "  --stream, -s      (print assistant text live as it arrives)",
         "  --mcp <exe>       (repeatable; bare executable, no arguments yet)",
-        "  --resume <file>   (continue a saved session)",
+        "  --resume <file>   (continue a saved session; a new task is optional)",
         "  --save <file>     (checkpoint the final session)",
     ]
 
@@ -82,8 +84,13 @@ struct CliArgs {
 }
 
 /// A validated run: provider config resolved, budget parsed, task set.
+/// `provider`/`model` are the RAW strings as given ("" = not given):
+/// a resume overrides the loaded session's config with them, and only
+/// with them (see `resumed_cfg`).
 struct RunPlan {
     cfg : ProviderConfig,
+    provider : String,
+    model : String,
     max_turns : I64,
     resume : String,
     save : String,
@@ -95,14 +102,16 @@ struct RunPlan {
 /// Flags first, each `take_opt` stripping its tokens so the next stage
 /// sees the rest; `--mcp` loops until it stops finding one; the task is
 /// the positional left after every flag is gone. `--stream`/`-s` is a
-/// Bool flag, taken before everything else.
+/// Bool flag, taken before everything else. `--provider` defaults to
+/// "" (unspecified), not to "ollama": a resume must be able to tell
+/// "leave the session's provider alone" from an explicit override.
 def parse_args (args : List String) : CliArgs :=
     match Cli.take_flag "stream" "s" args {
         Cli.FlagResult.flag_result stream rest => parse_provider stream rest,
     }
 
 def parse_provider (stream : Bool) (args : List String) : CliArgs :=
-    match Cli.take_opt "provider" "" "ollama" args {
+    match Cli.take_opt "provider" "" "" args {
         Cli.OptResult.opt_result provider rest => parse_model stream provider rest,
     }
 
@@ -143,27 +152,59 @@ def parse_task (stream : Bool) (provider : String) (model : String) (max_turns_s
         Cli.PosResult.pos_result task rest => parse_extra stream provider model max_turns_str resume save mcps task rest,
     }
 
-/// A second positional is a typo, not a task; it lands in `error`.
+/// The filled struct with the task-dependent error: a task that is
+/// really an unknown flag (every KNOWN flag was consumed above, so a
+/// `--token` here is a typo) is named as such instead of silently
+/// becoming the task, and every extra positional is reported -- one
+/// error line naming all of them says what to fix, the first alone
+/// does not.
 def parse_extra (stream : Bool) (provider : String) (model : String) (max_turns_str : String) (resume : String) (save : String) (mcps : List String) (task : Option String) (args : List String) : CliArgs :=
+    let c : CliArgs := {
+        provider := provider, model := model, max_turns_str := max_turns_str,
+        resume := resume, save := save, mcps := mcps,
+        task := task_of task, stream := stream, error := flag_typo_error task,
+    } in
+    extra_walk c args
+
+/// Every positional past the task is a typo; collect them all into
+/// `error`, comma-separated.
+/// The accumulated-error step, hoisted out of the walk: a struct update
+/// bound to an annotated local -- a bare `{ c with ... }` in the
+/// recursive call's argument position is a checker crash, the known
+/// bare-literal-in-argument-position hazard.
+#[partial]
+def extra_step (c : CliArgs) (x : String) (rest : List String) : CliArgs :=
+    let c2 : CliArgs := { c with error := append_error c.error x } in
+    extra_walk c2 rest
+
+#[partial]
+def extra_walk (c : CliArgs) (args : List String) : CliArgs :=
     match Cli.take_positional args {
-        Cli.PosResult.pos_result extra _ =>
-            let c : CliArgs := {
-                provider := provider, model := model, max_turns_str := max_turns_str,
-                resume := resume, save := save, mcps := mcps,
-                task := task_of task, stream := stream, error := extra_error extra,
-            } in
-            c,
+        Cli.PosResult.pos_result extra rest =>
+            match extra {
+                Option.some x => extra_step c x rest,
+                Option.none => c,
+            }
+    }
+
+def append_error (e : String) (extra : String) : String :=
+    if String.is_empty e
+    then String.concat "unexpected extra argument: " extra
+    else String.concat e (String.concat ", " extra)
+
+/// A task token starting with `--` is a flag nothing consumed -- an
+/// unknown flag. Naming it is the difference between "unexpected extra
+/// argument: <the real task>" (which points at the WRONG token) and
+/// the actual typo.
+def flag_typo_error (task : Option String) : String :=
+    match task {
+        Option.some t => if String.starts_with "--" t then String.concat "unknown flag: " t else "",
+        Option.none => "",
     }
 
 def task_of (task : Option String) : String :=
     match task {
         Option.some t => t,
-        Option.none => "",
-    }
-
-def extra_error (extra : Option String) : String :=
-    match extra {
-        Option.some x => String.concat "unexpected extra argument: " x,
         Option.none => "",
     }
 
@@ -188,31 +229,39 @@ def resolve_cfg (provider : String) (model : String) : Result String ProviderCon
 
 def plan_of (c : CliArgs) : Result String RunPlan :=
     if Bool.not (String.is_empty c.error) then Result.err c.error
-    else match resolve_model c.provider c.model {
+    else
+        // An unspecified provider validates as the ollama default (what
+        // a FRESH run uses); a resume looks at the RAW strings instead
+        // -- `resumed_cfg` overrides only what was explicitly given.
+        let provider : String := if String.is_empty c.provider then "ollama" else c.provider in
+        match resolve_model provider c.model {
+            Result.err e => Result.err e,
+            Result.ok model => plan_of_model c provider model,
+        }
+
+def plan_of_model (c : CliArgs) (provider : String) (model : String) : Result String RunPlan :=
+    match resolve_cfg provider model {
         Result.err e => Result.err e,
-        Result.ok model => plan_of_model c model,
+        Result.ok cfg => plan_of_cfg c provider model cfg,
     }
 
-def plan_of_model (c : CliArgs) (model : String) : Result String RunPlan :=
-    match resolve_cfg c.provider model {
-        Result.err e => Result.err e,
-        Result.ok cfg => plan_of_cfg c cfg,
-    }
-
-def plan_of_cfg (c : CliArgs) (cfg : ProviderConfig) : Result String RunPlan :=
+def plan_of_cfg (c : CliArgs) (provider : String) (model : String) (cfg : ProviderConfig) : Result String RunPlan :=
     match parse_i64 c.max_turns_str {
         Option.none => Result.err "--max-turns must be a number",
-        Option.some n => plan_of_turns c cfg n,
+        Option.some n => plan_of_turns c provider model cfg n,
     }
 
-def plan_of_turns (c : CliArgs) (cfg : ProviderConfig) (n : I64) : Result String RunPlan :=
+/// A FRESH run needs a task; a resume does not -- continuing a saved
+/// session with no new instruction is a legitimate "keep going".
+def plan_of_turns (c : CliArgs) (provider : String) (model : String) (cfg : ProviderConfig) (n : I64) : Result String RunPlan :=
     if n < 1 then Result.err "--max-turns must be at least 1"
-    else if String.is_empty c.task then Result.err usage
-    else plan_done c cfg n
+    else if String.is_empty c.task && String.is_empty c.resume then Result.err usage
+    else plan_done c provider model cfg n
 
-def plan_done (c : CliArgs) (cfg : ProviderConfig) (n : I64) : Result String RunPlan :=
+def plan_done (c : CliArgs) (provider : String) (model : String) (cfg : ProviderConfig) (n : I64) : Result String RunPlan :=
     let p : RunPlan := {
-        cfg := cfg, max_turns := n, resume := c.resume, save := c.save,
+        cfg := cfg, provider := provider, model := model, max_turns := n,
+        resume := c.resume, save := c.save,
         mcps := c.mcps, task := c.task, stream := c.stream,
     } in
     Result.ok p
@@ -393,9 +442,33 @@ def resumed_budget (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServ
     then fail_disposed servers "resumed session already used the whole --max-turns budget (raise --max-turns)"
     else resumed_state plan reg servers s budget
 
+/// The config a resume runs with: the loaded session's own config,
+/// overridden by an explicit `--provider` (the whole config -- wire,
+/// key and host with it) or by an explicit `--model` (the model only;
+/// the session's wire and key stay). With neither given, the session's
+/// config is the point of resuming.
+def resumed_cfg (plan : RunPlan) (s : Session) : ProviderConfig :=
+    if Bool.not (String.is_empty plan.provider) then plan.cfg
+    else if Bool.not (String.is_empty plan.model) then { s.config with model := plan.cfg.model }
+    else s.config
+
+/// The history a resume continues: the loaded transcript, with the new
+/// task appended as a user message when one was given -- `--resume`
+/// with no task is a plain "continue".
+def resumed_history (plan : RunPlan) (s : Session) : List Message :=
+    if String.is_empty plan.task then s.history
+    else List.append s.history [user_message plan.task]
+
 def resumed_state (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServer) (s : Session) (budget : I64) : IO I64 := do {
-    let s2 : Session := { s with history := List.append s.history [user_message plan.task] };
-    let st : RunState := { session := s2, reg := reg, turns_left := budget, emit := plan_emit plan };
+    // The config and the history come from the resume rules above; the
+    // tool list refreshes from the LIVE registry -- the loaded
+    // session's `tools` is the checkpoint's own snapshot, and a resume
+    // may mount a different `--mcp` set, so what a later `--save`
+    // writes must describe what actually ran.
+    let s1 : Session := { s with config := resumed_cfg plan s };
+    let s2 : Session := { s1 with tools := ToolRegistry.specs reg };
+    let s3 : Session := { s2 with history := resumed_history plan s };
+    let st : RunState := { session := s3, reg := reg, turns_left := budget, emit := plan_emit plan };
     let r <- ResultT.run (Loop.run_state st);
     finish_run plan servers r
 }
