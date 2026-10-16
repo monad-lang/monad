@@ -497,7 +497,7 @@ def resumed_budget (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServ
 /// config is the point of resuming.
 def resumed_cfg (plan : RunPlan) (s : Session) : ProviderConfig :=
     if Bool.not (String.is_empty plan.provider) then plan.cfg
-    else if Bool.not (String.is_empty plan.model) then { s.config with model := plan.cfg.model }
+    else if Bool.not (String.is_empty plan.model) then { (s.config) with model := plan.cfg.model }
     else s.config
 
 /// The history a resume continues: the loaded transcript, with the new
