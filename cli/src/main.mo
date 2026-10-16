@@ -1974,6 +1974,18 @@ def after_separator (args : List String) : List String :=
         List.empty => List.empty,
     }
 
+/// A `--` typed BEFORE the path separates nothing yet (there are no
+/// program arguments to separate at that point), but users type it
+/// anyway -- every leading separator is peeled before the path is
+/// taken, so `monad run -- a.mo x` runs `a.mo` with argument `x`
+/// instead of dying on a file named `--`.
+#[partial]
+def drop_leading_separators (args : List String) : List String :=
+    match args {
+        List.cons hd tl => if hd == "--" then drop_leading_separators tl else args,
+        List.empty => List.empty,
+    }
+
 /// `compile <path> [name]` (original positional form) and `compile <path>
 /// [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]` (flag
 /// form) both work; an explicit `--output`/`-o` wins over a positional
@@ -2077,7 +2089,7 @@ def Command.from_args (args : List String) : Command :=
                                 match Cli.take_flag "release" "" rest1a {
                                     Cli.FlagResult.flag_result release rest1b =>
                                         let debug := if debug_explicit then true else not release in
-                                        match Cli.take_positional rest1b {
+                                        match Cli.take_positional (drop_leading_separators rest1b) {
                                             Cli.PosResult.pos_result path_opt rest1c =>
                                                 match path_opt {
                                                     Option.some path =>
@@ -2362,7 +2374,11 @@ def print_help : IO I64 {
     println "         --target <triple> builds for another target (space-separated: --target=x does not parse)";
     println "           `monad print-targets` lists the spellings this compiler has measured";
     println "         --no-cache (or MONAD_NO_CACHE) compiles for real, reading and writing no store entry";
-    println "       monad run <path> [--verbose/-v] [--debug/-g] [--release]  Compile and execute a .mo source file";
+    println "       monad run <path> [--verbose/-v] [--debug/-g] [--release] [--] [args...]  Compile and execute a .mo source file";
+    println "         <path> may be a mote DIRECTORY (its [[bin]] target is built and run), like build's;";
+    println "         the binary lands where build would put it and the second identical run prints `cached:`";
+    println "         Everything after <path> is the compiled program's own argv -- a leading `--`";
+    println "         separates them and is dropped once (a `--` before <path> is peeled too)";
     println "       monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
     println "       monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache] [--affine]  Parse and typecheck .mo source files (no execution)";

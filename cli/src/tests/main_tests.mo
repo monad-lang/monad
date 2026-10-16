@@ -403,6 +403,27 @@ def test_from_args_run_flags_are_position_independent : Bool :=
         _ => false,
     }
 
+// A `--` typed before the path separates nothing yet -- it is peeled
+// there too, so `monad run -- a.mo x` runs `a.mo` instead of dying on
+// a file named `--`.
+#[test]
+def test_from_args_run_peels_a_leading_separator : Bool :=
+    match Command.from_args ["run", "--", "a.mo", "x"] {
+        Command.run path _verbose _debug args =>
+            Path.to_string path == "a.mo" && same_args ["x"] args,
+        _ => false,
+    }
+
+// Only the FIRST `--` after the path separates; a second one is a
+// literal program argument, forwarded exactly as typed.
+#[test]
+def test_from_args_run_second_separator_is_literal : Bool :=
+    match Command.from_args ["run", "a.mo", "--", "--", "x"] {
+        Command.run path _verbose _debug args =>
+            Path.to_string path == "a.mo" && same_args ["--", "x"] args,
+        _ => false,
+    }
+
 #[test]
 def test_from_args_help_on_empty : Bool :=
     match Command.from_args [] {
