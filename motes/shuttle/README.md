@@ -21,13 +21,15 @@ verification surface for this mote.
 
 ```
 usage: shuttle run "<task>"
-  --provider ollama|mistral|openrouter|anthropic  (default ollama)
+  --provider ollama|mistral|openrouter|anthropic  (default ollama; on --resume it
+                    overrides the loaded session's provider)
   --model <name>    (defaults: ollama qwen2.5-coder, mistral mistral-large-latest,
-                    anthropic claude-opus-5; openrouter requires it)
+                    anthropic claude-opus-5; openrouter requires it; on --resume it
+                    overrides the loaded session's model)
   --max-turns <n>   (default 10, total across a save/resume)
   --stream, -s      (print assistant text live as it arrives)
   --mcp <exe>       (repeatable; bare executable, no arguments yet)
-  --resume <file>   (continue a saved session)
+  --resume <file>   (continue a saved session; a new task is optional)
   --save <file>     (checkpoint the final session)
 ```
 
@@ -103,7 +105,10 @@ handshake (`mcp_client::server`), and mounts every tool from
 `tools/list` as a proxy `ToolImpl`: the model calls it like a built-in,
 the proxy forwards to `tools/call` and maps the result's first text
 block to a `tool_result`. Repeat `--mcp` to mount several servers;
-mounted servers are disposed on every exit path. `--mcp` takes a bare
+mounted servers are disposed on every exit path. Registration is
+last-wins, so a mount tool named like a built-in (or an earlier
+mount's tool) replaces it silently -- the CLI prints a stderr warning
+per shadowed name at mount time. `--mcp` takes a bare
 executable only (no argument list yet -- `String.split` does not exist),
 so wrap argumented servers in a script.
 
@@ -115,7 +120,20 @@ the latest state of a run, not an append-only log. `--resume <file>`
 continues one: the loaded transcript is the model's context, the turn
 and token accounting keep counting from where the file left off, and
 `--max-turns` is the budget for the WHOLE session across both halves
-(resume with `--max-turns` above the turns already spent). The registry
+(resume with `--max-turns` above the turns already spent). A resume
+needs no new task -- `--resume <file>` alone is a plain "continue",
+and a task appended after it is a new instruction in the same context.
+An explicit `--provider` replaces the loaded session's whole config
+(wire, key and host with it); an explicit `--model` replaces the model
+only; neither given, the session's own config is the point of
+resuming. The tool list is refreshed from the live registry at resume
+(a resume may mount a different `--mcp` set), so a later `--save`
+describes what actually ran.
+
+A run that hits the turn cap mid-flight ends NORMALLY, with its
+session: the transcript so far is kept (and saved on `--save`), a
+stderr note says the cap stopped it, and `--resume` continues from
+there. The registry
 is closures and never round-trips: a resumed run gets a fresh one, and
 its mismatch with the transcript's recorded tools is the caller's signal
 to remount what the transcript references (a tool_use naming a tool no
@@ -125,7 +143,7 @@ can see).
 ## Tests
 
 ```bash
-monad test motes/shuttle        # 63 tests: codecs, context, session, mock e2e
+monad test motes/shuttle        # 73 tests: codecs, context, session, cli, mock e2e
 monad test motes/shuttle/src/tests/ollama_e2e_tests.mo   # live, env-gated
 ```
 
