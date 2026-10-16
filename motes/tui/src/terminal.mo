@@ -19,23 +19,28 @@
 ///   2 -- the terminal size packed as `rows * 65536 + cols`; ioctl
 ///        TIOCGWINSZ on stdin then stdout, then the `COLUMNS`/`LINES`
 ///        environment variables, then 24x80
-/// Any other op yields -1.
+///   3 -- wait up to `arg` milliseconds for stdin to become readable
+///        (1 readable, 0 timed out, -1 error; readable at EOF too --
+///        pair with a read that returns "" to detect closure). This
+///        is the tick source: an app asks for input with a timeout, and
+///        the timeout is the frame clock.
+/// Any other op yields -1. `arg` is ignored by ops 0-2.
 #[native "term_ctl"]
-priv def term_ctl (op : I64) : RawIO I64
+priv def term_ctl (op : I64) (arg : I64) : RawIO I64
 
 /// Enter cbreak mode: ICANON and ECHO off, so key presses arrive one at
 /// a time unechoed. Deliberately NOT full raw mode: ISIG stays on (Ctrl-C
 /// still kills a hung app) and OPOST stays on (a plain `"\n"` still
 /// prints). `false` when stdin is not a tty -- nothing is changed then.
 pub def Terminal.enter_raw_mode : IO Bool := do {
-    let rc <- IO.mk (term_ctl 0);
+    let rc <- IO.mk (term_ctl 0 0);
     return (rc == 1)
 }
 
 /// Restore the terminal mode `enter_raw_mode` replaced. `false` when
 /// stdin is not a tty or no mode was saved.
 pub def Terminal.leave_raw_mode : IO Bool := do {
-    let rc <- IO.mk (term_ctl 1);
+    let rc <- IO.mk (term_ctl 1 0);
     return (rc == 1)
 }
 
@@ -49,8 +54,17 @@ pub def Terminal.unpack_size (packed : I64) : Pair I64 I64 :=
 /// The terminal size as `(rows, cols)`. Never fails: away from a tty
 /// this is the `COLUMNS`/`LINES` environment variables, then 24x80.
 pub def Terminal.size : IO (Pair I64 I64) := do {
-    let packed <- IO.mk (term_ctl 2);
+    let packed <- IO.mk (term_ctl 2 0);
     return (Terminal.unpack_size packed)
+}
+
+/// Wait up to `timeout_ms` for stdin to be readable. `false` on
+/// timeout (which is the frame clock an app's ticks ride on), `true`
+/// when a read will not block -- including at EOF, where the read
+/// itself returns "". A 0 timeout is a plain non-blocking check.
+pub def Terminal.poll (timeout_ms : I64) : IO Bool := do {
+    let rc <- IO.mk (term_ctl 3 timeout_ms);
+    return (rc == 1)
 }
 
 // ==================== ANSI string builders ====================

@@ -2208,15 +2208,43 @@ fn term_ctl(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   let op = extract_int(
     args
       .first()
-      .ok_or_else(|| CoreEvalError::NativeArgError("term_ctl needs 1 arg".into()))?,
+      .ok_or_else(|| CoreEvalError::NativeArgError("term_ctl needs 2 args".into()))?,
+  )?;
+  let arg = extract_int(
+    args
+      .get(1)
+      .ok_or_else(|| CoreEvalError::NativeArgError("term_ctl needs 2 args".into()))?,
   )?;
   let result = match op {
     0 => term_ctl_enter_raw(),
     1 => term_ctl_leave_raw(),
     2 => term_ctl_size(),
+    3 => term_ctl_poll(arg),
     _ => -1,
   };
   raw_io_wrap(natives, Value::Lit(IrLit::Num(result, NumSuffix::I64)))
+}
+
+/// `term_ctl` op 3 -- poll(2) on stdin for up to `timeout_ms`:
+/// 1 readable (EOF counts as readable; the READ is what reports
+/// closure), 0 timed out, -1 poll itself failed. This is the tick
+/// source a TUI frame loop rides on -- there is no sleep-with-wakeup
+/// primitive, so "input timed out" IS the frame clock.
+fn term_ctl_poll(timeout_ms: i64) -> i64 {
+  let timeout = timeout_ms.clamp(0, i32::MAX as i64) as i32;
+  let mut fds = [libc::pollfd {
+    fd: libc::STDIN_FILENO,
+    events: libc::POLLIN,
+    revents: 0,
+  }];
+  let rc = unsafe { libc::poll(fds.as_mut_ptr(), 1, timeout) };
+  if rc < 0 {
+    -1
+  } else if rc == 0 {
+    0
+  } else {
+    1
+  }
 }
 
 /// `IO.current_time` (std/io.mo). `IO.io`-wrapped, like every other

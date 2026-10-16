@@ -36,6 +36,8 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <poll.h>
+#include <limits.h>
 
 typedef struct {
     _Atomic(int64_t) refcount;
@@ -1873,12 +1875,14 @@ int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
 }
 
-/* `term_ctl : I64 -> RawIO I64` (motes/tui/src/terminal.mo) -- the tui
- * mote's ONE terminal-control native, the same one-entry-point-one-flag
- * merge `monad_proc_read`/`monad_proc_wait` set: op 0 enters cbreak on
- * stdin (ICANON and ECHO off; ISIG and OPOST deliberately left on so
- * Ctrl-C still works and a plain "\n" still prints), op 1 restores the
- * mode op 0 saved, op 2 returns the size packed as rows*65536+cols.
+/* `term_ctl : I64 -> I64 -> RawIO I64` (motes/tui/src/terminal.mo) --
+ * the tui mote's ONE terminal-control native, the same
+ * one-entry-point-one-flag merge `monad_proc_read`/`monad_proc_wait`
+ * set: op 0 enters cbreak on stdin (ICANON and ECHO off; ISIG and
+ * OPOST deliberately left on so Ctrl-C still works and a plain "\n"
+ * still prints), op 1 restores the mode op 0 saved, op 2 returns the
+ * size packed as rows*65536+cols, op 3 polls stdin (the second
+ * argument is the timeout; the mode/size ops ignore it).
  * The mode ops answer 1/0 rather than failing -- stdin away from a tty
  * (a test run, a pipe) degrades to 0, so nothing here ever needs a pty.
  * `raw_io_passthrough` types the call's result as i64 and wraps it once
@@ -1931,10 +1935,30 @@ static int64_t term_ctl_size(void) {
     return 24 * 65536 + 80;
 }
 
-int64_t monad_term_ctl(int64_t op) {
+/* `term_ctl` op 3 -- poll(2) stdin for up to `timeout_ms`: 1 readable
+ * (EOF counts as readable; the READ is what reports closure), 0 timed
+ * out, -1 the poll itself failed. The frame clock a TUI loop rides on:
+ * there is no sleep-with-wakeup primitive, so "input timed out" IS the
+ * tick. The timeout is clamped into poll(2)'s int range; a negative
+ * wait is a plain non-blocking check, matching the Rust host. */
+static int64_t term_ctl_poll(int64_t timeout_ms) {
+    struct pollfd pfd;
+    pfd.fd = STDIN_FILENO;
+    pfd.events = POLLIN;
+    int t;
+    if (timeout_ms < 0) t = 0;
+    else if (timeout_ms > INT_MAX) t = INT_MAX;
+    else t = (int)timeout_ms;
+    int rc = poll(&pfd, 1, t);
+    if (rc < 0) return -1;
+    return rc == 0 ? 0 : 1;
+}
+
+int64_t monad_term_ctl(int64_t op, int64_t arg) {
     if (op == 0) return term_ctl_enter_raw();
     if (op == 1) return term_ctl_leave_raw();
     if (op == 2) return term_ctl_size();
+    if (op == 3) return term_ctl_poll(arg);
     return -1;
 }
 

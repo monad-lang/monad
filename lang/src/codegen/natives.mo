@@ -543,9 +543,11 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "proc_write" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_write")
             else if String.beq target "proc_read" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_read")
             else if String.beq target "proc_wait" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_wait")
-            // `term_ctl : I64 -> RawIO I64` (motes/tui/src/terminal.mo) --
-            // the tui mote's ONE terminal-control native: cbreak
-            // enter/leave and TIOCGWINSZ merged behind an I64 op flag,
+            // `term_ctl : I64 -> I64 -> RawIO I64` (motes/tui/src/
+            // terminal.mo) -- the tui mote's ONE terminal-control
+            // native: cbreak enter/leave, TIOCGWINSZ and stdin-poll
+            // merged behind an I64 op flag (the second i64 is the
+            // poll timeout; the mode/size ops ignore it),
             // the same one-entry-point-one-flag shape the proc family
             // just above set. `raw_io_passthrough` (one `RawIO.io` wrap;
             // the `Terminal.*` wrappers add the `IO.mk`), and
@@ -917,10 +919,12 @@ def runtime_declarations : List LLVMDeclaration :=
     let d89 := mk_decl "monad_proc_write" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d90 := mk_decl "monad_proc_read" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d91 := mk_decl "monad_proc_wait" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
-    // `monad_term_ctl` (runtime.c) -- `term_ctl : I64 -> RawIO I64`'s
-    // backing function: one i64 op flag in, i64 result out (the mode
-    // ops' 1/0, or the size packed as rows*65536+cols).
-    let d92 := mk_decl "monad_term_ctl" (List.cons "i64" List.empty) "i64" in
+    // `monad_term_ctl` (runtime.c) -- `term_ctl : I64 -> I64 ->
+    // RawIO I64`'s backing function: the i64 op flag plus one i64
+    // argument (the poll timeout; the mode/size ops ignore it) in,
+    // i64 result out (the mode ops' 1/0, the size packed as
+    // rows*65536+cols, or the poll's readable/timeout/error).
+    let d92 := mk_decl "monad_term_ctl" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,

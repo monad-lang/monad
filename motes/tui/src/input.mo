@@ -30,6 +30,8 @@
 // string compare and UTF-8 needs no numeric byte access.
 
 use lib::types { Event, Key, MouseButton, MouseEvent }
+use lib::terminal { Terminal.poll, Terminal.size }
+use std::io { IO.read_stdin_exact }
 
 // ==================== byte and character probes ====================
 
@@ -403,6 +405,111 @@ def Input.mouse_next (s : String) (k : I64) : Pair (Option Event) (Option I64) :
                             else Pair.pair Option.none Option.none
                         }
                     }
+                }
+            }
+        }
+    }
+
+// ==================== the reader (pull model) ====================
+//
+// The plan's "event reader fiber" lands as a PULL producer instead: the
+// app loop is the single scheduler, one `Input.produce` call is one
+// poll/read/decode cycle, and the reader's state (undecoded bytes, the
+// last observed size, whether stdin closed) is ordinary data threaded
+// through the loop. That resolves the `Mailbox` open item for v1 -- no
+// synchronized cross-fiber primitive exists in the stdlib and a native
+// one buys nothing a pull cannot, because nothing else writes into a
+// TUI's event graph.
+
+/// The reader's state between polls. `closed` is set the first time a
+/// read reports EOF (a poll says "readable" at EOF; the empty read is
+/// what means closed), and a closed reader never yields events again.
+pub struct InputReader {
+    pending : String,
+    last_rows : I64,
+    last_cols : I64,
+    closed : Bool
+}
+
+/// A reader that knows the terminal is `rows` x `cols` (so the first
+/// `produce` does not mistake the current size for a resize) and has
+/// consumed nothing.
+pub def input_reader (rows : I64) (cols : I64) : InputReader :=
+    { pending := "", last_rows := rows, last_cols := cols, closed := false }
+
+/// Record `size` against the reader's last observation: the resize
+/// event (one, on the change) and the reader that now knows it.
+def Input.note_size (r : InputReader) (size : Pair I64 I64) : Pair (List Event) InputReader :=
+    match size {
+        Pair.pair rows cols =>
+            if rows == r.last_rows && cols == r.last_cols
+            then Pair.pair List.empty r
+            else
+                let nr : InputReader := { r with last_rows := rows, last_cols := cols } in
+                Pair.pair (List.cons (Event.resize rows cols) List.empty) nr
+    }
+
+/// One poll/read/decode cycle. Waits up to `timeout_ms` for input;
+/// when it arrives, reads and decodes until the buffer is drained (a
+/// non-blocking poll between bytes). A resize is folded in front of
+/// whatever input arrived. The timeout is the tick source -- it is how
+/// an app's frame clock runs when no key is pressed -- and the one
+/// other thing it yields is the ESC-key resolution: a lone ESC still
+/// pending when no byte followed it is the escape key.
+///
+/// The caller threads the returned reader into the next call; on
+/// `closed` it should stop the loop.
+pub def Input.produce (r : InputReader) (timeout_ms : I64) : IO (Pair (List Event) InputReader) := do {
+    let size <- Terminal.size;
+    let sized : Pair (List Event) InputReader := Input.note_size r size;
+    let out <- Input.produce_go sized timeout_ms;
+    return out
+}
+
+def Input.produce_go (sized : Pair (List Event) InputReader) (timeout_ms : I64) : IO (Pair (List Event) InputReader) :=
+    match sized {
+        Pair.pair evs nr => do {
+            let readable <- Terminal.poll timeout_ms;
+            if Bool.not readable
+            then Input.idle_cycle nr evs
+            else Input.drain nr evs 256
+        }
+    }
+
+/// The timeout path: no input arrived. A pending lone ESC is the
+/// escape key (nothing followed it); anything else just rides.
+def Input.idle_cycle (r : InputReader) (evs : List Event) : IO (Pair (List Event) InputReader) := do {
+    if Bool.not (Input.pending_escape r.pending)
+    then return (Pair.pair evs r)
+    else do {
+        let nr : InputReader := { r with pending := "" };
+        return (Pair.pair (List.append evs [Event.key Key.escape]) nr)
+    }
+}
+
+/// The readable path: read one byte at a time until the non-blocking
+/// poll says nothing is left, decoding against `r.pending` as bytes
+/// arrive. `budget` bounds a paste; EOF (an empty read) closes the
+/// reader. The events accumulate in order after `evs`.
+#[terminating]
+def Input.drain (r : InputReader) (evs : List Event) (budget : I64) : IO (Pair (List Event) InputReader) :=
+    if Bool.not (budget > 0)
+    then do { return (Pair.pair evs r) }
+    else do {
+        let chunk <- IO.read_stdin_exact 1;
+        if String.length chunk == 0
+        then do {
+            let nr : InputReader := { r with closed := true };
+            return (Pair.pair evs nr)
+        }
+        else do {
+            let readable <- Terminal.poll 0;
+            match Input.decode (r.pending ++ chunk) {
+                Pair.pair new_evs leftover => do {
+                    let nr : InputReader := { r with pending := leftover };
+                    if Bool.not readable
+                    then return (Pair.pair (List.append evs new_evs) nr)
+                    else Input.drain nr (List.append evs new_evs) (budget - 1)
                 }
             }
         }
