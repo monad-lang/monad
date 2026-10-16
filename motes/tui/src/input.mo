@@ -238,10 +238,18 @@ def Input.walk (s : String) (i : I64) (acc : List Event) : Pair (List Event) I64
         then Input.walk s (i + 1) (List.cons (Event.key Key.tab) acc)
         else if c == "\u{7f}" || c == "\u{8}"
         then Input.walk s (i + 1) (List.cons (Event.key Key.backspace) acc)
-        else if c == "\u{0}"
-        then Input.walk s (i + 1) acc
+        // The `""` (mid-character) test MUST precede the NUL test: the
+        // compiled runtime's strings are NUL-terminated `char*`, so a
+        // `"\u{0}"` literal IS the empty string there and the tests
+        // would be indistinguishable -- a mid-character `""` would be
+        // swallowed by the NUL-drop branch and multi-byte input would
+        // silently vanish. Interpreted, a real NUL byte slices to a
+        // one-byte string that is not `""`, so this order drops NULs
+        // exactly as before.
         else if c == ""
         then Input.utf8_next s i acc
+        else if c == "\u{0}"
+        then Input.walk s (i + 1) acc
         else match Input.control_key c {
             Option.some k => Input.walk s (i + 1) (List.cons (Event.key k) acc),
             Option.none => Input.walk s (i + 1) (List.cons (Event.key (Key.char c)) acc)
