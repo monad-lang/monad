@@ -158,27 +158,22 @@ jobs:
       - uses: actions/checkout@v5
 
       # docs-check, one of the hooks the step below runs, type-checks the
-      # book's ```monad blocks with the host scripts/check-docs.sh defaults to:
-      # the bare name `monad`, i.e. the monadup-managed self-hosted nightly --
-      # not anything this pipeline builds (the flake host is `monad-rs`, and
-      # nothing here compiles a self-hosted binary ahead of the hooks). No
-      # runner has a nightly: the runner service's HOME is under /run, empty
-      # from boot, so without this step the hook exits 1 on check-docs's "no
-      # 'monad' binary on PATH" (run 38599479483, the first whose tree carried
-      # the monad default). `scripts/monadup` is in the checkout and needs
-      # only curl/jq/tar beyond coreutils -- curl and jq from the dev shell
-      # (nix/packages.nix), because the runner host's PATH has neither -- and
-      # `default` installs the latest nightly and sets it active,
-      # idempotently on a runner that is warm since its last boot.
-      #
-      # GITHUB_PATH, not GITHUB_ENV: the hook resolves `monad` through PATH
-      # inside `nix develop -c devenv tasks run ...`, and the dev shell
-      # inherits the step's environment, so the directory has to be ON the
-      # path rather than exported as a variable.
-      - name: Install the monad nightly (docs-check host)
-        run: |
-          nix develop --no-pure-eval --accept-flake-config -c scripts/monadup default
-          echo "$HOME/.monad/bin" >> "$GITHUB_PATH"
+      # book's ```monad blocks. Its host is MONAD_BIN, set on the hooks
+      # step: the checkout's own Rust host, `cargo run --release --`, NOT
+      # the monadup-managed self-hosted nightly this step used to install.
+      # A nightly is cut from main and can lag a branch that changes the
+      # parser or its sources: on the derive-handler branch (PR #77) the
+      # tree's std/derive.mo gained `#[derive_handler ...]`-annotated
+      # defmacros the then-current nightly could not parse, and its
+      # decls parser silently truncated the file at the first one, so
+      # the book's `#[derive Lens]` fence failed with an "unknown
+      # variable 'Point.y'" the checkout's own compilers never produce.
+      # The Rust host is the bootstrap reference host -- exactly as
+      # current as the tree under check, by construction -- and the
+      # `use`-completeness step below already builds the same release
+      # profile, so the host costs no extra build. Env, not GITHUB_PATH:
+      # MONAD_BIN is a variable scripts/check-docs.sh reads directly,
+      # and the dev shell inherits the step's environment.
 
       # The one step that stays a devenv task rather than calling a script
       # directly: `devenv:git-hooks:run` is `prek run -a` against
@@ -194,6 +189,13 @@ jobs:
       # in devenv.nix for why the per-hook results print on a green run.
       - name: Run pre commit checks
         run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run devenv:git-hooks
+        env:
+          # docs-check's host -- see the comment above the step list. The
+          # dev shell inherits this, and prek passes it through to
+          # scripts/check-docs.sh unmodified; the script splits MONAD_BIN
+          # into words, so `cargo run ... --` composes with the per-fence
+          # `check <file>` it appends.
+          MONAD_BIN: cargo run --release --quiet --
 
       # The `use`-completeness rule, ENFORCED. Every name a module reaches
       # from another module has to be named in its own `use` line (unless
