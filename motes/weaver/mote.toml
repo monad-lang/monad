@@ -23,3 +23,12 @@ path = "../shuttle"
 
 [dependencies.toml]
 path = "../toml"
+
+[dependencies.clap]
+path = "../clap"
+
+[dependencies.mcp_client]
+path = "../mcp_client"
+
+[dependencies.parsec]
+path = "../parsec"
