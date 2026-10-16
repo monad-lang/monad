@@ -14,12 +14,13 @@ use http::types {
   http1_1,
 }
 use http::body {Body.content_type, Body.parse_multipart, Body.to_bytes_pure}
+use http::strings {Strings.drop_bytes}
 use http::uri {
   Uri.format, Uri.parse, Uri.percent_decode, Uri.percent_encode, Uri.resolve,
   Uri.same_origin,
 }
 use http::wire {
-  Wire.drop_bytes, Wire.format_request, Wire.format_response, Wire.frame_request,
+  Wire.format_request, Wire.format_response, Wire.frame_request,
   Wire.frame_response, Wire.parse_request, Wire.parse_response,
   Wire.request_target,
 }
@@ -163,7 +164,7 @@ def test_frame_keeps_pipelined_request : Bool :=
     Result.ok opt =>
       match opt {
         Option.none => false,
-        Option.some n => String.beq (String.from_list (Wire.drop_bytes n two)) "GET /b HTTP/1.1\r\n\r\n"
+        Option.some n => String.beq (String.from_list (Strings.drop_bytes n two)) "GET /b HTTP/1.1\r\n\r\n"
       }
   }
 
