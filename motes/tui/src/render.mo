@@ -14,8 +14,10 @@
 // `String.slice` unit can split a code point — documented, not silently
 // assumed).
 
+use lib::types {
+    Rect, Screen, Cell, TextStyle, CellDelta, LayoutSize
+}
 use lib::core {
-    Rect, Screen, Cell, TextStyle, CellDelta, LayoutSize,
     mk_screen, screen_get_cell, screen_set_cell,
     style_default, style_merge, style_to_ansi, mk_rect, clamp
 }
@@ -202,7 +204,7 @@ def diff_row (old_cells : List Cell) (new_cells : List Cell) (row : I64) (col : 
                 empty => List.empty,
                 cons n nr =>
                     let rest := diff_row or nr row (col + 1) in
-                    if Bool.not (Cell.beq o n) then List.cons (CellDelta.set row col n) rest else rest
+                    if Bool.not (o == n) then List.cons (CellDelta.set row col n) rest else rest
             }
     }
 

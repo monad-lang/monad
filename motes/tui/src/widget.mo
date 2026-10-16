@@ -10,7 +10,8 @@
 // forward type references within a file, so `Widget` is declared first and
 // names the two later types in its constructor arguments.
 
-use lib::core { TextStyle, style_default, LayoutSize }
+use lib::types { TextStyle, LayoutSize }
+use lib::core { style_default }
 
 /// Box-drawing style for the `border` decorator. The actual glyphs live in
 /// `render.mo` (`border_chars`) — this type only carries the choice.

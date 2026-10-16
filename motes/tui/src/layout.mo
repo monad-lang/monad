@@ -9,7 +9,8 @@
 // `…`, and these two simplifications are documented here, not silently
 // assumed). No native bindings, no I/O — pure layout math.
 
-use lib::core { Rect, LayoutSize, mk_rect, clamp }
+use lib::types { Rect, LayoutSize }
+use lib::core { mk_rect, clamp }
 
 /// Sum of the space reserved by `fixed`/`min` sizes — the part of `total`
 /// that is NOT available for `fill`/`max` distribution.

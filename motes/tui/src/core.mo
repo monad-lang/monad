@@ -1,14 +1,10 @@
-// Terminal UI Library - Core Types
+// Terminal UI Library - Core Functions
 //
-// This module defines the fundamental types for the tui library:
-// - Rect: A rectangular area of the terminal
-// - Cell: A single character cell with styling
-// - TextStyle: Text styling (colors plus attribute flags)
-// - Screen: A 2D grid of cells representing the terminal buffer
-// - Event: Terminal input events (keyboard, mouse, resize)
-// - Key: Keyboard input
-// - MouseEvent: Mouse input
-// - MouseButton: Mouse buttons
+// The value types themselves live in `types.mo` (where their `#[derive]`
+// instances expand -- see that file's header for why the split is
+// load-bearing). This module holds the functions over them: style
+// helpers, screen accessors, rectangle predicates, and `Screen`'s
+// hand-rolled `BEq`.
 
 // `Color` and the SGR-code builders come from `std::ansi`. They used to be
 // copied in here, because this module's style type was also called `Style` and
@@ -19,33 +15,11 @@
 // for the copy.
 use std::ansi { Color, color_fg_code, color_bg_code }
 
-/// A rectangular area of the terminal
-pub struct Rect {
-    x: I64,
-    y: I64,
-    width: I64,
-    height: I64
-}
+// The types (and their derived `BEq`/`Lens` instances) come from the mote's
+// types-only module.
+use lib::types { Rect, TextStyle, Cell, LayoutSize, MouseButton, Key, MouseEvent, Event, Screen, CellDelta }
 
-def Rect.beq (a b : Rect) : Bool :=
-    a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height
-
-instance BEq Rect {
-    def beq (a b : Rect) : Bool := Rect.beq a b
-}
-
-/// A composable text style: colors plus attribute flags. Unlike
-/// `ansi.Modifier` (which represents a single fg/bg/style/reset code), a
-/// `TextStyle` can express e.g. bold *and* a foreground color at the same time.
-pub struct TextStyle {
-    fg: Option Color := none,
-    bg: Option Color := none,
-    bold: Bool := false,
-    dim: Bool := false,
-    italic: Bool := false,
-    underline: Bool := false,
-    strikethrough: Bool := false
-}
+use init::optics {view, set, over}
 
 /// The style with no colors or attributes set.
 //
@@ -107,243 +81,14 @@ pub def style_to_ansi (s : TextStyle) : String :=
     let codes := append_code c5 (bool_code s.strikethrough "9") in
     if codes == "" then "" else "\u{1b}[" ++ codes ++ "m"
 
-/// Compares `Option Color` fields by hand rather than via the generic
-/// `[BEq A] BEq (Option A)` instance: that generic instance doesn't dispatch
-/// to a custom `A`'s `BEq` instance correctly at runtime (a pre-existing
-/// evaluator limitation — see the equivalent note in `lang/json.mo`).
-def option_color_beq (a b : Option Color) : Bool :=
-    match a {
-        some ca => match b {
-            some cb => Color.beq ca cb,
-            none => false
-        },
-        none => match b {
-            none => true,
-            some _ => false
-        }
-    }
-
-def TextStyle.beq (a b : TextStyle) : Bool :=
-    option_color_beq a.fg b.fg
-    && option_color_beq a.bg b.bg
-    && a.bold == b.bold
-    && a.dim == b.dim
-    && a.italic == b.italic
-    && a.underline == b.underline
-    && a.strikethrough == b.strikethrough
-
-instance BEq TextStyle {
-    def beq (a b : TextStyle) : Bool := TextStyle.beq a b
-}
-
-/// A single character cell with styling
-pub struct Cell {
-    char: String,
-    style: TextStyle
-}
-
-def Cell.beq (a b : Cell) : Bool :=
-    a.char == b.char && TextStyle.beq a.style b.style
-
-instance BEq Cell {
-    def beq (a b : Cell) : Bool := Cell.beq a b
-}
-
-/// Layout size constraints for flexible sizing
-pub type LayoutSize {
-    /// Fixed size in units
-    fixed (n : I64),
-    /// Fill available space, optionally with a weight
-    fill (weight : I64),
-    /// Minimum size
-    min (n : I64),
-    /// Maximum size
-    max (n : I64)
-}
-
-def LayoutSize.beq (a b : LayoutSize) : Bool :=
-    match a {
-        fixed na => match b { fixed nb => na == nb, _ => false },
-        fill wa => match b { fill wb => wa == wb, _ => false },
-        min na => match b { min nb => na == nb, _ => false },
-        max na => match b { max nb => na == nb, _ => false }
-    }
-
-instance BEq LayoutSize {
-    def beq (a b : LayoutSize) : Bool := LayoutSize.beq a b
-}
-
-/// Mouse buttons
-pub type MouseButton {
-    left,
-    right,
-    middle,
-    scroll_up,
-    scroll_down
-}
-
-def MouseButton.beq (a b : MouseButton) : Bool :=
-    match a {
-        left => match b { left => true, _ => false },
-        right => match b { right => true, _ => false },
-        middle => match b { middle => true, _ => false },
-        scroll_up => match b { scroll_up => true, _ => false },
-        scroll_down => match b { scroll_down => true, _ => false }
-    }
-
-instance BEq MouseButton {
-    def beq (a b : MouseButton) : Bool := MouseButton.beq a b
-}
-
-/// Keyboard keys
-pub type Key {
-    /// A regular character key
-    char (c : String),
-    /// Enter/Return key
-    enter,
-    /// Tab key
-    tab,
-    /// Backspace key
-    backspace,
-    /// Escape key
-    escape,
-    /// Arrow keys
-    up,
-    down,
-    left,
-    right,
-    /// Navigation keys
-    home,
-    end,
-    page_up,
-    page_down,
-    /// Edit keys
-    delete,
-    insert,
-    /// Function keys (F1-F12). Spelled out rather than `f`: a one-letter
-    /// constructor in a whole-program namespace shadows same-named locals
-    /// everywhere, and this one used to break `init/src/io.mo`'s
-    /// `Monad IO`.bind (`match a { io a => f a }`) into a constructor
-    /// application -- silently stopping every `do` block in any program
-    /// that loaded this module. Fixed in the compiler
-    /// (`try_compile_constructor_app_db`, pinned by
-    /// `slow_tests/src/codegen_ctor_shadows_param_tests.mo`), so the name
-    /// is now a choice rather than a workaround -- but it keeps this mote
-    /// usable on a toolchain that predates the fix.
-    function_key (n : I64),
-    /// Control + character
-    ctrl (c : String),
-    /// Alt + character
-    alt (c : String)
-}
-
-def Key.beq (a b : Key) : Bool :=
-    match a {
-        char ca => match b { char cb => ca == cb, _ => false },
-        enter => match b { enter => true, _ => false },
-        tab => match b { tab => true, _ => false },
-        backspace => match b { backspace => true, _ => false },
-        escape => match b { escape => true, _ => false },
-        up => match b { up => true, _ => false },
-        down => match b { down => true, _ => false },
-        left => match b { left => true, _ => false },
-        right => match b { right => true, _ => false },
-        home => match b { home => true, _ => false },
-        end => match b { end => true, _ => false },
-        page_up => match b { page_up => true, _ => false },
-        page_down => match b { page_down => true, _ => false },
-        delete => match b { delete => true, _ => false },
-        insert => match b { insert => true, _ => false },
-        function_key na => match b { function_key nb => na == nb, _ => false },
-        ctrl ca => match b { ctrl cb => ca == cb, _ => false },
-        alt ca => match b { alt cb => ca == cb, _ => false }
-    }
-
-instance BEq Key {
-    def beq (a b : Key) : Bool := Key.beq a b
-}
-
-/// Mouse events
-pub type MouseEvent {
-    /// Mouse button pressed at position
-    press (button : MouseButton) (row : I64) (col : I64),
-    /// Mouse button released at position
-    release (button : MouseButton) (row : I64) (col : I64),
-    /// Mouse drag (button held down and moved)
-    drag (button : MouseButton) (row : I64) (col : I64),
-    /// Mouse wheel scroll up
-    scroll_up (row : I64) (col : I64),
-    /// Mouse wheel scroll down
-    scroll_down (row : I64) (col : I64)
-}
-
-def MouseEvent.beq (a b : MouseEvent) : Bool :=
-    match a {
-        press ba ra ca => match b {
-            press bb rb cb => MouseButton.beq ba bb && ra == rb && ca == cb,
-            _ => false
-        },
-        release ba ra ca => match b {
-            release bb rb cb => MouseButton.beq ba bb && ra == rb && ca == cb,
-            _ => false
-        },
-        drag ba ra ca => match b {
-            drag bb rb cb => MouseButton.beq ba bb && ra == rb && ca == cb,
-            _ => false
-        },
-        scroll_up ra ca => match b {
-            scroll_up rb cb => ra == rb && ca == cb,
-            _ => false
-        },
-        scroll_down ra ca => match b {
-            scroll_down rb cb => ra == rb && ca == cb,
-            _ => false
-        }
-    }
-
-instance BEq MouseEvent {
-    def beq (a b : MouseEvent) : Bool := MouseEvent.beq a b
-}
-
-/// Terminal events
-pub type Event {
-    /// Key press event
-    key (k : Key),
-    /// Mouse event
-    mouse (m : MouseEvent),
-    /// Terminal resize event
-    resize (rows : I64) (cols : I64),
-    /// Tick event (frame update)
-    tick
-}
-
-def Event.beq (a b : Event) : Bool :=
-    match a {
-        key ka => match b { key kb => Key.beq ka kb, _ => false },
-        mouse ma => match b { mouse mb => MouseEvent.beq ma mb, _ => false },
-        resize ra ca => match b { resize rb cb => ra == rb && ca == cb, _ => false },
-        tick => match b { tick => true, _ => false }
-    }
-
-instance BEq Event {
-    def beq (a b : Event) : Bool := Event.beq a b
-}
-
-/// The screen buffer — a 2D grid of cells represented as a list of rows
-pub struct Screen {
-    rows: I64,
-    cols: I64,
-    row_cells: List (List Cell)
-}
-
-/// Hand-rolled (not generic `BEq (List A)`) for the same reason as
-/// `option_color_beq` above — dispatch to a custom element type's `BEq`
-/// instance through the generic `List`/`Option` instances is unreliable.
+/// Hand-rolled (not generic `BEq (List A)`): dispatch to a custom element
+/// type's `BEq` instance through the generic `List`/`Option` instances is
+/// unreliable at runtime (see the equivalent note in `lang/json.mo`).
 def cell_list_beq (a b : List Cell) : Bool :=
     match a {
         empty => match b { empty => true, _ => false },
         cons ha ta => match b {
-            cons hb tb => Cell.beq ha hb && cell_list_beq ta tb,
+            cons hb tb => ha == hb && cell_list_beq ta tb,
             _ => false
         }
     }
@@ -362,30 +107,6 @@ def Screen.beq (a b : Screen) : Bool :=
 
 instance BEq Screen {
     def beq (a b : Screen) : Bool := Screen.beq a b
-}
-
-/// A delta representing a change to a single cell
-pub type CellDelta {
-    /// Position of the cell to change
-    set (row : I64) (col : I64) (cell : Cell),
-    /// Clear a cell (set to default/empty)
-    clear (row : I64) (col : I64)
-}
-
-def CellDelta.beq (a b : CellDelta) : Bool :=
-    match a {
-        set ra ca cella => match b {
-            set rb cb cellb => ra == rb && ca == cb && Cell.beq cella cellb,
-            _ => false
-        },
-        clear ra ca => match b {
-            clear rb cb => ra == rb && ca == cb,
-            _ => false
-        }
-    }
-
-instance BEq CellDelta {
-    def beq (a b : CellDelta) : Bool := CellDelta.beq a b
 }
 
 // ==================== Helper Functions ====================
@@ -572,12 +293,14 @@ def test_style_to_ansi_bold_red_combines_one_sequence : Bool :=
     style_to_ansi s == "\u{1b}[31;1m"
 
 // ==================== Phase 1b regression tests ====================
-// BEq smoke tests for the hand-rolled instances (the `#[derive BEq]`
-// migration is still blocked by compiler bugs, so these guard the
-// hand-rolled `instance BEq T` declarations instead). The nested-concrete-field
-// cases (Cell nesting TextStyle, MouseEvent nesting MouseButton, Event
-// nesting Key, CellDelta nesting Cell) exercise dispatch through a
-// concrete named type's own `BEq` instance.
+// BEq smoke tests. All instances except `Screen`'s are now `#[derive BEq]`
+// (the derive backend's Option/nested-struct dispatch bugs are fixed on
+// current nightlies); `Screen` keeps its hand-rolled instance because it
+// compares `List (List Cell)` and generic-instance dispatch through `List`
+// remains unreliable. The nested-concrete-field cases (Cell nesting
+// TextStyle, MouseEvent nesting MouseButton, Event nesting Key, CellDelta
+// nesting Cell) exercise dispatch through a concrete named type's own
+// `BEq` instance.
 
 #[test]
 def test_beq_rect : Bool :=
@@ -642,3 +365,22 @@ def test_beq_screen_handrolled : Bool :=
     mk_screen 2 2 == mk_screen 2 2
     && Bool.not (mk_screen 2 2 == mk_screen 2 3)
     && Bool.not (screen_set_cell (mk_screen 2 2) 0 0 (mk_cell "x") == mk_screen 2 2)
+
+#[test]
+def test_lens_rect_view_set_over : Bool :=
+    let r := mk_rect 1 2 10 10 in
+    view Rect.x r == 1
+    && view Rect.width (set Rect.width 42 r) == 42
+    && view Rect.y (over Rect.y (fn y => y + 1) r) == 3
+
+#[test]
+def test_lens_text_style_roundtrip : Bool :=
+    let s : TextStyle := { style_default with bold := true } in
+    let unbolded := over TextStyle.bold (fn b => Bool.not b) s in
+    // The fg comparison matches out the color rather than `==` on
+    // `Option Color`: generic `BEq (Option A)` dispatch is the unreliable
+    // path this mote avoids elsewhere.
+    match view TextStyle.fg (set TextStyle.fg (some Color.red) s) {
+        some c => c == Color.red && Bool.not unbolded.bold,
+        none => false
+    }
