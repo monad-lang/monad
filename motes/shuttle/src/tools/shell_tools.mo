@@ -10,6 +10,7 @@
 /// "schema_util" module, and adding one for three copies of a 5-line
 /// helper is not worth a new module edge).
 use shuttle::tool {ToolSpec, ToolImpl}
+use shuttle::gate {Capability}
 use shuttle::tools::shell {shell_run}
 use json::json {Json}
 use std::map {BTreeMap}
@@ -44,4 +45,4 @@ pub def ShellTool.spec : ToolSpec :=
     { name := "shell", description := "Run a shell command and return its merged output.", schema := params_schema shell_params }
 
 pub def ShellTool.impl : ToolImpl :=
-    { spec := ShellTool.spec, run := shell_run }
+    { spec := ShellTool.spec, cap := Capability.exec, run := shell_run }

@@ -11,7 +11,9 @@
 ///
 /// A tool failure (the implementation's own `ResultT` erring) becomes
 /// an `is_error := true` tool_result, not a short-circuit of the whole
-/// loop -- the model gets to see the failure and adapt.
+/// loop -- the model gets to see the failure and adapt. A gate DENIAL
+/// takes the same shape (`denied: <reason>`): the model gets to see
+/// the refusal and adapt, the run never dies of an approval.
 ///
 /// KNOWN GAP (Rust host only): these modules `monad check` clean, but
 /// the Rust host's `lower_core_ir` path fails on files importing them
@@ -33,6 +35,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone}
 use shuttle::context {usage_zero, usage_add}
+use shuttle::gate {Capability, Pick, Approval, Gate}
 use json::json {Json}
 
 /// A tool failure (the implementation's own `ResultT` erring) becomes
@@ -55,35 +58,151 @@ def run_tool (id : String) (impl : ToolImpl) (input : Json) : ResultT String IO 
             })
     }
 
-def dispatch_content (reg : ToolRegistry) (c : Content) : ResultT String IO (Option Content) :=
+// ── The approval gate (weaver.md Phase 1) ───────────────────────────────
+//
+// Consulted before `impl.run` on every pick. A denial is an
+// `is_error := true` tool_result the model can see and react to -- the
+// same contract as a tool failure, deliberately NOT a loop-killing
+// `Result.err`. An `Approval.always` answer is cached per capability in
+// `RunState.always` (Elm state -- there is no `IORef`), so the gate is
+// asked once per capability, never once per pick.
+
+/// The pick the gate sees for one dispatch: the tool's name, its
+/// capability tag, and the model's input.
+def gate_pick (impl : ToolImpl) (input : Json) : Pick :=
+    let p : Pick := { name := impl.spec.name, cap := impl.cap, input := input } in
+    p
+
+/// Membership in the always-cache: spelled out because `List.any`'s
+/// implicit `A` does not unify in this position.
+#[partial]
+def cap_cached (cap : Capability) (cached : List Capability) : Bool :=
+    match cached {
+        List.empty => false,
+        List.cons h rest => if Capability.eq cap h then true else cap_cached cap rest,
+    }
+
+/// `Approval.always` grows the cache by one capability; every other
+/// answer leaves it alone.
+def cache_answer (ap : Approval) (cap : Capability) (cached : List Capability) : List Capability :=
+    match ap {
+        Approval.always => List.cons cap cached,
+        _ => cached,
+    }
+
+/// A pick whose capability is already cached: proceeds as `once`
+/// without disturbing the cache -- and without asking.
+def consult_cached (cached : List Capability) : IO (Pair Approval (List Capability)) :=
+    IO.pure (Pair.pair Approval.once cached)
+
+def consult_ask (gate : Gate) (impl : ToolImpl) (input : Json) (cached : List Capability) : IO (Pair Approval (List Capability)) := do {
+    let ap <- gate.ask (gate_pick impl input);
+    return (Pair.pair ap (cache_answer ap impl.cap cached))
+}
+
+/// One gate consultation with the cache threaded: `Pair.pair` the
+/// answer and the updated cache.
+def consult_gate (gate : Gate) (impl : ToolImpl) (input : Json) (cached : List Capability) : IO (Pair Approval (List Capability)) :=
+    if cap_cached impl.cap cached then consult_cached cached else consult_ask gate impl input cached
+
+/// One gated dispatch. `run_tool`'s error contract is unchanged; the
+/// gate only decides whether it is reached.
+def run_gated (id : String) (impl : ToolImpl) (input : Json) (gate : Gate) (cached : List Capability) : ResultT String IO (Pair Content (List Capability)) := do {
+    let pap <- ResultT.lift (consult_gate gate impl input cached);
+    gate_decided id impl input pap
+}
+
+def gate_decided (id : String) (impl : ToolImpl) (input : Json) (pap : Pair Approval (List Capability)) : ResultT String IO (Pair Content (List Capability)) :=
+    match pap {
+        Pair.pair ap cached2 => apply_approval id impl input ap cached2,
+    }
+
+/// The denial answer: an `is_error` tool_result naming the reason, so
+/// the model can react to the refusal in its next turn. `once` and
+/// `always` (and a cache hit, reported as `once`) reach the impl.
+def apply_approval (id : String) (impl : ToolImpl) (input : Json) (ap : Approval) (cached : List Capability) : ResultT String IO (Pair Content (List Capability)) :=
+    match ap {
+        Approval.deny reason =>
+            ResultT.mk (return (Result.ok (Pair.pair (Content.tool_result id (String.concat "denied: " reason) true) cached))),
+        _ => run_with_cache id impl input cached,
+    }
+
+def run_with_cache (id : String) (impl : ToolImpl) (input : Json) (cached : List Capability) : ResultT String IO (Pair Content (List Capability)) := do {
+    let c <- run_tool id impl input;
+    ResultT.mk (return (Result.ok (Pair.pair c cached)))
+}
+
+// ── Dispatch ────────────────────────────────────────────────────────────
+
+def unknown_tool_result (id : String) (name : String) : Content :=
+    Content.tool_result id (String.concat "unknown tool: " name) true
+
+def content_of (p : Pair Content (List Capability)) : Content :=
+    match p { Pair.pair c _ => c }
+
+def cache_of (p : Pair Content (List Capability)) : List Capability :=
+    match p { Pair.pair _ cached => cached }
+
+def result_of (p : Pair (Option Content) (List Capability)) : Option Content :=
+    match p { Pair.pair oc _ => oc }
+
+def cache_result_of (p : Pair (Option Content) (List Capability)) : List Capability :=
+    match p { Pair.pair _ cached => cached }
+
+def dispatch_fold (r : Result String (Pair Content (List Capability))) : Result String (Pair (Option Content) (List Capability)) :=
+    match r {
+        Result.err e => Result.err e,
+        Result.ok pc => Result.ok (Pair.pair (Option.some (content_of pc)) (cache_of pc)),
+    }
+
+def dispatch_known (id : String) (impl : ToolImpl) (input : Json) (gate : Gate) (cached : List Capability) : ResultT String IO (Pair (Option Content) (List Capability)) :=
+    ResultT.mk (do {
+        let r <- ResultT.run (run_gated id impl input gate cached);
+        return (dispatch_fold r)
+    })
+
+def dispatch_content (reg : ToolRegistry) (gate : Gate) (cached : List Capability) (c : Content) : ResultT String IO (Pair (Option Content) (List Capability)) :=
     match c {
         Content.tool_use id name input =>
             match ToolRegistry.lookup name reg {
-                Option.some impl =>
-                    ResultT.mk (do {
-                        let r <- ResultT.run (run_tool id impl input);
-                        return (match r {
-                            Result.ok content => Result.ok (Option.some content),
-                            Result.err e => Result.err e,
-                        })
-                    }),
+                Option.some impl => dispatch_known id impl input gate cached,
                 Option.none =>
-                    ResultT.mk (return (Result.ok (Option.some (Content.tool_result id (String.concat "unknown tool: " name) true)))),
+                    ResultT.mk (return (Result.ok (Pair.pair (Option.some (unknown_tool_result id name)) cached))),
             },
-        _ => ResultT.mk (return (Result.ok Option.none)),
+        _ => ResultT.mk (return (Result.ok (Pair.pair Option.none cached))),
     }
 
+def cons_opt (oc : Option Content) (rest : List Content) : List Content :=
+    match oc {
+        Option.some c => List.cons c rest,
+        Option.none => rest,
+    }
+
+def results_of (p : Pair (List Content) (List Capability)) : List Content :=
+    match p { Pair.pair rs _ => rs }
+
+def allcache_of (p : Pair (List Content) (List Capability)) : List Capability :=
+    match p { Pair.pair _ cached => cached }
+
+/// The recursion is structural in `rest` but threads the ever-growing
+/// cache, so the termination checker cannot see it -- `#[terminating]`
+/// for the same reason `Loop.iterate` carries it.
+#[terminating]
+def dispatch_tail (p : Pair (Option Content) (List Capability)) (reg : ToolRegistry) (gate : Gate) (rest : List Content) : ResultT String IO (Pair (List Content) (List Capability)) := do {
+    let pt <- dispatch_all reg gate (cache_result_of p) rest;
+    ResultT.mk (return (Result.ok (Pair.pair (cons_opt (result_of p) (results_of pt)) (allcache_of pt))))
+}
+
+/// Dispatch every `tool_use` in `cs`, threading the always-cache through
+/// the walk (a pick's `always` answer covers a LATER pick in the same
+/// turn) and returning the updated cache alongside the results.
 #[partial]
-pub def dispatch_all (reg : ToolRegistry) (cs : List Content) : ResultT String IO (List Content) :=
+pub def dispatch_all (reg : ToolRegistry) (gate : Gate) (cached : List Capability) (cs : List Content) : ResultT String IO (Pair (List Content) (List Capability)) :=
     match cs {
-        List.empty => ResultT.mk (return (Result.ok List.empty)),
+        List.empty => ResultT.mk (return (Result.ok (Pair.pair List.empty cached))),
         List.cons c rest => do {
-            let maybe_result <- dispatch_content reg c;
-            let tail_results <- dispatch_all reg rest;
-            ResultT.mk (return (Result.ok (match maybe_result {
-                Option.some r => List.cons r tail_results,
-                Option.none => tail_results,
-            })))
+            let p <- dispatch_content reg gate cached c;
+            dispatch_tail p reg gate rest
         }
     }
 
@@ -121,9 +240,13 @@ pub def Loop.dispatch (turn : Turn) : Agent AgentAnswered AgentExecuting (List C
     Agent.agent (fn (s : RunState) => agent_dispatch_run turn s)
 
 def agent_dispatch_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunState (List Content)) := do {
-    let results <- dispatch_all s.reg (turn_content turn.message);
-    ResultT.mk (return (Result.ok (Pair.pair s results)))
+    let p <- dispatch_all s.reg s.gate s.always (turn_content turn.message);
+    ResultT.mk (return (Result.ok (Pair.pair (state_with_always s (allcache_of p)) (results_of p))))
 }
+
+def state_with_always (s : RunState) (cached : List Capability) : RunState :=
+    let s2 : RunState := { s with always := cached } in
+    s2
 
 /// Executing -> Idle: append the assistant message and the one tool
 /// message carrying all results, and hand control back to `send` for
@@ -206,10 +329,12 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 /// Build the initial run state: a fresh session over the given config
 /// and history, zero turns taken, nothing spent, `emit` the live-text
 /// sink every provider call streams through (`Provider.silent_emit`
-/// for a caller that wants no live output).
-pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) : RunState :=
+/// for a caller that wants no live output), and `gate` the approval
+/// seam consulted before every tool run (`Gate.auto` for a caller
+/// that wants no gate -- shuttle's own CLI and tests).
+pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=
@@ -226,5 +351,5 @@ pub def Loop.run_state (st : RunState) : ResultT String IO Session := do {
 }
 
 /// Drive the loop: fresh session, up to `turns_left` model calls.
-pub def Loop.run (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) : ResultT String IO Session :=
-    Loop.run_state (Loop.initial_state cfg reg system history turns_left emit)
+pub def Loop.run (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : ResultT String IO Session :=
+    Loop.run_state (Loop.initial_state cfg reg system history turns_left emit gate)

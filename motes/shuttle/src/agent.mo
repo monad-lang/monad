@@ -23,6 +23,7 @@
 use init::transformers {ResultT}
 use shuttle::session {Session}
 use shuttle::registry {ToolRegistry}
+use shuttle::gate {Capability, Gate}
 
 // The protocol's phantom phase markers.
 type AgentIdle {}
@@ -31,15 +32,23 @@ type AgentExecuting {}
 type AgentDone {}
 
 /// Everything a running loop carries: the serializable `Session`, the
-/// tool registry, the remaining turn budget, and the live-text sink.
-/// Registry and `emit` are closures -- checkpoint the session, never
-/// this -- and `emit` is never read by the loop's own logic, only
+/// tool registry, the remaining turn budget, the live-text sink, and
+/// the approval seam (`gate` plus the per-capability `always` cache).
+/// Registry, `emit` and `gate` are closures -- checkpoint the session,
+/// never this -- and `emit` is never read by the loop's own logic, only
 /// handed to the provider, so the session codec is untouched.
+///
+/// `always` is Elm state, not an `IORef` (there is none): the loop
+/// appends a capability to it when the gate answers `Approval.always`,
+/// and a later pick of a cached capability skips the gate entirely --
+/// per-capability, per-run, never serialized.
 pub struct RunState {
     session : Session,
     reg : ToolRegistry,
     turns_left : I64,
     emit : String -> IO Unit,
+    gate : Gate,
+    always : List Capability,
 }
 
 /// One agent step from phase `I` to phase `J` producing `A`.

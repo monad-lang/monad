@@ -15,6 +15,7 @@ use init::transformers {ResultT}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Usage, Turn}
 use shuttle::provider {ProviderConfig, Wire, Provider.silent_emit}
+use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::loop {Loop.run}
@@ -66,7 +67,7 @@ def echo_spec : ToolSpec := { name := "echo", description := "echoes its JSON in
 def echo_run (id : String) (input : Json) : ResultT String IO Content :=
     ResultT.mk (return (Result.ok (Content.tool_result id (Json.to_string input) false)))
 
-def echo_impl : ToolImpl := { spec := echo_spec, run := echo_run }
+def echo_impl : ToolImpl := { spec := echo_spec, cap := Capability.read, run := echo_run }
 
 def mock_registry : ToolRegistry := ToolRegistry.register echo_impl ToolRegistry.empty
 
@@ -107,7 +108,7 @@ def session_shape_ok (s : Session) : Bool :=
 #[test]
 def test_mock_loop_dispatches_tool_and_finishes : IO Bool := do {
     write_script;
-    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit);
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto);
     return (match r {
         Result.ok s => session_shape_ok s,
         Result.err _ => false,
@@ -122,7 +123,7 @@ def test_mock_loop_dispatches_tool_and_finishes : IO Bool := do {
 #[test]
 def test_mock_loop_cap_ends_normally_with_the_session : IO Bool := do {
     write_script;
-    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 1 Provider.silent_emit);
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 1 Provider.silent_emit Gate.auto);
     return (match r {
         Result.err _ => false,
         Result.ok s => s.turns == 1 && last_is_tool s.history,
@@ -168,7 +169,7 @@ def write_script_with_unknown : IO Unit := do {
 #[test]
 def test_mock_loop_answers_unknown_tool_with_is_error : IO Bool := do {
     write_script_with_unknown;
-    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit);
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto);
     return (match r {
         Result.ok s => history_mentions "unknown tool: not_a_tool" s.history,
         Result.err _ => false,
@@ -214,7 +215,7 @@ def turn_2_text : String := String.concat "the echo tool said: " sentinel
 def test_mock_loop_emits_text_turn_only : IO Bool := do {
     write_script;
     reset_tap;
-    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_tap);
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_tap Gate.auto);
     match r {
         Result.err _ => return false,
         Result.ok _ => do {
@@ -232,11 +233,11 @@ def test_mock_loop_emits_text_turn_only : IO Bool := do {
 def test_mock_loop_streamed_and_silent_sessions_identical : IO Bool := do {
     write_script;
     reset_tap;
-    let r1 <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_tap);
+    let r1 <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_tap Gate.auto);
     match r1 {
         Result.err _ => return false,
         Result.ok s1 => do {
-            let r2 <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit);
+            let r2 <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto);
             match r2 {
                 Result.err _ => return false,
                 Result.ok s2 =>

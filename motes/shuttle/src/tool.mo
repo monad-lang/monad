@@ -4,6 +4,7 @@
 use json::json {Json}
 use json::serde_backend {derive_json_serialize, derive_json_deserialize}
 use init::transformers {ResultT}
+use shuttle::gate {Capability}
 use shuttle::message_types {Content}
 use std::map {}
 
@@ -16,6 +17,11 @@ pub struct ToolSpec {
 derive_json_serialize! ToolSpec
 derive_json_deserialize! ToolSpec
 
+/// `cap` is the approval axis (weaver.md Phase 1): a gate decides by
+/// CAPABILITY, not by tool name, so a policy can be stated once over
+/// {read, write, exec, net} and hold for every tool -- built-in, MCP
+/// proxy, or future. See `gate.mo` for the vocabulary.
+///
 /// `run`'s return type is `ResultT String IO Content`, not a bare `IO
 /// Content`: a tool failure is a `Result.err` short-circuit through the
 /// loop's own `ResultT`, not an ad hoc `Content.tool_result.is_error`
@@ -28,5 +34,6 @@ derive_json_deserialize! ToolSpec
 /// the real id, not a name hardcoded at registration.
 pub struct ToolImpl {
     spec : ToolSpec,
+    cap : Capability,
     run : String -> Json -> ResultT String IO Content,
 }

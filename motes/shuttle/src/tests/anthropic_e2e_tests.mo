@@ -20,6 +20,7 @@ use init::transformers {ResultT}
 use shuttle::message_types {Role, Content}
 use shuttle::message {Message}
 use shuttle::provider {ProviderConfig, Wire, Provider.silent_emit}
+use shuttle::gate {Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
 use shuttle::loop {Loop.run}
 use shuttle::tools::file_tools {ReadTool.impl}
@@ -70,7 +71,7 @@ def run_e2e : IO Bool := do {
         Option.some m => m,
         Option.none => "claude-opus-5",
     };
-    let r <- ResultT.run (Loop.run (e2e_config model) e2e_registry "You are a helpful coding assistant with a read tool." [e2e_task_message] 6 Provider.silent_emit);
+    let r <- ResultT.run (Loop.run (e2e_config model) e2e_registry "You are a helpful coding assistant with a read tool." [e2e_task_message] 6 Provider.silent_emit Gate.auto);
     return (match r {
         Result.ok session => history_mentions_sentinel session.history,
         Result.err _ => false,

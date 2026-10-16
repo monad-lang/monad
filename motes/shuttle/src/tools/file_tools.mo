@@ -7,6 +7,7 @@
 /// of `{ .. }`", even with an explicit `def x : T := { .. }`
 /// annotation right there.
 use shuttle::tool {ToolSpec, ToolImpl}
+use shuttle::gate {Capability}
 use shuttle::tools::file {read_run, write_run, edit_run}
 use json::json {Json}
 use std::map {BTreeMap}
@@ -52,16 +53,16 @@ pub def ReadTool.spec : ToolSpec :=
     { name := "read", description := "Read a file's contents with line numbers.", schema := params_schema read_params }
 
 pub def ReadTool.impl : ToolImpl :=
-    { spec := ReadTool.spec, run := read_run }
+    { spec := ReadTool.spec, cap := Capability.read, run := read_run }
 
 pub def WriteTool.spec : ToolSpec :=
     { name := "write", description := "Write a file's full contents.", schema := params_schema write_params }
 
 pub def WriteTool.impl : ToolImpl :=
-    { spec := WriteTool.spec, run := write_run }
+    { spec := WriteTool.spec, cap := Capability.write, run := write_run }
 
 pub def EditTool.spec : ToolSpec :=
     { name := "edit", description := "Replace a file's contents, failing if it changed since last read.", schema := params_schema edit_params }
 
 pub def EditTool.impl : ToolImpl :=
-    { spec := EditTool.spec, run := edit_run }
+    { spec := EditTool.spec, cap := Capability.write, run := edit_run }

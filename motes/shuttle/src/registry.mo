@@ -16,7 +16,7 @@ pub def ToolRegistry.empty : ToolRegistry := ToolRegistry.registry BTreeMap.empt
 pub def ToolRegistry.register (impl : ToolImpl) (reg : ToolRegistry) : ToolRegistry :=
     match reg {
         ToolRegistry.registry tools =>
-            match impl { mk spec run => ToolRegistry.registry (Map.insert spec.name impl tools) }
+            match impl { { spec, .. } => ToolRegistry.registry (Map.insert spec.name impl tools) }
     }
 
 pub def ToolRegistry.lookup (name : String) (reg : ToolRegistry) : Option ToolImpl :=
@@ -31,5 +31,5 @@ pub def ToolRegistry.specs (reg : ToolRegistry) : List ToolSpec :=
 
 def pair_to_spec (p : Pair String ToolImpl) : ToolSpec :=
     match p {
-        Pair.pair name impl => match impl { mk spec run => spec }
+        Pair.pair name impl => match impl { { spec, .. } => spec }
     }

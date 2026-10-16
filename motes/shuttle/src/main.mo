@@ -34,6 +34,7 @@ use shuttle::agent {RunState}
 use shuttle::loop {Loop.run, Loop.run_state}
 use shuttle::session {Session, Session.load, Session.save}
 use shuttle::tool {ToolSpec, ToolImpl}
+use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::tools::file_tools {ReadTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
@@ -294,7 +295,10 @@ def mcp_proxy_run (server : McpServer) (tool : String) : String -> Json -> Resul
 
 def mcp_tool_impl (server : McpServer) (t : McpTool) : ToolImpl :=
     let spec : ToolSpec := { name := t.name, description := t.description, schema := t.schema } in
-    let impl : ToolImpl := { spec := spec, run := mcp_proxy_run server t.name } in
+    // `exec` is the conservative tag: a server's catalogue is arbitrary
+    // code, so an MCP proxy is gated as code until a per-server override
+    // says otherwise (Weaver's settings own that override).
+    let impl : ToolImpl := { spec := spec, cap := Capability.exec, run := mcp_proxy_run server t.name } in
     impl
 
 #[partial]
@@ -469,7 +473,7 @@ def start_run (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServer) :
     else run_resumed plan reg servers
 
 def run_fresh (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
-    let r <- ResultT.run (Loop.run plan.cfg reg system_prompt [user_message plan.task] plan.max_turns (plan_emit plan));
+    let r <- ResultT.run (Loop.run plan.cfg reg system_prompt [user_message plan.task] plan.max_turns (plan_emit plan) Gate.auto);
     finish_run plan servers r
 }
 
@@ -516,7 +520,7 @@ def resumed_state (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServe
     let s1 : Session := { s with config := resumed_cfg plan s };
     let s2 : Session := { s1 with tools := ToolRegistry.specs reg };
     let s3 : Session := { s2 with history := resumed_history plan s };
-    let st : RunState := { session := s3, reg := reg, turns_left := budget, emit := plan_emit plan };
+    let st : RunState := { session := s3, reg := reg, turns_left := budget, emit := plan_emit plan, gate := Gate.auto, always := List.empty };
     let r <- ResultT.run (Loop.run_state st);
     finish_run plan servers r
 }
