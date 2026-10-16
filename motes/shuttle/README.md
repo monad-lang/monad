@@ -2,7 +2,7 @@
 
 The Monad AI agent harness: a typed tool-use loop over a normalized
 transcript, providers on two wire protocols, and any MCP server's tools
-mounted as first-class tools. Owns `plans/implementations/agent-skills.md`.
+mounted as first-class tools.
 
 ## Building and running
 

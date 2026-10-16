@@ -16,8 +16,8 @@
 /// KNOWN GAP (Rust host only): these modules `monad check` clean, but
 /// the Rust host's `lower_core_ir` path fails on files importing them
 /// with `MatchTraversalMismatch { expected: [Monad], found: [mk] }` --
-/// the same checker/lowering desync documented in the Phase 2/4
-/// changelogs of `plans/implementations/agent-skills.md`. The
+/// the same checker/lowering desync documented for `StateT.bind` in
+/// `init/src/transformers_tests.mo`. The
 /// self-hosted compiled backend runs everything; the Rust host is
 /// bootstrap-only and not a verification surface for this mote.
 /// VERIFIED LIVE under the SELF-HOSTED compiled backend (Phase 2:
