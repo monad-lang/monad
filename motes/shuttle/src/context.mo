@@ -59,16 +59,17 @@ pub def message_tokens (m : Message) : I64 :=
 pub def history_tokens (history : List Message) : I64 :=
     sum_i64 (List.map message_tokens history)
 
-/// The stub a trimmed `tool_result` carries. `is_error` stays false: a
-/// trimmed result is not a tool failure, and the model must not treat it
-/// as one.
+/// The stub a trimmed `tool_result` carries: the same marker text
+/// whatever the output was.
 def trimmed_marker : String := "[trimmed by the shuttle context manager]"
 
+/// The trim stub keeps `was_error`: a trimmed result must not flip a
+/// real tool failure into a success (or the reverse) -- the model
+/// would reason from the wrong outcome.
 def stub_content (c : Content) : Content :=
     match c {
-        Content.tool_result call_id _ _ =>
-            let stubbed : Content := Content.tool_result call_id trimmed_marker false in
-            stubbed,
+        Content.tool_result call_id _ was_error =>
+            Content.tool_result call_id trimmed_marker was_error,
         _ => c,
     }
 

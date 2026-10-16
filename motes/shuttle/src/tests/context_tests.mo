@@ -35,6 +35,9 @@ def big_output : String := String.concat big_chunk (String.concat big_chunk big_
 def old_tool_message : Message :=
     { role := Role.tool, content := [Content.tool_result "call_1" big_output false] }
 
+def old_error_message : Message :=
+    { role := Role.tool, content := [Content.tool_result "call_err" big_output true] }
+
 def plain_message : Message :=
     { role := Role.assistant, content := [Content.text "short"] }
 
@@ -87,10 +90,20 @@ def test_trim_stubs_oldest_tool_results_and_keeps_newest : Bool :=
         && List.length trimmed == 3
 
 #[test]
-def test_stub_tool_results_keeps_is_error_false : Bool :=
+def test_stub_tool_results_keeps_the_error_flag : Bool :=
     match message_first_content (stub_tool_results old_tool_message) {
         Option.some c => match c {
             Content.tool_result _ output is_error => String.contains output "trimmed" && Bool.not is_error,
+            _ => false,
+        },
+        Option.none => false,
+    }
+
+#[test]
+def test_stub_tool_results_keeps_a_real_error_flag : Bool :=
+    match message_first_content (stub_tool_results old_error_message) {
+        Option.some c => match c {
+            Content.tool_result _ output is_error => String.contains output "trimmed" && is_error,
             _ => false,
         },
         Option.none => false,
