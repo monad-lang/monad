@@ -332,6 +332,12 @@ pub fn exec_native(
     "proc_write" => proc_write(args, natives),
     "proc_read" => proc_read(args, natives),
     "proc_wait" => proc_wait(args, natives),
+    // The tui mote's ONE terminal-control native (motes/tui/src/
+    // terminal.mo) -- raw-mode enter/leave and TIOCGWINSZ merged behind
+    // an I64 op flag, the same one-entry-point-one-flag shape
+    // `proc_read`/`proc_wait` set. IO-returning, so not in
+    // PURE_NATIVES.
+    "term_ctl" => term_ctl(args, natives),
     "fork_io" => fork_io(args, natives),
     // `await_fiber` is NOT dispatched here — it needs `globals`/`cache`
     // (not just `natives`) to actually run the fiber's deferred action;
@@ -2100,6 +2106,117 @@ fn proc_wait(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
     }
   };
   raw_io_wrap(natives, Value::Lit(IrLit::Num(code, NumSuffix::I64)))
+}
+
+/// The mode `term_ctl` op 0 replaced, restored by op 1. `Mutex` (not
+/// `AtomicBool`-style tricks) because `run_tests_parallel` reaches this
+/// one table from real threads; the lock is held for a pair of
+/// `tc*` calls, never across a read.
+static TERM_CTL_SAVED: std::sync::LazyLock<std::sync::Mutex<Option<libc::termios>>> =
+  std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// `term_ctl` op 0 -- cbreak on stdin: ICANON and ECHO off (keypresses
+/// arrive one at a time, unechoed), ISIG and OPOST deliberately left on
+/// (Ctrl-C still works; a plain "\n" still prints). 1 on success, 0 when
+/// stdin is not a tty -- degrading rather than failing so a test run
+/// never needs a pty.
+fn term_ctl_enter_raw() -> i64 {
+  unsafe {
+    let mut t: libc::termios = std::mem::zeroed();
+    if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
+      return 0;
+    }
+    {
+      let mut saved = TERM_CTL_SAVED.lock().unwrap();
+      // First entry wins: a nested enter-leave-enter sequence must still
+      // restore the ORIGINAL mode, not the intermediate one.
+      if saved.is_none() {
+        *saved = Some(t);
+      }
+    }
+    t.c_lflag &= !(libc::ICANON | libc::ECHO);
+    t.c_cc[libc::VMIN] = 1;
+    t.c_cc[libc::VTIME] = 0;
+    if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &t) != 0 {
+      return 0;
+    }
+    1
+  }
+}
+
+/// `term_ctl` op 1 -- restore the saved mode, 0 when there is none (a
+/// leave without an enter, or stdin not a tty at enter time).
+fn term_ctl_leave_raw() -> i64 {
+  let saved = TERM_CTL_SAVED.lock().unwrap().take();
+  match saved {
+    Some(t) => unsafe {
+      if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &t) == 0 {
+        1
+      } else {
+        0
+      }
+    },
+    None => 0,
+  }
+}
+
+/// `term_ctl` op 2 -- the size of the terminal on `fd`, as
+/// `rows * 65536 + cols`, or None when it has none.
+fn term_ctl_size_fd(fd: i32) -> Option<i64> {
+  unsafe {
+    let mut ws: libc::winsize = std::mem::zeroed();
+    if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) != 0 {
+      return None;
+    }
+    if ws.ws_row == 0 || ws.ws_col == 0 {
+      return None;
+    }
+    Some(ws.ws_row as i64 * 65536 + ws.ws_col as i64)
+  }
+}
+
+/// `term_ctl` op 2 -- the terminal size packed as `rows * 65536 + cols`.
+/// stdin first, then stdout (a piped-stdin program still owns a terminal
+/// its output goes to), then `COLUMNS`/`LINES`, then 24x80. Never fails.
+fn term_ctl_size() -> i64 {
+  if let Some(p) = term_ctl_size_fd(libc::STDIN_FILENO) {
+    return p;
+  }
+  if let Some(p) = term_ctl_size_fd(libc::STDOUT_FILENO) {
+    return p;
+  }
+  let cols = std::env::var("COLUMNS")
+    .ok()
+    .and_then(|s| s.parse::<i64>().ok());
+  let rows = std::env::var("LINES")
+    .ok()
+    .and_then(|s| s.parse::<i64>().ok());
+  if let (Some(r), Some(c)) = (rows, cols) {
+    if r > 0 && c > 0 {
+      return r * 65536 + c;
+    }
+  }
+  24 * 65536 + 80
+}
+
+/// `term_ctl : I64 -> RawIO I64` (motes/tui/src/terminal.mo) -- the tui
+/// mote's one terminal-control native: op 0/1 enter/leave cbreak mode on
+/// stdin (1/0), op 2 the size packed as `rows * 65536 + cols`, any other
+/// op -1. `RawIO`-declared, so ONE `RawIO.io` wrap via `raw_io_wrap`;
+/// the `Terminal.*` wrappers build the user-facing `IO` with `IO.mk`.
+fn term_ctl(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let op = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("term_ctl needs 1 arg".into()))?,
+  )?;
+  let result = match op {
+    0 => term_ctl_enter_raw(),
+    1 => term_ctl_leave_raw(),
+    2 => term_ctl_size(),
+    _ => -1,
+  };
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(result, NumSuffix::I64)))
 }
 
 /// `IO.current_time` (std/io.mo). `IO.io`-wrapped, like every other

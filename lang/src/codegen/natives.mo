@@ -543,6 +543,15 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "proc_write" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_write")
             else if String.beq target "proc_read" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_read")
             else if String.beq target "proc_wait" then Option.some (NativeWrapKind.raw_io_passthrough "monad_proc_wait")
+            // `term_ctl : I64 -> RawIO I64` (motes/tui/src/terminal.mo) --
+            // the tui mote's ONE terminal-control native: cbreak
+            // enter/leave and TIOCGWINSZ merged behind an I64 op flag,
+            // the same one-entry-point-one-flag shape the proc family
+            // just above set. `raw_io_passthrough` (one `RawIO.io` wrap;
+            // the `Terminal.*` wrappers add the `IO.mk`), and
+            // deliberately no `native_op_table` key, for the same
+            // hijack reason as the proc family.
+            else if String.beq target "term_ctl" then Option.some (NativeWrapKind.raw_io_passthrough "monad_term_ctl")
             else if String.beq target "list_dir" then Option.some (NativeWrapKind.io_passthrough "monad_list_dir")
             // `IO.get_env` (std/io.mo) -- `IO (Option String)`: the raw
             // result is a real `Option` Constructor built in runtime.c
@@ -908,6 +917,10 @@ def runtime_declarations : List LLVMDeclaration :=
     let d89 := mk_decl "monad_proc_write" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d90 := mk_decl "monad_proc_read" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d91 := mk_decl "monad_proc_wait" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    // `monad_term_ctl` (runtime.c) -- `term_ctl : I64 -> RawIO I64`'s
+    // backing function: one i64 op flag in, i64 result out (the mode
+    // ops' 1/0, or the size packed as rows*65536+cols).
+    let d92 := mk_decl "monad_term_ctl" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
@@ -915,7 +928,7 @@ def runtime_declarations : List LLVMDeclaration :=
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d68, d69, d70, d71, d72,
      d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d86, d87,
-     d88, d89, d90, d91]
+     d88, d89, d90, d91, d92]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

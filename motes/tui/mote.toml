@@ -1,6 +1,7 @@
 # The terminal-UI library: pure-functional core types, layout, a widget tree,
-# and the render/diff/ANSI pipeline. No terminal control and no I/O yet, so
-# nothing here needs a native binding.
+# and the render/diff/ANSI pipeline, plus terminal control (`terminal.mo`'s
+# one `term_ctl` native -- cbreak mode and TIOCGWINSZ -- with everything
+# else pure ANSI strings).
 
 [mote]
 name = "tui"

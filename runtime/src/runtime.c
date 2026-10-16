@@ -34,6 +34,8 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 
 typedef struct {
     _Atomic(int64_t) refcount;
@@ -1869,6 +1871,71 @@ int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
     int status = 0;
     if (waitpid(pid, &status, 0) < 0) return -1;
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
+}
+
+/* `term_ctl : I64 -> RawIO I64` (motes/tui/src/terminal.mo) -- the tui
+ * mote's ONE terminal-control native, the same one-entry-point-one-flag
+ * merge `monad_proc_read`/`monad_proc_wait` set: op 0 enters cbreak on
+ * stdin (ICANON and ECHO off; ISIG and OPOST deliberately left on so
+ * Ctrl-C still works and a plain "\n" still prints), op 1 restores the
+ * mode op 0 saved, op 2 returns the size packed as rows*65536+cols.
+ * The mode ops answer 1/0 rather than failing -- stdin away from a tty
+ * (a test run, a pipe) degrades to 0, so nothing here ever needs a pty.
+ * `raw_io_passthrough` types the call's result as i64 and wraps it once
+ * as `RawIO.io`; the `Terminal.*` wrappers add the `IO.mk`. */
+static struct termios g_term_ctl_saved;
+static int g_term_ctl_saved_valid = 0;
+
+static int64_t term_ctl_enter_raw(void) {
+    struct termios t;
+    if (tcgetattr(STDIN_FILENO, &t) != 0) return 0;
+    /* First entry wins: a nested enter-leave-enter sequence must still
+     * restore the ORIGINAL mode, not the intermediate one. */
+    if (!g_term_ctl_saved_valid) {
+        g_term_ctl_saved = t;
+        g_term_ctl_saved_valid = 1;
+    }
+    t.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+    t.c_cc[VMIN] = 1;
+    t.c_cc[VTIME] = 0;
+    return tcsetattr(STDIN_FILENO, TCSAFLUSH, &t) == 0 ? 1 : 0;
+}
+
+static int64_t term_ctl_leave_raw(void) {
+    if (!g_term_ctl_saved_valid) return 0;
+    g_term_ctl_saved_valid = 0;
+    return tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_term_ctl_saved) == 0 ? 1 : 0;
+}
+
+static int term_ctl_size_fd(int fd, int64_t* packed) {
+    struct winsize ws;
+    if (ioctl(fd, TIOCGWINSZ, &ws) != 0) return 0;
+    if (ws.ws_row == 0 || ws.ws_col == 0) return 0;
+    *packed = (int64_t)ws.ws_row * 65536 + (int64_t)ws.ws_col;
+    return 1;
+}
+
+static int64_t term_ctl_size(void) {
+    int64_t packed = 0;
+    /* stdin first, then stdout: a piped-stdin program still owns the
+     * terminal its output goes to. */
+    if (term_ctl_size_fd(STDIN_FILENO, &packed)) return packed;
+    if (term_ctl_size_fd(STDOUT_FILENO, &packed)) return packed;
+    const char* cols_env = getenv("COLUMNS");
+    const char* rows_env = getenv("LINES");
+    if (cols_env && rows_env) {
+        int64_t cols = atol(cols_env);
+        int64_t rows = atol(rows_env);
+        if (cols > 0 && rows > 0) return rows * 65536 + cols;
+    }
+    return 24 * 65536 + 80;
+}
+
+int64_t monad_term_ctl(int64_t op) {
+    if (op == 0) return term_ctl_enter_raw();
+    if (op == 1) return term_ctl_leave_raw();
+    if (op == 2) return term_ctl_size();
+    return -1;
 }
 
 /* `#[native "current_time"]` (std/io.mo's `IO.current_time`, which
