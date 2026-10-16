@@ -304,6 +304,51 @@ def register_mcp_tools (reg : ToolRegistry) (server : McpServer) (tools : List M
         List.cons t rest => register_mcp_tools (ToolRegistry.register (mcp_tool_impl server t) reg) server rest,
     }
 
+/// The names already registered -- built-ins plus every earlier mount.
+def taken_names (reg : ToolRegistry) : List String :=
+    List.map (fn (t : ToolSpec) => t.name) (ToolRegistry.specs reg)
+
+/// Membership by name: `List.any`'s implicit `A` does not unify in this
+/// position, and `List.contains` is commented out of `std` (the same
+/// TODO), so the walk is spelled out.
+#[partial]
+def name_taken (name : String) (taken : List String) : Bool :=
+    match taken {
+        List.empty => false,
+        List.cons n rest => if n == name then true else name_taken name rest,
+    }
+
+/// The mount's tools whose names are already taken, in mount order.
+/// Each tool joins the taken set as the walk passes it, so a duplicate
+/// WITHIN one mount's catalogue is flagged too.
+#[partial]
+def collision_walk (taken : List String) (tools : List McpTool) : List String :=
+    match tools {
+        List.empty => List.empty,
+        List.cons t rest =>
+            let taken2 : List String := List.append taken [t.name] in
+            if name_taken t.name taken
+            then List.append [t.name] (collision_walk taken2 rest)
+            else collision_walk taken2 rest,
+    }
+
+/// Registration is last-wins, so a mount tool named like a built-in
+/// (or an earlier mount's tool) silently REPLACES it -- the model
+/// cannot tell, so the user must.
+#[partial]
+def warn_collisions (reg : ToolRegistry) (tools : List McpTool) : IO Unit :=
+    warn_each (collision_walk (taken_names reg) tools)
+
+#[partial]
+def warn_each (names : List String) : IO Unit :=
+    match names {
+        List.empty => return unit,
+        List.cons n rest => do {
+            write_errln (String.concat "warning: mcp tool '" (String.concat n "' shadows an existing tool of the same name; the mcp tool wins"));
+            warn_each rest
+        }
+    }
+
 /// Mount every `--mcp` command, in order. On any failure the already
 /// mounted servers are disposed before the error returns (a failed
 /// connect/list has already torn its own child down -- the stdio
@@ -335,7 +380,10 @@ def mount_listed (client : McpClientInfo) (rest : List String) (reg : ToolRegist
     match r {
         Result.err e => mount_fail servers (String.concat "mcp tools/list failed: " e),
         Result.ok p => match p {
-            Pair.pair m2 tools => mount_all client rest (register_mcp_tools reg m2 tools) (List.cons m2 servers),
+            Pair.pair m2 tools => do {
+                let _ <- warn_collisions reg tools;
+                mount_all client rest (register_mcp_tools reg m2 tools) (List.cons m2 servers)
+            },
         },
     }
 
