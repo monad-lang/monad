@@ -21,11 +21,13 @@ use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
+use shuttle::tools::file_tools {EditTool.impl}
 use weaver::commands {State}
 use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
-use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_null, Json.to_string}
+use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.to_string}
 use parsec::number {parse_i64}
+use std::map {BTreeMap}
 use std::io {IO.write_file, IO.read_file, IO.file_exists}
 use std::path {Path.of}
 use std::process {process_id}
@@ -211,30 +213,33 @@ def mock_config : ProviderConfig :=
 
 def budget : I64 := 6
 
-def fresh_session : Session := {
-    config := mock_config,
-    system_prompt := "You are a test harness.",
-    tools := ToolRegistry.specs stamp_registry,
-    history := List.empty,
-    turns := 0,
-    spent := usage_zero,
+/// The offline twin of main.mo's `initial_state`, parameterized by the
+/// registry: test 1 stamps with a side-effect-free `write`-cap tool,
+/// test 2 runs shuttle's real `edit` against a real file.
+def state_of (reg : ToolRegistry) : State := {
+    run := run_of reg,
+    mode := Mode.manual,
+    provider := "mock",
+    budget := budget,
+    quit := false,
 }
 
-def initial_run : RunState := {
-    session := fresh_session,
-    reg := stamp_registry,
+def run_of (reg : ToolRegistry) : RunState := {
+    session := session_of reg,
+    reg := reg,
     turns_left := budget,
     emit := tap_write,
     gate := Gate.auto,
     always := List.empty,
 }
 
-def initial_state : State := {
-    run := initial_run,
-    mode := Mode.manual,
-    provider := "mock",
-    budget := budget,
-    quit := false,
+def session_of (reg : ToolRegistry) : Session := {
+    config := mock_config,
+    system_prompt := "You are a test harness.",
+    tools := ToolRegistry.specs reg,
+    history := List.empty,
+    turns := 0,
+    spent := usage_zero,
 }
 
 // ── Assertions ─────────────────────────────────────────────────────────
@@ -287,6 +292,7 @@ def final_state_ok (st : State) (cursor : I64) (tap : String) : Bool :=
         && cursor == 6
         && String.contains tap "[approve]"
         && String.contains tap "mode: plan"
+        && String.contains tap "refused: plan mode: only read tools run"
 
 // ── The test ────────────────────────────────────────────────────────────
 
@@ -296,8 +302,77 @@ def test_dumb_e2e_manual_approval_and_plan_refusal : IO Bool := do {
     let _ <- write_inputs;
     let _ <- write_text cursor_path "0";
     let _ <- write_text tap_path "";
-    let st <- Dumb.run scripted_read tap_write initial_state;
+    let st <- Dumb.run scripted_read tap_write (state_of stamp_registry);
     let cursor <- read_cursor;
     let tap <- read_tap;
     return (final_state_ok st cursor tap)
+}
+
+// ── The Phase 5 e2e: a real `edit`, diff in the approval ───────────────
+
+def edit_target_path : String :=
+    String.concat "/tmp/weaver_edit_target_" (String.concat pid ".txt")
+
+def edit_registry : ToolRegistry := ToolRegistry.register EditTool.impl ToolRegistry.empty
+
+def edit_input (target : String) : Json :=
+    Json.make_object
+        (Map.insert "path" (Json.make_str target)
+        (Map.insert "expected_content" (Json.make_str "line one\nline two\n")
+        (Map.insert "new_content" (Json.make_str "line one\nline two changed\n")
+            BTreeMap.empty)))
+
+def edit_turn_message (target : String) : Message :=
+    { role := Role.assistant, content := [Content.tool_use "call_1" "edit" (edit_input target)] }
+
+def edit_turn (target : String) : Turn :=
+    { message := edit_turn_message target, usage := usage_n 1, stop := StopReason.tool_use_stop }
+
+def write_wire_script_edit (target : String) : IO Unit :=
+    write_text script_path (Json.to_string (Json.make_array [
+        Turn.serialize_json (edit_turn target),
+        Turn.serialize_json (text_turn "edited it" 2),
+    ]))
+
+def write_edit_inputs : IO Unit :=
+    write_text inputs_path (Json.to_string (Json.make_array [
+        Json.make_str "go",
+        Json.make_str "y",
+    ]))
+
+def read_target (path : String) : IO String :=
+    match Path.of path {
+        Result.ok p => IO.read_file p,
+        Result.err _ => IO.pure "TARGET-READ-FAILED",
+    }
+
+def mode_is_manual (m : Mode) : Bool :=
+    match m { Mode.manual => true, _ => false }
+
+/// The diff e2e (weaver.md Phase 5): a real `edit` pick through the
+/// whole loop -- the approval prompt shows the old -> new diff, the
+/// approved tool actually changes the file, and the transcript carries
+/// the tool's own result.
+def diff_session_ok (st : State) (cursor : I64) (tap : String) (file : String) : Bool :=
+    mode_is_manual st.mode
+        && Bool.not st.quit
+        && st.run.session.turns == 2
+        && cursor == 2
+        && String.contains tap "- line two"
+        && String.contains tap "+ line two changed"
+        && history_mentions "edited file" st.run.session.history
+        && file == "line one\nline two changed\n"
+
+#[test]
+def test_dumb_e2e_edit_approval_shows_diff : IO Bool := do {
+    let _ <- write_text edit_target_path "line one\nline two\n";
+    let _ <- write_wire_script_edit edit_target_path;
+    let _ <- write_edit_inputs;
+    let _ <- write_text cursor_path "0";
+    let _ <- write_text tap_path "";
+    let st <- Dumb.run scripted_read tap_write (state_of edit_registry);
+    let cursor <- read_cursor;
+    let tap <- read_tap;
+    let file <- read_target edit_target_path;
+    return (diff_session_ok st cursor tap file)
 }

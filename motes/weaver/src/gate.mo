@@ -2,7 +2,9 @@
 /// `Gate` shuttle's loop consults (shuttle `gate.mo`'s seam),
 /// implemented as "ask the human". The MODE decides first (policy.mo's
 /// table): `allow` proceeds without a word, `refuse` denies with the
-/// table's reason, `ask` prints the pick and reads `y`/`n`/`a`.
+/// table's reason (printed inline, Phase 5), `ask` prints the pick --
+/// with the old -> new diff for `write`/`edit` picks -- and reads
+/// `y`/`n`/`a`.
 ///
 /// The `a` answer is `Approval.always`, which the LOOP caches per
 /// capability in `RunState.always` (shuttle's Elm state -- there is no
@@ -15,6 +17,7 @@
 /// discipline as the mock wire.
 use shuttle::gate {Capability, Pick, Approval, Gate}
 use weaver::policy {Mode, Decision, Policy.decide}
+use weaver::diff {Diff.for_input, Diff.render}
 use json::json {Json, Json.to_string}
 
 /// The display name of a capability, in prompts and `/tools`.
@@ -43,28 +46,63 @@ def weaver_ask (mode : Mode) (read : Unit -> IO (Option String)) (write : String
     match Policy.decide p.cap mode {
         Decision.allow => IO.pure Approval.once,
         Decision.ask => prompt_pick read write p,
-        Decision.refuse reason => IO.pure (Approval.deny reason),
+        Decision.refuse reason => refused write reason,
     }
 
-/// The `ask` cell: print the pick (name, capability, input summary),
-/// read one word. EOF during an approval is a denial, not an approval
-/// -- a closed stdin must never green-light a mutation.
+/// A policy refusal is visible to the HUMAN too, not only to the
+/// model: the loop turns the denial into a tool_result the model
+/// reads, but the terminal would otherwise stay silent about WHY
+/// nothing ran -- the plan-mode inline reason (weaver.md Phase 5).
+def refused (write : String -> IO Unit) (reason : String) : IO Approval := do {
+    let _ <- write (String.concat "refused: " (String.concat reason "\n"));
+    IO.pure (Approval.deny reason)
+}
+
+/// The `ask` cell: print the pick (name, capability, input summary,
+/// and for file mutations the old -> new diff), read one word. EOF
+/// during an approval is a denial, not an approval -- a closed stdin
+/// must never green-light a mutation.
 def prompt_pick (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval := do {
-    let _ <- write (pick_prompt p);
+    let _ <- write (pick_header p);
+    let r <- Diff.for_input p.name p.input;
+    let _ <- write_diff write r;
+    let _ <- write "[y/n/a]: ";
     let line <- read unit;
     answer_of line
 }
 
-/// One line: `[approve] write stamp {...} [y/n/a]: ` -- the model's
-/// input JSON is the whole contract, truncated only so a huge pick
-/// cannot bury the prompt.
-def pick_prompt (p : Pick) : String :=
+/// One line: `[approve] write edit {...}` -- for a `write`/`edit`
+/// pick the diff block follows on its own lines, then the answer
+/// prompt. The model's input JSON is the whole contract, truncated
+/// only so a huge pick cannot bury the prompt.
+def pick_header (p : Pick) : String :=
     String.concat "[approve] "
         (String.concat (cap_name p.cap)
         (String.concat " "
         (String.concat p.name
         (String.concat " "
-        (String.concat (summarize p.input) " [y/n/a]: ")))))
+        (String.concat (summarize p.input) " ")))))
+
+/// The diff block: a blank line, the capped render, a blank line.
+/// `(no changes)` covers an edit whose two sides are identical --
+/// the human must still see that there is nothing to approve.
+def write_diff (write : String -> IO Unit) (r : Option (Pair String String)) : IO Unit :=
+    match r {
+        Option.none => IO.pure unit,
+        Option.some pr => match pr {
+            Pair.pair old new => write (String.concat "\n" (String.concat (capped_diff old new) "\n")),
+        },
+    }
+
+/// The same display-only truncation discipline as `summarize`: a
+/// huge write must not bury the terminal in a diff.
+def capped_diff (old : String) (new : String) : String :=
+    let d : String := Diff.render old new in
+    if String.is_empty d
+    then "(no changes)"
+    else if String.length d > 1200
+    then String.concat (String.slice d 0 1200) "\n... (diff truncated)"
+    else d
 
 /// The first 200 bytes of the input's JSON -- byte-slicing is safe
 /// here for the same reason it is in prompts: a truncated render is
