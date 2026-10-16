@@ -88,31 +88,42 @@ def config_int_field (obj : BTreeMap String Json) (name : String) : Result Strin
         Result.ok j => Json.get_num_i64 (Json.get_num j),
     }
 
+// One step per def, the same discipline as session.mo's decode steps:
+// each def decodes exactly one field and tail-calls the next, so no
+// pattern is more than one constructor deep.
+def config_wire_step (obj : BTreeMap String Json) (base_url : String) (model : String) (api_key_env : String) (max_tokens : I64) : Result String ProviderConfig :=
+    match config_field obj "wire" {
+        Result.err e => Result.err e,
+        Result.ok wj => match Wire.deserialize_json wj {
+            Result.err e => Result.err e,
+            Result.ok wire =>
+                let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, max_tokens := max_tokens, wire := wire } in
+                Result.ok c,
+        },
+    }
+
+def config_max_step (obj : BTreeMap String Json) (base_url : String) (model : String) (api_key_env : String) : Result String ProviderConfig :=
+    match config_int_field obj "max_tokens" {
+        Result.err e => Result.err e,
+        Result.ok max_tokens => config_wire_step obj base_url model api_key_env max_tokens,
+    }
+
+def config_key_step (obj : BTreeMap String Json) (base_url : String) (model : String) : Result String ProviderConfig :=
+    match config_str_field obj "api_key_env" {
+        Result.err e => Result.err e,
+        Result.ok api_key_env => config_max_step obj base_url model api_key_env,
+    }
+
+def config_model_step (obj : BTreeMap String Json) (base_url : String) : Result String ProviderConfig :=
+    match config_str_field obj "model" {
+        Result.err e => Result.err e,
+        Result.ok model => config_key_step obj base_url model,
+    }
+
 def config_of_object (obj : BTreeMap String Json) : Result String ProviderConfig :=
     match config_str_field obj "base_url" {
         Result.err e => Result.err e,
-        Result.ok base_url =>
-            match config_str_field obj "model" {
-                Result.err e => Result.err e,
-                Result.ok model =>
-                    match config_str_field obj "api_key_env" {
-                        Result.err e => Result.err e,
-                        Result.ok api_key_env =>
-                            match config_int_field obj "max_tokens" {
-                                Result.err e => Result.err e,
-                                Result.ok max_tokens =>
-                                    match config_field obj "wire" {
-                                        Result.err e => Result.err e,
-                                        Result.ok wj => match Wire.deserialize_json wj {
-                                            Result.err e => Result.err e,
-                                            Result.ok wire =>
-                                                let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, max_tokens := max_tokens, wire := wire } in
-                                                Result.ok c,
-                                        },
-                                    },
-                            },
-                    },
-            },
+        Result.ok base_url => config_model_step obj base_url,
     }
 
 pub def ProviderConfig.deserialize_json (j : Json) : Result String ProviderConfig :=
