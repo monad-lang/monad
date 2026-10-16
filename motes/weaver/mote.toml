@@ -1,0 +1,25 @@
+# Weaver -- the interactive coding agent on shuttle: the approval
+# policy, the dumb-mode UI, the slash commands and the settings, over
+# shuttle's headless harness (plans/implementations/weaver.md). No
+# `tui`/`loom` deps yet: Phase 4 (TUI) and Phase 7 (Loom mounts) are
+# gated on terminal-ui and plugin-framework, and a manifest dep that
+# nothing imports is a lie.
+[mote]
+name = "weaver"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.json]
+path = "../json"
+
+[dependencies.shuttle]
+path = "../shuttle"
+
+[dependencies.toml]
+path = "../toml"
