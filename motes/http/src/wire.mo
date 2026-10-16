@@ -599,12 +599,14 @@ def Wire.response_has_body (method : Method) (status : U16) : Bool :=
   else Bool.not (U16.beq status 304u16)
 
 /// Whether the head declares exactly `Transfer-Encoding: chunked` -- the
-/// one transfer coding this library decodes. `Option.none` when no
-/// `Transfer-Encoding` is present at all; `Option.some false` when it names
-/// anything else, or stacks codings (`gzip, chunked`), which stays the error
-/// it has always been: the chunks would decode to bytes still encoded, and
-/// handing those to the caller as a body is a lie with a `Content-Length`'s
-/// confidence.
+/// one transfer coding this library decodes. The coding name is compared
+/// case-insensitively: transfer coding names are case-insensitive (RFC
+/// 9112 §7), so a sloppy server's `Chunked` is the same coding.
+/// `Option.none` when no `Transfer-Encoding` is present at all;
+/// `Option.some false` when it names anything else, or stacks codings
+/// (`gzip, chunked`), which stays the error it has always been: the chunks
+/// would decode to bytes still encoded, and handing those to the caller
+/// as a body is a lie with a `Content-Length`'s confidence.
 def Wire.chunked_declared (headers : Headers) : Option Bool :=
   match Headers.get_all "transfer-encoding" headers {
     List.empty => Option.none,
@@ -614,7 +616,8 @@ def Wire.chunked_declared (headers : Headers) : Option Bool :=
       // compiled backend, and this answer decides whether a body is decoded
       // at all.
       let trimmed : String := String.trim first in
-      let is_chunked : Bool := String.beq trimmed "chunked" in
+      let lowered : String := String.to_lowercase trimmed in
+      let is_chunked : Bool := lowered == "chunked" in
       let only : Bool := List.is_empty rest in
       Option.some (Bool.and only is_chunked)
   }

@@ -580,6 +580,15 @@ def test_frame_response_te_other_is_error : Bool :=
 def test_frame_response_te_stacked_is_error : Bool :=
   w_res_frame_bad (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\nx") Method.GET
 
+/// Transfer coding names are case-insensitive (RFC 9112 §7): a server
+/// that spells it `Chunked` is declaring the one coding this library
+/// decodes, not an unsupported one.
+#[test]
+def test_frame_response_te_case_insensitive : Bool :=
+  w_res_frames_to
+    (String.to_list (String.concat "HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n" "5\r\nhello\r\n0\r\n\r\n"))
+    Method.GET "hello" ""
+
 // ── request framing ────────────────────────────────────────────────────
 
 #[test]
