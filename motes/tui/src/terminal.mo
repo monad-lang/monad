@@ -19,10 +19,12 @@
 ///   2 -- the terminal size packed as `rows * 65536 + cols`; ioctl
 ///        TIOCGWINSZ on stdin then stdout, then the `COLUMNS`/`LINES`
 ///        environment variables, then 24x80
-///   3 -- wait up to `arg` milliseconds for stdin to become readable
-///        (1 readable, 0 timed out, -1 error; readable at EOF too --
-///        pair with a read that returns "" to detect closure). This
-///        is the tick source: an app asks for input with a timeout, and
+///   3 -- wait for stdin to become readable for up to `arg`
+///        milliseconds (1 readable, 0 timed out, -1 error; readable at
+///        EOF too -- pair with a read that returns "" to detect
+///        closure; a NEGATIVE `arg` blocks indefinitely, poll(2)'s own
+///        convention, which is how an app opts out of ticks). This is
+///        the tick source: an app asks for input with a timeout, and
 ///        the timeout is the frame clock.
 /// Any other op yields -1. `arg` is ignored by ops 0-2.
 #[native "term_ctl"]
@@ -58,10 +60,11 @@ pub def Terminal.size : IO (Pair I64 I64) := do {
     return (Terminal.unpack_size packed)
 }
 
-/// Wait up to `timeout_ms` for stdin to be readable. `false` on
-/// timeout (which is the frame clock an app's ticks ride on), `true`
-/// when a read will not block -- including at EOF, where the read
-/// itself returns "". A 0 timeout is a plain non-blocking check.
+/// Wait for stdin to be readable. `false` on timeout, `true` when a
+/// read will not block -- including at EOF, where the read itself
+/// returns "". A 0 timeout is a non-blocking check; a NEGATIVE
+/// timeout blocks indefinitely (poll(2)'s own convention), which is
+/// how an app that wants no ticks opts out of the frame clock.
 pub def Terminal.poll (timeout_ms : I64) : IO Bool := do {
     let rc <- IO.mk (term_ctl 3 timeout_ms);
     return (rc == 1)

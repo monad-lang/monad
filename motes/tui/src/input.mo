@@ -476,15 +476,18 @@ def Input.produce_go (sized : Pair (List Event) InputReader) (timeout_ms : I64) 
         }
     }
 
-/// The timeout path: no input arrived. A pending lone ESC is the
-/// escape key (nothing followed it); anything else just rides.
+/// The timeout path: no input arrived, which IS the frame clock -- a
+/// `tick` event rides the batch (apps that want no ticks poll with a
+/// negative timeout and never get here). A pending lone ESC resolves
+/// first and suppresses that cycle's tick: the escape key IS the
+/// batch's event.
 def Input.idle_cycle (r : InputReader) (evs : List Event) : IO (Pair (List Event) InputReader) := do {
-    if Bool.not (Input.pending_escape r.pending)
-    then return (Pair.pair evs r)
-    else do {
+    if Input.pending_escape r.pending
+    then do {
         let nr : InputReader := { r with pending := "" };
         return (Pair.pair (List.append evs [Event.key Key.escape]) nr)
     }
+    else return (Pair.pair (List.append evs [Event.tick]) r)
 }
 
 /// The readable path: read one byte at a time until the non-blocking

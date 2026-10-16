@@ -1939,14 +1939,15 @@ static int64_t term_ctl_size(void) {
  * (EOF counts as readable; the READ is what reports closure), 0 timed
  * out, -1 the poll itself failed. The frame clock a TUI loop rides on:
  * there is no sleep-with-wakeup primitive, so "input timed out" IS the
- * tick. The timeout is clamped into poll(2)'s int range; a negative
- * wait is a plain non-blocking check, matching the Rust host. */
+ * tick. poll(2)'s own convention: a negative timeout blocks
+ * indefinitely -- that is how an app opts out of ticks. Positive
+ * waits are clamped into poll(2)'s int range, matching the Rust host. */
 static int64_t term_ctl_poll(int64_t timeout_ms) {
     struct pollfd pfd;
     pfd.fd = STDIN_FILENO;
     pfd.events = POLLIN;
     int t;
-    if (timeout_ms < 0) t = 0;
+    if (timeout_ms < 0) t = -1;
     else if (timeout_ms > INT_MAX) t = INT_MAX;
     else t = (int)timeout_ms;
     int rc = poll(&pfd, 1, t);
