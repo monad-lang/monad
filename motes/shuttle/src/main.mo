@@ -1,5 +1,5 @@
 /// The CLI -- agent-skills.md Phase 8. Hand-rolled over `clap::args`
-/// primitives rather than `#[derive_cli]`, because `--mcp` is repeatable
+/// primitives rather than `#[derive Cli]`, because `--mcp` is repeatable
 /// and the derive's v1 surface is Bool flags + positionals only.
 ///
 /// `shuttle run "<task>"` drives the indexed loop (loop.mo) against a

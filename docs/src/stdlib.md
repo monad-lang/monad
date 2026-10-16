@@ -168,8 +168,10 @@ representation and quotes strings; `Show` is a display string. The prelude's
 ### `std.derive` — **not ambient**
 
 `derive_beq_meta`, `derive_bord_meta`, `derive_debug_meta`, `derive_lens_meta`
-and the `defmacro`s that wrap them. Must be imported for `#[derive ...]` to
-resolve — see [Macros and Derive](./macros.md).
+and the `defmacro`s that wrap them. Each `defmacro` registers its target with
+`#[derive_handler ...]` (e.g. `#[derive_handler BEq]` on `derive_beq`), and the
+module must be imported for `#[derive ...]` to resolve — see
+[Macros and Derive](./macros.md).
 
 ### `std.test` — **not ambient**
 

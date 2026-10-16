@@ -2950,7 +2950,7 @@ pub fn unimported_names(
   );
   let written = collect_module_references(&parsed);
   let mut written_bare = written.bare;
-  written_bare.extend(collect_macro_call_names(decls));
+  written_bare.extend(collect_macro_call_names(decls, loaded));
 
   let mut out: Vec<UnimportedName> = Vec::new();
   let mut seen: Set<NamePath> = Set::default();
@@ -3324,7 +3324,7 @@ pub fn load_module_from_text_typed_at(
   // decls (macro calls are expanded away by `type_check_module_decls_new`
   // below, so this is the last chance to record them for
   // `collect_referenced_names`'s unused-import analysis).
-  let macro_call_names = collect_macro_call_names(&init_decls);
+  let macro_call_names = collect_macro_call_names(&init_decls, loaded);
   let init_decls_result =
     crate::core_check_module::type_check_module_decls_new(&path, init_decls, loaded);
   let init_decls = init_decls_result.map_err(LoadingError::Type)?;
@@ -4045,17 +4045,22 @@ fn collect_term_names(term: &Term, refs: &mut References, bound: &mut Binders) {
 
 /// Collect the macro names a module *invokes* — `derive_lens! Point`-style
 /// `Decl::MacroCall`s and `#[derive BEq]` attribute dispatch (mapped to
-/// `derive_beq` via `derive_macro_name`) — from **pre-expansion** decls.
-/// `collect_referenced_names` can't see these any other way: macro calls
-/// are expanded away before the `Module` is stored, and `#[derive]`
-/// attribute args aren't ordinary `Term::Var`s. Run this on the parsed
-/// decls in `load_module_from_text_typed` (before
+/// its registered `defmacro` via the `#[derive_handler ...]` registry,
+/// which spans these decls plus the already-loaded modules) — from
+/// **pre-expansion** decls. `collect_referenced_names` can't see these any
+/// other way: macro calls are expanded away before the `Module` is stored,
+/// and `#[derive]` attribute args aren't ordinary `Term::Var`s. Run this on
+/// the parsed decls in `load_module_from_text_typed` (before
 /// `type_check_module_decls_new` expands them) and store the result on the
 /// `Module` via `set_macro_call_names`. Errors from
 /// `derive_attribute_targets` (malformed `#[derive]` args) are ignored
 /// here — they'll be reported as real errors during expansion; this pass
 /// only needs the well-formed names for unused-import analysis.
-pub fn collect_macro_call_names(decls: &[SourceContext<Decl>]) -> Set<NamePath> {
+pub fn collect_macro_call_names(
+  decls: &[SourceContext<Decl>],
+  loaded: &LoadedModules,
+) -> Set<NamePath> {
+  let handler_names = crate::eval::macro_expand::derive_handler_macro_names(decls, loaded);
   let mut names = Set::default();
   for ctx in decls {
     match ctx.value() {
@@ -4065,8 +4070,8 @@ pub fn collect_macro_call_names(decls: &[SourceContext<Decl>]) -> Set<NamePath> 
       Decl::Type(ind) => {
         if let Ok(targets) = crate::eval::macro_expand::derive_attribute_targets(ind) {
           for target in targets {
-            if let Some(macro_name) = crate::eval::macro_expand::derive_macro_name(&target) {
-              names.insert(NamePath::single(Identifier::new(macro_name.to_string())));
+            if let Some(macro_name) = handler_names.get(&target) {
+              names.insert(NamePath::single(macro_name.clone()));
             }
           }
         }

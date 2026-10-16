@@ -602,6 +602,93 @@ fn test_extern_c_plus_plus_parses() {
 }
 
 #[test]
+fn test_attribute_on_decl_gen_defmacro() {
+  // `#[derive_handler ...]`-style registration rides the decl-gen form
+  // (`defmacro name params := decls { ... }`), so the attribute must
+  // survive into `DeclGenDef.attributes`.
+  let s = r#"#[derive_handler Lens]
+    defmacro derive_lens T := decls { def lens_ran : Bool := true }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    name: id("derive_handler"),
+    args: vec![AttrArg::Ident(id("Lens"))],
+  }];
+
+  match res.value() {
+    Decl::DeclGen(gd) => {
+      assert_eq!(gd.name, npt("derive_lens"));
+      assert_eq!(gd.attributes, expected_attrs);
+    }
+    other => panic!("expected DeclGen, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_attribute_on_term_defmacro() {
+  let s = r#"#[test]
+    defmacro id x := quote { x }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    name: id("test"),
+    args: vec![],
+  }];
+
+  match res.value() {
+    Decl::DefMacro(def) => {
+      assert_eq!(def.name, NamePath::top("id"));
+      assert_eq!(def.attributes, expected_attrs);
+    }
+    other => panic!("expected DefMacro, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_attributes_stacked_on_decl_gen_defmacro() {
+  let s = r#"#[derive_handler Foo Bar] #[native "x"]
+    defmacro derive_foo T := decls { def foo : I64 := 1 }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::DeclGen(gd) => {
+      assert_eq!(gd.attributes.len(), 2);
+      assert_eq!(gd.attributes[0].name, id("derive_handler"));
+      assert_eq!(gd.attributes[1].name, id("native"));
+    }
+    other => panic!("expected DeclGen, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_defmacro_without_attributes_unchanged() {
+  let s = r#"defmacro derive_lens T := decls { def lens_ran : Bool := true }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::DeclGen(gd) => assert!(gd.attributes.is_empty()),
+    other => panic!("expected DeclGen, got {other:?}"),
+  }
+
+  let s = r#"defmacro id x := quote { x }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::DefMacro(def) => assert!(def.attributes.is_empty()),
+    other => panic!("expected DefMacro, got {other:?}"),
+  }
+}
+
+#[test]
 fn test_mote_inner_attr_parses_as_a_decl() {
   // `#![mote { ... }]` is a DECLARATION in the AST, not a prefix on the
   // next one -- that is what lets a misplaced one reach

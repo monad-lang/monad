@@ -1,4 +1,4 @@
-// `#[derive_cli]` tests — see `motes/clap/src/args.mo`'s `derive_cli_meta`/`derive_cli`
+// `#[derive Cli]` tests — see `motes/clap/src/args.mo`'s `derive_cli_meta`/`derive_cli`
 // for the generator (an ordinary `TypeInfo -> List Decl` Monad function
 // invoked via `reflect_type_info!`, the same reflection-as-data
 // metaprogramming kernel `std/derive.mo`'s four derives use — see
@@ -15,15 +15,15 @@ use crate::term::{Identifier, ModulePath, NamePath, SearchPaths};
 /// with the real `motes/clap/src/args.mo` pre-loaded (via `load_module_files`, its
 /// REAL on-disk path — not a synthetic name loaded from an `include_str!`
 /// snippet, which the reflection-as-data port made insufficient here: since
-/// `#[derive_cli]` now invokes `motes/clap/src/args.mo`'s own `derive_cli_meta`
+/// `#[derive Cli]` now invokes `motes/clap/src/args.mo`'s own `derive_cli_meta`
 /// through `reflect_type_info!`/`MetaEvalContext`, that whole-program
 /// capture pass RE-READS every non-`init` loaded module's source from disk
 /// via search paths — `lib.rs::build_core_program`'s documented
 /// requirement, see `meta_compile.rs` — which only finds a module
 /// registered under its real path, findable via `SearchPaths`, same as
 /// `meta_test.rs`'s own `std/derive.mo` fixture) so generated
-/// `#[derive_cli]` code can resolve `Cli.take_flag`/`Cli.take_positional`
-/// (and `#[derive_cli]`'s own dispatch can resolve the `derive_cli`
+/// `#[derive Cli]` code can resolve `Cli.take_flag`/`Cli.take_positional`
+/// (and `#[derive Cli]`'s own dispatch can resolve the `derive_cli`
 /// decl-gen macro `motes/clap/src/args.mo` now defines).
 fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath), String> {
   let mut loaded = default_modules().map_err(|e| e.to_string())?;
@@ -78,14 +78,14 @@ fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath)
 // a real name-resolving runtime-value printer (`raise_core` only raises
 // checker-time `CoreTerm`s, not post-evaluation `Value`s) — design work
 // beyond this pass, not a mechanical port. The tests below that only
-// check TYPE-CHECKING (not evaluating) `#[derive_cli]`-generated code
+// check TYPE-CHECKING (not evaluating) `#[derive Cli]`-generated code
 // are unaffected and still give real coverage of the generator itself
 // (`motes/clap/src/args.mo`'s `derive_cli_meta`) — and the actual end-to-end,
 // argv-evaluating proof lives in `motes/clap/src/tests/cli_derive_tests.mo`, run
 // through the real `test` command (see that file's own header comment).
 
 const DEMO_SRC: &str = r#"
-#[derive_cli]
+#[derive Cli]
 type Command {
     compile (path : String) (#[arg] verbose : Bool),
     pretty (path : String),
@@ -101,7 +101,7 @@ fn test_derive_cli_generates_and_type_checks() {
   }
   assert!(
     r.is_ok(),
-    "#[derive_cli] type should generate a parser that type-checks"
+    "#[derive Cli] type should generate a parser that type-checks"
   );
 }
 
@@ -119,14 +119,14 @@ fn test_derive_cli_untouched_without_attribute() {
   let module = loaded.get_module(&path).unwrap();
   assert!(
     module.get_def(&NamePath::top("parse_command")).is_none(),
-    "no #[derive_cli] attribute means no generated parser"
+    "no #[derive Cli] attribute means no generated parser"
   );
 }
 
 #[test]
 fn test_derive_cli_non_bool_arg_field_rejected() {
   let src = r#"
-    #[derive_cli]
+    #[derive Cli]
     type BadCommand {
         compile (path : String) (#[arg] name : String),
     }
@@ -163,7 +163,7 @@ fn test_derive_cli_zero_arg_constructor_alone() {
   // "narrow gap" in `motes/clap/src/args.mo`): a single zero-param constructor
   // wrapped in `Result.ok` is the minimal case that reproduced it.
   let src = r#"
-    #[derive_cli]
+    #[derive Cli]
     type Command6 {
         help6,
     }

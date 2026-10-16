@@ -4,7 +4,7 @@ use crate::term::{
   AttrArg, Constructor, Decl, DeclGenDef, Def, GlobalRef, Identifier, Inductive, Literal,
   ModulePath, NamePath, NameRef, Named, Par, Param, SourceContext,
   Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Pi, Quote, Var},
-  case_with_optional_field_pattern, id, instance, match_term, mpvar,
+  case_with_optional_field_pattern, instance, match_term, mpvar,
 };
 
 /// Names of the built-in macro-expansion reflection intrinsics — recognized
@@ -115,16 +115,166 @@ pub(crate) fn derive_attribute_targets(induct: &Inductive) -> Result<Vec<String>
   Ok(targets)
 }
 
-/// Map a `#[derive ...]` target name to the `std/derive.mo` decl-gen macro
-/// that implements it.
-pub(crate) fn derive_macro_name(target: &str) -> Option<&'static str> {
-  match target {
-    "BEq" => Some("derive_beq"),
-    "BOrd" => Some("derive_bord"),
-    "Debug" => Some("derive_debug"),
-    "Lens" => Some("derive_lens"),
-    _ => None,
+/// A `#[derive ...]` target registered by a `defmacro` via
+/// `#[derive_handler <Target> ...]` — the target name(s) the attribute
+/// declared, pointing at the macro `#[derive <Target>]` dispatches to
+/// (the annotated `defmacro` itself) and where it was defined (for
+/// duplicate-registration diagnostics).
+#[derive(Debug, Clone)]
+pub(crate) struct DeriveHandler {
+  macro_name: Identifier,
+  site: String,
+}
+
+/// Read the bare target names a `defmacro`'s `#[derive_handler ...]`
+/// attribute(s) declared. Accepts the same two arg shapes
+/// `derive_attribute_targets` accepts for `#[derive ...]` (bare words
+/// and bracketed groups); anything else is a registration error the
+/// author sees at expansion of the registering module.
+fn derive_handler_targets(gd: &DeclGenDef) -> Result<Vec<String>, MacroError> {
+  fn flatten(arg: &AttrArg, out: &mut Vec<String>) -> Result<(), MacroError> {
+    match arg {
+      AttrArg::Ident(id) => {
+        out.push(id.as_str().to_string());
+        Ok(())
+      }
+      AttrArg::Group(items) => {
+        for item in items {
+          flatten(item, out)?;
+        }
+        Ok(())
+      }
+      other => Err(MacroError::Generic(format!(
+        "#[derive_handler ...] targets must be bare names (e.g. `Lens`), got: {other:?}"
+      ))),
+    }
   }
+  let mut targets = Vec::new();
+  for attr in &gd.attributes {
+    if attr.name.as_str() != "derive_handler" {
+      continue;
+    }
+    for arg in &attr.args {
+      flatten(arg, &mut targets)?;
+    }
+  }
+  Ok(targets)
+}
+
+/// Insert one registration, erroring on a duplicate: two DIFFERENT macros
+/// registering the same target name would otherwise resolve last-wins,
+/// silently wrong across mote load order. The SAME macro re-registering
+/// a target is idempotent, not a conflict — the same physical file can
+/// sit in `loaded` under two module paths at once (a multi-file `check`
+/// names the target module by its file path while dependents import it
+/// by its mote-qualified path), and that double-load must not error.
+fn register_derive_handler(
+  registry: &mut Map<String, DeriveHandler>,
+  target: &str,
+  macro_name: Identifier,
+  site: String,
+) -> Result<(), MacroError> {
+  if let Some(existing) = registry.get(target) {
+    if existing.macro_name != macro_name {
+      return Err(MacroError::Generic(format!(
+        "duplicate derive target `{target}`: registered by macro `{}` in {} and macro `{macro_name}` in {site}",
+        existing.macro_name, existing.site
+      )));
+    }
+    return Ok(());
+  }
+  registry.insert(target.to_string(), DeriveHandler { macro_name, site });
+  Ok(())
+}
+
+/// The `#[derive <Target>]` target registry: target name -> the macro
+/// that implements it, built per `expand_macros` run from the current
+/// module's own `defmacro` registrations plus every loaded module's —
+/// mirroring how `decl_gen_defs` itself is collected (current module
+/// takes priority, no program-level mutable state). The use-gate stays
+/// where it always was: dispatch synthesizes an ordinary
+/// `expand_macro_call`, so a target only resolves if its macro is in
+/// `decl_gen_defs` (same as a hand-written `derive_beq! T` call).
+fn derive_handler_registry(
+  decls: &[SourceContext<Decl>],
+  loaded: &LoadedModules,
+  current_path: &ModulePath,
+) -> Result<Map<String, DeriveHandler>, MacroError> {
+  let mut registry: Map<String, DeriveHandler> = Map::new();
+  let current_site = format!("module `{current_path}`");
+  for ctx in decls {
+    if let Decl::DeclGen(gd) = ctx.value() {
+      for target in derive_handler_targets(gd)? {
+        let macro_name = gd
+          .name
+          .segments()
+          .last()
+          .cloned()
+          .expect("defmacro name is non-empty");
+        register_derive_handler(&mut registry, &target, macro_name, current_site.clone())?;
+      }
+    }
+  }
+  for module in loaded.modules() {
+    // The module currently being expanded can already sit in `loaded`
+    // with a STALE copy of its own source (see `expand_macros`'s doc
+    // comment) — its registrations come from the fresh `decls` walk
+    // above, so the stale copy must not be counted as a second site.
+    if module.path() == current_path {
+      continue;
+    }
+    for (_path, gd_ctx) in module.decl_gens_map() {
+      let gd = gd_ctx.value();
+      for target in derive_handler_targets(gd)? {
+        let macro_name = gd
+          .name
+          .segments()
+          .last()
+          .cloned()
+          .expect("defmacro name is non-empty");
+        register_derive_handler(
+          &mut registry,
+          &target,
+          macro_name,
+          format!("module `{}`", module.path()),
+        )?;
+      }
+    }
+  }
+  Ok(registry)
+}
+
+/// Lenient target → macro-name map for pre-expansion analyses
+/// (`module.rs`'s `collect_macro_call_names`): registrations from the
+/// given decls plus every loaded module, first-wins, malformed entries
+/// skipped. The strict duplicate/malformed errors belong to
+/// `derive_handler_registry` (run by `expand_macros`); this is only for
+/// unused-import analysis, which must never fail.
+pub(crate) fn derive_handler_macro_names(
+  decls: &[SourceContext<Decl>],
+  loaded: &LoadedModules,
+) -> Map<String, Identifier> {
+  let mut names: Map<String, Identifier> = Map::new();
+  let lenient_targets = |gd: &DeclGenDef, names: &mut Map<String, Identifier>| {
+    if let Ok(targets) = derive_handler_targets(gd) {
+      if let Some(macro_name) = gd.name.segments().last() {
+        for target in targets {
+          names.entry(target).or_insert_with(|| macro_name.clone());
+        }
+      }
+    }
+  };
+  for ctx in decls {
+    if let Decl::DeclGen(gd) = ctx.value() {
+      lenient_targets(gd, &mut names);
+    }
+  }
+  for module in loaded.modules() {
+    for (_path, gd_ctx) in module.decl_gens_map() {
+      lenient_targets(gd_ctx.value(), &mut names);
+    }
+  }
+  names
 }
 
 /// Dispatch a built-in reflection intrinsic invoked at **decl** position
@@ -412,6 +562,14 @@ pub fn expand_macros(
     inductives.entry(path).or_insert(induct);
   }
 
+  // The `#[derive <Target>]` target registry, built the same way
+  // `decl_gen_defs` is (current module + loaded modules): every
+  // `defmacro` carrying `#[derive_handler ...]` registers its bare
+  // target name(s) as dispatching to itself. `#[derive Cli]` (clap's
+  // `derive_cli` macro registers the target) goes through this same
+  // table — the old `#[derive_cli]` special case is gone.
+  let handler_registry = derive_handler_registry(&decls, loaded, current_path)?;
+
   // Expand macro calls and flatten generated declarations.
   //
   // This is a work queue, not a single pass: a `Decl::MacroCall`'s
@@ -471,49 +629,38 @@ pub fn expand_macros(
       }
       Decl::Type(induct) => {
         let mut generated: Vec<Decl> = Vec::new();
-        // `#[derive_cli]` — dispatches to the `derive_cli` decl-gen macro
-        // (`motes/clap/src/args.mo`), the same reflection-as-data mechanism every
-        // other derive uses (via `derive_cli_meta`, an ordinary
-        // `TypeInfo -> List Decl` function invoked through
-        // `reflect_type_info!`), through ordinary macro-call synthesis —
-        // same spirit as, and now literally the same code shape as, the
-        // `#[derive BEq BOrd Debug Lens]` loop just below. Requires the
-        // file to `use clap.args {derive_cli}` (or a superset, e.g.
-        // `use clap.args {*}`), same convention as any other cross-module
-        // decl-gen macro call.
-        if induct.has_attr("derive_cli") {
-          let call_args = vec![mpvar(NamePath::from(induct.name().clone()))];
-          let expanded = expand_macro_call(
-            &id("derive_cli"),
-            &call_args,
-            &decl_gen_defs,
-            &inductives,
-            loaded,
-            &current_decls,
-            current_path,
-          )?;
-          generated.extend(expanded);
-        }
-        // `#[derive BEq BOrd Debug Lens]` — generic dispatch to the
-        // corresponding `derive_*!` decl-gen macro (`std/derive.mo`) via
+        // `#[derive BEq BOrd Debug Lens]` (and any mote-registered
+        // target, via `#[derive_handler ...]` on the implementing
+        // `defmacro`) — generic dispatch to the corresponding
+        // `derive_*!` decl-gen macro (`std/derive.mo` and friends) via
         // the ordinary `expand_macro_call` path, exactly as if the user
         // had written `derive_beq! Point` themselves. No code generation
         // happens here; this is purely a name lookup + macro-call
         // synthesis, same spirit as `#[derive(...)]` dispatching to
         // whichever expander (builtin or third-party) is registered under
-        // each trait name in Rust. Requires the file to `use std.derive
-        // {derive_beq, ...}` (or a superset) — same as any other
+        // each trait name in Rust. Requires the file to bring the
+        // registering macro into scope (e.g. `use std.derive
+        // {derive_beq, ...}` or a superset) — same as any other
         // cross-module decl-gen macro call; there is no implicit/auto
-        // loading of `std.derive`.
+        // loading of `std.derive`. An unknown target errors with the
+        // registered target names; a KNOWN target whose macro isn't in
+        // `decl_gen_defs` fails there, same as a hand-written call.
         for target in derive_attribute_targets(&induct)? {
-          let macro_name = derive_macro_name(&target).ok_or_else(|| {
+          let handler = handler_registry.get(&target).ok_or_else(|| {
             MacroError::Generic(format!(
-              "unknown derive target `{target}` (expected one of: BEq, BOrd, Debug, Lens)"
+              "unknown derive target `{target}` (registered targets: {})",
+              if handler_registry.is_empty() {
+                "none".to_string()
+              } else {
+                let mut names: Vec<&str> = handler_registry.keys().map(|k| k.as_str()).collect();
+                names.sort();
+                names.join(", ")
+              }
             ))
           })?;
           let call_args = vec![mpvar(NamePath::from(induct.name().clone()))];
           let expanded = expand_macro_call(
-            &id(macro_name),
+            &handler.macro_name,
             &call_args,
             &decl_gen_defs,
             &inductives,

@@ -120,7 +120,7 @@ instance BEq Attribute {
 }
 
 /// Whether `attrs` contains an attribute named `name`, e.g.
-/// `has_attr (Identifier.id "derive_cli") ind_attrs`. Mirrors the Rust
+/// `has_attr (Identifier.id "derive") ind_attrs`. Mirrors the Rust
 /// reference's `Inductive::has_attr`/`Def::has_test_attr`
 /// (core/src/term.rs).
 def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
@@ -1696,8 +1696,8 @@ pub struct StructField {
 pub struct Struct {
     /// `attrs` mirrors `Inductive`'s own slot: the `#[...]` attributes
     /// written above the declaration, preserved through lowering so the
-    /// macro-expansion pass can still see a `#[derive ...]`/
-    /// `#[derive_cli]` request at the point where decl-gen macros are
+    /// macro-expansion pass can still see a `#[derive ...]`
+    /// request at the point where decl-gen macros are
     /// resolved (`lang/typecheck/macro_queue.mo`) — the attribute itself
     /// is not a term or a type, so nothing else could carry it.
     name: Identifier,

@@ -1974,6 +1974,8 @@ fn decls_until_end(mut input: Span) -> (Vec<Decl>, Span) {
 }
 
 fn decl_gen_parser(input: Span) -> Res<Decl> {
+  let (input, attributes) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
   let (input, _) = tag("defmacro")(input)?;
   let (input, _) = ws1(input)?;
   let (input, name) = def_name(input)?;
@@ -1989,7 +1991,7 @@ fn decl_gen_parser(input: Span) -> Res<Decl> {
       name,
       params,
       decls,
-      attributes: vec![],
+      attributes,
     }),
   ))
 }
@@ -2048,6 +2050,8 @@ fn macro_call_decl_parser(input: Span) -> Res<Decl> {
 }
 
 fn defmacro_parser(input: Span) -> Res<Def> {
+  let (input, attributes) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
   let (input, vis) = vis_parser(input)?;
   let (input, _) = tag("defmacro")(input)?;
   let (input, _) = ws1(input)?;
@@ -2059,12 +2063,12 @@ fn defmacro_parser(input: Span) -> Res<Def> {
   let (input, _) = ws0(input)?;
   let (input, term) = term(input)?;
   if params.is_empty() {
-    let mut d = def(name, vec![], Hole, term, vec![]);
+    let mut d = def(name, vec![], Hole, term, attributes);
     d.vis = vis;
     Ok((input, d))
   } else {
     let body = lams(params, term);
-    let mut d = def(name, vec![], Hole, body, vec![]);
+    let mut d = def(name, vec![], Hole, body, attributes);
     d.vis = vis;
     Ok((input, d))
   }

@@ -1,8 +1,8 @@
-/// `#[derive_cli]` demo for tui — forward-looking pattern, not real API.
+/// `#[derive Cli]` demo for tui — forward-looking pattern, not real API.
 ///
 /// tui itself has no CLI entry point yet (that is Phase 7 of the library's
 /// design, `tui.mo`'s `run_app`). This file only exists to show the
-/// `#[derive_cli]` pattern a *future application built on* tui would follow
+/// `#[derive Cli]` pattern a *future application built on* tui would follow
 /// in its own launch argument parser: one attribute on a subcommand type
 /// generates a full `List String -> Result String TuiDemoCommand` parser,
 /// dispatching on subcommand name, `#[arg]`-marked `Bool` fields as
@@ -13,7 +13,7 @@
 /// `lang`/`llvm`/`runtime`/`build`/`lsp` in behind it.
 use clap::args {*}
 
-#[derive_cli]
+#[derive Cli]
 type TuiDemoCommand {
     run (widget : String) (#[arg] fullscreen : Bool),
     version,

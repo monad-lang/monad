@@ -31,7 +31,7 @@ use lang::mote {
 use lib::pretty {show_term, show_decls}
 use lib::typecheck::name_subst {close_named_vars}
 use lib::typecheck::macro_apply {expand_decl_gen_call}
-use lib::typecheck::macro_queue {DeclGenEntry, build_decl_gen_registry, derive_bridge_decls, expand_decls, lookup_decl_gen}
+use lib::typecheck::macro_queue {DeclGenEntry, DeriveHandlerReg, build_decl_gen_registry, derive_bridge_decls, derive_handler_regs_of_decls, expand_decls, find_duplicate_derive_target, lookup_decl_gen}
 use lib::typecheck::meta_eval {meta_eval_invoke}
 use lib::typecheck::meta_reflect {
   build_type_info_value, collect_inductives, find_inductive_by_bare_name,
@@ -5574,7 +5574,7 @@ def decl_gen_subst_one (registry : List DeclGenEntry) (d : Decl) : List Decl :=
             match lookup_decl_gen registry name {
                 Option.some entry =>
                     match entry {
-                        DeclGenEntry.dg_entry _ params gen_decls =>
+                        DeclGenEntry.dg_entry _ params gen_decls _ =>
                             match expand_decl_gen_call params gen_decls args {
                                 Option.some expanded => expanded,
                                 Option.none => List.cons d List.empty,
@@ -5587,7 +5587,7 @@ def decl_gen_subst_one (registry : List DeclGenEntry) (d : Decl) : List Decl :=
 
 /// One decl -> the decl plus everything it generates: `decl_gen_subst_one`
 /// (the decl itself, or a written macro call's own expansion), then
-/// `derive_bridge_decls` (`#[derive ...]`/`#[derive_cli]` on a type
+/// `derive_bridge_decls` (`#[derive ...]` on a type
 /// declaration, expanded into the `derive_*! <T>` call the user could
 /// have written — see `macro_queue.mo`'s own section note for the whole
 /// mechanism). Order is the reference's own: the type declaration first,
@@ -5800,7 +5800,45 @@ def replace_dep_module_decls (loaded : LoadedModules) (entries : List (Pair Modu
         LoadedModules.mk main all => LoadedModules.mk main (replace_many_module_decls entries all)
     }
 
+/// Every dependency module's `#[derive_handler ...]` registrations, each
+/// attributed to its own module -- the dep half of the duplicate
+/// validation in `expand_decls_graph` below (`raw_target` supplies the
+/// target module's own, attributed to `scope.module_id`).
+#[partial]
+def dep_module_derive_handler_regs (mods : List ModuleInfo) : List DeriveHandlerReg :=
+    match mods {
+        List.empty => List.empty,
+        List.cons m rest => list_append (derive_handler_regs_of_decls m.path m.decl_list) (dep_module_derive_handler_regs rest),
+    }
+
+/// Duplicate `#[derive_handler ...]` target registration is a hard
+/// error: two sites claiming the same `#[derive ...]` target would
+/// otherwise resolve last-wins, silently wrong across module load
+/// order (mirrors the Rust host's `derive_handler_registry`). This is
+/// the one pass that sees every module's registrations WITH
+/// attribution -- `dep_modules` already excludes the target module
+/// (its own come from `raw_target`), so each registration site is
+/// counted exactly once. The message matches the Rust host's
+/// `register_derive_handler` spelling.
 def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) (dep_modules : List ModuleInfo) : Result String GraphExpansion :=
+    let regs : List DeriveHandlerReg :=
+        list_append (derive_handler_regs_of_decls scope.module_id raw_target)
+            (dep_module_derive_handler_regs dep_modules) in
+    match find_duplicate_derive_target regs {
+        Option.some dup =>
+            match dup {
+                Pair.pair first second =>
+                    Result.err
+                        ("duplicate derive target `" ++ show_identifier first.dr_target
+                            ++ "`: registered by macro `" ++ show_identifier first.dr_macro
+                            ++ "` in module `" ++ show_module_path first.dr_module
+                            ++ "` and macro `" ++ show_identifier second.dr_macro
+                            ++ "` in module `" ++ show_module_path second.dr_module ++ "`"),
+            },
+        Option.none => expand_decls_graph_go scope whole_graph_decls target raw_target dep_modules,
+    }
+
+def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) (dep_modules : List ModuleInfo) : Result String GraphExpansion :=
     let registry : List DeclGenEntry := build_decl_gen_registry whole_graph_decls in
     let graph_subst : List Decl := decl_gen_subst_decls registry whole_graph_decls in
     let target_subst : List Decl := decl_gen_subst_decls registry target in

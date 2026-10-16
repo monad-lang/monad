@@ -118,9 +118,9 @@ handle.
 > to the same `std/derive.mo` macros the host calls
 > (`derive_bridge_decls`, `lang/src/typecheck/macro_queue.mo`), so
 > `#[derive BEq BOrd Debug Lens]` generates its instances either way. What you
-> must do on both is *import the backend* — `#[derive BEq]` dispatches by name
-> to a macro, and a macro that is not in scope is "macro `derive_beq` not
-> found".
+> must do on both is *import the backend* — `#[derive BEq]` resolves through
+> the derive-target registry to a macro by name, and a macro that is not in
+> scope is "macro `derive_beq` not found".
 
 The attribute form dispatches to those macros by name. Arguments are
 **space-separated bare names** — not `#[derive(BEq, BOrd)]`:
@@ -188,8 +188,8 @@ For sum types, `init.optics` provides `Prism` instead.
 
 ### You must import the backend
 
-`#[derive BEq]` dispatches to `derive_beq` by name, so the module defining it
-has to be in scope:
+`#[derive BEq]` resolves to `derive_beq` through the registry, then calls it
+by name, so the module defining it has to be in scope:
 
 ```monad,ignore
 use std::derive {derive_beq, derive_bord, derive_debug, derive_lens}
@@ -202,21 +202,43 @@ makes `#[derive BEq]` fail with "macro `derive_beq` not found".
 ## Writing Your Own Derive
 
 Because a derive is just a `TypeInfo -> List Decl` function plus a two-line
-`defmacro`, adding one is ordinary programming. `motes/clap/src/args.mo` does exactly this
-for `#[derive_cli]`, generating an argv parser from a struct's fields and their
-`#[arg]` annotations — the field attributes come through in `FieldInfo.attrs`.
+`defmacro`, adding one is ordinary programming. Annotate the `defmacro` with
+`#[derive_handler <Target> ...]` and `#[derive <Target>]` dispatches to it —
+no compiler change, and it works from any mote the compiling file imports:
+
+```monad,ignore
+#[derive_handler Focus]
+defmacro derive_focus T := decls {
+    reflect_type_info! T derive_focus_meta
+}
+```
+
+`motes/clap/src/args.mo` does exactly this for `#[derive Cli]`, generating an
+argv parser from a struct's fields and their `#[arg]` annotations — the field
+attributes come through in `FieldInfo.attrs`.
+
+Registration rules:
+
+- One attribute may name several targets, space-separated bare names —
+  `#[derive_handler BEq BOrd]` registers both.
+- Two *different* macros registering the same target is a compile error
+  listing both sites; the same macro registering it twice (e.g. one file
+  loaded under two module paths) is idempotent, not an error.
+- An unknown `#[derive Foo]` target is an error on the Rust host (listing the
+  registered targets) and a silent no-op self-hosted.
 
 ## Limitations
 
-- Only the four targets above are wired into the `#[derive ...]` attribute; your
-  own macros are called with `!` syntax.
+- `#[derive ...]` dispatches only to *registered* targets — but registration
+  is library-side (`#[derive_handler ...]` on any `defmacro`), so this is not
+  a compiler limit. Unregistered macros are called with `!` syntax.
 - `Expr` is not a full mirror of the compiler's `Term`: `Pi`, `Forall`, `Sort`,
   `Ann`, and `Quote` are excluded, because no shipped derive needs them.
 - `TypeInfo` does not carry a type's generic parameters, per-field defaults, or
   field multiplicities.
 
 `cli/src/main.mo` hand-writes its own argv parser rather than using
-`#[derive_cli]`, and stays free of macro syntax on purpose: the self-hosted
+`#[derive Cli]`, and stays free of macro syntax on purpose: the self-hosted
 parse/scope/typecheck suite re-parses that file through the self-hosted
 pipeline, and it is the one file where an attribute would be load-bearing for
 the bootstrap itself. `motes/clap/src/tests/cli_derive_tests.mo` is the derived
@@ -227,6 +249,9 @@ equivalent.
 - `defmacro` defines term macros and declaration macros; `quote { }` makes syntax data
 - `reflect_type_info!` passes a type's structure to an ordinary Monad function
 - `#[derive BEq BOrd Debug Lens]` — space-separated, and the backend must be imported
+- `#[derive_handler <Target> ...]` on a `defmacro` registers it as an
+  `#[derive <Target>]` backend; duplicate targets across *different* macros
+  are a compile error
 - Derives are library code in `std/derive.mo`, not compiler built-ins
 - Both compilers expand `#[derive …]`; term macros (`double!`) are
   self-hosted-only, which is the one divergence left in this area

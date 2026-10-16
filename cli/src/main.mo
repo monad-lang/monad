@@ -1923,7 +1923,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
         }
     }
 
-// `Command` and its argv parser are hand-written (not `#[derive_cli]`) and
+// `Command` and its argv parser are hand-written (not `#[derive Cli]`) and
 // this file stays free of any macro/attribute-derive syntax on purpose:
 // cli/src/main.mo is one of the files the self-hosted parse/scope/typecheck
 // test suite (slow_tests/parser_file_tests.mo, scope_all_tests.mo,

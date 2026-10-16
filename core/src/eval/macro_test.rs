@@ -708,20 +708,22 @@ fn test_undefined_macro_call_still_reports_not_found() {
 
 // ===== `#[derive ...]` attribute dispatch (Decl::Type hook) =====
 //
-// Tests the dispatch MECHANISM itself — mapping `#[derive Name ...]`
-// target names to `derive_<lowercase>!` macro calls via the ordinary
-// `expand_macro_call` path — using locally-defined stub macros (shadowing
-// the real `std/derive.mo` names, current-module priority) rather than
-// the real BEq/BOrd/Debug/Lens machinery, which is already covered end to
-// end via `std/derive_tests.mo`. `Lens`/`BEq` are used as target names
-// here purely because they're in the fixed `derive_macro_name` table —
-// what these stub macros actually generate is unrelated to lenses or
-// equality.
+// Tests the dispatch MECHANISM itself — `#[derive Name ...]` target names
+// resolving through the derive-handler REGISTRY (populated from
+// `#[derive_handler <Name>]` annotations on `defmacro`s, this file's own
+// or any loaded module's) into the corresponding `derive_*!` macro call
+// via the ordinary `expand_macro_call` path — using locally-defined stub
+// macros rather than the real BEq/BOrd/Debug/Lens machinery, which is
+// already covered end to end via `std/derive_tests.mo`. `Lens`/`BEq` are
+// used as target names here purely because they are the names the local
+// stubs registered — what these stub macros actually generate is
+// unrelated to lenses or equality.
 
 #[test]
 fn test_derive_attribute_dispatches_to_named_macro() {
   let r = expand_and_type_check(
     r#"
+    #[derive_handler Lens]
     defmacro derive_lens T := decls { def lens_ran : Bool := true }
 
     #[derive Lens]
@@ -743,7 +745,9 @@ fn test_derive_attribute_dispatches_to_named_macro() {
 fn test_derive_attribute_multiple_targets() {
   let r = expand_and_type_check(
     r#"
+    #[derive_handler BEq]
     defmacro derive_beq T := decls { def beq_ran : Bool := true }
+    #[derive_handler Lens]
     defmacro derive_lens T := decls { def lens_ran : Bool := true }
 
     #[derive BEq Lens]
@@ -765,7 +769,9 @@ fn test_derive_attribute_multiple_targets() {
 fn test_derive_attribute_bracket_group_form() {
   let r = expand_and_type_check(
     r#"
+    #[derive_handler BEq]
     defmacro derive_beq T := decls { def beq_ran : Bool := true }
+    #[derive_handler [Lens]]
     defmacro derive_lens T := decls { def lens_ran : Bool := true }
 
     #[derive [BEq, Lens]]
@@ -794,6 +800,176 @@ fn test_derive_attribute_unknown_target_fails() {
   assert!(
     err.contains("unknown derive target") && err.contains("Bogus"),
     "expected an unknown-derive-target error, got: {err}"
+  );
+}
+
+#[test]
+fn test_derive_attribute_unknown_target_lists_registered_targets() {
+  // The unknown-target error names the REGISTERED handlers, not a
+  // hardcoded list.
+  let err = expand_fails(
+    r#"
+    #[derive_handler Lens]
+    defmacro derive_lens T := decls { def lens_ran : Bool := true }
+
+    #[derive Bogus]
+    type Foo { mk, }
+    "#,
+  );
+  assert!(
+    err.contains("unknown derive target") && err.contains("Bogus") && err.contains("Lens"),
+    "expected the unknown-target error to list the registered `Lens`, got: {err}"
+  );
+}
+
+#[test]
+fn test_derive_handler_registered_by_loaded_module() {
+  // Cross-module registration: a loaded module's `#[derive_handler
+  // Focus]` annotation makes `#[derive Focus]` work in a consumer,
+  // with no Rust-side change — the whole point of the registry.
+  let loaded = default_modules().unwrap();
+
+  let helper_path = ModulePath::top("derive_focus_helper");
+  let parsed_helper = parse_file(
+    r#"
+    use init
+
+    #[derive_handler Focus]
+    defmacro derive_focus T := decls { def focus_ran : Bool := true }
+    "#,
+  )
+  .unwrap();
+  let helper_decls =
+    type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    helper_path.clone(),
+    ParsedModule {
+      decls: helper_decls,
+      module_doc: None,
+    },
+  ));
+
+  let r = expand_and_type_check_with_loaded(
+    r#"
+    use derive_focus_helper {derive_focus}
+    use init
+
+    #[derive Focus]
+    type Bar { mk, }
+
+    def main : Bool := focus_ran
+    "#,
+    &loaded,
+  );
+  if let Err(e) = &r {
+    eprintln!("cross-module derive registration error: {e}");
+  }
+  assert!(
+    r.is_ok(),
+    "#[derive Focus] should dispatch to the loaded module's registered macro"
+  );
+}
+
+#[test]
+fn test_derive_handler_duplicate_registration_fails() {
+  // Two modules registering the same target name is a compile error
+  // listing both registration sites — shadowing/last-wins would be
+  // silently wrong across mote load order.
+  let loaded = default_modules().unwrap();
+
+  let helper_path = ModulePath::top("dup_a");
+  let parsed_helper = parse_file(
+    r#"
+    use init
+
+    #[derive_handler Dup]
+    defmacro derive_dup_a T := decls { def dup_a_ran : Bool := true }
+    "#,
+  )
+  .unwrap();
+  let helper_decls =
+    type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    helper_path.clone(),
+    ParsedModule {
+      decls: helper_decls,
+      module_doc: None,
+    },
+  ));
+
+  let second_path = ModulePath::top("dup_b");
+  let parsed_second = parse_file(
+    r#"
+    use init
+
+    #[derive_handler Dup]
+    defmacro derive_dup_b T := decls { def dup_b_ran : Bool := true }
+    "#,
+  )
+  .unwrap();
+  let r = type_check_module_decls_new(&second_path, parsed_second.decls, &loaded);
+  let msg = match r {
+    Err(e) => e.to_string(),
+    Ok(_) => panic!("duplicate derive target registration should fail"),
+  };
+  assert!(
+    msg.contains("duplicate derive target") && msg.contains("Dup"),
+    "expected a duplicate-registration error, got: {msg}"
+  );
+  assert!(
+    msg.contains("dup_a") && msg.contains("dup_b"),
+    "error should list both registration sites, got: {msg}"
+  );
+}
+
+#[test]
+fn test_derive_handler_same_macro_double_load_is_idempotent() {
+  // The same physical file can sit in `loaded` under two module paths at
+  // once (a multi-file `check` names the target module by its file path
+  // while dependents import it by its mote-qualified path) — the SAME
+  // macro registering the same target from both copies is not a
+  // duplicate, only two DIFFERENT macros claiming one target are.
+  let loaded = default_modules().unwrap();
+
+  let helper_path = ModulePath::top("same_a");
+  let parsed_helper = parse_file(
+    r#"
+    use init
+
+    #[derive_handler Same]
+    defmacro derive_same T := decls { def same_ran : Bool := true }
+    "#,
+  )
+  .unwrap();
+  let helper_decls =
+    type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    helper_path.clone(),
+    ParsedModule {
+      decls: helper_decls,
+      module_doc: None,
+    },
+  ));
+
+  // The second module registers `Same` with the SAME macro name.
+  let second_path = ModulePath::top("same_b");
+  let parsed_second = parse_file(
+    r#"
+    use init
+
+    #[derive_handler Same]
+    defmacro derive_same T := decls { def same_ran : Bool := true }
+    "#,
+  )
+  .unwrap();
+  let r = type_check_module_decls_new(&second_path, parsed_second.decls, &loaded);
+  assert!(
+    r.is_ok(),
+    "the same macro re-registering a target is idempotent, got: {:?}",
+    r.err()
   );
 }
 

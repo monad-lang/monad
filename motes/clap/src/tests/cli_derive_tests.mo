@@ -1,22 +1,20 @@
-/// `#[derive_cli]` — clap-style attribute derive, macro-system maturity test.
+/// `#[derive Cli]` — clap-style attribute derive, macro-system maturity test.
 ///
-/// This is the actual proof that `#[derive_cli]` works end to end as a real
-/// `.mo` program (not just the Rust-level tests in
-/// `core/src/eval/derive_cli_test.rs`): one attribute on a type the user
-/// writes themselves generates a full `List String -> Result String
-/// DemoCommand` parser, dispatching on subcommand name, `#[arg]`-marked
-/// `Bool` fields as `--flag`s, everything else as required positionals.
-///
-/// Deliberately **not** `use`d by `cli/src/main.mo` or listed in any
-/// self-hosted parse/scope/typecheck test file (`parser_file_tests.mo`,
-/// `scope_all_tests.mo`, `typecheck_lang_tests.mo`) — the self-hosted
-/// compiler (`lang/parser.mo`) has no concept of `#[derive_cli]` or
-/// per-param `#[...]` attributes yet, so this file is only ever run through
-/// the Rust host (`cargo run -- test motes/clap/src/tests/cli_derive_tests.mo`),
-/// which does.
+/// This is the actual proof that `#[derive Cli]` works end to end as a real
+/// `.mo` program under BOTH compilers (the Rust-level tests in
+/// `core/src/eval/derive_cli_test.rs` cover the Rust host only): one
+/// attribute on a type the user writes themselves — registered by the
+/// `#[derive_handler Cli]` annotation on `derive_cli` in
+/// `motes/clap/src/args.mo`, not by any compiler special case — generates
+/// a full `List String -> Result String DemoCommand` parser, dispatching
+/// on subcommand name, `#[arg]`-marked `Bool` fields as `--flag`s,
+/// everything else as required positionals. The attribute-to-macro
+/// bridge (`lang/typecheck/macro_queue.mo`'s `derive_bridge_decls`)
+/// took this file off the Rust-only list (`scripts/check-monad-tests.sh`,
+/// the P10 record) — it now runs self-hosted too.
 use lib::args {*}
 
-#[derive_cli]
+#[derive Cli]
 type DemoCommand {
     compile (path : String) (#[arg] verbose : Bool),
     pretty (path : String),

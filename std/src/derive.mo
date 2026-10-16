@@ -1,6 +1,12 @@
 /// Derive macros: `derive_lens`, `derive_debug`, `derive_beq`,
 /// `derive_bord` — written using Monad's own macro system.
 ///
+/// Each `defmacro` registers its `#[derive ...]` target with
+/// `#[derive_handler <Target>]` — the registration the derive-target
+/// registry resolves the attribute through, on both compilers (no
+/// hardcoded target list anywhere). Two different macros registering
+/// the same target is a compile error.
+///
 /// All four are ported to the reflection-as-data kernel (`init/meta.mo`'s
 /// `TypeInfo`/`Expr`/`Decl` values + `core/src/eval/meta_compile.rs`'s
 /// `MetaEvalContext`, invoked via the `reflect_type_info!` intrinsic) —
@@ -97,6 +103,7 @@ pub def derive_lens_meta (info : TypeInfo) : List Decl :=
             }
     }
 
+#[derive_handler Lens]
 defmacro derive_lens T := decls {
     reflect_type_info! T derive_lens_meta
 }
@@ -185,6 +192,7 @@ pub def derive_debug_meta (info : TypeInfo) : List Decl :=
                     (e_match (e_var "self") arms)]]
     }
 
+#[derive_handler Debug]
 defmacro derive_debug T := decls {
     reflect_type_info! T derive_debug_meta
 }
@@ -262,6 +270,7 @@ pub def derive_beq_meta (info : TypeInfo) : List Decl :=
                     (e_match (e_var "a") arms)]]
     }
 
+#[derive_handler BEq]
 defmacro derive_beq T := decls {
     reflect_type_info! T derive_beq_meta
 }
@@ -347,6 +356,7 @@ pub def derive_bord_meta (info : TypeInfo) : List Decl :=
                  bord_method "gt" gt_chain false type_name ctors]]
     }
 
+#[derive_handler BOrd]
 defmacro derive_bord T := decls {
     reflect_type_info! T derive_bord_meta
 }

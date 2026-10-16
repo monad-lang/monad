@@ -309,7 +309,8 @@ parentheses or commas**:
 #[terminating]              // assert well-foundedness; skip the termination check
 #[partial]                  // this definition may not terminate
 #[derive BEq BOrd Debug]    // generate instances via macros
-#[derive_cli]               // generate an argv parser
+#[derive Cli]               // generate an argv parser (clap's registered target)
+#[derive_handler Cli]       // register a defmacro as a #[derive Cli] backend
 #[cfg ...]                  // conditional compilation
 ```
 

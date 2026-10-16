@@ -2,11 +2,11 @@
 ///
 /// Used two ways:
 /// - by hand, from `cli/src/main.mo` (which stays free of any macro/attribute
-///   syntax so the self-hosted parser/typechecker — which doesn't know
-///   about `#[derive_cli]` — can still parse it; see `cli/src/main.mo`'s own
+///   syntax — it is the file the bootstrap is built from; see
+///   `cli/src/main.mo`'s own
 ///   header comment and the self-hosted parse/scope/typecheck tests in
 ///   `lang/tests/`);
-/// - by generated code, from `#[derive_cli]`-annotated types — see
+/// - by generated code, from `#[derive Cli]`-annotated types — see
 ///   `derive_cli_meta`/`derive_cli` below, and the demo in
 ///   `lib/tests/cli_derive_tests.mo`.
 ///
@@ -23,7 +23,7 @@ use std::list {List.any, List.filter, List.length}
 // `String.concat_all` lives in `init/string.mo` (moved there by
 // c431ba0, which deleted this file's own `cli_concat_all` copy). An
 // explicit import is required, not optional: this module's defs are
-// meta-evaluated during `#[derive_cli]` expansion, and that closure is
+// meta-evaluated during `#[derive Cli]` expansion, and that closure is
 // scoped to the module's own declared dependencies -- without this the
 // expansion fails with `unbound variable String.concat_all`, taking
 // `cli/src/main.mo` and four test files down with it. `motes/json`
@@ -103,7 +103,7 @@ pub def Cli.take_opt (long : String) (short : String) (default : String) (args :
                 }
     }
 
-// --- #[derive_cli]: reflection-as-data metaprogramming ---
+// --- #[derive Cli]: reflection-as-data metaprogramming ---
 //
 // `derive_cli_meta` is an ordinary `TypeInfo -> List Decl` function (see
 // `init/meta.mo`/`plans/review-and-reduce-the-greedy-nest.md`), invoked via
@@ -161,7 +161,7 @@ def cli_bad_arg_field_in_ctor (ctor_display : String) (fields : List FieldInfo) 
             if cli_has_arg_attr f && Bool.not (cli_is_bool_typ (cli_field_typ f))
                 then Option.some
                     (String.concat_all
-                        ["#[derive_cli]: `", ctor_display, "`'s field `", cli_field_name f,
+                        ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f,
                          "` is annotated `#[arg]` but is not `Bool` — only boolean flags are supported (v1)"])
                 else cli_bad_arg_field_in_ctor ctor_display tail,
     }
@@ -252,16 +252,17 @@ def cli_dispatch_chain (type_name : String) (ctors : List CtorInfo) : Expr :=
         cons c tail => cli_dispatch_ctor type_name c (cli_dispatch_chain type_name tail),
     }
 
-/// `#[derive_cli] type Command { ... }` (or, called directly, `derive_cli!
-/// Command`) generates `parse_<lowercased name> : List String -> Result
-/// String Command`. Fails at meta-expansion time (`Decl.d_error`) if the
-/// type has no constructors, or if `#[arg]` annotates a non-`Bool` field.
+/// `#[derive Cli] type Command { ... }` (or, called directly,
+/// `derive_cli! Command`) generates `parse_<lowercased name> : List
+/// String -> Result String Command`. Fails at meta-expansion time
+/// (`Decl.d_error`) if the type has no constructors, or if `#[arg]`
+/// annotates a non-`Bool` field.
 pub def derive_cli_meta (info : TypeInfo) : List Decl :=
     match info {
         type_info type_name ctors =>
             match ctors {
                 empty =>
-                    [d_error (String.concat_all ["#[derive_cli]: `", type_name, "` has no constructors"])],
+                    [d_error (String.concat_all ["#[derive Cli]: `", type_name, "` has no constructors"])],
                 cons _ _ =>
                     match cli_bad_arg_field ctors {
                         some msg => [d_error msg],
@@ -279,9 +280,13 @@ pub def derive_cli_meta (info : TypeInfo) : List Decl :=
             }
     }
 
-// No `pub`: `vis_parser` (lang/src/parser.mo) takes a visibility prefix on
-// `def`/`type`/`class`/`struct`/`instance`/`infix` and not on `defmacro`, so
-// this name crosses a mote boundary as package-private.
+// Registers the `Cli` derive target: any module that brings this macro
+// into scope (`use clap.args {derive_cli}` or a superset) can write
+// `#[derive Cli]` on its command types — the old `#[derive_cli]`
+// attribute special case is gone. The macro itself stays
+// package-private (a `defmacro` has no visibility prefix), same as
+// before this annotation existed.
+#[derive_handler Cli]
 defmacro derive_cli T := decls {
     reflect_type_info! T derive_cli_meta
 }

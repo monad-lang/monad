@@ -82,7 +82,7 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
 def test_typecheck_lang_main : IO Bool := typecheck_file "cli/src/main.mo"
 
 /// Self-hosted counterpart to `motes/clap/src/tests/cli_derive_tests.mo` -- bare
-/// `derive_cli!` (not `#[derive_cli]` attribute sugar), proving
+/// `derive_cli!` (not the `#[derive Cli]` attribute sugar), proving
 /// `reflect_type_info!`'s self-hosted evaluation
 /// (`lang/typecheck/meta_eval.mo`) works for `motes/clap/src/args.mo`'s own
 /// meta-def too, not just `std/derive.mo`'s four derives (see

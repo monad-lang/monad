@@ -1,19 +1,17 @@
 /// Self-hosted counterpart to `motes/clap/src/tests/cli_derive_tests.mo` --
-/// proves `derive_cli!` (the bare decl-macro form, not `#[derive_cli]`
+/// proves `derive_cli!` (the bare decl-macro form, not the `#[derive Cli]`
 /// attribute sugar) type-checks correctly through the SELF-HOSTED
 /// checker (`lang/typecheck/macro_queue.mo`'s `expand_decls_graph` +
 /// `lang/typecheck/meta_eval.mo`), the same way
 /// `slow_tests/typecheck_std_tests.mo`'s `known_broken_typecheck_std_derive_tests`
-/// already proves for `std/derive.mo`'s four derives. `#[derive_cli]`
+/// already proves for `std/derive.mo`'s four derives. The `#[derive Cli]`
 /// attribute-sugar dispatch (turning the attribute into a synthesized
-/// `derive_cli!` call) is a separate, smaller, optional follow-up --
-/// out of scope here; the bare form alone is enough to prove
-/// `reflect_type_info!` evaluation works for `cli/src/args.mo`'s own meta-
-/// def too, not just `std/derive.mo`'s.
+/// `derive_cli!` call via clap's own `#[derive_handler Cli]`
+/// registration) is proven separately by `cli_derive_tests.mo`, which
+/// now runs under both hosts.
 ///
 /// Listed in `slow_tests/typecheck_lang_tests.mo` (self-hosted
-/// type-check corpus) -- unlike `cli_derive_tests.mo`, which is
-/// deliberately Rust-host-only.
+/// type-check corpus) -- like `cli_derive_tests.mo`.
 use lib::args {*}
 
 type DemoCommand {

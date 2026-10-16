@@ -1735,7 +1735,7 @@ def type_cons_one_group_content (input : String) (name : Identifier) (params : L
 	// and (via `decls_try`'s "any failure silently truncates the rest of
 	// the file" leniency) silently dropping every declaration after it --
 	// which is why the skip came first; the CAPTURE is what
-	// `#[derive_cli]` needs on top (see `ctor_params_for_names_attrs`'s
+	// `#[derive Cli]` needs on top (see `ctor_params_for_names_attrs`'s
 	// own doc comment for the concrete bug a discarded list caused).
 	let empty_attrs : List Attribute := List.empty in
 	match opt_attributes_go (skip_spaces input) empty_attrs {
@@ -2293,10 +2293,10 @@ def def_params_try_explicit (r : ParseResult String) (orig : String) (params : L
 	match r {
 		// `opt_attributes` captured right after the opening `(` -- the
 		// one real per-param attribute shape (`#[arg]`, e.g.
-		// `(#[arg] verbose : Bool)` in a #[derive_cli]-annotated type's
+		// `(#[arg] verbose : Bool)` in an `#[derive Cli]`-annotated type's
 		// constructor) is on a CONSTRUCTOR field, not a `def` param
-		// (see motes/clap/src/tests/cli_derive_tests.mo, deliberately Rust-host-
-		// only per its own doc comment) -- so this specific path has no
+		// (see motes/clap/src/tests/cli_derive_tests.mo, now running under
+		// both hosts per its own doc comment) -- so this specific path has no
 		// in-scope real corpus target, unlike every other piece of this
 		// plan. Lower-confidence, hand-repro-only per
 		// plans/bootstrapping/self-hosted-compiler.md's own staging.
@@ -2454,7 +2454,7 @@ def params_for_names_attrs (names : List Identifier) (typ : ParseTerm) (attrs : 
 /// `type_cons_one_group_content` used to parse a field's leading
 /// `#[arg]` and DISCARD it ("accept the syntax, discard the content",
 /// its own doc comment), on the grounds that "nothing downstream reads a
-/// field's own attributes". `#[derive_cli]` does: `motes/clap/src/args.mo`'s
+/// field's own attributes". `#[derive Cli]` does: `motes/clap/src/args.mo`'s
 /// `derive_cli_meta` classifies each `FieldInfo` into a `--flag` or a
 /// positional purely by `cli_has_arg_attr`, and `FieldInfo.attrs` is fed
 /// from exactly this `Param.attrs` slot through
@@ -3695,63 +3695,78 @@ def macro_params_loop (input : String) (acc : List ParseParam) : ParseResult (Li
 		fail _ => success input (list_reverse acc)
 	}
 
+// Attributes are captured here via `opt_attributes` and threaded through
+// the chain to both payload sites — same "placeholder now, patch later"
+// shape `type_parser`'s own `type_try_attrs` uses (and the same fix the
+// Rust reference's `decl_gen_parser`/`defmacro_parser` got: `#[...]`
+// previously didn't parse at all before `defmacro`, which is where
+// `#[derive_handler <Name>]` registration rides).
 #[partial]
 def defmacro_parser (input : String) : ParseResult ParseDecl :=
-	defmacro_kw (tag "defmacro" input)
+	defmacro_try_attrs (opt_attributes input) input
+
+// Same `skip_docstrings (skip_spaces rem)` gap-fix as `type_try_attrs`:
+// a `#[attr] // comment` line right before `defmacro` needs skipping
+// between the attribute and the keyword.
+#[partial]
+def defmacro_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult ParseDecl :=
+	match r {
+		success rem attrs => defmacro_kw (tag "defmacro" (skip_docstrings (skip_spaces rem))) attrs,
+		fail _ => defmacro_kw (tag "defmacro" orig) List.empty,
+	}
 
 #[partial]
-def defmacro_kw (r : ParseResult String) : ParseResult ParseDecl :=
+def defmacro_kw (r : ParseResult String) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => defmacro_ws1 (ws1 rem),
+		success rem _ => defmacro_ws1 (ws1 rem) attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_ws1 (r : ParseResult String) : ParseResult ParseDecl :=
+def defmacro_ws1 (r : ParseResult String) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => defmacro_name (dotted_def_name (skip_spaces rem)),
+		success rem _ => defmacro_name (dotted_def_name (skip_spaces rem)) attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_name (r : ParseResult String) : ParseResult ParseDecl :=
+def defmacro_name (r : ParseResult String) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
-		success rem name => defmacro_params_result (macro_params rem) (Identifier.id name),
+		success rem name => defmacro_params_result (macro_params rem) (Identifier.id name) attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_params_result (r : ParseResult (List ParseParam)) (name : Identifier) : ParseResult ParseDecl :=
+def defmacro_params_result (r : ParseResult (List ParseParam)) (name : Identifier) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
-		success rem params => defmacro_assign (tag ":=" (skip_spaces rem)) name params,
+		success rem params => defmacro_assign (tag ":=" (skip_spaces rem)) name params attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_assign (r : ParseResult String) (name : Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
+def defmacro_assign (r : ParseResult String) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
 		success rem _ =>
 			let after_assign : String := skip_spaces rem in
-			defmacro_try_decls_block (tag "decls" after_assign) after_assign name params,
+			defmacro_try_decls_block (tag "decls" after_assign) after_assign name params attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_try_decls_block (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
+def defmacro_try_decls_block (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => defmacro_decls_open (tag "{" (skip_spaces rem)) name params,
-		fail _ => defmacro_term_body (type_expression (skip_docstrings (skip_spaces orig))) name params
+		success rem _ => defmacro_decls_open (tag "{" (skip_spaces rem)) name params attrs,
+		fail _ => defmacro_term_body (type_expression (skip_docstrings (skip_spaces orig))) name params attrs
 	}
 
 #[partial]
-def defmacro_term_body (r : ParseResult ParseTerm) (name : Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
+def defmacro_term_body (r : ParseResult ParseTerm) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
 		success rem term =>
 			let body : ParseTerm := lam_params params term in
 			let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
-			let no_attrs : List Attribute := List.empty in
 			let no_constraints : List TypeConstraint := List.empty in
-			success rem (pd_def_macro_d  (ParseDef.mk np_ pt_hole  body no_constraints no_attrs Visibility.package_private List.empty)),
+			success rem (pd_def_macro_d  (ParseDef.mk np_ pt_hole  body no_constraints attrs Visibility.package_private List.empty)),
 		fail e => fail e
 	}
 
@@ -3768,26 +3783,25 @@ def defmacro_term_body (r : ParseResult ParseTerm) (name : Identifier) (params :
 /// inventing a separate "no-macro" variant) matches the reference
 /// exactly, and needs no new termination-guarding machinery.
 #[partial]
-def defmacro_decls_open (r : ParseResult String) (name : Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
+def defmacro_decls_open (r : ParseResult String) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => defmacro_decls_result (decls_skip (skip_spaces rem) List.empty) name params,
+		success rem _ => defmacro_decls_result (decls_skip (skip_spaces rem) List.empty) name params attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_decls_result (r : ParseResult (List ParseDecl)) (name : Identifier) (params : List ParseParam) : ParseResult ParseDecl :=
+def defmacro_decls_result (r : ParseResult (List ParseDecl)) (name : Identifier) (params : List ParseParam) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
-		success rem decl_list => defmacro_decls_close (tag "}" (skip_spaces rem)) name params decl_list,
+		success rem decl_list => defmacro_decls_close (tag "}" (skip_spaces rem)) name params decl_list attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : List ParseParam) (decl_list : List ParseDecl) : ParseResult ParseDecl :=
+def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : List ParseParam) (decl_list : List ParseDecl) (attrs : List Attribute) : ParseResult ParseDecl :=
 	match r {
 		success rem _ =>
 			let np_ : NamePath := NamePath.mk (List.cons name List.empty) in
-			let no_attrs : List Attribute := List.empty in
-			success rem (pd_decl_gen_d  np_ params decl_list no_attrs),
+			success rem (pd_decl_gen_d  np_ params decl_list attrs),
 		fail e => fail (ParseError.custom "expected } to close decl_list block" "")
 	}
 
@@ -9315,14 +9329,14 @@ def test_decls_parser_does_not_truncate_after_attribute_with_trailing_comment : 
     }
 
 #[test]
-def test_type_parser_captures_derive_cli_attribute : Bool :=
-    match type_parser "#[derive_cli]\ntype Command { help, }" {
+def test_type_parser_captures_derive_attribute : Bool :=
+    match type_parser "#[derive Cli]\ntype Command { help, }" {
         success rem out =>
             String.beq rem "" &&
             match out.kind {
                 ParseDeclKind.inductive_d ind => match ind {
                     ParseInductive.mk _ _ _ _ attrs _ =>
-                        I64.beq (List.length attrs) 1 && has_attr (Identifier.id "derive_cli") attrs,
+                        I64.beq (List.length attrs) 1 && has_attr (Identifier.id "derive") attrs,
                 },
                 _ => false
             },
@@ -9380,14 +9394,14 @@ def test_struct_parser_captures_multi_arg_derive_attribute : Bool :=
         fail _ => false
     }
 
-/// `#[derive_cli]` above a `type` and above a `struct` both reach their
+/// `#[derive Cli]` above a `type` and above a `struct` both reach their
 /// own decl shape's `attrs` slot -- the two halves the bridge in
 /// `lang/typecheck/macro_queue.mo` reads back out, and the reason
 /// `Struct` needed a slot of its own where the Rust reference
 /// represents both as one `Inductive`.
 #[test]
 def test_attribute_reaches_both_decl_shapes : Bool :=
-    match type_parser "#[derive_cli]\ntype Cmd { help, }" {
+    match type_parser "#[derive Cli]\ntype Cmd { help, }" {
         success _ out =>
             match out.kind {
                 ParseDeclKind.inductive_d ind => match ind {
@@ -9396,7 +9410,7 @@ def test_attribute_reaches_both_decl_shapes : Bool :=
                 _ => false
             },
         fail _ => false
-    } && (match struct_parser "#[derive_cli]\nstruct Cmd { help : Bool }" {
+    } && (match struct_parser "#[derive Cli]\nstruct Cmd { help : Bool }" {
         success _ out =>
             match out.kind {
                 ParseDeclKind.struct_d s => match s {
@@ -9659,6 +9673,63 @@ def test_defmacro_decls_block_with_nested_macro_call : Bool :=
                         List.cons d _ => match d.kind { ParseDeclKind.macro_call_d name _ => id_eq name (Identifier.id "reflect_type_info"), _ => false },
                         List.empty => false,
                     },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// `#[derive_handler ...]`-style registration rides Form A — the
+/// attribute must survive into `decl_gen_d`'s attrs slot instead of
+/// being dropped (the chain's old hardcoded `no_attrs`).
+#[test]
+def test_defmacro_attribute_on_decls_block : Bool :=
+    match decl_parser "#[derive_handler Lens]\ndefmacro derive_lens T := decls { reflect_type_info! T derive_lens_meta }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.decl_gen_d name _ _ attrs =>
+                    id_eq (Identifier.id "derive_lens") (name_path_last name) &&
+                    I64.beq (List.length attrs) 1 &&
+                    has_attr (Identifier.id "derive_handler") attrs,
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// Form B (`defmacro name params := <term>`) carries the attribute on
+/// the reused `Def` payload's own attrs slot.
+#[test]
+def test_defmacro_attribute_on_term_body : Bool :=
+    match decl_parser "#[test]\ndefmacro id x := quote { x }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.def_macro_d d => match d {
+                    ParseDef.mk {attrs, ..} =>
+                        I64.beq (List.length attrs) 1 && has_attr (Identifier.id "test") attrs,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// Both forms without an attribute keep an empty attrs list, exactly
+/// as before the chain learned to parse attributes.
+#[test]
+def test_defmacro_no_attribute_attrs_empty : Bool :=
+    match decl_parser "defmacro derive_lens T := decls { reflect_type_info! T derive_lens_meta }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.decl_gen_d _ _ _ attrs => I64.beq (List.length attrs) 0,
+                _ => false
+            },
+        fail _ => false
+    } && match decl_parser "defmacro id x := quote { x }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseDeclKind.def_macro_d d => match d { ParseDef.mk {attrs, ..} => I64.beq (List.length attrs) 0 },
                 _ => false
             },
         fail _ => false
