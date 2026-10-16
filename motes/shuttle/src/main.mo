@@ -37,6 +37,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {ReadTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
+use shuttle::wire::mock {is_assistant, content_text}
 
 def usage : String :=
     List.intercalate "\n" [
@@ -430,12 +431,34 @@ def report_saved (plan : RunPlan) (servers : List McpServer) (session : Session)
     }
 
 def report_print (plan : RunPlan) (servers : List McpServer) (session : Session) : IO I64 := do {
+    if last_is_tool session.history
+    then write_errln "turn cap reached before the model finished -- raise --max-turns; the transcript so far is kept"
+    else return unit;
     if plan.stream then IO.write_stdout "\n" else print_answer session;
     let dim <- colored (usage_line session) Color.bright_black;
     IO.println dim;
     let _ <- dispose_all servers;
     return 0
 }
+
+/// Whether the run ended at the turn cap mid-flight: the loop stops
+/// with the tool results appended and the model never having answered,
+/// so the LAST history message is a tool message. A run that finished
+/// -- even one whose last turn spent the budget exactly -- has an
+/// assistant message last.
+#[partial]
+def last_is_tool (history : List Message) : Bool :=
+    match history {
+        List.empty => false,
+        List.cons m rest =>
+            if List.is_empty rest then is_tool m else last_is_tool rest,
+    }
+
+def is_tool (m : Message) : Bool :=
+    match m.role {
+        Role.tool => true,
+        _ => false,
+    }
 
 /// The final answer print that is NOT made in stream mode: the text
 /// already reached stdout fragment by fragment through `emit`, so
@@ -457,18 +480,6 @@ def usage_line (session : Session) : String :=
     (String.concat " | tokens in " (String.concat (I64.to_string session.spent.input_tokens)
     (String.concat ", out " (String.concat (I64.to_string session.spent.output_tokens)
     (String.concat ", cached " (String.concat (I64.to_string session.spent.cached_tokens) "]")))))))
-
-def is_assistant (m : Message) : Bool :=
-    match m.role {
-        Role.assistant => true,
-        _ => false,
-    }
-
-def content_text (c : Content) : String :=
-    match c {
-        Content.text s => s,
-        _ => "",
-    }
 
 #[partial]
 def message_text (m : Message) : String :=

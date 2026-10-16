@@ -45,7 +45,7 @@ use json::json {Json}
 /// propagate through `ResultT`'s own short-circuiting bind.
 def run_tool (id : String) (impl : ToolImpl) (input : Json) : ResultT String IO Content :=
     match impl {
-        ToolImpl.mk spec run =>
+        { run, .. } =>
             ResultT.mk (do {
                 let r <- ResultT.run (run id input);
                 return (Result.ok (match r {
@@ -88,7 +88,7 @@ pub def dispatch_all (reg : ToolRegistry) (cs : List Content) : ResultT String I
     }
 
 def turn_content (m : Message) : List Content :=
-    match m { Message.mk role content => content }
+    match m { { content, .. } => content }
 
 // ── The indexed phase steps ────────────────────────────────────────────
 
@@ -98,6 +98,10 @@ def turn_content (m : Message) : List Content :=
 pub def Loop.send : Agent AgentIdle AgentAnswered Turn :=
     Agent.agent agent_send_step
 
+/// The budget guard for DIRECT callers of the pub `Loop.send`: the
+/// loop itself ends cleanly at a spent budget (`Loop.check_budget`
+/// below) and never asks send to exceed one, so a caller driving the
+/// steps by hand gets the refusal here, named.
 def agent_send_step (s : RunState) : ResultT String IO (Pair RunState Turn) :=
     if s.turns_left < 1 then ResultT.mk (return (Result.err "turn cap reached"))
     else agent_send_run s
@@ -148,11 +152,12 @@ def agent_finish_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunS
     ResultT.mk (return (Result.ok (Pair.pair s2 unit)))
 }
 
-/// One full iteration: ask, then either dispatch-and-loop or finish.
+/// The value-level branch after one send: a tool turn dispatches,
+/// appends every result in one message, and loops back to Idle; any
+/// other stop reason appends the final assistant message and finishes.
 /// The two arms agree on `Agent Answered Done Unit`, which is what
-/// lets the value-level branch on the stop reason live INSIDE one
-/// indexed program -- the tool arm loops back to Idle via
-/// `append_results`, so the recursion closes at the same indices.
+/// lets the branch live INSIDE one indexed program -- the tool arm
+/// closes the recursion at the same indices it opened.
 def loop_after_send (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
     match turn.stop {
         StopReason.tool_use_stop =>
@@ -160,9 +165,41 @@ def loop_after_send (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
         _ => Loop.finish turn,
     }
 
+/// Idle -> Idle: the budget check that starts every iteration.
+/// `Option.some` means the budget is spent and the run must END here,
+/// with the session it has.
+pub def Loop.check_budget : Agent AgentIdle AgentIdle (Option Unit) :=
+    Agent.agent agent_budget_step
+
+def agent_budget_step (s : RunState) : ResultT String IO (Pair RunState (Option Unit)) :=
+    if s.turns_left < 1
+    then ResultT.mk (return (Result.ok (Pair.pair s (Option.some unit))))
+    else ResultT.mk (return (Result.ok (Pair.pair s Option.none)))
+
+/// Idle -> Done without a model call: the turn budget is spent. Ending
+/// at the cap is a NORMAL completion -- the transcript built so far
+/// (assistant turns, tool results, accumulated usage) is the run's
+/// RESULT, never an error to discard, and a `--save` caller still gets
+/// it. The phantom markers police the ask-then-dispatch order; this
+/// hand-built `Agent.agent` step is the one phase transition the type
+/// discipline does not grant to dispatch, only to the budget.
+pub def Loop.cap_done : Agent AgentIdle AgentDone Unit :=
+    Agent.agent (fn (s : RunState) => ResultT.mk (return (Result.ok (Pair.pair s unit))))
+
+/// One full iteration: the budget first, then ask, then either
+/// dispatch-and-loop or finish. A spent budget ends the run through
+/// `cap_done` instead of erroring; the two ask-arms agree on
+/// `Agent Answered Done Unit`, which is what lets the value-level
+/// branch on the stop reason live INSIDE one indexed program -- the
+/// tool arm loops back to Idle via `append_results`, so the recursion
+/// closes at the same indices.
 #[terminating]
 pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
-    Agent.bind Loop.send (fn (turn : Turn) => loop_after_send turn)
+    Agent.bind Loop.check_budget (fn (capped : Option Unit) =>
+        match capped {
+            Option.some _ => Loop.cap_done,
+            Option.none => Agent.bind Loop.send (fn (turn : Turn) => loop_after_send turn),
+        })
 
 // ── Entry points ───────────────────────────────────────────────────────
 

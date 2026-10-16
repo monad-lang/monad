@@ -114,6 +114,35 @@ def test_mock_loop_dispatches_tool_and_finishes : IO Bool := do {
     })
 }
 
+/// The turn-cap end, offline: a budget of ONE against the tool_use
+/// script turn stops the run as a normal `Result.ok` -- the session is
+/// kept with `turns` at the cap, and the history's LAST message is the
+/// tool result (the shape the CLI's cap-stop note keys off). The old
+/// loop errored here, losing the session.
+#[test]
+def test_mock_loop_cap_ends_normally_with_the_session : IO Bool := do {
+    write_script;
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 1 Provider.silent_emit);
+    return (match r {
+        Result.err _ => false,
+        Result.ok s => s.turns == 1 && last_is_tool s.history,
+    })
+}
+
+#[partial]
+def last_is_tool (history : List Message) : Bool :=
+    match history {
+        List.empty => false,
+        List.cons m rest =>
+            if List.length rest == 0 then is_tool_message m else last_is_tool rest,
+    }
+
+def is_tool_message (m : Message) : Bool :=
+    match m.role {
+        Role.tool => true,
+        _ => false,
+    }
+
 /// The unknown-tool path, offline: the script asks for a tool the
 /// registry does not have, and the loop must answer with an
 /// `is_error` tool_result naming it -- not abort the run.

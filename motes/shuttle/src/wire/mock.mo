@@ -51,7 +51,7 @@ def content_text (c : Content) : String :=
 #[partial]
 def mock_turn_text (t : Turn) : String :=
     match t {
-        Turn.mk message _ _ => String.concat_all (List.map content_text message.content)
+        { message, .. } => String.concat_all (List.map content_text message.content)
     }
 
 /// A scripted turn is one atomic payload, so its whole text is
