@@ -1,38 +1,65 @@
-// Terminal UI Library - the application loop (Phase 7)
+// Terminal UI Library - the application loop (Phase 7, v2: Elm `Msg` + `perform`)
 //
 // `run_app` is the Elm-architecture entry point: the app is a record
-// of `init`/`update`/`view` plus a frame clock, and the loop wires
-// the pull reader (input.mo), the fold semantics (frp.mo pins them)
-// and the renderer (render.mo) around it. One loop, one write per
+// of `init`/`on_event`/`update`/`view` plus a frame clock, and the loop
+// wires the pull reader (input.mo), the fold semantics (frp.mo pins
+// them) and the renderer (render.mo) around it. One loop, one write per
 // changed model:
 //
 //   Input.produce (poll/read/decode + resize + tick)  ->  List Event
-//   fold update over the model (dispatch -> next frame)  ->  S * Cmd
-//   view -> render -> diff -> apply_deltas  ->  one stdout write
+//   on_event lifts each Event into the app's own Msg
+//   fold update over the model (dispatch/perform -> next frame)  ->  S * Cmd
+//   view -> render -> diff (or a forced full repaint) -> apply_deltas  ->  write
 //
-// `Cmd` is the only side-channel: `update` returns commands rather
-// than performing them, and `dispatch` re-enters the event list one
-// frame later -- the same step semantics `EventStream.fold`
-// table-tests.
+// `Cmd` is the side-channel: `update` returns commands rather than
+// performing them itself. `dispatch` re-enters the message list one frame
+// later (the same step semantics `EventStream.fold` table-tests); `perform`
+// runs real IO INLINE, during the same fold, and feeds its result back the
+// same way `dispatch` does -- the one thing `update` cannot express on its
+// own, since `update` itself stays pure.
 //
-// v1 shape deviations from the plan's sketch, recorded here so they
-// are decisions, not drift:
-//   * `update` is PURE (`S -> Event -> Pair S Cmd`), not
-//     `TuiT M Raw Raw (S * Cmd)` -- the transformer (Phase 10) lifts
-//     this loop's halves; the pure update is the 90% case the plan
-//     says the App record is for.
-//   * `tick_ms` is a field of `App`: a frame clock has to live
-//     somewhere, and negative = block until input, no ticks.
-//   * `run_frp` is deferred: the cold FRP core deliberately has no
-//     live signals, and `run_app` IS the live composition point.
-//   * Panic recovery is the honest v1 version: the terminal is
-//     restored on every CONTROLLED exit (quit, EOF). A hard crash
-//     still strands the alt screen -- unwinding through the restore
-//     path needs the error-effect story (Phase 10's ResultT stack).
+// v2 shape change, recorded here so it is a decision, not drift: `App`/
+// `Cmd` gained a second type parameter `M` (the app's own message type),
+// and `App` gained `on_event : Event -> M`. v1 had
+// `update : S -> Event -> Pair S Cmd` -- update consumed the terminal's own
+// event type directly, and there was no way for an app to drive real IO (a
+// network call, a subprocess) from inside the loop at all. `Cmd.perform
+// (action : Unit -> IO M)` closes that gap without reaching for
+// concurrency: `std/concurrent` has no non-blocking fiber-poll primitive on
+// either backend (confirmed when weaver's interactive TUI needed exactly
+// this), so `perform`'s action runs synchronously, blocking the frame it
+// was returned from -- the same trade-off a line-based UI already makes
+// over `IO.read_line`. A future async `perform` would need a new
+// fiber-poll native; nothing here forecloses that, it is simply not what
+// v2 builds.
 //
-// `Cmd`'s `beep`/`set_clipboard`/`open_url` from the plan's sketch
-// need natives that do not exist yet; they stay unimplemented rather
-// than stubbed.
+// A `perform` that renders to the real terminal outside this loop's own
+// `view`/`render`/`diff` pipeline (an approval overlay is exactly this use
+// case) leaves `prev` stale: the next diff would compare the model's
+// screen against a `prev` that no longer matches what is actually on the
+// terminal, and could leave stray pixels behind. `step_batch`/`step_cmd`
+// thread a `forced : Bool` alongside the model and the queued messages, set
+// whenever ANY `perform` fired during that batch's fold, and `draw_frame`
+// treats `forced` exactly like a resize: repaint from a blank screen
+// instead of diffing against `prev`.
+//
+// v1 shape deviations, still true in v2:
+//   * `update` is PURE (`S -> M -> Pair S (Cmd M)`), not
+//     `TuiT M Raw Raw (S * Cmd)` -- the transformer (tuit.mo) lifts this
+//     loop's halves; the pure update is the 90% case the plan's App record
+//     is for.
+//   * `tick_ms` is a field of `App`: a frame clock has to live somewhere,
+//     and negative = block until input, no ticks.
+//   * `run_frp` is deferred: the cold FRP core deliberately has no live
+//     signals, and `run_app` IS the live composition point.
+//   * Panic recovery is the honest v1 version: the terminal is restored on
+//     every CONTROLLED exit (quit, EOF). A hard crash still strands the alt
+//     screen -- unwinding through the restore path needs the error-effect
+//     story (tuit.mo's `ResultT` stack).
+//
+// `Cmd`'s `beep`/`set_clipboard`/`open_url` from the plan's original sketch
+// need natives that do not exist yet; they stay unimplemented rather than
+// stubbed.
 
 use lib::types { CellDelta, Event, Screen }
 use lib::core { empty_screen, mk_rect }
@@ -49,27 +76,33 @@ use std::list { List.length }
 
 /// Commands `update` returns instead of performing. `none` is the
 /// ordinary case, `quit` stops the loop (the terminal is restored),
-/// `dispatch` injects an event into the NEXT frame's batch.
-pub type Cmd {
+/// `dispatch` injects a message into the NEXT frame's batch, `perform`
+/// runs real IO now and folds its result message in as if it had been
+/// dispatched.
+pub type Cmd (M : Type) {
     /// Nothing to do.
     none,
     /// Stop the app; the terminal is restored.
     quit,
-    /// Inject `event` into the next frame's event batch.
-    dispatch (event : Event)
+    /// Inject `msg` into the next frame's message batch.
+    dispatch (msg : M),
+    /// Run `action` now (blocking this frame) and fold its result message
+    /// in immediately, the same way a `dispatch`ed message is folded.
+    perform (action : Unit -> IO M)
 }
 
-/// An Elm-architecture app: the initial model, the pure step, the
-/// view, and the frame clock. `tick_ms` is the poll timeout driving
-/// `Event.tick` -- 100 is a snappy UI, negative blocks until input
-/// (no ticks at all).
+/// An Elm-architecture app: the initial model, how a raw terminal `Event`
+/// becomes the app's own message type `M`, the pure step, the view, and
+/// the frame clock. `tick_ms` is the poll timeout driving `Event.tick` --
+/// 100 is a snappy UI, negative blocks until input (no ticks at all).
 ///
-/// A single-constructor `type`, not a `struct`: parameterized structs
-/// do not parse on the current nightly (the plan's own note, and
+/// A single-constructor `type`, not a `struct`: parameterized structs do
+/// not parse on the current nightly (the plan's own note, and
 /// `init/transformers.mo`'s `StateT` header says the same).
-pub type App (S : Type) {
+pub type App (S : Type) (M : Type) {
     app (init : S)
-        (update : S -> Event -> Pair S Cmd)
+        (on_event : Event -> M)
+        (update : S -> M -> Pair S (Cmd M))
         (view : S -> Widget)
         (tick_ms : I64)
 }
@@ -79,11 +112,7 @@ pub type App (S : Type) {
 /// was nonempty (so ticks animate, real keys move, resize reflows).
 /// Restores the terminal on quit or EOF -- every exit from `loop_app`
 /// lands in the one `restore_terminal` below it.
-///
-/// An `update` whose dispatched events dispatch again loops forever --
-/// the fold step is the app's own responsibility, the same deal
-/// `EventStream.fold` gives the cold path.
-pub def run_app {S : Type} (a : App S) : IO Unit := do {
+pub def run_app {S : Type} {M : Type} (a : App S M) : IO Unit := do {
     let size <- Terminal.size;
     let _ <- Terminal.enter_raw_mode;
     Terminal.enter_alt_screen;
@@ -97,25 +126,29 @@ pub def run_app {S : Type} (a : App S) : IO Unit := do {
 /// until quit/EOF, then restore. The back buffer starts as a
 /// same-sized blank screen: `diff` refuses to diff different-sized
 /// screens, so a wrong seed would swallow the first frame.
-def run_with_size {S : Type} (a : App S) (size : Pair I64 I64) : IO Unit :=
+def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO Unit :=
     match size {
-        Pair.pair rows cols => do {
-            let reader : InputReader := input_reader rows cols;
-            let _ <- loop_app a reader a.init (empty_screen rows cols) List.empty;
-            restore_terminal
-        }
+        Pair.pair rows cols =>
+            match a {
+                App.app init _ _ _ _ => do {
+                    let reader : InputReader := input_reader rows cols;
+                    let _ <- loop_app a reader init (empty_screen rows cols) List.empty;
+                    restore_terminal
+                }
+            }
     }
 
-/// One iteration: produce a batch, fold it, draw if it was nonempty,
-/// recurse with the dispatched events as the next batch's prefix.
-/// `#[terminating]`: the loop's progress is the reader's stream, not
-/// a structural argument.
+/// One iteration: produce a batch of raw events, lift them to `M`,
+/// fold, draw if it was nonempty (or forced), recurse with the
+/// dispatched/performed messages as the next batch's prefix.
+/// `#[terminating]`: the loop's progress is the reader's stream, not a
+/// structural argument.
 #[terminating]
-def loop_app {S : Type} (a : App S) (reader : InputReader) (model : S) (prev : Screen) (pending : List Event) : IO Unit :=
+def loop_app {S : Type} {M : Type} (a : App S M) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) : IO Unit :=
     match a {
-        App.app _ upd vw tick_ms => do {
+        App.app _ on_ev upd vw tick_ms => do {
             let out <- Input.produce reader tick_ms;
-            after_produce a upd vw model prev pending out
+            after_produce a upd vw on_ev model prev pending out
         }
     }
 
@@ -123,103 +156,139 @@ def loop_app {S : Type} (a : App S) (reader : InputReader) (model : S) (prev : S
 /// (a piped script's last keystrokes still count) and then stops -- a
 /// controlled exit, `run_with_size` restores after us.
 #[terminating]
-def after_produce {S : Type} (a : App S) (upd : S -> Event -> Pair S Cmd) (vw : S -> Widget) (model : S) (prev : Screen) (pending : List Event) (out : Pair (List Event) InputReader) : IO Unit :=
+def after_produce {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (out : Pair (List Event) InputReader) : IO Unit :=
     match out {
-        Pair.pair evs reader2 => do {
+        Pair.pair evs reader2 =>
+            let msgs : List M := List.map on_ev evs in
             if reader2.closed
-            then final_frame upd vw reader2 model prev pending evs
-            else step_loop a upd vw reader2 model prev pending evs
-        }
+            then final_frame upd vw reader2 model prev pending msgs
+            else step_loop a upd vw reader2 model prev pending msgs
     }
 
 /// The exit draw: one fold, one frame, no recursion -- the loop is over
-/// and any `dispatch` commands die with it (there is no next frame).
+/// and any `dispatch`/`perform` commands die with it (there is no next
+/// frame).
 #[terminating]
-def final_frame {S : Type} (upd : S -> Event -> Pair S Cmd) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (pending : List Event) (evs : List Event) : IO Unit :=
-    let batch : List Event := List.append pending evs in
-    match step_batch upd model batch {
-        Pair.pair inner _ =>
-            match inner {
-                Pair.pair model2 _ => do {
-                    let frame <- draw_frame vw model2 reader prev (List.length batch > 0);
+def final_frame {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (msgs : List M) : IO Unit := do {
+    let batch : List M := List.append pending msgs;
+    let stepped <- step_batch upd model batch;
+    final_draw vw reader prev batch stepped
+}
+
+def final_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : IO Unit :=
+    match stepped {
+        Pair.pair inner tail => match inner {
+            Pair.pair model2 _ => match tail {
+                Pair.pair _ forced => do {
+                    let frame <- draw_frame vw model2 reader prev (List.length batch > 0) forced;
                     return Unit.unit
                 }
             }
+        }
     }
 
-/// The batch `step_loop` folds: `pending` (last frame's dispatched
-/// events) in front of the freshly produced ones.
+/// The batch `step_loop` folds: `pending` (last frame's
+/// dispatched/performed messages) in front of the freshly produced ones.
 #[terminating]
-def step_loop {S : Type} (a : App S) (upd : S -> Event -> Pair S Cmd) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (pending : List Event) (evs : List Event) : IO Unit :=
-    let batch : List Event := List.append pending evs in
-    after_step a vw reader prev batch (step_batch upd model batch)
+def step_loop {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (msgs : List M) : IO Unit :=
+    let batch : List M := List.append pending msgs in
+    do {
+        let stepped <- step_batch upd model batch;
+        after_step a vw reader prev batch stepped
+    }
 
 /// The fold's continuation: `quit` ends the loop, anything else draws
-/// the frame (when the batch was nonempty) and recurses with the
-/// queued `dispatch` events.
+/// the frame (when the batch was nonempty, or `perform` forced a
+/// repaint) and recurses with the queued `dispatch`/`perform` messages.
 #[terminating]
-def after_step {S : Type} (a : App S) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List Event) (stepped : Pair (Pair S Cmd) (List Event)) : IO Unit :=
+def after_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : IO Unit :=
     match stepped {
-        Pair.pair inner pending2 => continue_step a vw reader prev batch inner pending2
+        Pair.pair inner tail => continue_step a vw reader prev batch inner tail
     }
 
 #[terminating]
-def continue_step {S : Type} (a : App S) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List Event) (inner : Pair S Cmd) (pending2 : List Event) : IO Unit :=
+def continue_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) : IO Unit :=
     match inner {
         Pair.pair model2 cmd =>
             match cmd {
                 Cmd.quit => do { return Unit.unit },
-                _ => do {
-                    let frame <- draw_frame vw model2 reader prev (List.length batch > 0);
-                    loop_app a reader model2 frame pending2
+                _ => match tail {
+                    Pair.pair pending2 forced => do {
+                        let frame <- draw_frame vw model2 reader prev (List.length batch > 0) forced;
+                        loop_app a reader model2 frame pending2
+                    }
                 }
             }
     }
 
-/// Fold `update` over the batch: the final model, the surviving
-/// command (`quit` short-circuits), and the events the batch's
-/// `dispatch` commands queued for the next frame.
-def step_batch {S : Type} (upd : S -> Event -> Pair S Cmd) (model : S) (evs : List Event) : Pair (Pair S Cmd) (List Event) :=
-    match evs {
-        empty => Pair.pair (Pair.pair model Cmd.none) List.empty,
-        cons e rest =>
-            match upd model e {
+/// Fold `update` over the batch: the final model, the surviving command
+/// (`quit` short-circuits), the messages the batch's `dispatch`/
+/// `perform` commands queued for the next frame, and whether any
+/// `perform` fired (which forces the next draw to repaint from blank --
+/// see the header comment). `perform` runs real IO, so this (and
+/// `step_cmd`) is an `IO` action now, not a pure fold.
+def step_batch {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (model : S) (msgs : List M) : IO (Pair (Pair S (Cmd M)) (Pair (List M) Bool)) :=
+    match msgs {
+        List.empty => return (Pair.pair (Pair.pair model Cmd.none) (Pair.pair List.empty false)),
+        List.cons m rest =>
+            match upd model m {
                 Pair.pair model2 cmd => step_cmd upd model2 rest cmd
             }
     }
 
 /// `#[terminating]`: `step_batch` and `step_cmd` are mutually recursive
-/// on the tail of the event list.
+/// on the tail of the message list.
 #[terminating]
-def step_cmd {S : Type} (upd : S -> Event -> Pair S Cmd) (model : S) (rest : List Event) (cmd : Cmd) : Pair (Pair S Cmd) (List Event) :=
+def step_cmd {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (model : S) (rest : List M) (cmd : Cmd M) : IO (Pair (Pair S (Cmd M)) (Pair (List M) Bool)) :=
     match cmd {
-        Cmd.quit => Pair.pair (Pair.pair model Cmd.quit) List.empty,
-        Cmd.dispatch d =>
-            match step_batch upd model rest {
-                Pair.pair inner p3 =>
-                    match inner {
-                        Pair.pair model3 cmd3 =>
-                            Pair.pair (Pair.pair model3 cmd3) (List.cons d p3)
-                    }
-            },
+        Cmd.quit => return (Pair.pair (Pair.pair model Cmd.quit) (Pair.pair List.empty false)),
+        Cmd.dispatch d => do {
+            let stepped <- step_batch upd model rest;
+            return (queue_dispatched d stepped)
+        },
+        Cmd.perform action => do {
+            let m2 <- action unit;
+            let stepped <- step_batch upd model (List.cons m2 rest);
+            return (force_repaint stepped)
+        },
         Cmd.none => step_batch upd model rest
     }
 
+/// `dispatch`'s queueing: `d` rides in FRONT of whatever the rest of the
+/// batch already queued (the same order `step_cmd`'s own recursion
+/// produces one message at a time).
+def queue_dispatched {S : Type} {M : Type} (d : M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : Pair (Pair S (Cmd M)) (Pair (List M) Bool) :=
+    match stepped {
+        Pair.pair inner tail => match tail {
+            Pair.pair pend forced => Pair.pair inner (Pair.pair (List.cons d pend) forced)
+        }
+    }
+
+/// `perform` fired: force the forward flag on, whatever the rest of the
+/// batch decided.
+def force_repaint {S : Type} {M : Type} (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : Pair (Pair S (Cmd M)) (Pair (List M) Bool) :=
+    match stepped {
+        Pair.pair inner tail => match tail {
+            Pair.pair pend _ => Pair.pair inner (Pair.pair pend true)
+        }
+    }
+
 /// Render the model into a fresh screen and write the diff against
-/// `prev` -- unless the batch was empty (nothing moved, no write).
-/// `diff` refuses different-sized screens, so a RESIZE frame repaints
-/// instead: every non-blank cell against a fresh blank screen of the
-/// new size (the alt screen is already blank, so blank cells emit
-/// nothing and the repaint is as cheap as a diff).
-def draw_frame {S : Type} (vw : S -> Widget) (model : S) (reader : InputReader) (prev : Screen) (dirty : Bool) : IO Screen :=
-    if Bool.not dirty
+/// `prev` -- unless the batch was empty AND no `perform` forced a
+/// repaint (nothing moved, no write). `diff` refuses different-sized
+/// screens, so a RESIZE frame (or a forced one) repaints instead: every
+/// non-blank cell against a fresh blank screen of the new size (the alt
+/// screen is already blank, so blank cells emit nothing and the repaint
+/// is as cheap as a diff).
+def draw_frame {S : Type} (vw : S -> Widget) (model : S) (reader : InputReader) (prev : Screen) (dirty : Bool) (forced : Bool) : IO Screen :=
+    if Bool.not dirty && Bool.not forced
     then return prev
     else do {
         let screen : Screen :=
             render (vw model) (mk_rect 0 0 reader.last_cols reader.last_rows)
                 (empty_screen reader.last_rows reader.last_cols);
         let deltas : List CellDelta :=
-            if prev.rows == screen.rows && prev.cols == screen.cols
+            if Bool.not forced && prev.rows == screen.rows && prev.cols == screen.cols
             then diff prev screen
             else diff (empty_screen screen.rows screen.cols) screen;
         IO.write_stdout (apply_deltas deltas);

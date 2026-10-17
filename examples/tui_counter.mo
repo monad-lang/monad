@@ -15,7 +15,7 @@ use tui::widget {Widget, BorderStyle, border, label, sized}
 
 /// + / - count, q quits, everything else (mouse, resize, ticks) leaves
 /// the model alone.
-def counter_key (count : I64) (k : Key) : Pair I64 Cmd :=
+def counter_key (count : I64) (k : Key) : Pair I64 (Cmd Event) :=
     match k {
         Key.char c =>
             if c == "+"
@@ -28,7 +28,7 @@ def counter_key (count : I64) (k : Key) : Pair I64 Cmd :=
         _ => Pair.pair count Cmd.none
     }
 
-def counter_update (count : I64) (e : Event) : Pair I64 Cmd :=
+def counter_update (count : I64) (e : Event) : Pair I64 (Cmd Event) :=
     match e {
         Event.key k => counter_key count k,
         _ => Pair.pair count Cmd.none
@@ -43,8 +43,10 @@ def counter_view (count : I64) : Widget :=
         sized (LayoutSize.fixed 1) (label "+ / - to change, q to quit")
     ]
 
-def counter_app : App I64 :=
-    App.app 0 counter_update counter_view (0 - 1)
+/// `M = Event`: the counter has no messages of its own, so `on_event` is
+/// the identity lift.
+def counter_app : App I64 Event :=
+    App.app 0 (fn (e : Event) => e) counter_update counter_view (0 - 1)
 
 def main (args : List String) : IO Unit :=
     run_app counter_app
