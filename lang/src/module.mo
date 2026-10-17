@@ -8550,6 +8550,44 @@ def test_elaborate_cross_class_instance_constraint_resolves : IO Bool := do {
     return (not (String.contains out "HAdd.add") && String.contains out "__Dict_Add_N")
 }
 
+/// An unannotated lambda argument's own parameter type is solved from a
+/// LATER sibling argument the checker has not yet inferred when it checks
+/// the lambda (`Pump.pump (fn a => Foo.foo (Pump.unwrap a) (Pump.unwrap a))
+/// (Box.box Thing.mk)`, mirroring `Comonad.extend`'s real-world shape).
+/// Before this, `a` stayed a hole, `Pump.unwrap` was left an unresolved
+/// bare reference, and `Foo.foo` resolved to the wildcard bridge's own
+/// abstract method (`Foo_A_foo`) rather than the concrete carrier --
+/// confirmed by running this exact probe through `elaborate_synthetic_source`
+/// before the fix. `class_method_next_param` (`infer.mo`) now also solves
+/// the callee's remaining signature against `expected_type`, which the
+/// OUTER recursive call already derived from the already-checked second
+/// argument's own inferred type (`Box Thing`).
+#[test]
+def test_elaborate_hof_argument_carrier_resolves_from_a_later_sibling : IO Bool := do {
+    let src : String :=
+        "class Foo A { def foo : A -> A -> A }\n" ++
+        "class Bar A B C { def bar : A -> B -> C }\n" ++
+        "instance [Bar A A A] Foo A { def foo (a b : A) : A := Bar.bar a b }\n" ++
+        "instance [Foo A] Bar A A A { def bar (a b : A) : A := Foo.foo a b }\n" ++
+        "type Thing { mk }\n" ++
+        "instance Bar Thing Thing Thing { def bar (a b : Thing) : Thing := a }\n" ++
+        "class Pump (W : Type -> Type) {\n" ++
+        "    def unwrap (w : W A) : A\n" ++
+        "    def pump (f : W A -> B) (w : W A) : W B\n" ++
+        "}\n" ++
+        "type Box A { box (a : A) }\n" ++
+        "instance Pump Box {\n" ++
+        "    def unwrap (b : Box A) : A := match b { box a => a }\n" ++
+        "    def pump (f : Box A -> B) (b : Box A) : Box B := match b { box a => Box.box (f b) }\n" ++
+        "}\n" ++
+        "def g : Box Thing := Pump.pump (fn a => Foo.foo (Pump.unwrap a) (Pump.unwrap a)) (Box.box Thing.mk)\n";
+    let out <- elaborate_synthetic_source src;
+    return (not (String.contains out "Pump.unwrap")
+        && not (String.contains out "Foo_A_foo")
+        && String.contains out "Pump_Box_unwrap"
+        && String.contains out "Bar_Thing_Thing_Thing_bar")
+}
+
 /// `Map`'s carrier `M` stands in the `m : M K V` argument, not in the first
 /// argument (`K`) or the result (`Option V`), and `[BOrd K]` on `Map BT` binds `K`
 /// from the call's own signature -- including through a match arm whose binders are untyped.

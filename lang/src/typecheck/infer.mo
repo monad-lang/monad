@@ -4477,7 +4477,7 @@ pub struct CalleeDomain {
 def app_arg_expected_type_from_callee (f : Term) (a : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Term :=
     let written : Term := app_arg_expected_type f in
     if is_hole written && arg_is_unannotated_lam a then
-        match callee_arg_domain f scope local_types locals {
+        match callee_arg_domain f expected_type scope local_types locals {
             Option.none => written,
             Option.some cd =>
                 match lam_binder_hint cd scope {
@@ -4672,13 +4672,13 @@ def mentions_unresolved_name (t : Term) (scope : Scope) : Bool :=
 /// The domain a callee expects at the position of an argument we are about to
 /// check. Two sources, cheapest first.
 #[terminating]
-def callee_arg_domain (f : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option CalleeDomain :=
+def callee_arg_domain (f : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option CalleeDomain :=
     // A class method first: its own inference yields the class's ABSTRACT
     // signature (a hole at this position) rather than an instance-solved Pi,
     // so the declared signature in the class is the only source that has an
     // answer -- and consulting it first also spares a do-bind the wasted
     // `type_check` below.
-    match class_method_next_param f scope local_types locals {
+    match class_method_next_param f expected_type scope local_types locals {
         Option.some cd => Option.some cd,
         Option.none => inferred_callee_domain f scope local_types locals,
     }
@@ -4737,14 +4737,14 @@ def pi_domain_of (t : Term) : Option Term :=
 /// variables unsolved), which is why the result carries the class's variable
 /// names alongside the domain -- see `CalleeDomain`.
 #[terminating]
-def class_method_next_param (f : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option CalleeDomain :=
+def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option CalleeDomain :=
     match flatten_call_spine f {
         CallSpine.mk head args =>
             match class_method_declared_sig head scope {
                 Option.none => Option.none,
                 Option.some decl =>
                     match sig_tvars_params_ret decl.sig {
-                        SigInfo.mk params _ret =>
+                        SigInfo.mk params ret =>
                             // The NEXT parameter is the one after as many
                             // arguments as the spine has already applied.
                             match nth_type (List.length args) params {
@@ -4753,7 +4753,25 @@ def class_method_next_param (f : Term) (scope : Scope) (local_types : List Term)
                                     match def_call_check_args args params List.empty scope local_types locals {
                                         err _ => Option.none,
                                         ok dcc =>
-                                            let dom : Term := subst_typevars_term next_param dcc.subst in
+                                            // `dcc.subst` solves type variables from arguments
+                                            // ALREADY applied; a HOF argument whose carrier
+                                            // comes from a LATER sibling (`Comonad.extend (fn a
+                                            // => ...) (Id.id 41)`, `Pump.pump (fn a => ...)
+                                            // (Box.box 1)`) has none yet. `expected_type` here
+                                            // is already `W A -> W B` (the type THIS call's
+                                            // result must have, unified by the OUTER recursive
+                                            // call against the already-checked later argument's
+                                            // own inferred type) -- the signature's remaining,
+                                            // still-unapplied params and its return, solved
+                                            // against it, recover exactly that binding.
+                                            // `solve_typevars` never overwrites an entry
+                                            // `dcc.subst` already set, so this is a strictly
+                                            // additional source, not a relaxation of it.
+                                            let remaining : Term :=
+                                                rebuild_pi_chain (drop_params (I64.add (List.length args) 1) params) ret in
+                                            let solved : List (Pair Identifier Term) :=
+                                                solve_typevars scope remaining expected_type dcc.subst in
+                                            let dom : Term := subst_typevars_term next_param solved in
                                             Option.some (CalleeDomain.mk dom decl.vars),
                                     },
                             },
