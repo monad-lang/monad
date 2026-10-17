@@ -65,23 +65,34 @@ pub def StateT.exec [Monad M] {S : Type} {A : Type} (m : StateT S M A) (s : S) :
 pub def StateT.lift [Monad M] {S : Type} {A : Type} (m : M A) : StateT S M A :=
     StateT.mk (fn s => Monad.bind m (fn a => Monad.pure (Pair.pair s a)))
 
-/// Internal: unwrap a `Pair S A` and run the continuation in the new state.
+/// Internal: unwrap a `Pair S A` and run the continuation in the new
+/// state. Extracted so the instance body stays single-line (the parser
+/// doesn't accept multi-line lambdas inside instance bodies); it is the
+/// `ResultT`/`OptionT` `bind_step` pattern exactly, and it carries no
+/// `[Monad M]` dictionary parameter of its own -- its body never
+/// references the class, so the call the instance body makes to it needs
+/// no dictionary argument (see `collect_def_constraints`, lang/scope.mo).
 def StateT.bind_step [Monad M] {S : Type} {A : Type} {B : Type} (f : A -> StateT S M B) (p : Pair S A) : M (Pair S B) :=
     match p {
         Pair.pair s2 a => StateT.run (f a) s2
     }
 
-/// Internal: the state-threading bind step. Extracted so the instance
-/// body stays single-line (the parser doesn't accept multi-line lambdas
-/// inside instance bodies).
-def StateT.bind_go [Monad M] {S : Type} {A : Type} {B : Type} (ma : StateT S M A) (f : A -> StateT S M B) (s : S) : M (Pair S B) :=
-    Monad.bind (StateT.run ma s) (StateT.bind_step f)
-
+/// The instance body references `Monad.bind` DIRECTLY (through the
+/// single-line lambda `StateT.mk`'s field needs), not through an
+/// extracted helper: the promoted method's own `[Monad M]` dictionary
+/// parameter (Phase 3) is what serves that reference (D5 forwarding),
+/// and a helper call in between is resolved against the call's own
+/// argument carriers -- abstract inside an instance body, so the
+/// variable-headed prelude bridge matches and the helper runs with the
+/// WRONG dictionary (the `driver exited -1` this file's own test
+/// history records). The `ResultT`/`OptionT` instances below, whose
+/// bodies already reference `Monad.bind` directly, are the green
+/// precedent for exactly this shape.
 pub instance [Monad M] Monad (StateT S M) {
     def pure (a : A) : StateT S M A :=
         StateT.mk (fn s => Monad.pure (Pair.pair s a))
     def bind (ma : StateT S M A) (f : A -> StateT S M B) : StateT S M B :=
-        StateT.mk (StateT.bind_go ma f)
+        StateT.mk (fn (s : S) => Monad.bind (StateT.run ma s) (StateT.bind_step f))
 }
 
 /// Result transformer: `ResultT E M A = M (Result E A)` short-circuits the

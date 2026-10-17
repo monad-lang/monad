@@ -22,7 +22,8 @@ def test_statet_pure_run : Bool :=
 // (the fix that resurrects `ResultT`/`OptionT`'s own bind tests below)
 // cleared the `MatchTraversalMismatch` here too. But it then exposed a
 // SECOND, separate failure: `eval error: value is not a constructor` at run
-// time, inside `StateT.bind_go`/`StateT.bind_step` (`lib/transformers.mo`),
+// time, inside the `StateT` instance's own `bind`/`StateT.bind_step`
+// (`lib/transformers.mo`),
 // previously blamed on a real interpreter bug in `StateT`'s own `bind`.
 // That blame was wrong: the failure was the checker's dictionary-resolution
 // gap for instance calls whose `[Monad M]` dictionary argument resolves
