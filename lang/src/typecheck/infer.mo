@@ -4756,17 +4756,23 @@ def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (l
                                             // `dcc.subst` solves type variables from arguments
                                             // ALREADY applied; a HOF argument whose carrier
                                             // comes from a LATER sibling (`Comonad.extend (fn a
-                                            // => ...) (Id.id 41)`, `Pump.pump (fn a => ...)
-                                            // (Box.box 1)`) has none yet. `expected_type` here
-                                            // is already `W A -> W B` (the type THIS call's
+                                            // => ...) (Id.id 41)`) has none yet. `expected_type`
+                                            // here is already `W A -> W B` (the type THIS call's
                                             // result must have, unified by the OUTER recursive
                                             // call against the already-checked later argument's
                                             // own inferred type) -- the signature's remaining,
                                             // still-unapplied params and its return, solved
-                                            // against it, recover exactly that binding.
-                                            // `solve_typevars` never overwrites an entry
-                                            // `dcc.subst` already set, so this is a strictly
-                                            // additional source, not a relaxation of it.
+                                            // against it, recover exactly that binding, PROVIDED
+                                            // the later argument's own type came out concrete. A
+                                            // bare, unannotated constructor application infers
+                                            // its own type parameter as a hole by design
+                                            // (`con_ref_result_type` declines it) -- that gap is
+                                            // orthogonal to this one and stays open; this only
+                                            // widens what `class_method_next_param` reads, it
+                                            // doesn't change how any OTHER argument infers its
+                                            // own type. `solve_typevars` never overwrites an
+                                            // entry `dcc.subst` already set, so this is a
+                                            // strictly additional source, not a relaxation of it.
                                             let remaining : Term :=
                                                 rebuild_pi_chain (drop_params (I64.add (List.length args) 1) params) ret in
                                             let solved : List (Pair Identifier Term) :=
