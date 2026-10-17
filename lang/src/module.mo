@@ -7334,6 +7334,28 @@ def test_dict_resolution_d5_forwarding_resolves : IO Bool := do {
     return (match diags { List.empty => true, List.cons _ _ => false })
 }
 
+/// A constraint on a CONCRETE carrier still resolves through a mutual
+/// class bridge (`[Bar A A A] Foo A` / `[Foo A] Bar A A A`, mirroring
+/// `init/src/prelude.mo`'s real `Add`/`HAdd`) to the one real terminal
+/// instance it has to go through -- `constraints_resolve_without_cycle`
+/// (`lang.scope`) must not reject this: `Foo.foo` on `Thing` has no
+/// direct `Foo Thing` instance, only the bridge, whose own `[Bar A A A]`
+/// constraint DOES have a concrete `Bar Thing Thing Thing` instance one
+/// hop away.
+#[test]
+def test_dict_resolution_through_a_mutual_bridge_to_a_concrete_instance_resolves : IO Bool := do {
+    let src : String :=
+        "class Foo A { def foo : A -> A -> A }\n" ++
+        "class Bar A B C { def bar : A -> B -> C }\n" ++
+        "instance [Bar A A A] Foo A { def foo (a b : A) : A := Bar.bar a b }\n" ++
+        "instance [Foo A] Bar A A A { def bar (a b : A) : A := Foo.foo a b }\n" ++
+        "type Thing { mk }\n" ++
+        "instance Bar Thing Thing Thing { def bar (a b : Thing) : Thing := a }\n" ++
+        "def use_foo (a b : Thing) : Thing := Foo.foo a b";
+    let diags <- check_synthetic_source src;
+    return (match diags { List.empty => true, List.cons _ _ => false })
+}
+
 /// Stage 3's own load-bearing proof: `elaborate_module_decls`'s output
 /// for `greet`'s body actually CONTAINS the resolved concrete reference
 /// (`Speak_Dog_say`), not just "checks clean" -- codegen must consume

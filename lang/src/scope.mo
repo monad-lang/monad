@@ -6375,15 +6375,67 @@ def find_constraint_bound_carrier_any (instances : List Instance) (cls_name : Na
 /// generic, self-bound or unrevealing -- the ones no bound carrier could
 /// be read from -- so such a constraint resolves exactly as it did before
 /// `find_constraint_bound_carrier_any` existed.
+///
+/// `constraints_resolve_without_cycle` guards the one failure mode this
+/// fallback can walk into: a wildcard-headed instance (`instance [HAdd A
+/// A A] Add A`) can itself need another wildcard-headed instance's dict
+/// (`instance [Add A] HAdd A A A`), and when the carrier never becomes
+/// concrete, the two have no base case -- each is a valid-looking match
+/// for the other's constraint. Accepted, this compiles to two functions
+/// calling each other unconditionally, which runs fine right up until it
+/// overflows the stack (confirmed via `gdb bt`: `Add_A_add -> ... ->
+/// HAdd_A_A_A_add -> Add_A_add -> ...`, repeating).
 #[partial]
 def resolve_dict_arg_plain (instances : List Instance) (cls_name : NamePath) (carriers : List Term) : Option Term :=
     match find_matching_instance_any instances cls_name carriers {
         Option.none => Option.none,
         Option.some ins =>
             match ins {
-                Instance.mk found_insname _ _ ins_args _ _ _ =>
-                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname cls_name ins_args)))),
+                Instance.mk found_insname _ ins_constraints ins_args _ _ _ =>
+                    if constraints_resolve_without_cycle instances ins_constraints (List.cons cls_name List.empty)
+                    then Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname cls_name ins_args))))
+                    else Option.none,
             },
+    }
+
+/// Does every one of `constraints` lead somewhere, without looping back
+/// to a class already in `seen`? Mirrors `resolve_dict_arg_plain`'s own
+/// catch-all match (`find_matching_instance` against a representative
+/// `Term.hole`, since a genuinely wildcard-headed instance matches any
+/// carrier including one that carries no information at all) rather than
+/// fully re-running dict resolution -- cheap, and this is the ONLY
+/// caller, so cheap matters: every ordinary constrained call in the
+/// corpus that reaches this fallback pays for it. `seen` only grows and
+/// is checked before each expansion, so this terminates even though the
+/// two recursions below (`rest`, and a DIFFERENT instance's own
+/// constraints) are not on structurally smaller lists.
+#[partial]
+def constraints_resolve_without_cycle (instances : List Instance) (constraints : List TypeConstraint) (seen : List NamePath) : Bool :=
+    match constraints {
+        List.empty => true,
+        List.cons c rest =>
+            if Bool.not (constraints_resolve_without_cycle instances rest seen) then false
+            else
+                match c {
+                    TypeConstraint.mk cname _ =>
+                        if npath_member_any cname seen then false
+                        else
+                            match find_matching_instance instances cname Term.hole {
+                                Option.none => true,
+                                Option.some ins =>
+                                    match ins {
+                                        Instance.mk _ _ nested_constraints _ _ _ _ =>
+                                            constraints_resolve_without_cycle instances nested_constraints (List.cons cname seen),
+                                    },
+                            },
+                },
+    }
+
+#[partial]
+def npath_member_any (target : NamePath) (names : List NamePath) : Bool :=
+    match names {
+        List.empty => false,
+        List.cons n rest => if class_name_eq target n then true else npath_member_any target rest,
     }
 
 /// Sibling of `find_matching_instance_any` that also returns WHICH
