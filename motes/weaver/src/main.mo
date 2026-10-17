@@ -31,6 +31,7 @@ use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
 use weaver::providers {Weaver.preset}
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
+use weaver::tui_app {Tui.run}
 use init::transformers {ResultT}
 use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr}
@@ -351,10 +352,19 @@ def mounted_plan (p : Plan) (s : Settings) (r : Result String (Pair ToolRegistry
 
 /// The one place the interactive session ends, whatever ended it: EOF
 /// on stdin, `/quit`, or a crashed loop -- the mounted MCP servers come
-/// down on every path.
+/// down on every path. `Tui.run` auto-detects a tty (via the same
+/// `enter_raw_mode` degrade `terminal.mo` already documents) and falls
+/// back to the line-based `Dumb.run` when stdin is not one -- a piped
+/// or scripted run is byte-identical to before this phase.
 def start_loop (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
     let st : WeaverState := initial_state p reg s;
-    let _ <- Dumb.run (fn (_ : Unit) => IO.read_line) stdout_write st;
+    let ran_tui <- Tui.run st;
+    let _ <- run_fallback ran_tui st;
     let _ <- dispose_all servers;
     return 0
 }
+
+def run_fallback (ran_tui : Bool) (st : WeaverState) : IO WeaverState :=
+    if ran_tui
+    then IO.pure st
+    else Dumb.run (fn (_ : Unit) => IO.read_line) stdout_write st

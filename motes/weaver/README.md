@@ -1,9 +1,10 @@
 # weaver
 
 The interactive coding agent built on shuttle's harness: a slash-command
-loop, a mode-based approval policy, and settings persistence -- the
-line-based UI (a terminal UI is planned, gated on terminal-ui's raw-mode
-natives).
+loop, a mode-based approval policy, settings persistence, and a terminal
+UI over `motes/tui` -- auto-detected when stdin is a tty, with a
+line-based fallback (`dumb.mo`) for everything else (piped input,
+scripts, a non-tty CI run).
 
 ## Building and running
 
@@ -39,11 +40,35 @@ commands.mo        the slash-command table (BTreeMap) and the
 diff.mo            old -> new rendering for write/edit approvals,
                    picked out of the tool input
 dumb.mo            the line loop: read -> command-or-model -> print,
-                   turns charged against the budget
+                   turns charged against the budget; the non-tty fallback
+model.mo           the TUI's pure half: TuiModel/WeaverMsg, on_event,
+                   Model.view (transcript/status/input over motes/tui)
+tui_app.mo         the TUI's IO half: TuiApp.update (closes over a
+                   model turn or a slash command via Cmd.perform),
+                   Gate.weaver_tui (the approval overlay), Tui.run
 providers.mo       the provider presets (host, key env var, wire)
 main.mo            the entry: settings load, flag resolution, MCP
-                   mount (proxy tools default exec-cap), the loop
+                   mount (proxy tools default exec-cap), Tui.run with
+                   Dumb.run as its non-tty fallback
 ```
+
+### The TUI
+
+`monad run motes/weaver/src/main.mo` starts the TUI whenever stdin is a
+tty (the same `Terminal.enter_raw_mode` degrade check `terminal.mo`
+already uses for a non-tty stdin). Tab cycles the approval mode
+(`manual -> plan -> allow_edit -> auto -> manual`); Enter submits a line
+and blocks the UI for that one turn or slash command -- there is no
+non-blocking fiber-poll primitive in `std/concurrent` to animate a
+spinner meanwhile, so a turn's duration is the same wait a line-based
+UI already has over `IO.read_line`. An approval prompt (`manual`/
+`allow_edit`'s `ask` cells) takes over the whole screen for one
+`y`/`n`/`a` keypress, diff included for a `write`/`edit` pick, then the
+TUI repaints and continues. `/quit` is the one guaranteed clean exit
+(cbreak mode keeps `ISIG` on, so Ctrl-C still kills a hung process but
+bypasses the restore path -- the same class of gap `tui::run_app`'s own
+header documents for a hard crash). A piped or scripted run (stdin not
+a tty) falls back to the line-based UI above automatically.
 
 The `mock` provider is shuttle's scripted wire: a JSON array of turns at
 `/tmp/shuttle_mock_turns_<pid>.json`, indexed by assistant count. The

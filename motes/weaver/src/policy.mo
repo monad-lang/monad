@@ -80,6 +80,19 @@ pub def Mode.warns_auto (m : Mode) : Bool :=
         _ => false,
     }
 
+/// The TUI's Tab key: the unconstrained `/mode`-equivalent edge,
+/// cycling through every mode in the table's own display order
+/// (manual -> plan -> allow_edit -> auto -> manual). Plain cycling, not
+/// `/plan approve`'s constrained landing -- Tab is a shortcut for
+/// `/mode <next>`, nothing more guarded.
+pub def Mode.cycle (m : Mode) : Mode :=
+    match m {
+        Mode.manual => Mode.plan,
+        Mode.plan => Mode.allow_edit,
+        Mode.allow_edit => Mode.auto,
+        Mode.auto => Mode.manual,
+    }
+
 /// The display name, and the string `/mode` accepts.
 pub def Mode.show (m : Mode) : String :=
     match m {

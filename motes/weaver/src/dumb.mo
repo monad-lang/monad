@@ -156,11 +156,18 @@ def append_user (run : RunState) (text : String) : RunState :=
 
 // ── The status/prompt line ─────────────────────────────────────────────
 
-/// The one line before every read, the dumb-mode twin of the TUI's
-/// status bar: the `auto` warning (the trust setting must never pass
-/// unremarked), the mode, the provider/model, the turn budget, and the
-/// token spend from the session's own accounting.
+/// The one line before every read: the `auto` warning (the trust
+/// setting must never pass unremarked), the mode, the provider/model,
+/// the turn budget, and the token spend from the session's own
+/// accounting, followed by dumb mode's own `"> "` prompt. `tui_app.mo`'s
+/// status bar reuses `Dumb.status_fields` for everything up to that
+/// prompt -- the input box IS the prompt there -- so the two UIs never
+/// drift on what the status line shows.
 def prompt_line (st : WeaverState) : String :=
+    Dumb.status_fields st ++ "> "
+
+/// Everything `prompt_line` shows except the trailing `"> "` prompt.
+pub def Dumb.status_fields (st : WeaverState) : String :=
     auto_warning st.mode
         ++ "["
         ++ Mode.show st.mode
@@ -178,7 +185,6 @@ def prompt_line (st : WeaverState) : String :=
         ++ I64.to_string st.run.session.spent.output_tokens
         ++ ", cached "
         ++ I64.to_string st.run.session.spent.cached_tokens
-        ++ "> "
 
 /// `auto` mode is a trust setting, not a sandbox -- say so while it
 /// is on.

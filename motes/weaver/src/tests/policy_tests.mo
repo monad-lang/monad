@@ -4,7 +4,7 @@
 /// I/O -- the point of the decision table being a function.
 use weaver::policy {
     Mode, Decision, Policy.decide,
-    Mode.parse, Mode.approve_plan, Mode.warns_auto, Mode.show,
+    Mode.parse, Mode.approve_plan, Mode.warns_auto, Mode.show, Mode.cycle,
 }
 use shuttle::gate {Capability}
 
@@ -84,6 +84,21 @@ def test_mode_parse : Bool :=
 def test_mode_show_parse_roundtrip : Bool :=
     roundtrip Mode.manual && roundtrip Mode.plan
         && roundtrip Mode.allow_edit && roundtrip Mode.auto
+
+// ── Tab's mode cycle ─────────────────────────────────────────────────────
+
+/// Tab cycles through every mode in the table's display order and is
+/// back where it started on the fifth press.
+#[test]
+def test_mode_cycle_order : Bool :=
+    mode_eq (Mode.cycle Mode.manual) Mode.plan
+        && mode_eq (Mode.cycle Mode.plan) Mode.allow_edit
+        && mode_eq (Mode.cycle Mode.allow_edit) Mode.auto
+        && mode_eq (Mode.cycle Mode.auto) Mode.manual
+
+#[test]
+def test_mode_cycle_is_a_full_loop : Bool :=
+    mode_eq (Mode.cycle (Mode.cycle (Mode.cycle (Mode.cycle Mode.manual)))) Mode.manual
 
 // ── The auto warning flag ───────────────────────────────────────────────
 
