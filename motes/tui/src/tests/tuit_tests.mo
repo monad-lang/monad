@@ -95,6 +95,17 @@ def restore_code : String :=
 
 // ==================== the lifecycle ====================
 
+// Every op value is bound by an ANNOTATED let, and every `prog` keeps
+// its declared type: the compiled backend resolves a constrained
+// call's `[Monad M]` dictionary from type information alone, and these
+// annotations are where it comes from at these call sites -- the
+// 0-arg ops (`enter_raw_mode`, `close`) from the binding's own type
+// (the checker's expect channel), the `and_then` calls from their
+// arguments' bound types (carrier inference, which walks the
+// `TuiT M I I` wrapper instance's own `[Monad M]` down to the `MockM`
+// leaf). An inline, un-annotated op reference has neither, and the
+// self-hosted resolver leaves the call's dictionary unresolved.
+
 /// enter_raw_mode -> draw -> close, the full Cooked..Closed arc: the
 /// log pins the exact order (mode, repaint, restore, mode).
 #[test]
@@ -103,8 +114,10 @@ def test_lifecycle_log : Bool :=
         ["raw", screen_repaint demo_screen, restore_code, "cooked"]
 
 def prog_lifecycle : TuiT MockM Cooked Closed Unit :=
-    TuiT.and_then TuiT.enter_raw_mode
-        (TuiT.and_then (TuiT.draw demo_screen) TuiT.close)
+    let enter : TuiT MockM Cooked Raw Unit := TuiT.enter_raw_mode in
+    let paint : TuiT MockM Raw Raw Unit := TuiT.draw demo_screen in
+    let bye : TuiT MockM Raw Closed Unit := TuiT.close in
+    TuiT.and_then enter (TuiT.and_then paint bye)
 
 /// enter_cooked_mode is the inverse transition: Raw -> Cooked, no
 /// restore write (close owns that).
@@ -113,7 +126,9 @@ def test_cooked_roundtrip : Bool :=
     strs_be (mock_log (TuiT.run prog_roundtrip mock_term)) ["raw", "cooked"]
 
 def prog_roundtrip : TuiT MockM Cooked Cooked Unit :=
-    TuiT.and_then TuiT.enter_raw_mode TuiT.enter_cooked_mode
+    let enter : TuiT MockM Cooked Raw Unit := TuiT.enter_raw_mode in
+    let cook : TuiT MockM Raw Cooked Unit := TuiT.enter_cooked_mode in
+    TuiT.and_then enter cook
 
 // ==================== the transformer property ====================
 
@@ -125,8 +140,10 @@ def test_lift_interleaves_with_ops : Bool :=
         ["before", screen_repaint demo_screen, "after"]
 
 def prog_lifted : TuiT MockM Raw Raw Unit :=
-    TuiT.and_then (TuiT.lift (mock_write "before"))
-        (TuiT.and_then (TuiT.draw demo_screen) (TuiT.lift (mock_write "after")))
+    let before : TuiT MockM Raw Raw Unit := TuiT.lift (mock_write "before") in
+    let paint : TuiT MockM Raw Raw Unit := TuiT.draw demo_screen in
+    let after : TuiT MockM Raw Raw Unit := TuiT.lift (mock_write "after") in
+    TuiT.and_then before (TuiT.and_then paint after)
 
 /// The equal-index `Monad (TuiT M I I)` bridge: do-notation over
 /// `TuiT MockM Raw Raw` dispatches to the hand-written instance, and
