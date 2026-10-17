@@ -169,6 +169,40 @@ def test_spawn_cat_roundtrips_a_written_line : IO Bool := do {
     }
 }
 
+def pr_is_err (w : Result String U64) : Bool :=
+    match w {
+        Result.ok _ => false,
+        Result.err _ => true
+    }
+
+/// Writing to a child that has already exited is `Result.err` (EPIPE),
+/// not the death of THIS process by SIGPIPE -- the compiled runtime
+/// ignores SIGPIPE in `main` for exactly this. Reading stdout to its end
+/// first is what makes "already exited" deterministic: `true` closes it
+/// only by exiting.
+#[test]
+def test_spawn_write_to_an_exited_child_is_an_error_not_a_signal : IO Bool := do {
+    let r <- Proc.spawn "true" [];
+    match r {
+        Result.err _ => return false,
+        Result.ok c => do {
+            let l <- Proc.read_line c;
+            let w <- Proc.write c "hello\n";
+            let _code <- Proc.wait c;
+            return (pr_is_eof l && pr_is_err w)
+        }
+    }
+}
+
+/// The other half of ignoring SIGPIPE: a child must get the default
+/// back. With SIGPIPE still ignored, `yes` would see EPIPE and print
+/// "Broken pipe" onto the merged stream instead of dying quietly.
+#[test]
+def test_capture_child_gets_default_sigpipe : IO Bool := do {
+    let r <- Proc.capture "sh" ["-c", "yes | head -n 1"];
+    match r { Pair.pair code out => return (code == 0 && String.beq out "y\n") }
+}
+
 /// A server's stderr is its log stream, not its protocol stream: "err"
 /// must come out of `read_stderr_line` while "out" stays on stdout. If
 /// the pipes were merged (as `capture` merges them) this fails -- which

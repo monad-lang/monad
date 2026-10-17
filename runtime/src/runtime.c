@@ -1579,6 +1579,7 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     pid_t pid = fork();
     if (pid < 0) { free(argv); return -1; }
     if (pid == 0) {
+        signal(SIGPIPE, SIG_DFL); /* see `main`: SIG_IGN would survive exec */
         execvp(cmd, argv);
         _exit(127);            /* exec failed -- conventional shell code */
     }
@@ -1741,6 +1742,7 @@ void* monad_proc_spawn(char* cmd, void* args) {
         close(out_pipe[0]); close(out_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
         close(status_pipe[0]);
+        signal(SIGPIPE, SIG_DFL); /* see `main`: SIG_IGN would survive exec */
         execvp(cmd, argv);
         unsigned char exec_errno = (errno > 0 && errno < 256) ? (unsigned char)errno : 127;
         ssize_t ignored = write(status_pipe[1], &exec_errno, 1);
@@ -2727,6 +2729,15 @@ static void* main_thread_main(void* p) {
 int main(int argc, char** argv) {
     raise_stack_limit();
     GC_INIT();
+    /* A write to a pipe or socket whose reader has gone must come back as
+       EPIPE (a `Result.err` the caller can see), not kill the process --
+       Rust's std makes the same choice process-wide. `MSG_NOSIGNAL` only
+       covers `send`; `monad_proc_write`'s `write` to a child that already
+       exited had no such cover. Ignored dispositions survive `exec`, so
+       every fork child (`monad_exec_cmd`, `monad_proc_spawn`) restores
+       the default before exec'ing, or `yes | head` in a spawned shell
+       would never stop. */
+    signal(SIGPIPE, SIG_IGN);
     /* Exclude argv[0] (the binary's own path) -- matches the
        interpreter's own `run <file> <args...>` semantics (args passed to
        a compiled program's `main` are just the extra CLI args, not the
