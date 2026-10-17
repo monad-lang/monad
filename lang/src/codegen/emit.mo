@@ -75,7 +75,7 @@ use lib::module {
 use lib::scope {
   add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
   alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
-  modpath_eq, scope_find_inductive,
+  modpath_eq, refine_scope_instances, scope_find_inductive,
   resolve_open_alias_decls,
   collect_infixes, promote_instance_defs, resolve_class_calls_decls,
   resolve_infix_decls, strip_all_leading_binders,
@@ -6161,7 +6161,7 @@ pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List
     let promoted_decls := promote_instance_defs resolved_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
     let t_scope : I64 <- Bench.now;
-    let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
+    let scope_data : ScopeData := refine_scope_instances dict_param_decls (build_scope_from_decls target_mp dict_param_decls);
     let t_desugar : I64 <- bench_step verbose "  front end: build_scope_from_decls" t_scope (List.length scope_data.classes);
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };

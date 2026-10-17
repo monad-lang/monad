@@ -307,6 +307,57 @@ pub def build_scope_from_groups (groups : List DeclGroup) : ScopeData :=
     then alias_decls_in_scope all_decls with_builtins
     else with_builtins
 
+/// Refine the instance registry's wildcards the same way the syntactic
+/// class-call pass refines its own `collect_instances` list
+/// (`resolve_class_calls_decls`), so the CHECKER's D4 resolution
+/// (`lang.typecheck.infer`'s `resolve_class_method_carrier` and
+/// `dict_forwarding_override`) matches the same instances against the
+/// same carriers that pass does.
+///
+/// Without it, an instance whose arg mentions an UNDECLARED type variable
+/// -- `instance [Monad M] Monad (TuiT M I I)` names `I` with no `{I :
+/// Type}` binder -- has `I` missing from `instance_wildcard_names` in the
+/// registry, so `term_matches_carrier` requires a literal `I` at that
+/// position and the instance matches NO concrete carrier. The prelude's
+/// bridge `instance {I : Type} [IndexedMonad M] Monad (M I I)` declares
+/// both, matches every carrier, and took the call instead: the checker's
+/// hint-channel rewrite committed the do-block's `Monad.bind`/`Monad.pure`
+/// to the bridge's promoted methods, codegen never revisited the choice,
+/// and the compiled driver died calling `prelude::Monad_M_I_I_bind` with
+/// an IndexedMonad dictionary (motes/tui/src/tests/tuit_tests.mo,
+/// do-notation at equal indices). The syntactic pass, whose list IS
+/// refined, picked the wrapper -- the two passes disagreed, and the
+/// checker's answer is final (`resolve_class_method_d4`'s own doc
+/// comment: "a call that succeeds HERE is rewritten and is never handed
+/// to `lang.scope`'s pass again").
+///
+/// WHOLE-GRAPH CALLERS ONLY. The known-name filter
+/// (`declared_type_names`) must cover every type the program can name,
+/// exactly like `resolve_class_calls_decls`' own call site -- which runs
+/// "on the FULL loaded decl graph". Refining a scope built from ONE
+/// module's decls recovers real imported types as pattern variables: in
+/// a single-module scope, `instance Copy I64` has no `I64` in its
+/// `known` list, so `I64` becomes a wildcard, the instance stops being
+/// fully concrete, `is_copy` (`lang.typecheck.copy_class`) denies ω,
+/// and the affine walk reports a use-after-move in `Copy`'s own method
+/// body. This is why the refinement is NOT folded into
+/// `build_scope_from_groups` itself despite that being the one funnel
+/// every scope build passes through: the three whole-graph callers
+/// (`elaborate_loaded_modules`, `rebuild_target_scope`,
+/// `compile_input_of_modules`) apply it explicitly, and per-module
+/// scope builds keep the registry exactly as the decls wrote it.
+pub def refine_scope_instances (decl_list : List Decl) (sd : ScopeData) : ScopeData :=
+    { sd with instances := refine_scope_instance_groups (declared_type_names decl_list) sd.instances }
+
+#[partial]
+def refine_scope_instance_groups (known : List Identifier) (groups : List ScopeInstance) : List ScopeInstance :=
+    match groups {
+        List.empty => List.empty,
+        List.cons g rest =>
+            List.cons { g with instances := refine_instance_wildcards known g.instances }
+                (refine_scope_instance_groups known rest),
+    }
+
 def build_scope_from_groups_go (groups : List DeclGroup) (acc : ScopeData) : ScopeData :=
     match groups {
         List.empty => acc,
@@ -5094,6 +5145,21 @@ def constraint_carriers (bindings : List (Pair Identifier Term)) (vars : List Id
         Option.none => List.cons carrier List.empty,
     }
 
+/// A bare type variable that IS one of the constraint's own variables --
+/// the constraint's `M` itself, never solved at the call site. Such a
+/// candidate is not a carrier at all: it is the question, not an answer,
+/// and any instance matching it is a catch-all. See `resolve_dict_arg`'s
+/// own doc comment for the measured failure this guards.
+def carrier_is_constraint_var (t : Term) (vars : List Identifier) : Bool :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => id_in_list id vars,
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
 // ─── Callee-signature instantiation ─────────────────────────────────
 //
 // `infer_carrier_type`'s `Term.app` arm reduces the called def's own
@@ -6449,7 +6515,30 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                     // tried and measured inert on B3; see
                     // `find_constraint_bound_carrier_any`.)
                     let cands : List Term := constraint_carriers bindings vars carrier in
-                    let searched : List Term := List.append cands extra_carriers in
+                    // A candidate that IS one of the constraint's own
+                    // variables, still unresolved (`M` in `[Monad M]`
+                    // when the call site never solved `M`), is not weak
+                    // evidence but NO evidence: it names the very thing
+                    // the constraint is asking for. A catch-all instance
+                    // matches it regardless -- MEASURED
+                    // (motes/tui/src/tests/tuit_tests.mo's do-notation at
+                    // equal indices): the bind call's carrier came from
+                    // its first argument's own polymorphic type
+                    // (`TI M Rw Rw (Pair I64 I64)`, `M` free), the
+                    // wrapper instance bound its `M` to that free var,
+                    // and `[Monad M]` then resolved the bare `M` against
+                    // the prelude's bridge `instance {I : Type}
+                    // [IndexedMonad M] Monad (M I I)` -- whose pattern
+                    // head is ALSO spelled `M` -- so the wrapper's
+                    // promoted method was committed with the BRIDGE's
+                    // dictionary and the compiled driver died on the
+                    // mismatched dict layout. Dropped rather than demoted
+                    // (the `demote_uninformative_carriers` treatment):
+                    // a demoted self-variable still wins when it is the
+                    // only candidate, and any instance it "matches" is
+                    // a catch-all lie, not a resolution.
+                    let searched : List Term :=
+                        List.filter (fn (t : Term) => Bool.not (carrier_is_constraint_var t vars)) (List.append cands extra_carriers) in
                     // The constraint's own variable, bound by the matched
                     // instance's head against the candidate, is the RIGHT
                     // carrier -- and when the caller had no bindings to
@@ -6674,7 +6763,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                                                 ClassMethodRef.mk cls method_name =>
                                                     resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name resolved_args head spine_args def_carrier env ctor_owners expect dict_hints,
                                             },
-                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env dict_hints def_constraints def_types ctor_field_types id head resolved_args env ctor_owners,
+                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env dict_hints def_constraints def_types ctor_field_types id head resolved_args env ctor_owners expect,
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
@@ -6702,7 +6791,16 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                                 ClassMethodRef.mk cls method_name =>
                                     resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect List.empty,
                             },
-                        Option.none => t,
+                        // A bare reference to an ordinary CONSTRAINED def (a 0-arg
+                        // op like `TuiT.enter_raw_mode`, in the value position of the
+                        // annotated binding that pins its type) has the same
+                        // dictionary-argument obligation an applied call does --
+                        // Phase 3 gave the def the parameter either way -- and this
+                        // arm used to hand back the reference untouched, so codegen
+                        // emitted a closure AWAITING the dict where a fully-applied
+                        // value belonged. Zero resolved args, and only `expect` to
+                        // resolve the dict from.
+                        Option.none => resolve_ordinary_constrained_call classes instances dict_env List.empty def_constraints def_types ctor_field_types id t List.empty env ctor_owners expect,
                     },
                 DebugName.unnamed => t,
             },
@@ -7979,6 +8077,27 @@ pub type DefConstraintEntry {
     mk (name : NamePath) (constraints : List TypeConstraint),
 }
 
+/// The constraint list this table hands `resolve_ordinary_constrained_call`
+/// must be the one Phase 3 actually gave the callee dict PARAMETERS for:
+/// `qualifying_dict_constraints` over the same body, the shared predicate.
+/// A raw list here and a filtered list there is an ABI mismatch -- the
+/// call site prepends a dict argument for a constraint the callee's own
+/// signature never accepted, every parameter shifts left by one, and the
+/// compiled callee calls a field of the dictionary as a function: MEASURED
+/// as `driver exited -1` on `init/src/transformers_tests.mo` and
+/// `motes/tui/src/tests/tuit_tests.mo` (`StateT.bind_step`/`tui_apply`,
+/// single-var `[Monad M]` constraints no body references). A constraint
+/// that never qualified gets no parameter AND no argument -- a def whose
+/// dict resolution would fail at the call site is passed through
+/// UNTOUCHED, which is exactly what its no-parameter ABI needs.
+///
+/// The body read here is the one this pass walks -- elaborated on the
+/// codegen paths, pristine on the check path's own uses. A class-method
+/// reference the real checker could only leave abstract (the abstract
+/// carrier every qualifying reference has) survives elaboration, so the
+/// predicate answers the same on both; only a def referencing the class
+/// SOLELY at elaboration-resolvable concrete carriers could disagree with
+/// Phase 3's earlier decision, and no corpus def has that shape.
 #[partial]
 def collect_def_constraints (decl_list : List Decl) : List DefConstraintEntry :=
     match decl_list {
@@ -7987,10 +8106,11 @@ def collect_def_constraints (decl_list : List Decl) : List DefConstraintEntry :=
             match d {
                 Decl.def_d def_ =>
                     match def_ {
-                        Def.mk {name := dname, constraints, ..} =>
-                            match constraints {
+                        Def.mk {name := dname, term := body, constraints, ..} =>
+                            let qualifying : List TypeConstraint := qualifying_dict_constraints constraints body in
+                            match qualifying {
                                 List.empty => collect_def_constraints rest,
-                                List.cons _ _ => List.cons (DefConstraintEntry.mk dname constraints) (collect_def_constraints rest),
+                                List.cons _ _ => List.cons (DefConstraintEntry.mk dname qualifying) (collect_def_constraints rest),
                             },
                     },
                 _ => collect_def_constraints rest,
@@ -8077,6 +8197,63 @@ def find_minted_name_sep (s : String) (i : I64) (n : I64) : I64 :=
     else if String.beq (String.slice s i 2) "::" then i
     else find_minted_name_sep s (i + 1) n
 
+/// The callee's own constraint variables, bound by matching its declared
+/// codomain against the call's expected type. `t_and_then`'s
+/// `forall M A B. [Monad M] => T M A -> T M B -> T M B` read against an
+/// annotated binding's `T MockM I64` binds `M := MockM` -- exactly the
+/// binding the arg-carrier channel cannot produce when every argument
+/// is itself a constrained-def reference with an abstract carrier (the
+/// probe that measured this: `t_and_then t_op (t_map f t_op)` offered
+/// only the bare head `T`, matched nothing, and the call site left the
+/// dict off entirely, so the compiled callee received its first T-value
+/// argument in the dict slot and the driver died on entry).
+///
+/// Only the constraints' own variables are bindable wildcards: the
+/// callee's other quantifiers (the `A`/`B` the codomain also mentions)
+/// are none of the dictionary resolution's business. No registered
+/// type, or a codomain that shares no spine with the expectation,
+/// answers the empty list and the caller passes the call through
+/// unchanged -- the pre-existing silent behavior.
+def expect_constraint_bindings (def_types : HashMap String Term) (id : Identifier) (constraints : List TypeConstraint) (expect : Term) : List (Pair Identifier Term) :=
+    match lookup_def_type def_types id {
+        Option.none => List.empty,
+        Option.some typ =>
+            bind_term_vars (constraint_vars constraints) (strip_all_leading_binders typ) (term_peel expect) List.empty,
+    }
+
+/// The expectation-driven fallback of `resolve_ordinary_constrained_call`,
+/// consulted only after the arg-carrier channel failed (either no
+/// argument revealed a carrier at all, or the carriers it revealed
+/// resolved no dictionary -- a 0-arg constrained op has no arguments to
+/// say anything, and a call whose args are all constrained-def references
+/// says only abstract heads). The expectation is the annotated binding's
+/// own type (`let prog : T MockM I64 := ... in`, the `expect` channel of
+/// `lam_param_hints`), so matching the callee's codomain against it binds
+/// the constraint's variables at the call site and `resolve_dict_args`
+/// resolves the dictionary from those bindings -- the bound carrier is
+/// offered FIRST (`constraint_carriers`), the whole expected type only
+/// as the trailing fallback candidate. Nothing bound, or nothing
+/// resolved, leaves the call untouched, exactly as before this existed.
+#[partial]
+def resolve_constrained_call_from_expect (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (hints : List String) (def_types : HashMap String Term) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (resolved_args : List Term) (id : Identifier) (head : Term) (constraints : List TypeConstraint) (expect : Option Term) : Term :=
+    match expect {
+        Option.none => rebuild_call head resolved_args,
+        Option.some exp =>
+            match expected_carrier_of exp {
+                Option.none => rebuild_call head resolved_args,
+                Option.some exp_typ =>
+                    let bindings := expect_constraint_bindings def_types id constraints exp_typ in
+                    match bindings {
+                        List.empty => rebuild_call head resolved_args,
+                        List.cons _ _ =>
+                            match resolve_dict_args classes instances dict_env hints bindings exp_typ (demote_uninformative_carriers (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args)) constraints {
+                                Option.none => rebuild_call head resolved_args,
+                                Option.some dict_args => rebuild_call head (List.append dict_args resolved_args),
+                            },
+                    },
+            },
+    }
+
 /// Resolves a call to an ORDINARY (non-class-method) global whose own
 /// def carries constraints (registered in `def_constraints`) -- if
 /// found, resolves and prepends the same dict argument(s)
@@ -8088,22 +8265,28 @@ def find_minted_name_sep (s : String) (i : I64) (n : I64) : I64 :=
 /// arguments (`arg_is_dict`), or one whose dict args can't be resolved
 /// passes through completely unchanged -- this must never touch an
 /// ordinary, unconstrained call.
+///
+/// `expect` is this call's expected type, when the source pins one (the
+/// annotated-binding channel, `lam_param_hints`): the last-resort
+/// fallback (`resolve_constrained_call_from_expect`) when no argument
+/// reveals a usable carrier -- the 0-arg constrained op
+/// (`TuiT.enter_raw_mode`) has no argument that could.
 #[partial]
-def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (hints : List String) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
+def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (hints : List String) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expect : Option Term) : Term :=
     match lookup_def_constraints def_constraints (NamePath.mk (List.cons id List.empty)) {
         Option.none => rebuild_call head resolved_args,
         Option.some constraints =>
             if arg_is_dict resolved_args
             then rebuild_call head resolved_args
             else match infer_carrier_from_args_go env ctor_owners def_types ctor_field_types resolved_args {
-                Option.none => rebuild_call head resolved_args,
                 Option.some carrier =>
                     // No instance head here (an ordinary constrained DEF call), so no
                     // bindings: `List.empty` keeps the pre-existing whole-carrier order.
                     match resolve_dict_args classes instances dict_env hints List.empty carrier (demote_uninformative_carriers (infer_all_carriers_from_args_go env ctor_owners def_types ctor_field_types resolved_args)) constraints {
-                        Option.none => rebuild_call head resolved_args,
                         Option.some dict_args => rebuild_call head (List.append dict_args resolved_args),
+                        Option.none => resolve_constrained_call_from_expect classes instances dict_env hints def_types ctor_owners ctor_field_types env resolved_args id head constraints expect,
                     },
+                Option.none => resolve_constrained_call_from_expect classes instances dict_env hints def_types ctor_owners ctor_field_types env resolved_args id head constraints expect,
             },
     }
 

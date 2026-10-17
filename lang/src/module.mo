@@ -50,7 +50,7 @@ use lib::scope {
   dict_param_name,
   filter_valid_open_aliases,
   modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
-  param_names, promote_instance_decl_groups, promote_instance_defs,
+  param_names, promote_instance_decl_groups, promote_instance_defs, refine_scope_instances,
   alias_map_empty, build_alias_map,
   resolve_class_calls_decls, resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
@@ -5950,7 +5950,7 @@ def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (targe
 /// works there.
 #[partial]
 def rebuild_target_scope (target_mp : ModulePath) (decls : List Decl) : Scope :=
-    { module_id := target_mp, scope := build_scope_from_decls target_mp decls, parent := Option.none, incomplete_match_ok := false }
+    { module_id := target_mp, scope := refine_scope_instances decls (build_scope_from_decls target_mp decls), parent := Option.none, incomplete_match_ok := false }
 
 /// `loaded` with the MAIN module's own `decl_list` replaced by `decls` --
 /// in both the `main_module` field and the matching entry of
@@ -6062,7 +6062,7 @@ def elaborate_loaded_modules_cached_go (file_path : String) (check_deps : Bool) 
             let dict_paramed_flat : List Decl := decl_groups_flatten dict_paramed;
             let main_module : ModuleInfo := get_loaded_main loaded;
             let target_mp : ModulePath := main_module.path;
-            let scope_data : ScopeData := build_scope_from_groups dict_paramed;
+            let scope_data : ScopeData := refine_scope_instances dict_paramed_flat (build_scope_from_groups dict_paramed);
             let t_scope : I64 <- bench_step verbose "  elab: build_scope_from_decls" t_dict (List.length scope_data.classes);
             let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
             // `target_decls` must go through the SAME infix-resolution/
@@ -7395,6 +7395,193 @@ def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool
             let dict_paramed := add_constraint_dict_params_decls promoted;
             let dispatched := resolve_class_calls_decls dict_paramed;
             decl_list_has_use_it_calling_makeempty_mybox_empty dispatched
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
+/// One dict ARGUMENT per dict PARAMETER: `resolve_ordinary_constrained_
+/// call` prepends a leading dict argument for every entry
+/// `collect_def_constraints`'s table holds, so that table must record
+/// exactly the constraints Phase 3 (`add_constraint_dict_params`) turned
+/// into leading dict PARAMETERS -- `qualifying_dict_constraints`, the
+/// same predicate both halves must share. Recording the RAW constraint
+/// list instead handed a leading argument to every constrained CALLEE
+/// whose own constraint never qualified (single-var but unreferenced in
+/// the body -- `init/src/transformers.mo`'s `StateT.bind_step`,
+/// `motes/tui/src/tuit.mo`'s `tui_apply`): the callee's parameters all
+/// shifted left by one, its own continuation slot received the
+/// dictionary, and the compiled driver called a field of the dictionary
+/// as a function and died by signal -- MEASURED as `driver exited -1`
+/// on `init/src/transformers_tests.mo` and `motes/tui/src/tests/
+/// tuit_tests.mo`.
+///
+/// `refs_step` is the qualifying half (its body calls `Wrap.wrap`, so
+/// Phase 3 gave it a `__dict_Wrap` parameter and the call site must
+/// prepend the `Wrap Id` dictionary); `norefs_step` is the bind_step
+/// shape (constrained, but its body never mentions the class -- no
+/// parameter, and the call site must pass it through UNTOUCHED).
+#[test]
+def test_resolve_class_calls_skips_unreferenced_constrained_callee : IO Bool := do {
+    let src : String :=
+        "class Wrap (M : Type -> Type) { def wrap (m : M A) : M A }\n" ++
+        "type Id A { id_mk (a : A) }\n" ++
+        "instance Wrap Id { def wrap (m : Id A) : Id A := m }\n" ++
+        "def refs_step [Wrap M] {A : Type} (m : M A) : M A := Wrap.wrap m\n" ++
+        "def norefs_step [Wrap M] {B : Type} (m : M B) : M B := m\n" ++
+        "def use_refs : Id I64 := refs_step (Id.id_mk 1)\n" ++
+        "def use_norefs : Id I64 := norefs_step (Id.id_mk 2)";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let dispatched := resolve_class_calls_decls dict_paramed;
+            let refs_ok := decl_list_def_term_contains dispatched "use_refs" "__Dict_Wrap_Id";
+            let norefs_ok := Bool.not (decl_list_def_term_contains dispatched "use_norefs" "__Dict_Wrap");
+            Bool.and refs_ok norefs_ok
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
+/// A 0-arg constrained op, resolved from its annotated binding's own
+/// type: `op`'s body references the class (so Phase 3 gave it a dict
+/// parameter) but it has NO value arguments for carrier inference to
+/// read a carrier from, and as a bare reference the var arm used to
+/// hand it back untouched -- codegen then emitted a closure AWAITING
+/// the dictionary where a fully-applied value belonged. The binding's
+/// annotation is the one place the source pins the result type, and
+/// `resolve_ordinary_constrained_call`'s expect fallback
+/// (`resolve_constrained_call_from_expect`) matches the callee's
+/// declared codomain against it to bind the constraint's variable
+/// (`M := Id`) and prepend the dictionary. MEASURED on the TuiT probe:
+/// `t_and_then t_op (t_map f t_op)` at an annotated
+/// `let prog : T MockM I64 := ... in` left the dict off entirely, the
+/// compiled callee received its first value argument in the dict slot,
+/// and the driver died on entry -- the `TuiT.enter_raw_mode` shape of
+/// `motes/tui/src/tests/tuit_tests.mo`'s lifecycle programs.
+#[test]
+def test_resolve_class_calls_expect_resolves_zero_arg_constrained_op : IO Bool := do {
+    let src : String :=
+        "class Wrappable (M : Type -> Type) { def mk (a : I64) : M I64 }\n" ++
+        "type Id A { id_mk (a : A) }\n" ++
+        "instance Wrappable Id { def mk (a : I64) : Id I64 := Id.id_mk a }\n" ++
+        "def op [Wrappable M] : M I64 := Wrappable.mk 5\n" ++
+        "def use_op : Id I64 := let x : Id I64 := op in x";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let dispatched := resolve_class_calls_decls dict_paramed;
+            decl_list_def_term_contains dispatched "use_op" "__Dict_Wrappable_Id"
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
+/// Do-notation at EQUAL indices, with both the hand-written wrapper
+/// `Monad (TI M I I)` and the prelude-shaped catch-all bridge
+/// `Monad (M I I)` applicable to the carrier `TI MockM Rw Rw`. MEASURED
+/// failure (motes/tui/src/tests/tuit_tests.mo,
+/// `test_do_notation_at_equal_indices`/`prog_bridged`): the checker's
+/// instance REGISTRY was not wildcard-refined, so the wrapper's
+/// undeclared `I` matched no concrete carrier and the hint-channel
+/// rewrite committed the do-block's `Monad.bind`/`Monad.pure` to the
+/// BRIDGE -- the compiled driver then died calling
+/// `prelude::Monad_M_I_I_bind` with an IndexedMonad dictionary, and the
+/// syntactic pass (whose own instance list IS refined,
+/// `resolve_class_calls_decls`) never got to disagree: the checker's
+/// rewrite is final. Pins `refine_scope_instances`: elaboration must
+/// not commit the bridge's `Monad_M_I_I_*` methods, and the dispatched
+/// term must carry the wrapper's `Monad_TI_M_I_I_*` ones instead.
+#[test]
+def test_elaborate_do_at_equal_indices_picks_the_wrapper_instance : IO Bool := do {
+    let src : String :=
+        "class Monad (M : Type -> Type) {\n" ++
+        "    def pure (a : A) : M A\n" ++
+        "    def bind (ma : M A) (f : A -> M B) : M B\n" ++
+        "}\n" ++
+        "class IndexedMonad (M : Type -> Type -> Type -> Type) {\n" ++
+        "    def pure (a : A) : M I I A\n" ++
+        "    def bind (ma : M I J A) (f : A -> M J K B) : M I K B\n" ++
+        "    def map (f : A -> B) (ma : M I J A) : M I J B\n" ++
+        "    def and_then (x : M I J A) (y : M J K B) : M I K B\n" ++
+        "    def lift (a : A) : M I I A\n" ++
+        "}\n" ++
+        "instance {I : Type} [IndexedMonad M] Monad (M I I) {\n" ++
+        "    def pure (a : A) : M I I A := IndexedMonad.pure a\n" ++
+        "    def bind (ma : M I I A) (f : A -> M I I B) : M I I B := IndexedMonad.bind ma f\n" ++
+        "}\n" ++
+        "type MockM A { mock_m (log : List String) (a : A) }\n" ++
+        "def mock_pure {A : Type} (a : A) : MockM A :=\n" ++
+        "    MockM.mock_m List.empty a\n" ++
+        "def mock_bind_run {A : Type} {B : Type} (f : A -> MockM B) (log : List String) (a : A) : MockM B :=\n" ++
+        "    match f a {\n" ++
+        "        MockM.mock_m log2 b => MockM.mock_m (List.append log log2) b\n" ++
+        "    }\n" ++
+        "instance Monad MockM {\n" ++
+        "    def pure (a : A) : MockM A := mock_pure a\n" ++
+        "    def bind (ma : MockM A) (f : A -> MockM B) : MockM B :=\n" ++
+        "        match ma { mock_m log a => mock_bind_run f log a }\n" ++
+        "}\n" ++
+        "type Rw {}\n" ++
+        "type Term (M : Type -> Type) { term (size : M (Pair I64 I64)) }\n" ++
+        "def Term.size {M : Type -> Type} (t : Term M) : M (Pair I64 I64) := match t { term s => s }\n" ++
+        "type TI (M : Type -> Type) (I : Type) (J : Type) (A : Type) { ti_mk (action : Term M -> M A) }\n" ++
+        "def TI.run {M : Type -> Type} {I : Type} {J : Type} {A : Type} (ma : TI M I J A) (t : Term M) : M A := match ma { ti_mk action => action t }\n" ++
+        "instance [Monad M] IndexedMonad (TI M) {\n" ++
+        "    def pure (a : A) : TI M I I A := TI.ti_mk (fn (_ : Term M) => Monad.pure a)\n" ++
+        "    def bind (ma : TI M I J A) (f : A -> TI M J K B) : TI M I K B := TI.ti_mk (fn (t : Term M) => Monad.bind (TI.run ma t) (fn (a : A) => TI.run (f a) t))\n" ++
+        "    def map (f : A -> B) (ma : TI M I J A) : TI M I J B := TI.ti_mk (fn (t : Term M) => Monad.bind (TI.run ma t) (fn (a : A) => Monad.pure (f a)))\n" ++
+        "    def and_then (x : TI M I J A) (y : TI M J K B) : TI M I K B := TI.ti_mk (fn (t : Term M) => Monad.bind (TI.run x t) (fn (_ : A) => TI.run y t))\n" ++
+        "    def lift (a : A) : TI M I I A := TI.ti_mk (fn (_ : Term M) => Monad.pure a)\n" ++
+        "}\n" ++
+        "instance [Monad M] Monad (TI M I I) {\n" ++
+        "    def pure (a : A) : TI M I I A := TI.ti_mk (fn (_ : Term M) => Monad.pure a)\n" ++
+        "    def bind (ma : TI M I I A) (f : A -> TI M I I B) : TI M I I B := TI.ti_mk (fn (t : Term M) => Monad.bind (TI.run ma t) (fn (a : A) => TI.run (f a) t))\n" ++
+        "}\n" ++
+        "def TI.size [Monad M] : TI M Rw Rw (Pair I64 I64) := TI.ti_mk Term.size\n" ++
+        "def prog_do : TI MockM Rw Rw (Pair I64 I64) := do { let sz <- TI.size; return sz }\n";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let path : ModulePath := ModulePath.mk List.empty;
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            // The registry refinement under test -- the whole-graph
+            // pipeline sites (`elaborate_loaded_modules`,
+            // `compile_input_of_modules`, `rebuild_target_scope`) apply
+            // this same wrapper around their own scope build.
+            let sd : ScopeData := refine_scope_instances dict_paramed (build_scope_from_decls path dict_paramed);
+            let scope : Scope := {
+                module_id := path,
+                scope := sd,
+                parent := Option.none,
+                incomplete_match_ok := false,
+            };
+            let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+            let desugared := elaborate_def_typs dict_paramed (names_of_decls dict_paramed);
+            let report := elaborate_module_decls_reporting scope desugared empty_locs;
+            let elaborated := best_effort_decls report;
+            // The checker's rewrite is final: once elaboration names the
+            // bridge's method, nothing downstream revisits it.
+            let elaborated_ok : Bool :=
+                Bool.not (decl_list_def_term_contains elaborated "prog_do" "Monad_M_I_I_bind");
+            let dispatched := resolve_class_calls_decls elaborated;
+            let dispatched_ok : Bool :=
+                decl_list_def_term_contains dispatched "prog_do" "Monad_TI_M_I_I_bind"
+                    && decl_list_def_term_contains dispatched "prog_do" "Monad_TI_M_I_I_pure"
+                    && Bool.not (decl_list_def_term_contains dispatched "prog_do" "Monad_M_I_I_bind")
+                    && Bool.not (decl_list_def_term_contains dispatched "prog_do" "Monad_M_I_I_pure");
+            Bool.and elaborated_ok dispatched_ok
         },
         ParseResult.fail _ => false,
     })
