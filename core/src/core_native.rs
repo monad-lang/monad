@@ -1335,48 +1335,79 @@ fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
 /// both hand over a corrupt stream.
 static STDIN_CARRY: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
+/// One UNBUFFERED `read(2)` from `fd`, retrying `EINTR`; `0` means EOF.
+///
+/// Every stdin reader here goes through this rather than
+/// `std::io::stdin()`, matching `runtime.c`, whose readers all use
+/// `read(0, ...)`. Rust's `Stdin` is an 8 KiB `BufReader`: a 1-byte
+/// read through it pulls in everything the OS has ready, and those
+/// bytes are then invisible to anything that looks at fd 0 itself.
+/// `motes/tui/src/input.mo` reads one byte and then `poll(2)`s fd 0
+/// (`term_ctl` op 3) to ask whether more of an escape sequence is
+/// pending -- through the buffer, `poll` said "nothing" and the rest of
+/// the keystroke waited for the NEXT keypress.
+fn read_fd_raw(fd: libc::c_int, buf: &mut [u8]) -> std::io::Result<usize> {
+  loop {
+    let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+    if n >= 0 {
+      return Ok(n as usize);
+    }
+    let e = std::io::Error::last_os_error();
+    if e.kind() != std::io::ErrorKind::Interrupted {
+      return Err(e);
+    }
+  }
+}
+
+/// One line off `fd`, byte at a time, WITHOUT its trailing newline;
+/// `None` when nothing at all was read (EOF). Byte-at-a-time for the
+/// reason `runtime.c`'s `monad_read_line` gives: anything that reads
+/// ahead consumes bytes belonging to the caller's NEXT read
+/// (`read_stdin_exact`, or tui's poll-then-read).
+fn read_line_fd(fd: libc::c_int) -> std::io::Result<Option<Vec<u8>>> {
+  let mut line = Vec::new();
+  let mut saw_byte = false;
+  let mut byte = [0u8; 1];
+  while read_fd_raw(fd, &mut byte)? == 1 {
+    saw_byte = true;
+    if byte[0] == b'\n' {
+      break;
+    }
+    line.push(byte[0]);
+  }
+  Ok(saw_byte.then_some(line))
+}
+
 /// One `read` from stdin; `0` means EOF. Split out so both of
 /// `read_stdin_exact`'s read sites (the fill loop and the
 /// complete-the-character loop) share one error shape.
 fn read_stdin_chunk(buf: &mut [u8]) -> Result<usize, CoreEvalError> {
-  use std::io::Read;
-  let stdin = std::io::stdin();
-  let mut lock = stdin.lock();
-  lock
-    .read(buf)
+  read_fd_raw(libc::STDIN_FILENO, buf)
     .map_err(|e| CoreEvalError::NativeArgError(format!("read_stdin_exact failed: {e}")))
 }
 
 /// `IO.read_line : IO (Option String)` — one line from stdin WITHOUT
 /// its trailing newline, or `Option.none` at EOF (nothing read at all).
 ///
-/// Uses `read_until(b'\n')` rather than `BufRead::read_line`: the
-/// latter REJECTS invalid UTF-8, and this is a protocol reader whose
-/// only job is to hand back what the peer sent. A final line with no
-/// trailing newline is `Option.some line`, and `\r` is deliberately NOT
-/// stripped.
+/// Reads raw bytes (`read_line_fd`) rather than `BufRead::read_line`:
+/// the latter REJECTS invalid UTF-8, and this is a protocol reader
+/// whose only job is to hand back what the peer sent. A final line with
+/// no trailing newline is `Option.some line`, and `\r` is deliberately
+/// NOT stripped.
 ///
 /// No `STDIN_CARRY` handling is needed here, unlike `read_stdin_exact`
 /// just below: `\n` is ASCII, so it is always a character boundary, and
-/// `read_until` returns either up to and including that boundary or
-/// everything up to EOF -- never a lone prefix of a multi-byte
-/// character with more of it still to come.
+/// the line ends either at that boundary or at EOF -- never on a lone
+/// prefix of a multi-byte character with more of it still to come.
 fn read_line(natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  use std::io::BufRead;
-  let stdin = std::io::stdin();
-  let mut buf: Vec<u8> = Vec::new();
-  let n = stdin
-    .lock()
-    .read_until(b'\n', &mut buf)
+  let line = read_line_fd(libc::STDIN_FILENO)
     .map_err(|e| CoreEvalError::NativeArgError(format!("read_line failed: {e}")))?;
-  let opt = if n == 0 {
-    make_option(natives, None)?
-  } else {
-    if buf.last() == Some(&b'\n') {
-      buf.pop();
+  let opt = match line {
+    None => make_option(natives, None)?,
+    Some(buf) => {
+      let line = String::from_utf8_lossy(&buf).into_owned();
+      make_option(natives, Some(Value::Lit(IrLit::Str(line.into()))))?
     }
-    let line = String::from_utf8_lossy(&buf).into_owned();
-    make_option(natives, Some(Value::Lit(IrLit::Str(line.into()))))?
   };
   io_wrap(natives, opt)
 }
@@ -2541,6 +2572,44 @@ mod tests {
 
   fn string(s: &str) -> Value {
     Value::Lit(IrLit::Str(s.into()))
+  }
+
+  /// The stdin readers must not read ahead: after one line or one byte,
+  /// the rest must still be in the KERNEL, where `poll(2)` (tui's
+  /// `term_ctl` op 3) and the next raw read can see it. A pipe stands in
+  /// for fd 0.
+  #[test]
+  fn test_raw_fd_readers_leave_unread_bytes_pollable() {
+    let mut fds = [0 as libc::c_int; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (rd, wr) = (fds[0], fds[1]);
+    let input = b"ab\n\x1b[A";
+    let wrote = unsafe { libc::write(wr, input.as_ptr().cast(), input.len()) };
+    assert_eq!(wrote, input.len() as isize);
+
+    let pending = |fd: libc::c_int| {
+      let mut p = [libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+      }];
+      unsafe { libc::poll(p.as_mut_ptr(), 1, 0) }
+    };
+
+    assert_eq!(read_line_fd(rd).unwrap(), Some(b"ab".to_vec()));
+    let mut byte = [0u8; 1];
+    assert_eq!(read_fd_raw(rd, &mut byte).unwrap(), 1);
+    assert_eq!(byte[0], 0x1b);
+    assert_eq!(
+      pending(rd),
+      1,
+      "the rest of the escape sequence must stay pollable"
+    );
+
+    unsafe { libc::close(wr) };
+    assert_eq!(read_line_fd(rd).unwrap(), Some(b"[A".to_vec()));
+    assert_eq!(read_line_fd(rd).unwrap(), None);
+    unsafe { libc::close(rd) };
   }
 
   #[test]
