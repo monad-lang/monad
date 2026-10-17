@@ -18,12 +18,12 @@ use std::map {BTreeMap}
 /// must declare exactly those keys -- with `schema := Json.null` the
 /// model has no contract to follow and guesses (live-verified against
 /// Ollama: `file_path` instead of `path`).
-def str_param (name : String) (desc : String) : Pair String Json :=
+pub def str_param (name : String) (desc : String) : Pair String Json :=
     Pair.pair name (Json.make_object (Map.insert "type" (Json.make_str "string") (Map.insert "description" (Json.make_str desc) BTreeMap.empty)))
 
 /// `{"type":"object","properties":{...},"required":[...]}` for a
 /// flat all-string-parameters tool.
-def params_schema (params : List (Pair String Json)) : Json :=
+pub def params_schema (params : List (Pair String Json)) : Json :=
     let props := Json.make_object (params_to_map params BTreeMap.empty) in
     Json.make_object (Map.insert "type" (Json.make_str "object") (Map.insert "properties" props (Map.insert "required" (Json.make_array (List.map pair_fst params)) BTreeMap.empty)))
 
