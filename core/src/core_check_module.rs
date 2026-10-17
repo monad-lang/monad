@@ -434,18 +434,59 @@ fn collect_class_method_order(
 /// `KnownInstanceInfo`'s doc comment) — called after `register_type_decls`
 /// has fully populated `structs`, not at this file's original call site
 /// (right after parsing, before any of those exist).
+/// An instance whose first type argument's HEAD is one of its own type
+/// variables (`instance {I} [IndexedMonad M] Monad (M I I)` — the
+/// prelude's generic bridge) is deliberately NOT registered: this table
+/// keys on the argument's concrete head path, and a variable has no path
+/// — only a spelling. Registering it would silently collide with any
+/// DEF's same-named type variable (`[Monad M]`, whose `M` atom resolves
+/// by name to the bridge's key) and hand out the bridge as a garbage
+/// dictionary, so it stays out entirely (the bridge is already documented
+/// as never dispatching — see tuit.mo's `Monad (TuiT M I I)` note).
 fn collect_known_instances(
   loaded: &LoadedModules,
   expanded: &[SourceContext<Decl>],
   structs: &StructFields,
   atoms: &mut AtomTable,
   infix: &Map<Operator, NamePath>,
+  constrained_def_classes: &Map<Identifier, Vec<NamePath>>,
 ) -> KnownInstances {
   let mut out = KnownInstances::new();
   let mut visit = |instance: &crate::term::Instance, atoms: &mut AtomTable| {
     let Some(first_arg) = instance.args.first() else {
       return;
     };
+    // A variable-headed instance can never be keyed here (see this
+    // function's doc comment) — detect the instance's own declared
+    // variable names (its `params` plus its constraint vars) at the head
+    // of its first type argument's application spine and skip.
+    // Interleave the App walk with Ctx unwrapping — a type argument's
+    // spine can arrive Ctx-wrapped (`Ctx(App(Var M, Var I), Var I)`, the
+    // parser attaches source context to instance arguments), and a plain
+    // App-only walk stops at the wrapper without ever reaching the head
+    // variable — which is exactly how the prelude's variable-headed
+    // bridge (`Monad (M I) I`) previously slipped past this skip and got
+    // itself registered under a variable's spelling.
+    let mut head = first_arg;
+    loop {
+      match head {
+        Term::App { fun, .. } => head = fun,
+        Term::Ctx { term, .. } => head = term,
+        _ => break,
+      }
+    }
+    if let Term::Var { name } = head
+      && let Some(id) = var_identifier(name)
+    {
+      let is_own_var = instance.params.iter().any(|p| &p.name == id)
+        || instance
+          .constraints
+          .iter()
+          .any(|c| c.vars().iter().any(|v| v == id));
+      if is_own_var {
+        return;
+      }
+    }
     let Some(type_path) = term_head_path(first_arg) else {
       return;
     };
@@ -463,10 +504,33 @@ fn collect_known_instances(
         let wrapped = instance
           .constraints
           .iter()
-          .filter(|c| term_references_class(&def.term, c.class(), structs, atoms, infix))
+          .filter(|c| {
+            term_references_class(
+              &def.term,
+              c.class(),
+              structs,
+              atoms,
+              infix,
+              constrained_def_classes,
+            )
+          })
           .cloned()
           .collect();
         (method_name.clone(), wrapped)
+      })
+      .collect();
+    // Each constraint's variable, located by name in the instance's OWN
+    // declared type argument's application spine (`TuiT M I I` -> `M` at
+    // 0) — name equality is reliable here because the constraint variable
+    // and the type argument share the instance declaration's one scope.
+    // `resolve_instance_dict_args` uses this instead of guessing when the
+    // constraint count and the concrete type's spine length don't line up.
+    let constraint_positions: Map<Identifier, usize> = instance
+      .constraints
+      .iter()
+      .filter_map(|c| {
+        let var = c.vars().first()?.clone();
+        constraint_var_position(first_arg, &var).map(|pos| (var, pos))
       })
       .collect();
     out.insert(
@@ -475,6 +539,7 @@ fn collect_known_instances(
         prefix: GlobalRef::Local(instance.name().clone()),
         constraints: instance.constraints.clone(),
         method_constraints,
+        constraint_positions,
       },
     );
   };
@@ -506,6 +571,104 @@ fn term_head_path(t: &Term) -> Option<GlobalRef> {
     Term::Ctx { term, .. } => term_head_path(term),
     _ => None,
   }
+}
+
+/// The bare identifier of a `NameRef` when it names a single, unqualified
+/// thing (`Id` directly; nothing else qualifies — `Np` paths are ≥ 2
+/// segments by construction, `Qn`/`Op`/... carry their own resolution
+/// context). Used by `collect_known_instances` to test whether an
+/// instance's first type argument is headed by one of its OWN variables.
+fn var_identifier(name: &NameRef) -> Option<&Identifier> {
+  match name {
+    NameRef::Id(id) => Some(id),
+    _ => None,
+  }
+}
+
+/// Every constrained def's bare last-segment name mapped to the classes
+/// its own declared constraints mention, across every loaded module's
+/// defs plus the file's own — how `term_references_class` sees THROUGH a
+/// call to another constrained def (`tui_discard_bool [Monad M]`): the
+/// callee needs a dictionary for the class, so any caller whose own
+/// `[Monad M]`-style constraint could supply it must not read as
+/// phantom. Keyed by the def NAME's last segment (matching how the body
+/// SPELLS the call — `Id(bind)` or `Np([TuiT, bind])` both end in
+/// "bind"), a deliberate approximation in the same over- rather than
+/// under-approximating direction the callee-through check needs: a
+/// same-last-name false positive costs at worst a spurious dict `Pi`,
+/// which call-site D4 auto-insertion resolves harmlessly.
+fn collect_constrained_def_classes(
+  loaded: &LoadedModules,
+  expanded: &[SourceContext<Decl>],
+) -> Map<Identifier, Vec<NamePath>> {
+  let mut out: Map<Identifier, Vec<NamePath>> = Map::new();
+  let mut visit = |def: &Def| {
+    let classes: Vec<NamePath> = def
+      .type_constraints()
+      .iter()
+      .map(|c| c.class().clone())
+      .collect();
+    if classes.is_empty() {
+      return;
+    }
+    out
+      .entry(def.name.last().clone())
+      .or_default()
+      .extend(classes);
+  };
+  for module in loaded.modules() {
+    for def in module.defs() {
+      visit(def);
+    }
+  }
+  for decl in expanded {
+    if let Decl::Def(def) = &**decl {
+      visit(def);
+    }
+  }
+  out
+}
+
+/// The 0-based position of `var` within `first_arg`'s own application
+/// spine (`TuiT M I I` -> `Some(0)` for `M`, `Some(1)` for the first `I`)
+/// — how `collect_known_instances` records, per instance-level
+/// constraint, which of the instance's declared type arguments the
+/// constraint's variable actually is. `None` when `first_arg` isn't an
+/// application at all (a bare type, `MockM` — an instance on it can't
+/// have constraints on nested vars anyway) or the variable isn't a
+/// top-level argument of it (the constraint is on the head itself, or
+/// nested deeper than one level).
+fn constraint_var_position(first_arg: &Term, var: &Identifier) -> Option<usize> {
+  let mut args: Vec<&Term> = Vec::new();
+  let mut head = first_arg;
+  // Interleave the App walk with Ctx unwrapping, same as the variable-
+  // headed-instance skip in `collect_known_instances`: instance type
+  // arguments arrive Ctx-wrapped (`TuiT M I I` as
+  // `Ctx(App(App(App(TuiT, M), I), I))`), and an App-only walk sees the
+  // wrapper, collects no arguments at all, and reports every constraint
+  // variable as unfindable — which left `KnownInstanceInfo::
+  // constraint_positions` empty and forced `resolve_instance_dict_args`
+  // onto its last-resort (wrong) positional guess.
+  loop {
+    match head {
+      Term::App { fun, arg } => {
+        args.push(arg);
+        head = fun;
+      }
+      Term::Ctx { term, .. } => head = term,
+      _ => break,
+    }
+  }
+  args.reverse();
+  args.iter().position(|arg| match arg {
+    Term::Var {
+      name: NameRef::Id(id),
+    } => id == var,
+    Term::Ctx { term, .. } => {
+      matches!(term.as_ref(), Term::Var { name: NameRef::Id(id) } if id == var)
+    }
+    _ => false,
+  })
 }
 
 impl Default for ModuleCheckEnv {
@@ -1367,23 +1530,39 @@ fn peel_foralls(typ_c: CoreTerm) -> (Vec<(Identifier, Atom, CoreTerm)>, CoreTerm
 
 /// Whether `term` (a def's own SOURCE-level body, before lowering)
 /// references anything under `class_name`'s namespace — a qualified
-/// reference (`Functor.map`) directly, or an unqualified one (`map`, only
+/// reference (`Functor.map`) directly, an unqualified one (`map`, only
 /// resolvable via `structs`' already-registered field/method list for
 /// `class_name`, since nothing else at this point knows what `open
-/// Functor` made reachable unqualified). Used to decide whether a
-/// `[ClassName Var]` constraint is only a phantom/documentation
-/// annotation (see `elaborate_constrained_type`'s doc comment) — an
-/// under-approximation is the SAFE direction here (worst case: an
-/// unnecessary dict `Pi` gets inserted for a constraint that turns out
-/// unused, exactly today's behavior before this check existed), so this
-/// deliberately doesn't try to resolve every alias-resolution edge case.
+/// Functor` made reachable unqualified), OR a call to another
+/// constrained def whose own constraints mention `class_name`
+/// (`constrained_def_classes`, see `collect_constrained_def_classes`) —
+/// the callee needs a dictionary for the class, and at an abstract
+/// caller that dictionary can only come from the caller's OWN dict
+/// parameter. Without the callee-through check, a def whose body reaches
+/// the class only through such a call (`TuiT.enter_raw_mode [Monad M]
+/// := ... tui_discard_bool ...`, where `tui_discard_bool [Monad M]` is
+/// the only path to `Monad`) reads as phantom, gets no dict `Pi` from
+/// `elaborate_constrained_type`, and its body's inner call is left with
+/// no dictionary to thread. Used to decide whether a `[ClassName Var]`
+/// constraint is only a phantom/documentation annotation (see
+/// `elaborate_constrained_type`'s doc comment) — an under-approximation
+/// is the SAFE direction here (worst case: an unnecessary dict `Pi` gets
+/// inserted for a constraint that turns out unused, exactly today's
+/// behavior before this check existed), so this deliberately doesn't try
+/// to resolve every alias-resolution edge case.
 fn term_references_class(
   term: &Term,
   class_name: &NamePath,
   structs: &StructFields,
   atoms: &mut AtomTable,
   infix: &Map<Operator, NamePath>,
+  constrained_def_classes: &Map<Identifier, Vec<NamePath>>,
 ) -> bool {
+  let calls_constrained_def = |name: &Identifier| {
+    constrained_def_classes
+      .get(name)
+      .is_some_and(|classes| classes.iter().any(|c| c == class_name))
+  };
   let mut is_match = |path: &NamePath| {
     path == class_name
       || path.is_prefix(class_name)
@@ -1395,16 +1574,19 @@ fn term_references_class(
   match term {
     Term::Var {
       name: NameRef::Np(path),
-    } => is_match(path),
+    } => is_match(path) || calls_constrained_def(path.last()),
     Term::Var {
       name: NameRef::Qn(qn),
-    } => is_match(&qn.to_flat_name_path()),
+    } => is_match(&qn.to_flat_name_path()) || calls_constrained_def(qn.to_flat_name_path().last()),
     Term::Var {
       name: NameRef::Id(id),
-    } => structs
-      .structs
-      .get(&atoms.intern(GlobalRef::Local(class_name.clone())))
-      .is_some_and(|info| info.fields.iter().any(|(name, _)| name == id)),
+    } => {
+      structs
+        .structs
+        .get(&atoms.intern(GlobalRef::Local(class_name.clone())))
+        .is_some_and(|info| info.fields.iter().any(|(name, _)| name == id))
+        || calls_constrained_def(id)
+    }
     // An infix operator (`a == b`, parsed as `App(App(Var{Op(==)},a),b)`)
     // is how a constrained instance's own generic method most often
     // invokes another class method recursively (`Option`'s `beq`'s `a ==
@@ -1420,38 +1602,134 @@ fn term_references_class(
     } => infix.get(op).is_some_and(|path| is_match(path)),
     Term::Var { .. } => false,
     Term::Forall { typ, body, .. } => {
-      term_references_class(typ, class_name, structs, atoms, infix)
-        || term_references_class(body, class_name, structs, atoms, infix)
+      term_references_class(
+        typ,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || term_references_class(
+        body,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
     }
     Term::Pi { arg, ret, .. } => {
-      term_references_class(arg, class_name, structs, atoms, infix)
-        || term_references_class(ret, class_name, structs, atoms, infix)
+      term_references_class(
+        arg,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || term_references_class(
+        ret,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
     }
     Term::Lam { param, body } => {
-      term_references_class(param.typ(), class_name, structs, atoms, infix)
-        || term_references_class(body, class_name, structs, atoms, infix)
+      term_references_class(
+        param.typ(),
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || term_references_class(
+        body,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
     }
     Term::App { fun, arg } => {
-      term_references_class(fun, class_name, structs, atoms, infix)
-        || term_references_class(arg, class_name, structs, atoms, infix)
+      term_references_class(
+        fun,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || term_references_class(
+        arg,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
     }
     Term::Ann { term, typ } => {
-      term_references_class(term, class_name, structs, atoms, infix)
-        || term_references_class(typ, class_name, structs, atoms, infix)
+      term_references_class(
+        term,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || term_references_class(
+        typ,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
     }
-    Term::Ctx { term, .. } => term_references_class(term, class_name, structs, atoms, infix),
-    Term::Quote { term } => term_references_class(term, class_name, structs, atoms, infix),
-    Term::Con(c) => c
-      .args()
-      .iter()
-      .flatten()
-      .any(|a| term_references_class(a, class_name, structs, atoms, infix)),
-    Term::Ntv { native } => native
-      .args
-      .iter()
-      .flatten()
-      .any(|a| term_references_class(a, class_name, structs, atoms, infix)),
-    Term::Lit { value } => literal_references_class(value, class_name, structs, atoms, infix),
+    Term::Ctx { term, .. } => term_references_class(
+      term,
+      class_name,
+      structs,
+      atoms,
+      infix,
+      constrained_def_classes,
+    ),
+    Term::Quote { term } => term_references_class(
+      term,
+      class_name,
+      structs,
+      atoms,
+      infix,
+      constrained_def_classes,
+    ),
+    Term::Con(c) => c.args().iter().flatten().any(|a| {
+      term_references_class(
+        a,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
+    }),
+    Term::Ntv { native } => native.args.iter().flatten().any(|a| {
+      term_references_class(
+        a,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
+    }),
+    Term::Lit { value } => literal_references_class(
+      value,
+      class_name,
+      structs,
+      atoms,
+      infix,
+      constrained_def_classes,
+    ),
     Term::Sort { .. } | Term::Hole => false,
   }
 }
@@ -1462,34 +1740,94 @@ fn literal_references_class(
   structs: &StructFields,
   atoms: &mut AtomTable,
   infix: &Map<Operator, NamePath>,
+  constrained_def_classes: &Map<Identifier, Vec<NamePath>>,
 ) -> bool {
   match lit {
     Literal::Str { .. } | Literal::Char { .. } | Literal::Num { .. } | Literal::Float { .. } => {
       false
     }
     Literal::Match { value, cases } => {
-      term_references_class(value, class_name, structs, atoms, infix)
-        || cases
-          .iter()
-          .any(|c| term_references_class(&c.value, class_name, structs, atoms, infix))
+      term_references_class(
+        value,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || cases.iter().any(|c| {
+        term_references_class(
+          &c.value,
+          class_name,
+          structs,
+          atoms,
+          infix,
+          constrained_def_classes,
+        )
+      })
     }
     Literal::If { value, then, els } => {
-      term_references_class(value, class_name, structs, atoms, infix)
-        || term_references_class(then, class_name, structs, atoms, infix)
-        || term_references_class(els, class_name, structs, atoms, infix)
+      term_references_class(
+        value,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || term_references_class(
+        then,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      ) || term_references_class(
+        els,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
     }
     Literal::StructLit { fields, type_name } => {
-      fields
-        .values()
-        .any(|v| term_references_class(v, class_name, structs, atoms, infix))
-        || type_name
-          .as_ref()
-          .is_some_and(|t| term_references_class(t, class_name, structs, atoms, infix))
+      fields.values().any(|v| {
+        term_references_class(
+          v,
+          class_name,
+          structs,
+          atoms,
+          infix,
+          constrained_def_classes,
+        )
+      }) || type_name.as_ref().is_some_and(|t| {
+        term_references_class(
+          t,
+          class_name,
+          structs,
+          atoms,
+          infix,
+          constrained_def_classes,
+        )
+      })
     }
-    Literal::StructUpdate { fields, .. } => fields
-      .values()
-      .any(|v| term_references_class(v, class_name, structs, atoms, infix)),
-    Literal::Term(t) => term_references_class(t, class_name, structs, atoms, infix),
+    Literal::StructUpdate { fields, .. } => fields.values().any(|v| {
+      term_references_class(
+        v,
+        class_name,
+        structs,
+        atoms,
+        infix,
+        constrained_def_classes,
+      )
+    }),
+    Literal::Term(t) => term_references_class(
+      t,
+      class_name,
+      structs,
+      atoms,
+      infix,
+      constrained_def_classes,
+    ),
     Literal::Foreign(_) => false,
   }
 }
@@ -1538,6 +1876,7 @@ fn elaborate_constrained_type(
   structs: &StructFields,
   atoms: &mut AtomTable,
   infix: &Map<Operator, NamePath>,
+  constrained_def_classes: &Map<Identifier, Vec<NamePath>>,
 ) -> (CoreTerm, bool) {
   if type_constraints.is_empty() {
     return (typ_c, false);
@@ -1549,7 +1888,14 @@ fn elaborate_constrained_type(
     if constraint.vars().len() != 1 {
       continue;
     }
-    if !term_references_class(body, constraint.class(), structs, atoms, infix) {
+    if !term_references_class(
+      body,
+      constraint.class(),
+      structs,
+      atoms,
+      infix,
+      constrained_def_classes,
+    ) {
       continue;
     }
     let Some((_, var_atom, _)) = peeled_vars
@@ -2004,6 +2350,7 @@ fn check_one_def_new(
   global_atom_paths: &AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
+  constrained_def_classes: &Map<Identifier, Vec<NamePath>>,
   // Phase 0 of `plans/implementations/core-term-closure-evaluator.md`:
   // opt-in capture of this def's pre-`raise_core` `CoreTerm`, keyed by
   // `capture_path` (usually `&def.name`, but instance-qualified for a
@@ -2034,6 +2381,7 @@ fn check_one_def_new(
       structs,
       mctx.atoms_mut(),
       &config.infix,
+      constrained_def_classes,
     );
     ctx.insert(self_atom, typ_c.clone());
 
@@ -2331,6 +2679,7 @@ fn check_one_instance_new(
   global_atom_paths: &AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
+  constrained_def_classes: &Map<Identifier, Vec<NamePath>>,
   class_method_order: &Map<NamePath, Vec<Identifier>>,
   // Phase 0 capture — see `check_one_def_new`'s doc comment. Each
   // method's OWN `Def.name` is a bare, non-instance-qualified identifier
@@ -2377,6 +2726,7 @@ fn check_one_instance_new(
       global_atom_paths,
       known_class_methods,
       known_instances,
+      constrained_def_classes,
       core_out.as_deref_mut(),
       &method_capture_path,
     )?;
@@ -2562,7 +2912,15 @@ pub fn type_check_module_decls_new_inner(
   // Needs `structs`/`infix` fully populated (see `collect_known_instances`'s
   // own doc comment) -- moved here from right after parsing, before
   // `register_type_decls` had run.
-  let known_instances = collect_known_instances(loaded, &expanded, &structs, &mut atoms, &infix);
+  let constrained_def_classes = collect_constrained_def_classes(loaded, &expanded);
+  let known_instances = collect_known_instances(
+    loaded,
+    &expanded,
+    &structs,
+    &mut atoms,
+    &infix,
+    &constrained_def_classes,
+  );
   for decl in &expanded {
     if let Decl::Def(def) = &**decl {
       let atom = atoms.intern(GlobalRef::Local(def.name.clone()));
@@ -2638,6 +2996,7 @@ pub fn type_check_module_decls_new_inner(
           &structs,
           &mut atoms,
           &config.infix,
+          &constrained_def_classes,
         );
         ctx.insert(self_atom, typ_c);
       }
@@ -2780,6 +3139,7 @@ pub fn type_check_module_decls_new_inner(
           &global_atom_paths,
           &known_class_methods,
           &known_instances,
+          &constrained_def_classes,
           core_out.as_deref_mut(),
           &capture_path,
         )
@@ -2804,6 +3164,7 @@ pub fn type_check_module_decls_new_inner(
           &global_atom_paths,
           &known_class_methods,
           &known_instances,
+          &constrained_def_classes,
           &class_method_order,
           core_out.as_deref_mut(),
         ) {
@@ -2866,6 +3227,7 @@ pub fn type_check_module_decls_new_inner(
               &global_atom_paths,
               &known_class_methods,
               &known_instances,
+              &constrained_def_classes,
               core_out.as_deref_mut(),
               &capture_path,
             )
@@ -2895,6 +3257,7 @@ pub fn type_check_module_decls_new_inner(
                 &global_atom_paths,
                 &known_class_methods,
                 &known_instances,
+                &constrained_def_classes,
                 core_out.as_deref_mut(),
                 &capture_path,
               ) {

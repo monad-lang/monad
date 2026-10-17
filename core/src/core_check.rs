@@ -642,6 +642,18 @@ pub struct KnownInstanceInfo {
   /// name that isn't in this map at all, matching "this method needs no
   /// dict args" rather than erroring.
   pub method_constraints: Map<Identifier, Vec<TypeConstraint>>,
+  /// Each instance-level constraint's own variable mapped to the 0-based
+  /// position it occupies in the instance's declared type argument's
+  /// application spine — `instance [Monad M] Monad (TuiT M I I)` stores
+  /// `M -> 0`, because at a call site resolving the concrete type
+  /// `TuiT MockM Raw Raw` the `M` constraint's dictionary must be
+  /// resolved for the spine's argument 0 (`MockM`), not the outermost
+  /// one the counts-don't-line-up fallback would otherwise guess. Computed
+  /// at registration from the instance's OWN declaration (where the
+  /// constraint variable and the type argument's spelling share one
+  /// scope, so name equality is reliable) — see
+  /// `core_check_module::collect_known_instances`.
+  pub constraint_positions: Map<Identifier, usize>,
 }
 
 /// Built once per file from every loaded module's `instance` declarations
@@ -2223,10 +2235,49 @@ fn try_resolve_class_method(
       // unconditionally ignoring it regressed 70+ other corpus tests, so
       // `check`'s failure genuinely does catch real problems for every
       // OTHER shape and must stay fatal there.
-      if is_dict_projection_spine(&arg_d) {
-        let _ = check(mctx, ctx, structs, &arg_d, &arg_ty);
+      // A bare `Free` arg this desugar just rewrote through D4's
+      // bare-`Free` arm comes back with its dictionaries explicitly
+      // APPLIED (`App(def, dict, ...)`), a shape `check` cannot type:
+      // `instantiate_foralls` auto-instantiates leading dictionary
+      // `Pi`s (the checker's model is that dictionaries are invisible
+      // at call sites), so the explicitly-applied dict reads as one
+      // argument too many and `expect_pi` fails on the def's RESULT
+      // type (`ExpectedFunctionType`). Check the RAW bare `Free`
+      // instead — same head, its type instantiates the same way — and
+      // keep `arg_d` (dict applied) as the result term: D4's own
+      // peek-unify and dictionary resolution already validated the
+      // dict choice against this very `arg_ty` (`expected`), so the
+      // types are sound; only the term needed the rewrite. Every other
+      // shape (spines, lambdas, literals) still checks `arg_d` first —
+      // the desugaring changed the term there, and `check`'s verdict on
+      // the rewritten form is load-bearing (see the projection-spine
+      // case below) — but falls back to the raw arg when that check
+      // fails: the same invisible-dict model makes `check` unable to
+      // type ANY explicitly-applied dictionary the desugar inserted
+      // (D4's rewrite inside a lambda body, or a nested class-method
+      // call resolved with its own per-method dict args — e.g. the
+      // `fn sz => Monad.pure sz` continuation of a do-block over
+      // `Monad (TuiT M I I)`), so an arg_d failure there is the
+      // checker's model showing, not a bad rewrite. The raw arg is the
+      // exact term the original module check already validated and
+      // pins the same metas; the rewrite's own types were validated by
+      // the resolution itself (the peek-unify against `expected` above,
+      // and every dict chosen from metas pinned by these very args).
+      // Only when the raw arg ALSO fails — a genuinely ill-typed
+      // argument — does resolution bail. Checking arg_d first (rather
+      // than raw always) still matters: a wrong-instance rewrite that
+      // checks ill keeps resolution from completing on garbage.
+      let to_check = if matches!(arg.strip_ctx(), CoreTerm::Free(_)) {
+        arg
       } else {
-        check(mctx, ctx, structs, &arg_d, &arg_ty).ok()?;
+        &arg_d
+      };
+      if is_dict_projection_spine(&arg_d) {
+        let _ = check(mctx, ctx, structs, to_check, &arg_ty);
+      } else if check(mctx, ctx, structs, to_check, &arg_ty).is_err() {
+        if check(mctx, ctx, structs, arg, &arg_ty).is_err() {
+          return None;
+        }
       }
       arg_d
     };
@@ -2330,7 +2381,8 @@ fn try_resolve_class_method(
       .get(&concrete_atom)
       .or_else(|| structs.inductive_paths.get(&concrete_atom))?
       .clone();
-    let instance_info = known_instances.get(&(info.class_path.clone(), concrete_path))?;
+    let looked_up = known_instances.get(&(info.class_path.clone(), concrete_path.clone()));
+    let instance_info = looked_up?;
     let instance_atom = mctx.intern(instance_info.prefix.clone());
     // This method's OWN subset of the instance's constraints (not the
     // flat `instance_info.constraints`, every one of the instance's own
@@ -2354,6 +2406,7 @@ fn try_resolve_class_method(
       &forced_class_meta,
       &named_metas,
       class_meta,
+      &instance_info.constraint_positions,
     )?;
     let mut result = project_dict_field(
       mctx,
@@ -2380,6 +2433,31 @@ fn try_resolve_class_method(
     };
   }
   Some(result)
+}
+
+/// Whether an instance's own value starts with leading dictionary `Pi`s —
+/// D3 elaborates the instance def itself (not just its methods) only when
+/// the instance's body references the class, so a constrained instance's
+/// registered `constraints` say which dictionaries MIGHT apply, while
+/// this says whether the instance VALUE actually takes them. Guards
+/// `try_insert_dict_args`'s instance-constraint application: applying
+/// dict args to an instance that doesn't take them would mis-arity the
+/// value (its methods get their own per-method dict args at their call
+/// sites instead — `try_resolve_class_method`'s `method_constraints`).
+fn instance_value_takes_dicts(
+  mctx: &mut MetaContext,
+  ctx: &TyCtx,
+  structs: &StructFields,
+  instance_atom: Atom,
+) -> bool {
+  let Some(instance_typ) = ctx.get(&instance_atom) else {
+    return false;
+  };
+  let residual = instantiate_foralls_only(mctx, &instance_typ);
+  let CoreTerm::Pi { arg, .. } = residual else {
+    return false;
+  };
+  head_atom_of(mctx, &arg).is_some_and(|class_atom| is_class_atom(structs, class_atom))
 }
 
 /// D4: call-site dictionary auto-insertion — the `CoreTerm`-level analogue
@@ -2421,6 +2499,7 @@ fn try_insert_dict_args(
   head_atom: Atom,
   head_typ: &CoreTerm,
   spine_args: &[&CoreTerm],
+  expected: Option<&CoreTerm>,
 ) -> Option<CoreTerm> {
   let mut residual = instantiate_foralls_only(mctx, head_typ);
   let mut dict_slots: Vec<(GlobalRef, CoreTerm)> = Vec::new();
@@ -2442,6 +2521,27 @@ fn try_insert_dict_args(
   if dict_slots.is_empty() {
     return None;
   }
+  // Mirror `try_resolve_class_method`'s own pre-arg step: peek at the
+  // residual return type (peeling exactly `spine_args.len()` `Pi` layers
+  // with placeholder metas — the spine's term arguments can't be used
+  // here, they haven't been checked yet) and unify it against `expected`
+  // (when known) BEFORE the arg loop below. This is what lets a
+  // PARTIAL application — zero args at all, a bare `Free` reference to a
+  // constrained def whose leading parameters are all dictionaries (see
+  // `desugar_struct_literals`'s bare-`Free` arm) — still pin the dict
+  // slot's class parameter through its expected type, the only source
+  // of type information that shape has.
+  if let Some(expected) = expected {
+    let mut peek = residual.clone().into_stripped_ctx();
+    for _ in spine_args {
+      let CoreTerm::Pi { ret, .. } = peek else {
+        break;
+      };
+      let placeholder = mctx.fresh_meta(CoreTerm::Hole);
+      peek = force(mctx, open_with(&ret, &CoreTerm::Meta(placeholder))).into_stripped_ctx();
+    }
+    let _ = unify(mctx, &peek, expected);
+  }
   let mut arg_tys: Vec<CoreTerm> = Vec::with_capacity(spine_args.len());
   for &arg in spine_args {
     let CoreTerm::Pi {
@@ -2462,21 +2562,78 @@ fn try_insert_dict_args(
     // concrete instance for a type that's still abstract here. Only when
     // nothing's bound does this fall back to D4's own "resolve the now-
     // concrete type to a registered instance" path.
-    let dict_atom = match dict_scope.get(class_path) {
-      Some(&bound) => bound,
+    let dict_value = match dict_scope.get(class_path) {
+      Some(&bound) => CoreTerm::Free(bound),
       None => {
-        let concrete_atom = head_atom_of(mctx, dict_arg_typ)?;
+        // The dict slot's own type is the CLASS applied to its (now
+        // resolved) parameter — `App(Free(Monad), <M's instantiation>)`.
+        // The type an instance is registered under is that PARAMETER
+        // (`MockM` — `term_head_path` of the instance's own declared
+        // argument), NOT the application's head, which is always the
+        // class itself: taking the head here computes the key
+        // `(Monad, Monad)`, which can never match any registered
+        // instance. (`head_atom_of` of the parameter handles an APPLIED
+        // concrete type the same way `try_resolve_class_method` handles
+        // `List I64` — the head `List` is what `BEq (List A)` registers
+        // under.)
+        let forced_dict_typ = force(mctx, dict_arg_typ.clone()).into_stripped_ctx();
+        let concrete_typ = match forced_dict_typ {
+          CoreTerm::App { arg, .. } => *arg,
+          other => other,
+        };
+        let concrete_atom = head_atom_of(mctx, &concrete_typ)?;
         let concrete_path = atom_paths
           .get(&concrete_atom)
-          .or_else(|| structs.inductive_paths.get(&concrete_atom))?
-          .clone();
-        let instance_info = known_instances.get(&(class_path.clone(), concrete_path))?;
-        mctx.intern(instance_info.prefix.clone())
+          .or_else(|| structs.inductive_paths.get(&concrete_atom))
+          .clone()?;
+        let instance_info = known_instances.get(&(class_path.clone(), concrete_path.clone()))?;
+        let instance_atom = mctx.intern(instance_info.prefix.clone());
+        // A still-generic instance (`instance [Monad M] Monad (TuiT M I I)`)
+        // MAY itself be a D3-elaborated constrained def — D3 gives the
+        // instance's own value leading dictionary `Pi`s only when its
+        // body references the class (the same `term_references_class`
+        // test every constrained def gets). When it did, those `Pi`s
+        // must be applied here before the value can serve as THIS call's
+        // dictionary; when it didn't (an instance whose methods handle
+        // the class themselves, each with its own per-method dict args —
+        // `try_resolve_class_method`'s `method_constraints` path), the
+        // bare `Con` value is the dictionary as-is and applying anything
+        // to it would mis-arity it. Resolved with the same machinery
+        // the class-method path uses (`resolve_instance_dict_args`),
+        // feeding it the dict slot's parameter as the "concrete meta".
+        // No method-level named metas exist at an ordinary def call
+        // site, so `named_metas` is empty (shape-1 lookups always fail)
+        // and the class-meta sentinel is never read — shape-2's
+        // spine-positional match is the only path.
+        let mut dict_value = CoreTerm::Free(instance_atom);
+        if !instance_info.constraints.is_empty()
+          && instance_value_takes_dicts(mctx, ctx, structs, instance_atom)
+        {
+          let constraint_dicts = resolve_instance_dict_args(
+            mctx,
+            structs,
+            atom_paths,
+            known_instances,
+            dict_scope,
+            &instance_info.constraints,
+            &concrete_typ,
+            &Map::new(),
+            MetaId::fresh(),
+            &instance_info.constraint_positions,
+          )?;
+          for dict_arg in constraint_dicts {
+            dict_value = CoreTerm::App {
+              fun: Box::new(dict_value),
+              arg: Box::new(dict_arg),
+            };
+          }
+        }
+        dict_value
       }
     };
     result = CoreTerm::App {
       fun: Box::new(result),
-      arg: Box::new(CoreTerm::Free(dict_atom)),
+      arg: Box::new(dict_value),
     };
   }
   for (&arg, arg_ty) in spine_args.iter().zip(arg_tys.iter()) {
@@ -2705,6 +2862,7 @@ fn resolve_instance_dict_args(
   concrete_meta: &CoreTerm,
   named_metas: &Map<Identifier, MetaId>,
   class_meta: MetaId,
+  constraint_positions: &Map<Identifier, usize>,
 ) -> Option<Vec<CoreTerm>> {
   if constraints.is_empty() {
     return Some(Vec::new());
@@ -2734,8 +2892,18 @@ fn resolve_instance_dict_args(
       )?);
       continue;
     }
+    // Which of the concrete type's spine arguments THIS constraint is
+    // about: positionally when the counts line up (the `Show (List A)`
+    // shape — one constraint per template argument); otherwise the
+    // position recorded from the instance's own declaration
+    // (`instance [Monad M] Monad (TuiT M I I)` — one constraint but
+    // three template arguments, `M` at position 0), which the
+    // counts-based rule cannot express; and only as a last resort the
+    // single outermost argument.
     let elem_ty = if positional {
       template_args[i]
+    } else if let Some(&pos) = constraint_positions.get(var_name) {
+      *template_args.get(pos)?
     } else {
       *template_args.last()?
     };
@@ -2812,7 +2980,37 @@ pub fn desugar_struct_literals(
           )
         })
       });
-      resolved.unwrap_or_else(|| term.clone())
+      if let Some(resolved) = resolved {
+        return resolved;
+      }
+      // D4 for a BARE reference to an ordinary constrained def whose
+      // leading parameters are ALL dictionaries (`TuiT.enter_raw_mode :
+      // [Monad M] TuiT M Cooked Raw Unit` — no explicit args, so no `App`
+      // spine ever forms at its use sites; passing one unapplied to
+      // `TuiT.and_then` is exactly this shape). `try_insert_dict_args`
+      // bails early (no dict slots) for the overwhelmingly common
+      // unconstrained def, so this costs one `instantiate_foralls_only`
+      // per bare reference that isn't a class method; with no spine args
+      // at all, the class parameter can only be pinned through `expected`
+      // (the unify-peek step inside).
+      if let Some(head_typ) = ctx.get(atom)
+        && let Some(resolved) = try_insert_dict_args(
+          mctx,
+          ctx,
+          structs,
+          atom_paths,
+          known_class_methods,
+          known_instances,
+          dict_scope,
+          *atom,
+          &head_typ,
+          &[],
+          expected,
+        )
+      {
+        return resolved;
+      }
+      term.clone()
     }
     CoreTerm::Bound(_) | CoreTerm::Meta(_) | CoreTerm::Sort { .. } | CoreTerm::Hole => term.clone(),
 
@@ -3120,6 +3318,7 @@ pub fn desugar_struct_literals(
           *head_atom,
           head_typ,
           &spine_args,
+          expected,
         )
       {
         return resolved;
