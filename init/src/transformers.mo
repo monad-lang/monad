@@ -11,12 +11,12 @@
 // `Monad M` underneath it, so stacks resolve one level at a time down
 // to a base monad (`Id`, `IO`, ...). Because instance resolution is a
 // run-time step in Monad, `transformers_tests.mo` has to EXECUTE every
-// instance -- `check` alone cannot see a missing one. (The `bind` half of
-// the `StateT` instance is currently unexercised: the lowering bug its own
-// note describes. `ResultT`/`OptionT`'s `bind` do NOT hit that bug --
-// probed directly, see their own tests -- so stay suspicious of blaming
-// "Monad.bind + a pattern match in one file" in general; it was
-// `StateT`-specific.)
+// instance -- `check` alone cannot see a missing one. (The `bind` half
+// of the `StateT` instance was long unexercised, blamed on a
+// StateT-specific lowering bug; the real cause was the checker's
+// dictionary-resolution gap for `[Monad M]` dictionary arguments
+// resolved from a partially-applied spine, and `test_statet_bind` now
+// passes.)
 
 // Future transformers (WriterT) will need Monoid/Semigroup from foldable.
 // use lib::foldable {Monoid, Semigroup}

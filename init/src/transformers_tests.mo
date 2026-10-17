@@ -17,26 +17,27 @@ def test_statet_pure_run : Bool :=
 
 // `test_statet_bind` was commented out here, blamed on `MatchTraversalMismatch`
 // triggered by `Monad.bind` immediately followed by a `Pair.pair` match in
-// the same `def`, and called "StateT-specific." That diagnosis is only half
+// the same `def`, and called "StateT-specific." That diagnosis was only half
 // right: splitting `Monad.bind`'s computation into its own top-level `def`
-// (the fix that resurrects `ResultT`/`OptionT`'s own bind tests below, after
-// finding the SAME lowering bug there -- it is not StateT-specific) does
-// clear the `MatchTraversalMismatch` here too. But it then exposes a SECOND,
-// separate bug: `eval error: value is not a constructor` at run time, inside
-// `StateT.bind_go`/`StateT.bind_step` (`lib/transformers.mo`) -- a real
-// interpreter bug in `StateT`'s own `bind`, previously masked by the
-// lowering failure, not something this plan's `ResultT`/`OptionT` work
-// is scoped to chase down. Restore the split-`def` form once that is fixed:
-//
-// def statet_bind_result : StateT I64 Id I64 :=
-//     let m : StateT I64 Id I64 := Monad.pure 10 in
-//     Monad.bind m (fn a => Monad.pure (a + 1))
-//
-// #[test]
-// def test_statet_bind : Bool :=
-//     match Id.run (StateT.run statet_bind_result 100) {
-//         Pair.pair s a => (s == 100) && (a == 11)
-//     }
+// (the fix that resurrects `ResultT`/`OptionT`'s own bind tests below)
+// cleared the `MatchTraversalMismatch` here too. But it then exposed a
+// SECOND, separate failure: `eval error: value is not a constructor` at run
+// time, inside `StateT.bind_go`/`StateT.bind_step` (`lib/transformers.mo`),
+// previously blamed on a real interpreter bug in `StateT`'s own `bind`.
+// That blame was wrong: the failure was the checker's dictionary-resolution
+// gap for instance calls whose `[Monad M]` dictionary argument resolves
+// from a partially-applied spine (`StateT I64 Id`), fixed by the
+// constraint-position work in `core_check_module.rs`/`core_check.rs` --
+// the split-`def` form below now passes.
+def statet_bind_result : StateT I64 Id I64 :=
+    let m : StateT I64 Id I64 := Monad.pure 10 in
+    Monad.bind m (fn a => Monad.pure (a + 1))
+
+#[test]
+def test_statet_bind : Bool :=
+    match Id.run (StateT.run statet_bind_result 100) {
+        Pair.pair s a => (s == 100) && (a == 11)
+    }
 
 // ResultT/OptionT `bind`: a throwaway single-file probe (outside this mote,
 // its own tiny `#![mote {...}]`) run BEFORE writing these instances showed
