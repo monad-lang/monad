@@ -6,15 +6,16 @@ use init::transformers {ResultT}
 use json::json {
     Json, Json.to_string, Json.parse, Json.ParseError.to_string, Json.get_str,
     Json.get_array, Json.get_object, Json.object_get, Json.get_num, Json.get_num_i64,
+    Json.make_object, Json.make_str, Json.make_null, Json.make_array,
 }
 use json::serde_backend {}
-use http::types {Headers, Headers.empty, Headers.set, Response, Uri}
+use http::types {Headers, Headers.empty, Headers.set, Response, Uri, Status.ok}
 use http::uri {Uri.parse}
 use http::body {Body.from_text, Body.to_bytes_pure}
 use http::sse {Sse.init, Sse.push, SseState, SseEvent}
 use moose::client {Client.post, Client.post_stream}
 use openai::types {ChatRequest, ChatResponse, ApiUsage, ChatMessage, Choice}
-use openai::tool {ToolCall}
+use openai::tool {ToolCall, ToolDef}
 use std::map {BTreeMap}
 
 /// Named `ApiUsage`, not `Usage` -- this is a whole-program-scope
@@ -36,6 +37,21 @@ def openai_headers (api_key : Option String) : Headers :=
         Option.none => base,
     }
 
+/// The error a non-200 response becomes: the status AND the body --
+/// the body is where the server says why (`"Invalid model: ..."`, a
+/// rejected key). Mirrors `motes/anthropic`'s `decode_messages_response`,
+/// which has checked the status from the start; this client swallowed
+/// it instead (measured live against Mistral, 2026-10-18: a 422 came
+/// back as a successful EMPTY completion -- "(no assistant reply)",
+/// exit 0, nothing legible anywhere).
+def openai_http_error (r : Response) : Option String :=
+    if U16.beq r.status Status.ok
+    then Option.none
+    else
+        Option.some (String.concat "openai: HTTP "
+            (String.concat (U16.to_string r.status)
+            (String.concat ": " (String.from_list (Body.to_bytes_pure r.body)))))
+
 def decode_chat_response (r : Response) : Result String ChatResponse :=
     let text := String.from_list (Body.to_bytes_pure r.body) in
     match Json.parse text {
@@ -45,11 +61,81 @@ def decode_chat_response (r : Response) : Result String ChatResponse :=
 
 def openai_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String ChatResponse) := do {
     let resp <- Client.post u headers (Body.from_text body_str);
-    return (match resp {
-        Result.err e => Result.err e,
-        Result.ok r => decode_chat_response r,
+    return (match openai_http_error resp {
+        Option.some e => Result.err e,
+        Option.none => decode_chat_response resp,
     })
 }
+
+// ── The request body, hand-written ──────────────────────────────────────
+//
+// `ChatRequest.serialize_json` is DERIVED, and the derive emits every
+// declared field of every message unconditionally -- `"name":null`,
+// `"tool_call_id":null`, `"tool_calls":[]` on a plain user message.
+// Lenient servers (Ollama, OpenAI) accept the nulls; strict ones
+// (Mistral's pydantic validation, measured live 2026-10-18) refuse the
+// whole request with HTTP 422 `"extra_forbidden"` on each. The wire's
+// own shape has those fields OPTIONAL, so the request encoder omits
+// them when they carry nothing. Hand-written HERE (not in `types.mo`):
+// this file holds no `reflect_type_info!`, so pattern matches are free
+// -- the rule `types.mo`'s header states. The RESPONSE decoders stay
+// derived: only OUR side reads them, and the derive's absent-key rule
+// already tolerates what a server leaves out.
+
+def msg_content_json (o : Option String) : Json :=
+    match o {
+        Option.some s => Json.make_str s,
+        Option.none => Json.make_null,
+    }
+
+def opt_i64_json (o : Option I64) : Json :=
+    match o {
+        Option.some n => Json.make_num_int n,
+        Option.none => Json.make_null,
+    }
+
+def msg_json (m : ChatMessage) : Json :=
+    match m {
+        ChatMessage.mk role content tool_calls tool_call_id name =>
+            let base : BTreeMap String Json :=
+                Map.insert "role" (Json.make_str role)
+                (Map.insert "content" (msg_content_json content) BTreeMap.empty) in
+            Json.make_object (msg_name_json name (msg_tool_call_id_json tool_call_id (msg_tool_calls_json tool_calls base)))
+    }
+
+def msg_tool_calls_json (tcs : List ToolCall) (obj : BTreeMap String Json) : BTreeMap String Json :=
+    match tcs {
+        List.empty => obj,
+        List.cons _ _ => Map.insert "tool_calls" (Json.make_array (List.map ToolCall.serialize_json tcs)) obj,
+    }
+
+def msg_tool_call_id_json (o : Option String) (obj : BTreeMap String Json) : BTreeMap String Json :=
+    match o {
+        Option.some s => Map.insert "tool_call_id" (Json.make_str s) obj,
+        Option.none => obj,
+    }
+
+def msg_name_json (o : Option String) (obj : BTreeMap String Json) : BTreeMap String Json :=
+    match o {
+        Option.some s => Map.insert "name" (Json.make_str s) obj,
+        Option.none => obj,
+    }
+
+/// The chat-completions request body: `model`/`messages`/`tools`/
+/// `max_tokens`/`stream` always (no strict server has objected to a
+/// present top-level field, only to message-level extras), each
+/// message with its EMPTY optionals omitted. This is the one request
+/// encoder both `OpenAI.complete` and `OpenAI.complete_stream` send.
+pub def OpenAI.request_json (req : ChatRequest) : Json :=
+    match req {
+        ChatRequest.mk model messages tools max_tokens _ =>
+            Json.make_object
+                (Map.insert "model" (Json.make_str model)
+                (Map.insert "messages" (Json.make_array (List.map msg_json messages))
+                (Map.insert "tools" (Json.make_array (List.map ToolDef.serialize_json tools))
+                (Map.insert "max_tokens" (opt_i64_json max_tokens)
+                (Map.insert "stream" (Json.make_bool req.stream) BTreeMap.empty)))))
+    }
 
 /// POST `{base_url}/v1/chat/completions`. `api_key` is `Option.none` for
 /// an unauthenticated local server (Ollama); `Option.some key` sends
@@ -59,7 +145,7 @@ def openai_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (R
 /// to a `Uri` once here, at the one place a malformed `base_url` can
 /// actually fail, rather than threading a raw `String` into `Client.post`.
 pub def OpenAI.complete (base_url : String) (api_key : Option String) (req : ChatRequest) : ResultT String IO ChatResponse :=
-    let body_str := Json.to_string (ChatRequest.serialize_json req) in
+    let body_str := Json.to_string (OpenAI.request_json req) in
     let url_str := String.concat base_url "/v1/chat/completions" in
     match Uri.parse url_str {
         Result.err e => ResultT.mk (return (Result.err e)),
@@ -351,8 +437,10 @@ def openai_tools_of (tools : List (Pair I64 ToolCall)) : List ToolCall :=
 /// Assemble the accumulated stream into the SAME `ChatResponse` shape
 /// `OpenAI.complete` returns, so a consumer (shuttle's wire adapter)
 /// handles both paths with one decoder. The HTTP-level `Response`
-/// `Client.post_stream` returns is discarded by design: the assembled
-/// chat completion is the payload; the bytes were never a JSON body.
+/// `Client.post_stream` returns is consulted for its STATUS first (see
+/// `openai_http_error`): an error status's body is not an SSE stream
+/// at all, and folding it would assemble an empty completion and call
+/// it success -- the silent-failure mode this file once had.
 def openai_assemble (acc : OpenaiAcc) : ChatResponse :=
     let content : Option String :=
         match (acc.text == "") {
@@ -376,7 +464,10 @@ def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text 
         Result.err e => Result.err e,
         Result.ok pr =>
             match pr {
-                Pair.pair acc _ => Result.ok (openai_assemble acc)
+                Pair.pair acc resp => match openai_http_error resp {
+                    Option.some e => Result.err e,
+                    Option.none => Result.ok (openai_assemble acc),
+                }
             }
     })
 }
@@ -390,7 +481,7 @@ def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text 
 /// never sends one).
 pub def OpenAI.complete_stream (base_url : String) (api_key : Option String) (req : ChatRequest) (on_text : String -> IO Unit) : ResultT String IO ChatResponse :=
     let sreq : ChatRequest := { req with stream := true } in
-    let body_str := Json.to_string (ChatRequest.serialize_json sreq) in
+    let body_str := Json.to_string (OpenAI.request_json sreq) in
     let url_str := String.concat base_url "/v1/chat/completions" in
     match Uri.parse url_str {
         Result.err e => ResultT.mk (return (Result.err e)),
