@@ -61,9 +61,11 @@ env:
 # 49-minute critical path of a 59-minute pipeline, sat in the queue until
 # 19:41:00. Ten minutes spent waiting for a machine that was running the other
 # half of the same work, and no order left to get wrong now that both halves
-# are one job. `scripts/ci-compiler-checks.sh` is that job's substance: the
-# ladder and the sweep, with the sweep starting the moment the ladder's release
-# rung-1 exists instead of after the ladder has finished with it.
+# are one job. `scripts/ci-self-compile.sh` is that job's substance: a
+# self-compile of this checkout hosted by the latest monadup nightly, falling
+# back to the flake's Rust host when the nightly cannot build the tree. The
+# TEST coverage lives in the Rust suite `pre-commit-checks` runs -- the
+# self-hosted sweeps this replaces are not CI's to run anymore.
 #
 # It still runs in PARALLEL with `pre-commit-checks`, deliberately, so `needs:`
 # was considered and declined on the measurements, not on taste:
@@ -233,45 +235,33 @@ jobs:
   compiler-checks:
     runs-on: [self-hosted, linux]
     # Gated on the classifier: a change that touches no compiler input has
-    # nothing for this job to build or sweep. A skipped job still reports
+    # nothing for this job to build. A skipped job still reports
     # (as `skipped`, which required checks treat as passing, unlike a
     # skipped WORKFLOW), so this cannot strand a merge the way a
     # workflow-level `paths-ignore` would.
     needs: changes
     if: needs.changes.outputs.compiler == 'true'
-    # Hang guard, not a deadline, for the whole step list: the host build, the
-    # interpreted self-compile (~22 min), the sweep (22m34s in run 36914860312,
-    # overlapped with the ladder's tail) and the oracle. 120 min is what the
-    # two jobs this replaces carried between them (120 for `test`, 90 for
-    # `bootstrap`), and it stays because the merged job is shorter than the
-    # 49-minute critical path it replaces but no smaller in what one step can
-    # stall on.
-    #
-    # The shard count is no longer this comment's to claim: the "Settle the
-    # CPU budget" step in the list below measures the runner's budget and
-    # sets MONAD_SWEEP_JOBS from it. Run 36301331844 is why -- this comment
-    # used to assert the default was "= 7 here" and that run shipped 3, i.e.
-    # the `nproc` the sweep itself called returned 4 there. That turned out
-    # not to be a disagreement but a FLEET: `runs-on: [self-hosted, linux]`
-    # reaches two machines and the "Set up job" step names the one that took
-    # the job. nixos-server (4 cores) gave 3 shards in 36301331844;
-    # anders-desktop (8 cores) gave 7 in 36322856497. Both are correct, which
-    # is why no literal belongs here.
-    timeout-minutes: 120
+    # Hang guard, not a deadline, for the whole step list: the host build,
+    # the nightly install, and whichever self-compile leg runs -- ~1 min
+    # for a nightly-hosted build, ~22 min for the interpreted fallback the
+    # nightly's failure pays for, plus the cold host build the binary cache
+    # usually substitutes. 90 min covers the worst ordering of those with
+    # room for the runner's co-tenants.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
-      # The host that runs this job's rung-1 builds comes from the flake:
+      # The FALLBACK host for this job's self-compile comes from the flake:
       # `packages.monadHost` is `cargo build -p monad-cli`, hermetically, and
       # MONAD_HOST_BIN is the knob scripts/build-self-hosted.sh already takes
       # for exactly this -- nix/monad.nix passes the same package the same way
       # (`lib.getExe`), and it is what removes `cargo run --release --`'s cold
-      # fat-LTO build from this job. Nothing else here runs cargo, so the old
-      # "Build release binary" step is gone rather than joined. A Rust compile
-      # error still fails HERE, in a step named for the host: this is the same
-      # `.#monadHost` the job's `.#monad` build took as a native input, and
-      # that build is gone -- see `flake-package` for where the flake's
-      # package is verified now.
+      # fat-LTO build from this job. The PRIMARY host is the latest monadup
+      # nightly, which the self-compile step installs itself; this binary is
+      # what that step reaches for when the nightly cannot build the tree --
+      # which makes it exactly as current as the tree under check, by
+      # construction. A Rust compile error still fails HERE, in a step named
+      # for the host.
       #
       # A packaged host is not self-sufficient the way `cargo run` was: the
       # path it reads its stdlib from is compiled IN (core/src/term/module.rs's
@@ -282,14 +272,10 @@ jobs:
       # self-compile reads. Run 36236800752 is what happens without it:
       # `failed to read /build/qkmvxrw…-source/init/src/prelude.mo`.
       #
-      # The COMPILER is deliberately not taken from the flake, unlike in the
-      # job this replaces: the ladder asserts the interpreted-vs-compiled
-      # comparison, which needs the `.ll` the interpreter writes beside its
-      # output, and a store compiler has none beside it (nix/monad.nix does
-      # not install one). Only the host is packaged; the ladder stays a
-      # from-source build, in both build modes -- and the SWEEP now grades that
-      # rung-1 rather than a flake-built second copy of it, which is the
-      # interpretation this merge stops paying for twice.
+      # The COMPILER is deliberately not taken from the flake in either leg:
+      # the job self-compiles THIS checkout's sources
+      # (scripts/ci-self-compile.sh -> scripts/build-self-hosted.sh), so the
+      # verdict is about the tree, not a store-built copy of it.
       - name: Build the host from the flake
         run: |
           host="$(nix build --no-link --print-out-paths --accept-flake-config .#monadHost)"
@@ -305,149 +291,54 @@ jobs:
           paths="$(nix build --no-link --print-out-paths --accept-flake-config .#monadHost)"
           nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
 
-      # What this runner actually lets the sweep use, printed because the
-      # answer differs per machine: this file once claimed the sharding
-      # default was "= 7 here" while monad-nixos-modules' runner module
-      # comments 8 vCPU as "matches the CI host's cores" and run 36301331844
-      # shipped 3 shards. All three were right about different hosts. `runs-on:
-      # [self-hosted, linux]` reaches nixos-server (4 cores) and
-      # anders-desktop (8 cores), and "Set up job" names the one that took the
-      # job -- so the two readings below are per-machine facts, not a
-      # contradiction to explain away.
+      # The self-compile leg, and the whole substance of this job beyond
+      # building the fallback host: `scripts/ci-self-compile.sh` installs the
+      # latest monadup nightly (`monadup default`), self-compiles this
+      # checkout with it as the host, and falls back to the flake's monad-rs
+      # (MONAD_HOST_BIN from the step above) when the nightly cannot build
+      # the tree -- a PR can outgrow a nightly cut from main, and the
+      # failure is not always loud, so the Rust host stays the reference
+      # the fallback builds with. The script's own header says what it
+      # accepts as failure and what it does not.
       #
-      # MONAD_SWEEP_JOBS is SET from the measurement instead of being left to
-      # the script's default, so the value stops depending on which
-      # environment happened to ask. `nproc` already respects the process's
-      # CPU affinity and the cgroup quota caps the CPU time it may actually
-      # burn, so the smaller of the two is the budget.
+      # Called directly rather than through a devenv task: devenv-tasks
+      # captures a task's stdout and shows it only on failure, and here the
+      # output IS the diagnostic -- the compile's per-module stage trace and
+      # which host leg produced the binary.
       #
-      # The budget IS the shard count -- one shard per core. The `nproc - 1`
-      # that both this file and the sweep's default used to carry reserved a
-      # core "for the machine", and a shard count below the core count can
-      # only lengthen the phase's wall (the LARGEST shard) or leave it equal,
-      # never shorten it: the reserved core runs nothing while the critical
-      # path is decided on the others. (Run 36323615273's `947s 1425s 1425s`
-      # used to be cited here as the size of what that cost; those per-shard
-      # numbers were a running-maximum instrumentation artifact, so the
-      # argument is stated from the structure instead -- see `run_shards` in
-      # scripts/check-monad-tests.sh.)
-      #
-      # One shard per core and NO MORE, measured rather than assumed
-      # (2026-10-02, `taskset -c 0-3`, compiler already built, store wiped
-      # between runs, same 231-file corpus): the phase wall was 1233 s at 4
-      # shards, 1283 s at 8 and 1160 s at 12, a 124 s band, while the summed
-      # per-shard wall grew 3849 -> 6990 -> 9016 s as more processes shared
-      # four cores. Splitting finer than the core count buys no shorter
-      # critical path, and 8 -- the worst of the three -- is what that costs.
-      # The ~271 s between the 4-shard wall and the 962 s the same 3849 s of
-      # work would take on four cores is the machine and its co-tenants, not
-      # the split. The sweep's per-process warm-up is ~13 s (a fresh `monad
-      # test` on a file with no tests, cold store), so it is not what bounds
-      # this either.
-      #
-      # The merge does not move that number, and the reason is the same
-      # structure: the ladder's tail (its `check`, its fixpoint turn, the
-      # `cmp`) now overlaps the sweep's first minutes, and reserving a core
-      # for it would raise the phase's wall by a third to relieve a few
-      # minutes of contention -- while a count below the core count cannot
-      # shorten the max whatever the co-tenant is doing.
-      #
-      # The cap of 8 is a guard on shard COUNT, not on memory -- the memory
-      # claim it used to carry ("this corpus has OOM'd a box before") does
-      # not describe this corpus: `monad test lang/src/scope.mo`, the
-      # heaviest file in it, peaks at 172 MB of summed tree RSS (measured
-      # 2026-09-27). It stays because no runner in this fleet has more than
-      # 8 cores. A literal shard count is deliberately not written down: it
-      # would be wrong on one of the two machines.
-      #
-      # The measurement is a script run INSIDE the dev shell, for a reason
-      # that cost a red pipeline: a bare `run:` step gets the RUNNER HOST's
-      # PATH, which has no `awk` and no `lscpu`. The first version of this
-      # step was inlined here and run 36313431973's job (called `test` then)
-      # died 8 s in on
-      #     line 4: lscpu: command not found
-      #     line 7: awk: command not found
-      #     Process completed with exit code 127
-      # before it had measured anything at all -- having already printed the
-      # host's `nproc` (8), because `nproc` and `uname` DO exist there. So
-      # the host reading stays here, where it is reachable, and everything
-      # that needs a real tool is in scripts/ci-cpu-budget.sh, which the dev
-      # shell supplies them for. That script is also runnable by hand, which
-      # is how this was checked rather than assumed.
-      - name: Settle the CPU budget
-        run: |
-          echo "host nproc (affinity-aware, outside the dev shell): $(nproc)"
-          echo "host nproc --all: $(nproc --all)"
-          nix develop --no-pure-eval --accept-flake-config -c \
-            scripts/ci-cpu-budget.sh
-
-      # The ladder and the sweep, in ONE step, because the script overlaps
-      # them: it starts `scripts/bootstrap-compile.sh` in the background, waits
-      # for the release rung-1 to be finished (a marker the ladder writes, not
-      # the binary's existence -- `build -o` creates that while it links), and
-      # runs the sweep against it while the ladder is still checking and
-      # turning over. A step boundary here would put the sweep's 22 minutes
-      # back behind the ladder's whole 25. Which half failed is in the script's
-      # own one-line verdict, and the ladder's output keeps its `[release]` /
-      # `[debug]` prefixes, so a log line with neither is the sweep's.
-      #
-      # Called directly rather than through `devenv tasks run
-      # monad:bootstrap-compile` / `monad:test` (the local equivalents):
-      # devenv-tasks captures a task's stdout and shows it only on failure, and
-      # here the output IS the diagnostic -- the compile's --verbose per-module
-      # stage trace and the sweep's per-file verdicts.
       # `--profile` pins the devshell for the job: `nix develop` realizes it
       # but registers NO gc root, so every path the env only references could
       # in principle be collected mid-job. `--profile` installs it into a
       # profile under /nix/var/nix/gcroots/auto, rooting clang, llc, boehm-gc
       # and openssl for the whole job. The profile lives outside the checkout
       # so generations accumulate as profile generations (self-pruning)
-      # rather than as checkout residue. Both compiled steps below share it.
-      #
-      # It was added for the public runner's `ld.bfd: cannot find -lssl`
-      # (motes/tls and motes/moose, from 38045526832 on) and did NOT fix it
-      # (38172396496 failed the same way with it in place): no collection ran
-      # and openssl was in the store throughout. The cause was the store-built
-      # rung-1 that scripts/bootstrap-compile.sh reuses when it is valid --
-      # its wrapper SET `NIX_LDFLAGS` to libgc's directory alone, erasing the
-      # devshell's openssl `-L` for every link the sweep did, which is also
-      # why it came and went with whether that rung-1 was in the store. The
-      # wrapper now `--prefix`es (nix/monad.nix), and a mote's libraries reach
-      # the link through `[link] pkg-config` (llvm/src/link.mo's
-      # `pkg_config_link_flags`) rather than through the environment at all.
-      - name: Bootstrap ladder and self-hosted sweep
+      # rather than as checkout residue. The openssl fault it was originally
+      # added for was a wrapper that SET `NIX_LDFLAGS` (now a `--prefix`,
+      # nix/monad.nix), and a mote's libraries reach the link through
+      # `[link] pkg-config` (llvm/src/link.mo's `pkg_config_link_flags`)
+      # rather than through the environment at all.
+      - name: Self-compile with the latest nightly (Rust host fallback)
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/ci-compiler-checks.sh
-
-      # Its own step, after the merged one, and NOT folded into the script: it
-      # reuses the binary the ladder wrote to
-      # <checkout>/target-monad/bootstrap-ci/monad
-      # (scripts/lib/bootstrap-dir.sh) and needs nothing else from the ladder,
-      # and its per-file verdicts read better as their own step than as a tail
-      # of a 45-minute log. Its own header says why it is called directly
-      # rather than through `devenv tasks run monad:debug-oracle`.
-      - name: Debug transparency oracle
-        run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/debug-oracle.sh
+            -c scripts/ci-self-compile.sh
 
   # `packages.monad` left the per-PR path when `test` became `compiler-checks`:
-  # the sweep grades the ladder's own release rung-1, so on a compiler change
-  # the flake package is no longer built on the way to anything -- and nothing
-  # else builds it either (the nightly builds only `.#monadHost`), so the
-  # packaged artifact and its sandboxed build would go unverified. This job is
-  # where they are verified, on the changes that can move them.
+  # the compiler job self-compiles this checkout's sources directly, so on a
+  # compiler change the flake package is no longer built on the way to
+  # anything -- and nothing else builds it either (the nightly builds only
+  # `.#monadHost`), so the packaged artifact and its sandboxed build would go
+  # unverified. This job is where they are verified, on the changes that can
+  # move them.
   #
   # Gated on `flake`, NOT on `compiler`, and that is the whole point: `nix/**`,
   # `flake.nix` and `flake.lock` define the PACKAGING, while `compilerSrc`
   # (nix/monad.nix) is built from the source trees -- so an edit to `nix/`
   # usually leaves the interpretation a store hit and this job is minutes,
   # whereas a `flake.lock` bump moves the toolchain and is legitimately cold.
-  # The compiler sources are covered on every commit by the ladder, which
-  # builds the same binary from the same tree, unwrapped.
+  # The compiler sources are covered on every compiler-relevant commit by
+  # `compiler-checks`, which self-compiles the same binary from the same
+  # tree, unwrapped.
   #
   # No `--no-pure-eval`, unlike every other nix invocation in this file: this
   # is an ordinary package build, and evaluating it purely is part of what the
@@ -460,7 +351,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.flake == 'true'
     # Hang guard for a cold build, not a deadline: a sandboxed interpretation
-    # of the whole tree (~22 min, the same work the ladder pays) plus the link
+    # of the whole tree (~22 min, the same rung-1 interpretation the
+    # self-compile's fallback leg pays) plus the link
     # and wrapper steps. It is also the one build in this pipeline that runs
     # under a nix sandbox's RLIMIT_STACK, which is a reason to keep building it
     # rather than reason about it.
