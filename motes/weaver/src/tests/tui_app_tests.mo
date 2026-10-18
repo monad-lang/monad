@@ -45,7 +45,7 @@ def mode_eq (a : Mode) (b : Mode) : Bool :=
     }
 
 def cmd_is_perform (c : Cmd WeaverMsg) : Bool :=
-    match c { Cmd.perform _ => true, _ => false }
+    match c { Cmd.perform_async _ => true, _ => false }
 
 def cmd_is_none (c : Cmd WeaverMsg) : Bool :=
     match c { Cmd.none => true, _ => false }
@@ -270,3 +270,78 @@ def test_up_with_text_is_not_history : Bool :=
                 Pair.pair m2 cmd => cmd_is_none cmd && m2.input.value == "a" && m2.hist_idx == 0 - 1
             }
     }
+
+// ── async turns (Phase 12) ───────────────────────────────────────────────
+
+// Enter sets `turn_pending` and fires a `perform_async`; a second Enter
+// is refused while pending (turns are serial).
+def cmd_be (a : Cmd WeaverMsg) (b : Cmd WeaverMsg) : Bool :=
+    match a {
+        Cmd.none => match b { Cmd.none => true, _ => false },
+        Cmd.perform_async _ => match b { Cmd.perform_async _ => true, _ => false },
+        _ => false,
+    }
+
+#[test]
+def test_enter_forks_the_turn : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "h")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg Key.enter) {
+                Pair.pair m2 cmd =>
+                    cmd_be cmd (Cmd.perform_async (fn (_ : Unit) => IO.pure unused_placeholder))
+                        && m2.turn_pending
+            }
+    }
+
+// The action's shape placeholder: never executed, only a type anchor for
+// the cmd equality above.
+def unused_placeholder : WeaverMsg := WeaverMsg.command_failed (WeaverError.config "unused")
+
+#[test]
+def test_enter_while_pending_is_refused : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "h")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg Key.enter) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg (Key.char "i")) {
+                        Pair.pair m3 _ =>
+                            match TuiApp.update m3 (key_msg Key.enter) {
+                                Pair.pair m4 cmd => cmd_be cmd Cmd.none && String.is_empty m4.input.value
+                            }
+                    }
+            }
+    }
+
+// Ticks advance the spinner only while a turn is pending, and never
+// touch the Ctrl-C streak (the 100 ms frame clock would otherwise make
+// the double-press gesture impossible).
+#[test]
+def test_tick_spins_only_while_pending : Bool :=
+    match TuiApp.update (model_of Mode.manual) (WeaverMsg.key_event Event.tick) {
+        Pair.pair idle _ =>
+            match TuiApp.update (enter_pending idle) (WeaverMsg.key_event Event.tick) {
+                Pair.pair spun cmd => spun.spinner_frame == 1 && idle.spinner_frame == 0 && idle.ctrl_c_streak == spun.ctrl_c_streak && cmd_is_none cmd
+            }
+    }
+
+// A pending-turn model: type + enter (the fork fires, pending rides).
+def enter_pending (m : TuiModel) : TuiModel :=
+    match TuiApp.update m (key_msg (Key.char "h")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg Key.enter) { Pair.pair m2 _ => m2 }
+    }
+
+// The completion clears `turn_pending` (the spinner stops) and repaints
+// (the progress fragment's cleanup); a run rides back into the state.
+#[test]
+def test_turn_result_ends_the_turn : Bool :=
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.turn_result run_of ["assistant: done"]) {
+        Pair.pair m2 cmd =>
+            cmd_is_perform_repaint cmd
+                && Bool.not m2.turn_pending
+                && transcript_contains "assistant: done" m2.transcript
+    }
+
+// The repaint cmd IS a plain perform (the forced blank repaint).
+def cmd_is_perform_repaint (c : Cmd WeaverMsg) : Bool :=
+    match c { Cmd.perform _ => true, _ => false }

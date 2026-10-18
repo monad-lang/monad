@@ -63,8 +63,13 @@ pub def Tui.run (st : WeaverState) : IO Bool := do {
 def run_tui_with_size (st : WeaverState) (size : Pair I64 I64) : IO Bool :=
     match size {
         Pair.pair rows cols => do {
+            // 100 ms: the tick is the spinner's frame clock AND the
+            // async-turn poll cadence (a completed turn's result joins
+            // the next batch within one tick); idle ticks with an
+            // unchanged model are zero-diff draws. The tui default (-1)
+            // stays untouched.
             let app : App TuiModel WeaverMsg :=
-                App.app (init_tui_model st rows cols) on_event TuiApp.update Model.view (0 - 1);
+                App.app (init_tui_model st rows cols) on_event TuiApp.update Model.view 100;
             let _ <- run_app app;
             return true
         }
@@ -79,13 +84,28 @@ pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd Weav
     match msg {
         WeaverMsg.key_event e => update_event m e,
         WeaverMsg.turn_result run lines =>
-            Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.append_block (set_run mm run) lines) m) Cmd.none,
+            Pair.pair (with_turn_end (fn (mm : TuiModel) => Model.append_block (set_run mm run) lines) m) repaint_cmd,
         WeaverMsg.turn_failed run e =>
-            Pair.pair (with_streak_reset (fn (mm : TuiModel) => model_for_failure mm run e) m) (failed_cmd e),
+            Pair.pair (with_turn_end (fn (mm : TuiModel) => model_for_failure mm run e) m) (failed_cmd e),
         WeaverMsg.command_result effect => command_result_step m effect,
         WeaverMsg.command_failed e =>
-            Pair.pair (with_streak_reset (fn (mm : TuiModel) => model_for_command_failure mm e) m) (failed_cmd e),
+            Pair.pair (with_turn_end (fn (mm : TuiModel) => model_for_command_failure mm e) m) (failed_cmd e),
     }
+
+/// A turn's or command's completion: the fold `f` runs, the streak
+/// resets, and `turn_pending` clears -- the spinner stops.
+def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
+    { (with_streak_reset f m) with turn_pending := false }
+
+/// The completion frame's repaint: a trivial `perform` forces the next
+/// draw to repaint from blank (`step_cmd`'s force_repaint rule), which
+/// cleans whatever the raw `TuiApp.progress` fragment wrote on the
+/// transcript's last row mid-turn -- the sync loop's own
+/// perform-enforced repaint, re-created at completion. The tick it
+/// folds is a harmless no-op (`update_event` leaves an idle tick's
+/// model untouched).
+def repaint_cmd : Cmd WeaverMsg :=
+    Cmd.perform (fn (_ : Unit) => IO.pure (WeaverMsg.key_event Event.tick))
 
 /// A failed turn's model: the failure's run lands (the pre-error
 /// session), then the ONE classification point decides -- a recoverable
@@ -109,9 +129,9 @@ def failed_cmd (e : WeaverError) : Cmd WeaverMsg :=
     if WeaverError.recoverable e then Cmd.none else Cmd.quit
 
 def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := with_streak_reset
+    let m2 : TuiModel := with_turn_end
         (fn (mm : TuiModel) => Model.append_block (set_state mm effect.state) (Diff.lines effect.output)) m in
-    if effect.state.quit then Pair.pair m2 Cmd.quit else Pair.pair m2 Cmd.none
+    if effect.state.quit then Pair.pair m2 Cmd.quit else Pair.pair m2 repaint_cmd
 
 def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
     match e {
@@ -119,6 +139,15 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         Event.resize rows cols =>
             Pair.pair (with_streak_reset (fn (mm : TuiModel) => set_size mm rows cols) m) Cmd.none,
         Event.mouse me => update_mouse m me,
+        // The frame clock: the spinner advances ONLY while a turn is
+        // pending, so an idle tick folds to an unchanged model (a
+        // zero-diff draw). Deliberately NO streak reset -- ticks arrive
+        // every 100 ms and would make the double-Ctrl-C gesture
+        // impossible.
+        Event.tick =>
+            if m.turn_pending
+            then Pair.pair { m with spinner_frame := m.spinner_frame + 1 } Cmd.none
+            else Pair.pair m Cmd.none,
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
@@ -242,20 +271,24 @@ def cycle_mode (m : TuiModel) : TuiModel :=
     set_state m st2
 
 /// Enter with a non-empty line: echo it into the transcript right away
-/// (the turn itself is about to block the UI) and clear the box, then
-/// `perform` the real work -- a model turn or a slash command -- off
-/// the state as it was BEFORE this key, which `run_submitted_line`
-/// closes over.
+/// and clear the box, then `perform_async` the real work -- a model
+/// turn or a slash command -- off the state as it was BEFORE this key,
+/// which `run_submitted_line` closes over. The submit FORKS: the UI
+/// keeps folding ticks (the spinner) while the turn runs on its fiber,
+/// and `turn_pending` rides along so a second submit is refused until
+/// the result folds back (turns are serial: one pending handle, one
+/// consumer).
 def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let text : String := String.trim m.input.value in
-    if String.is_empty text
+    if Bool.or (String.is_empty text) m.turn_pending
     then Pair.pair m Cmd.none
     else
         let st : WeaverState := m.state in
-        let m2 : TuiModel := with_streak_reset
-            (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text)
-                (echo_lines text)) m in
-        Pair.pair m2 (Cmd.perform (fn (_ : Unit) => run_submitted_line st text))
+        let m2 : TuiModel :=
+            { (with_streak_reset
+                (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text)
+                    (echo_lines text)) m) with turn_pending := true } in
+        Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => run_submitted_line st text))
 
 /// A submitted line enters the history (most recent first, deduped
 /// against the current head) and the walk index returns to live.
@@ -366,22 +399,36 @@ def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunSta
 }
 
 /// The TUI turn's live progress sink: the model's streamed text, shown
-/// as ONE transparent-overwrite line at the status-bar row (row
-/// `rows - 2` -- status at `rows - 2`, input at `rows - 1`). The line
-/// lives only until the perform-enforced repaint, which repaints from
-/// blank and rewrites the real status bar.
+/// as ONE transparent-overwrite line on the transcript panel's LAST
+/// content row (`rows - 7`: fill is `rows - 4` after the status and
+/// input's rows, minus the border's two lines and the padding's two --
+/// content rows start at row 2). A dedicated row, not the status bar:
+/// the loop now redraws every tick while a turn runs, and the only
+/// mid-turn cell the diff pipeline rewrites is the spinner glyph at
+/// the status row's end -- this row's cells stay untouched by ticks,
+/// so the fragment survives between emits. The `repaint_cmd` every
+/// completion folds repaints from blank, erasing the last fragment
+/// with the turn's real result.
 pub def TuiApp.progress (frag : String) : IO Unit := do {
     let size <- Terminal.size;
     match size {
         Pair.pair rows cols => do {
-            let _ <- Terminal.cursor_move (rows - 2) 0;
-            IO.write_stdout (blank_of cols);
-            let _ <- Terminal.cursor_move (rows - 2) 0;
-            IO.write_stdout (progress_text frag cols);
-            IO.flush_stdout
+            let row : I64 := rows - progress_row_offset;
+            if row < 1 then IO.pure Unit.unit
+            else do {
+                let _ <- Terminal.cursor_move row 0;
+                IO.write_stdout (blank_of cols);
+                let _ <- Terminal.cursor_move row 0;
+                IO.write_stdout (progress_text frag cols);
+                IO.flush_stdout
+            }
         }
     }
 }
+
+/// The progress row's distance from the bottom edge (see
+/// `TuiApp.progress`'s comment for the arithmetic).
+def progress_row_offset : I64 := 7
 
 /// `n` spaces: the row wipe (tui has no erase-line builder; spaces are
 /// blank cells and the forced repaint's blank-diff drops them anyway).

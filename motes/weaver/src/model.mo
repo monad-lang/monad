@@ -60,6 +60,14 @@ pub struct TuiModel {
     hist : List String := List.empty,
     /// Where the history walk stands (-1 = live edit, not browsing).
     hist_idx : I64 := 0 - 1,
+    /// A turn is running on its own fiber (`Cmd.perform_async`): the
+    /// spinner shows and the status row carries its glyph. Keys typed
+    /// meanwhile buffer in the tty and drain when the turn completes --
+    /// tui.mo's header carries the whole reason.
+    turn_pending : Bool := false,
+    /// The spinner's tick counter (bumped only while `turn_pending`, so
+    /// idle ticks are zero-diff draws).
+    spinner_frame : I64 := 0,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -68,7 +76,7 @@ pub struct TuiModel {
 /// a struct literal whose new field is omitted has been seen to check
 /// clean and fill GARBAGE at runtime (the two-host divergence note).
 pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :=
-    { state := st, input := input_state "" input_placeholder, transcript := List.empty, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, hist := List.empty, hist_idx := 0 - 1 }
+    { state := st, input := input_state "" input_placeholder, transcript := List.empty, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0 }
 
 /// The input box's placeholder, shared by the live edit and a history
 /// walk's return-to-live.
@@ -212,6 +220,21 @@ pub def list_length (xs : List String) : I64 :=
 // ── status line ─────────────────────────────────────────────────────────
 
 /// The TUI's status bar: the dumb-mode twin minus the trailing `"> "`
-/// prompt (the input box itself is the prompt here).
+/// prompt (the input box itself is the prompt here), with the
+/// turn-spinner glyph riding at the end while a turn runs. The glyph is
+/// deliberately the ONLY cell of this row that changes mid-turn
+/// (`spinner_frame` bumps per tick, everything else is static), so the
+/// diff pipeline rewrites exactly that one cell each frame and the raw
+/// `TuiApp.progress` fragment on the transcript's last row survives.
 pub def status_line (m : TuiModel) : String :=
-    Dumb.status_fields m.state
+    if m.turn_pending
+    then String.concat (String.concat (Dumb.status_fields m.state) " ") (spinner_glyph m.spinner_frame)
+    else Dumb.status_fields m.state
+
+/// The spinner's four frames, cycling on the tick count.
+pub def spinner_glyph (frame : I64) : String :=
+    let idx : I64 := frame - (frame / 4) * 4 in
+    if I64.beq idx 0 then "|"
+    else if I64.beq idx 1 then "/"
+    else if I64.beq idx 2 then "-"
+    else "\\"
