@@ -2172,8 +2172,15 @@ fn proc_wait(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   let code = match taken {
     None => -1,
     Some(mut pc) => {
-      // Drop stdin FIRST: a child blocked on stdin-EOF would hang here.
+      // Close all three pipes FIRST, as `monad_proc_wait` (runtime.c)
+      // does: a child blocked on stdin-EOF would hang here, and so would
+      // one blocked writing into a full stdout/stderr pipe nobody will
+      // read again (`test_spawn_read_line_is_bounded`'s 2 MB writer,
+      // left mid-line when the bounded read gives up). Closed, its next
+      // write fails and it exits.
       pc.stdin.take();
+      pc.out.take();
+      pc.err.take();
       if kill_first {
         let _ = pc.child.kill();
       }
