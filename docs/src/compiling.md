@@ -129,12 +129,14 @@ monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target <tripl
         is rejected by name rather than by a backend error further down. The
         target is part of the build cache key, so one source built for two
         targets keeps two entries.
-        It is not a C-compiler redirect. `runtime.c` and the link go through
-        `clang` by bare name, so building for another target needs THAT
-        target's `clang` first on PATH -- which is what the nightly's cross
-        legs install as a shim. With the host's clang the failure is at the
-        link, on the object it is handed (`file format not recognized`), and
-        says nothing about what the target itself is missing.
+        It is not a C-compiler redirect. For native cross legs, `runtime.c`
+        and the link go through `clang` by bare name, so building for another
+        target needs THAT target's `clang` first on PATH -- which is what the
+        nightly's cross legs install as a shim. The two wasm profiles are the
+        exception: they are addressed through wasi-sdk's clang by absolute
+        path, selected by `WASI_SDK_PATH` (the dev shell sets it), and the
+        runtime is compiled with `-DMONAD_TARGET_WASI` / `-DMONAD_TARGET_WEB`.
+        See "WebAssembly" below.
 
         This verb was called `monad compile` until 2026-09-29. There is no
         alias: two verbs that both produce a binary differ only in which one
@@ -178,6 +180,40 @@ monad print-targets
 monad version
         Print the git commit this binary was built from.
 ```
+
+## WebAssembly
+
+Two profiles ride the same LLVM backend:
+
+| Profile | Triple | Runtime | Host |
+|---|---|---|---|
+| wasi | `wasm32-unknown-wasip1` | wasi-libc, wasm32-unknown-wasip1 | wasmtime, Node |
+| web | `wasm32-unknown-unknown` | freestanding, four JS imports | `WebAssembly.instantiate` |
+
+```bash
+monad build --target wasm32-unknown-wasip1 fixtures/wasm/fib.mo -o fib.wasm
+wasmtime fib.wasm
+
+monad build --target wasm32-unknown-unknown fixtures/wasm/hello.mo -o hello.wasm
+node wasm/web/smoke.mjs hello.wasm
+```
+
+`WASI_SDK_PATH` must name a wasi-sdk installation (the directory containing
+`bin/clang` and `share/wasi-sysroot`); `devenv.nix` pins one. The output name
+gets `.wasm` when it does not already end in it.
+
+The wasm runtime is a leaky allocator (`malloc` on wasi, a bump allocator
+over `__heap_base` on web): there is no Boehm GC on wasm32, and codegen
+never emits `monad_release`, so one-shot programs and reload-by-reinstantiating
+REPL sessions are the supported shape.
+
+A reachable native the target cannot serve is a compile error naming the
+native and the target, not a link failure or a trap. The wasm profiles omit
+OS threads/processes/sockets/files (`fork_io`, `exec_cmd`, `tcp_*`, `read_file`,
+`get_env`, `stream_open`, ...); the web profile additionally omits C-library
+float formatting (`f64_to_string`, `f64_of_string`). Console I/O (`IO.println`,
+`IO.write_stdout`, `IO.read_line`) and `std_fd`/`stream_read`/`stream_write`
+are available on both.
 
 Running `monad` with no arguments prints this usage.
 

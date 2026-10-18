@@ -323,6 +323,17 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/ci-self-compile.sh
 
+      # Phase 0-2 of plans/bootstrapping/wasm-target.md: the wasi fib
+      # differential, the web loader smoke test, and clean target-gating
+      # errors. Reuses the binary the step above just self-compiled, so it
+      # pays no second compiler build; the script runs no cargo.
+      - name: WASM target proof (wasi + web + gating)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-wasm-target.sh \
+              "$PWD/target-monad/ci-self-compile/monad"
+
   # `packages.monad` left the per-PR path when `test` became `compiler-checks`:
   # the compiler job self-compiles this checkout's sources directly, so on a
   # compiler change the flake package is no longer built on the way to

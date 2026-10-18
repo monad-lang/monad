@@ -7,10 +7,59 @@
 # https://devenv.sh/packages/
 { pkgs, ... }:
 
+let
+  # wasi-sdk is not packaged in the pinned nixpkgs, so pin the official release
+  # tarball. The prebuilt clang needs libtinfo (and the runtime C needs zlib),
+  # so autoPatchelfHook rewrites its RPATH against the nix store libraries.
+  #
+  # The `bin/clang` here is the deliberate exception to this repo's "do not
+  # pass --target to the C compiler" rule (`llvm/src/target.mo`): it is a
+  # dedicated cross toolchain, not a nixpkgs cc-wrapper being shimmed.
+  wasiSdk = pkgs.stdenv.mkDerivation rec {
+    pname = "wasi-sdk";
+    version = "34.0";
+
+    src = pkgs.fetchurl {
+      url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-${version}-x86_64-linux.tar.gz";
+      sha256 = "sha256-t2HjoHIduunAmgBZ5f2yv5F9G0qKe0MPs7Wq+wmEssQ=";
+    };
+
+    nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+    buildInputs = [
+      pkgs.ncurses
+      pkgs.zlib
+      pkgs.stdenv.cc.cc.lib
+    ];
+
+    sourceRoot = "wasi-sdk-${version}-x86_64-linux";
+    dontStrip = true;
+
+    installPhase = ''
+      mkdir -p $out
+      cp -r . $out/
+    '';
+
+    meta.platforms = [ "x86_64-linux" ];
+  };
+in
 {
+  # The wasm toolchain and its two hosts. `wasmtime` runs the wasi profile;
+  # `nodejs` runs the web profile's direct loader in the smoke test.
+  #
+  # The pinned wasi-sdk tarball above is the Linux release; on Darwin the
+  # binding stays unset (and the derivation is never forced), so the rest of
+  # the dev shell still evaluates and `--target wasm32-…` fails with the
+  # clear WASI_SDK_PATH diagnostic instead of a store-path error.
+  env.WASI_SDK_PATH = if pkgs.stdenv.hostPlatform.isLinux then "${wasiSdk}" else "";
+
+  # `wasiSdk` is deliberately NOT in this list: its bin/clang would shadow the
+  # nixpkgs clang the native ladder uses (and defaults to wasm32), silently
+  # breaking every native build. It is reachable only as $WASI_SDK_PATH.
   packages = with pkgs; [
     shellcheck
     wasm-pack
+    wasmtime
+    nodejs
     lld
     llvm
     clang
