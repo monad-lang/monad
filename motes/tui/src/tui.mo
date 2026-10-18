@@ -180,19 +180,24 @@ def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO
 #[terminating]
 def loop_app {S : Type} {M : Type} (a : App S M) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
     match a {
-        App.app _ on_ev upd vw tick_ms => do {
-            // Polling comes BEFORE the produce: with `tick_ms < 0` the
-            // produce can block until a key, and the host's poll (which
-            // RUNS the deferred action) would then hang behind it.
-            let polled <- poll_turns turns;
-            match polled {
-                Pair.pair tmsgs turns2 => do {
-                    let batched : List M := List.append pending tmsgs;
-                    let out <- produce_for turns2 reader tick_ms;
-                    after_produce a upd vw on_ev model prev batched turns2 out
+        // Explicit `Monad.bind` on the poll (the do-block form's binder
+        // is untyped on the self-hosted side, and a
+        // polymorphic-`.mo`-def result is exactly where its inference
+        // goes wrong -- `poll_turns`'s own comment).
+        App.app _ on_ev upd vw tick_ms =>
+            Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (Fiber M))) => do {
+                match polled {
+                    Pair.pair tmsgs turns2 => do {
+                        // Polling comes BEFORE the produce: with
+                        // `tick_ms < 0` the produce can block until a
+                        // key, and the host's poll (which RUNS the
+                        // deferred action) would then hang behind it.
+                        let batched : List M := List.append pending tmsgs;
+                        let out <- produce_for turns2 reader tick_ms;
+                        after_produce a upd vw on_ev model prev batched turns2 out
+                    }
                 }
-            }
-        }
+            })
     }
 
 /// The cycle's read half, decided by the turn state: `produce` normally,
@@ -217,17 +222,26 @@ def produce_for {M : Type} (turns : List (Fiber M)) (reader : InputReader) (time
 def poll_turns {M : Type} (turns : List (Fiber M)) : IO (Pair (List M) (List (Fiber M))) :=
     match turns {
         List.empty => IO.pure (Pair.pair List.empty List.empty),
-        List.cons f rest => do {
-            let head <- pollFiber f;
-            let tail <- poll_turns rest;
-            match tail {
-                Pair.pair tmsgs tturns =>
-                    match head {
-                        Option.none => IO.pure (Pair.pair tmsgs (List.cons f tturns)),
-                        Option.some m => IO.pure (Pair.pair (List.cons m tmsgs) tturns)
-                    }
+        List.cons f rest =>
+            // Explicit `Monad.bind`, NOT a do-block: this file's binds
+            // dispatch `Monad` over the (polymorphic-native) result the
+            // self-hosted checker resolves wrongly here -- mock.mo
+            // recorded the same failure and the same cure.
+            Monad.bind (pollFiber f) (fn (head : Option M) =>
+                Monad.bind (poll_turns rest) (fn (tail : Pair (List M) (List (Fiber M))) =>
+                    IO.pure (split_head head f tail)))
+    }
+
+/// `poll_turns`'s fold: a completed fiber's message conses in FRONT of
+/// the rest's messages (fork order preserved); a running one stays.
+#[partial]
+def split_head {M : Type} (head : Option M) (f : Fiber M) (tail : Pair (List M) (List (Fiber M))) : Pair (List M) (List (Fiber M)) :=
+    match tail {
+        Pair.pair tmsgs tturns =>
+            match head {
+                Option.none => Pair.pair tmsgs (List.cons f tturns),
+                Option.some m => Pair.pair (List.cons m tmsgs) tturns
             }
-        }
     }
 
 /// The produce step: a closed reader folds and draws its FINAL batch
