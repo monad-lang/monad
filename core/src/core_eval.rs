@@ -326,9 +326,10 @@ pub fn eval(
 /// one-arg-at-a-time accumulation.
 ///
 /// Takes `globals`/`cache` (not just `natives`, unlike `exec_native`
-/// itself) purely for `await_fiber`'s sake: running a forked fiber's
-/// deferred action means applying its stored closure, which needs the
-/// same `apply` this function's own callers already have in scope. Every
+/// itself) purely for `await_fiber`/`poll_fiber`'s sake: running a forked
+/// fiber's deferred action means applying its stored closure, which needs
+/// the same `apply` this function's own callers already have in scope
+/// (`poll_fiber` runs it to completion — the host's degradation). Every
 /// other native ignores them and goes through `exec_native` unchanged —
 /// see `core_native::await_fiber`'s own doc comment for why it alone
 /// needs this.
@@ -352,6 +353,10 @@ fn fire_or_accumulate(
     }
     if name.as_str() == "await_fiber" {
       crate::core_native::await_fiber(&args, globals, natives, cache)
+    } else if name.as_str() == "poll_fiber" {
+      // Running (the host's degradation runs it to completion) needs the
+      // full evaluator, exactly like `await_fiber`.
+      crate::core_native::poll_fiber(&args, globals, natives, cache)
     } else if name.as_str() == "io_bind" {
       crate::core_native::io_bind(&args, globals, natives, cache)
     } else {

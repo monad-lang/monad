@@ -552,7 +552,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // that.
             else if String.beq target "get_env" then Option.some (NativeWrapKind.io_passthrough "monad_get_env")
             // The async runtime (`std/concurrent/{fiber,combine}.mo`).
-            // Six of the seven are `IO`-returning the same way: call the
+            // Seven of the eight are `IO`-returning the same way: call the
             // runtime, wrap the raw result in `IO.mk (RawIO.io _)`.
             // `await_fiber` is the exception -- what it hands back IS the
             // action's own result, already a complete `IO A`, so it is a
@@ -568,6 +568,14 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "fork_io" then Option.some (NativeWrapKind.io_passthrough "monad_fork_io")
             else if String.beq target "await_fiber" then Option.some (NativeWrapKind.passthrough "monad_await_fiber")
             else if String.beq target "cancel_fiber" then Option.some (NativeWrapKind.io_passthrough "monad_cancel_fiber")
+            // `pollFiber` (std/concurrent/fiber.mo) -- `Fiber A ->
+            // IO (Option A)`: await's non-blocking sibling. The raw
+            // result is a real `Option` Constructor built in runtime.c
+            // (some=4/none=3), so `io_passthrough` like `get_env` --
+            // not `await_fiber`'s plain `passthrough`. The async
+            // event-loop primitive tui's `Cmd.perform_async` and
+            // weaver's turn loop poll every tick (weaver.md Phase 12).
+            else if String.beq target "poll_fiber" then Option.some (NativeWrapKind.io_passthrough "monad_poll_fiber")
             else if String.beq target "sleep_io" then Option.some (NativeWrapKind.io_passthrough "monad_sleep_io")
             else if String.beq target "scope_new" then Option.some (NativeWrapKind.io_passthrough "monad_scope_new")
             else if String.beq target "scope_fork" then Option.some (NativeWrapKind.io_passthrough "monad_scope_fork")
@@ -912,6 +920,10 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d100 := mk_decl "monad_std_fd" (List.cons "i64" List.empty) "i64" in
     // `ByteBuf.truncate` (runtime.c): buffer + new length in, Unit out.
     let d101 := mk_decl "monad_bytebuf_truncate" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    // `pollFiber` (runtime.c): an opaque fiber handle in, a real
+    // `Option` Constructor out (some=4/none=3) -- the async event
+    // loop's poll primitive.
+    let d102 := mk_decl "monad_poll_fiber" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
@@ -919,7 +931,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
-     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101]
+     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101, d102]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.
@@ -935,7 +947,7 @@ pub type NativeAvailability {
 /// Both wasm profiles omit them; the target gate turns a reachable use into
 /// a compile error naming the native and the target.
 def wasm_os_only_natives : List String := [
-    "fork_io", "await_fiber", "cancel_fiber", "scope_new", "scope_fork",
+    "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "exec_cmd", "process_id", "proc_spawn",
     "proc_write", "proc_read", "proc_wait", "tcp_connect", "tcp_listen",
     "tcp_accept", "tcp_local_port", "read_file", "write_file",

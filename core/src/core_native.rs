@@ -170,7 +170,8 @@ const PURE_NATIVES: &[&str] = &[
 /// (non-deterministic timing),
 /// `read_file`/`write_file`/`file_exists`/`is_dir`/`list_dir`/`get_env`/
 /// `exec_cmd` (filesystem/process IO), `fork_io`/`cancel_fiber`/
-/// `sleep_io`/`scope_new`/`scope_fork`/`scope_drop`/`await_fiber`
+/// `sleep_io`/`scope_new`/`scope_fork`/`scope_drop`/`await_fiber`/
+/// `poll_fiber`
 /// (concurrency/shared mutable state). Nothing here is a `tcp_*` native:
 /// this evaluator deliberately implements no TCP at all, so `std/io.mo`'s
 /// eight `tcp_*` defs are dispatched by the self-hosted backend alone
@@ -2723,6 +2724,75 @@ pub fn await_fiber(
   Ok(result)
 }
 
+/// Peel `a` out of the action's own result. The action is typed
+/// `IO (IO A)`-shaped `IO A`, so its value is the two-layer
+/// `IO.mk (RawIO.io a)` box; one peel of exactly this box was the
+/// compiled await's past bug (runtime.c's `monad_await_fiber` comment).
+/// Both tags verified against `well_known`, erroring loudly on anything
+/// else rather than guessing a field count.
+fn peel_io_box(natives: &NativeTable, v: Value) -> Result<Value, CoreEvalError> {
+  let io_mk = require_ctor(natives.well_known.io_mk, "IO.mk")?;
+  let raw = match v {
+    Value::Con { tag, args } if tag == io_mk.tag && !args.is_empty() => {
+      args.first().cloned().unwrap()
+    }
+    other => {
+      return Err(CoreEvalError::NativeArgError(format!(
+        "poll_fiber: expected the action's IO box, got {other:?}"
+      )));
+    }
+  };
+  let raw_io = require_ctor(natives.well_known.raw_io_io, "RawIO.io")?;
+  match raw {
+    Value::Con { tag, args } if tag == raw_io.tag && !args.is_empty() => {
+      Ok(args.first().cloned().unwrap())
+    }
+    other => Err(CoreEvalError::NativeArgError(format!(
+      "poll_fiber: expected RawIO.io inside the IO box, got {other:?}"
+    ))),
+  }
+}
+
+/// `pollFiber (f : Fiber A) : IO (Option A)` — `await_fiber`'s
+/// non-blocking sibling (`std/concurrent/fiber.mo`). The Rust host has
+/// the honest degradation the async-threading plan pins: there are no
+/// real threads here (`fork_io` defers) so asking IS doing — poll runs
+/// the deferred action to completion and always returns `some` of the
+/// result, never `none`. Dispatched from `fire_or_accumulate` like
+/// `await_fiber`, for the same reason: running the action needs the
+/// full evaluator. Mirrors `runtime.c`'s `monad_poll_fiber`.
+pub fn poll_fiber(
+  args: &[Value],
+  globals: &crate::core_value::GlobalTable,
+  natives: &NativeTable,
+  cache: &mut crate::core_value::GlobalCache,
+) -> Result<Value, CoreEvalError> {
+  let f = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("poll_fiber needs 1 arg".into()))?;
+  let id = extract_handle_id(f)?;
+  let handle = crate::runtime::global::take::<FiberHandle>(id)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber handle {id} not found")))?;
+  if handle.fiber.is_done() && handle.fiber.state() == crate::runtime::fiber::FiberState::Cancelled
+  {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "fiber {id} was cancelled"
+    )));
+  }
+  let action = handle
+    .action
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber {id} already awaited")))?;
+  let io_box = crate::core_eval::apply(action, unit_value(), globals, natives, cache)?;
+  handle.fiber.set_result(io_box.clone());
+  handle
+    .fiber
+    .set_state(crate::runtime::fiber::FiberState::Completed);
+  io_wrap(
+    natives,
+    make_option(natives, Some(peel_io_box(natives, io_box)?))?,
+  )
+}
+
 /// `cancel_fiber (f : Fiber A) : IO Unit` — marks the fiber cancelled
 /// without running it (a no-op if it's already running/done, same as
 /// `Fiber::cancel`'s own guard). Mirrors `eval::native::cancel_fiber`.
@@ -2807,6 +2877,7 @@ fn scope_drop(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::core_ir::CoreIr;
   use crate::lower_core_ir::WellKnownCtors;
 
   // Tag numbers here are deliberately NOT the real prelude's declared
