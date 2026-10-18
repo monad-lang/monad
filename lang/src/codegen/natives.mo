@@ -624,13 +624,14 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // FFI's callback arguments. `passthrough` with zero params:
             // the call's result IS the def's value, the raw word 0.
             else if String.beq target "ptr_null" then Option.some (NativeWrapKind.passthrough "monad_ptr_null")
-            // `std/bytebuf.mo`'s six `#[native "bytebuf_*"]` defs -- a
+            // `std/bytebuf.mo`'s eight `#[native "bytebuf_*"]` defs -- a
             // flat byte buffer the FFI can address (motes/tls's
             // `SSL_read`/`SSL_write`). Compiled, a `ByteBuf` is a pointer
             // to a `BufObj` (runtime.c: element kind, recorded length,
             // 64-byte-aligned payload); the four `IO`-typed ones are
-            // `io_passthrough` like the TCP family, while `ptr` and
-            // `length` are pure and stay bare `passthrough`es.
+            // `io_passthrough` like the TCP family, `ptr` and `length`
+            // are pure and stay bare `passthrough`es, and the two
+            // `RawIO` text-bridge ones below are `raw_io_passthrough`.
             else if String.beq target "bytebuf_alloc" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_alloc")
             else if String.beq target "bytebuf_of_list" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_of_list")
             else if String.beq target "bytebuf_to_list" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_to_list")
@@ -895,7 +896,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // `monad_ptr_null` (runtime.c) -- `Ptr.null`'s backing function. No
     // parameters; the i64 result is the NULL word itself.
     let d80 := mk_decl "monad_ptr_null" List.empty "i64" in
-    // `std/bytebuf.mo`'s six (runtime.c) -- every arg and result i64
+    // `std/bytebuf.mo`'s first six (runtime.c) -- every arg and result i64
     // under the head-of-list convention: a `ByteBuf` is a pointer to its
     // `BufObj`, and `of_list`/`to_list`'s `List U8` is one i64 pointer to
     // the list's head (exactly `tcp_write`/`tcp_read`'s shape, d68/d69).
