@@ -54,4 +54,5 @@ members = [
   "motes/anthropic",
   "motes/shuttle",
   "motes/loom",
+  "motes/xml_html",
 ]

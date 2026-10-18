@@ -1,0 +1,26 @@
+# The shared markup core: XML/HTML node types and their serializers.
+#
+# `motes/oak/` imports `Html.Attr`/`Html.Node`/`Html.to_string` from here;
+# the HTML/XML parsers (a later phase of this plan) produce the same types.
+# One type, two producers (builders and parsers), one serializer.
+#
+# Sub-table headers rather than inline tables: the self-hosted manifest
+# reader supports headers and not inline tables (see motes/parsec/mote.toml).
+#
+# `init` and `std` are ambient; declared anyway as every manifest here does.
+# `parsec` is the parser substrate the later parse phase builds on, and it is
+# also where the UTF-8 width probe used by the escapers comes from.
+
+[mote]
+name = "xml_html"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.parsec]
+path = "../parsec"
