@@ -15,7 +15,7 @@
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.parse}
 use weaver::error {WeaverError}
-use toml::toml {Toml.Value, Toml.parse, Toml.get_string, Toml.get_integer, Toml.get_table, Toml.table_get}
+use toml::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.get_integer, Toml.get_table, Toml.table_get}
 use std::io {IO.get_env, IO.read_file, IO.file_exists}
 use std::path {Path.of}
 use std::map {BTreeMap, BTreeMap.to_list}
