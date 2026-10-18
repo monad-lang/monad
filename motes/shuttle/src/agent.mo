@@ -49,7 +49,16 @@ pub struct RunState {
     emit : String -> IO Unit,
     gate : Gate,
     always : List Capability,
+    retries : I64,
+    sleep_ms : I64 -> IO Unit,
 }
+
+/// The sleep seam's default: no timed-wait native exists (no new
+/// natives -- the recorded owner decision) and the headless default
+/// must never wait, so the field is spelled at EVERY full literal
+/// (divergence note: an unspelled field has been seen to check clean
+/// and fill garbage). An interactive caller passes a polling sleeper.
+pub def silent_sleep (ms : I64) : IO Unit := IO.pure unit
 
 /// One agent step from phase `I` to phase `J` producing `A`.
 pub type Agent (I : Type) (J : Type) (A : Type) {

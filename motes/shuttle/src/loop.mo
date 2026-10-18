@@ -33,7 +33,7 @@ use shuttle::provider {Provider.send}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone}
+use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep}
 use shuttle::context {usage_zero, usage_add}
 use shuttle::gate {Capability, Pick, Approval, Gate}
 use json::json {Json}
@@ -225,15 +225,83 @@ def agent_send_step (s : RunState) : ResultT String IO (Pair RunState Turn) :=
     if s.turns_left < 1 then ResultT.mk (return (Result.err "turn cap reached"))
     else agent_send_run s
 
+/// The wire call, retried through the RunState's policy: `retries`
+/// TOTAL attempts (1 = byte-identical to the pre-retry loop), sleeping
+/// `sleep_ms` between attempts through the sleep seam, each retry
+/// announced through `emit` so an interactive UI shows the wait. The
+/// classification: a 4xx-status error is NOT retried (a malformed
+/// request or an unknown key fails identically on every resend) except
+/// 429 -- rate limiting is exactly what waiting is for; anything
+/// without an `HTTP 4` marker is treated as transient.
 def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do {
     let specs : List ToolSpec := ToolRegistry.specs s.reg;
-    let turn <- Provider.send s.session.config s.session.system_prompt specs s.session.history s.emit;
+    let turn <- Loop.retry_send
+        (fn (_ : Unit) => Provider.send s.session.config s.session.system_prompt specs s.session.history s.emit)
+        s.sleep_ms
+        (if s.retries < 1 then 1 else s.retries)
+        1
+        2000
+        s.emit;
     let base : Session := s.session;
     let spent2 : Usage := usage_add s.session.spent turn.usage;
     let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2 };
     let s2 : RunState := { s with session := session2, turns_left := s.turns_left - 1 };
     ResultT.mk (return (Result.ok (Pair.pair s2 turn)))
 }
+
+/// The retry loop. `send` is a `Unit ->` SEAM (the eagerness lesson:
+/// a naked `ResultT ... IO` value is evaluated at the call site, so a
+/// retried send must be rebuilt per attempt). `retries` is the total
+/// attempt budget, `attempt` the attempt being made (1-based), `delay`
+/// the first sleep in ms growing by 2000 per retry. The
+/// unwrap-and-rewrap shape (`ResultT.run` inside a `do`, never
+/// `ResultT.lift` -- the lift-in-a-do-block shape crashes the compiled
+/// backend) matches `run_tool`'s above.
+#[terminating]
+pub def Loop.retry_send
+    (send : Unit -> ResultT String IO Turn)
+    (sleep_ms : I64 -> IO Unit)
+    (retries : I64)
+    (attempt : I64)
+    (delay : I64)
+    (emit : String -> IO Unit)
+    : ResultT String IO Turn :=
+    ResultT.mk (do {
+        let res <- ResultT.run (send unit);
+        match res {
+            Result.ok turn => return (Result.ok turn),
+            Result.err e =>
+                if Bool.not (attempt < retries) || Bool.not (retry_worth_error e)
+                then return (Result.err e)
+                else do {
+                    let _ <- sleep_ms delay;
+                    let _ <- emit (String.concat "retrying ("
+                        (String.concat (I64.to_string (attempt + 1))
+                        (String.concat "/" (String.concat (I64.to_string retries)
+                        (String.concat "): " (String.concat e "\n"))))));
+                    let res2 <- ResultT.run (Loop.retry_send send sleep_ms retries (attempt + 1) (delay + 2000) emit);
+                    return res2
+                }
+        }
+    })
+
+/// Whether a wire error is worth a resend: the clients surface the HTTP
+/// status in their error text (`openai: HTTP 429: ...`). A `4`xx is a
+/// request error and fails identically on every resend -- EXCEPT 429,
+/// rate limiting, which is exactly what waiting is for. Anything
+/// without an `HTTP 4` marker is treated as transient.
+#[terminating]
+def retry_worth_error (e : String) : Bool :=
+    if Bool.and (retry_contains e 0 "HTTP 4") (Bool.not (retry_contains e 0 "429"))
+    then false
+    else true
+
+#[terminating]
+def retry_contains (s : String) (i : I64) (needle : String) : Bool :=
+    if String.starts_with needle (String.drop i s)
+    then true
+    else if i < String.length s then retry_contains s (i + 1) needle
+    else false
 
 /// Answered -> Executing: run every `tool_use` the turn asked for.
 pub def Loop.dispatch (turn : Turn) : Agent AgentAnswered AgentExecuting (List Content) :=
@@ -334,7 +402,7 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 /// that wants no gate -- shuttle's own CLI and tests).
 pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=

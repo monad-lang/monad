@@ -30,7 +30,7 @@ use shuttle::presets {
     ProviderConfig.openrouter, ProviderConfig.anthropic,
 }
 use shuttle::registry {ToolRegistry}
-use shuttle::agent {RunState}
+use shuttle::agent {RunState, silent_sleep}
 use shuttle::loop {Loop.run, Loop.run_state}
 use shuttle::session {Session, Session.load, Session.save}
 use shuttle::tool {ToolSpec, ToolImpl}
@@ -520,7 +520,7 @@ def resumed_state (plan : RunPlan) (reg : ToolRegistry) (servers : List McpServe
     let s1 : Session := { s with config := resumed_cfg plan s };
     let s2 : Session := { s1 with tools := ToolRegistry.specs reg };
     let s3 : Session := { s2 with history := resumed_history plan s };
-    let st : RunState := { session := s3, reg := reg, turns_left := budget, emit := plan_emit plan, gate := Gate.auto, always := List.empty };
+    let st : RunState := { session := s3, reg := reg, turns_left := budget, emit := plan_emit plan, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep };
     let r <- ResultT.run (Loop.run_state st);
     finish_run plan servers r
 }
