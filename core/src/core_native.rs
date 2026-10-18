@@ -2419,9 +2419,11 @@ fn proc_wait(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
 static TERM_CTL_SAVED: std::sync::LazyLock<std::sync::Mutex<Option<libc::termios>>> =
   std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
-/// `term_ctl` op 0 -- cbreak on stdin: ICANON and ECHO off (keypresses
-/// arrive one at a time, unechoed), ISIG and OPOST deliberately left on
-/// (Ctrl-C still works; a plain "\n" still prints). 1 on success, 0 when
+/// `term_ctl` op 0 -- cbreak on stdin: ICANON, ECHO and ISIG off
+/// (keypresses arrive one at a time, unechoed, and Ctrl-C is DELIVERED
+/// to the app as a `\x03` byte -- the tui app's double-press exit
+/// needs the byte, not a SIGINT; recorded in the UI-repair notes).
+/// OPOST stays on (a plain "\n" still prints). 1 on success, 0 when
 /// stdin is not a tty -- degrading rather than failing so a test run
 /// never needs a pty.
 fn term_ctl_enter_raw() -> i64 {
@@ -2438,7 +2440,7 @@ fn term_ctl_enter_raw() -> i64 {
         *saved = Some(t);
       }
     }
-    t.c_lflag &= !(libc::ICANON | libc::ECHO);
+    t.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG);
     t.c_cc[libc::VMIN] = 1;
     t.c_cc[libc::VTIME] = 0;
     if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &t) != 0 {

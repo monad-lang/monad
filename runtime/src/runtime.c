@@ -1955,9 +1955,11 @@ int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
 /* `term_ctl : I64 -> I64 -> RawIO I64` (motes/tui/src/terminal.mo) --
  * the tui mote's ONE terminal-control native, the same
  * one-entry-point-one-flag merge `monad_proc_read`/`monad_proc_wait`
- * set: op 0 enters cbreak on stdin (ICANON and ECHO off; ISIG and
- * OPOST deliberately left on so Ctrl-C still works and a plain "\n"
- * still prints), op 1 restores the mode op 0 saved, op 2 returns the
+ * set: op 0 enters cbreak on stdin (ICANON, ECHO and ISIG off -- ISIG
+ * too, so Ctrl-C is delivered to the app as a \x03 byte for the tui
+ * app's double-press exit instead of SIGINT-killing the process;
+ * OPOST stays on so a plain "\n" still prints), op 1 restores the
+ * mode op 0 saved, op 2 returns the
  * size packed as rows*65536+cols, op 3 polls stdin (the second
  * argument is the timeout; the mode/size ops ignore it).
  * The mode ops answer 1/0 rather than failing -- stdin away from a tty
@@ -1976,7 +1978,7 @@ static int64_t term_ctl_enter_raw(void) {
         g_term_ctl_saved = t;
         g_term_ctl_saved_valid = 1;
     }
-    t.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+    t.c_lflag &= ~(tcflag_t)(ICANON | ECHO | ISIG);
     t.c_cc[VMIN] = 1;
     t.c_cc[VTIME] = 0;
     return tcsetattr(STDIN_FILENO, TCSAFLUSH, &t) == 0 ? 1 : 0;
