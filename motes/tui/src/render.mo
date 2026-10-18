@@ -125,23 +125,27 @@ def draw_border (area : Rect) (bs : BorderStyle) (screen : Screen) (active : Tex
 
 // ==================== Text input & list (Phase 5) ====================
 
-/// Re-underline the cell at `(row, col)`: merge `underline := true` into
-/// the cell's own style, whatever it is. The cursor's visual is a style,
-/// not a glyph, so it composes with any character under it.
+/// Re-style the cell at `(row, col)` as the text field's cursor: merge
+/// `underline := true` and `reverse := true` into the cell's own style,
+/// whatever it is. The cursor's visual is a style, not a glyph, so it
+/// composes with any character under it. `run_app` HIDES the terminal
+/// cursor, and an underline alone reads as "no caret" on real screens
+/// (the recorded UI-repair finding) -- reverse gives an unmissable
+/// block cursor.
 def underline_at (screen : Screen) (row : I64) (col : I64) : Screen :=
     match screen_get_cell screen row col {
         some c =>
-            let u : TextStyle := { style_default with underline := true } in
+            let u : TextStyle := { style_default with underline := true, reverse := true } in
             screen_set_cell screen row col { c with style := style_merge c.style u },
         none => screen
     }
 
 /// One text field. The value scrolls horizontally to keep the cursor
 /// inside the field (the visible window starts at the cursor minus the
-/// last column), the cursor cell is underlined (a space underlined when
-/// the cursor sits past the value's end), and an empty value shows the
-/// placeholder dimmed, with no cursor. Single-line: `area.height < 1`
-/// is a no-op, extra height is ignored.
+/// last column), the cursor cell is a reverse block (see `underline_at`;
+/// a space reversed when the cursor sits past the value's end), and an
+/// empty value shows the placeholder dimmed, with no cursor.
+/// Single-line: `area.height < 1` is a no-op, extra height is ignored.
 def render_text_input (st : InputState) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
     if area.height < 1
     then screen

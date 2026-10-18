@@ -31,9 +31,13 @@
 priv def term_ctl (op : I64) (arg : I64) : RawIO I64
 
 /// Enter cbreak mode: ICANON and ECHO off, so key presses arrive one at
-/// a time unechoed. Deliberately NOT full raw mode: ISIG stays on (Ctrl-C
-/// still kills a hung app) and OPOST stays on (a plain `"\n"` still
-/// prints). `false` when stdin is not a tty -- nothing is changed then.
+/// a time unechoed. Deliberately NOT full raw mode: ISIG is OFF (an
+/// app that wants to handle Ctrl-C gets the `\u{3}` byte as
+/// `Key.ctrl "c"` -- the double-press exit -- instead of the kernel
+/// killing it; while a turn blocks inside `Cmd.perform` a queued
+/// Ctrl-C byte waits, so a truly hung tool still needs /quit once the
+/// turn ends), and OPOST stays on (a plain `"\n"` still prints).
+/// `false` when stdin is not a tty -- nothing is changed then.
 pub def Terminal.enter_raw_mode : IO Bool := do {
     let rc <- IO.mk (term_ctl 0 0);
     return (rc == 1)

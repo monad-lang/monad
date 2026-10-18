@@ -28,7 +28,7 @@ use init::optics {view, set, over}
 // panics the checker (`raise_core.rs`, "Free(Atom(_)) is missing from
 // atom_paths") instead of substituting the default.
 pub def style_default : TextStyle :=
-    { fg := none, bg := none, bold := false, dim := false, italic := false, underline := false, strikethrough := false }
+    { fg := none, bg := none, bold := false, dim := false, italic := false, underline := false, strikethrough := false, reverse := false }
 
 /// Layer `top` on top of `base`: colors in `top` win when set, otherwise
 /// `base`'s colors are kept; attribute flags are OR'd together.
@@ -40,7 +40,8 @@ pub def style_merge (base : TextStyle) (top : TextStyle) : TextStyle :=
         dim := base.dim || top.dim,
         italic := base.italic || top.italic,
         underline := base.underline || top.underline,
-        strikethrough := base.strikethrough || top.strikethrough
+        strikethrough := base.strikethrough || top.strikethrough,
+        reverse := base.reverse || top.reverse
     }
 
 /// `preferred` if set, else `fallback`.
@@ -79,6 +80,7 @@ pub def style_to_ansi (s : TextStyle) : String :=
     let c4 := append_code c3 (bool_code s.italic "3") in
     let c5 := append_code c4 (bool_code s.underline "4") in
     let codes := append_code c5 (bool_code s.strikethrough "9") in
+    let codes := append_code codes (bool_code s.reverse "7") in
     if codes == "" then "" else "\u{1b}[" ++ codes ++ "m"
 
 /// Hand-rolled (not generic `BEq (List A)`): dispatch to a custom element
@@ -291,6 +293,17 @@ def test_style_to_ansi_bold_red_combines_one_sequence : Bool :=
     // it.
     let s : TextStyle := { style_default with fg := some Color.red, bold := true } in
     style_to_ansi s == "\u{1b}[31;1m"
+
+#[test]
+def test_style_to_ansi_reverse_appends_sgr_seven : Bool :=
+    let s : TextStyle := { style_default with reverse := true } in
+    style_to_ansi s == "\u{1b}[7m"
+
+#[test]
+def test_style_merge_or_s_reverse : Bool :=
+    let base : TextStyle := { style_default with dim := true } in
+    let top : TextStyle := { style_default with reverse := true } in
+    style_merge base top == ({ style_default with dim := true, reverse := true } : TextStyle)
 
 // ==================== Phase 1b regression tests ====================
 // BEq smoke tests. All instances except `Screen`'s are now `#[derive BEq]`

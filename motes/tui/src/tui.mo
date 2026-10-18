@@ -130,9 +130,16 @@ def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO
     match size {
         Pair.pair rows cols =>
             match a {
-                App.app init _ _ _ _ => do {
+                App.app init _ _ vw _ => do {
                     let reader : InputReader := input_reader rows cols;
-                    let _ <- loop_app a reader init (empty_screen rows cols) List.empty;
+                    // An initial frame BEFORE the first `Input.produce`:
+                    // with no ticks (`tick_ms < 0`) the first produce
+                    // blocks until a key, and the screen stayed blank
+                    // until then (the recorded UI-repair finding). This
+                    // draw also flushes run_app's setup writes, which
+                    // otherwise sat in the stdout buffer behind it.
+                    let prev <- draw_frame vw init reader (empty_screen rows cols) true false;
+                    let _ <- loop_app a reader init prev List.empty;
                     restore_terminal
                 }
             }

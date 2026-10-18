@@ -45,7 +45,8 @@ pub struct TextStyle {
     dim: Bool := false,
     italic: Bool := false,
     underline: Bool := false,
-    strikethrough: Bool := false
+    strikethrough: Bool := false,
+    reverse: Bool := false
 }
 
 /// A single character cell with styling
