@@ -3147,4 +3147,119 @@ mod tests {
       CoreEvalError::MissingWellKnownCtor("Bool.true")
     ));
   }
+
+  // --- poll_fiber (`std/concurrent/fiber.mo`) ------------------------
+  // The compiled backend's side of these corners runs under its own
+  // runner (`std/concurrent/poll_test.mo`); these pin the HOST's contract
+  // in isolation, where an eval error is an assertion rather than a
+  // doomed `#[test]`.
+
+  /// A `Unit -> IO I64` closure whose body is the two-layer
+  /// `IO.mk (RawIO.io 42)` box — the shape `fork_io`'s action returns on
+  /// the host, built with `test_natives`' scrambled tags so the peeled
+  /// payload is proven to come from the well-known resolution and not a
+  /// lucky default. `Env::nil()` is right: the body binds nothing.
+  fn io_box_action() -> Value {
+    let natives = test_natives();
+    let mk = natives.well_known.io_mk.unwrap();
+    let raw = natives.well_known.raw_io_io.unwrap();
+    Value::Closure {
+      body: std::sync::Arc::new(crate::core_ir::con(
+        mk.tag,
+        mk.arity,
+        vec![crate::core_ir::con(
+          raw.tag,
+          raw.arity,
+          vec![CoreIr::Lit(IrLit::Num(42, NumSuffix::I64))],
+        )],
+      )),
+      env: crate::core_value::Env::nil(),
+    }
+  }
+
+  /// Extract the opaque handle id out of `fork_io`'s
+  /// `IO.mk (RawIO.io <handle>)` result, through the well-known tags.
+  fn handle_id_of(v: Value) -> u64 {
+    let natives = test_natives();
+    let mk = natives.well_known.io_mk.unwrap();
+    let raw = natives.well_known.raw_io_io.unwrap();
+    let Value::Con { tag, args } = v else {
+      panic!("expected the IO.mk wrapper, got {v:?}")
+    };
+    assert_eq!(tag, mk.tag);
+    let inner = args.first().cloned().unwrap();
+    let Value::Con { tag, args } = inner else {
+      panic!("expected the RawIO.io wrapper")
+    };
+    assert_eq!(tag, raw.tag);
+    let payload = args.first().cloned().unwrap();
+    let Value::Lit(IrLit::Num(n, _)) = payload else {
+      panic!("expected the opaque handle number, got {payload:?}")
+    };
+    n as u64
+  }
+
+  #[test]
+  fn test_poll_fiber_runs_the_deferred_action() {
+    let natives = test_natives();
+    let globals = crate::core_value::GlobalTable::new(vec![]);
+    let mut cache = crate::core_value::GlobalCache::new(0);
+    let fh = fork_io(&[io_box_action()], &natives).unwrap();
+    let id = handle_id_of(fh);
+
+    // The degraded contract: there is no `none` here — asking IS doing
+    // on the lazy host. The answer is `some` of the peeled payload
+    // inside the standard two-layer wrap: IO.mk (RawIO.io (some 42)).
+    let polled = poll_fiber(&[handle_value(id)], &globals, &natives, &mut cache).unwrap();
+    let some = natives.well_known.option_some.unwrap();
+    let Value::Con { ref args, .. } = polled else {
+      panic!("expected the IO.mk wrapper, got {polled:?}")
+    };
+    let raw = args.first().cloned().unwrap();
+    let Value::Con { ref args, .. } = raw else {
+      panic!("expected the RawIO.io wrapper")
+    };
+    let opt = args.first().cloned().unwrap();
+    let Value::Con { tag, ref args } = opt else {
+      panic!("expected the Option wrapper, got {opt:?}")
+    };
+    assert_eq!(tag, some.tag);
+    assert_eq!(args.len(), 1);
+    let payload = args.first().cloned().unwrap();
+    assert!(matches!(payload, Value::Lit(IrLit::Num(42, _))));
+
+    // poll consumed the handle (`global::take`, like await's): the
+    // double-consumer is structurally gone from the registry.
+    assert!(crate::runtime::global::take::<FiberHandle>(id).is_none());
+  }
+
+  #[test]
+  fn test_await_after_poll_errors_not_found() {
+    let natives = test_natives();
+    let globals = crate::core_value::GlobalTable::new(vec![]);
+    let mut cache = crate::core_value::GlobalCache::new(0);
+    let fh = fork_io(&[io_box_action()], &natives).unwrap();
+    let id = handle_id_of(fh);
+    poll_fiber(&[handle_value(id)], &globals, &natives, &mut cache).unwrap();
+    let err = await_fiber(&[handle_value(id)], &globals, &natives, &mut cache).unwrap_err();
+    assert!(
+      matches!(err, CoreEvalError::NativeArgError(msg) if msg.contains(&format!("fiber handle {id} not found")))
+    );
+  }
+
+  #[test]
+  fn test_poll_after_cancel_errors() {
+    let natives = test_natives();
+    let globals = crate::core_value::GlobalTable::new(vec![]);
+    let mut cache = crate::core_value::GlobalCache::new(0);
+    let fh = fork_io(&[io_box_action()], &natives).unwrap();
+    let id = handle_id_of(fh);
+    // cancel keeps the handle registered (`with`, not `take`), so the
+    // poll reaches it and raises the same eval error await would.
+    cancel_fiber(&[handle_value(id)], &natives).unwrap();
+    let err = poll_fiber(&[handle_value(id)], &globals, &natives, &mut cache).unwrap_err();
+    assert!(
+      matches!(err, CoreEvalError::NativeArgError(msg) if msg.contains(&format!("fiber {id} was cancelled")))
+    );
+  }
 }
