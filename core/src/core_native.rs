@@ -1376,9 +1376,12 @@ fn read_fd_raw(fd: libc::c_int, buf: &mut [u8]) -> std::io::Result<usize> {
 /// reason `runtime.c`'s `monad_read_line` gives: anything that reads
 /// ahead consumes bytes belonging to the caller's NEXT read
 /// (`read_stdin_exact`, or tui's poll-then-read).
-fn read_line_fd(fd: libc::c_int) -> std::io::Result<Option<Vec<u8>>> {
-  let mut line = Vec::new();
-  let mut saw_byte = false;
+///
+/// `carry` is bytes already taken off `fd` that belong to the start of
+/// this line (stdin's `STDIN_CARRY`); they count as read.
+fn read_line_fd(fd: libc::c_int, carry: Vec<u8>) -> std::io::Result<Option<Vec<u8>>> {
+  let mut saw_byte = !carry.is_empty();
+  let mut line = carry;
   let mut byte = [0u8; 1];
   while read_fd_raw(fd, &mut byte)? == 1 {
     saw_byte = true;
@@ -1407,12 +1410,16 @@ fn read_stdin_chunk(buf: &mut [u8]) -> Result<usize, CoreEvalError> {
 /// no trailing newline is `Option.some line`, and `\r` is deliberately
 /// NOT stripped.
 ///
-/// No `STDIN_CARRY` handling is needed here, unlike `read_stdin_exact`
-/// just below: `\n` is ASCII, so it is always a character boundary, and
-/// the line ends either at that boundary or at EOF -- never on a lone
-/// prefix of a multi-byte character with more of it still to come.
+/// `STDIN_CARRY` is taken first: a `read_stdin_exact` that stopped in
+/// the middle of a character left that character's leading bytes there,
+/// already off fd 0, and they are the start of this line. (It never
+/// holds a `\n` -- only an incomplete character's prefix.)
 fn read_line(natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  let line = read_line_fd(libc::STDIN_FILENO)
+  let carry = match STDIN_CARRY.lock() {
+    Ok(mut guard) => std::mem::take(&mut *guard),
+    Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+  };
+  let line = read_line_fd(libc::STDIN_FILENO, carry)
     .map_err(|e| CoreEvalError::NativeArgError(format!("read_line failed: {e}")))?;
   let opt = match line {
     None => make_option(natives, None)?,
@@ -2945,7 +2952,7 @@ mod tests {
       unsafe { libc::poll(p.as_mut_ptr(), 1, 0) }
     };
 
-    assert_eq!(read_line_fd(rd).unwrap(), Some(b"ab".to_vec()));
+    assert_eq!(read_line_fd(rd, Vec::new()).unwrap(), Some(b"ab".to_vec()));
     let mut byte = [0u8; 1];
     assert_eq!(read_fd_raw(rd, &mut byte).unwrap(), 1);
     assert_eq!(byte[0], 0x1b);
@@ -2956,8 +2963,26 @@ mod tests {
     );
 
     unsafe { libc::close(wr) };
-    assert_eq!(read_line_fd(rd).unwrap(), Some(b"[A".to_vec()));
-    assert_eq!(read_line_fd(rd).unwrap(), None);
+    assert_eq!(read_line_fd(rd, Vec::new()).unwrap(), Some(b"[A".to_vec()));
+    assert_eq!(read_line_fd(rd, Vec::new()).unwrap(), None);
+    unsafe { libc::close(rd) };
+  }
+
+  /// A carried prefix (stdin's `STDIN_CARRY`) starts the line: "é" split
+  /// as 0xC3 already taken + 0xA9 still on the fd reads back whole.
+  #[test]
+  fn test_read_line_fd_starts_with_the_carry() {
+    let mut fds = [0 as libc::c_int; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (rd, wr) = (fds[0], fds[1]);
+    let rest = b"\xA9t\n";
+    let wrote = unsafe { libc::write(wr, rest.as_ptr().cast(), rest.len()) };
+    assert_eq!(wrote, rest.len() as isize);
+    unsafe { libc::close(wr) };
+    let line = read_line_fd(rd, vec![0xC3]).unwrap().unwrap();
+    assert_eq!(String::from_utf8(line).unwrap(), "\u{e9}t");
+    // A carry with nothing after it at EOF is still a line, not EOF.
+    assert_eq!(read_line_fd(rd, vec![b'x']).unwrap(), Some(b"x".to_vec()));
     unsafe { libc::close(rd) };
   }
 
