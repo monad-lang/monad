@@ -166,9 +166,10 @@ pub def input_line_move (delta : I64) (st : InputState) : InputState :=
             },
     }
 
-/// The multiline key handler: `Alt+Enter` (the decoder's
-/// `Key.alt "\r"` -- Ctrl+J IS `\r`/`\n` on a cbreak wire, i.e. plain
-/// Enter) inserts a newline; `up`/`down` cross lines. Everything else
+/// The multiline key handler: `Alt+Enter` (`Key.alt "\n"` -- ICRNL
+/// stays on in cbreak, so a terminal's Enter arrives as `\n`; a line
+/// that does not convert gives `Key.alt "\r"`, accepted too; Ctrl+J IS
+/// `\r`/`\n` on this wire, i.e. plain Enter) inserts a newline; `up`/`down` cross lines. Everything else
 /// falls to the single-line handler, so a one-line value still has the
 /// plain up/down no-op it always had (Weaver routes history through
 /// its own `update_key` only when the input is empty, before this).
@@ -176,7 +177,9 @@ pub def input_line_move (delta : I64) (st : InputState) : InputState :=
 pub def handle_input_multiline_key (k : Key) (st : InputState) : InputState :=
     match k {
         Key.alt c =>
-            if c == "\r" then input_insert "\n" st else handle_input_key k st,
+            if Bool.or (c == "\r") (c == "\n")
+            then input_insert "\n" st
+            else handle_input_key k st,
         Key.up => input_line_move (0 - 1) st,
         Key.down => input_line_move 1 st,
         _ => handle_input_key k st,

@@ -199,7 +199,7 @@ def fatal_is_some2 (m : TuiModel) : Bool :=
 def test_alt_enter_inserts_a_newline : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "a")) {
         Pair.pair m1 _ =>
-            match TuiApp.update m1 (key_msg (Key.alt "\r")) {
+            match TuiApp.update m1 (key_msg (Key.alt "\n")) {
                 Pair.pair m2 _ =>
                     match TuiApp.update m2 (key_msg (Key.char "b")) {
                         Pair.pair m3 _ => m3.input.value == "a\nb"
@@ -216,7 +216,7 @@ def model_of_step (m : TuiModel) (msg : WeaverMsg) : TuiModel :=
 def test_multiline_value_routs_single_line_handler : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "a")) {
         Pair.pair m1 _ =>
-            match TuiApp.update m1 (key_msg (Key.alt "\r")) {
+            match TuiApp.update m1 (key_msg (Key.alt "\n")) {
                 Pair.pair m2 _ =>
                     match TuiApp.update m2 (key_msg Key.enter) {
                         Pair.pair m3 cmd =>
