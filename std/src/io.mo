@@ -11,10 +11,14 @@
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
 use lib::path {Path}
-use lib::stream {FdStream, StreamError, stream_result}
+use lib::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.of_string}
+use lib::stream {
+  Stream, FdStream, FdStream.read_line_bounded, FdStream.stderr, FdStream.stdin,
+  FdStream.stdout, PartialLinePolicy, StreamError, stream_result,
+}
 
-#[native print_str]
-pub def IO.println (s: String) : IO Unit
+/// Write `s` and a newline to stdout (buffered; see `IO.flush_stdout`).
+pub def IO.println (s : String) : IO Unit := IO.write_to FdStream.stdout (String.concat s "\n")
 
 #[native "write_file"]
 def IO.write_file_native (path : String) (content : String) : IO Unit
@@ -42,7 +46,8 @@ def IO.list_dir_native (path : String) : IO (List String)
 pub def IO.get_env (s : String) : IO (Option String)
 
 // ── Raw stdio ───────────────────────────────────────────────────────────
-// The five below are the byte-level half of stdio: `IO.println` writes
+// The group below is the byte-level half of stdio, over `std/stream.mo`'s
+// `FdStream.stdin`/`stdout`/`stderr`: `IO.println` writes
 // a line to stdout and `IO.read_file` reads a whole named file, and
 // neither is usable when the process's own stdin/stdout IS the channel.
 // That is the language server's situation, and it is why each of these
@@ -64,13 +69,39 @@ pub def IO.get_env (s : String) : IO (Option String)
 // bytes at BYTE offsets taken from `Content-Length`, so every byte has
 // to arrive unaltered.
 
+// Write `text` to `s` verbatim, discarding a write error: the stdio
+// writers' type has no error channel, and a vanished stdout/stderr
+// reader kills the process by SIGPIPE before an error could surface
+// (`stdio_die_on_epipe`, runtime.c; the interpreter mirrors it).
+pub def IO.write_to (s : FdStream) (text : String) : IO Unit := do {
+  let buf <- ByteBuf.of_string text;
+  let _ <- Stream.write s buf;
+  ByteBuf.free buf
+}
+
 // One line from stdin, WITHOUT its trailing newline. `Option.none` at
 // EOF, meaning nothing at all was read -- a final line with no trailing
 // newline is still `Option.some line`, so a caller reading a sequence of
 // lines terminates on `none` rather than on an empty string. `\r` is
-// NOT stripped (the caller wants the bytes the peer actually sent).
-#[native "read_line"]
-pub def IO.read_line : IO (Option String)
+// NOT stripped (the caller wants the bytes the peer actually sent). A
+// read error is `none` too, as end of input.
+//
+// One byte per read (`FdStream.read_line_bounded`), so the bytes after
+// the line stay in the kernel for the caller's next `read_stdin_exact`
+// or `poll(2)` -- a reader that read ahead would desynchronize both.
+pub def IO.read_line : IO (Option String) := do {
+  let r <- FdStream.read_line_bounded FdStream.stdin 0 PartialLinePolicy.deliver;
+  return (IO.line_or_none r)
+}
+
+def IO.line_or_none (r : Result StreamError (Option String)) : Option String :=
+  match r {
+    Result.ok line => line,
+    Result.err _ => Option.none
+  }
+
+#[native "read_stdin_exact"]
+priv def read_stdin_exact (n : I64) : RawIO String
 
 // Blocking read of UP TO `n` bytes from stdin, returning exactly the
 // bytes read. A result SHORTER than `n` -- including "" -- means EOF;
@@ -78,28 +109,27 @@ pub def IO.read_line : IO (Option String)
 // comment, the caller accumulates the result and slices it at byte
 // offsets, so a chunk may end in the middle of a multi-byte UTF-8
 // character and must still be handed over unaltered.
-#[native "read_stdin_exact"]
-pub def IO.read_stdin_exact (n : I64) : IO String
+pub def IO.read_stdin_exact (n : I64) : IO String := IO.mk (read_stdin_exact n)
 
 // Write `s` to stdout VERBATIM -- no trailing newline, which is the
 // whole difference from `IO.println`. No flush either: a protocol
 // writer batches a frame's pieces and calls `IO.flush_stdout` once the
 // frame is complete.
-#[native "write_stdout"]
-pub def IO.write_stdout (s : String) : IO Unit
+pub def IO.write_stdout (s : String) : IO Unit := IO.write_to FdStream.stdout s
+
+#[native "flush_stdout"]
+priv def flush_stdout : RawIO Unit
 
 // Flush stdout. Needed because stdout is block-buffered when it is a
 // pipe (which is how a language server's peer reads it), so a written
-// frame stays invisible to the peer until this runs.
-#[native "flush_stdout"]
-pub def IO.flush_stdout : IO Unit
+// frame stays invisible to the peer until this runs. The one stdio
+// operation the stream primitives cannot express.
+pub def IO.flush_stdout : IO Unit := IO.mk flush_stdout
 
-// Write `s` to stderr verbatim, no trailing newline, and flush it. A
-// separate native from `IO.write_stdout` for more than the stream it
-// names: a log line must not sit in a buffer, and it must never
-// interleave into the protocol stream on fd 1.
-#[native "write_stderr"]
-pub def IO.write_stderr (s : String) : IO Unit
+// Write `s` to stderr verbatim, no trailing newline, flushed at once:
+// a log line must not sit in a buffer, and it must never interleave
+// into the protocol stream on fd 1.
+pub def IO.write_stderr (s : String) : IO Unit := IO.write_to FdStream.stderr s
 
 // Milliseconds since the Unix epoch, from the system WALL clock
 // (`SystemTime::now`, core/src/core_native.rs). Use it for differences

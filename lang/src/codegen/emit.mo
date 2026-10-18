@@ -2817,24 +2817,24 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
         _ => Option.none,
     }
 
-// `print_str`/`write_file` are declared `void` on the C side
-// (`runtime/src/runtime.c`) -- their LLVM `declare` says so (`mk_decl
-// "monad_print_str" ... "void"`), but every native CALL here is always
+// `write_file` is declared `void` on the C side
+// (`runtime/src/runtime.c`) -- its LLVM `declare` says so (`mk_decl
+// "monad_write_file" ... "void"`), but every native CALL here is always
 // emitted `i64`-typed (`LLVMType.i64_`) regardless, so the call itself
 // produces an i64 "result" that's really just whatever garbage the C
 // ABI happened to leave in the return register, not a real value.
 // Harmless as long as nothing reads it -- but a native call used as a
-// do-notation statement's own VALUE (e.g. `println x; return unit`
-// desugars to `Monad.bind (println x) (\_ -> Monad.pure unit)`) feeds
+// do-notation statement's own VALUE (e.g. `write_file p x; return unit`
+// desugars to `Monad.bind (write_file p x) (\_ -> Monad.pure unit)`) feeds
 // that garbage straight into `bind`'s own first argument, which
 // `Monad_IO_bind` then treats as a real tagged pointer
 // (`monad_get_tag`/`monad_get_field`) -- confirmed as a real gap via a
-// direct repro (a do-block whose first statement is a bare `println`
-// call): compiled clean, segfaulted on the very first line, before
-// printing anything.
+// direct repro (a do-block whose first statement was a bare `println`,
+// back when that was the inlined `print_str` native): compiled clean,
+// segfaulted on the very first line, before printing anything.
 //
 // Fixed narrowly, without touching the (apparently llc-tolerated)
-// call-type mismatch itself: `println`/`write_file`'s REAL declared
+// call-type mismatch itself: `write_file`'s REAL declared
 // type is `IO Unit`, i.e. a properly tagged `IO.mk (RawIO.io Unit)` constructor
 // value (one field, holding the `Unit` value) -- exactly the shape
 // `Monad_IO_pure`'s own generated body builds (`alloc_constructor` at
@@ -2851,13 +2851,12 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
 #[partial]
 def is_void_native (op : NativeOp) : Bool :=
     match op {
-        NativeOp.op_print_str => true,
         NativeOp.op_write_file => true,
         _ => false,
     }
 
 /// Every native op whose Monad-level declared type is `IO _`
-/// (`init/io.mo`) -- `op_print_str`/`op_read_file`/`op_write_file`/
+/// (`init/io.mo`) -- `op_read_file`/`op_write_file`/
 /// `op_file_exists` -- needs its raw call result wrapped in a real
 /// `IO.mk (RawIO.io _)`-tagged constructor before it can be used as an `IO` value
 /// (do-notation's `<-`, `Monad_IO_bind`, ...). The 8 arithmetic/comparison
@@ -2866,7 +2865,7 @@ def is_void_native (op : NativeOp) : Bool :=
 ///
 /// `is_void_native` (above) was previously the ONLY signal used to decide
 /// this, conflating "the C function is declared `void`" with "the Monad
-/// type is `IO _`" -- true for `print_str`/`write_file` (both void AND
+/// type is `IO _`" -- true for `write_file` (both void AND
 /// `IO Unit`), but `read_file`/`file_exists` are `IO _`-returning WITHOUT
 /// being C-`void` (`monad_read_file`/`monad_file_exists` return a real
 /// `char*`). Their raw call result was used AS-IS wherever an `IO` value
@@ -2880,7 +2879,6 @@ def is_void_native (op : NativeOp) : Bool :=
 #[partial]
 def needs_io_wrap (op : NativeOp) : Bool :=
     match op {
-        NativeOp.op_print_str => true,
         NativeOp.op_read_file => true,
         NativeOp.op_write_file => true,
         NativeOp.op_file_exists => true,
@@ -2940,7 +2938,7 @@ def materialize_truthy_ptr_as_bool (c : CodegenCtx) (raw_val : LLVMValue) : Mate
 def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : CompileResult :=
     match compile_db_term_ir c arg {
         CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
-            // For unary native operations like print_str, call the runtime function
+            // For unary native operations like read_file, call the runtime function
             match fresh_temp ctx1 {
                 CtxStrPair.mk ctx_t temp =>
                     let fn_name := native_op_to_fn_name op in
@@ -3058,7 +3056,6 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
     NativeOp.op_lt => "I64_lt",
     NativeOp.op_gt => "I64_gt",
     NativeOp.op_ne => "I64_ne",
-    NativeOp.op_print_str => "monad_print_str",
     NativeOp.op_read_file => "monad_read_file",
     NativeOp.op_write_file => "monad_write_file",
     NativeOp.op_file_exists => "monad_file_exists",
@@ -3089,7 +3086,6 @@ def is_arith_native_op (op : NativeOp) : Bool := match op {
     NativeOp.op_ne => true,
     NativeOp.op_lt => true,
     NativeOp.op_gt => true,
-    NativeOp.op_print_str => false,
     NativeOp.op_read_file => false,
     NativeOp.op_write_file => false,
     NativeOp.op_file_exists => false,
@@ -5326,7 +5322,7 @@ def strs_have_no_i8_star (ss : List String) : Bool :=
 #[test]
 def test_runtime_decls_i64_convention : Bool :=
     decls_have_no_i8_star runtime_declarations
-        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare void @monad_print_str(i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare void @monad_write_file(i64, i64, i64)"
         && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare i64 @monad_read_file(i64)"
         && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare i64 @monad_i64_to_string(i64)"
 

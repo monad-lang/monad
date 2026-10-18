@@ -123,7 +123,7 @@ fn test_reflect_type_info_blocks_impure_natives_with_a_clear_error() {
     r#"
     use init::meta {TypeInfo, Decl}
 
-    #[native "print_str"]
+    #[native "get_env"]
     def my_print (s : String) : I64
 
     struct Point { x : I64, y : I64 }
@@ -141,7 +141,7 @@ fn test_reflect_type_info_blocks_impure_natives_with_a_clear_error() {
   );
   let err = r.expect_err("a meta def calling an impure native must fail, not succeed");
   assert!(
-    err.contains("print_str") && err.to_lowercase().contains("pure"),
+    err.contains("get_env") && err.to_lowercase().contains("pure"),
     "expected a clear purity-sandbox error naming the blocked native, got: {err}"
   );
 }

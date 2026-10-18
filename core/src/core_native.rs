@@ -165,8 +165,8 @@ const PURE_NATIVES: &[&str] = &[
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
-/// `is_pure_native` — the allowlist above is authoritative): `print_str`
-/// (IO), `current_time`/`current_time_nano`/`bench_report`
+/// `is_pure_native` — the allowlist above is authoritative):
+/// `stream_read`/`stream_write` (IO), `current_time`/`current_time_nano`/`bench_report`
 /// (non-deterministic timing),
 /// `read_file`/`write_file`/`file_exists`/`is_dir`/`list_dir`/`get_env`/
 /// `exec_cmd` (filesystem/process IO), `fork_io`/`cancel_fiber`/
@@ -297,7 +297,6 @@ pub fn exec_native(
     "string_starts_with" => string_starts_with(args, natives),
     "string_slice" => string_slice(args),
     "string_drop" => string_drop(args),
-    "print_str" => print_str(args, natives),
     "array_new" => array_new(args, natives),
     "array_len" => array_len(args),
     "array_get" => array_get(args, natives),
@@ -318,15 +317,12 @@ pub fn exec_native(
     "is_dir" => is_dir(args, natives),
     "list_dir" => list_dir(args, natives),
     "get_env" => get_env(args, natives),
-    // The raw-stdio family (`std/io.mo`). Like `current_time` above
-    // (and unlike the file natives just above it), `read_line` and
-    // `flush_stdout` are nullary natives -- there is no argument to
-    // check, so no `NativeArgError` for one.
-    "read_line" => read_line(natives),
+    // `std/io.mo`'s two raw-stdio natives, `RawIO` behind `.mo`
+    // wrappers (the rest of stdio is `std/stream.mo`'s streams). Like
+    // `current_time` above, `flush_stdout` is nullary -- there is no
+    // argument to check, so no `NativeArgError` for one.
     "read_stdin_exact" => read_stdin_exact(args, natives),
-    "write_stdout" => write_stdout(args, natives),
     "flush_stdout" => flush_stdout(natives),
-    "write_stderr" => write_stderr(args, natives),
     "exec_cmd" => exec_cmd(args, natives),
     // The piped-subprocess family (`std/src/process.mo`, agent-skills.md
     // Phase 4) -- IO-returning, so none of them belongs in PURE_NATIVES.
@@ -1001,25 +997,6 @@ pub fn io_bind(
   crate::core_eval::apply(f, inner, globals, natives, cache)
 }
 
-fn print_str(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError(
-      "print_str needs 1 arg".into(),
-    ));
-  }
-  let s = extract_string(&args[0])?;
-  println!("{s}");
-  // `IO.println`'s declared type is `IO Unit`, and `Monad.bind`'s own
-  // `IO` instance (init/io.mo) pattern-matches its argument via `match a
-  // { io a => f a }` -- an unwrapped return value here was a real,
-  // pre-existing bug (this native predates this session's own changes),
-  // just never hit by anything that BINDS a `println` call via `<-`/
-  // `Monad.bind` rather than discarding its result outright. `Unit`'s
-  // own runtime shape still doesn't matter (never pattern-matched), so
-  // any inner value works -- kept as the string for minimal disruption.
-  io_wrap(natives, Value::Lit(IrLit::Str(s.to_string().into())))
-}
-
 // --- `std/array.mo` -------------------------------------------------
 //
 // An `Array A` value IS a `Value::Con` tagged `Array.mk` whose `args`
@@ -1327,6 +1304,8 @@ fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
 // byte stream whose frames can be split across reads. See that group's
 // own comment in `std/io.mo` for the contract each of these implements;
 // `runtime/src/runtime.c` holds the compiled backend's matching half.
+// Only `read_stdin_exact` and `flush_stdout` are natives now: stdio
+// writes and `IO.read_line` are `std/stream.mo` streams on slots 0-2.
 
 /// Bytes a previous `read_stdin_exact` call read but could not hand
 /// over, because they are the start of a multi-byte UTF-8 character
@@ -1372,28 +1351,6 @@ fn read_fd_raw(fd: libc::c_int, buf: &mut [u8]) -> std::io::Result<usize> {
   }
 }
 
-/// One line off `fd`, byte at a time, WITHOUT its trailing newline;
-/// `None` when nothing at all was read (EOF). Byte-at-a-time for the
-/// reason `runtime.c`'s `monad_read_line` gives: anything that reads
-/// ahead consumes bytes belonging to the caller's NEXT read
-/// (`read_stdin_exact`, or tui's poll-then-read).
-///
-/// `carry` is bytes already taken off `fd` that belong to the start of
-/// this line (stdin's `STDIN_CARRY`); they count as read.
-fn read_line_fd(fd: libc::c_int, carry: Vec<u8>) -> std::io::Result<Option<Vec<u8>>> {
-  let mut saw_byte = !carry.is_empty();
-  let mut line = carry;
-  let mut byte = [0u8; 1];
-  while read_fd_raw(fd, &mut byte)? == 1 {
-    saw_byte = true;
-    if byte[0] == b'\n' {
-      break;
-    }
-    line.push(byte[0]);
-  }
-  Ok(saw_byte.then_some(line))
-}
-
 /// One `read` from stdin; `0` means EOF. Split out so both of
 /// `read_stdin_exact`'s read sites (the fill loop and the
 /// complete-the-character loop) share one error shape.
@@ -1402,37 +1359,7 @@ fn read_stdin_chunk(buf: &mut [u8]) -> Result<usize, CoreEvalError> {
     .map_err(|e| CoreEvalError::NativeArgError(format!("read_stdin_exact failed: {e}")))
 }
 
-/// `IO.read_line : IO (Option String)` — one line from stdin WITHOUT
-/// its trailing newline, or `Option.none` at EOF (nothing read at all).
-///
-/// Reads raw bytes (`read_line_fd`) rather than `BufRead::read_line`:
-/// the latter REJECTS invalid UTF-8, and this is a protocol reader
-/// whose only job is to hand back what the peer sent. A final line with
-/// no trailing newline is `Option.some line`, and `\r` is deliberately
-/// NOT stripped.
-///
-/// `STDIN_CARRY` is taken first: a `read_stdin_exact` that stopped in
-/// the middle of a character left that character's leading bytes there,
-/// already off fd 0, and they are the start of this line. (It never
-/// holds a `\n` -- only an incomplete character's prefix.)
-fn read_line(natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  let carry = match STDIN_CARRY.lock() {
-    Ok(mut guard) => std::mem::take(&mut *guard),
-    Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
-  };
-  let line = read_line_fd(libc::STDIN_FILENO, carry)
-    .map_err(|e| CoreEvalError::NativeArgError(format!("read_line failed: {e}")))?;
-  let opt = match line {
-    None => make_option(natives, None)?,
-    Some(buf) => {
-      let line = String::from_utf8_lossy(&buf).into_owned();
-      make_option(natives, Some(Value::Lit(IrLit::Str(line.into()))))?
-    }
-  };
-  io_wrap(natives, opt)
-}
-
-/// `IO.read_stdin_exact (n : I64) : IO String` — blocking read of UP TO
+/// `read_stdin_exact : I64 -> RawIO String` — blocking read of UP TO
 /// `n` bytes from stdin; the result being SHORTER than `n` (including
 /// `""`) means EOF, and `n <= 0` returns `""`.
 ///
@@ -1462,7 +1389,7 @@ fn read_stdin_exact(args: &[Value], natives: &NativeTable) -> Result<Value, Core
   }
   let n = extract_int(&args[0])?;
   if n <= 0 {
-    return io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())));
+    return raw_io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())));
   }
   let n = n as usize;
   let mut carry = match STDIN_CARRY.lock() {
@@ -1524,67 +1451,35 @@ fn read_stdin_exact(args: &[Value], natives: &NativeTable) -> Result<Value, Core
   };
   *carry = buf;
   drop(carry);
-  io_wrap(natives, Value::Lit(IrLit::Str(result.into())))
+  raw_io_wrap(natives, Value::Lit(IrLit::Str(result.into())))
 }
 
-/// `IO.write_stdout (s : String) : IO Unit` — write `s` to stdout
-/// VERBATIM: no trailing newline (the whole difference from
-/// `IO.println`) and no flush (a frame's pieces are written first, then
-/// `flush_stdout` once). See `write_file`'s own doc comment on why the
-/// `IO.io` wrapping is required; `Unit`'s own runtime shape still
-/// doesn't matter (never pattern-matched), so the empty string is the
-/// inner value.
-fn write_stdout(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError(
-      "write_stdout needs 1 arg".into(),
-    ));
-  }
-  let s = extract_string(&args[0])?;
-  use std::io::Write;
-  let stdout = std::io::stdout();
-  let mut lock = stdout.lock();
-  lock
-    .write_all(s.as_bytes())
-    .map_err(|e| CoreEvalError::NativeArgError(format!("write_stdout failed: {e}")))?;
-  io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
-}
-
-/// `IO.flush_stdout : IO Unit` — flush stdout. Nullary (like
+/// `flush_stdout : RawIO Unit` — flush stdout (Rust's `Stdout`, which
+/// `stream_write` on slot 1 writes through). Nullary (like
 /// `current_time`), so no argument check.
 fn flush_stdout(natives: &NativeTable) -> Result<Value, CoreEvalError> {
   use std::io::Write;
-  let stdout = std::io::stdout();
-  let mut lock = stdout.lock();
-  lock
-    .flush()
-    .map_err(|e| CoreEvalError::NativeArgError(format!("flush_stdout failed: {e}")))?;
-  io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
+  if let Err(e) = std::io::stdout().lock().flush() {
+    die_on_stdio_epipe(&e);
+    return Err(CoreEvalError::NativeArgError(format!(
+      "flush_stdout failed: {e}"
+    )));
+  }
+  raw_io_wrap(natives, unit_value())
 }
 
-/// `IO.write_stderr (s : String) : IO Unit` — write `s` to stderr
-/// verbatim, no trailing newline, and FLUSH it: a log line that sits in
-/// a buffer until process exit is no log line at all for a server that
-/// never exits. A native of its own rather than `IO.write_stdout` plus
-/// a stream argument, so a log line can never interleave into the
-/// protocol stream on fd 1.
-fn write_stderr(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError(
-      "write_stderr needs 1 arg".into(),
-    ));
+/// The process's own stdout/stderr die of SIGPIPE when the reader goes
+/// away, as `runtime.c`'s `stdio_die_on_epipe` does: Rust ignores
+/// SIGPIPE, so without this `prog | head` would keep printing into
+/// nothing (the stdio writers discard their errors) instead of
+/// stopping.
+fn die_on_stdio_epipe(e: &std::io::Error) {
+  if e.kind() == std::io::ErrorKind::BrokenPipe {
+    unsafe {
+      libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+      libc::raise(libc::SIGPIPE);
+    }
   }
-  let s = extract_string(&args[0])?;
-  use std::io::Write;
-  let stderr = std::io::stderr();
-  let mut lock = stderr.lock();
-  lock
-    .write_all(s.as_bytes())
-    .map_err(|e| CoreEvalError::NativeArgError(format!("write_stderr failed: {e}")))?;
-  lock
-    .flush()
-    .map_err(|e| CoreEvalError::NativeArgError(format!("write_stderr failed: {e}")))?;
-  io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
 }
 
 fn string_to_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -2045,10 +1940,15 @@ fn stream_write(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
     CoreEvalError::NativeArgError(format!("stream_write: no buffer for handle {id}"))
   })?;
   let written = fd_target(handle, "stream_write")?.and_then(|t| match t {
-    FdTarget::Stdout => std::io::stdout().write_all(&bytes),
+    FdTarget::Stdout => std::io::stdout()
+      .write_all(&bytes)
+      .inspect_err(die_on_stdio_epipe),
     FdTarget::Stderr => {
       let mut err = std::io::stderr();
-      err.write_all(&bytes).and_then(|()| err.flush())
+      err
+        .write_all(&bytes)
+        .and_then(|()| err.flush())
+        .inspect_err(die_on_stdio_epipe)
     }
     FdTarget::File(mut f) => f.write_all(&bytes),
     FdTarget::Stdin => Err(std::io::Error::from_raw_os_error(libc::EBADF)),
@@ -2948,12 +2848,14 @@ mod tests {
     Value::Lit(IrLit::Str(s.into()))
   }
 
-  /// The stdin readers must not read ahead: after one line or one byte,
-  /// the rest must still be in the KERNEL, where `poll(2)` (tui's
-  /// `term_ctl` op 3) and the next raw read can see it. A pipe stands in
-  /// for fd 0.
+  /// Stdin reads must not read ahead: after one line or one byte, the
+  /// rest must still be in the KERNEL, where `poll(2)` (tui's
+  /// `term_ctl` op 3) and the next raw read can see it. A slot-0
+  /// `stream_read` is one `read_fd_raw`, and `IO.read_line` is one
+  /// 1-byte `stream_read` per byte (`FdStream.read_line_bounded`), so
+  /// that is what the line read below does. A pipe stands in for fd 0.
   #[test]
-  fn test_raw_fd_readers_leave_unread_bytes_pollable() {
+  fn test_raw_fd_reads_leave_unread_bytes_pollable() {
     let mut fds = [0 as libc::c_int; 2];
     assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
     let (rd, wr) = (fds[0], fds[1]);
@@ -2969,8 +2871,16 @@ mod tests {
       }];
       unsafe { libc::poll(p.as_mut_ptr(), 1, 0) }
     };
+    let read_line = |fd: libc::c_int| {
+      let mut line = Vec::new();
+      let mut byte = [0u8; 1];
+      while read_fd_raw(fd, &mut byte).unwrap() == 1 && byte[0] != b'\n' {
+        line.push(byte[0]);
+      }
+      line
+    };
 
-    assert_eq!(read_line_fd(rd, Vec::new()).unwrap(), Some(b"ab".to_vec()));
+    assert_eq!(read_line(rd), b"ab".to_vec());
     let mut byte = [0u8; 1];
     assert_eq!(read_fd_raw(rd, &mut byte).unwrap(), 1);
     assert_eq!(byte[0], 0x1b);
@@ -2981,26 +2891,7 @@ mod tests {
     );
 
     unsafe { libc::close(wr) };
-    assert_eq!(read_line_fd(rd, Vec::new()).unwrap(), Some(b"[A".to_vec()));
-    assert_eq!(read_line_fd(rd, Vec::new()).unwrap(), None);
-    unsafe { libc::close(rd) };
-  }
-
-  /// A carried prefix (stdin's `STDIN_CARRY`) starts the line: "é" split
-  /// as 0xC3 already taken + 0xA9 still on the fd reads back whole.
-  #[test]
-  fn test_read_line_fd_starts_with_the_carry() {
-    let mut fds = [0 as libc::c_int; 2];
-    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-    let (rd, wr) = (fds[0], fds[1]);
-    let rest = b"\xA9t\n";
-    let wrote = unsafe { libc::write(wr, rest.as_ptr().cast(), rest.len()) };
-    assert_eq!(wrote, rest.len() as isize);
-    unsafe { libc::close(wr) };
-    let line = read_line_fd(rd, vec![0xC3]).unwrap().unwrap();
-    assert_eq!(String::from_utf8(line).unwrap(), "\u{e9}t");
-    // A carry with nothing after it at EOF is still a line, not EOF.
-    assert_eq!(read_line_fd(rd, vec![b'x']).unwrap(), Some(b"x".to_vec()));
+    assert_eq!(read_line(rd), b"[A".to_vec());
     unsafe { libc::close(rd) };
   }
 

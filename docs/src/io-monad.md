@@ -295,22 +295,26 @@ The standard library provides `Monad IO` and `Monad Id`; notably **not**
 
 ## Native Functions
 
-IO operations are implemented as natives that call into Rust:
+IO operations bottom out in natives, implemented by the Rust host and by the
+compiled backend's C runtime:
 
 ```monad,ignore
-#[native print_str]
-def IO.println (s : String) : IO Unit
+#[native "get_env"]
+pub def IO.get_env (s : String) : IO (Option String)
 ```
 
 The `#[native name]` attribute marks a definition as implemented outside Monad,
 and such a definition has no body. The name in the attribute is the runtime's
 identifier for the operation, which is not always the Monad-side name — the
-native behind `IO.println` is `print_str`.
+native behind `IO.read_stdin_exact` is a `priv` `read_stdin_exact` returning
+`RawIO String`, which the public def wraps. Not every IO operation is a native:
+`IO.println`, `IO.write_stdout`, `IO.write_stderr` and `IO.read_line` are
+ordinary Monad over `std/stream.mo`'s byte streams.
 
-There are 165 natives declared across `init/` and `std/`. Three — `eq_rec`, `string_to_chars`, and
+There are 170 natives declared across `init/` and `std/`. Three — `eq_rec`, `string_to_chars`, and
 `string_from_chars` — are declared but not implemented anywhere, and calling one
 fails at run time with `unknown native`. The compiler backend wires a subset of
-the rest; see [Compiling and Running](./compiling.md#native-coverage). The nine
+the rest; see [Compiling and Running](./compiling.md#native-coverage). The four
 `tcp_*` natives above are among the wired ones, but only in the self-hosted
 backend — the Rust host has no TCP implementation at all.
 

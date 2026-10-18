@@ -118,3 +118,23 @@ pub def compile_source_run_piped_expect (source : String) (basename : String) (e
         },
     }
 }
+
+/// Like `compile_source_run_expect`, but the binary's stdin is the output
+/// of the shell command `feed` (`<feed> | bin`; the pipeline's status is
+/// the binary's).
+#[partial]
+pub def compile_source_run_stdin_expect (source : String) (basename : String) (feed : String) (expected : I64) : IO Bool := do {
+    let built <- build_source_binary source basename;
+    match built {
+        Result.err e => do {
+            println (basename ++ ": " ++ e);
+            return false
+        },
+        Result.ok bin => do {
+            let exec_result <- exec_cmd "bash" ["-c", feed ++ " | \"$0\"", bin];
+            exec_cmd "rm" ["-f", bin];
+            println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
+            return (exec_result == expected)
+        },
+    }
+}

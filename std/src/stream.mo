@@ -147,9 +147,9 @@ pub def FdStream.open_file (path : String) (mode : I64) : IO (Result StreamError
 /// The raw descriptor, for FFI calls that take one (`SSL_set_fd`).
 pub def FdStream.raw_fd (s : FdStream) : IO I32 := IO.mk (stream_fd s)
 
-/// Writes to stdout share the C runtime's stdio buffer (Rust's
-/// `Stdout` when interpreted), so they interleave in order with
-/// `IO.println`; `IO.flush_stdout` still flushes them.
+/// Writes to stdout go through the C runtime's stdio buffer (Rust's
+/// `Stdout` when interpreted) -- `IO.println` and `IO.write_stdout` are
+/// exactly such writes -- and `IO.flush_stdout` flushes them.
 pub def FdStream.stdin : FdStream := std_fd 0
 pub def FdStream.stdout : FdStream := std_fd 1
 /// Written unbuffered -- a log line must not wait for a flush.

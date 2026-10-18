@@ -42,6 +42,13 @@ pub fn take<T: 'static>(id: u64) -> Option<T> {
     .and_then(|obj| obj.downcast::<T>().ok().map(|b| *b))
 }
 
+/// How many objects are registered -- a leak probe for tests (a
+/// `ByteBuf` read and never freed stays here for the process's life).
+pub fn live_count() -> usize {
+  let table = HANDLE_TABLE.lock().expect("handle table poisoned");
+  table.objects.len()
+}
+
 pub fn drop_handle(id: u64) {
   let mut table = HANDLE_TABLE.lock().expect("handle table poisoned");
   table.objects.remove(&id);

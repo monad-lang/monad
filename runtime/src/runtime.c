@@ -893,6 +893,14 @@ static void stdio_die_on_epipe(int failed) {
     }
 }
 
+/* BOOTSTRAP SHIM, not a native: nothing in this tree declares or calls
+   it. `IO.println` is ordinary Monad over `std/stream.mo` now, but a
+   host compiler built before that change (the published nightly, an
+   older rung) still inlines every `println` call to this symbol through
+   its `native_op_table` key, and links the CHECKOUT's runtime -- so
+   without it such a host cannot build this tree. Delete it once a
+   nightly without the key is the oldest host anyone builds with
+   (io-streams plan, Phase 6). */
 void monad_print_str(char* s) {
     if (s) {
         errno = 0;
@@ -988,8 +996,8 @@ char* monad_i64_to_string(int64_t n) {
    `String.concat` result printed nothing meaningful). Same bare-`char*`
    convention as `monad_i64_to_string` just above (this backend's Strings
    are never `alloc_string`'s boxed `StringObj` in practice). NULL-safe:
-   a NULL operand is treated as empty, matching `monad_print_str`'s own
-   NULL tolerance elsewhere in this file, since a still-missing/upstream
+   a NULL operand is treated as empty, matching the NULL tolerance of
+   the other String natives in this file, since a still-missing/upstream
    String native could plausibly hand this a NULL rather than a real
    empty string. */
 char* monad_string_concat(char* a, char* b) {
@@ -1256,14 +1264,14 @@ int64_t monad_string_hash(char* s) {
    Each head is `argv[i]` directly -- a raw, already-NUL-terminated
    `char*`, valid for the process's whole lifetime -- NOT alloc_string's
    boxed StringObj. Every native that consumes a "String" value
-   (monad_print_str, ...) expects the SAME representation string
+   (ByteBuf.of_string, ...) expects the SAME representation string
    LITERALS compile to: a bare `char*` (compile_lit_ir's Literal.str
    case emits a plain LLVM global constant, no StringObj wrapping at
    all). Boxing argv here via alloc_string produced a value with a
    totally different, incompatible layout (StringObj's `{ header;
    length; data[] }`, data offset well past the pointer's start) --
-   `monad_print_str` reading straight from that pointer as if it were a
-   C string just printed nothing/garbage from the header bytes instead
+   the former `monad_print_str` reading straight from that pointer as if
+   it were a C string just printed nothing/garbage from the header bytes instead
    of the actual argument, the moment ANY CLI arg (as opposed to a
    literal string, e.g. hello.mo's own "no arguments" fallback) reached
    it. This codegen has no unified boxed-vs-raw string representation
@@ -1845,14 +1853,10 @@ void* monad_proc_write(int64_t handle, char* s) {
  * `read_line` doc records: a frame without its newline is a truncated
  * message, not a message, and the Rust host's `proc_line` agrees.
  *
- * Deliberately NOT shared with `monad_read_line` below, its one
- * near-twin in this file: the two differ on exactly three policies that
- * would all have to become flags -- a partial line at EOF (discarded
- * here, delivered there), a read error (`Result.err` here, EOF there),
- * and buffer ownership (malloc + copy into GC memory here, because the
- * payload is wrapped in a `Result`; the buffer itself is handed back
- * there, because nothing wraps it). A shared core with three policy
- * flags would be longer than the two readers.
+ * Its former stdin near-twin is now `std/stream.mo`'s
+ * `FdStream.read_line_bounded`, whose `PartialLinePolicy` is the first
+ * of the policies the two differed on; this reader joins it in the
+ * io-streams plan's Phase 5.
  *
  * Byte-at-a-time, deliberately: a per-slot pushback buffer would make
  * this one syscall per line instead of per byte, at the cost of
@@ -2483,9 +2487,9 @@ int64_t monad_bytebuf_len(int64_t b) {
    cannot know, so `std/stream.mo`'s `stream_result` decodes it.
 
    stdout and stderr are written through libc's stdio buffers, not with
-   `write(2)`, so a stream write interleaves in order with `IO.println`
-   (`printf`) and is flushed by `IO.flush_stdout`; stderr is flushed
-   after every write, as `monad_write_stderr` does. */
+   `write(2)`, so writes interleave in order with any remaining
+   `printf`/`fprintf` user and are flushed by `IO.flush_stdout`; stderr
+   is flushed after every write (a log line must not wait). */
 
 /* errno -> `StreamErrorKind`'s declaration order (std/src/stream.mo).
    Code 8, `host_unresolved`, has no errno: `tcp_connect`'s getaddrinfo
@@ -2624,87 +2628,27 @@ int64_t monad_std_fd(int64_t which) {
 }
 
 /* ─── Raw stdio (`std/io.mo`'s raw-stdio group) ──────────────────────
-   The byte-level half of stdio, added for the language server (`lsp`):
-   it writes LSP frames to stdout with no extra newline, logs to stderr
-   without corrupting its own protocol stream on fd 1, and reads a stdin
-   byte stream whose frames the OS is free to split across reads.
-   `monad_print_str` (above) and `monad_read_file` can express none of
-   that -- the first always appends '\n' and cannot be aimed anywhere
-   but fd 1 (or 2, at all), the second takes a path.
+   The two stdio operations the byte streams above cannot express:
+   `read_stdin_exact`'s fill-to-n read and a real stdout flush. Writing
+   to stdout/stderr and `IO.read_line` are `std/stream.mo` streams on
+   fds 0-2 (`monad_stream_read`/`monad_stream_write`). Both are `RawIO`
+   natives (`raw_io_passthrough`, lang/src/codegen/natives.mo) returning
+   their raw payload.
 
    Read the same group's comment in `std/io.mo` for the contract, and
-   `core/src/core_native.rs`'s `read_stdin_exact` family for the Rust
+   `core/src/core_native.rs`'s `read_stdin_exact` for the Rust
    evaluator's half. That half needs a UTF-8-carry subtlety this one
    does not: bytes are stored raw here, which is exactly what a byte
    stream wants, so no chunk boundary can surprise this side.
 
-   A returned `String` is a bare NUL-terminated `char*`, the same
-   representation every other String native here returns and the one
-   `compile_lit_ir`'s string literals have (see `monad_print_str`'s own
-   notes on the boxed `StringObj`). The `IO Unit` natives return the
-   Unit constructor pointer via `tcp_unit` just above --
-   `io_passthrough` (`lang/src/codegen/natives.mo`) IO-wraps a native's
-   raw result, so an `IO Unit` native returns the Unit ctor rather than
-   nothing at all.
-
-   Every read here goes through `read(0, ...)` rather than stdio
+   Every stdin read goes through `read(0, ...)` rather than stdio
    (`getchar`/`fgets`), and that is load-bearing rather than a
    preference: stdio reads a whole block ahead into its own buffer, so
-   a `getchar`-based `monad_read_line` would silently swallow the bytes
-   the caller's next `monad_read_stdin_exact` is looking for -- the
-   protocol stream would desynchronize with no error anywhere. Nothing
-   else in this runtime touches fd 0, so one reader is all there is. */
+   the bytes after a line would be swallowed before the caller's next
+   `read_stdin_exact` -- the protocol stream would desynchronize with no
+   error anywhere. */
 
-/* One line from stdin, WITHOUT its trailing newline. `Option.none`
-   (tag 3) when nothing at all was read, `Option.some line` (tag 4)
-   otherwise -- the same fixed tags `monad_get_env` above builds, and
-   the same ones `monad_array_get` / runtime.mo's `rt_tag_some` use.
-   A final line with no trailing newline is still `some`, and `\r` is
-   deliberately NOT stripped (the caller wants the bytes the peer
-   actually sent).
-
-   Byte-at-a-time deliberately: anything that reads a block ahead would
-   consume bytes belonging to the caller's NEXT read. A line is short,
-   so the syscall per byte costs nothing worth optimizing against a
-   desynchronized protocol stream. Its near-twin `proc_read_line_off`
-   (above) explains why the two readers stay separate. */
-char* monad_read_line(void) {
-    size_t cap = 64;
-    size_t len = 0;
-    /* Did the stream yield anything at all? A bare "\n" reads no
-       characters but is still a line (`some ""`), whereas reading
-       nothing at all is EOF (`none`) -- so the two cases cannot be told
-       apart from `len` alone. */
-    int saw_byte = 0;
-    char* buf = (char*)monad_alloc_atomic(cap);
-    if (!buf) return (char*)alloc_constructor(3, 0);
-    for (;;) {
-        char c;
-        ssize_t got = read(0, &c, 1);
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            break;                    /* a read error is EOF to the caller */
-        }
-        if (got == 0) break;          /* EOF */
-        saw_byte = 1;
-        if (c == '\n') break;         /* the terminator is not part of the line */
-        if (len + 1 >= cap) {
-            size_t grown_cap = cap * 2;
-            char* grown = (char*)GC_realloc(buf, grown_cap);
-            if (!grown) break;        /* OOM: hand back what we have */
-            buf = grown;
-            cap = grown_cap;
-        }
-        buf[len++] = c;
-    }
-    if (!saw_byte) return (char*)alloc_constructor(3, 0);   /* Option.none */
-    buf[len] = '\0';
-    Constructor* some = (Constructor*)alloc_constructor(4, 1);
-    if (some) some->fields[0] = buf;
-    return (char*)some;
-}
-
-/* `IO.read_stdin_exact (n : I64) : IO String` -- blocking read of UP TO
+/* `read_stdin_exact : I64 -> RawIO String` -- blocking read of UP TO
    `n` bytes from stdin, returning exactly the bytes read. The result
    being SHORTER than `n` (including "") means EOF to the caller, which
    is what makes that a reliable end-of-stream test rather than "the OS
@@ -2715,7 +2659,7 @@ char* monad_read_line(void) {
    The result is NUL-terminated but its LENGTH is the caller's count of
    bytes, not `strlen` -- a frame body may legitimately contain NULs.
    Note that a String with an embedded NUL is a representation this
-   runtime's other String consumers (`monad_print_str`, `strlen`-based
+   runtime's other String consumers (`ByteBuf.of_string`, `strlen`-based
    comparisons) cannot round-trip; the caller slices it with
    `String.slice`, which is length-based (`monad_string_slice`), so the
    byte stream survives as far as the framing reader needs it. */
@@ -2752,39 +2696,12 @@ char* monad_read_stdin_exact(int64_t n) {
     return buf;
 }
 
-/* `IO.write_stdout (s : String) : IO Unit` -- `s` to stdout VERBATIM:
-   no trailing newline (the whole difference from `monad_print_str`) and
-   no flush (a frame's pieces go out first, then `monad_flush_stdout`
-   once). Null-tolerant like its neighbours. */
-void* monad_write_stdout(char* s) {
-    if (s) {
-        errno = 0;
-        stdio_die_on_epipe(fputs(s, stdout) == EOF);
-    }
-    return tcp_unit();
-}
-
-/* `IO.flush_stdout : IO Unit` -- needed because stdout is block-buffered
+/* `flush_stdout : RawIO Unit` -- needed because stdout is block-buffered
    when it is a pipe (which is how a language server's peer reads it), so
    a written frame stays invisible until this runs. */
 void* monad_flush_stdout(void) {
     errno = 0;
     stdio_die_on_epipe(fflush(stdout) == EOF);
-    return tcp_unit();
-}
-
-/* `IO.write_stderr (s : String) : IO Unit` -- `s` to stderr verbatim,
-   no trailing newline, and FLUSHED at once: a log line that sits in a
-   buffer until process exit is no log line at all for a server that
-   never exits. A native of its own rather than an fd argument to the
-   one above so that a log line can never interleave into the protocol
-   stream the peer is parsing. */
-void* monad_write_stderr(char* s) {
-    if (s) {
-        errno = 0;
-        int failed = fputs(s, stderr) == EOF;
-        stdio_die_on_epipe(fflush(stderr) == EOF || failed);
-    }
     return tcp_unit();
 }
 

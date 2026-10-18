@@ -304,7 +304,7 @@ Attributes are written `#[name arg1 arg2]` — **space-separated arguments, no
 parentheses or commas**:
 
 ```monad,ignore
-#[native print_str]         // implemented in Rust; no body follows
+#[native get_env]           // implemented by the runtime; no body follows
 #[test]                     // a test, run by `monad test`
 #[terminating]              // assert well-foundedness; skip the termination check
 #[partial]                  // this definition may not terminate
@@ -320,8 +320,8 @@ Attributes come before visibility: `#[test] pub def ...`, not
 ## Native Functions
 
 ```monad,ignore
-#[native print_str]
-def IO.println (s : String) : IO Unit
+#[native get_env]
+def IO.get_env (s : String) : IO (Option String)
 
 #[native "num_add"]
 def I64.add (a b : I64) : I64
