@@ -3,11 +3,11 @@
 /// length; nothing else in `std/` exposes one).
 ///
 /// A `ByteBuf` records its length: `length` is the byte count it was
-/// created with, and `to_list`'s `len` is clamped to that, so an
-/// over-large `len` cannot read past the allocation. Give `to_list`
-/// `SSL_read`'s return to read only what actually came back. Values are
-/// opaque like `Socket` (std/io.mo): never pattern-match, compare or
-/// print one.
+/// created with (or later `truncate`d to), and `to_list`'s `len` is
+/// clamped to that, so an over-large `len` cannot read past the
+/// allocation. `truncate` a buffer to `SSL_read`'s return to keep only
+/// what actually came back. Values are opaque like `FdStream`
+/// (std/stream.mo): never pattern-match, compare or print one.
 ///
 /// Compiled, a `ByteBuf` is the heap kind `plans/bootstrapping/
 /// mlir-codegen.md`'s `Buf E` generalises ("a fourth heap kind"): a
@@ -38,7 +38,8 @@ pub def ByteBuf.alloc (n : I64) : IO ByteBuf
 #[native "bytebuf_ptr"]
 pub def ByteBuf.ptr (b : ByteBuf) : Ptr
 
-/// How many bytes the buffer was created with.
+/// How many bytes the buffer holds: its creation size, or what
+/// `truncate` cut it to.
 #[native "bytebuf_len"]
 pub def ByteBuf.length (b : ByteBuf) : I64
 
@@ -68,8 +69,18 @@ pub def ByteBuf.to_string (b : ByteBuf) (len : I64) : IO String :=
 pub def ByteBuf.of_string (s : String) : IO ByteBuf :=
   IO.mk (bytebuf_of_string s)
 
+/// Shrink the recorded length to `n`, keeping the first `n` bytes; `n`
+/// is clamped to `[0, length]`, so this never grows a buffer. The
+/// allocation itself is unchanged -- the bytes past `n` just stop
+/// being part of it.
+pub def ByteBuf.truncate (b : ByteBuf) (n : I64) : IO Unit :=
+  IO.mk (bytebuf_truncate b n)
+
 #[native "bytebuf_to_string"]
 priv def bytebuf_to_string (b : ByteBuf) (len : I64) : RawIO String
 
 #[native "bytebuf_of_string"]
 priv def bytebuf_of_string (s : String) : RawIO ByteBuf
+
+#[native "bytebuf_truncate"]
+priv def bytebuf_truncate (b : ByteBuf) (n : I64) : RawIO Unit

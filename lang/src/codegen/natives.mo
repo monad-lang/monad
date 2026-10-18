@@ -643,6 +643,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // the C side hands back a bare string / `BufObj` pointer.
             else if String.beq target "bytebuf_to_string" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_to_string")
             else if String.beq target "bytebuf_of_string" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_of_string")
+            // `ByteBuf.truncate`'s raw half: a `RawIO Unit`, same kind.
+            else if String.beq target "bytebuf_truncate" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_truncate")
             // `std/stream.mo`'s byte streams: the five effectful ones are
             // `RawIO` natives behind `.mo` wrappers (`raw_io_passthrough`;
             // the `Result`/`Unit`/fd words come back raw), and `std_fd` is
@@ -954,6 +956,8 @@ def runtime_declarations : List LLVMDeclaration :=
     let d98 := mk_decl "monad_stream_close" (List.cons "i64" List.empty) "i64" in
     let d99 := mk_decl "monad_stream_fd" (List.cons "i64" List.empty) "i64" in
     let d100 := mk_decl "monad_std_fd" (List.cons "i64" List.empty) "i64" in
+    // `ByteBuf.truncate` (runtime.c): buffer + new length in, Unit out.
+    let d101 := mk_decl "monad_bytebuf_truncate" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
@@ -961,7 +965,7 @@ def runtime_declarations : List LLVMDeclaration :=
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d68, d69, d70, d71, d72,
      d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d86, d87,
-     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100]
+     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

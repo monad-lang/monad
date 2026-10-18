@@ -15,7 +15,7 @@
 /// instance at run time, and constrained instance dispatch is exactly
 /// what this backend does not honor (`unresolved global: BEq.beq`).
 
-use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string}
+use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string, ByteBuf.truncate}
 use std::list {List.length}
 
 def empty_bytes : List U8 := List.empty
@@ -210,4 +210,29 @@ def test_of_string_empty_is_a_zero_length_buffer : IO Bool := do {
     let n := ByteBuf.length b;
     let _ <- ByteBuf.free b;
     return (I64.beq n 0 && String.beq s "")
+}
+
+/// `truncate` keeps the first `n` bytes: both `length` and an over-long
+/// `to_list` see only them -- what `Tls.read` relies on to hand back
+/// exactly `SSL_read`'s count.
+#[test]
+def test_truncate_shrinks_length_and_contents : IO Bool := do {
+    let b <- ByteBuf.of_list three_bytes;
+    let _ <- ByteBuf.truncate b 2;
+    let xs <- ByteBuf.to_list b 3;
+    let len : I64 := ByteBuf.length b;
+    let _ <- ByteBuf.free b;
+    return (I64.beq len 2 && bytes_eq xs first_two)
+}
+
+/// An `n` past the length never grows the buffer; a negative one empties it.
+#[test]
+def test_truncate_clamps : IO Bool := do {
+    let b <- ByteBuf.of_list three_bytes;
+    let _ <- ByteBuf.truncate b 10;
+    let grown : I64 := ByteBuf.length b;
+    let _ <- ByteBuf.truncate b (0 - 1);
+    let emptied : I64 := ByteBuf.length b;
+    let _ <- ByteBuf.free b;
+    return (I64.beq grown 3 && I64.beq emptied 0)
 }

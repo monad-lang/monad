@@ -2528,6 +2528,18 @@ void* monad_bytebuf_of_string(char* s) {
     return obj;
 }
 
+/* `bytebuf_truncate : ByteBuf -> I64 -> RawIO Unit` -- shrink the
+   recorded length to `n`, clamped to `[0, len]`; the allocation stays as
+   it is. Returned raw; `raw_io_passthrough` wraps it. */
+void* monad_bytebuf_truncate(void* buf, int64_t n) {
+    BufObj* obj = (BufObj*)buf;
+    if (obj) {
+        if (n < 0) n = 0;
+        if (n < obj->len) obj->len = n;
+    }
+    return tcp_unit();
+}
+
 /* `IO.ByteBuf.free (b : ByteBuf) : IO Unit` -- no-op (see the section
    comment); returns the Unit ctor like every `IO Unit` native. */
 void* monad_bytebuf_free(void* buf) {

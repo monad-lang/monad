@@ -367,6 +367,7 @@ pub fn exec_native(
     "bytebuf_free" => bytebuf_free(args, natives),
     "bytebuf_to_string" => bytebuf_to_string(args, natives),
     "bytebuf_of_string" => bytebuf_of_string(args, natives),
+    "bytebuf_truncate" => bytebuf_truncate(args, natives),
     // `std/stream.mo`'s byte streams -- `RawIO` natives behind `.mo`
     // wrappers, except the pure `std_fd` (in `PURE_NATIVES`).
     "stream_open" => stream_open(args, natives),
@@ -1798,6 +1799,23 @@ fn bytebuf_of_string(args: &[Value], natives: &NativeTable) -> Result<Value, Cor
   };
   let id = crate::runtime::global::register(s.as_bytes().to_vec());
   raw_io_wrap(natives, handle_value(id))
+}
+
+/// `bytebuf_truncate : ByteBuf -> I64 -> RawIO Unit` -- shrink the
+/// buffer to its first `n` bytes, `n` clamped to `[0, len]` (never
+/// grows, like the compiled `BufObj`'s `len` store).
+fn bytebuf_truncate(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "bytebuf_truncate needs 2 args".into(),
+    ));
+  }
+  let id = extract_handle_id(&args[0])?;
+  let n = extract_int(&args[1])?.max(0) as usize;
+  crate::runtime::global::with_mut::<Vec<u8>, _>(id, |v| v.truncate(n)).ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("bytebuf_truncate: no buffer for handle {id}"))
+  })?;
+  raw_io_wrap(natives, unit_value())
 }
 
 // --- `std/stream.mo`'s byte streams --------------------------------

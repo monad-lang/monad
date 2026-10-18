@@ -26,6 +26,14 @@ pub fn with<T: 'static, R>(id: u64, f: impl FnOnce(&T) -> R) -> Option<R> {
     .and_then(|obj| obj.downcast_ref::<T>().map(f))
 }
 
+pub fn with_mut<T: 'static, R>(id: u64, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+  let mut table = HANDLE_TABLE.lock().expect("handle table poisoned");
+  table
+    .objects
+    .get_mut(&id)
+    .and_then(|obj| obj.downcast_mut::<T>().map(f))
+}
+
 pub fn take<T: 'static>(id: u64) -> Option<T> {
   let mut table = HANDLE_TABLE.lock().expect("handle table poisoned");
   table
@@ -68,6 +76,13 @@ mod tests {
   fn test_with_nonexistent_id() {
     let result = with::<i64, _>(999, |v| *v);
     assert_eq!(result, None);
+  }
+
+  #[test]
+  fn test_with_mut_updates_in_place() {
+    let id = register(vec![1u8, 2, 3]);
+    with_mut::<Vec<u8>, _>(id, |v| v.truncate(1));
+    assert_eq!(with::<Vec<u8>, _>(id, |v| v.clone()), Some(vec![1u8]));
   }
 
   #[test]
