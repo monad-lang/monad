@@ -26,6 +26,7 @@
 // '-fzero-call-used-regs=used-gpr' for target 'riscv64-unknown-linux-gnu'".
 
 use std::process {Proc.capture}
+use std::io {IO.get_env}
 open IO {println}
 
 /// One target: the spelling the toolchain is addressed by, the spelling llc
@@ -51,7 +52,129 @@ pub def TargetSpec.known_targets : List TargetSpec := [
         "-mattr=+m,+a,+f,+d,+c", "-target-abi=lp64d", "-relocation-model=pic",
     ],
     TargetSpec.mk "wasm32-unknown-wasip1" "" List.empty,
+    TargetSpec.mk "wasm32-unknown-unknown" "" List.empty,
 ]
+
+/// The two wasm profiles behind the wasm triples. Everything else is the
+/// host's native target.
+pub type TargetKind {
+    native,
+    wasi,
+    web,
+}
+
+pub def TargetKind.name (kind : TargetKind) : String := match kind {
+    TargetKind.native => "native",
+    TargetKind.wasi => "wasi",
+    TargetKind.web => "web",
+}
+
+pub def TargetKind.is_wasm (kind : TargetKind) : Bool := match kind {
+    TargetKind.native => false,
+    TargetKind.wasi => true,
+    TargetKind.web => true,
+}
+
+pub def TargetKind.of_triple (triple : String) : TargetKind :=
+    if String.starts_with "wasm32" triple
+    then if String.contains triple "wasi" then TargetKind.wasi else TargetKind.web
+    else TargetKind.native
+
+/// Everything `llvm/src/link.mo` needs to know about a target beyond the
+/// llc triple: which C compiler and flags, which runtime platform define,
+/// and the output suffix. Kept OFF `TargetSpec` so that its nine
+/// construction sites and every existing caller stay unchanged.
+pub struct TargetPlan {
+    kind : TargetKind,
+    triple : String,
+    clang : String,
+    compile_flags : List String,
+    link_flags : List String,
+    runtime_defines : List String,
+    output_ext : String,
+}
+
+/// The plan for a native target: same bare `clang`, no flags, no suffix.
+pub def TargetPlan.native_plan (triple : String) : TargetPlan :=
+    TargetPlan.mk TargetKind.native triple "clang" List.empty List.empty List.empty ""
+
+/// A wasm plan, addressed through the wasi-sdk `clang` by absolute path.
+/// This is the deliberate exception to the "do not pass --target to the C
+/// compiler" rule above: wasi-sdk IS the target toolchain, not a nixpkgs
+/// cc-wrapper being shimmed.
+pub def TargetPlan.for_wasm (kind : TargetKind) (triple : String) (clang : String) (sysroot : String) : TargetPlan :=
+    match kind {
+        TargetKind.wasi => TargetPlan.mk kind triple clang
+            ["--target=" ++ triple, "--sysroot=" ++ sysroot]
+            ["--target=" ++ triple, "--sysroot=" ++ sysroot, "-Wl,-z,stack-size=8388608"]
+            ["-DMONAD_TARGET_WASI"] ".wasm",
+        TargetKind.web => TargetPlan.mk kind triple clang
+            ["--target=wasm32-unknown-unknown", "-ffreestanding", "-fno-builtin"]
+            ["--target=wasm32-unknown-unknown", "-nostdlib", "-Wl,--no-entry",
+             "-Wl,--export-memory",
+             // `monad_main` is exported by runtime/src/platform_web.c's
+             // `__attribute__((export_name("monad_main")))`; a
+             // `--export=monad_main` here would look for a C symbol of that
+             // name and fail, because the C function is `monad_web_entry`.
+             "-Wl,--export=monad_alloc", "-Wl,--export=monad_string_length",
+             "-Wl,--export=monad_i64_to_string", "-Wl,-z,stack-size=1048576"]
+            ["-DMONAD_TARGET_WEB"] ".wasm",
+        TargetKind.native => TargetPlan.native_plan triple,
+    }
+
+/// The plan for `spec`. Native resolves without touching the environment;
+/// wasm requires `WASI_SDK_PATH` and a working `bin/clang`.
+#[partial]
+pub def TargetPlan.resolve (spec : TargetSpec) : IO (Result String TargetPlan) := do {
+    let kind := TargetKind.of_triple spec.triple;
+    match kind {
+        TargetKind.native => return (Result.ok (TargetPlan.native_plan spec.triple)),
+        _ => do {
+            let env <- IO.get_env "WASI_SDK_PATH";
+            match env {
+                Option.none => return (Result.err (TargetPlan.missing_sdk_message spec.triple kind)),
+                Option.some raw => do {
+                    let root := String.trim raw;
+                    if String.is_empty root then
+                        return (Result.err (TargetPlan.missing_sdk_message spec.triple kind))
+                    else do {
+                        let clang := root ++ "/bin/clang";
+                        let sysroot := root ++ "/share/wasi-sysroot";
+                        let cap <- Proc.capture clang ["--version"];
+                        match cap {
+                            Pair.pair code _out =>
+                                if code == 0
+                                then return (Result.ok (TargetPlan.for_wasm kind spec.triple clang sysroot))
+                                else return (Result.err (TargetPlan.bad_sdk_message root clang)),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[partial]
+def TargetPlan.missing_sdk_message (triple : String) (kind : TargetKind) : String :=
+    "error: target `" ++ triple ++ "` (" ++ TargetKind.name kind ++ ") needs the wasi-sdk toolchain, but `WASI_SDK_PATH` is not set. Set it to the wasi-sdk root (the directory containing bin/clang and share/wasi-sysroot), or enter the project dev shell (devenv pins one)."
+
+#[partial]
+def TargetPlan.bad_sdk_message (root : String) (clang : String) : String :=
+    "error: WASI_SDK_PATH=`" ++ root ++ "` does not name a wasi-sdk installation: `" ++ clang ++ "` is not executable."
+
+/// `name` with the profile's output suffix, unless it already has it.
+pub def TargetPlan.output_name (plan : TargetPlan) (name : String) : String :=
+    if String.is_empty plan.output_ext then name
+    else if String.ends_with name plan.output_ext then name
+    else name ++ plan.output_ext
+
+/// The aliases the toolchain accepts for the two wasm profiles, canonicalised
+/// before the table lookup so `--target wasm32-wasip1` reaches the measured
+/// `wasm32-unknown-wasip1` entry without a `clang` probe.
+pub def TargetSpec.alias (name : String) : String :=
+    if String.beq name "wasm32-wasip1" then "wasm32-unknown-wasip1"
+    else if String.beq name "wasm32-wasi" then "wasm32-unknown-wasip1"
+    else name
 
 /// The `-mtriple` and ABI flags `llc` gets for this target. Empty for a
 /// native target, which is what keeps this change out of the native argv.
@@ -79,9 +202,9 @@ pub def TargetSpec.resolve (name : String) : IO (Result String TargetSpec) := do
         let native <- TargetSpec.native;
         return (Result.ok native)
     } else do {
-        match TargetSpec.lookup TargetSpec.known_targets name {
+        match TargetSpec.lookup TargetSpec.known_targets (TargetSpec.alias name) {
             Option.some t => return (Result.ok t),
-            Option.none => TargetSpec.resolve_unrecognised name,
+            Option.none => TargetSpec.resolve_unrecognised (TargetSpec.alias name),
         }
     }
 }
@@ -466,3 +589,26 @@ def test_empty_name_matches_no_entry : Bool :=
         Option.some _ => false,
         Option.none => true,
     }
+
+#[test]
+def test_target_kind_of_triple : Bool :=
+    String.beq (TargetKind.name (TargetKind.of_triple "wasm32-unknown-wasip1")) "wasi"
+        && String.beq (TargetKind.name (TargetKind.of_triple "wasm32-unknown-unknown")) "web"
+        && String.beq (TargetKind.name (TargetKind.of_triple "x86_64-unknown-linux-gnu")) "native"
+
+#[test]
+def test_wasm_aliases_resolve_to_a_known_entry : Bool :=
+    let t := TargetSpec.table_or (TargetSpec.alias "wasm32-wasip1") in
+    String.beq (TargetSpec.alias "wasm32-wasip1") "wasm32-unknown-wasip1"
+        && String.beq (TargetSpec.alias "wasm32-wasi") "wasm32-unknown-wasip1"
+        && String.beq t.triple "wasm32-unknown-wasip1"
+
+#[test]
+def test_wasm_output_gets_the_wasm_suffix_once : Bool :=
+    let plan := TargetPlan.for_wasm TargetKind.wasi "wasm32-unknown-wasip1" "/sdk/clang" "/sdk/sysroot" in
+    String.beq (TargetPlan.output_name plan "fib") "fib.wasm"
+        && String.beq (TargetPlan.output_name plan "fib.wasm") "fib.wasm"
+
+#[test]
+def test_native_output_name_is_untouched : Bool :=
+    String.beq (TargetPlan.output_name (TargetPlan.native_plan "x86_64-unknown-linux-gnu") "fib") "fib"

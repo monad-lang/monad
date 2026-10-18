@@ -13,6 +13,7 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::types {AttrArg, Attribute, id, id_eq}
 use llvm::ir {LLVMDeclaration, NativeOp}
+use llvm::target {TargetKind}
 use lang::codegen::symbols {
   extract_base_name, replace_dots_with_underscores, symbol_identifier,
   unqualify_def_name,
@@ -656,7 +657,7 @@ def mk_decl (name : String) (params : List String) (ret_ty : String) : LLVMDecla
     LLVMDeclaration.mk name params ret_ty
 
 #[partial]
-def runtime_declarations : List LLVMDeclaration :=
+pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // CONVENTION: every parameter and return type below is i64. The
     // backend holds Strings (and pointers generally) as raw i64 values
     // ("a String is always a bare char*/i64", `NativeWrapKind`'s own doc
@@ -670,11 +671,12 @@ def runtime_declarations : List LLVMDeclaration :=
     // assembly; the v28 binary built and ran with dozens of them), but
     // it is malformed IR per the spec and a stricter parser could
     // reject it. `test_runtime_decls_i64_convention` pins this.
+    let void_ret : String := if TargetKind.is_wasm kind then "i64" else "void" in
     let d1 := mk_decl "monad_alloc" (List.cons "i64" List.empty) "i64" in
     let d2 := mk_decl "monad_retain" (List.cons "i64" List.empty) "void" in
     let d3 := mk_decl "monad_release" (List.cons "i64" List.empty) "void" in
     let d5 := mk_decl "monad_read_file" (List.cons "i64" List.empty) "i64" in
-    let d6 := mk_decl "monad_write_file" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "void" in
+    let d6 := mk_decl "monad_write_file" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) void_ret in
     let d7 := mk_decl "monad_file_exists" (List.cons "i64" List.empty) "i64" in
     let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
@@ -691,7 +693,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // Writes a constructor's field at allocation time (compile_con_ir) --
     // alloc_constructor only ever allocates space, it has no way to
     // accept field values itself.
-    let d13 := mk_decl "monad_set_field" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "void" in
+    let d13 := mk_decl "monad_set_field" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) void_ret in
     // Fixed-arity indirect-call trampolines for a boxed, zero-capture
     // closure value (runtime.c's apply_closureN family) -- see that
     // file's own doc comment on the family. Used by
@@ -748,7 +750,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // `monad_closure_set_env`, `runtime.c`, and `compile_db_lam_ir`'s
     // own doc comment above).
     let d26 := mk_decl "monad_closure_get_env" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
-    let d27 := mk_decl "monad_closure_set_env" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "void" in
+    let d27 := mk_decl "monad_closure_set_env" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) void_ret in
     // Same "no implicit declare" requirement as every other native above
     // -- `monad_string_slice`/`monad_string_drop` (runtime.c) were added
     // together with their own `native_runtime_fn_name` wiring, see that
@@ -914,6 +916,52 @@ def runtime_declarations : List LLVMDeclaration :=
      d65, d66, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101]
+
+/// The native target's declaration list -- the historical name, kept for
+/// every existing caller and test.
+pub def runtime_declarations : List LLVMDeclaration := runtime_declarations_for TargetKind.native
+
+/// Whether an IR-facing native is available on `kind`.
+pub type NativeAvailability {
+    available,
+    unavailable (reason : String),
+}
+
+/// Natives backed by OS processes, threads, sockets, files or preopens.
+/// Both wasm profiles omit them; the target gate turns a reachable use into
+/// a compile error naming the native and the target.
+def wasm_os_only_natives : List String := [
+    "fork_io", "await_fiber", "cancel_fiber", "scope_new", "scope_fork",
+    "scope_drop", "sleep_io", "exec_cmd", "process_id", "proc_spawn",
+    "proc_write", "proc_read", "proc_wait", "tcp_", "tcp_connect",
+    "tcp_listen", "tcp_accept", "tcp_local_port", "read_file", "write_file",
+    "file_exists", "is_dir", "list_dir", "get_env", "stream_open",
+]
+
+/// Natives whose C implementation needs `snprintf`/`strtod`; the web
+/// profile is freestanding, wasi-libc has them.
+def web_only_natives : List String := ["f64_to_string", "f64_of_string"]
+
+#[terminating]
+def name_in (name : String) (names : List String) : Bool := match names {
+    List.empty => false,
+    List.cons hd tl => if String.beq name hd then true else name_in name tl,
+}
+
+pub def native_target_availability (kind : TargetKind) (target : String) : NativeAvailability :=
+    match kind {
+        TargetKind.native => NativeAvailability.available,
+        TargetKind.wasi =>
+            if name_in target wasm_os_only_natives
+            then NativeAvailability.unavailable "the wasi profile has no OS threads, processes, sockets or filesystem preopens"
+            else NativeAvailability.available,
+        TargetKind.web =>
+            if name_in target wasm_os_only_natives
+            then NativeAvailability.unavailable "the web profile has no OS threads, processes, sockets or filesystems"
+            else if name_in target web_only_natives
+            then NativeAvailability.unavailable "the web profile is freestanding: no C library float formatting"
+            else NativeAvailability.available,
+    }
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

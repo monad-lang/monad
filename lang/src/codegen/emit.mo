@@ -28,7 +28,8 @@ use runtime::natives {runtime_native_functions}
 use lang::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   strip_db_lams, validate_no_colliding_def_symbols,
-  report_elab_stats, strict_elab_enabled, validate_no_undesugared_struct_lits, validate_no_unwired_natives,
+  report_elab_stats, strict_elab_enabled, validate_no_undesugared_struct_lits,
+  validate_no_unwired_natives, validate_native_target_availability,
 }
 use lang::codegen::ctors {
   bare_ctor_tag, build_constructor_arity_map,
@@ -39,7 +40,9 @@ use lang::codegen::ctors {
 use lib::codegen::natives {
   NativeWrapKind, lookup_native, lookup_native_any, native_attr_target_name,
   native_op_table, native_runtime_fn_name, runtime_declarations,
+  runtime_declarations_for,
 }
+use llvm::target {TargetKind}
 use lib::codegen::decls {
   build_def_name_map, collect_all_decls_from_modules, def_name_str, extract_defs,
   extract_inductives, extract_structs, filter_reachable_decls, reachable_defs_from,
@@ -113,14 +116,19 @@ def empty_arities : HashMap String I64 := str_map_empty
 /// own IR emission, `llvm/src/ir.mo`) to box a bare reference to
 /// `llvm_name` as a callable value: every top-level def in this backend
 /// is compiled with the uniform `(i64, i64, ..., i64) -> i64` signature
-/// (`build_llvm_params_db`/`LLVMFunction.mk`), so this is always a
-/// `bitcast` of that function's own address down to `i8*` -- e.g. for
-/// `arity=2`: `"bitcast (i64 (i64, i64)* @foo to i8*)"`.
+/// (`build_llvm_params_db`/`LLVMFunction.mk`), so this is a `ptrtoint` of
+/// that function's own address to an i64 word -- e.g. for `arity=2`:
+/// `"ptrtoint (i64 (i64, i64)* @foo to i64)"`.
+///
+/// Deliberately NOT a `bitcast ... to i8*`: a wasm function pointer is a
+/// table index, not a linear-memory address, and LLVM lowers that bitcast
+/// to a trapping `bitcast_invalid` stub. The integer word is also what the
+/// runtime's closure ABI stores (see `alloc_closure`'s `i64 entry`).
 #[partial]
 def global_fn_ptr_text (llvm_name : String) (arity : I64) : String :=
     let fn_ty := LLVMType.fn_ (repeat_type LLVMType.i64_ arity) LLVMType.i64_ in
-    String.concat "bitcast (" (String.concat (show_llvm_type fn_ty)
-        (String.concat "* " (String.concat (llvm_symbol_ref llvm_name) " to i8*)")))
+    String.concat "ptrtoint (" (String.concat (show_llvm_type fn_ty)
+        (String.concat "* " (String.concat (llvm_symbol_ref llvm_name) " to i64)")))
 
 #[partial]
 def repeat_type (ty : LLVMType) (n : I64) : List LLVMType :=
@@ -4974,7 +4982,7 @@ pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Opti
             let all_funcs := List.append runtime_native_functions (List.append ctor_funcs compiled_funcs) in
             let funcs := ren_main_and_wrap all_funcs in
             let extra_decls := extern_declarations compiled_exts in
-            let all_decls := List.append runtime_declarations extra_decls in
+            let all_decls := List.append (runtime_declarations_for (TargetKind.of_triple triple)) extra_decls in
             LLVMModule.mk triple compiled_globals funcs all_decls source_path debug_files,
     }
 
@@ -6357,6 +6365,12 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                     return (Result.err e)
                 },
                 Result.ok _ =>
+                  match validate_native_target_availability (TargetKind.of_triple triple) triple reachable_decls {
+                    Result.err e => do {
+                        if verbose then do { fail_line ("FAILED at stage: validate_native_target_availability (" ++ e ++ ")"); return unit } else return unit;
+                        return (Result.err e)
+                    },
+                    Result.ok _ =>
                   // And once more for the OTHER silent-placeholder path
                   // codegen has: a struct literal that best-effort
                   // elaboration never desugared still compiles to
@@ -6426,6 +6440,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                     return closed
                         },
                       },
+                  },
                   },
             },
     }

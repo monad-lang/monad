@@ -475,7 +475,7 @@ def show_llvm_value (val : LLVMValue) : String := match val {
             (String.concat " " (String.concat (show_llvm_value v)
                 (String.concat " to " (show_llvm_type to_ty))))),
     alloc_closure entry arity env =>
-        String.concat "call i64 @alloc_closure(i8* " (String.concat entry
+        String.concat "call i64 @alloc_closure(i64 " (String.concat entry
             (String.concat ", i64 " (String.concat (I64.to_string arity)
             (String.concat ", i64 " (String.concat (I64.to_string (list_valu_len env)) ")"))))),
     alloc_constructor tag fields =>

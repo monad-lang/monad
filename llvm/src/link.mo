@@ -16,7 +16,7 @@ open IO {println}
 use std::process {exec_cmd, Proc.capture}
 use std::bench {Bench.now, Bench.report_since}
 use std::log {fail_line, ok_line, stage}
-use lib::target {TargetSpec}
+use lib::target {TargetSpec, TargetPlan, TargetKind}
 
 /// `llc -filetype=obj`, for the machine this compiler is running on.
 ///
@@ -57,6 +57,17 @@ pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (ob
     exec_cmd "clang" (List.append ["-pthread", "-c", runtime_c] (List.append inc (List.append extra_flags ["-o", obj_path])))
 }
 
+/// `compile_runtime_obj` for `plan`: the native arm is byte-identical to it,
+/// the wasm arms use wasi-sdk's clang and the plan's target/sysroot and
+/// platform define, with no `-pthread` and no Boehm include.
+#[partial]
+pub def compile_runtime_obj_for (plan : TargetPlan) (runtime_c : String) (extra_flags : List String) (obj_path : String) : IO I64 := do {
+    match plan.kind {
+        TargetKind.native => compile_runtime_obj runtime_c extra_flags obj_path,
+        _ => exec_cmd plan.clang (List.append ["-c", runtime_c] (List.append plan.compile_flags (List.append plan.runtime_defines (List.append extra_flags ["-o", obj_path])))),
+    }
+}
+
 /// Link objects into an executable. Boehm GC is linked statically when
 /// the static archive (`libgc.a`) is available: on Linux via
 /// `-Wl,-Bstatic -lgc -Wl,-Bdynamic` (the linker searches its `-L` paths
@@ -80,6 +91,17 @@ pub def link_objects (objs : List String) (output : String) (extra_flags : List 
         })
     } else return ["-Wl,-Bstatic", "-lgc", "-Wl,-Bdynamic"];
     exec_cmd "clang" (List.append ["-pthread"] (List.append objs (List.append gc_args (List.append extra_flags ["-o", output]))))
+}
+
+/// `link_objects` for `plan`: the native arm is byte-identical to it, the
+/// wasm arms use wasi-sdk's clang with the plan's link flags and never add
+/// `-pthread` or `-lgc`.
+#[partial]
+pub def link_objects_for (plan : TargetPlan) (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
+    match plan.kind {
+        TargetKind.native => link_objects objs output extra_flags,
+        _ => exec_cmd plan.clang (List.append plan.link_flags (List.append objs (List.append extra_flags ["-o", output]))),
+    }
 }
 
 /// `<flag><dir>` for Boehm GC's `var` directory (`includedir`, `libdir`)
@@ -304,12 +326,30 @@ pub def build_commit_define (from_env : Option String) (compiler_commit : String
 /// where the "compile_file total minus compile_loaded_modules_to_ir total"
 /// remainder actually goes, before guessing at a fix.
 #[partial]
-pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 {
+pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 := do {
+    let plan <- TargetPlan.resolve spec;
+    match plan {
+        Result.err e => do {
+            fail_line e;
+            return 1
+        },
+        Result.ok p => link_ir_plan runtime_c ir_text ir_path output_dir output_name link_libs link_pkgs compiler_commit verbose spec p,
+    }
+}
+
+#[partial]
+def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) (plan : TargetPlan) : IO I64 {
     // `Path.join` here is THE fix for the mangled-double-slash bug this
     // whole `Path` type exists to prevent: if `output_name` is already
     // absolute, it replaces `output_dir` outright instead of naively
     // concatenating (`os.path.join`-style semantics).
-    let target := Path.join output_dir output_name;
+    // A wasm profile's default output gets `.wasm`; an explicit name that
+    // already ends in it is left alone. `Path.path` keeps an absolute name
+    // absolute through `Path.join`.
+    let final_name : Path := if TargetKind.is_wasm plan.kind
+        then Path.path (TargetPlan.output_name plan (Path.to_string output_name))
+        else output_name;
+    let target := Path.join output_dir final_name;
     let obj_path := Path.with_suffix target ".o";
     // Beside the other artifacts (i.e. next to `target`), NOT in
     // `output_dir` -- an absolute or directory-bearing `output_name`
@@ -380,7 +420,7 @@ pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output
         let from_env <- IO.get_env "MONAD_BUILD_COMMIT";
         let build_hash : String := build_commit_define from_env compiler_commit;
         let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
-        let result <- compile_runtime_obj runtime_c (List.append [commit_flag] (verbose_argv verbose)) runtime_obj_s;
+        let result <- compile_runtime_obj_for plan runtime_c (List.append [commit_flag] (verbose_argv verbose)) runtime_obj_s;
         if verbose then do {
             Bench.report_since "link_ir: clang runtime.c" t_rtc;
             return unit
@@ -399,7 +439,7 @@ pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output
             // after the objects.
             let pkg_flags : List String <- pkg_config_link_flags link_pkgs;
             let link_flags : List String := List.append pkg_flags (List.append dash_l (verbose_argv verbose));
-            let result <- link_objects [obj_path_s, runtime_obj_s] output_path_s link_flags;
+            let result <- link_objects_for plan [obj_path_s, runtime_obj_s] output_path_s link_flags;
             if verbose then do {
                 Bench.report_since "link_ir: clang link" t_link;
                 return unit

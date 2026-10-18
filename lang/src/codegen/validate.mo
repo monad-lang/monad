@@ -33,8 +33,9 @@ use lib::codegen::decls {def_name_str, extract_defs, extract_inductives}
 use runtime::natives {runtime_native_functions}
 use lib::codegen::natives {
   lookup_native_any, native_attr_target_name, native_runtime_fn_name,
-  runtime_declarations,
+  runtime_declarations, NativeAvailability, native_target_availability,
 }
+use llvm::target {TargetKind}
 use lang::codegen::symbols {def_symbol_name, name_path_to_str}
 use lib::codegen::util {
   dedup_strs, join_semicolon_msgs
@@ -125,6 +126,47 @@ def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List Str
                                 Option.none => find_unwired_native_defs_go rest acc,
                             },
                         _ => find_unwired_native_defs_go rest acc,
+                    },
+            },
+    }
+
+/// A reachable bodyless native the selected target cannot serve is a
+/// compile error naming the native and the target, not a link failure or a
+/// run-time trap. Runs on the REACHABLE decls, like the unwired check.
+#[partial]
+pub def validate_native_target_availability (kind : TargetKind) (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
+    let msgs := find_unavailable_native_defs kind triple (extract_defs decl_list) in
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+    }
+
+#[partial]
+def find_unavailable_native_defs (kind : TargetKind) (triple : String) (defs : List Def) : List String :=
+    List.reverse (find_unavailable_native_defs_go kind triple defs List.empty)
+
+#[partial]
+def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs : List Def) (acc : List String) : List String :=
+    match defs {
+        List.empty => acc,
+        List.cons d rest =>
+            match d {
+                Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs, vis := _vis, ..} =>
+                    match strip_db_lams term_ {
+                        Term.hole =>
+                            match native_attr_target_name attrs {
+                                Option.none => find_unavailable_native_defs_go kind triple rest acc,
+                                Option.some target =>
+                                    match native_target_availability kind target {
+                                        NativeAvailability.available =>
+                                            find_unavailable_native_defs_go kind triple rest acc,
+                                        NativeAvailability.unavailable reason =>
+                                            let def_name := name_path_to_str name in
+                                            let msg := "native `" ++ target ++ "` (needed by def `" ++ def_name ++ "`) is not available on target `" ++ triple ++ "` (" ++ TargetKind.name kind ++ "): " ++ reason in
+                                            find_unavailable_native_defs_go kind triple rest (List.cons msg acc),
+                                    },
+                            },
+                        _ => find_unavailable_native_defs_go kind triple rest acc,
                     },
             },
     }
