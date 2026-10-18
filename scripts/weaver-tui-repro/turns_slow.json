@@ -1,0 +1,1 @@
+[{"message": {"role": "assistant", "content": [{"type": "text", "text": "reply slow: the async turn kept the UI alive while this text was being produced -- spinner frames, buffered keys, completion at the end."}]}, "usage": {"input_tokens": 1, "output_tokens": 10, "cached_tokens": 0}, "stop": "end_turn"}]

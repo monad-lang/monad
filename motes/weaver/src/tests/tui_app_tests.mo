@@ -306,7 +306,10 @@ def test_enter_while_pending_is_refused : Bool :=
                     match TuiApp.update m2 (key_msg (Key.char "i")) {
                         Pair.pair m3 _ =>
                             match TuiApp.update m3 (key_msg Key.enter) {
-                                Pair.pair m4 cmd => cmd_be cmd Cmd.none && String.is_empty m4.input.value
+                                // Refused: nothing appends, no echo, and
+                                // the typed text STAYS in the box (the
+                                // still-open edit survives the turn).
+                                Pair.pair m4 cmd => cmd_be cmd Cmd.none && m4.input.value == "i"
                             }
                     }
             }
