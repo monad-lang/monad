@@ -710,7 +710,7 @@ def lower_parse_match_cases (ctx : ParseLowerCtx) (cases : List ParseMatchCase) 
 
 #[partial]
 def lower_parse_match_case (ctx : ParseLowerCtx) (c : ParseMatchCase) : MatchCase :=
-    MatchCase.mk c.name c.args (lower_parse_term (lower_ctx_bind_all c.args ctx) c.body) c.field_pattern
+    MatchCase.mk c.name c.args (lower_parse_term (lower_ctx_bind_all c.args ctx) c.body) c.field_pattern Option.none
 
 
 #[partial]

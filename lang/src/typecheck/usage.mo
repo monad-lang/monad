@@ -137,7 +137,7 @@ def uses_of_cases (target : I64) (cases : List MatchCase) : I64 :=
 #[partial]
 def uses_of_case (target : I64) (c : MatchCase) : I64 :=
     match c {
-        MatchCase.mk _name args body _fp => uses_of (target + List.length args) body,
+        MatchCase.mk _name args body _fp _typ_name => uses_of (target + List.length args) body,
     }
 
 /// Struct-literal field values all run, so they SUM.
@@ -528,7 +528,7 @@ def borrow_aware_cases (borrows : HashMap String Bool) (borrowed_here : Bool) (t
 #[partial]
 def borrow_aware_case (borrows : HashMap String Bool) (borrowed_here : Bool) (target : I64) (c : MatchCase) : I64 :=
     match c {
-        MatchCase.mk _name args body _fp =>
+        MatchCase.mk _name args body _fp _typ_name =>
             borrow_aware_at borrows borrowed_here (target + List.length args) body,
     }
 
@@ -640,7 +640,7 @@ def owning_at_cases (ctors : HashMap String Bool) (borrows : HashMap String Bool
 #[partial]
 def owning_at_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx : UsePos) (target : I64) (c : MatchCase) : I64 :=
     match c {
-        MatchCase.mk _name args body _fp => owning_at ctors borrows ctx (target + List.length args) body,
+        MatchCase.mk _name args body _fp _typ_name => owning_at ctors borrows ctx (target + List.length args) body,
     }
 
 #[partial]
@@ -828,7 +828,7 @@ def collect_uses_cases (ctors : HashMap String Bool) (borrows : HashMap String B
 #[partial]
 def collect_uses_case (ctors : HashMap String Bool) (borrows : HashMap String Bool) (c : MatchCase) (acc : List BinderUse) : List BinderUse :=
     match c {
-        MatchCase.mk name args body _fp =>
+        MatchCase.mk name args body _fp _typ_name =>
             let n : I64 := List.length args in
             let with_args : List BinderUse := collect_case_args ctors borrows name args 0 n body acc in
             collect_uses_term ctors borrows body with_args,
@@ -1041,8 +1041,8 @@ def test_uses_of_takes_max_across_match_arms : Bool :=
     // Two zero-binder arms, each using `x` once. Rule 1: one, not two.
     let no_fp : Option FieldPattern := Option.none in
     let no_args : List Identifier := List.empty in
-    let arm1 : MatchCase := MatchCase.mk (Identifier.id "a") no_args t_var0 no_fp in
-    let arm2 : MatchCase := MatchCase.mk (Identifier.id "b") no_args t_var0 no_fp in
+    let arm1 : MatchCase := MatchCase.mk (Identifier.id "a") no_args t_var0 no_fp Option.none in
+    let arm2 : MatchCase := MatchCase.mk (Identifier.id "b") no_args t_var0 no_fp Option.none in
     let arms : List MatchCase := List.cons arm1 (List.cons arm2 List.empty) in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
     I64.beq (uses_of 0 t) 1
@@ -1056,7 +1056,7 @@ def test_uses_of_shifts_past_match_arm_binders : Bool :=
     let args : List Identifier :=
         List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty) in
     let body : Term := Term.var 2 dbg_x in
-    let arm : MatchCase := MatchCase.mk (Identifier.id "c") args body no_fp in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "c") args body no_fp Option.none in
     let arms : List MatchCase := List.cons arm List.empty in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
     I64.beq (uses_of 0 t) 1
@@ -1231,7 +1231,7 @@ def test_collect_records_the_constructor_and_position : Bool :=
     let no_fp : Option FieldPattern := Option.none in
     let args : List Identifier :=
         List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty) in
-    let arm : MatchCase := MatchCase.mk (Identifier.id "pair") args (Term.var 0 dbg_x) no_fp in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "pair") args (Term.var 0 dbg_x) no_fp Option.none in
     let arms : List MatchCase := List.cons arm List.empty in
     let t : Term := Term.lit (Literal.match_ Term.hole arms) in
     match collect_binder_uses probe_ctors str_map_empty t {
@@ -1269,7 +1269,7 @@ def test_owning_ignores_a_call_argument : Bool :=
 def test_owning_ignores_a_match_scrutinee : Bool :=
     // Matching inspects a value; it does not consume it.
     let no_fp : Option FieldPattern := Option.none in
-    let arm : MatchCase := MatchCase.mk (Identifier.id "a") List.empty Term.hole no_fp in
+    let arm : MatchCase := MatchCase.mk (Identifier.id "a") List.empty Term.hole no_fp Option.none in
     let t : Term := Term.lit (Literal.match_ t_var0 (List.cons arm List.empty)) in
     I64.beq (owning_uses probe_ctors str_map_empty 0 t) 0
 

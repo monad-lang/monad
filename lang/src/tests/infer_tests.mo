@@ -356,7 +356,7 @@ def test_match_empty_cases : Bool :=
 def test_match_single_case : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "x") List.empty body Option.none in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "x") List.empty body Option.none Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -373,8 +373,8 @@ def test_match_multi_case_bodies_ok : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body1 : Term := sort_n 1 in
     let body2 : Term := sort_n 1 in
-    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none in
-    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty body2 Option.none in
+    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none Option.none in
+    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty body2 Option.none Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -390,8 +390,8 @@ def test_match_multi_case_second_fails : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body1 : Term := sort_n 1 in
     let bad_var : Term := Term.var sentinel (DebugName.named (Identifier.id "no_such")) in
-    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none in
-    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty bad_var Option.none in
+    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none Option.none in
+    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty bad_var Option.none Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -413,7 +413,7 @@ def test_match_case_args_bound : Bool :=
         (Identifier.id "some")
         (List.cons arg_id List.empty)
         body
-        Option.none in
+        Option.none Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -468,7 +468,7 @@ def test_match_valid_constructor : Bool :=
         (Identifier.id "some")
         List.empty
         body
-        Option.none in
+        Option.none Option.none in
     // `none` is named too, and not in order to test it: since Phase 1
     // (strict-exhaustiveness.md) a `Maybe` match omitting `none` is a
     // coverage ERROR, so this arm is what keeps the pin about VALID
@@ -477,7 +477,7 @@ def test_match_valid_constructor : Bool :=
         (Identifier.id "none")
         List.empty
         body
-        Option.none in
+        Option.none Option.none in
     let cases : List MatchCase := List.cons case_some (List.cons case_none List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -502,12 +502,12 @@ def test_match_invalid_constructor : Bool :=
         (Identifier.id "some")
         List.empty
         body
-        Option.none in
+        Option.none Option.none in
     let case_bogus : MatchCase := MatchCase.mk
         (Identifier.id "bogus")
         List.empty
         body
-        Option.none in
+        Option.none Option.none in
     let cases : List MatchCase := List.cons case_some (List.cons case_bogus List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -527,7 +527,7 @@ def test_match_wildcard : Bool :=
         (Identifier.id "_")
         List.empty
         body
-        Option.none in
+        Option.none Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -546,7 +546,7 @@ def test_match_wildcard_rejects_args : Bool :=
         (Identifier.id "_")
         (List.cons (Identifier.id "x") List.empty)
         body
-        Option.none in
+        Option.none Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -567,7 +567,7 @@ def test_match_bound_scrutinee : Bool :=
         (Identifier.id "x")
         List.empty
         body
-        Option.none in
+        Option.none Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     let types : List Term := [sort_n 1] in
@@ -587,8 +587,8 @@ def test_match_branch_type_conflict : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body1 : Term := sort_n 1 in
     let body2 : Term := sort_n 0 in
-    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none in
-    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty body2 Option.none in
+    let case1 : MatchCase := MatchCase.mk (Identifier.id "a") List.empty body1 Option.none Option.none in
+    let case2 : MatchCase := MatchCase.mk (Identifier.id "b") List.empty body2 Option.none Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -624,7 +624,7 @@ def cov_ind : Inductive :=
         Visibility.package_private
 
 def cov_case (n : String) : MatchCase :=
-    MatchCase.mk (Identifier.id n) List.empty (sort_n 1) Option.none
+    MatchCase.mk (Identifier.id n) List.empty (sort_n 1) Option.none Option.none
 
 // These drive `match_coverage_warning`, the rule's pure QUERY, and not
 // `validate_match_coverage`: the rule is a WARNING now, so the latter
@@ -720,7 +720,7 @@ def test_match_missing_arm_does_not_fail_the_check_end_to_end : Bool :=
     // test and fixing the corpus in the same change.
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none Option.none in
     let cases : List MatchCase := List.cons case_some List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -740,7 +740,7 @@ def test_match_missing_arm_is_still_reported_end_to_end : Bool :=
         (NamePath.mk (List.cons (Identifier.id "none") List.empty)) List.empty (sort_n 1) in
     let ind : Inductive := Inductive.mk
         type_name List.empty (sort_n 1) [some_cn, none_cn] List.empty Visibility.package_private in
-    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty (sort_n 1) Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty (sort_n 1) Option.none Option.none in
     match match_coverage_warning [case_some] (Option.some ind) test_scope {
         Option.some msg => String.contains msg "`Maybe.none`",
         Option.none => false,
@@ -750,8 +750,8 @@ def test_match_missing_arm_is_still_reported_end_to_end : Bool :=
 def test_match_exhaustive_arms_check_end_to_end : Bool :=
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
-    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none in
-    let case_none : MatchCase := MatchCase.mk (Identifier.id "none") List.empty body Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none Option.none in
+    let case_none : MatchCase := MatchCase.mk (Identifier.id "none") List.empty body Option.none Option.none in
     let cases : List MatchCase := List.cons case_some (List.cons case_none List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -815,14 +815,14 @@ def test_field_pattern_bare_reordered_fields_permutes_body_correctly : Bool :=
     let fp : FieldPattern := FieldPattern.mk (List.cons y_entry (List.cons x_entry List.empty)) false in
     let args : List Identifier := List.cons (Identifier.id "y") (List.cons (Identifier.id "x") List.empty) in
     let body : Term := Term.var 0 DebugName.unnamed in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args body (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args body (Option.some fp) Option.none in
     match type_check_match_case case_ point_typed_scrutinee (Term.var sentinel (DebugName.named (Identifier.id "Point"))) (Option.some point_ind) Term.hole point_scope point_typed_local_types empty_locals {
         err _ => false,
         ok checked =>
             match checked {
                 mk resolved_case _typ =>
                     match resolved_case {
-                        MatchCase.mk resolved_name resolved_args resolved_body resolved_fp =>
+                        MatchCase.mk resolved_name resolved_args resolved_body resolved_fp _resolved_tn =>
                             Similar.similar resolved_name (Identifier.id "mk")
                                 && I64.beq (List.length resolved_args) 2
                                 && (match resolved_body { Term.var idx _ => I64.beq idx 1, _ => false })
@@ -840,7 +840,7 @@ def test_field_pattern_named_multi_constructor_via_named_form : Bool :=
     let fp : FieldPattern := FieldPattern.mk (List.cons x_entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "x") List.empty in
     let body : Term := Term.var 0 DebugName.unnamed in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") args body (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") args body (Option.some fp) Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
@@ -872,7 +872,7 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Shape"))) List.empty in
     let fp : FieldPattern := FieldPattern.mk List.empty true in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "") List.empty (sort_n 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") List.empty (sort_n 1) (Option.some fp) Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole shape_scope types empty_locals {
@@ -883,7 +883,7 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
 #[test]
 def test_field_pattern_unknown_field_is_an_error : Bool :=
     let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "z") (Identifier.id "z")) List.empty) true in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") [Identifier.id "z"] (sort_n 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") [Identifier.id "z"] (sort_n 1) (Option.some fp) Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
@@ -895,7 +895,7 @@ def test_field_pattern_unknown_field_is_an_error : Bool :=
 def test_field_pattern_missing_field_without_rest_is_an_error : Bool :=
     // Only "x" is listed, no `..` -- "y" is uncovered.
     let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "x") (Identifier.id "x")) List.empty) false in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") [Identifier.id "x"] (sort_n 1) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") [Identifier.id "x"] (sort_n 1) (Option.some fp) Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ (sort_n 1) cases) in
     match type_check t Term.hole point_scope empty_local_types empty_locals {
@@ -964,7 +964,7 @@ def test_field_pattern_first_field_type_comes_from_the_scrutinee : Bool :=
     let entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "first") (Identifier.id "first") in
     let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "first") List.empty in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) Option.none in
     match type_check_match_case case_ (Term.var 0 DebugName.unnamed) pair_scrutinee_typ (Option.some pair_ind) Term.hole pair_scope pair_typed_local_types empty_locals {
         err _ => false,
         ok checked =>
@@ -980,7 +980,7 @@ def test_field_pattern_second_field_type_comes_from_the_scrutinee : Bool :=
     let entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "second") (Identifier.id "second") in
     let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "second") List.empty in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) Option.none in
     match type_check_match_case case_ (Term.var 0 DebugName.unnamed) pair_scrutinee_typ (Option.some pair_ind) Term.hole pair_scope pair_typed_local_types empty_locals {
         err _ => false,
         ok checked =>
@@ -999,7 +999,7 @@ def test_field_pattern_bare_scrutinee_head_leaves_declared_types : Bool :=
     let entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "first") (Identifier.id "first") in
     let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
     let args : List Identifier := List.cons (Identifier.id "first") List.empty in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "") args (Term.var 0 DebugName.unnamed) (Option.some fp) Option.none in
     match type_check_match_case case_ (Term.var 0 DebugName.unnamed) (named_free_var "P") (Option.some pair_ind) Term.hole pair_scope (List.cons (named_free_var "P") List.empty) empty_locals {
         err _ => false,
         ok checked =>
@@ -1264,7 +1264,7 @@ def dup_match_checks (decl_list : List Decl) : Bool :=
     let dup_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none, incomplete_match_ok := false } in
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Dup"))) List.empty in
-    let case_ : MatchCase := MatchCase.mk (Identifier.id "d_wanted") [Identifier.id "p"] (sort_n 1) Option.none in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "d_wanted") [Identifier.id "p"] (sort_n 1) Option.none Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole dup_scope types empty_locals {

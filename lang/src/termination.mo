@@ -352,7 +352,7 @@ def check_cases (cases : List MatchCase) (key : String) (names : List String) (p
         List.empty => Option.none,
         List.cons c rest =>
             match c {
-                MatchCase.mk _cname cargs cbody _fp =>
+                MatchCase.mk _cname cargs cbody _fp _tn =>
                     match check_body cbody key names params (extend_env_from_match env scrutinee cargs params) {
                         Option.some msg => Option.some msg,
                         Option.none => check_cases rest key names params env scrutinee,
@@ -404,7 +404,7 @@ def find_callees_cases (cases : List MatchCase) (names : List String) : List Str
         List.empty => List.empty,
         List.cons c rest =>
             match c {
-                MatchCase.mk _cname _cargs cbody _fp => str_union (find_callees cbody names) (find_callees_cases rest names),
+                MatchCase.mk _cname _cargs cbody _fp _tn => str_union (find_callees cbody names) (find_callees_cases rest names),
             },
     }
 
@@ -679,7 +679,7 @@ def t_lam (s : String) (body : Term) : Term :=
 def t_app (f : Term) (a : Term) : Term := Term.app f a
 
 def t_case (name : String) (binders : List String) (body : Term) : MatchCase :=
-    MatchCase.mk (Identifier.id name) (List.map Identifier.id binders) body Option.none
+    MatchCase.mk (Identifier.id name) (List.map Identifier.id binders) body Option.none Option.none
 
 def t_match (scrutinee : Term) (cases : List MatchCase) : Term :=
     Term.lit (Literal.match_ scrutinee cases)

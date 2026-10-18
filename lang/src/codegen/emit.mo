@@ -383,6 +383,60 @@ def builtin_arity_matches (base_name : String) (arity : I64) : Bool :=
         Option.none => false,
     }
 
+/// Stage 11.4: same tiers as `constructor_tag_at`, but when the
+/// caller's `MatchCase`/`Con` already carries its RESOLVED owner
+/// (`typ_name`, set once the checker has identified the real
+/// inductive), the owner-qualified key ("Wide.ok") is tried before the
+/// composite bare#arity key. Unlike bare#arity, an owner-qualified key
+/// also distinguishes two DIFFERENT types sharing both the same bare
+/// name AND the same arity (`type A { mk (x : I64) }`,
+/// `type B { mk (x : I64) }`) -- a collision class bare#arity alone can
+/// never tell apart, since both claim the identical composite key.
+/// `typ_name` is `Option.none` for a `MatchCase` built by hand outside
+/// the checker (codegen test fixtures that feed raw `Term`s directly) --
+/// those fall straight through to `constructor_tag_at`'s own behavior,
+/// unchanged.
+#[partial]
+def constructor_tag_owned (c : CodegenCtx) (name : String) (typ_name : Option NamePath) (arity : I64) : I64 :=
+    let base_name := extract_base_name name in
+    match str_map_lookup name builtin_ctor_tags {
+        Option.some tag => if builtin_arity_matches name arity then tag else constructor_tag_owned_nonbuiltin c base_name typ_name arity,
+        Option.none =>
+            match constructor_tag_owned_key c base_name typ_name arity {
+                Option.some tag => tag,
+                Option.none =>
+                    match str_map_lookup base_name builtin_ctor_tags {
+                        Option.some tag => if builtin_arity_matches base_name arity then tag else bare_ctor_tag c base_name,
+                        Option.none => bare_ctor_tag c base_name,
+                    },
+            },
+    }
+
+/// The owner-qualified tier, tried before the composite bare#arity key
+/// -- `Option.none` here (no `typ_name`, or the ctx table happens not
+/// to carry that exact qualified alias) means "fall back to the
+/// composite key exactly as `constructor_tag_at` already does".
+#[partial]
+def constructor_tag_owned_key (c : CodegenCtx) (base_name : String) (typ_name : Option NamePath) (arity : I64) : Option I64 :=
+    match typ_name {
+        Option.some path =>
+            match ctx_lookup_ctor_tag c (String.concat (name_path_to_str path) (String.concat "." base_name)) {
+                Option.some tag => Option.some tag,
+                Option.none => ctx_lookup_ctor_tag c (ctor_composite_key base_name arity),
+            },
+        Option.none => ctx_lookup_ctor_tag c (ctor_composite_key base_name arity),
+    }
+
+/// `constructor_tag_owned`'s tiers with the builtin tables skipped --
+/// mirrors `constructor_tag_at_nonbuiltin`, with the same owner-
+/// qualified preference `constructor_tag_owned` itself tries first.
+#[partial]
+def constructor_tag_owned_nonbuiltin (c : CodegenCtx) (base_name : String) (typ_name : Option NamePath) (arity : I64) : I64 :=
+    match constructor_tag_owned_key c base_name typ_name arity {
+        Option.some tag => tag,
+        Option.none => bare_ctor_tag c base_name,
+    }
+
 #[partial]
 def show_operator (op : Operator) : String := match op {
     Operator.mk s => s,
@@ -639,15 +693,12 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                     match fresh_temp ctx2 {
                                         CtxStrPair.mk ctx3 cmp_temp =>
                                             match this_case {
-                                                MatchCase.mk name args _body _fp =>
-                                                    // Composite bare#arity key: the case's
-                                                    // own positional binder count IS the
-                                                    // constructor's field count for a
-                                                    // well-typed arm, and it is what
-                                                    // disambiguates a bare name two
-                                                    // different types both declare (see
-                                                    // `constructor_tag_at`).
-                                                    let tag_of_case := constructor_tag_at ctx3 (symbol_identifier name) (List.length args) in
+                                                MatchCase.mk name args _body _fp typ_name =>
+                                                    // Owner-qualified when the checker resolved
+                                                    // it (stage 11.4); composite bare#arity
+                                                    // fallback otherwise -- see
+                                                    // `constructor_tag_owned`.
+                                                    let tag_of_case := constructor_tag_owned ctx3 (symbol_identifier name) typ_name (List.length args) in
                                                     let cmp_instr := LLVMInstruction.assign cmp_temp (LLVMValue.icmp_eq tag_val (LLVMValue.int_ tag_of_case)) in
                                                     let branch_instr := LLVMInstruction.branch (LLVMValue.var_ cmp_temp) case_label next_check_label in
                                                     let check_block := LLVMBasicBlock.mk check_label (List.cons cmp_instr (List.cons branch_instr List.empty)) in
@@ -759,7 +810,7 @@ def retarget_terminal_ret (blocks : List LLVMBasicBlock) (target_val : LLVMValue
 #[partial]
 def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ : MatchCase) (case_label : String) (merge_label : String) : MatchChainResult :=
     match case_ {
-        MatchCase.mk _name args body _fp =>
+        MatchCase.mk _name args body _fp _typ_name =>
             match bind_match_fields c scrutinee_val args 0 {
                 { ctx := c1, instrs := field_instrs } =>
                     match compile_db_term_ir c1 body {
@@ -1143,12 +1194,11 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                         CtxStrPair.mk ctx_t temp =>
                             // Call the @alloc_constructor runtime function
                             // alloc_constructor takes (tag, field_count) and allocates space for fields
-                            // The tag is determined by the constructor name AND this
-                            // application's own compiled-arg count -- the composite
-                            // key that keeps same-named constructors of different
-                            // types distinguishable at match dispatch (see
-                            // `constructor_tag_at`).
-                            let tag_val := constructor_tag_at c (symbol_identifier name) (List.length all_vals) in
+                            // The tag is owner-qualified from `typ_name` (stage
+                            // 11.4) when the ctx table carries that alias,
+                            // composite bare#arity otherwise -- see
+                            // `constructor_tag_owned`.
+                            let tag_val := constructor_tag_owned c (symbol_identifier name) (Option.some typ_name) (List.length all_vals) in
                             let alloc_val := LLVMValue.alloc_constructor tag_val all_vals in
                             let assign_instr := LLVMInstruction.assign temp alloc_val in
                             // alloc_constructor only ALLOCATES the fields
@@ -5991,8 +6041,8 @@ def desugar_struct_lit_cases (scope : Scope) (cases : List MatchCase) : List Mat
     List.empty => List.empty,
     List.cons c rest =>
         match c {
-            MatchCase.mk cname cargs cbody cfp =>
-                List.cons (MatchCase.mk cname cargs (desugar_struct_lit_term scope cbody) cfp) (desugar_struct_lit_cases scope rest),
+            MatchCase.mk cname cargs cbody cfp ctn =>
+                List.cons (MatchCase.mk cname cargs (desugar_struct_lit_term scope cbody) cfp ctn) (desugar_struct_lit_cases scope rest),
         },
 }
 

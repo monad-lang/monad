@@ -260,8 +260,8 @@ def test_show_literal_if : Bool :=
 #[test]
 def test_show_literal_match_simple : Bool :=
     let scrut : Term := Term.lit (Literal.num 5 NumSuffix.i64) in
-    let case_none : MatchCase := MatchCase.mk (Identifier.id "none") empty_id_list (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
-    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") (List.cons test_id_x List.empty) (Term.var 0 (DebugName.named test_id_x)) Option.none in
+    let case_none : MatchCase := MatchCase.mk (Identifier.id "none") empty_id_list (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none Option.none in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") (List.cons test_id_x List.empty) (Term.var 0 (DebugName.named test_id_x)) Option.none Option.none in
     let cases : List MatchCase := List.cons case_none (List.cons case_some List.empty) in
     let lit : Literal := Literal.match_ scrut cases in
     let term : Term := Term.lit lit in
@@ -384,7 +384,7 @@ def test_show_instance : Bool :=
 #[test]
 def test_show_match_case_no_args : Bool :=
     let body : Term := Term.lit (Literal.num 0 NumSuffix.i64) in
-    let mc : MatchCase := MatchCase.mk (Identifier.id "none") empty_id_list body Option.none in
+    let mc : MatchCase := MatchCase.mk (Identifier.id "none") empty_id_list body Option.none Option.none in
     let result : String := show_match_case mc in
     String.beq result "none => 0i64"
 
@@ -392,6 +392,6 @@ def test_show_match_case_no_args : Bool :=
 def test_show_match_case_with_args : Bool :=
     let body : Term := Term.var 0 (DebugName.named test_id_x) in
     let args : List Identifier := List.cons test_id_x (List.cons test_id_y List.empty) in
-    let mc : MatchCase := MatchCase.mk (Identifier.id "some") args body Option.none in
+    let mc : MatchCase := MatchCase.mk (Identifier.id "some") args body Option.none Option.none in
     let result : String := show_match_case mc in
     String.beq result "some x y => x"

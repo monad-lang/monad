@@ -111,8 +111,8 @@ def close_named_cases (stack : List Identifier) (cases : List MatchCase) : List 
         List.empty => List.empty,
         List.cons c rest =>
             match c {
-                MatchCase.mk name args body fp =>
-                    List.cons (MatchCase.mk name args (close_named_vars (List.append (list_reverse args) stack) body) fp)
+                MatchCase.mk name args body fp typ_name =>
+                    List.cons (MatchCase.mk name args (close_named_vars (List.append (list_reverse args) stack) body) fp typ_name)
                         (close_named_cases stack rest),
             },
     }

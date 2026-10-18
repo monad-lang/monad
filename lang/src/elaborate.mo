@@ -92,7 +92,7 @@ def free_vars_of_cases (cases : List MatchCase) (known_names : List Identifier) 
     match cases {
         List.cons elem rest =>
             match elem {
-                MatchCase.mk _ _ body _ =>
+                MatchCase.mk _ _ body _ _ =>
                     let body_vars := free_vars body known_names in
                     let acc_ := union_ids acc body_vars in
                     free_vars_of_cases rest known_names acc_,

@@ -429,11 +429,19 @@ pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute
 // `Option.none` -- every OTHER consumer (`lang/lower_core_ir.mo`,
 // `lang/codegen/emit.mo`, `lang/pretty.mo`'s runtime-facing paths) only
 // ever sees `Option.none` here.
+//
+// `typ_name` has the INVERSE lifecycle: `Option.none` pre-check (the
+// owning inductive isn't known yet), `Option.some path` once
+// `lang/typecheck/infer.mo`'s `type_check_match_case`/the struct-update
+// desugaring resolve it -- `lang/codegen/ctors.mo`/`emit.mo` read it
+// directly for owner-qualified ctor-tag dispatch instead of guessing
+// from the bare name/arity alone (stage 11.4).
 struct MatchCase {
     name: Identifier,
     args: List Identifier,
     body: Term,
     field_pattern: Option FieldPattern,
+    typ_name: Option NamePath,
 }
 
 /// One `{ field, other := binder, .. }` pattern -- mirrors the Rust
@@ -483,7 +491,7 @@ pub def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term 
             let entry : FieldPatternEntry := FieldPatternEntry.mk field field in
             let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
             let binders : List Identifier := List.cons field List.empty in
-            let case_ : MatchCase := MatchCase.mk (Identifier.id "") binders value (Option.some fp) in
+            let case_ : MatchCase := MatchCase.mk (Identifier.id "") binders value (Option.some fp) Option.none in
             Term.lit (Literal.match_ scrutinee (List.cons case_ List.empty)),
     }
 
@@ -2090,8 +2098,8 @@ instance Similar Native {
 instance Similar MatchCase {
     def similar (a : MatchCase) (b : MatchCase) : Bool :=
         match a {
-            MatchCase.mk name1 args1 body1 _ => match b {
-                MatchCase.mk name2 args2 body2 _ =>
+            MatchCase.mk name1 args1 body1 _ _ => match b {
+                MatchCase.mk name2 args2 body2 _ _ =>
                     Similar.similar name1 name2 && id_list_similar args1 args2 && Similar.similar body1 body2
             }
         }

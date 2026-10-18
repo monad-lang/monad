@@ -1,9 +1,25 @@
 /// Constructor tags and arities.
 ///
 /// A constructor's runtime tag and field count are keyed in their OWN
-/// namespace, not the def-symbol one: `MatchCase` carries only a bare
-/// `Identifier` (the parser parses `Slim.mk` and discards the
-/// qualifier), so dispatch can never supply more than a bare name.
+/// namespace, not the def-symbol one. `MatchCase` and `Con` dispatch
+/// sites now carry their resolved owner too (`typ_name`, stage 11.4 --
+/// `lang/typecheck/infer.mo`'s `type_check_match_case` resolves it once
+/// the scrutinee's real constructor is known), so `lang/codegen/
+/// emit.mo`'s `constructor_tag_owned` can key by the exact owner-
+/// qualified alias for those two call shapes -- the only tier that can
+/// tell apart two different types sharing both the same bare ctor name
+/// AND the same arity, which the composite key below never could.
+///
+/// A THIRD call shape still has no owner to consult at all: a bare,
+/// unapplied constructor referenced as a first-class VALUE (`Term.var`
+/// in `compile_db_term_ir`, e.g. `List.map Option.some xs`) carries
+/// nothing but its own `Identifier` by the time it reaches codegen --
+/// no scrutinee, no `Con` literal, nothing stage 11.4 could thread in
+/// without a new `Term` annotation. `constructor_tag`/`constructor_
+/// arity`/`is_constructor_var` below exist for exactly this residual
+/// case and are unchanged by 11.4; see `constructor_tag_owned`'s own
+/// doc comment (emit.mo) for the owner-qualified path the other two
+/// shapes now take instead.
 ///
 /// Tags are therefore keyed three ways at one build site: the composite
 /// `bare#arity`, the owner-qualified `Type.ctor` alias, and the bare

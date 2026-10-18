@@ -698,7 +698,7 @@ def whnf_named_case_for (con_name : Identifier) (cases : List MatchCase) : Optio
         List.empty => Option.none,
         List.cons hd rest =>
             match hd {
-                MatchCase.mk name _ _ _ =>
+                MatchCase.mk name _ _ _ _ =>
                     if id_eq (whnf_simple_name name) con_name
                     then Option.some hd
                     else whnf_named_case_for con_name rest,
@@ -717,7 +717,7 @@ def whnf_wildcard_case (cases : List MatchCase) : Option MatchCase :=
         List.empty => Option.none,
         List.cons hd rest =>
             match hd {
-                MatchCase.mk name _ _ _ =>
+                MatchCase.mk name _ _ _ _ =>
                     if String.beq (show_identifier (whnf_simple_name name)) "_"
                     then Option.some hd
                     else whnf_wildcard_case rest,
@@ -752,7 +752,7 @@ def whnf_iota_case (scrut : Term) (cases : List MatchCase) (scope : Scope) : Opt
 /// project, and a well-typed checked match never over-applies.
 def whnf_fire_case (case_ : MatchCase) (field_args : List Term) : Option Term :=
     match case_ {
-        MatchCase.mk _name binders body _field_pattern =>
+        MatchCase.mk _name binders body _field_pattern _typ_name =>
             let n : I64 := List.length binders in
             if I64.beq n (List.length field_args)
             then Option.some (whnf_subst_case_fields body field_args n)

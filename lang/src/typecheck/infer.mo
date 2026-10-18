@@ -1160,7 +1160,7 @@ pub def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope 
         List.empty => ok Option.none,
         List.cons hd rest =>
             match hd {
-                MatchCase.mk name _ _ _ =>
+                MatchCase.mk name _ _ _ _ =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     // A bare field-pattern case's own name is the parser's
                     // empty-string placeholder (`{ .. }`, `plans/
@@ -1212,7 +1212,7 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
         List.empty => ok true,
         List.cons hd rest =>
             match hd {
-                MatchCase.mk name _ _ fp =>
+                MatchCase.mk name _ _ fp _ =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     match fp {
                         Option.some _ => validate_cases_against_inductive rest ind,
@@ -1289,7 +1289,7 @@ def match_has_wildcard_case (cases : List MatchCase) : Bool :=
         List.empty => false,
         List.cons hd rest =>
             match hd {
-                MatchCase.mk name _ _ _ =>
+                MatchCase.mk name _ _ _ _ =>
                     if match_is_wildcard_name name then true else match_has_wildcard_case rest,
             },
     }
@@ -1311,7 +1311,7 @@ def case_names_cover_constructor (cases : List MatchCase) (cname : NamePath) : B
         List.empty => false,
         List.cons hd rest =>
             match hd {
-                MatchCase.mk name _ _ _ =>
+                MatchCase.mk name _ _ _ _ =>
                     if case_name_covers name cname then true
                     else case_names_cover_constructor rest cname,
             },
@@ -1477,7 +1477,7 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
 /// the way a written positional case's `args` order is.
 def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
-        MatchCase.mk name args body fp =>
+        MatchCase.mk name args body fp _typ_name =>
             match fp {
                 Option.some field_pattern =>
                     type_check_field_pattern_case name args body field_pattern scrutinee_typ maybe_ind expected_type scope local_types locals,
@@ -1486,19 +1486,19 @@ def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee
                     if Similar.similar name wildcard_id then
                         match args {
                             List.empty =>
-                                type_check_case_body_checked name args body expected_type scope local_types locals,
+                                type_check_case_body_checked name args body expected_type scope local_types locals maybe_ind,
                             _ =>
                                 err (TypeError.custom "wildcard pattern cannot bind arguments"),
                         }
                     else
                         match args {
                             List.empty =>
-                                type_check_case_body_checked name args body expected_type scope local_types locals,
+                                type_check_case_body_checked name args body expected_type scope local_types locals maybe_ind,
                             _ =>
                                 let arg_types : List Term := arg_types_for_case name maybe_ind scrutinee_typ in
                                 let extended_types : List Term := prepend_typed args arg_types local_types in
                                 let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
-                                type_check_case_body_checked name args body expected_type scope extended_types extended_locals,
+                                type_check_case_body_checked name args body expected_type scope extended_types extended_locals maybe_ind,
                         },
             },
     }
@@ -1586,7 +1586,7 @@ def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (
                     // this same list, NOT `declared_names` -- see
                     // `wildcard_binder_name`'s own doc comment for the
                     // silent capture using `declared_names` there caused.
-                    type_check_case_body_checked resolved_name declared_binders permuted_body expected_type scope extended_types extended_locals,
+                    type_check_case_body_checked resolved_name declared_binders permuted_body expected_type scope extended_types extended_locals maybe_ind,
             },
     }
 
@@ -2053,13 +2053,17 @@ def rec_prepend_typed_local_vars (args : List Identifier) (arg_types : List Term
 // match with no informative outer expected type at all), so this is a
 // strict widening, not a behavior change, for every case that doesn't
 // need it.
-def type_check_case_body_checked (name : Identifier) (args : List Identifier) (body : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
+def type_check_case_body_checked (name : Identifier) (args : List Identifier) (body : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) (maybe_ind : Option Inductive) : Result TypeError CheckedCase :=
     match type_check body expected_type scope local_types locals {
         ok body_tt =>
             let body_term : Term := body_tt.term in
             let body_typ : Term := body_tt.typ in
             let no_fp : Option FieldPattern := Option.none in
-            let new_case : MatchCase := MatchCase.mk name args body_term no_fp in
+            let resolved_typ_name : Option NamePath := match maybe_ind {
+                Option.some ind => Option.some (inductive_type_path ind),
+                Option.none => Option.none,
+            } in
+            let new_case : MatchCase := MatchCase.mk name args body_term no_fp resolved_typ_name in
             // Annotated local first -- see the matching comment in
             // `type_check`'s `Term.hole` arm.
             let cc : CheckedCase := { case_ := new_case, body_typ_ := body_typ } in
@@ -6402,7 +6406,7 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                                             let args : List (Option Term) := struct_update_arm_args elab_overrides binders n 0 in
                                                             let body : Term := Term.con (Con.mk mk_name typ_mp n args) in
                                                             let no_fp : Option FieldPattern := Option.none in
-                                                            let case_ : MatchCase := MatchCase.mk mk_name binders body no_fp in
+                                                            let case_ : MatchCase := MatchCase.mk mk_name binders body no_fp (Option.some (inductive_type_path ind)) in
                                                             ok (mk_typed (Term.lit (Literal.match_ base_term (List.cons case_ List.empty))) base_typ),
                                                     },
                                             }
@@ -6850,7 +6854,7 @@ def match_first_case_arity (t : Term) : I64 :=
             match l {
                 Literal.match_ _ cases =>
                     match cases {
-                        List.cons c _ => match c { MatchCase.mk _ cargs _ _ => List.length cargs },
+                        List.cons c _ => match c { MatchCase.mk _ cargs _ _ _ => List.length cargs },
                         List.empty => -1,
                     },
                 _ => -1,
@@ -7291,7 +7295,7 @@ def struct_update_arm_body (t : Term) : Option Term :=
     match t {
         Term.lit l => match l {
             Literal.match_ _scrut cases => match cases {
-                List.cons c _ => match c { MatchCase.mk _n _a body _fp => Option.some body },
+                List.cons c _ => match c { MatchCase.mk _n _a body _fp _tn => Option.some body },
                 List.empty => Option.none,
             },
             _ => Option.none,

@@ -8833,7 +8833,7 @@ def def_param_destructured_body_var_is (_expected_name : Identifier) (expected_i
                                                 List.cons case_ rest =>
                                                     (match rest { List.empty => true, _ => false }) &&
                                                     match case_ {
-                                                        MatchCase.mk _n _args body fp =>
+                                                        MatchCase.mk _n _args body fp _typ_name =>
                                                             (match fp { Option.some _ => true, Option.none => false }) &&
                                                             (match body { Term.var idx _ => I64.beq idx expected_idx, _ => false })
                                                     },

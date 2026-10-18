@@ -235,7 +235,7 @@ def iota_scope : Scope :=
 /// `field_pattern` is `Option.none` -- what every ELABORATED case
 /// carries (the checker clears it once the real constructor is known).
 def mc (con : String) (binders : List Identifier) (body : Term) : MatchCase :=
-    MatchCase.mk (Identifier.id con) binders body Option.none
+    MatchCase.mk (Identifier.id con) binders body Option.none Option.none
 
 def id_a : Identifier := Identifier.id "a"
 def id_b : Identifier := Identifier.id "b"

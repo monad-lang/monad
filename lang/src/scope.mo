@@ -2273,10 +2273,10 @@ def resolve_open_alias_match_cases (names : HashMap String String) (bound : List
 #[partial]
 def resolve_open_alias_match_case (names : HashMap String String) (bound : List String) (c : MatchCase) : MatchCase :=
     match c {
-        MatchCase.mk name args body fp =>
+        MatchCase.mk name args body fp typ_name =>
             let bound1 := push_bound_names bound args in
             let bound2 := push_bound_field_pattern bound1 fp in
-            MatchCase.mk name args (resolve_open_alias_term_scoped names bound2 body) fp,
+            MatchCase.mk name args (resolve_open_alias_term_scoped names bound2 body) fp typ_name,
     }
 
 #[partial]
@@ -3049,7 +3049,7 @@ def match_cases_reference_class (cls_str : String) (cases : List MatchCase) : Bo
     match cases {
         List.empty => false,
         List.cons c rest =>
-            match c { MatchCase.mk _ _ body _ => def_references_class cls_str body || match_cases_reference_class cls_str rest },
+            match c { MatchCase.mk _ _ body _ _ => def_references_class cls_str body || match_cases_reference_class cls_str rest },
     }
 
 #[partial]
@@ -3836,7 +3836,7 @@ def term_head_identifier (t : Term) : Option Identifier :=
 #[partial]
 def match_arm_env (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (scrutinee : Term) (case_ : MatchCase) : List LocalTypeBinding :=
     match case_ {
-        MatchCase.mk cname cargs _body _fp =>
+        MatchCase.mk cname cargs _body _fp _typ_name =>
             match lookup_ctor_field_types_for ctor_field_types cname (scrutinee_type_head env ctor_owners def_types ctor_field_types scrutinee) {
                 Option.some entry =>
                     match entry {
@@ -6679,7 +6679,7 @@ def build_dict_field_projection (cls : Class) (dict_id : Identifier) (method_nam
     let method_names := class_method_names cls in
     let pattern_vars := dict_match_pattern_vars method_names method_name in
     let call := rebuild_call (Term.var 0 (DebugName.named method_name)) real_args in
-    let case_ := MatchCase.mk (Identifier.id "mk") pattern_vars call Option.none in
+    let case_ := MatchCase.mk (Identifier.id "mk") pattern_vars call Option.none Option.none in
     Term.lit (Literal.match_ (Term.var 0 (DebugName.named dict_id)) (List.cons case_ List.empty))
 
 /// Checker-facing sibling of `build_dict_field_projection` (D5 dict-
@@ -6704,7 +6704,7 @@ def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (me
     let method_names := class_method_names cls in
     let pattern_vars := dict_match_pattern_vars method_names method_name in
     let call := rebuild_call (Term.var free_var_sentinel (DebugName.named method_name)) real_args in
-    let case_ := MatchCase.mk (Identifier.id "mk") pattern_vars call Option.none in
+    let case_ := MatchCase.mk (Identifier.id "mk") pattern_vars call Option.none Option.none in
     Term.lit (Literal.match_ (Term.var free_var_sentinel (DebugName.named dict_id)) (List.cons case_ List.empty))
 
 /// The main per-term rewrite -- `term_map_children`-driven fallback for
@@ -7520,9 +7520,9 @@ def resolve_class_call_cases (classes : List Class) (instances : List Instance) 
 #[partial]
 def resolve_class_call_case (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
     match c {
-        MatchCase.mk name args body fp =>
+        MatchCase.mk name args body fp typ_name =>
             let new_env := match_arm_env ctor_field_types env ctor_owners def_types scrutinee c in
-            MatchCase.mk name args (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp,
+            MatchCase.mk name args (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp typ_name,
     }
 
 /// D5-first, D4-fallback resolution for one class-method call, given
@@ -8093,7 +8093,7 @@ def find_unresolved_class_calls_cases (classes : List Class) (cases : List Match
     List.empty => acc,
     List.cons c rest =>
         match c {
-            MatchCase.mk _name _args body _fp => find_unresolved_class_calls_cases classes rest (find_unresolved_class_calls_term classes body acc),
+            MatchCase.mk _name _args body _fp _typ_name => find_unresolved_class_calls_cases classes rest (find_unresolved_class_calls_term classes body acc),
         },
 }
 

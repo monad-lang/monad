@@ -91,7 +91,7 @@ def match_cases_map_children (f : Term -> Term) (cases : List MatchCase) : List 
 
 #[partial]
 def match_case_map_children (f : Term -> Term) (c : MatchCase) : MatchCase :=
-    match c { MatchCase.mk name args body fp => MatchCase.mk name args (f body) fp }
+    match c { MatchCase.mk name args body fp typ_name => MatchCase.mk name args (f body) fp typ_name }
 
 #[partial]
 def struct_fields_map_children (f : Term -> Term) (fields : List StructLitField) : List StructLitField :=
@@ -201,7 +201,7 @@ def match_cases_map_children_at_depth (f : I64 -> Term -> Term) (cases : List Ma
 /// `List.length args` binders deeper than the `Literal.match_` node.
 #[partial]
 def match_case_map_children_at_depth (f : I64 -> Term -> Term) (c : MatchCase) : MatchCase :=
-    match c { MatchCase.mk name args body fp => MatchCase.mk name args (f (List.length args) body) fp }
+    match c { MatchCase.mk name args body fp typ_name => MatchCase.mk name args (f (List.length args) body) fp typ_name }
 
 // ─── Read-only one-level children ──────────────────────────────────
 //
@@ -249,7 +249,7 @@ def match_cases_children (cases : List MatchCase) : List Term :=
         List.empty => List.empty,
         List.cons c rest =>
             match c {
-                MatchCase.mk _name _args body _fp => List.cons body (match_cases_children rest),
+                MatchCase.mk _name _args body _fp _typ_name => List.cons body (match_cases_children rest),
             },
     }
 

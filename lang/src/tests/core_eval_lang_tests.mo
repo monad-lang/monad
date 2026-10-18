@@ -146,9 +146,9 @@ def my_add_term : Term :=
       (Term.lit (Literal.match_
         (Term.var 1 (named "a"))
         [
-          MatchCase.mk (Identifier.id "z") List.empty (Term.var 0 (named "b")) Option.none,
+          MatchCase.mk (Identifier.id "z") List.empty (Term.var 0 (named "b")) Option.none Option.none,
           MatchCase.mk (Identifier.id "s") [Identifier.id "n"]
-            (mynat_s (Term.app (Term.app (free_var "my_add") (Term.var 0 (named "n"))) (Term.var 1 (named "b")))) Option.none,
+            (mynat_s (Term.app (Term.app (free_var "my_add") (Term.var 0 (named "n"))) (Term.var 1 (named "b")))) Option.none Option.none,
         ])))
 
 def two_term : Term := mynat_s (mynat_s mynat_z)
@@ -286,8 +286,8 @@ def wildcard_arity_match_term : Term :=
   Term.lit (Literal.match_
     (mylist_cons (num 1) mylist_nil)
     [
-      MatchCase.mk (Identifier.id "mynil") List.empty (num 0) Option.none,
-      MatchCase.mk (Identifier.id "_") List.empty (num 99) Option.none,
+      MatchCase.mk (Identifier.id "mynil") List.empty (num 0) Option.none Option.none,
+      MatchCase.mk (Identifier.id "_") List.empty (num 99) Option.none Option.none,
     ])
 
 def wildcard_arity_test_decls : List Decl :=
@@ -370,7 +370,7 @@ def get_b_term : Term :=
   Term.lam (binder_explicit (named "t")) Term.hole
     (Term.lit (Literal.match_
       (Term.var 0 (named "t"))
-      [MatchCase.mk (Identifier.id "triple_mk") [Identifier.id "a", Identifier.id "b", Identifier.id "c"] (Term.var 1 (named "b")) Option.none]))
+      [MatchCase.mk (Identifier.id "triple_mk") [Identifier.id "a", Identifier.id "b", Identifier.id "c"] (Term.var 1 (named "b")) Option.none Option.none]))
 
 def get_b_main_term : Term :=
   Term.app (free_var "get_b") (triple_con (num 10) (num 20) (num 30))

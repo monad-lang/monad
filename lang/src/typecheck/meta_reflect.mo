@@ -614,7 +614,7 @@ def reify_match_arm (locals : List String) (v : Value) : Result String MatchCase
                                                     match reify_expr_value (push_locals binder_names locals) body_val {
                                                         Result.err e => Result.err e,
                                                         Result.ok body_term =>
-                                                            Result.ok (MatchCase.mk (Identifier.id ctor_name) (identifiers_of binder_names) body_term Option.none),
+                                                            Result.ok (MatchCase.mk (Identifier.id ctor_name) (identifiers_of binder_names) body_term Option.none Option.none),
                                                     },
                                             },
                                     },
@@ -991,7 +991,7 @@ def test_reify_e_lam_and_match_arm_first_binder_index : Bool :=
                                     match cases {
                                         List.cons case_ _ =>
                                             match case_ {
-                                                MatchCase.mk _ _ case_body _ =>
+                                                MatchCase.mk _ _ case_body _ _ =>
                                                     match case_body {
                                                         Term.var idx _ => I64.beq idx 1, // "x", first-declared
                                                         _ => false,
@@ -1037,7 +1037,7 @@ def test_reify_e_ctor_args_reference_correct_outer_and_field_indices : Bool :=
                                             match cases {
                                                 List.cons case_ _ =>
                                                     match case_ {
-                                                        MatchCase.mk _ _ case_body _ =>
+                                                        MatchCase.mk _ _ case_body _ _ =>
                                                             match case_body {
                                                                 // Point.mk v y -- App(App(Var "Point.mk"), Var v), Var y
                                                                 Term.app applied_v_term y_term =>
