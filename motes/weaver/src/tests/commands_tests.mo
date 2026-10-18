@@ -19,6 +19,7 @@ use weaver::commands {WeaverState, Effect, Commands.dispatch}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use json::json {Json}
+use std::map {BTreeMap}
 use std::process {process_id}
 
 // ── The offline state (main.mo's shape, per-command parameterized) ──────
@@ -47,6 +48,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     provider := "mock",
     budget := budget,
     mcps := mcps,
+    keys := BTreeMap.empty,
     quit := false,
 }
 
@@ -242,4 +244,39 @@ def test_unknown_provider_is_config_error : IO Bool := do {
         Result.err e => is_config e,
         Result.ok _ => false,
     })
+}
+
+/// Phase 10: `/provider` re-resolves the NEW provider's key from the
+/// loaded settings -- the merged `[api_keys]` entry lands in the config
+/// as the direct key (which then beats the env at send time).
+#[test]
+def test_provider_swap_lands_the_settings_key : IO Bool := do {
+    let r <- Commands.dispatch "/provider mistral" state_with_keys;
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => match e.state.run.session.config.api_key {
+            Option.some k => k == "sk-file-mistral",
+            Option.none => false,
+        },
+    })
+}
+
+/// A provider the settings files did not speak for stays env-only: the
+/// swap lands `none`, and the env name remains the resolution.
+#[test]
+def test_provider_swap_without_settings_key_is_env_only : IO Bool := do {
+    let r <- Commands.dispatch "/provider mistral" (state_of Mode.manual []);
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => match e.state.run.session.config.api_key {
+            Option.some _ => false,
+            Option.none => true,
+        },
+    })
+}
+
+/// The state the key tests swap from: the merged settings' key table
+/// carries a mistral entry.
+def state_with_keys : WeaverState := {
+    (state_of Mode.manual []) with keys := Map.insert "mistral" "sk-file-mistral" BTreeMap.empty,
 }

@@ -127,9 +127,26 @@ model = "qwen3:8b"
 max_turns = 20
 
 [mcp_caps]             # per-server capability override, keyed by the
-my-server = "read"     # exact --mcp executable: read | write | exec | net
+my-server = "read"      # exact --mcp executable: read | write | exec | net
+
+[api_keys]             # per-provider API keys, keyed by provider name:
+mistral = "..."         # ollama | mistral | openrouter | anthropic
 ```
 
 A missing or unparsable file contributes nothing; a bad value drops its
 own entry, never the file. The built-in floor is
 ollama / the provider's default model / 40 turns / manual mode.
+
+### API keys
+
+An `[api_keys]` entry wins over the provider's env var (`MISTRAL_API_KEY`
+and friends stay the fallback when the file does not speak for a
+provider); there is deliberately no `--api-key` flag -- a key on a
+command line leaks into shell history and `ps`.
+
+Keys are plaintext on disk. `~/.weaver/config.toml` is the recommended
+home for them; the project file is gitignored but plaintext is
+plaintext, and a key that came from there prints one startup warning
+naming the providers. A saved session (`/save`) never contains key
+material -- the checkpoint keeps only the env var name, and a resumed
+session re-resolves its key from settings/env at startup.

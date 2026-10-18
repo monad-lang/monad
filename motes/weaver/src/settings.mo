@@ -28,6 +28,7 @@ pub struct Settings {
     model : Option String,
     max_turns : Option I64,
     caps : BTreeMap String Capability,
+    api_keys : BTreeMap String String,
 }
 
 pub def Settings.empty : Settings := {
@@ -36,6 +37,7 @@ pub def Settings.empty : Settings := {
     model := Option.none,
     max_turns := Option.none,
     caps := BTreeMap.empty,
+    api_keys := BTreeMap.empty,
 }
 
 /// The resolution order as a function: `over` wins field by field, the
@@ -45,7 +47,8 @@ pub def Settings.merge (base : Settings) (over : Settings) : Settings := {
     provider := merge_opt base.provider over.provider,
     model := merge_opt base.model over.model,
     max_turns := merge_opt base.max_turns over.max_turns,
-    caps := merge_caps base.caps (BTreeMap.to_list over.caps),
+    caps := merge_table base.caps (BTreeMap.to_list over.caps),
+    api_keys := merge_table base.api_keys (BTreeMap.to_list over.api_keys),
 }
 
 def merge_opt {A : Type} (base : Option A) (over : Option A) : Option A :=
@@ -54,15 +57,16 @@ def merge_opt {A : Type} (base : Option A) (over : Option A) : Option A :=
         Option.none => base,
     }
 
-/// The union, `over`'s entries winning per key.
+/// The table union, `over`'s entries winning per key -- the shape both
+/// the capability overrides and the api keys resolve through.
 #[partial]
-def merge_caps (base : BTreeMap String Capability) (entries : List (Pair String Capability)) : BTreeMap String Capability :=
+def merge_table {A : Type} (base : BTreeMap String A) (entries : List (Pair String A)) : BTreeMap String A :=
     match entries {
         List.empty => base,
-        List.cons kv rest => merge_caps (cap_insert kv base) rest,
+        List.cons kv rest => merge_table (tab_insert kv base) rest,
     }
 
-def cap_insert (kv : Pair String Capability) (acc : BTreeMap String Capability) : BTreeMap String Capability :=
+def tab_insert {A : Type} (kv : Pair String A) (acc : BTreeMap String A) : BTreeMap String A :=
     match kv { Pair.pair k v => Map.insert k v acc }
 
 // ── Loading ─────────────────────────────────────────────────────────────
@@ -77,6 +81,7 @@ def cap_insert (kv : Pair String Capability) (acc : BTreeMap String Capability) 
 pub struct Loaded {
     settings : Settings,
     warnings : List WeaverError,
+    project_keys : List String := List.empty,
 }
 
 pub def Loaded.empty : Loaded := {
@@ -93,10 +98,12 @@ pub def Settings.load : IO Loaded := do {
 }
 
 /// The resolution order's last step: settings merge field by field,
-/// warnings concatenate in load order.
+/// warnings concatenate in load order, and the project-file key names
+/// ride along (the global file is never the project file).
 def merge_loaded (g : Loaded) (p : Loaded) : Loaded := {
     settings := Settings.merge g.settings p.settings,
     warnings := List.append g.warnings p.warnings,
+    project_keys := List.append g.project_keys p.project_keys,
 }
 
 pub def Settings.load_global : IO Loaded :=
@@ -114,9 +121,21 @@ def home_settings (home : Option String) : IO Loaded :=
     }
 
 /// The project file is relative to the working directory -- Weaver's
-/// session starts wherever the user launched it.
-pub def Settings.load_project : IO Loaded :=
-    Settings.load_warned_of ".weaver/config.toml"
+/// session starts wherever the user launched it. A key that came from
+/// HERE is worth a startup line (weaver.md Phase 10): the project file
+/// is plaintext in a repo, the deliberate act the entry represents
+/// notwithstanding.
+pub def Settings.load_project : IO Loaded := do {
+    let l <- Settings.load_warned_of ".weaver/config.toml";
+    return (mark_project_keys l)
+}
+
+def mark_project_keys (l : Loaded) : Loaded :=
+    let l2 : Loaded := { l with project_keys := List.map key_name (BTreeMap.to_list l.settings.api_keys) } in
+    l2
+
+def key_name (kv : Pair String String) : String :=
+    match kv { Pair.pair k _ => k }
 
 /// One file, loaded with its failures visible: a missing or unreadable
 /// path is nothing at all (the absent file contributes nothing and
@@ -185,6 +204,9 @@ def parse_error_show (e : Toml.ParseError) : String :=
 ///
 /// [mcp_caps]
 /// mcp-server-filesystem = "read"
+///
+/// [api_keys]
+/// mistral = "..."
 /// ```
 ///
 /// A parse failure is the empty settings (see `Settings.load`); unknown
@@ -201,8 +223,37 @@ def settings_of (root : BTreeMap String Toml.Value) : Settings := {
     provider := str_at "provider" root,
     model := str_at "model" root,
     max_turns := int_at "max_turns" root,
-    caps := caps_of (table_at "mcp_caps" root),
+    caps := table_of (table_at "mcp_caps" root) parse_cap,
+    api_keys := table_of (table_at "api_keys" root) key_value,
 }
+
+/// A TOML table of string values, every entry run through `validate`:
+/// a value that is not a string, or one the validator refuses, drops
+/// its own entry -- never the file. Both `[mcp_caps]` and `[api_keys]`
+/// ride this walk.
+def table_of {A : Type} (t : Option (BTreeMap String Toml.Value)) (validate : String -> Option A) : BTreeMap String A :=
+    match t {
+        Option.none => BTreeMap.empty,
+        Option.some tbl => table_walk validate (BTreeMap.to_list tbl) BTreeMap.empty,
+    }
+
+#[partial]
+def table_walk {A : Type} (validate : String -> Option A) (entries : List (Pair String Toml.Value)) (acc : BTreeMap String A) : BTreeMap String A :=
+    match entries {
+        List.empty => acc,
+        List.cons kv rest => table_walk validate rest (table_entry validate kv acc),
+    }
+
+def table_entry {A : Type} (validate : String -> Option A) (kv : Pair String Toml.Value) (acc : BTreeMap String A) : BTreeMap String A :=
+    match kv {
+        Pair.pair k v => match Toml.get_string v {
+            Result.ok s => match validate s {
+                Option.some a => Map.insert k a acc,
+                Option.none => acc,
+            },
+            Result.err _ => acc,
+        },
+    }
 
 def str_at (key : String) (root : BTreeMap String Toml.Value) : Option String :=
     match Toml.table_get key root {
@@ -237,33 +288,6 @@ def opt_mode (m : Option String) : Option Mode :=
         Option.some s => Mode.parse s,
     }
 
-/// The per-server capability overrides: a string -> capability table,
-/// every entry validated (`read`/`write`/`exec`/`net`); an invalid
-/// value drops that entry, not the whole file.
-def caps_of (t : Option (BTreeMap String Toml.Value)) : BTreeMap String Capability :=
-    match t {
-        Option.none => BTreeMap.empty,
-        Option.some tbl => caps_walk (BTreeMap.to_list tbl) BTreeMap.empty,
-    }
-
-#[partial]
-def caps_walk (entries : List (Pair String Toml.Value)) (acc : BTreeMap String Capability) : BTreeMap String Capability :=
-    match entries {
-        List.empty => acc,
-        List.cons kv rest => caps_walk rest (cap_entry kv acc),
-    }
-
-def cap_entry (kv : Pair String Toml.Value) (acc : BTreeMap String Capability) : BTreeMap String Capability :=
-    match kv {
-        Pair.pair k v => match Toml.get_string v {
-            Result.ok s => match parse_cap s {
-                Option.some c => Map.insert k c acc,
-                Option.none => acc,
-            },
-            Result.err _ => acc,
-        },
-    }
-
 /// The capability vocabulary, `/tools`' display names parsed back.
 pub def parse_cap (s : String) : Option Capability :=
     if s == "read" then Option.some Capability.read
@@ -272,7 +296,20 @@ pub def parse_cap (s : String) : Option Capability :=
     else if s == "net" then Option.some Capability.net
     else Option.none
 
+/// The `[api_keys]` validator: any string is a key -- except the empty
+/// one, which says nothing and stays unsaid (an empty bearer header is
+/// worse than no key at all).
+def key_value (s : String) : Option String :=
+    if String.is_empty s then Option.none else Option.some s
+
 /// A mounted server's capability override: settings name the server by
 /// its `--mcp` executable, so the key is that exact string.
 pub def Settings.cap_of (server : String) (s : Settings) : Option Capability :=
     Map.lookup server s.caps
+
+/// A provider's settings-stored key, when the file(s) spoke for it:
+/// the value that lands in the config as the DIRECT key, and therefore
+/// wins over the env var at send time (Design 8 -- the file entry is
+/// the more deliberate act).
+pub def Settings.key_of (provider : String) (s : Settings) : Option String :=
+    Map.lookup provider s.api_keys

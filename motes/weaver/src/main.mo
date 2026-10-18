@@ -36,6 +36,7 @@ use weaver::tui_app {Tui.run}
 use init::transformers {ResultT}
 use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr}
+use std::list {List.intercalate}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's
 /// whole point is the write/edit pair; shuttle's own CLI ships only
@@ -147,7 +148,7 @@ def plan_of (s : Settings) (c : CliArgs) : Result WeaverError Plan :=
     else
         let provider : String := resolve_provider s c.provider in
         let model : String := resolve_model s c.model in
-        match Weaver.preset provider model {
+        match Weaver.preset provider model s.api_keys {
             Result.err e => Result.err (WeaverError.config e),
             Result.ok cfg => plan_turns s c provider cfg,
         }
@@ -319,7 +320,7 @@ def dispose_all (servers : List McpServer) : IO Unit :=
 def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) : WeaverState :=
     let session : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
     let run : RunState := { session := session, reg := reg, turns_left := p.max_turns, emit := stdout_write, gate := Gate.auto, always := List.empty } in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, quit := false } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -331,6 +332,7 @@ def initial_mode (s : Settings) : Mode :=
 pub def main (args : List String) : IO I64 := do {
     let loaded <- Settings.load;
     let _ <- warn_settings loaded.warnings;
+    let _ <- warn_project_keys loaded.project_keys;
     main_plan loaded.settings (parse_args args)
 }
 
@@ -346,6 +348,18 @@ def warn_settings (ws : List WeaverError) : IO Unit :=
             write_errln (String.concat "warning: " (WeaverError.show w));
             warn_settings rest
         }
+    }
+
+/// Phase 10's one startup line: api keys that came from the PROJECT
+/// file are plaintext in a repo -- the deliberate act the entry
+/// represents is worth naming, once, so the user knows what landed on
+/// disk. (The global file is the recommended home for keys; no warning
+/// for it.)
+def warn_project_keys (names : List String) : IO Unit :=
+    match names {
+        List.empty => IO.pure unit,
+        List.cons _ _ =>
+            write_errln (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
     }
 
 def main_plan (s : Settings) (c : CliArgs) : IO I64 :=

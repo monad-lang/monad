@@ -222,6 +222,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     provider := "mock",
     budget := budget,
     mcps := List.empty,
+    keys := BTreeMap.empty,
     quit := false,
 }
 

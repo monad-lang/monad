@@ -36,8 +36,10 @@ use std::list {List.intercalate}
 /// always-cache) so the whole turn loop advances it; `budget` is the
 /// TOTAL for the session (what `/resume` recomputes `turns_left`
 /// against); `mcps` is the mounted `--mcp` servers' commands (what
-/// `/mcp` lists); `quit` is the `/quit` flag the loop ends on; `fatal`
-/// is the non-recoverable error that ended the run early, if one did
+/// `/mcp` lists); `keys` is the merged `[api_keys]` table (what
+/// `/provider` re-resolves a swap's direct key from -- weaver.md Phase
+/// 10); `quit` is the `/quit` flag the loop ends on; `fatal` is the
+/// non-recoverable error that ended the run early, if one did
 /// (`main` exits 1 when it is set).
 pub struct WeaverState {
     run : RunState,
@@ -45,6 +47,7 @@ pub struct WeaverState {
     provider : String,
     budget : I64,
     mcps : List String,
+    keys : BTreeMap String String,
     quit : Bool,
     fatal : Option WeaverError := Option.none,
 }
@@ -159,7 +162,8 @@ def cmd_model (arg : String) (st : WeaverState) : IO (Result WeaverError Effect)
 
 /// `/provider` with no argument shows the preset name; with one of the
 /// five names, it swaps the whole config (wire, key and host with it)
-/// and keeps the model name.
+/// and keeps the model name. Phase 10: the NEW provider's direct key
+/// re-resolves from the merged `[api_keys]` table the state carries.
 def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
     then respond st (String.concat "provider: " st.provider)
@@ -168,7 +172,7 @@ def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effe
 /// An unknown provider name is a `config` error: the run's
 /// configuration is wrong, not its files or its wire.
 def provider_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
-    match Weaver.preset arg st.run.session.config.model {
+    match Weaver.preset arg st.run.session.config.model st.keys {
         Result.err e => IO.pure (Result.err (WeaverError.config e)),
         Result.ok cfg =>
             let st2 : WeaverState := set_config st cfg arg in

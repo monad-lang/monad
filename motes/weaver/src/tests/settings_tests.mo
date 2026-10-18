@@ -8,7 +8,7 @@
 /// which would leak into every later manual run's resolution.
 use weaver::settings {
     Settings, Settings.empty, Settings.merge, Settings.load_of_path,
-    Settings.cap_of, Loaded, parse_settings, parse_warned, parse_cap,
+    Settings.cap_of, Settings.key_of, Loaded, parse_settings, parse_warned, parse_cap,
 }
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::policy {Mode}
@@ -165,6 +165,7 @@ def global_settings : Settings := {
     model := Option.none,
     max_turns := Option.some 20,
     caps := Map.insert "srv" Capability.read (Map.insert "keep" Capability.net BTreeMap.empty),
+    api_keys := Map.insert "mistral" "sk-global-mistral" (Map.insert "shared" "sk-global-shared" BTreeMap.empty),
 }
 
 /// The project file's shape: it overrides the provider and one server's
@@ -175,6 +176,7 @@ def project_settings : Settings := {
     model := Option.some "qwen3:8b",
     max_turns := Option.none,
     caps := Map.insert "srv" Capability.exec BTreeMap.empty,
+    api_keys := Map.insert "mistral" "sk-project-mistral" BTreeMap.empty,
 }
 
 /// The resolution order as one table: the project file wins per field
@@ -240,3 +242,28 @@ def test_load_of_path_present_file_parses : IO Bool := do {
         && opt_mode_eq s.mode Option.none
         && opt_cap_eq (Settings.cap_of "srv" s) (Option.some Capability.read))
 }
+
+// ── [api_keys] (Phase 10 / Design 8) ────────────────────────────────────
+
+/// The provider-key table parses like the caps table: string values
+/// keyed by provider name, a wrong TYPE dropping its own entry -- never
+/// the file -- and an absent provider simply having no key. An empty
+/// value says nothing and stays unsaid: an empty bearer header is worse
+/// than no key at all.
+#[test]
+def test_parse_settings_api_keys : Bool :=
+    let s : Settings := parse_settings "provider = \"mistral\"\n\n[api_keys]\nmistral = \"sk-file-mistral\"\nopenrouter = \"sk-file-or\"\nbad = 42\nempty = \"\"\n" in
+    opt_str_eq (Settings.key_of "mistral" s) (Option.some "sk-file-mistral")
+        && opt_str_eq (Settings.key_of "openrouter" s) (Option.some "sk-file-or")
+        && opt_str_eq (Settings.key_of "bad" s) Option.none
+        && opt_str_eq (Settings.key_of "empty" s) Option.none
+        && opt_str_eq (Settings.key_of "anthropic" s) Option.none
+
+/// The key tables union like the caps: the project file's entry wins
+/// per provider it speaks for, the global file's stands for the rest.
+#[test]
+def test_merge_api_keys_project_wins_per_key : Bool :=
+    let m : Settings := Settings.merge global_settings project_settings in
+    opt_str_eq (Settings.key_of "mistral" m) (Option.some "sk-project-mistral")
+        && opt_str_eq (Settings.key_of "shared" m) (Option.some "sk-global-shared")
+        && opt_str_eq (Settings.key_of "anthropic" m) Option.none
