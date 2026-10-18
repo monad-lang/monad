@@ -61,9 +61,12 @@ def decode_chat_response (r : Response) : Result String ChatResponse :=
 
 def openai_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String ChatResponse) := do {
     let resp <- Client.post u headers (Body.from_text body_str);
-    return (match openai_http_error resp {
-        Option.some e => Result.err e,
-        Option.none => decode_chat_response resp,
+    return (match resp {
+        Result.err e => Result.err e,
+        Result.ok r => match openai_http_error r {
+            Option.some e => Result.err e,
+            Option.none => decode_chat_response r,
+        },
     })
 }
 
