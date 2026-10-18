@@ -1,4 +1,4 @@
-// Terminal UI Library - the application loop (Phase 7, v2: Elm `Msg` + `perform`)
+// Terminal UI Library - the application loop (Phase 7, v3: async performs)
 //
 // `run_app` is the Elm-architecture entry point: the app is a record
 // of `init`/`on_event`/`update`/`view` plus a frame clock, and the loop
@@ -6,6 +6,7 @@
 // them) and the renderer (render.mo) around it. One loop, one write per
 // changed model:
 //
+//   poll_turns (pending async turns)                   ->  drained Msgs
 //   Input.produce (poll/read/decode + resize + tick)  ->  List Event
 //   on_event lifts each Event into the app's own Msg
 //   fold update over the model (dispatch/perform -> next frame)  ->  S * Cmd
@@ -29,9 +30,23 @@
 // either backend (confirmed when weaver's interactive TUI needed exactly
 // this), so `perform`'s action runs synchronously, blocking the frame it
 // was returned from -- the same trade-off a line-based UI already makes
-// over `IO.read_line`. A future async `perform` would need a new
-// fiber-poll native; nothing here forecloses that, it is simply not what
-// v2 builds.
+// over `IO.read_line`.
+//
+// v3, same reasoning in the other direction: `pollFiber` (async-threading
+// 7a.5) landed, and `Cmd.perform_async (action : Unit -> IO M)` is its
+// adoption. The action FORKS (`forkIO`); the result folds back whenever the
+// loop's `poll_turns` sees the fiber complete -- a frame boundary the
+// action's own turn never blocks (weaver's model turn runs on it, and a
+// spinner animates while it does). The loop owns every pending handle:
+// fork/poll happen only there, and each handle has exactly one consumer
+// (poll), which is what keeps the host's "already consumed / cancelled" eval
+// errors structurally unreachable. The input consequence is deliberately
+// the synchronous loop's: while a turn is pending the loop polls WITHOUT
+// reading (produce_poll_only) -- a second stdin reader would both race the
+// turn's modal overlay for every byte and, on a lost poll wake, block the
+// whole UI in `read_stdin_exact` (a blocking read). Keys typed mid-turn
+// buffer in the tty and drain the first normal read after the turn,
+// exactly as they did when `perform` blocked the frame.
 //
 // A `perform` that renders to the real terminal outside this loop's own
 // `view`/`render`/`diff` pipeline (an approval overlay is exactly this use
@@ -65,13 +80,14 @@ use lib::types { CellDelta, Event, Screen }
 use lib::core { empty_screen, mk_rect }
 use lib::render { apply_deltas, diff, render }
 use lib::widget { Widget }
-use lib::input { Input.produce, InputReader, input_reader }
+use lib::input { Input.produce, Input.produce_poll_only, InputReader, input_reader }
 use lib::terminal {
     Terminal.clear_screen, Terminal.cursor_hide, Terminal.cursor_move, Terminal.cursor_show,
     Terminal.enable_mouse, Terminal.disable_mouse,
     Terminal.enter_alt_screen, Terminal.enter_raw_mode, Terminal.leave_alt_screen,
     Terminal.leave_raw_mode, Terminal.size
 }
+use std::concurrent::fiber {Fiber, forkIO, pollFiber}
 use std::io { IO.flush_stdout, IO.write_stdout }
 use std::list { List.length }
 
@@ -89,7 +105,15 @@ pub type Cmd (M : Type) {
     dispatch (msg : M),
     /// Run `action` now (blocking this frame) and fold its result message
     /// in immediately, the same way a `dispatch`ed message is folded.
-    perform (action : Unit -> IO M)
+    perform (action : Unit -> IO M),
+    /// Fork `action` as a fiber (never blocks the frame); the loop polls
+    /// it every iteration and folds its result message in the moment the
+    /// fiber completes. The loop owns the pending handle: fork and poll
+    /// happen only there, so the fiber is consumed exactly once. While a
+    /// turn this command started is pending, the loop polls stdin
+    /// WITHOUT reading (see the header) -- mid-turn keys buffer until
+    /// the turn completes, exactly as in the synchronous `perform`.
+    perform_async (action : Unit -> IO M)
 }
 
 /// An Elm-architecture app: the initial model, how a raw terminal `Event`
@@ -141,23 +165,68 @@ def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO
                     // draw also flushes run_app's setup writes, which
                     // otherwise sat in the stdout buffer behind it.
                     let prev <- draw_frame vw init reader (empty_screen rows cols) true false;
-                    let _ <- loop_app a reader init prev List.empty;
+                    let _ <- loop_app a reader init prev List.empty List.empty;
                     restore_terminal
                 }
             }
     }
 
-/// One iteration: produce a batch of raw events, lift them to `M`,
-/// fold, draw if it was nonempty (or forced), recurse with the
-/// dispatched/performed messages as the next batch's prefix.
+/// One iteration: poll the pending turn fibers, produce a batch of raw
+/// events, lift them to `M`, fold, draw if it was nonempty (or forced),
+/// recurse with the dispatched/performed messages as the next batch's
+/// prefix and the pending handles still owned here.
 /// `#[terminating]`: the loop's progress is the reader's stream, not a
 /// structural argument.
 #[terminating]
-def loop_app {S : Type} {M : Type} (a : App S M) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) : IO Unit :=
+def loop_app {S : Type} {M : Type} (a : App S M) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
     match a {
         App.app _ on_ev upd vw tick_ms => do {
-            let out <- Input.produce reader tick_ms;
-            after_produce a upd vw on_ev model prev pending out
+            // Polling comes BEFORE the produce: with `tick_ms < 0` the
+            // produce can block until a key, and the host's poll (which
+            // RUNS the deferred action) would then hang behind it.
+            let polled <- poll_turns turns;
+            match polled {
+                Pair.pair tmsgs turns2 => do {
+                    let batched : List M := List.append pending tmsgs;
+                    let out <- produce_for turns2 reader tick_ms;
+                    after_produce a upd vw on_ev model prev batched turns2 out
+                }
+            }
+        }
+    }
+
+/// The cycle's read half, decided by the turn state: `produce` normally,
+/// `produce_poll_only` while a turn is pending (tui.mo's header carries
+/// the whole reason -- a second stdin reader would race the turn's modal
+/// overlay and block the UI on a lost wake).
+def produce_for {M : Type} (turns : List (Fiber M)) (reader : InputReader) (timeout_ms : I64) : IO (Pair (List Event) InputReader) :=
+    match turns {
+        List.empty => Input.produce reader timeout_ms,
+        List.cons _ _ => Input.produce_poll_only reader timeout_ms
+    }
+
+/// Every pending turn fiber, polled once. A fiber that has completed
+/// drops from the list and its result message joins the next batch
+/// (messages in fork order); one still running stays. Entries never see
+/// a cancelled or already-consumed poll: fork, poll and drop live only
+/// here and in `continue_step`, and each handle has exactly this one
+/// consumer (`pollFiber`) -- that is what keeps the host's eval errors
+/// structurally unreachable. `#[terminating]`: recursion on the list
+/// tail; a `pollFiber` never waits.
+#[terminating]
+def poll_turns {M : Type} (turns : List (Fiber M)) : IO (Pair (List M) (List (Fiber M))) :=
+    match turns {
+        List.empty => IO.pure (Pair.pair List.empty List.empty),
+        List.cons f rest => do {
+            let head <- pollFiber f;
+            let tail <- poll_turns rest;
+            match tail {
+                Pair.pair tmsgs tturns =>
+                    match head {
+                        Option.none => IO.pure (Pair.pair tmsgs (List.cons f tturns)),
+                        Option.some m => IO.pure (Pair.pair (List.cons m tmsgs) tturns)
+                    }
+            }
         }
     }
 
@@ -165,18 +234,20 @@ def loop_app {S : Type} {M : Type} (a : App S M) (reader : InputReader) (model :
 /// (a piped script's last keystrokes still count) and then stops -- a
 /// controlled exit, `run_with_size` restores after us.
 #[terminating]
-def after_produce {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (out : Pair (List Event) InputReader) : IO Unit :=
+def after_produce {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) (out : Pair (List Event) InputReader) : IO Unit :=
     match out {
         Pair.pair evs reader2 =>
             let msgs : List M := List.map on_ev evs in
             if reader2.closed
             then final_frame upd vw reader2 model prev pending msgs
-            else step_loop a upd vw reader2 model prev pending msgs
+            else step_loop a upd vw reader2 model prev turns pending msgs
     }
 
 /// The exit draw: one fold, one frame, no recursion -- the loop is over
 /// and any `dispatch`/`perform` commands die with it (there is no next
-/// frame).
+/// frame). A surviving `perform_async` dies too, unforked: a turn
+/// nobody will poll -- and the host never runs a dropped action (fork
+/// defers), which makes this exit the CHEAPEST of the two backends.
 #[terminating]
 def final_frame {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (msgs : List M) : IO Unit := do {
     let batch : List M := List.append pending msgs;
@@ -199,32 +270,46 @@ def final_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (
 /// The batch `step_loop` folds: `pending` (last frame's
 /// dispatched/performed messages) in front of the freshly produced ones.
 #[terminating]
-def step_loop {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (msgs : List M) : IO Unit :=
+def step_loop {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (Fiber M)) (pending : List M) (msgs : List M) : IO Unit :=
     let batch : List M := List.append pending msgs in
     do {
         let stepped <- step_batch upd model batch;
-        after_step a vw reader prev batch stepped
+        after_step a vw reader prev turns batch stepped
     }
 
 /// The fold's continuation: `quit` ends the loop, anything else draws
 /// the frame (when the batch was nonempty, or `perform` forced a
 /// repaint) and recurses with the queued `dispatch`/`perform` messages.
 #[terminating]
-def after_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : IO Unit :=
+def after_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : IO Unit :=
     match stepped {
-        Pair.pair inner tail => continue_step a vw reader prev batch inner tail
+        Pair.pair inner tail => continue_step a vw reader prev turns batch inner tail
     }
 
 #[terminating]
-def continue_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) : IO Unit :=
+def continue_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) : IO Unit :=
     match inner {
         Pair.pair model2 cmd =>
             match cmd {
                 Cmd.quit => do { return Unit.unit },
+                Cmd.perform_async action =>
+                    match tail {
+                        Pair.pair pending2 forced => do {
+                            // The fork IS this frame's delivery: the
+                            // handle joins the loop's pending set, and
+                            // the next `loop_app` polls it before it
+                            // produces. The handle is consumed exactly
+                            // once -- here it is born, in `poll_turns`
+                            // it dies.
+                            let f <- forkIO action;
+                            let frame <- draw_frame vw model2 reader prev (List.length batch > 0) forced;
+                            loop_app a reader model2 frame pending2 (List.cons f turns)
+                        }
+                    },
                 _ => match tail {
                     Pair.pair pending2 forced => do {
                         let frame <- draw_frame vw model2 reader prev (List.length batch > 0) forced;
-                        loop_app a reader model2 frame pending2
+                        loop_app a reader model2 frame pending2 turns
                     }
                 }
             }
@@ -260,6 +345,15 @@ def step_cmd {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (model : S) 
             let stepped <- step_batch upd model (List.cons m2 rest);
             return (force_repaint stepped)
         },
+        // Pass-through, not a fork: `step_cmd`'s shape has no room for a
+        // fiber handle, and its `rest` has nowhere to go but the
+        // unprocessed-message queue. The cmd rides back OUT as this
+        // batch's survivor (`continue_step` consumes it there and forks);
+        // `rest` re-queues as the next frame's pending, so a SECOND
+        // perform_async in the same batch forks, in order, one iteration
+        // later.
+        Cmd.perform_async action =>
+            return (Pair.pair (Pair.pair model (Cmd.perform_async action)) (Pair.pair rest false)),
         Cmd.none => step_batch upd model rest
     }
 

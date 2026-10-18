@@ -484,6 +484,35 @@ def Input.produce_go (sized : Pair (List Event) InputReader) (timeout_ms : I64) 
         }
     }
 
+/// The pending-turn cycle: everything `produce` does EXCEPT the read.
+/// Soundness, not a style choice -- see tui.mo's header. While an async
+/// turn runs, its modal overlay is the only stdin reader on the fiber's
+/// thread, so the loop must not read the same fd: a second reader both
+/// races the overlay for every byte and, having lost a poll wake, would
+/// block the whole UI inside `read_stdin_exact` (a blocking read).
+/// Bytes typed mid-turn therefore stay in the tty, and the first normal
+/// `produce` after the turn drains them -- the same buffering the
+/// synchronous loop already had. A readable-but-unread poll still
+/// yields the tick (the frame clock keeps animating the spinner rather
+/// than spinning a no-op cycle hot).
+pub def Input.produce_poll_only (r : InputReader) (timeout_ms : I64) : IO (Pair (List Event) InputReader) := do {
+    let size <- Terminal.size;
+    let sized : Pair (List Event) InputReader := Input.note_size r size;
+    let out <- Input.poll_only_go sized timeout_ms;
+    return out
+}
+
+def Input.poll_only_go (sized : Pair (List Event) InputReader) (timeout_ms : I64) : IO (Pair (List Event) InputReader) :=
+    match sized {
+        Pair.pair evs nr => do {
+            // Paces the cycle and observes resizes exactly as `produce`
+            // would; the readable result is deliberately ignored (the
+            // bytes belong to the turn fiber's reader).
+            Terminal.poll timeout_ms;
+            Input.idle_cycle nr evs
+        }
+    }
+
 /// The timeout path: no input arrived, which IS the frame clock -- a
 /// `tick` event rides the batch (apps that want no ticks poll with a
 /// negative timeout and never get here). A pending lone ESC resolves
