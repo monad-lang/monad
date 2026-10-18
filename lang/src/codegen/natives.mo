@@ -637,6 +637,11 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "bytebuf_free" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_free")
             else if String.beq target "bytebuf_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_ptr")
             else if String.beq target "bytebuf_len" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_len")
+            // The text bridge (`ByteBuf.to_string`/`of_string`): `RawIO`
+            // natives behind `.mo` wrappers, so `raw_io_passthrough` --
+            // the C side hands back a bare string / `BufObj` pointer.
+            else if String.beq target "bytebuf_to_string" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_to_string")
+            else if String.beq target "bytebuf_of_string" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_of_string")
             else Option.none,
     }
 
@@ -925,6 +930,10 @@ def runtime_declarations : List LLVMDeclaration :=
     // i64 result out (the mode ops' 1/0, the size packed as
     // rows*65536+cols, or the poll's readable/timeout/error).
     let d92 := mk_decl "monad_term_ctl" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    // `std/bytebuf.mo`'s text bridge (runtime.c): buffer + length in,
+    // string pointer out; string pointer in, `BufObj` pointer out.
+    let d93 := mk_decl "monad_bytebuf_to_string" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d94 := mk_decl "monad_bytebuf_of_string" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
@@ -932,7 +941,7 @@ def runtime_declarations : List LLVMDeclaration :=
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d68, d69, d70, d71, d72,
      d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d86, d87,
-     d88, d89, d90, d91, d92]
+     d88, d89, d90, d91, d92, d93, d94]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

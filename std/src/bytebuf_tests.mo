@@ -15,7 +15,7 @@
 /// instance at run time, and constrained instance dispatch is exactly
 /// what this backend does not honor (`unresolved global: BEq.beq`).
 
-use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.to_list}
+use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string}
 use std::list {List.length}
 
 def empty_bytes : List U8 := List.empty
@@ -153,4 +153,61 @@ def test_free_succeeds : IO Bool := do {
     let b <- ByteBuf.alloc 4;
     let u <- ByteBuf.free b;
     return true
+}
+// ─── The text bridge: `of_string` / `to_string` ───
+
+/// `"hé"`'s bytes: `h`, then `é` as its two UTF-8 bytes.
+def he_bytes : List U8 := [104u8, 195u8, 169u8]
+
+#[test]
+def test_of_string_round_trips_through_to_string : IO Bool := do {
+    let b <- ByteBuf.of_string "hello, world";
+    let s <- ByteBuf.to_string b 12;
+    let _ <- ByteBuf.free b;
+    return (String.beq s "hello, world")
+}
+
+/// The length is BYTES, not characters, and the bytes are the UTF-8
+/// encoding -- what a stream write of the string puts on the wire.
+#[test]
+def test_of_string_holds_the_utf8_bytes : IO Bool := do {
+    let b <- ByteBuf.of_string "hé";
+    let xs <- ByteBuf.to_list b 3;
+    let n := ByteBuf.length b;
+    let _ <- ByteBuf.free b;
+    return (I64.beq n 3 && bytes_eq xs he_bytes)
+}
+
+#[test]
+def test_to_string_of_utf8_bytes_is_the_text : IO Bool := do {
+    let b <- ByteBuf.of_list he_bytes;
+    let s <- ByteBuf.to_string b 3;
+    let _ <- ByteBuf.free b;
+    return (String.beq s "hé")
+}
+
+/// `len` past the recorded length clamps, exactly as `to_list`'s does.
+#[test]
+def test_to_string_clamps_len_to_the_buffer : IO Bool := do {
+    let b <- ByteBuf.of_string "abc";
+    let s <- ByteBuf.to_string b 100;
+    let _ <- ByteBuf.free b;
+    return (String.beq s "abc")
+}
+
+#[test]
+def test_to_string_takes_only_len_bytes : IO Bool := do {
+    let b <- ByteBuf.of_string "abcdef";
+    let s <- ByteBuf.to_string b 2;
+    let _ <- ByteBuf.free b;
+    return (String.beq s "ab")
+}
+
+#[test]
+def test_of_string_empty_is_a_zero_length_buffer : IO Bool := do {
+    let b <- ByteBuf.of_string "";
+    let s <- ByteBuf.to_string b 0;
+    let n := ByteBuf.length b;
+    let _ <- ByteBuf.free b;
+    return (I64.beq n 0 && String.beq s "")
 }

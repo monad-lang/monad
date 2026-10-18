@@ -2473,6 +2473,34 @@ void* monad_bytebuf_to_list(void* buf, int64_t len) {
     return list;
 }
 
+/* `bytebuf_to_string : ByteBuf -> I64 -> RawIO String` -- the first
+   `len` bytes as a NUL-terminated GC string, clamped exactly as
+   `monad_bytebuf_to_list` clamps (non-positive -> "", past the recorded
+   length -> the recorded length). One memcpy instead of a cons cell per
+   byte. A NUL inside the buffer survives the copy but, as with
+   `monad_read_stdin_exact`'s bodies, ends the string for every
+   strlen-based consumer. Returned raw; `raw_io_passthrough` wraps it. */
+void* monad_bytebuf_to_string(void* buf, int64_t len) {
+    BufObj* obj = (BufObj*)buf;
+    if (!obj || len < 0) len = 0;
+    if (obj && len > obj->len) len = obj->len;
+    char* out = (char*)monad_alloc_atomic((size_t)len + 1);
+    if (!out) return NULL;
+    if (len) memcpy(out, obj->payload, (size_t)len);
+    out[len] = '\0';
+    return out;
+}
+
+/* `bytebuf_of_string : String -> RawIO ByteBuf` -- a fresh buffer holding
+   the string's bytes (without the NUL), `monad_bytebuf_of_list`'s shape
+   from text. A NULL string is the empty buffer. */
+void* monad_bytebuf_of_string(char* s) {
+    size_t n = s ? strlen(s) : 0;
+    BufObj* obj = bytebuf_new((int64_t)n);
+    if (obj && n) memcpy(obj->payload, s, n);
+    return obj;
+}
+
 /* `IO.ByteBuf.free (b : ByteBuf) : IO Unit` -- no-op (see the section
    comment); returns the Unit ctor like every `IO Unit` native. */
 void* monad_bytebuf_free(void* buf) {

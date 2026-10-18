@@ -25,32 +25,51 @@
 /// compiled -- under the interpreter forcing it fails `unknown native:
 /// bytebuf_ptr`.
 
-type ByteBuf {
+pub type ByteBuf {
   bytebuf
 }
 
 /// Allocate `n` zeroed bytes.
 #[native "bytebuf_alloc"]
-def ByteBuf.alloc (n : I64) : IO ByteBuf
+pub def ByteBuf.alloc (n : I64) : IO ByteBuf
 
 /// The raw address of the payload, for FFI functions that write into or
 /// read out of it. Compiled backend only (see the module doc).
 #[native "bytebuf_ptr"]
-def ByteBuf.ptr (b : ByteBuf) : Ptr
+pub def ByteBuf.ptr (b : ByteBuf) : Ptr
 
 /// How many bytes the buffer was created with.
 #[native "bytebuf_len"]
-def ByteBuf.length (b : ByteBuf) : I64
+pub def ByteBuf.length (b : ByteBuf) : I64
 
 /// Copy `xs` into a fresh buffer.
 #[native "bytebuf_of_list"]
-def ByteBuf.of_list (xs : List U8) : IO ByteBuf
+pub def ByteBuf.of_list (xs : List U8) : IO ByteBuf
 
 /// The first `len` bytes of the buffer as a list, clamped to the buffer's
 /// own length.
 #[native "bytebuf_to_list"]
-def ByteBuf.to_list (b : ByteBuf) (len : I64) : IO (List U8)
+pub def ByteBuf.to_list (b : ByteBuf) (len : I64) : IO (List U8)
 
 /// Release the buffer (a no-op under the compiled GC backend).
 #[native "bytebuf_free"]
-def ByteBuf.free (b : ByteBuf) : IO Unit
+pub def ByteBuf.free (b : ByteBuf) : IO Unit
+
+/// The first `len` bytes of the buffer as a `String`, clamped to the
+/// buffer's own length exactly as `to_list` is -- one copy, where
+/// `String.from_list (ByteBuf.to_list ...)` would build and walk a cons
+/// cell per byte. Bytes that are not valid UTF-8 come back lossily
+/// (U+FFFD) under the interpreter, whose `String` must be UTF-8; the
+/// compiled backend copies them verbatim.
+pub def ByteBuf.to_string (b : ByteBuf) (len : I64) : IO String :=
+  IO.mk (bytebuf_to_string b len)
+
+/// Copy `s`'s bytes into a fresh buffer -- `of_list`'s shape, from text.
+pub def ByteBuf.of_string (s : String) : IO ByteBuf :=
+  IO.mk (bytebuf_of_string s)
+
+#[native "bytebuf_to_string"]
+priv def bytebuf_to_string (b : ByteBuf) (len : I64) : RawIO String
+
+#[native "bytebuf_of_string"]
+priv def bytebuf_of_string (s : String) : RawIO ByteBuf

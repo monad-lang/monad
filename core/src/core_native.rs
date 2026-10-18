@@ -363,6 +363,8 @@ pub fn exec_native(
     "bytebuf_of_list" => bytebuf_of_list(args, natives),
     "bytebuf_to_list" => bytebuf_to_list(args, natives),
     "bytebuf_free" => bytebuf_free(args, natives),
+    "bytebuf_to_string" => bytebuf_to_string(args, natives),
+    "bytebuf_of_string" => bytebuf_of_string(args, natives),
     "bytebuf_len" => bytebuf_len(args),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
@@ -1737,6 +1739,48 @@ fn bytebuf_len(args: &[Value]) -> Result<Value, CoreEvalError> {
     CoreEvalError::NativeArgError(format!("bytebuf_len: no buffer for handle {id}"))
   })?;
   Ok(Value::Lit(IrLit::Num(len as i64, NumSuffix::I64)))
+}
+
+/// `bytebuf_to_string : ByteBuf -> I64 -> RawIO String` -- the first
+/// `len` bytes as a `String`, clamped exactly as `bytebuf_to_list`
+/// clamps. A `String` here must be UTF-8, so bytes that are not come
+/// back lossily (U+FFFD); the compiled backend copies them verbatim.
+/// `RawIO` (one `raw_io_wrap` layer): `ByteBuf.to_string` adds `IO.mk`.
+fn bytebuf_to_string(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "bytebuf_to_string needs 2 args".into(),
+    ));
+  }
+  let id = extract_handle_id(&args[0])?;
+  let len = extract_int(&args[1])?;
+  let text = crate::runtime::global::with::<Vec<u8>, _>(id, |v| {
+    let take = if len <= 0 {
+      0
+    } else {
+      (len as usize).min(v.len())
+    };
+    String::from_utf8_lossy(&v[..take]).into_owned()
+  })
+  .ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("bytebuf_to_string: no buffer for handle {id}"))
+  })?;
+  raw_io_wrap(natives, Value::Lit(IrLit::Str(text.into())))
+}
+
+/// `bytebuf_of_string : String -> RawIO ByteBuf` -- a fresh registry
+/// buffer holding the string's bytes.
+fn bytebuf_of_string(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let s = match args.first() {
+    Some(v) => extract_string(v)?,
+    None => {
+      return Err(CoreEvalError::NativeArgError(
+        "bytebuf_of_string needs 1 arg".into(),
+      ));
+    }
+  };
+  let id = crate::runtime::global::register(s.as_bytes().to_vec());
+  raw_io_wrap(natives, handle_value(id))
 }
 
 fn bytebuf_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
