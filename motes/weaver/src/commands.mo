@@ -50,6 +50,11 @@ pub struct WeaverState {
     keys : BTreeMap String String,
     quit : Bool,
     fatal : Option WeaverError := Option.none,
+    /// The dumb UI's palette switch: `NO_COLOR` (or a future --no-color)
+    /// turns it off; the TUI always colors its own screen. Spell it at
+    /// every WeaverState literal -- an omitted non-defaulted field has
+    /// been seen to check clean and fill garbage at runtime.
+    colors : Bool := true,
 }
 
 /// One command's outcome: the advanced state and the line(s) to print.

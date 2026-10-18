@@ -21,13 +21,14 @@ use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
 use weaver::commands {WeaverState, Effect, Commands.dispatch}
 use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
-use weaver::gate {pick_header, capped_diff}
+use weaver::gate {pick_header, capped_diff, gate_answer_prompt, gate_answer_feedback}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
-use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view}
+use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Model.scroll_step, Model.append_block, panel_height}
+use weaver::theme {theme_line_style}
 use weaver::error {WeaverError, WeaverError.show}
 use tui::types {Event, Key, LayoutSize}
-use tui::widget {Widget, SizedWidget, sized, label}
+use tui::widget {Widget, SizedWidget, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_key}
 use tui::core {empty_screen, mk_rect}
 use tui::render {render, diff, apply_deltas}
@@ -76,27 +77,64 @@ def run_tui_with_size (st : WeaverState) (size : Pair I64 I64) : IO Bool :=
 pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
     match msg {
         WeaverMsg.key_event e => update_event m e,
-        WeaverMsg.turn_result run lines => Pair.pair (append_lines (set_run m run) lines) Cmd.none,
+        WeaverMsg.turn_result run lines =>
+            Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.append_block (set_run mm run) lines) m) Cmd.none,
         WeaverMsg.command_result effect => command_result_step m effect,
     }
 
 def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := append_lines (set_state m effect.state) (Diff.lines effect.output) in
+    let m2 : TuiModel := with_streak_reset
+        (fn (mm : TuiModel) => Model.append_block (set_state mm effect.state) (Diff.lines effect.output)) m in
     if effect.state.quit then Pair.pair m2 Cmd.quit else Pair.pair m2 Cmd.none
 
 def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
     match e {
         Event.key k => update_key m k,
-        Event.resize rows cols => Pair.pair (set_size m rows cols) Cmd.none,
-        _ => Pair.pair m Cmd.none,
+        Event.resize rows cols =>
+            Pair.pair (with_streak_reset (fn (mm : TuiModel) => set_size mm rows cols) m) Cmd.none,
+        _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
 def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
     match k {
-        Key.tab => Pair.pair (cycle_mode m) Cmd.none,
+        Key.tab => Pair.pair (with_streak_reset cycle_mode m) Cmd.none,
         Key.enter => enter_key m,
-        _ => Pair.pair (edit_input m k) Cmd.none,
+        Key.page_up => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (panel_height mm)) m) Cmd.none,
+        Key.page_down => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (0 - panel_height mm)) m) Cmd.none,
+        Key.ctrl c =>
+            if c == "c" then ctrl_c_step m
+            else if c == "u" then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (half_page mm)) m) Cmd.none
+            else if c == "d" then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (0 - half_page mm)) m) Cmd.none
+            else Pair.pair (streak_reset_input m k) Cmd.none,
+        Key.end => Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with scroll := 0 }) m) Cmd.none,
+        Key.home => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm 999999) m) Cmd.none,
+        _ => Pair.pair (streak_reset_input m k) Cmd.none,
     }
+
+/// The half-page scroll: half the panel, at least one row (Claude
+/// Code's Ctrl+U/Ctrl+D binding).
+def half_page (m : TuiModel) : I64 :=
+    let h : I64 := panel_height m in
+    if h < 2 then 1 else h / 2
+
+def streak_reset_input (m : TuiModel) (k : Key) : TuiModel :=
+    { (edit_input m k) with ctrl_c_streak := 0 }
+
+/// `with_streak_reset f m` = apply `f`, then zero the streak.
+def with_streak_reset (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
+    { (f m) with ctrl_c_streak := 0 }
+
+/// One Ctrl+C press: the first since the last other event appends a
+/// hint line; the second CONSECUTIVE one quits through `run_app`'s own
+/// exit -- `restore_terminal`, alt screen and raw mode both unwound.
+/// Consecutive-event streak, not a timed window: a pure update has no
+/// clock. Any other key or message zeroes the streak.
+def ctrl_c_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    if m.ctrl_c_streak > 0
+    then Pair.pair m Cmd.quit
+    else Pair.pair (append_lines ({ m with ctrl_c_streak := 1 } : TuiModel) [ctrl_c_hint_line]) Cmd.none
+
+def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
 
 def edit_input (m : TuiModel) (k : Key) : TuiModel :=
     { m with input := handle_input_key k m.input }
@@ -116,7 +154,8 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     then Pair.pair m Cmd.none
     else
         let st : WeaverState := m.state in
-        let m2 : TuiModel := append_lines (clear_input m) [String.concat "you: " text] in
+        let m2 : TuiModel := with_streak_reset
+            (fn (mm : TuiModel) => Model.append_block (clear_input mm) [String.concat "you: " text]) m in
         Pair.pair m2 (Cmd.perform (fn (_ : Unit) => run_submitted_line st text))
 
 def clear_input (m : TuiModel) : TuiModel :=
@@ -190,14 +229,48 @@ def error_line (e : WeaverError) : String :=
     String.concat "error: " (WeaverError.show e)
 
 /// Rebuild the turn's `Gate` from `Gate.weaver_tui` (instead of
-/// `Gate.weaver`) and drive the loop -- `append_user`/`drive_loop` are
-/// `dumb.mo`'s own read/write-independent halves, reused as-is
-/// (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
+/// `Gate.weaver`) and swap the emit seam to `TuiApp.progress` (NOT
+/// dumb's `stdout_write`: a perform-time raw write lands on the alt
+/// screen mid-frame -- the recorded UI-repair finding). Drive the loop
+/// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
+/// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
-    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode };
+    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode, emit := TuiApp.progress };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
+
+/// The TUI turn's live progress sink: the model's streamed text, shown
+/// as ONE transparent-overwrite line at the status-bar row (row
+/// `rows - 2` -- status at `rows - 2`, input at `rows - 1`). The line
+/// lives only until the perform-enforced repaint, which repaints from
+/// blank and rewrites the real status bar.
+pub def TuiApp.progress (frag : String) : IO Unit := do {
+    let size <- Terminal.size;
+    match size {
+        Pair.pair rows cols => do {
+            let _ <- Terminal.cursor_move (rows - 2) 0;
+            IO.write_stdout (blank_of cols);
+            let _ <- Terminal.cursor_move (rows - 2) 0;
+            IO.write_stdout (progress_text frag cols);
+            IO.flush_stdout
+        }
+    }
+}
+
+/// `n` spaces: the row wipe (tui has no erase-line builder; spaces are
+/// blank cells and the forced repaint's blank-diff drops them anyway).
+/// Bounded to `cols` -- the caller clips to the same width.
+#[terminating]
+def blank_of (n : I64) : String :=
+    if n < 1 then "" else blank_of_go n
+
+#[terminating]
+def blank_of_go (n : I64) : String :=
+    if n < 1 then "" else String.concat " " (blank_of_go (n - 1))
+
+def progress_text (frag : String) (cols : I64) : String :=
+    String.slice (String.concat "[thinking] " frag) 0 (cols - 1)
 
 // ── transcript rendering ─────────────────────────────────────────────────
 
@@ -257,8 +330,48 @@ def weaver_tui_ask (mode : Mode) (p : Pick) : IO Approval :=
 def prompt_overlay (p : Pick) : IO Approval := do {
     let diff_pair <- Diff.for_input p.name p.input;
     let _ <- render_overlay p diff_pair;
+    // Keys typed while the model call blocked sit in the tty buffer --
+    // without this drain the overlay's one-shot read would consume the
+    // STALE keystroke and phantom-answer the prompt.
+    let _ <- drain_stale_keys 64;
     let key_opt <- read_one_key;
-    return (approval_of_key key_opt)
+    let ap : Approval := approval_of_key key_opt;
+    let _ <- echo_answer p diff_pair ap;
+    return ap
+}
+
+/// Drop the buffered keystrokes the drain would otherwise feed the
+/// answer read: `poll 0 -> read 1 -> drop` until the tap runs dry.
+/// EOF stops the drain but leaves the reader to the read itself.
+#[terminating]
+def drain_stale_keys (budget : I64) : IO Unit :=
+    if Bool.not (budget > 0)
+    then IO.pure unit
+    else do {
+        let readable <- Terminal.poll 0;
+        if Bool.not readable
+        then IO.pure unit
+        else do {
+            let chunk <- IO.read_stdin_exact 1;
+            if String.length chunk == 0
+            then IO.pure unit
+            else drain_stale_keys (budget - 1)
+        }
+    }
+
+/// One immediate piece of feedback on the overlay's answer row (the
+/// last line of the overlay): the answer's echo, written before the
+/// gate returns -- an approval used to show nothing until the whole
+/// turn's next render, so under a slow provider the prompt looked dead.
+def echo_answer (p : Pick) (diff_pair : Option (Pair String String)) (ap : Approval) : IO Unit := do {
+    let lines : List String := overlay_lines p diff_pair;
+    // The answer row is the LAST overlay line, and its prompt's own
+    // length is where the echo starts (columns are 0-based here).
+    let row : I64 := list_str_length lines - 1;
+    let col : I64 := String.length (gate_answer_prompt p.cap);
+    let _ <- Terminal.cursor_move row col;
+    IO.write_stdout (gate_answer_feedback p.cap ap);
+    IO.flush_stdout
 }
 
 def approval_of_key (k : Option Key) : Approval :=
@@ -298,10 +411,19 @@ def overlay_widget (p : Pick) (diff_pair : Option (Pair String String)) : Widget
     Widget.column (List.map overlay_row (overlay_lines p diff_pair))
 
 def overlay_row (line : String) : SizedWidget :=
-    sized (LayoutSize.fixed 1) (label line)
+    sized (LayoutSize.fixed 1) (with_style (theme_line_style line) (label line))
 
 def overlay_lines (p : Pick) (diff_pair : Option (Pair String String)) : List String :=
-    List.append [pick_header p] (List.append (diff_lines_of diff_pair) ["", "[y/n/a]: "])
+    List.append [pick_header p] (List.append (diff_lines_of diff_pair) ["", gate_answer_prompt p.cap])
+
+/// The row-count helper `overlay_lines` feeds (same `#[partial]` shape
+/// as model.mo's `list_length`).
+#[partial]
+def list_str_length (xs : List String) : I64 :=
+    match xs {
+        List.empty => 0,
+        List.cons _ rest => 1 + list_str_length rest,
+    }
 
 def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
     match diff_pair {

@@ -4,7 +4,7 @@
 /// IO) is asserted by SHAPE here (it IS a `perform`), never executed --
 /// the turn/command machinery itself is shuttle's and `commands.mo`'s
 /// own, already pinned by their own test files.
-use shuttle::agent {RunState}
+use shuttle::agent {RunState, silent_sleep}
 use shuttle::context {usage_zero}
 use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
@@ -27,10 +27,10 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep }
 
 def state_of (mode : Mode) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, quit := false }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, quit := false, colors := false }
 
 def model_of (mode : Mode) : TuiModel :=
     init_tui_model (state_of mode) 24 80
@@ -119,4 +119,51 @@ def test_enter_with_text_echoes_clears_and_performs : Bool :=
 def test_resize_updates_rows_and_cols : Bool :=
     match TuiApp.update (model_of Mode.manual) (WeaverMsg.key_event (Event.resize 40 120)) {
         Pair.pair m2 cmd => m2.rows == 40 && m2.cols == 120 && cmd_is_none cmd
+    }
+
+// ── double Ctrl+C exit ───────────────────────────────────────────────────
+
+def cmd_is_quit (c : Cmd WeaverMsg) : Bool :=
+    match c { Cmd.quit => true, _ => false }
+
+#[test]
+def test_single_ctrl_c_appends_hint_keeps_running : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "c")) {
+        Pair.pair m2 cmd =>
+            cmd_is_none cmd
+                && m2.ctrl_c_streak == 1
+                && transcript_contains "press Ctrl+C again to exit (or /quit)" m2.transcript
+    }
+
+#[test]
+def test_double_ctrl_c_quits : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "c")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.ctrl "c")) {
+                Pair.pair _ cmd => cmd_is_quit cmd
+            }
+    }
+
+#[test]
+def test_other_key_resets_ctrl_c_streak : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "c")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.char "x")) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg (Key.ctrl "c")) {
+                        Pair.pair m3 cmd => cmd_is_none cmd && m3.ctrl_c_streak == 1
+                    }
+            }
+    }
+
+#[test]
+def test_resize_resets_ctrl_c_streak : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "c")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (WeaverMsg.key_event (Event.resize 40 120)) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg (Key.ctrl "c")) {
+                        Pair.pair _ cmd => cmd_is_none cmd
+                    }
+            }
     }

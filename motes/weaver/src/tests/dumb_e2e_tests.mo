@@ -12,7 +12,7 @@
 /// POLICY before any input is consumed -- the cursor is the proof it
 /// never reached the read seam.
 use init::transformers {ResultT}
-use shuttle::agent {RunState}
+use shuttle::agent {RunState, silent_sleep}
 use shuttle::context {usage_zero}
 use shuttle::gate {Capability, Gate}
 use shuttle::message {Message, Usage, Turn}
@@ -233,6 +233,8 @@ def run_of (reg : ToolRegistry) : RunState := {
     emit := tap_write,
     gate := Gate.auto,
     always := List.empty,
+    retries := 1,
+    sleep_ms := silent_sleep,
 }
 
 def session_of (reg : ToolRegistry) : Session := {

@@ -57,23 +57,33 @@ main.mo            the entry: settings load, flag resolution, MCP
 `monad run motes/weaver/src/main.mo` starts the TUI whenever stdin is a
 tty (the same `Terminal.enter_raw_mode` degrade check `terminal.mo`
 already uses for a non-tty stdin). Tab cycles the approval mode
-(`manual -> plan -> allow_edit -> auto -> manual`); Enter submits a line
-and blocks the UI for that one turn or slash command -- there is no
-non-blocking fiber-poll primitive in `std/concurrent` to animate a
-spinner meanwhile, so a turn's duration is the same wait a line-based
-UI already has over `IO.read_line`. An approval prompt (`manual`/
-`allow_edit`'s `ask` cells) takes over the whole screen for one
-`y`/`n`/`a` keypress, diff included for a `write`/`edit` pick, then the
-TUI repaints and continues. `/quit` is the one guaranteed clean exit
-(cbreak mode keeps `ISIG` on, so Ctrl-C still kills a hung process but
-bypasses the restore path -- the same class of gap `tui::run_app`'s own
-header documents for a hard crash). A piped or scripted run (stdin not
-a tty) falls back to the line-based UI above automatically.
+(`manual -> plan -> allow_edit -> auto -> manual`), PageUp/PageDown
+scroll a page and Ctrl+U/Ctrl+D half a page (End re-pins, Home jumps to
+the top; new output auto-pins only when the window is already pinned
+and the scrolled-up window shows a `N lines above -- PgDn for latest`
+row instead). Enter submits a line and blocks the UI for that one turn
+or slash command -- there is no non-blocking fiber-poll primitive in
+`std/concurrent` to animate a spinner meanwhile, so the wait is what a
+turn costs; what the model streams meanwhile shows on the status row
+(`[thinking] ...`, overwritten in place, wiped when the turn's
+transcript lands). An approval prompt (`manual`/`allow_edit`'s `ask`
+cells) takes over the whole screen for one `y`/`n`/`a` keypress, diff
+included for a `write`/`edit` pick; the answer echoes back immediately
+and keystrokes typed while the model call was blocking are drained,
+not fed to the answer read. `a` approves every pick of that capability
+for the WHOLE session -- one `a` on a read is repo-wide read access
+until `/clear` or exit. Two Ctrl+C presses in a row (no other key
+between) exit cleanly through the restore path -- cbreak now has ISIG
+off, so Ctrl+C arrives as a key rather than SIGINT; a single press just
+prints a hint, and DURING a turn Ctrl+C is only queued (a truly hung
+tool still needs `/quit` once the turn ends). A piped or scripted run
+(stdin not a tty) falls back to the line-based UI above automatically.
 
 The `mock` provider is shuttle's scripted wire: a JSON array of turns at
-`/tmp/shuttle_mock_turns_<pid>.json`, indexed by assistant count. The
-e2e tests (`src/tests/`) drive the whole loop -- approvals, plan-mode
-refusals, a real edit with its diff -- through it, offline.
+`/tmp/shuttle_mock_turns_<pid>.json` (or `SHUTTLE_MOCK_TURNS`), indexed
+by assistant count. The e2e tests (`src/tests/`) drive the whole loop --
+approvals, plan-mode refusals, a real edit with its diff -- through it,
+offline.
 
 ## Modes
 
@@ -136,6 +146,24 @@ mistral = "..."         # ollama | mistral | openrouter | anthropic
 A missing or unparsable file contributes nothing; a bad value drops its
 own entry, never the file. The built-in floor is
 ollama / the provider's default model / 40 turns / manual mode.
+
+### Colors
+
+The dumb UI follows the informal standard: colors are ON unless
+`NO_COLOR` is set (the TUI always colors its own screen). Transcript
+lines classify by prefix -- user lines and running rows dim (the
+running row cyan), `error:`/`denied:` lines and diff `-` rows red, diff
+`+` rows green, the status bar dim with the mode chip red (`auto`,
+the trust warning) or cyan (`plan`). Both UIs use the same
+classification (`theme.mo`).
+
+### Retries
+
+A failed provider call retries up to 3 times by default (2s, 4s, 6s
+backoff), each attempt announced as `retrying (n/3): <error>`. A 4xx
+status error is NOT retried -- a malformed request or an unknown key
+fails identically on every resend -- except 429 (rate limiting). The
+headless default is one attempt, byte-identical to the pre-retry loop.
 
 ### API keys
 

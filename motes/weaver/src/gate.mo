@@ -66,10 +66,33 @@ def prompt_pick (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
     let _ <- write (pick_header p);
     let r <- Diff.for_input p.name p.input;
     let _ <- write_diff write r;
-    let _ <- write "[y/n/a]: ";
+    let _ <- write (gate_answer_prompt p.cap);
     let line <- read unit;
-    answer_of line
+    let ap <- answer_of line;
+    let _ <- write (String.concat (gate_answer_feedback p.cap ap) "\n");
+    return ap
 }
+
+/// The answer line, both UIs' shared prompt. The `a` semantics used to
+/// be undocumented -- "grant read access to a whole repo" is exactly
+/// what `always` does (cached per capability for the whole session,
+/// `RunState.always`) -- so the prompt names it.
+pub def gate_answer_prompt (cap : Capability) : String :=
+    String.concat "[y] once  [n] deny  [a] = all "
+        (String.concat (cap_name cap) "s this session: ")
+
+/// What the gate echoes back once the answer lands. One piece of
+/// immediate feedback: answering USED to show nothing for the whole
+/// rest of the turn, so under a slow provider the prompt looked dead
+/// (the recorded UI-repair finding).
+pub def gate_answer_feedback (cap : Capability) (ap : Approval) : String :=
+    match ap {
+        Approval.once => "y -- approved",
+        Approval.always => String.concat "a -- all "
+            (String.concat (cap_name cap) "s approved for this session"),
+        Approval.deny reason =>
+            String.concat "n -- denied (" (String.concat reason ")"),
+    }
 
 /// One line: `[approve] write edit {...}` -- for a `write`/`edit`
 /// pick the diff block follows on its own lines, then the answer

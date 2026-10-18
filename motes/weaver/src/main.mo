@@ -17,7 +17,7 @@ use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
 use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
-use shuttle::agent {RunState}
+use shuttle::agent {RunState, silent_sleep}
 use shuttle::session {Session}
 use shuttle::context {usage_zero}
 use shuttle::provider {ProviderConfig}
@@ -27,7 +27,7 @@ use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
-use weaver::dumb {Dumb.run}
+use weaver::dumb {Dumb.run, Dumb.poll_sleep}
 use weaver::policy {Mode}
 use weaver::providers {Weaver.preset}
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
@@ -35,7 +35,7 @@ use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run}
 use init::transformers {ResultT}
 use json::json {Json}
-use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr}
+use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env}
 use std::list {List.intercalate}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's
@@ -317,10 +317,10 @@ def dispose_all (servers : List McpServer) : IO Unit :=
 /// history), the whole budget ahead, the settings' mode (manual is the
 /// safe default; `/mode` changes it), and a gate rebuilt from the mode
 /// before every turn -- `Gate.auto` here is never consulted.
-def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) : WeaverState :=
+def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) : WeaverState :=
     let session : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
-    let run : RunState := { session := session, reg := reg, turns_left := p.max_turns, emit := stdout_write, gate := Gate.auto, always := List.empty } in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false } in
+    let run : RunState := { session := session, reg := reg, turns_left := p.max_turns, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false, colors := colors } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -329,11 +329,20 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) : WeaverState :
 def initial_mode (s : Settings) : Mode :=
     match s.mode { Option.some m => m, Option.none => Mode.manual }
 
+/// The dumb UI's palette switch: `NO_COLOR` set anywhere is off --
+/// the informal standard; there is no tty probe (a piped consumer sets
+/// NO_COLOR) and no other env/CLI surface.
+def colors_probe : IO Bool := do {
+    let nc <- IO.get_env "NO_COLOR";
+    return (match nc { Option.none => true, Option.some _ => false })
+}
+
 pub def main (args : List String) : IO I64 := do {
+    let colors_on_main <- colors_probe;
     let loaded <- Settings.load;
     let _ <- warn_settings loaded.warnings;
     let _ <- warn_project_keys loaded.project_keys;
-    main_plan loaded.settings (parse_args args)
+    main_plan colors_on_main loaded.settings (parse_args args)
 }
 
 /// Phase 9's settings visibility: the parse failures `Settings.load`
@@ -362,24 +371,24 @@ def warn_project_keys (names : List String) : IO Unit :=
             write_errln (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
     }
 
-def main_plan (s : Settings) (c : CliArgs) : IO I64 :=
+def main_plan (colors : Bool) (s : Settings) (c : CliArgs) : IO I64 :=
     match plan_of s c {
         Result.err e => do { write_errln (String.concat "error: " (WeaverError.show e)); return 1 },
-        Result.ok p => run_plan p s,
+        Result.ok p => run_plan colors p s,
     }
 
-def run_plan (p : Plan) (s : Settings) : IO I64 := do {
+def run_plan (colors : Bool) (p : Plan) (s : Settings) : IO I64 := do {
     let r <- mount_all client_info p.mcps s weaver_registry [];
-    mounted_plan p s r
+    mounted_plan colors p s r
 }
 
 /// `mount_all` disposes the mounted servers itself on error, so both
 /// arms here hand back an exit code and nothing else.
-def mounted_plan (p : Plan) (s : Settings) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
+def mounted_plan (colors : Bool) (p : Plan) (s : Settings) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
     match r {
         Result.err e => do { write_errln (String.concat "error: " (WeaverError.show e)); return 1 },
         Result.ok pr => match pr {
-            Pair.pair reg servers => start_loop p s reg servers,
+            Pair.pair reg servers => start_loop colors p s reg servers,
         },
     }
 
@@ -391,8 +400,8 @@ def mounted_plan (p : Plan) (s : Settings) (r : Result WeaverError (Pair ToolReg
 /// or scripted run is byte-identical to before this phase.
 /// Phase 9: the exit code follows the state -- a fatal error recorded
 /// mid-session exits 1 (today every post-mount path returned 0).
-def start_loop (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
-    let st : WeaverState := initial_state p reg s;
+def start_loop (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
+    let st : WeaverState := initial_state p reg s colors;
     let ran_tui <- Tui.run st;
     let final <- run_fallback ran_tui st;
     let _ <- dispose_all servers;

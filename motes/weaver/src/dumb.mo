@@ -21,7 +21,19 @@ use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch}
 use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
+use weaver::theme {Theme.tint, theme_status_code}
 use init::transformers {ResultT}
+use tui::terminal {Terminal.poll}
+
+/// The interactive sleep: `Terminal.poll`'s timeout IS a timed wait --
+/// there is no sleep native (no new natives -- the recorded owner
+/// decision) -- and it wakes early on a keypress, which a queued
+/// Ctrl+C or a typed line only makes livelier (the gate's stale-key
+/// drain swallows what it buffered).
+pub def Dumb.poll_sleep (ms : I64) : IO Unit := do {
+    let _ <- Terminal.poll ms;
+    IO.pure unit
+}
 
 /// One loop step's outcome: the advanced state, and whether the loop
 /// continues. EOF and `/quit` are the only things that end a session.
@@ -46,11 +58,17 @@ struct Step {
 /// which no structural measure sees.
 #[terminating]
 pub def Dumb.run (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) : IO WeaverState := do {
+    let w : String -> IO Unit := theme_write write st.colors;
     let _ <- write (prompt_line st);
     let line <- read unit;
-    let step <- step_of read write st line;
+    let step <- step_of read w st line;
     if step.again then Dumb.run read write step.state else IO.pure step.state
 }
+
+/// The dumb write, tinted through the theme by line class -- plain
+/// when the session's colors are off (`NO_COLOR`).
+def theme_write (write : String -> IO Unit) (colors : Bool) : String -> IO Unit :=
+    fn (s : String) => write (Theme.tint colors s)
 
 def step_of (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (line : Option String) : IO Step :=
     match line {
@@ -129,11 +147,13 @@ def failed_step (write : String -> IO Unit) (st : WeaverState) (e : WeaverError)
 }
 
 /// The turn's text reached stdout live through `emit`; all that is
-/// left here is ending its line and returning the advanced state.
+/// left here is ending its line, adding the blank separator line
+/// before the next prompt (Phase 11's spacing), and returning the
+/// advanced state.
 /// (The struct update lives in `advance_run`, not here: `{ x with
 /// .. }` parses only in a plain body, not inside a do-block.)
 def turn_ok (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
-    let _ <- write "\n";
+    let _ <- write "\n\n";
     IO.pure (mk_step (advance_run st run2) true)
 }
 
@@ -149,7 +169,7 @@ def advance_run (st : WeaverState) (run2 : RunState) : WeaverState :=
 /// cross the boundary through `WeaverError.of_shuttle` (the one wrap,
 /// provider-tagged: everything this seam produces is a wire failure).
 def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
-    let gated : RunState := gate_for st.mode read write st.run;
+    let gated : RunState := gate_for st.mode read (theme_write write st.colors) st.run;
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
@@ -197,9 +217,15 @@ def append_user (run : RunState) (text : String) : RunState :=
 /// accounting, followed by dumb mode's own `"> "` prompt. `tui_app.mo`'s
 /// status bar reuses `Dumb.status_fields` for everything up to that
 /// prompt -- the input box IS the prompt there -- so the two UIs never
-/// drift on what the status line shows.
+/// drift on what the status line shows. Mode-colored through the
+/// theme's status code when colors are on.
 def prompt_line (st : WeaverState) : String :=
-    Dumb.status_fields st ++ "> "
+    let plain : String := Dumb.status_fields st ++ "> " in
+    if Bool.not st.colors
+    then plain
+    else
+        let code : String := theme_status_code st.mode in
+        String.concat code (String.concat plain "\u{1b}[0m")
 
 /// Everything `prompt_line` shows except the trailing `"> "` prompt.
 pub def Dumb.status_fields (st : WeaverState) : String :=
