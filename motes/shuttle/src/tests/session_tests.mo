@@ -9,6 +9,8 @@ use shuttle::tool {ToolSpec}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use json::json {Json}
+use std::io {IO.read_file}
+use std::path {Path.of}
 use std::process {process_id}
 use std::list {List.any, List.length}
 
@@ -91,4 +93,50 @@ def test_session_codec_roundtrips_in_memory : Bool :=
     match Session.deserialize_json (Session.serialize_json test_session) {
         Result.err _ => false,
         Result.ok s => s.turns == 2 && s.config.model == "test-model" && List.length s.history == 2,
+    }
+
+// ── Phase 10: a direct key never crosses the save seam ──────────────────
+
+/// A config carrying a DIRECT key -- what `[api_keys]` in Weaver's
+/// settings files resolves to. The trap (weaver.md Design 8): a
+/// `Session.save` file lands in /tmp and project dirs, so the key
+/// material must stay out of it -- save keeps only `api_key_env`, and
+/// a resumed session re-resolves its key from settings/env at startup.
+def keyed_config : ProviderConfig := { base_url := "http://localhost:11434", model := "keyed-model", api_key_env := "SHUTTLE_UNUSED_KEY", api_key := Option.some "sk-redacted-test-key-material", max_tokens := 64, wire := Wire.mock }
+
+def keyed_session : Session := { test_session with config := keyed_config }
+
+def keyed_path : String :=
+    String.concat "/tmp/shuttle_session_test_keyed_" (String.concat (I64.to_string process_id) ".json")
+
+/// A raw text read: the redaction test greps the saved file itself,
+/// not a re-decode of it.
+def read_text (path : String) : IO String :=
+    match Path.of path {
+        Result.err _ => IO.pure "",
+        Result.ok p => IO.read_file p,
+    }
+
+/// The pinned redaction: a session whose config carries a direct key
+/// saves to a file that contains no key material.
+#[test]
+def test_session_save_omits_direct_api_key : IO Bool := do {
+    let saved <- Session.save keyed_session keyed_path;
+    let text <- read_text keyed_path;
+    return (match saved {
+        Result.err _ => false,
+        Result.ok _ => Bool.not (String.contains text "sk-redacted-test-key-material"),
+    })
+}
+
+/// The codec agrees in memory: a round-tripped config carries no
+/// direct key, whatever a hand-edited file might try to inject.
+#[test]
+def test_config_codec_drops_direct_key : Bool :=
+    match ProviderConfig.deserialize_json (ProviderConfig.serialize_json keyed_config) {
+        Result.err _ => false,
+        Result.ok c => match c.api_key {
+            Option.some _ => false,
+            Option.none => true,
+        },
     }

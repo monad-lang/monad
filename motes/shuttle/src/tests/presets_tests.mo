@@ -87,3 +87,44 @@ def test_anthropic_preset_uses_the_anthropic_wire : Bool :=
         Wire.anthropic => true,
         _ => false,
     }
+
+// ── Phase 10: direct-key-first, env-second (weaver.md Design 8) ─────────
+
+/// A config with a direct key resolves to it WITHOUT reading the env:
+/// the deliberate file entry beats whatever the environment happens to
+/// hold -- even an env var that IS set.
+#[test]
+def test_effective_key_direct_beats_env : IO Bool := do {
+    let k <- ProviderConfig.effective_key (with_direct_key (ProviderConfig.mistral "m"));
+    return (match k {
+        Option.some v => String.beq v "sk-direct-from-settings",
+        Option.none => false,
+    })
+}
+
+/// Without a direct key the lookup is the old one, byte-identical: the
+/// named env var, `none` when nothing sets it.
+#[test]
+def test_effective_key_env_fallback_when_no_direct : IO Bool := do {
+    let k <- ProviderConfig.effective_key plain_key_cfg;
+    return (match k {
+        Option.some _ => false,
+        Option.none => true,
+    })
+}
+
+/// The presets stay env-only by default: no [api_keys] entry means the
+/// direct key is `none` and the env name remains the documented
+/// resolution.
+#[test]
+def test_presets_carry_no_direct_key : Bool :=
+    let c := ProviderConfig.mistral "m" in
+    let k := c.api_key in
+    match k {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+def with_direct_key (c : ProviderConfig) : ProviderConfig := { c with api_key := Option.some "sk-direct-from-settings" }
+
+def plain_key_cfg : ProviderConfig := { base_url := "http://localhost:11434", model := "m", api_key_env := "SHUTTLE_KEY_TEST_UNSET", max_tokens := 64, wire := Wire.mock }

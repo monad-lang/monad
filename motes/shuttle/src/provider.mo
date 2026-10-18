@@ -36,6 +36,7 @@ pub struct ProviderConfig {
     base_url : String,
     model : String,
     api_key_env : String,
+    api_key : Option String := Option.none,
     max_tokens : I64,
     wire : Wire,
 }
@@ -61,6 +62,13 @@ pub def Wire.deserialize_json (j : Json) : Result String Wire :=
         Result.ok s => wire_of_tag s,
     }
 
+/// The save codec DELIBERATELY omits `api_key`: a `Session.save` file
+/// lands in /tmp and project dirs, and a direct key must never cross
+/// that seam -- the file keeps only `api_key_env`, and a resumed
+/// session re-resolves its key from settings/env at startup (weaver.md
+/// Design 8). The redaction is pinned by
+/// `session_tests.mo::test_session_save_omits_direct_api_key`, not by
+/// this comment.
 pub def ProviderConfig.serialize_json (c : ProviderConfig) : Json :=
     Json.make_object
         (Map.insert "base_url" (Json.make_str c.base_url)
@@ -97,7 +105,7 @@ def config_wire_step (obj : BTreeMap String Json) (base_url : String) (model : S
         Result.ok wj => match Wire.deserialize_json wj {
             Result.err e => Result.err e,
             Result.ok wire =>
-                let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, max_tokens := max_tokens, wire := wire } in
+                let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, api_key := Option.none, max_tokens := max_tokens, wire := wire } in
                 Result.ok c,
         },
     }
@@ -132,25 +140,38 @@ pub def ProviderConfig.deserialize_json (j : Json) : Result String ProviderConfi
         Result.ok obj => config_of_object obj,
     }
 
+/// The key this config authenticates with, one resolution point for
+/// both live wires: the DIRECT key first, the env var second --
+/// byte-identical to the old env-only lookup when `api_key` is `none`
+/// (weaver.md Phase 10 / Design 8: a settings-file entry is the more
+/// deliberate act, so it wins; the env name stays the fallback, and
+/// there is deliberately no CLI key flag -- a key on a command line
+/// leaks into shell history and `ps`).
+pub def ProviderConfig.effective_key (cfg : ProviderConfig) : IO (Option String) :=
+    match cfg.api_key {
+        Option.some k => IO.pure (Option.some k),
+        Option.none => IO.get_env cfg.api_key_env,
+    }
+
 def send_openai (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn := do {
-    let api_key <- ResultT.lift (IO.get_env cfg.api_key_env);
+    let api_key <- ResultT.lift (ProviderConfig.effective_key cfg);
     let req := OpenAI.encode_request cfg.model cfg.max_tokens system tools history;
     let resp <- OpenAI.complete_stream cfg.base_url api_key req emit;
     ResultT.mk (return (OpenAI.decode_response resp))
 }
 
-/// The anthropic key is REQUIRED, not `Option` -- a missing env var
-/// errors here, named, rather than sending an empty `x-api-key` the
-/// wire would reject with a less legible 401.
+/// The anthropic key is REQUIRED, not `Option` -- a missing key errors
+/// here, named, rather than sending an empty `x-api-key` the wire would
+/// reject with a less legible 401.
 def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : MessagesRequest) (emit : String -> IO Unit) : ResultT String IO MessagesResponse :=
     match key_opt {
         Option.none =>
-            ResultT.mk (return (Result.err (String.concat "anthropic: no API key in env: " cfg.api_key_env))),
+            ResultT.mk (return (Result.err (String.concat "anthropic: no API key (env " (String.concat cfg.api_key_env " unset, and no direct key)")))),
         Option.some key => Anthropic.complete_stream cfg.base_url key req emit,
     }
 
 def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn := do {
-    let key_opt <- ResultT.lift (IO.get_env cfg.api_key_env);
+    let key_opt <- ResultT.lift (ProviderConfig.effective_key cfg);
     let req := Anthropic.encode_request cfg.model cfg.max_tokens system tools history;
     let resp <- anthropic_send_step cfg key_opt req emit;
     ResultT.mk (return (Anthropic.decode_response resp))
