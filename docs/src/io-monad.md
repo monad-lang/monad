@@ -80,63 +80,82 @@ There is no `getLine` — reading stdin is not implemented yet.
 
 ## Sockets and TCP
 
-`std.io` also holds the whole TCP surface — two opaque types and nine blocking
-natives:
+`std.io` holds TCP's setup calls: four blocking functions that open
+connections and listeners. Both are `FdStream`s from `std.stream`, so you
+read, write and close them with the same `Stream` methods you use for a file:
 
 | Function | Type |
 |----------|------|
-| `IO.tcp_connect` | `String -> U16 -> IO (Result String Socket)` |
-| `IO.tcp_listen` | `U16 -> IO (Result String Listener)` |
-| `IO.tcp_accept` | `Listener -> IO (Result String Socket)` |
-| `IO.tcp_read` | `Socket -> U64 -> IO (Result String (List U8))` |
-| `IO.tcp_write` | `Socket -> List U8 -> IO (Result String U64)` |
-| `IO.tcp_close` | `Socket -> IO Unit` |
-| `IO.tcp_close_listener` | `Listener -> IO Unit` |
-| `IO.tcp_local_port` | `Listener -> IO U16` |
-| `IO.tcp_fd` | `Socket -> IO I32` |
+| `IO.tcp_connect` | `String -> U16 -> IO (Result StreamError FdStream)` |
+| `IO.tcp_listen` | `U16 -> IO (Result StreamError FdStream)` |
+| `IO.tcp_accept` | `FdStream -> IO (Result StreamError FdStream)` |
+| `IO.tcp_local_port` | `FdStream -> IO U16` |
+| `Stream.read` | `FdStream -> I64 -> IO (Result StreamError ByteBuf)` |
+| `Stream.write` | `FdStream -> ByteBuf -> IO (Result StreamError I64)` |
+| `Stream.close` | `FdStream -> IO Unit` |
+| `FdStream.raw_fd` | `FdStream -> IO I32` |
 
-`IO.tcp_fd` extracts the raw descriptor behind a `Socket` — typed extraction,
-not a lookup (a `Socket` IS the fd), for handing to an FFI function such as
-OpenSSL's `SSL_set_fd`.
+The payload is a `ByteBuf` from `std.bytebuf`, a flat byte buffer, not a
+`List U8`. A read costs one allocation, whatever its size. Free every buffer
+with `ByteBuf.free` once you are done with it. That covers both the buffers a
+read hands you and the ones you build for a write.
 
-`Socket` and `Listener` are opaque. Each has a single zero-arity constructor so
-that the type checker has a name for the type; the runtime value is never one of
-them. That is what lets the implementation carry a bare file descriptor instead
-of a handle — so nothing may pattern-match, compare or print either.
+A failure is a `StreamError`: a `kind` you can `match` on (`connection_refused`,
+`address_in_use`, `host_unresolved`, ...) plus the OS's `message`.
+`FdStream.raw_fd` hands the descriptor to an FFI function such as OpenSSL's
+`SSL_set_fd`.
+
+An `FdStream` is opaque. At runtime it is the bare file descriptor, so never
+pattern-match, compare or print one, and never use it after `Stream.close`.
 
 ```monad
+use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
+use std::stream {Stream, StreamError, FdStream}
 
 /// Send one request over a fresh connection and return whatever comes back.
-/// Every step can fail, so each is matched on rather than discarded.
 def fetch (host : String) (port : U16) : IO (Result String String) := do {
     let opened <- IO.tcp_connect host port;
+    fetch_on opened
+}
+
+def fetch_on (opened : Result StreamError FdStream) : IO (Result String String) :=
     match opened {
-        Result.err e => return (Result.err e),
-        Result.ok sock => do {
-            let sent <- IO.tcp_write sock (String.to_list "GET / HTTP/1.0\r\n\r\n");
-            match sent {
-                Result.err e => do {
-                    IO.tcp_close sock;
-                    return (Result.err e)
-                },
-                Result.ok _ => do {
-                    let got <- IO.tcp_read sock 4096u64;
-                    IO.tcp_close sock;
-                    match got {
-                        Result.err e => return (Result.err e),
-                        Result.ok bytes => return (Result.ok (String.from_list bytes))
-                    }
-                }
-            }
+        Result.err e => IO.pure (Result.err e.message),
+        Result.ok sock => fetch_over sock
+    }
+
+def fetch_over (sock : FdStream) : IO (Result String String) := do {
+    let request <- ByteBuf.of_string "GET / HTTP/1.0\r\n\r\n";
+    let sent <- Stream.write sock request;
+    ByteBuf.free request;
+    let got <- Stream.read sock 4096;
+    Stream.close sock;
+    fetch_reply sent got
+}
+
+def fetch_reply (sent : Result StreamError I64) (got : Result StreamError ByteBuf) : IO (Result String String) :=
+    match sent {
+        Result.err e => IO.pure (Result.err e.message),
+        Result.ok _ => reply_text got
+    }
+
+def reply_text (got : Result StreamError ByteBuf) : IO (Result String String) :=
+    match got {
+        Result.err e => IO.pure (Result.err e.message),
+        Result.ok buf => do {
+            let text <- ByteBuf.to_string buf (ByteBuf.length buf);
+            ByteBuf.free buf;
+            return (Result.ok text)
         }
     }
-}
 ```
 
 `IO.tcp_listen 0u16` binds `0.0.0.0` on an OS-assigned port; read the port it
 actually settled on back with `IO.tcp_local_port`:
 
 ```monad
+use std::bytebuf {ByteBuf, ByteBuf.free}
+use std::stream {Stream, StreamError, FdStream}
 open IO {println}
 
 /// Listen on an OS-assigned port, print it, accept one connection, echo back
@@ -144,57 +163,64 @@ open IO {println}
 def echo_once : IO Unit := do {
     let bound <- IO.tcp_listen 0u16;
     match bound {
-        Result.err e => println e,
+        Result.err e => println e.message,
         Result.ok listener => do {
             let port <- IO.tcp_local_port listener;
             println (U16.to_string port);
             let accepted <- IO.tcp_accept listener;
-            IO.tcp_close_listener listener;
-            match accepted {
-                Result.err e => println e,
-                Result.ok conn => do {
-                    let got <- IO.tcp_read conn 1024u64;
-                    match got {
-                        Result.err e => println e,
-                        Result.ok bytes => do {
-                            let written <- IO.tcp_write conn bytes;
-                            match written {
-                                Result.err e => println e,
-                                Result.ok n => println (U64.to_string n)
-                            }
-                        }
-                    };
-                    IO.tcp_close conn
-                }
-            }
+            Stream.close listener;
+            echo_on accepted
         }
     }
 }
+
+def echo_on (accepted : Result StreamError FdStream) : IO Unit :=
+    match accepted {
+        Result.err e => println e.message,
+        Result.ok conn => do {
+            let got <- Stream.read conn 1024;
+            echo_back conn got;
+            Stream.close conn
+        }
+    }
+
+def echo_back (conn : FdStream) (got : Result StreamError ByteBuf) : IO Unit :=
+    match got {
+        Result.err e => println e.message,
+        Result.ok buf => do {
+            let written <- Stream.write conn buf;
+            ByteBuf.free buf;
+            match written {
+                Result.err e => println e.message,
+                Result.ok n => println (I64.to_string n)
+            }
+        }
+    }
 ```
 
-`IO.tcp_close_listener` closes the listening socket only; connections already
+Closing a listener closes the listening socket only. Connections already
 accepted from it keep working, which is why the snippet above can close the
-listener and then talk on `conn`. `IO.tcp_write` writes *all* of the bytes it is
-given — the count it returns is the full length, never a partial one, so there
-is no write loop to write.
+listener and then talk on `conn`. `Stream.write` writes *all* of the buffer it
+is given. The count it returns is always the full length, never a partial one,
+so you never need a write loop.
 
 ### What is not there
 
-- **TCP is self-hosted only.** The nine natives are implemented by
+- **TCP is self-hosted only.** The four `tcp_*` natives are implemented by
   `runtime/src/runtime.c`, which the self-hosted backend compiles; the Rust
   bootstrap host deliberately has no TCP implementation at all, so under it any
   of these fails at run time with `unknown native: tcp_listen` (or whichever was
   called). A socket test therefore cannot run under `cargo run -- test`, and the
   `examples/` HTTP entry is pure by design for exactly that reason.
 - **No read timeout, and no non-blocking mode.** `tcp_connect`, `tcp_accept` and
-  `tcp_read` block until they complete. A peer that connects and then sends
+  `Stream.read` block until they complete. A peer that connects and then sends
   nothing holds the accepting fiber and its OS thread indefinitely; nothing in
   the library breaks that. The mitigation in `motes/moon/src/server.mo` is a cap
   on requests served per connection, which bounds an *idle keep-alive client*,
   not a silent one. A real timeout is not implemented.
-- **EOF is not an error.** When the peer closes, `IO.tcp_read` returns
-  `Result.ok List.empty` rather than failing, and read loops terminate on exactly
-  that. `IO.tcp_close` never fails.
+- **EOF is not an error.** When the peer closes, `Stream.read` returns a
+  zero-length buffer rather than failing, and read loops terminate on exactly
+  that. `Stream.close` never fails.
 
 A working server and client built on these live in `motes/moon/src/server.mo` and
 `motes/moose/src/client.mo`.

@@ -11,6 +11,7 @@
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
 use lib::path {Path}
+use lib::stream {FdStream, StreamError, stream_result}
 
 #[native print_str]
 pub def IO.println (s: String) : IO Unit
@@ -154,7 +155,7 @@ pub def IO.list_dir (path : Path) : IO (List String) :=
     IO.list_dir_native (Path.to_string path)
 
 // ── TCP networking ──────────────────────────────────────────────────────
-// Eight blocking `#[native "tcp_*"]` defs, implemented ONLY by the
+// Four blocking `#[native "tcp_*"]` defs, implemented ONLY by the
 // self-hosted backend (`runtime/src/runtime.c`); the Rust evaluator
 // deliberately has no TCP implementation, so a second one cannot drift
 // away from this one.  These declarations are therefore the contract,
@@ -163,63 +164,49 @@ pub def IO.list_dir (path : Path) : IO (List String) :=
 //
 //   tcp_connect      blocking; the host is resolved with `getaddrinfo`
 //                    (so a name works, not just a literal address) and
-//                    each address it returns is tried in turn
+//                    each address it returns is tried in turn; a name
+//                    that does not resolve is `host_unresolved`
 //   tcp_listen       binds `0.0.0.0:port`; port `0u16` asks the OS for
 //                    one, read it back with `tcp_local_port`
-//   tcp_accept       blocking; the `Socket` is a NEW connection
-//   tcp_read         blocking, at most `max_bytes`; EOF (the peer
-//                    closed) is `Result.ok List.empty`, NOT an error —
-//                    read loops terminate on exactly that
-//   tcp_write        writes ALL of `data`; the ok payload is the full
-//                    length, not the last partial count
-//   tcp_close        never fails; closing a listener does not touch
-//   tcp_close_listener  connections already accepted from it
+//   tcp_accept       blocking; the stream is a NEW connection
 //   tcp_local_port   the port the listener actually bound; a failure
 //                    returns 0 (the type has no `Result` channel)
-//   tcp_fd           the connection's raw descriptor, for FFI calls that
-//                    take one (`SSL_set_fd` in motes/tls); the Socket IS
-//                    the fd, so this is typed extraction, not a lookup
 //
-// `Socket` and `Listener` are opaque: their single zero-arity
-// constructor exists only so the type checker has a type to name, and
-// the runtime value is never one of them.  Nothing may pattern-match,
-// compare or print these — that is what lets the implementation carry a
-// bare file descriptor instead of a handle.
-
-type Socket {
-  socket
-}
-
-type Listener {
-  listener
-}
+// Connections AND listeners are `FdStream`s (std/stream.mo): read, write
+// and close them with `Stream.read`/`write`/`close` -- end of stream is
+// a zero-length buffer, a write writes everything -- and take the raw
+// descriptor for an FFI call (`SSL_set_fd` in motes/tls) with
+// `FdStream.raw_fd`. Reading or writing a listener is a runtime
+// `invalid_input`, not a type error.
 
 #[native "tcp_connect"]
-def IO.tcp_connect (host : String) (port : U16) : IO (Result String Socket)
+priv def tcp_connect (host : String) (port : U16) : RawIO (Result (Pair I64 String) FdStream)
 
 #[native "tcp_listen"]
-def IO.tcp_listen (port : U16) : IO (Result String Listener)
+priv def tcp_listen (port : U16) : RawIO (Result (Pair I64 String) FdStream)
 
 #[native "tcp_accept"]
-def IO.tcp_accept (listener : Listener) : IO (Result String Socket)
-
-#[native "tcp_read"]
-def IO.tcp_read (sock : Socket) (max_bytes : U64) : IO (Result String (List U8))
-
-#[native "tcp_write"]
-def IO.tcp_write (sock : Socket) (data : List U8) : IO (Result String U64)
-
-#[native "tcp_close"]
-def IO.tcp_close (sock : Socket) : IO Unit
-
-#[native "tcp_close_listener"]
-def IO.tcp_close_listener (listener : Listener) : IO Unit
+priv def tcp_accept (listener : FdStream) : RawIO (Result (Pair I64 String) FdStream)
 
 #[native "tcp_local_port"]
-def IO.tcp_local_port (listener : Listener) : IO U16
+priv def tcp_local_port (listener : FdStream) : RawIO U16
 
-#[native "tcp_fd"]
-def IO.tcp_fd (sock : Socket) : IO I32
+pub def IO.tcp_connect (host : String) (port : U16) : IO (Result StreamError FdStream) := do {
+  let r <- IO.mk (tcp_connect host port);
+  return (stream_result r)
+}
+
+pub def IO.tcp_listen (port : U16) : IO (Result StreamError FdStream) := do {
+  let r <- IO.mk (tcp_listen port);
+  return (stream_result r)
+}
+
+pub def IO.tcp_accept (listener : FdStream) : IO (Result StreamError FdStream) := do {
+  let r <- IO.mk (tcp_accept listener);
+  return (stream_result r)
+}
+
+pub def IO.tcp_local_port (listener : FdStream) : IO U16 := IO.mk (tcp_local_port listener)
 
 // TODO support constraints
 // def IO.fprintln [ToString A] (a: A) : IO Unit :=

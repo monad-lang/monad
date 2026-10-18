@@ -113,12 +113,11 @@ is not for call sites and is meant to become an implementation detail.
 `is_dir`, `list_dir` (all `Path`-typed), plus `IO.get_env` and
 `IO.current_time` (monotonic milliseconds — only differences are meaningful).
 
-It also holds the entire TCP surface: the opaque `Socket` and `Listener` types
-and nine blocking natives — `tcp_connect`, `tcp_listen`, `tcp_accept`,
-`tcp_read`, `tcp_write`, `tcp_close`, `tcp_close_listener`, `tcp_local_port`,
-and `tcp_fd` (the raw descriptor behind a `Socket`, typed extraction rather
-than a lookup — the thing an FFI consumer such as `motes/tls` hands to
-`SSL_set_fd`).
+It also holds TCP's setup calls: `tcp_connect`, `tcp_listen`, `tcp_accept`
+and `tcp_local_port`, all blocking. Connections and listeners are `std.stream`
+`FdStream`s, so `Stream.read`/`write`/`close` move their bytes as `ByteBuf`s.
+`FdStream.raw_fd` returns the descriptor, which an FFI consumer such as
+`motes/tls` hands to `SSL_set_fd`. Errors are `StreamError`s.
 These are implemented **only** by the self-hosted backend; the Rust bootstrap
 host has no TCP at all, so a socket test cannot run under `cargo run -- test`.
 [The IO Monad](./io-monad.md#sockets-and-tcp) has the signatures, the two worked
@@ -214,18 +213,20 @@ ordinary functions, not `Functor`/`Foldable` methods.
 `ByteBuf`, a flat byte buffer the C FFI can address — the thing a
 `#[extern "c"]` function that takes a `void*` plus a length wants
 (`SSL_read`/`SSL_write` in `motes/tls` are the first consumers; an `Array U8`
-exposes no backing store). Values are opaque like `Socket`: never
-pattern-match, compare or print one. A buffer **records its length** —
-`length` is what it was created with, and `to_list`'s `len` is clamped to it,
-so an over-large `len` cannot read past the allocation (pass `SSL_read`'s
-return to read only what came back).
+exposes no backing store). Values are opaque like `FdStream`: never
+pattern-match, compare or print one. A buffer **records its length**.
+`length` is what it was created with, or what `truncate` cut it to.
+`to_list`'s `len` is clamped to that length, so an over-large `len` cannot
+read past the allocation. Truncating to `SSL_read`'s return keeps only the
+bytes that came back.
 
 | Function | Notes |
 |----------|-------|
 | `ByteBuf.alloc n` | `n` zeroed bytes |
 | `ByteBuf.of_list xs` | copy into a fresh buffer |
 | `ByteBuf.to_list b len` | the first `len` bytes, clamped to `length` |
-| `ByteBuf.length b` | how many bytes the buffer was created with |
+| `ByteBuf.length b` | how many bytes the buffer holds |
+| `ByteBuf.truncate b n` | shrink to the first `n` bytes (never grows) |
 | `ByteBuf.ptr b` | the raw payload address, a `Ptr` — **compiled backend only** |
 | `ByteBuf.free b` | a no-op compiled (Boehm reclaims); a real drop interpreted |
 
@@ -272,7 +273,7 @@ cooperative, so the two backends disagree about what a `forkIO` means.
 - **Three declared-but-unimplemented natives**: `eq_rec` (so `Eq.rec` cannot be
   called), `string_to_chars`, and `string_from_chars`.
 - **TCP has no timeout** and no non-blocking mode: `tcp_connect`, `tcp_accept`
-  and `tcp_read` block until they complete, so a peer that connects and then
+  and `Stream.read` block until they complete, so a peer that connects and then
   stays silent holds a fiber and its OS thread indefinitely. And TCP is
   self-hosted only — the Rust host cannot run a socket at all.
 

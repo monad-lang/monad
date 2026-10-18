@@ -317,12 +317,12 @@ def test_generated_u16_ops : IO Bool :=
 "# in
     compile_source_run_expect source "gen_u16_ops" 7
 
-/// The C TCP natives (runtime.c) end to end: listen on an OS-assigned
-/// port, read it back with `tcp_local_port`, connect, accept, write,
-/// read, see EOF, and read a closed handle. The Rust evaluator has no
-/// TCP implementation at all, so THIS is the family's only test that
-/// compiles, links and runs the real thing -- the deleted unit tests in
-/// core_native.rs used to cover the same contract.
+/// The C TCP natives (runtime.c) end to end, through the `std/stream.mo`
+/// surface: listen on an OS-assigned port, read it back with
+/// `tcp_local_port`, connect, accept, write, read, see EOF, and read a
+/// closed handle. The Rust evaluator has no TCP implementation at all,
+/// so THIS is the family's only test that compiles, links and runs the
+/// real thing.
 ///
 /// Distinct non-7 exit codes name the failing step, because a failure
 /// here is otherwise just "the binary exited non-zero".
@@ -332,7 +332,52 @@ def test_generated_u16_ops : IO Bool :=
 /// rather than fail (see the note in runtime.c's TCP section).
 #[test]
 def test_c_tcp_roundtrip : IO Bool :=
-    let source := r#"use std::io {Socket}
+    let source := r#"use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
+use std::stream {Stream, StreamError, FdStream}
+
+/// What one read produced: the text, "" at end of stream, or none.
+def read_text (s : FdStream) (n : I64) : IO (Option String) := do {
+    let r <- Stream.read s n;
+    read_text_got r
+}
+
+def read_text_got (r : Result StreamError ByteBuf) : IO (Option String) :=
+    match r {
+        Result.err _ => IO.pure Option.none,
+        Result.ok buf => buf_text buf
+    }
+
+def buf_text (buf : ByteBuf) : IO (Option String) := do {
+    let t <- ByteBuf.to_string buf (ByteBuf.length buf);
+    let _ <- ByteBuf.free buf;
+    return (Option.some t)
+}
+
+def write_text (s : FdStream) (text : String) : IO Bool := do {
+    let buf <- ByteBuf.of_string text;
+    let r <- Stream.write s buf;
+    let _ <- ByteBuf.free buf;
+    return (wrote_all r (String.length text))
+}
+
+def wrote_all (r : Result StreamError I64) (want : I64) : Bool :=
+    match r {
+        Result.err _ => false,
+        Result.ok n => n == want
+    }
+
+def is_text (o : Option String) (want : String) : Bool :=
+    match o {
+        Option.none => false,
+        Option.some t => String.beq t want
+    }
+
+def is_none (o : Option String) : Bool :=
+    match o {
+        Option.none => true,
+        Option.some _ => false
+    }
+
 def main (args : List String) : IO I64 := do {
     let listen_res <- IO.tcp_listen 0u16;
     match listen_res {
@@ -341,36 +386,20 @@ def main (args : List String) : IO I64 := do {
             let port <- IO.tcp_local_port listener;
             let conn_res <- IO.tcp_connect "127.0.0.1" port;
             match conn_res {
-                Result.err _ => do { let _ <- IO.tcp_close_listener listener; return 2 },
+                Result.err _ => do { let _ <- Stream.close listener; return 2 },
                 Result.ok client => do {
                     let accept_res <- IO.tcp_accept listener;
-                    let _ <- IO.tcp_close_listener listener;
+                    let _ <- Stream.close listener;
                     match accept_res {
-                        Result.err _ => do { let _ <- IO.tcp_close client; return 3 },
+                        Result.err _ => do { let _ <- Stream.close client; return 3 },
                         Result.ok server => do {
-                            let write_res <- IO.tcp_write client (String.to_list "hello");
-                            let wrote_five := match write_res {
-                                Result.err _ => false,
-                                Result.ok n => U64.beq n 5u64
-                            };
-                            let read_res <- IO.tcp_read server 1024u64;
-                            let got_hello := match read_res {
-                                Result.err _ => false,
-                                Result.ok bytes => String.beq (String.from_list bytes) "hello"
-                            };
-                            let _ <- IO.tcp_close client;
-                            let eof_res <- IO.tcp_read server 1024u64;
-                            let eof_is_empty := match eof_res {
-                                Result.err _ => false,
-                                Result.ok bytes => List.is_empty bytes
-                            };
-                            let closed_res <- IO.tcp_read client 16u64;
-                            let closed_handle_errs := match closed_res {
-                                Result.err _ => true,
-                                Result.ok _ => false
-                            };
-                            let _ <- IO.tcp_close server;
-                            if wrote_five && got_hello && eof_is_empty && closed_handle_errs
+                            let wrote_five <- write_text client "hello";
+                            let got <- read_text server 1024;
+                            let _ <- Stream.close client;
+                            let eof <- read_text server 1024;
+                            let closed <- read_text client 16;
+                            let _ <- Stream.close server;
+                            if wrote_five && is_text got "hello" && is_text eof "" && is_none closed
                             then return 7
                             else return 4
                         }
@@ -383,14 +412,14 @@ def main (args : List String) : IO I64 := do {
 "# in
     compile_source_run_expect source "c_tcp_roundtrip" 7
 
-/// `IO.tcp_fd` end to end: both ends of a real connection hand back a
-/// descriptor that is non-negative and distinct from the peer's -- the
-/// first assertion ever to exercise the compiled `I32` comparison group
-/// (`runtime/src/natives.mo`), which the fd's `IO I32` type forces.
+/// `FdStream.raw_fd` on TCP end to end: both ends of a real connection
+/// hand back a descriptor that is non-negative and distinct from the
+/// peer's -- which also exercises the compiled `I32` comparison group
+/// (`runtime/src/natives.mo`), since the fd's `IO I32` type forces it.
 /// `I64.to_i32 0` for the zero because the corpus has no `i32` literal.
 #[test]
-def test_c_tcp_fd : IO Bool :=
-    let source := r#"use std::io {Socket}
+def test_c_tcp_raw_fd : IO Bool :=
+    let source := r#"use std::stream {Stream, FdStream, FdStream.raw_fd}
 def main (args : List String) : IO I64 := do {
     let listen_res <- IO.tcp_listen 0u16;
     match listen_res {
@@ -399,17 +428,17 @@ def main (args : List String) : IO I64 := do {
             let port <- IO.tcp_local_port listener;
             let conn_res <- IO.tcp_connect "127.0.0.1" port;
             match conn_res {
-                Result.err _ => do { let _ <- IO.tcp_close_listener listener; return 2 },
+                Result.err _ => do { let _ <- Stream.close listener; return 2 },
                 Result.ok client => do {
                     let accept_res <- IO.tcp_accept listener;
-                    let _ <- IO.tcp_close_listener listener;
+                    let _ <- Stream.close listener;
                     match accept_res {
-                        Result.err _ => do { let _ <- IO.tcp_close client; return 3 },
+                        Result.err _ => do { let _ <- Stream.close client; return 3 },
                         Result.ok server => do {
-                            let client_fd <- IO.tcp_fd client;
-                            let server_fd <- IO.tcp_fd server;
-                            let _ <- IO.tcp_close client;
-                            let _ <- IO.tcp_close server;
+                            let client_fd <- FdStream.raw_fd client;
+                            let server_fd <- FdStream.raw_fd server;
+                            let _ <- Stream.close client;
+                            let _ <- Stream.close server;
                             let client_negative := I32.lt client_fd (I64.to_i32 0);
                             let server_negative := I32.lt server_fd (I64.to_i32 0);
                             let same_fd := I32.beq client_fd server_fd;
@@ -424,30 +453,88 @@ def main (args : List String) : IO I64 := do {
     }
 }
 "# in
-    compile_source_run_expect source "c_tcp_fd" 7
+    compile_source_run_expect source "c_tcp_raw_fd" 7
 
-/// Connecting to a port nothing listens on is `Result.err`, not a hang
-/// and not a bogus `Socket` -- the same negative the deleted Rust unit
-/// test `test_tcp_connect_to_closed_port_returns_err` covered. The port
-/// is obtained by binding port 0 and closing the listener again, so it
-/// is one the kernel just handed out and nothing holds.
+/// The `StreamErrorKind` each TCP setup failure maps to -- the C side
+/// reports a kind CODE, so these are what hold `runtime.c`'s errno table
+/// and `std/stream.mo`'s declaration order to each other:
+///
+///   - connecting to a port nothing listens on is `connection_refused`
+///     (the port is one the kernel just handed out to a listener that
+///     was closed again, so nothing holds it);
+///   - listening on a port a live listener holds is `address_in_use`;
+///   - a name under the reserved `.invalid` TLD is `host_unresolved`
+///     (RFC 6761: it never resolves), the one kind with no errno.
+///
+/// Exit code 7 is all three; 2/3/4 name the one that failed.
 #[test]
-def test_c_tcp_connect_to_closed_port_errs : IO Bool :=
-    let source := r#"use std::io {Socket}
+def test_c_tcp_error_kinds : IO Bool :=
+    let source := r#"use std::stream {Stream, StreamError, StreamErrorKind, FdStream}
+
+def is_refused (r : Result StreamError FdStream) : Bool :=
+    match r {
+        Result.ok _ => false,
+        Result.err e => connection_refused e.kind
+    }
+
+def connection_refused (k : StreamErrorKind) : Bool :=
+    match k {
+        StreamErrorKind.connection_refused => true,
+        _ => false
+    }
+
+def is_in_use (r : Result StreamError FdStream) : Bool :=
+    match r {
+        Result.ok _ => false,
+        Result.err e => address_in_use e.kind
+    }
+
+def address_in_use (k : StreamErrorKind) : Bool :=
+    match k {
+        StreamErrorKind.address_in_use => true,
+        _ => false
+    }
+
+def is_unresolved (r : Result StreamError FdStream) : Bool :=
+    match r {
+        Result.ok _ => false,
+        Result.err e => host_unresolved e.kind
+    }
+
+def host_unresolved (k : StreamErrorKind) : Bool :=
+    match k {
+        StreamErrorKind.host_unresolved => true,
+        _ => false
+    }
+
+def close_ok (r : Result StreamError FdStream) : IO Unit :=
+    match r {
+        Result.ok s => Stream.close s,
+        Result.err _ => IO.pure unit
+    }
+
 def main (args : List String) : IO I64 := do {
     let listen_res <- IO.tcp_listen 0u16;
     match listen_res {
         Result.err _ => return 1,
         Result.ok listener => do {
             let port <- IO.tcp_local_port listener;
-            let _ <- IO.tcp_close_listener listener;
+            let again <- IO.tcp_listen port;
+            let in_use := is_in_use again;
+            let _ <- close_ok again;
+            let _ <- Stream.close listener;
             let conn_res <- IO.tcp_connect "127.0.0.1" port;
-            match conn_res {
-                Result.err _ => return 7,
-                Result.ok client => do { let _ <- IO.tcp_close client; return 2 }
-            }
+            let refused := is_refused conn_res;
+            let _ <- close_ok conn_res;
+            let gai_res <- IO.tcp_connect "no-such-host.invalid" 80u16;
+            let unresolved := is_unresolved gai_res;
+            let _ <- close_ok gai_res;
+            if Bool.not refused then return 2
+            else if Bool.not in_use then return 3
+            else if Bool.not unresolved then return 4
+            else return 7
         }
     }
 }
 "# in
-    compile_source_run_expect source "c_tcp_closed_port" 7
+    compile_source_run_expect source "c_tcp_error_kinds" 7

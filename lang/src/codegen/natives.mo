@@ -303,7 +303,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // call the runtime, then wrap the raw result in `IO.mk (RawIO.io _)`.
             // That works for the three `IO Unit` ones because their C
             // functions return a Unit-ctor pointer rather than `void`
-            // (`monad_tcp_close`'s own shape) -- and `io_passthrough`
+            // (`monad_stream_close`'s own shape) -- and `io_passthrough`
             // types the call's result as i64 either way, which is why
             // their `runtime_declarations` entries below are i64 and not
             // the `void` a reader would expect from the C signature.
@@ -586,40 +586,23 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "scope_new" then Option.some (NativeWrapKind.io_passthrough "monad_scope_new")
             else if String.beq target "scope_fork" then Option.some (NativeWrapKind.io_passthrough "monad_scope_fork")
             else if String.beq target "scope_drop" then Option.some (NativeWrapKind.io_passthrough "monad_scope_drop")
-            // The TCP family (`std/io.mo`'s eight `#[native "tcp_*"]`
+            // The TCP family (`std/io.mo`'s four `#[native "tcp_*"]`
             // defs, reached by `motes/moon`'s server and `motes/moose`'s
-            // client). All eight are `IO`-returning C functions in
-            // `runtime.c`, so all eight are `io_passthrough`: call the
-            // runtime, then wrap the raw i64 result in `IO.mk (RawIO.io _)`.
-            //
-            // `Socket`/`Listener` are opaque here in the same sense
-            // `Fiber`/`Scope` are just above -- their type's single
-            // zero-arity constructor exists only so the checker can see
-            // a type, the value is never a constructor, and nothing in
-            // the corpus pattern-matches, compares or prints one. The
-            // runtime value is the file descriptor itself, which is why
-            // no `constructor_tag` lookup is needed and why
-            // `tcp_local_port : IO U16` is `io_passthrough` like
-            // `current_time : IO I64` rather than needing a kind of its
-            // own.
+            // client). All four are `RawIO` natives behind `.mo` wrappers,
+            // so `raw_io_passthrough`, like the `stream_*` family below
+            // that reads, writes and closes what they open. A connection
+            // or listener is an `FdStream`, whose runtime value is the
+            // file descriptor itself.
             //
             // There is no Rust-host half to mirror: the reference
             // deliberately does not implement TCP (its maintenance cost
             // was not worth a second implementation), so this backend is
             // TCP's only implementation and `runtime/src/runtime.c`'s
             // comments are its specification.
-            else if String.beq target "tcp_connect" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_connect")
-            else if String.beq target "tcp_listen" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_listen")
-            else if String.beq target "tcp_accept" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_accept")
-            else if String.beq target "tcp_read" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_read")
-            else if String.beq target "tcp_write" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_write")
-            else if String.beq target "tcp_close" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_close")
-            else if String.beq target "tcp_close_listener" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_close_listener")
-            else if String.beq target "tcp_local_port" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_local_port")
-            // `tcp_fd` is typed extraction, not a lookup: the runtime
-            // value already IS the descriptor, so it passes through like
-            // `tcp_local_port` (an `IO I32` over an i64 result).
-            else if String.beq target "tcp_fd" then Option.some (NativeWrapKind.io_passthrough "monad_tcp_fd")
+            else if String.beq target "tcp_connect" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_connect")
+            else if String.beq target "tcp_listen" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_listen")
+            else if String.beq target "tcp_accept" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_accept")
+            else if String.beq target "tcp_local_port" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_local_port")
             // `Ptr.null` (init/prelude.mo) -- the NULL pointer for the C
             // FFI's callback arguments. `passthrough` with zero params:
             // the call's result IS the def's value, the raw word 0.
@@ -868,16 +851,11 @@ def runtime_declarations : List LLVMDeclaration :=
     // gate (`gate_result`, `lang/codegen/emit.mo`) rejects the module
     // with "call to undefined symbol(s): monad_tcp_connect". Every
     // parameter and return is i64 under the CONVENTION at the head of
-    // this list: a String, a Socket/Listener handle and a file
-    // descriptor are all i64 here, and `tcp_write`'s `List U8` is one
-    // i64 pointer to the list's head, not a (pointer, length) pair.
+    // this list: a String, an `FdStream` (the file descriptor) and a
+    // port are all i64 here.
     let d65 := mk_decl "monad_tcp_connect" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d66 := mk_decl "monad_tcp_listen" (List.cons "i64" List.empty) "i64" in
     let d67 := mk_decl "monad_tcp_accept" (List.cons "i64" List.empty) "i64" in
-    let d68 := mk_decl "monad_tcp_read" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
-    let d69 := mk_decl "monad_tcp_write" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
-    let d70 := mk_decl "monad_tcp_close" (List.cons "i64" List.empty) "i64" in
-    let d71 := mk_decl "monad_tcp_close_listener" (List.cons "i64" List.empty) "i64" in
     let d72 := mk_decl "monad_tcp_local_port" (List.cons "i64" List.empty) "i64" in
     // `std/io.mo`'s raw-stdio group (`runtime.c`). Same "no implicit
     // declare" requirement as every native above -- without these the
@@ -887,7 +865,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // of this list; `monad_read_line`/`monad_flush_stdout` genuinely take
     // no arguments, so their parameter lists are empty and the emitted
     // `call` has no operands to type. The three `IO Unit` natives return
-    // i64 like `monad_tcp_close` (d70) even though their C functions
+    // i64 like `monad_stream_close` (d98) even though their C functions
     // return the Unit constructor pointer: `io_passthrough`
     // (`compile_native_def_wrapper_ir`) types EVERY native call's result
     // as `LLVMType.i64_` and IO-wraps that value, so a `declare void`
@@ -911,21 +889,18 @@ def runtime_declarations : List LLVMDeclaration :=
     // `std/bytebuf.mo`'s first six (runtime.c) -- every arg and result i64
     // under the head-of-list convention: a `ByteBuf` is a pointer to its
     // `BufObj`, and `of_list`/`to_list`'s `List U8` is one i64 pointer to
-    // the list's head (exactly `tcp_write`/`tcp_read`'s shape, d68/d69).
+    // the list's head, not a (pointer, length) pair.
     let d81 := mk_decl "monad_bytebuf_alloc" (List.cons "i64" List.empty) "i64" in
     let d82 := mk_decl "monad_bytebuf_of_list" (List.cons "i64" List.empty) "i64" in
     let d83 := mk_decl "monad_bytebuf_to_list" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d84 := mk_decl "monad_bytebuf_free" (List.cons "i64" List.empty) "i64" in
     let d85 := mk_decl "monad_bytebuf_ptr" (List.cons "i64" List.empty) "i64" in
-    // `monad_tcp_fd` (runtime.c) -- `IO.tcp_fd`'s backing function. The
-    // Socket value is the descriptor already; one i64 arg, i64 result.
-    let d86 := mk_decl "monad_tcp_fd" (List.cons "i64" List.empty) "i64" in
     // `monad_bytebuf_len` (runtime.c) -- `ByteBuf.length`'s backing
     // function: the element count recorded in the `BufObj`.
     let d87 := mk_decl "monad_bytebuf_len" (List.cons "i64" List.empty) "i64" in
     // The piped-subprocess family (runtime.c) -- every handle, string
     // and `List String` is one i64 word under the uniform boxed
-    // convention (`Child` is an opaque registry index, `Socket`'s own
+    // convention (`Child` is an opaque registry index, `FdStream`'s own
     // trick), and every result is i64: the `Result`/`Option`/`I64`
     // values these return are constructor POINTERS, and
     // `raw_io_passthrough` types the call's result as i64 and wraps
@@ -963,8 +938,8 @@ def runtime_declarations : List LLVMDeclaration :=
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
-     d65, d66, d67, d68, d69, d70, d71, d72,
-     d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d86, d87,
+     d65, d66, d67, d72,
+     d73, d74, d75, d76, d77, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
