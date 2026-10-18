@@ -52,3 +52,11 @@ UI-repair changelog; `monad check <probe>` shows each:
   Bind the expression to a `let` first.
 - `over_application.mo` -- a two-arg def called with three arguments
   checks clean on both hosts and crashes at runtime.
+## Round 2 (`pty_repro_round2.py`)
+
+With `turns_long.json` (8 reply turns), on a 20-row pty: rounded border
+glyphs render, the statusbar carries the dim-yellow SGR, PageUp shows
+the `N lines above` indicator, an SGR mouse wheel report scrolls,
+Alt+Enter folds a newline and the multiline submit echoes on its own
+lines (the pump after the submit must EXCEED the retry sleeps when the
+mock script is exhausted -- 2s+4s of backoff before the turn fails).

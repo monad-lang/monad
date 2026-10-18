@@ -56,7 +56,13 @@ main.mo            the entry: settings load, flag resolution, MCP
 
 `monad run motes/weaver/src/main.mo` starts the TUI whenever stdin is a
 tty (the same `Terminal.enter_raw_mode` degrade check `terminal.mo`
-already uses for a non-tty stdin). Tab cycles the approval mode
+already uses for a non-tty stdin). The input box is 3 padded rows;
+Alt+Enter folds a newline into it (Enter submits the whole value, a
+multiline submission echoed on its own lines), and the arrow keys pull
+prompt history -- ArrowUp recalls from an empty input, repeats walk
+backward, ArrowDown steps forward back to the live edit. The mouse
+wheel scrolls the transcript (3 lines a notch). Tab cycles the
+approval mode
 (`manual -> plan -> allow_edit -> auto -> manual`), PageUp/PageDown
 scroll a page and Ctrl+U/Ctrl+D half a page (End re-pins, Home jumps to
 the top; new output auto-pins only when the window is already pinned
@@ -151,11 +157,13 @@ ollama / the provider's default model / 40 turns / manual mode.
 
 The dumb UI follows the informal standard: colors are ON unless
 `NO_COLOR` is set (the TUI always colors its own screen). Transcript
-lines classify by prefix -- user lines and running rows dim (the
-running row cyan), `error:`/`denied:` lines and diff `-` rows red, diff
-`+` rows green, the status bar dim with the mode chip red (`auto`,
-the trust warning) or cyan (`plan`). Both UIs use the same
-classification (`theme.mo`).
+lines classify by prefix -- user lines cyan, `[running]` rows dim
+cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
+`+` rows green, the Ctrl+C hint dim. The status bar is dim YELLOW --
+the one place that reads as chrome, not content -- and turns red while
+`auto` mode is on (the trust warning). Borders are dim. Both UIs use
+the same classification (`theme.mo`: one LineClass enum, rendered by
+`class_style` in the TUI and `class_code` in dumb mode).
 
 ### Retries
 
