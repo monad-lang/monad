@@ -58,9 +58,9 @@ if (rc !== 0n) {
   console.error(`monad_main returned ${rc}; stderr=${JSON.stringify(stderr)}`);
   process.exit(1);
 }
-if (stdout.trimEnd() !== expected || !stdout.endsWith('\n')) {
+if (stdout !== expected + '\n') {
   console.error(
-    `unexpected stdout: ${JSON.stringify(stdout)} (expected ${JSON.stringify(expected)} + newline)`,
+    `unexpected stdout: ${JSON.stringify(stdout)} (expected ${JSON.stringify(expected + '\n')})`,
   );
   process.exit(1);
 }

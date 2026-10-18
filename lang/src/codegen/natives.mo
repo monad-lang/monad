@@ -656,6 +656,10 @@ def attr_arg_as_string_first (args : List AttrArg) : Option String :=
 def mk_decl (name : String) (params : List String) (ret_ty : String) : LLVMDeclaration :=
     LLVMDeclaration.mk name params ret_ty
 
+/// The `declare` list for `kind`: the same C symbols everywhere, except
+/// that the natives whose IR calls are typed `i64` are declared `i64` on
+/// wasm (wasm-ld checks signatures; native llc tolerates the historical
+/// `void` mismatch).
 #[partial]
 pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // CONVENTION: every parameter and return type below is i64. The
@@ -933,9 +937,9 @@ pub type NativeAvailability {
 def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "exec_cmd", "process_id", "proc_spawn",
-    "proc_write", "proc_read", "proc_wait", "tcp_", "tcp_connect",
-    "tcp_listen", "tcp_accept", "tcp_local_port", "read_file", "write_file",
-    "file_exists", "is_dir", "list_dir", "get_env", "stream_open",
+    "proc_write", "proc_read", "proc_wait", "tcp_connect", "tcp_listen",
+    "tcp_accept", "tcp_local_port", "read_file", "write_file",
+    "file_exists", "is_dir", "list_dir", "get_env", "stream_open", "term_ctl",
 ]
 
 /// Natives whose C implementation needs `snprintf`/`strtod`; the web
@@ -948,6 +952,9 @@ def name_in (name : String) (names : List String) : Bool := match names {
     List.cons hd tl => if String.beq name hd then true else name_in name tl,
 }
 
+/// Whether the native named `target` (its `#[native "..."]` spelling) can
+/// be served on `kind`. Unknown names default to available, so a new native
+/// is gated only when it is explicitly listed here.
 pub def native_target_availability (kind : TargetKind) (target : String) : NativeAvailability :=
     match kind {
         TargetKind.native => NativeAvailability.available,
@@ -962,6 +969,47 @@ pub def native_target_availability (kind : TargetKind) (target : String) : Nativ
             then NativeAvailability.unavailable "the web profile is freestanding: no C library float formatting"
             else NativeAvailability.available,
     }
+
+#[test]
+def test_wasm_gates_posix_only_natives : Bool :=
+    match native_target_availability TargetKind.wasi "term_ctl" {
+        NativeAvailability.unavailable _ => true,
+        NativeAvailability.available => false,
+    }
+        && match native_target_availability TargetKind.web "fork_io" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+        && match native_target_availability TargetKind.wasi "tcp_connect" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+
+#[test]
+def test_wasm_keeps_console_and_arithmetic : Bool :=
+    match native_target_availability TargetKind.wasi "stream_write" {
+        NativeAvailability.available => true,
+        NativeAvailability.unavailable _ => false,
+    }
+        && match native_target_availability TargetKind.web "print_str" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
+        && match native_target_availability TargetKind.native "term_ctl" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
+
+#[test]
+def test_web_gates_float_formatting : Bool :=
+    match native_target_availability TargetKind.web "f64_to_string" {
+        NativeAvailability.unavailable _ => true,
+        NativeAvailability.available => false,
+    }
+        && match native_target_availability TargetKind.wasi "f64_to_string" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

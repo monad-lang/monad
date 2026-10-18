@@ -46,11 +46,13 @@ in
   # The wasm toolchain and its two hosts. `wasmtime` runs the wasi profile;
   # `nodejs` runs the web profile's direct loader in the smoke test.
   #
-  # The pinned wasi-sdk tarball above is the Linux release; on Darwin the
-  # binding stays unset (and the derivation is never forced), so the rest of
-  # the dev shell still evaluates and `--target wasm32-…` fails with the
-  # clear WASI_SDK_PATH diagnostic instead of a store-path error.
-  env.WASI_SDK_PATH = if pkgs.stdenv.hostPlatform.isLinux then "${wasiSdk}" else "";
+  # The pinned wasi-sdk tarball above is the x86_64-linux release. On any
+  # other host (Darwin, aarch64-linux) the binding stays unset and the
+  # derivation is never forced, so the dev shell still evaluates and
+  # `--target wasm32-…` fails with the clear WASI_SDK_PATH diagnostic
+  # instead of a store-path or "cannot execute" error.
+  env.WASI_SDK_PATH =
+    if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then "${wasiSdk}" else "";
 
   # `wasiSdk` is deliberately NOT in this list: its bin/clang would shadow the
   # nixpkgs clang the native ladder uses (and defaults to wasm32), silently

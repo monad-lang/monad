@@ -16,7 +16,7 @@ use lang::types {
 }
 use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir}
-use llvm::target {TargetSpec, TargetKind}
+use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
 use lang::module {ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_file_cached_affine, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
@@ -588,20 +588,26 @@ def build_target (path : String) (out_name : String) (bin : String) (verbose : B
             return 1
         },
         Result.ok input => do {
-            if Bool.not (String.is_empty input.label) then println input.label
-            else return unit;
-            // The wasm suffix is applied HERE, before the cache: the build
-            // layer copies the artifact from exactly `dest_name`, so a
-            // suffix added only inside `link_ir` would make every cached
-            // wasm build miss its own output.
-            let kind := TargetKind.of_triple spec.triple;
-            let final_name : String :=
-                if TargetKind.is_wasm kind && Bool.not (String.ends_with input.name ".wasm")
-                then input.name ++ ".wasm"
-                else input.name;
-            build_cached { src := input.src, dest_name := (Path.path final_name),
-                verbose := verbose, debug := debug, no_cache := no_cache,
-                target := spec }
+            // Resolve the target BEFORE loading modules: a missing wasi-sdk
+            // is then an immediate error, not one printed after the whole
+            // parse/typecheck/codegen pipeline (or a self-compile).
+            let plan_result <- TargetPlan.resolve spec;
+            match plan_result {
+                Result.err msg => do { println msg; return 1 },
+                Result.ok plan => do {
+                    if Bool.not (String.is_empty input.label) then println input.label
+                    else return unit;
+                    // The suffix lives in ONE place (`TargetPlan`). It is
+                    // applied here, before the cache, because the build
+                    // layer copies the artifact from exactly `dest_name`;
+                    // a suffix added only in `link_ir` would make every
+                    // cached wasm build miss its own output.
+                    let final_name : String := TargetPlan.output_name plan input.name;
+                    build_cached { src := input.src, dest_name := (Path.path final_name),
+                        verbose := verbose, debug := debug, no_cache := no_cache,
+                        target := spec }
+                }
+            }
         }
     }
 }

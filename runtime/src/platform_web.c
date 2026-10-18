@@ -88,7 +88,9 @@ static rt_word web_alloc(rt_size size, int zero) {
 }
 
 rt_word monad_alloc(rt_size size) {
-    rt_word ptr = web_alloc(size, 0);
+    /* Boehm returns cleared memory; match it so a codegen path that reads a
+       field before writing it sees the same zero on every target. */
+    rt_word ptr = web_alloc(size, 1);
     if (ptr) {
         Header* h = (Header*)RT_PTR(ptr);
         h->refcount = 1;
@@ -99,7 +101,7 @@ rt_word monad_alloc(rt_size size) {
 }
 
 rt_word monad_alloc_atomic(rt_size size) {
-    return web_alloc(size, 0);
+    return web_alloc(size, 1);
 }
 
 void monad_retain(rt_word ptr) {

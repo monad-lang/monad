@@ -63,22 +63,34 @@ pub type TargetKind {
     web,
 }
 
+/// `kind`'s name in diagnostics (`native`, `wasi`, `web`).
 pub def TargetKind.name (kind : TargetKind) : String := match kind {
     TargetKind.native => "native",
     TargetKind.wasi => "wasi",
     TargetKind.web => "web",
 }
 
+/// Whether `kind` is one of the wasm profiles.
 pub def TargetKind.is_wasm (kind : TargetKind) : Bool := match kind {
     TargetKind.native => false,
     TargetKind.wasi => true,
     TargetKind.web => true,
 }
 
+/// Classify a resolved triple. Any `wasm*` spelling is a wasm profile --
+/// non-`wasm32` ones are then rejected by `TargetPlan.resolve` rather than
+/// silently treated as native and linked with the host toolchain.
 pub def TargetKind.of_triple (triple : String) : TargetKind :=
-    if String.starts_with "wasm32" triple
+    if String.starts_with "wasm" triple
     then if String.contains triple "wasi" then TargetKind.wasi else TargetKind.web
     else TargetKind.native
+
+/// The output suffix for `kind` (`.wasm` for both wasm profiles).
+pub def TargetKind.output_ext (kind : TargetKind) : String := match kind {
+    TargetKind.native => "",
+    TargetKind.wasi => ".wasm",
+    TargetKind.web => ".wasm",
+}
 
 /// Everything `llvm/src/link.mo` needs to know about a target beyond the
 /// llc triple: which C compiler and flags, which runtime platform define,
@@ -96,7 +108,8 @@ pub struct TargetPlan {
 
 /// The plan for a native target: same bare `clang`, no flags, no suffix.
 pub def TargetPlan.native_plan (triple : String) : TargetPlan :=
-    TargetPlan.mk TargetKind.native triple "clang" List.empty List.empty List.empty ""
+    TargetPlan.mk TargetKind.native triple "clang" List.empty List.empty List.empty
+        (TargetKind.output_ext TargetKind.native)
 
 /// A wasm plan, addressed through the wasi-sdk `clang` by absolute path.
 /// This is the deliberate exception to the "do not pass --target to the C
@@ -107,7 +120,7 @@ pub def TargetPlan.for_wasm (kind : TargetKind) (triple : String) (clang : Strin
         TargetKind.wasi => TargetPlan.mk kind triple clang
             ["--target=" ++ triple, "--sysroot=" ++ sysroot]
             ["--target=" ++ triple, "--sysroot=" ++ sysroot, "-Wl,-z,stack-size=8388608"]
-            ["-DMONAD_TARGET_WASI"] ".wasm",
+            ["-DMONAD_TARGET_WASI"] (TargetKind.output_ext kind),
         TargetKind.web => TargetPlan.mk kind triple clang
             ["--target=wasm32-unknown-unknown", "-ffreestanding", "-fno-builtin"]
             ["--target=wasm32-unknown-unknown", "-nostdlib", "-Wl,--no-entry",
@@ -118,7 +131,7 @@ pub def TargetPlan.for_wasm (kind : TargetKind) (triple : String) (clang : Strin
              // name and fail, because the C function is `monad_web_entry`.
              "-Wl,--export=monad_alloc", "-Wl,--export=monad_string_length",
              "-Wl,--export=monad_i64_to_string", "-Wl,-z,stack-size=1048576"]
-            ["-DMONAD_TARGET_WEB"] ".wasm",
+            ["-DMONAD_TARGET_WEB"] (TargetKind.output_ext kind),
         TargetKind.native => TargetPlan.native_plan triple,
     }
 
@@ -130,22 +143,26 @@ pub def TargetPlan.resolve (spec : TargetSpec) : IO (Result String TargetPlan) :
     match kind {
         TargetKind.native => return (Result.ok (TargetPlan.native_plan spec.triple)),
         _ => do {
-            let env <- IO.get_env "WASI_SDK_PATH";
-            match env {
-                Option.none => return (Result.err (TargetPlan.missing_sdk_message spec.triple kind)),
-                Option.some raw => do {
-                    let root := String.trim raw;
-                    if String.is_empty root then
-                        return (Result.err (TargetPlan.missing_sdk_message spec.triple kind))
-                    else do {
-                        let clang := root ++ "/bin/clang";
-                        let sysroot := root ++ "/share/wasi-sysroot";
-                        let cap <- Proc.capture clang ["--version"];
-                        match cap {
-                            Pair.pair code _out =>
-                                if code == 0
-                                then return (Result.ok (TargetPlan.for_wasm kind spec.triple clang sysroot))
-                                else return (Result.err (TargetPlan.bad_sdk_message root clang)),
+            if Bool.not (TargetPlan.is_supported_wasm_triple spec.triple) then
+                return (Result.err (TargetPlan.unsupported_wasm_message spec.triple))
+            else do {
+                let env <- IO.get_env "WASI_SDK_PATH";
+                match env {
+                    Option.none => return (Result.err (TargetPlan.missing_sdk_message spec.triple kind)),
+                    Option.some raw => do {
+                        let root := String.trim raw;
+                        if String.is_empty root then
+                            return (Result.err (TargetPlan.missing_sdk_message spec.triple kind))
+                        else do {
+                            let clang := root ++ "/bin/clang";
+                            let sysroot := root ++ "/share/wasi-sysroot";
+                            let cap <- Proc.capture clang ["--version"];
+                            match cap {
+                                Pair.pair code _out =>
+                                    if code == 0
+                                    then return (Result.ok (TargetPlan.for_wasm kind spec.triple clang sysroot))
+                                    else return (Result.err (TargetPlan.bad_sdk_message root clang)),
+                            }
                         }
                     }
                 }
@@ -153,6 +170,17 @@ pub def TargetPlan.resolve (spec : TargetSpec) : IO (Result String TargetPlan) :
         }
     }
 }
+
+/// The wasm spellings this compiler has a runtime and link recipe for.
+/// `wasm64` (and any other `wasm*`) is deliberately rejected rather than
+/// silently classified as native.
+pub def TargetPlan.is_supported_wasm_triple (triple : String) : Bool :=
+    String.starts_with "wasm32" triple
+
+/// The diagnostic for a wasm spelling we do not build (e.g. `wasm64`).
+#[partial]
+def TargetPlan.unsupported_wasm_message (triple : String) : String :=
+    "error: target `" ++ triple ++ "` is not a supported wasm profile: use wasm32-unknown-wasip1 or wasm32-unknown-unknown"
 
 #[partial]
 def TargetPlan.missing_sdk_message (triple : String) (kind : TargetKind) : String :=
@@ -162,11 +190,17 @@ def TargetPlan.missing_sdk_message (triple : String) (kind : TargetKind) : Strin
 def TargetPlan.bad_sdk_message (root : String) (clang : String) : String :=
     "error: WASI_SDK_PATH=`" ++ root ++ "` does not name a wasi-sdk installation: `" ++ clang ++ "` is not executable."
 
-/// `name` with the profile's output suffix, unless it already has it.
+/// `name` with `kind`'s output suffix, unless it already has it. The one
+/// place the suffix rule lives; the CLI and the linker both call this.
+pub def TargetPlan.output_name_for (kind : TargetKind) (name : String) : String :=
+    let ext := TargetKind.output_ext kind in
+    if String.is_empty ext then name
+    else if String.ends_with name ext then name
+    else name ++ ext
+
+/// `name` with the plan's output suffix, unless it already has it.
 pub def TargetPlan.output_name (plan : TargetPlan) (name : String) : String :=
-    if String.is_empty plan.output_ext then name
-    else if String.ends_with name plan.output_ext then name
-    else name ++ plan.output_ext
+    TargetPlan.output_name_for plan.kind name
 
 /// The aliases the toolchain accepts for the two wasm profiles, canonicalised
 /// before the table lookup so `--target wasm32-wasip1` reaches the measured
@@ -602,6 +636,20 @@ def test_wasm_aliases_resolve_to_a_known_entry : Bool :=
     String.beq (TargetSpec.alias "wasm32-wasip1") "wasm32-unknown-wasip1"
         && String.beq (TargetSpec.alias "wasm32-wasi") "wasm32-unknown-wasip1"
         && String.beq t.triple "wasm32-unknown-wasip1"
+
+#[test]
+def test_wasm64_is_classified_wasm_but_rejected : Bool :=
+    String.beq (TargetKind.name (TargetKind.of_triple "wasm64-unknown-unknown")) "web"
+        && Bool.not (TargetPlan.is_supported_wasm_triple "wasm64-unknown-unknown")
+        && TargetPlan.is_supported_wasm_triple "wasm32-unknown-wasip1"
+
+#[test]
+def test_output_ext_is_shared_by_both_wasm_profiles : Bool :=
+    String.beq (TargetKind.output_ext TargetKind.wasi) ".wasm"
+        && String.beq (TargetKind.output_ext TargetKind.web) ".wasm"
+        && String.beq (TargetKind.output_ext TargetKind.native) ""
+        && String.beq (TargetPlan.output_name_for TargetKind.web "fib") "fib.wasm"
+        && String.beq (TargetPlan.output_name_for TargetKind.web "fib.wasm") "fib.wasm"
 
 #[test]
 def test_wasm_output_gets_the_wasm_suffix_once : Bool :=

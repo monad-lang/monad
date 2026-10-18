@@ -68,6 +68,14 @@ echo "== web: hello (freestanding build + Node loader) =="
     -o "$tmp/hello.wasm" --no-cache
 node wasm/web/smoke.mjs "$tmp/hello.wasm"
 
+echo "== output suffix (build without -o) =="
+# The same rule must name the cache destination and the linked artifact.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \
+    "$tmp/noext" --no-cache
+[ -f "$tmp/noext.wasm" ] || fail "missing $tmp/noext.wasm"
+[ ! -e "$tmp/noext.wasm.wasm" ] || fail "the .wasm suffix was applied twice"
+node wasm/web/smoke.mjs "$tmp/noext.wasm"
+
 echo "== gating: OS-only natives fail with a target diagnostic =="
 if "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_file_io.mo \
     -o "$tmp/gate-web.wasm" --no-cache >"$tmp/gate-web.log" 2>&1; then
