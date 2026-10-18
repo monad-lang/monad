@@ -25,6 +25,7 @@ use weaver::gate {pick_header, capped_diff}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view}
+use weaver::error {WeaverError, WeaverError.show}
 use tui::types {Event, Key, LayoutSize}
 use tui::widget {Widget, SizedWidget, sized, label}
 use tui::widgets::input {InputState, input_state, handle_input_key}
@@ -149,9 +150,19 @@ pub def run_submitted_line (st : WeaverState) (text : String) : IO WeaverMsg :=
     else model_step_tui st text
 
 def command_step_tui (st : WeaverState) (line : String) : IO WeaverMsg := do {
-    let e <- Commands.dispatch line st;
-    return (WeaverMsg.command_result e)
+    let r <- Commands.dispatch line st;
+    return (command_msg st r)
 }
+
+/// A failed command folds the same styled-later error entry a failed
+/// turn does (one render point, `WeaverError.show`); the state stands
+/// untouched -- the session is intact. A successful command is the
+/// effect the update folds as before.
+def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :=
+    match r {
+        Result.err e => WeaverMsg.turn_result st.run [error_line e],
+        Result.ok e => WeaverMsg.command_result e,
+    }
 
 def model_step_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
     if st.run.turns_left < 1
@@ -165,18 +176,24 @@ def drive_turn_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
         return (turn_result_of st before r)
     }
 
-def turn_result_of (st : WeaverState) (before : I64) (r : Result String RunState) : WeaverMsg :=
+def turn_result_of (st : WeaverState) (before : I64) (r : Result WeaverError RunState) : WeaverMsg :=
     match r {
-        Result.err e => WeaverMsg.turn_result st.run [String.concat "error: " e],
+        Result.err e => WeaverMsg.turn_result st.run [error_line e],
         Result.ok run2 =>
             WeaverMsg.turn_result run2
                 (transcript_lines_of_messages (drop_n_messages (before + 1) run2.session.history)),
     }
 
+/// The transcript's error entry: the one render point does the prose,
+/// the entry is a transcript line Phase 11's palette will color.
+def error_line (e : WeaverError) : String :=
+    String.concat "error: " (WeaverError.show e)
+
 /// Rebuild the turn's `Gate` from `Gate.weaver_tui` (instead of
 /// `Gate.weaver`) and drive the loop -- `append_user`/`drive_loop` are
-/// `dumb.mo`'s own read/write-independent halves, reused as-is.
-def drive_tui (st : WeaverState) (text : String) : ResultT String IO RunState := do {
+/// `dumb.mo`'s own read/write-independent halves, reused as-is
+/// (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
+def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode };
     let ready : RunState := append_user gated text;
     drive_loop ready

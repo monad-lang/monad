@@ -8,8 +8,9 @@
 /// which would leak into every later manual run's resolution.
 use weaver::settings {
     Settings, Settings.empty, Settings.merge, Settings.load_of_path,
-    Settings.cap_of, parse_settings, parse_cap,
+    Settings.cap_of, Loaded, parse_settings, parse_warned, parse_cap,
 }
+use weaver::error {WeaverError, WeaverError.show}
 use weaver::policy {Mode}
 use shuttle::gate {Capability}
 use std::map {BTreeMap}
@@ -95,6 +96,40 @@ def test_parse_settings_unparsable_is_empty : Bool :=
         && opt_str_eq s.model Option.none
         && opt_i64_eq s.max_turns Option.none
         && opt_cap_eq (Settings.cap_of "anything" s) Option.none
+
+// ── parse_warned: the same behavior, now visible (Phase 9) ──────────────
+
+/// The one warning an unparsable file contributes: `settings`-tagged
+/// (recoverable -- startup continues), naming the file it came from.
+def is_settings (e : WeaverError) : Bool :=
+    match e { WeaverError.settings _ => true, _ => false }
+
+def single_settings_warning (path : String) (ws : List WeaverError) : Bool :=
+    match ws {
+        List.empty => false,
+        List.cons w rest =>
+            is_settings w && String.contains (WeaverError.show w) path && no_more rest,
+    }
+
+def no_more (xs : List WeaverError) : Bool :=
+    match xs { List.empty => true, _ => false }
+
+/// The BEHAVIOR contract stands (empty settings on a parse failure)
+/// and the silence does not: exactly one warning, settings-tagged,
+/// naming the file.
+#[test]
+def test_parse_warned_unparsable_warns_once_naming_the_file : Bool :=
+    let l : Loaded := parse_warned "/tmp/weaver/config.toml" "mode =" in
+    let s : Settings := l.settings in
+    opt_mode_eq s.mode Option.none
+        && opt_str_eq s.provider Option.none
+        && single_settings_warning "/tmp/weaver/config.toml" l.warnings
+
+/// A good file contributes its keys and no warnings at all.
+#[test]
+def test_parse_warned_good_file_is_silent : Bool :=
+    let l : Loaded := parse_warned "/tmp/weaver/config.toml" "provider = \"mistral\"\n" in
+    opt_str_eq l.settings.provider (Option.some "mistral") && no_more l.warnings
 
 /// The best-effort contract: a wrong TYPE drops its scalar, a wrong
 /// capability NAME drops its caps entry -- and every other entry of the

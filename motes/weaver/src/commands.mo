@@ -12,6 +12,12 @@
 /// ride inside shuttle's `RunState` -- Elm state, there is no `IORef`
 /// -- and Weaver's own knobs (mode, preset name, the total turn
 /// budget) sit beside it.
+///
+/// Phase 9: a dispatch is `IO (Result WeaverError Effect)` -- a FAILED
+/// command is the `Result.err`, not an output line that happens to
+/// start with `save failed:`. The error carries no state, so the
+/// caller's stands untouched (session intact); the caller classifies
+/// it through `WeaverError.recoverable`.
 use shuttle::provider {ProviderConfig}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session, Session.save, Session.load}
@@ -21,6 +27,7 @@ use shuttle::tool {ToolSpec}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset}
+use weaver::error {WeaverError}
 use std::map {BTreeMap}
 use std::list {List.intercalate}
 
@@ -29,7 +36,9 @@ use std::list {List.intercalate}
 /// always-cache) so the whole turn loop advances it; `budget` is the
 /// TOTAL for the session (what `/resume` recomputes `turns_left`
 /// against); `mcps` is the mounted `--mcp` servers' commands (what
-/// `/mcp` lists); `quit` is the `/quit` flag the loop ends on.
+/// `/mcp` lists); `quit` is the `/quit` flag the loop ends on; `fatal`
+/// is the non-recoverable error that ended the run early, if one did
+/// (`main` exits 1 when it is set).
 pub struct WeaverState {
     run : RunState,
     mode : Mode,
@@ -37,10 +46,13 @@ pub struct WeaverState {
     budget : I64,
     mcps : List String,
     quit : Bool,
+    fatal : Option WeaverError := Option.none,
 }
 
 /// One command's outcome: the advanced state and the line(s) to print.
 /// The caller owns the printing -- a command talks only through this.
+/// This is the SUCCESS shape only: a failure is the dispatch's
+/// `Result.err` and never builds an `Effect`.
 pub struct Effect {
     state : WeaverState,
     output : String,
@@ -48,12 +60,20 @@ pub struct Effect {
 
 /// One table entry -- a uniform signature, the Phase 7 rewiring point.
 pub struct SlashCommand {
-    run : String -> WeaverState -> IO Effect,
+    run : String -> WeaverState -> IO (Result WeaverError Effect),
 }
 
 pub def Effect.ok (st : WeaverState) (output : String) : Effect :=
     let e : Effect := { state := st, output := output } in
     e
+
+/// Every handler's success shape: the effect, wrapped in the typed
+/// `Result` the dispatch contract speaks. (NOT `ok` -- the bare name
+/// collides with the `Result.ok` constructor at evaluation time: the
+/// checker resolves the local def, the evaluator does not, and every
+/// call misapplies the constructor instead.)
+def respond (st : WeaverState) (output : String) : IO (Result WeaverError Effect) :=
+    IO.pure (Result.ok (Effect.ok st output))
 
 /// The command table -- the whole `/`-surface, weaver.md Phase 6's
 /// final shape.
@@ -73,7 +93,7 @@ pub def command_table : BTreeMap String SlashCommand :=
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
-pub def Commands.dispatch (line : String) (st : WeaverState) : IO Effect :=
+pub def Commands.dispatch (line : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match split_command line {
         Pair.pair cmd arg =>
             match Map.lookup cmd command_table {
@@ -86,7 +106,7 @@ pub def Commands.dispatch (line : String) (st : WeaverState) : IO Effect :=
 /// `c.run arg st` at the call site would desugar the field access as a
 /// receiver call (`SlashCommand.run c`) and misapply -- the same reason
 /// `loop.mo` binds `run` out of `ToolImpl` before calling it.
-def dispatch_command (c : SlashCommand) (arg : String) (st : WeaverState) : IO Effect :=
+def dispatch_command (c : SlashCommand) (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match c {
         { run, .. } => run arg st
     }
@@ -114,50 +134,52 @@ def first_space (s : String) (i : I64) : Result String I64 :=
 /// `/mode` with no argument shows; with one of the four names, sets.
 /// The gate is rebuilt by the dumb loop from the mode before every
 /// turn, so a mode change takes effect on the very next model call.
-def cmd_mode (arg : String) (st : WeaverState) : IO Effect :=
+def cmd_mode (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then IO.pure (Effect.ok st (String.concat "mode: " (Mode.show st.mode)))
+    then respond st (String.concat "mode: " (Mode.show st.mode))
     else mode_of arg st
 
-def mode_of (arg : String) (st : WeaverState) : IO Effect :=
+def mode_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match Mode.parse arg {
         Option.none =>
-            IO.pure (Effect.ok st (String.concat "unknown mode: " (String.concat arg " (manual | plan | allow_edit | auto)"))),
+            respond st (String.concat "unknown mode: " (String.concat arg " (manual | plan | allow_edit | auto)")),
         Option.some m =>
             let st2 : WeaverState := set_mode st m in
-            IO.pure (Effect.ok st2 (String.concat "mode: " (Mode.show m))),
+            respond st2 (String.concat "mode: " (Mode.show m)),
     }
 
 /// `/model` with no argument shows the current model; with a name, it
 /// swaps the session config's model (the wire, key and host stay).
-def cmd_model (arg : String) (st : WeaverState) : IO Effect :=
+def cmd_model (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then IO.pure (Effect.ok st (String.concat "model: " st.run.session.config.model))
+    then respond st (String.concat "model: " st.run.session.config.model)
     else
         let st2 : WeaverState := set_model st arg in
-        IO.pure (Effect.ok st2 (String.concat "model: " arg))
+        respond st2 (String.concat "model: " arg)
 
 /// `/provider` with no argument shows the preset name; with one of the
 /// five names, it swaps the whole config (wire, key and host with it)
 /// and keeps the model name.
-def cmd_provider (arg : String) (st : WeaverState) : IO Effect :=
+def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then IO.pure (Effect.ok st (String.concat "provider: " st.provider))
+    then respond st (String.concat "provider: " st.provider)
     else provider_of arg st
 
-def provider_of (arg : String) (st : WeaverState) : IO Effect :=
+/// An unknown provider name is a `config` error: the run's
+/// configuration is wrong, not its files or its wire.
+def provider_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match Weaver.preset arg st.run.session.config.model {
-        Result.err e => IO.pure (Effect.ok st e),
+        Result.err e => IO.pure (Result.err (WeaverError.config e)),
         Result.ok cfg =>
             let st2 : WeaverState := set_config st cfg arg in
-            IO.pure (Effect.ok st2 (String.concat "provider: " arg)),
+            respond st2 (String.concat "provider: " arg),
     }
 
 /// `/tools`: every registered tool with its capability tag -- what the
 /// gate will consult before each of them runs.
-def cmd_tools (arg : String) (st : WeaverState) : IO Effect :=
+def cmd_tools (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     let lines : List String := List.map (tool_line st.run.reg) (ToolRegistry.specs st.run.reg) in
-    IO.pure (Effect.ok st (String.concat "tools: " (List.intercalate ", " lines)))
+    respond st (String.concat "tools: " (List.intercalate ", " lines))
 
 def tool_line (reg : ToolRegistry) (spec : ToolSpec) : String :=
     match ToolRegistry.lookup spec.name reg {
@@ -166,8 +188,8 @@ def tool_line (reg : ToolRegistry) (spec : ToolSpec) : String :=
     }
 
 /// `/mcp`: the mounted `--mcp` servers, or the hint for mounting one.
-def cmd_mcp (arg : String) (st : WeaverState) : IO Effect :=
-    IO.pure (Effect.ok st (mcp_line st.mcps))
+def cmd_mcp (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    respond st (mcp_line st.mcps)
 
 def mcp_line (mcps : List String) : String :=
     if strings_empty mcps
@@ -181,9 +203,9 @@ def strings_empty (xs : List String) : Bool :=
 /// approve [manual|allow_edit]` is the one CONSTRAINED mode transition
 /// (policy.mo's `Mode.approve_plan`): plan mode ends at the mode the
 /// approving user names, and any other mode has no plan to approve.
-def cmd_plan (arg : String) (st : WeaverState) : IO Effect :=
+def cmd_plan (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then IO.pure (Effect.ok st (plan_status st.mode))
+    then respond st (plan_status st.mode)
     else plan_arg arg st
 
 def plan_status (m : Mode) : String :=
@@ -192,21 +214,21 @@ def plan_status (m : Mode) : String :=
         _ => String.concat "not in plan mode (mode: " (String.concat (Mode.show m) "); switch with /mode plan"),
     }
 
-def plan_arg (arg : String) (st : WeaverState) : IO Effect :=
+def plan_arg (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match split_command arg {
         Pair.pair word rest =>
             if word == "approve"
             then plan_approve (String.trim rest) st
-            else IO.pure (Effect.ok st "usage: /plan | /plan approve [manual|allow_edit]"),
+            else respond st "usage: /plan | /plan approve [manual|allow_edit]",
     }
 
 /// The approval itself: only `manual` and `allow_edit` are acceptable
 /// landings -- `/plan approve auto` would be a one-word trust
 /// escalation, and the gate's whole point is that it costs more than
 /// that.
-def plan_approve (target : String) (st : WeaverState) : IO Effect :=
+def plan_approve (target : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if Bool.not (is_landing target)
-    then IO.pure (Effect.ok st "plan approval drops to manual or allow_edit")
+    then respond st "plan approval drops to manual or allow_edit"
     else approve_to (landing target) st
 
 def is_landing (target : String) : Bool :=
@@ -218,11 +240,11 @@ def landing (target : String) : Mode :=
         Option.none => Mode.manual,
     }
 
-def approve_to (target : Mode) (st : WeaverState) : IO Effect :=
+def approve_to (target : Mode) (st : WeaverState) : IO (Result WeaverError Effect) :=
     let st2 : WeaverState := set_mode st (Mode.approve_plan target st.mode) in
     if mode_eq st.mode Mode.plan
-    then IO.pure (Effect.ok st2 (String.concat "plan approved -- mode: " (Mode.show target)))
-    else IO.pure (Effect.ok st2 (String.concat "no plan to approve -- mode: " (Mode.show st2.mode)))
+    then respond st2 (String.concat "plan approved -- mode: " (Mode.show target))
+    else respond st2 (String.concat "no plan to approve -- mode: " (Mode.show st2.mode))
 
 def mode_eq (a : Mode) (b : Mode) : Bool :=
     match a {
@@ -233,61 +255,64 @@ def mode_eq (a : Mode) (b : Mode) : Bool :=
     }
 
 /// `/save <file>`: checkpoint the session (shuttle's `Session.save`).
-def cmd_save (arg : String) (st : WeaverState) : IO Effect :=
+/// A write failure is an `io` error -- the file the user named could
+/// not be written; the session stands.
+def cmd_save (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then IO.pure (Effect.ok st "usage: /save <file>")
+    then respond st "usage: /save <file>"
     else do {
         let r <- Session.save st.run.session arg;
         save_result arg st r
     }
 
-def save_result (file : String) (st : WeaverState) (r : Result String Unit) : IO Effect :=
+def save_result (file : String) (st : WeaverState) (r : Result String Unit) : IO (Result WeaverError Effect) :=
     match r {
-        Result.err e => IO.pure (Effect.ok st (String.concat "save failed: " e)),
-        Result.ok _ => IO.pure (Effect.ok st (String.concat "saved " file)),
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok _ => respond st (String.concat "saved " file),
     }
 
 /// `/resume <file>`: continue a saved session. The turn budget SPANS
 /// both halves (shuttle's own semantics): the remaining budget is the
-/// total minus the turns the loaded session already took.
-def cmd_resume (arg : String) (st : WeaverState) : IO Effect :=
+/// total minus the turns the loaded session already took. A load
+/// failure is an `io` error; the live session stands untouched.
+def cmd_resume (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then IO.pure (Effect.ok st "usage: /resume <file>")
+    then respond st "usage: /resume <file>"
     else do {
         let r <- Session.load arg;
         resume_result arg st r
     }
 
-def resume_result (file : String) (st : WeaverState) (r : Result String Session) : IO Effect :=
+def resume_result (file : String) (st : WeaverState) (r : Result String Session) : IO (Result WeaverError Effect) :=
     match r {
-        Result.err e => IO.pure (Effect.ok st (String.concat "resume failed: " e)),
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
         Result.ok s => resume_ok file st s,
     }
 
-def resume_ok (file : String) (st : WeaverState) (s : Session) : IO Effect :=
+def resume_ok (file : String) (st : WeaverState) (s : Session) : IO (Result WeaverError Effect) :=
     let remaining : I64 := st.budget - s.turns in
     let st2 : WeaverState := set_session st s st.budget in
     if remaining < 1
-    then IO.pure (Effect.ok st2 (String.concat "resumed " (String.concat file " -- the whole turn budget is already spent")))
-    else IO.pure (Effect.ok st2 (String.concat "resumed " file))
+    then respond st2 (String.concat "resumed " (String.concat file " -- the whole turn budget is already spent"))
+    else respond st2 (String.concat "resumed " file)
 
 /// `/clear`: drop the transcript and the accounting, keep the config
 /// and the tools. The turn budget resets to the full amount.
-def cmd_clear (arg : String) (st : WeaverState) : IO Effect :=
+def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     let base : Session := st.run.session in
     let fresh : Session := { base with history := List.empty, turns := 0, spent := usage_zero } in
     let st2 : WeaverState := set_session st fresh st.budget in
-    IO.pure (Effect.ok st2 "cleared")
+    respond st2 "cleared"
 
 /// `/quit`: the loop's exit flag. Disposal (MCP servers) is the
 /// entry's job -- the command only says stop.
-def cmd_quit (arg : String) (st : WeaverState) : IO Effect :=
+def cmd_quit (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     let st2 : WeaverState := set_quit st in
-    IO.pure (Effect.ok st2 "bye")
+    respond st2 "bye"
 
 /// `/help`: the whole table, one line per command.
-def cmd_help (arg : String) (st : WeaverState) : IO Effect :=
-    IO.pure (Effect.ok st help_text)
+def cmd_help (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    respond st help_text
 
 def help_text : String :=
     List.intercalate "\n" [
@@ -304,8 +329,8 @@ def help_text : String :=
         "/quit                                exit (MCP servers are disposed)",
     ]
 
-def unknown_effect (cmd : String) (st : WeaverState) : IO Effect :=
-    IO.pure (Effect.ok st (String.concat "unknown command: " (String.concat cmd " (try /help)")))
+def unknown_effect (cmd : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    respond st (String.concat "unknown command: " (String.concat cmd " (try /help)"))
 
 // ── WeaverState updates ──────────────────────────────────────────────────────
 // Every update binds an annotated local (the bare `{ x with ... }` in an
@@ -318,6 +343,12 @@ def set_mode (st : WeaverState) (m : Mode) : WeaverState :=
 
 def set_quit (st : WeaverState) : WeaverState :=
     let st2 : WeaverState := { st with quit := true } in
+    st2
+
+/// Record the non-recoverable error that ended the run: the dumb loop
+/// sets it, `main` reads it for the exit code.
+def set_fatal (st : WeaverState) (e : WeaverError) : WeaverState :=
+    let st2 : WeaverState := { st with fatal := Option.some e } in
     st2
 
 def set_model (st : WeaverState) (model : String) : WeaverState :=

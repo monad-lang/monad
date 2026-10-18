@@ -1,9 +1,11 @@
-/// The slash-command table tests -- weaver.md Phase 6: every command
-/// pinned through the one public seam, `Commands.dispatch`, exactly as
-/// the dumb loop sees them (the `cmd_*` handlers stay package-private).
-/// The assertions are on the Effect's whole payload -- the advanced
-/// state AND the exact output line -- because the output is part of the
-/// contract: the user reads it, and the loop prints nothing else.
+/// The slash-command table tests -- weaver.md Phase 6, re-pinned for
+/// Phase 9: every command through the one public seam,
+/// `Commands.dispatch`, which now speaks `Result WeaverError Effect` --
+/// a FAILED command is the `Result.err` (typed, no state attached, so
+/// the caller's stands), a successful one is the Effect's whole payload
+/// (the advanced state AND the exact output line), because the output
+/// is part of the contract: the user reads it, and the loop prints
+/// nothing else.
 use init::transformers {ResultT}
 use shuttle::agent {RunState}
 use shuttle::context {usage_zero}
@@ -14,6 +16,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
 use weaver::commands {WeaverState, Effect, Commands.dispatch}
+use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use json::json {Json}
 use std::process {process_id}
@@ -82,97 +85,101 @@ def mode_eq (a : Mode) (b : Mode) : Bool :=
         Mode.auto => match b { Mode.auto => true, _ => false },
     }
 
-/// One dispatch's whole outcome: the mode it landed on, the output it
-/// printed, and whether it quit.
-def effect_is (e : Effect) (m : Mode) (out : String) : Bool :=
-    mode_eq e.state.mode m && e.output == out && Bool.not e.state.quit
+/// One dispatch's whole SUCCESS outcome: it is a `Result.ok` (a failed
+/// command is the `Result.err`, never an Effect), it landed on `m`, it
+/// printed exactly `out`, and it did not quit.
+def effect_is (r : Result WeaverError Effect) (m : Mode) (out : String) : Bool :=
+    match r {
+        Result.ok e => mode_eq e.state.mode m && e.output == out && Bool.not e.state.quit,
+        Result.err _ => false,
+    }
 
 // ── /mode ──────────────────────────────────────────────────────────────
 
 #[test]
 def test_mode_shows_current : IO Bool := do {
-    let e <- Commands.dispatch "/mode" (state_of Mode.manual []);
-    return (effect_is e Mode.manual "mode: manual")
+    let r <- Commands.dispatch "/mode" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "mode: manual")
 }
 
 #[test]
 def test_mode_sets_plan : IO Bool := do {
-    let e <- Commands.dispatch "/mode plan" (state_of Mode.manual []);
-    return (effect_is e Mode.plan "mode: plan")
+    let r <- Commands.dispatch "/mode plan" (state_of Mode.manual []);
+    return (effect_is r Mode.plan "mode: plan")
 }
 
 #[test]
 def test_mode_rejects_unknown_name : IO Bool := do {
-    let e <- Commands.dispatch "/mode fast" (state_of Mode.manual []);
-    return (effect_is e Mode.manual "unknown mode: fast (manual | plan | allow_edit | auto)")
+    let r <- Commands.dispatch "/mode fast" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "unknown mode: fast (manual | plan | allow_edit | auto)")
 }
 
 // ── /plan ───────────────────────────────────────────────────────────────
 
 #[test]
 def test_plan_status_in_plan_mode : IO Bool := do {
-    let e <- Commands.dispatch "/plan" (state_of Mode.plan []);
-    return (effect_is e Mode.plan "plan mode: only read tools run; produce the plan, then /plan approve [manual|allow_edit]")
+    let r <- Commands.dispatch "/plan" (state_of Mode.plan []);
+    return (effect_is r Mode.plan "plan mode: only read tools run; produce the plan, then /plan approve [manual|allow_edit]")
 }
 
 #[test]
 def test_plan_status_outside_plan_mode : IO Bool := do {
-    let e <- Commands.dispatch "/plan" (state_of Mode.manual []);
-    return (effect_is e Mode.manual "not in plan mode (mode: manual); switch with /mode plan")
+    let r <- Commands.dispatch "/plan" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "not in plan mode (mode: manual); switch with /mode plan")
 }
 
 #[test]
 def test_plan_approve_defaults_to_manual : IO Bool := do {
-    let e <- Commands.dispatch "/plan approve" (state_of Mode.plan []);
-    return (effect_is e Mode.manual "plan approved -- mode: manual")
+    let r <- Commands.dispatch "/plan approve" (state_of Mode.plan []);
+    return (effect_is r Mode.manual "plan approved -- mode: manual")
 }
 
 #[test]
 def test_plan_approve_lands_on_allow_edit : IO Bool := do {
-    let e <- Commands.dispatch "/plan approve allow_edit" (state_of Mode.plan []);
-    return (effect_is e Mode.allow_edit "plan approved -- mode: allow_edit")
+    let r <- Commands.dispatch "/plan approve allow_edit" (state_of Mode.plan []);
+    return (effect_is r Mode.allow_edit "plan approved -- mode: allow_edit")
 }
 
 /// `/plan approve auto` is a one-word trust escalation; the command
 /// refuses it and the session stays in plan mode.
 #[test]
 def test_plan_approve_auto_is_refused : IO Bool := do {
-    let e <- Commands.dispatch "/plan approve auto" (state_of Mode.plan []);
-    return (effect_is e Mode.plan "plan approval drops to manual or allow_edit")
+    let r <- Commands.dispatch "/plan approve auto" (state_of Mode.plan []);
+    return (effect_is r Mode.plan "plan approval drops to manual or allow_edit")
 }
 
 #[test]
 def test_plan_approve_outside_plan_mode_is_noop : IO Bool := do {
-    let e <- Commands.dispatch "/plan approve manual" (state_of Mode.manual []);
-    return (effect_is e Mode.manual "no plan to approve -- mode: manual")
+    let r <- Commands.dispatch "/plan approve manual" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "no plan to approve -- mode: manual")
 }
 
 // ── /mcp and /tools ─────────────────────────────────────────────────────
 
 #[test]
 def test_mcp_none_mounted : IO Bool := do {
-    let e <- Commands.dispatch "/mcp" (state_of Mode.manual []);
-    return (effect_is e Mode.manual "mcp: none mounted (--mcp <executable>, repeatable)")
+    let r <- Commands.dispatch "/mcp" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "mcp: none mounted (--mcp <executable>, repeatable)")
 }
 
 #[test]
 def test_mcp_lists_mounted_servers : IO Bool := do {
-    let e <- Commands.dispatch "/mcp" (state_of Mode.manual ["srv-a", "srv-b"]);
-    return (effect_is e Mode.manual "mcp: srv-a, srv-b")
+    let r <- Commands.dispatch "/mcp" (state_of Mode.manual ["srv-a", "srv-b"]);
+    return (effect_is r Mode.manual "mcp: srv-a, srv-b")
 }
 
 #[test]
 def test_tools_lists_capability_tags : IO Bool := do {
-    let e <- Commands.dispatch "/tools" (state_of Mode.manual []);
-    return (effect_is e Mode.manual "tools: stamp (write)")
+    let r <- Commands.dispatch "/tools" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "tools: stamp (write)")
 }
 
 // ── Unknown commands ───────────────────────────────────────────────────
 
 #[test]
 def test_unknown_command_gets_help_hint : IO Bool := do {
-    let e <- Commands.dispatch "/nope" (state_of Mode.manual []);
-    return (effect_is e Mode.manual "unknown command: /nope (try /help)")
+    let r <- Commands.dispatch "/nope" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "unknown command: /nope (try /help)")
 }
 
 // ── /save and /resume: the budget spans both halves ────────────────────
@@ -185,10 +192,54 @@ def session_path : String :=
 /// budget spans both halves, exactly shuttle's own semantics.
 #[test]
 def test_save_resume_budget_spans_halves : IO Bool := do {
-    let e1 <- Commands.dispatch (String.concat "/save " session_path) (with_turns (state_of Mode.manual []) 4);
-    let e2 <- Commands.dispatch (String.concat "/resume " session_path) (state_of Mode.manual []);
-    return (e1.output == String.concat "saved " session_path
-        && e2.output == String.concat "resumed " session_path
-        && e2.state.run.session.turns == 4
-        && e2.state.run.turns_left == 2)
+    let r1 <- Commands.dispatch (String.concat "/save " session_path) (with_turns (state_of Mode.manual []) 4);
+    let r2 <- Commands.dispatch (String.concat "/resume " session_path) (state_of Mode.manual []);
+    return (effect_is r1 Mode.manual (String.concat "saved " session_path)
+        && effect_is r2 Mode.manual (String.concat "resumed " session_path)
+        && resumed_turns r2 == 4
+        && resumed_left r2 == 2)
+}
+
+/// The resumed session's turn count -- the value the budget recomputes
+/// against. `-1` on a failed dispatch so a `Result.err` can never
+/// masquerade as a successful resume at count 0.
+def resumed_turns (r : Result WeaverError Effect) : I64 :=
+    match r { Result.ok e => e.state.run.session.turns, Result.err _ => 0 - 1 }
+
+def resumed_left (r : Result WeaverError Effect) : I64 :=
+    match r { Result.ok e => e.state.run.turns_left, Result.err _ => 0 - 1 }
+
+// ── Failed commands: the typed errors, session intact ──────────────────
+
+/// A `Result.err` carries no Effect -- the caller's state IS the
+/// outcome, which is what "session intact" means: nothing to rebuild,
+/// nothing lost. What the error IS is the contract; the helpers pin
+/// the tag, the dispatch test pins the shape.
+def is_io (e : WeaverError) : Bool :=
+    match e { WeaverError.io _ => true, _ => false }
+
+def is_config (e : WeaverError) : Bool :=
+    match e { WeaverError.config _ => true, _ => false }
+
+/// A failed `/resume` is a typed `io` error (the file the user named
+/// could not be read), not an output line that starts with
+/// `resume failed:`.
+#[test]
+def test_resume_missing_file_is_io_error : IO Bool := do {
+    let r <- Commands.dispatch "/resume /tmp/weaver_session_no_such_file.json" (state_of Mode.manual []);
+    return (match r {
+        Result.err e => is_io e,
+        Result.ok _ => false,
+    })
+}
+
+/// An unknown provider name is a `config` error -- the run's
+/// configuration is wrong, not its files or its wire.
+#[test]
+def test_unknown_provider_is_config_error : IO Bool := do {
+    let r <- Commands.dispatch "/provider bogus" (state_of Mode.manual []);
+    return (match r {
+        Result.err e => is_config e,
+        Result.ok _ => false,
+    })
 }

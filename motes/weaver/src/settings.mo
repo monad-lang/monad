@@ -14,6 +14,7 @@
 /// decision the file records.
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.parse}
+use weaver::error {WeaverError}
 use toml::toml {Toml.Value, Toml.parse, Toml.get_string, Toml.get_integer, Toml.get_table, Toml.table_get}
 use std::io {IO.get_env, IO.read_file, IO.file_exists}
 use std::path {Path.of}
@@ -66,49 +67,111 @@ def cap_insert (kv : Pair String Capability) (acc : BTreeMap String Capability) 
 
 // ── Loading ─────────────────────────────────────────────────────────────
 
-/// The resolved settings: the global file under the project file.
-/// A missing or unparsable file contributes nothing -- an interactive
-/// tool must start, not refuse, over its own config.
-pub def Settings.load : IO Settings := do {
-    let g <- Settings.load_global;
-    let p <- Settings.load_project;
-    return (Settings.merge g p)
+/// The loaded settings: the resolved knobs PLUS the per-file parse
+/// failures that were swallowed on the way. Phase 9's contract: the
+/// empty-settings-on-parse-error BEHAVIOR stands (an interactive tool
+/// must start, not refuse, over its own config), but the silence does
+/// not -- each unparsable file contributes a `settings`-tagged warning
+/// naming it, and the UI prints the warnings at startup. All the
+/// warnings are recoverable by construction.
+pub struct Loaded {
+    settings : Settings,
+    warnings : List WeaverError,
 }
 
-pub def Settings.load_global : IO Settings :=
+pub def Loaded.empty : Loaded := {
+    settings := Settings.empty,
+    warnings := List.empty,
+}
+
+/// The resolved settings: the global file under the project file, with
+/// whatever either file failed to say riding alongside as warnings.
+pub def Settings.load : IO Loaded := do {
+    let g <- Settings.load_global;
+    let p <- Settings.load_project;
+    return (merge_loaded g p)
+}
+
+/// The resolution order's last step: settings merge field by field,
+/// warnings concatenate in load order.
+def merge_loaded (g : Loaded) (p : Loaded) : Loaded := {
+    settings := Settings.merge g.settings p.settings,
+    warnings := List.append g.warnings p.warnings,
+}
+
+pub def Settings.load_global : IO Loaded :=
     load_home
 
-def load_home : IO Settings := do {
+def load_home : IO Loaded := do {
     let home <- IO.get_env "HOME";
     home_settings home
 }
 
-def home_settings (home : Option String) : IO Settings :=
+def home_settings (home : Option String) : IO Loaded :=
     match home {
-        Option.none => IO.pure Settings.empty,
-        Option.some h => Settings.load_of_path (String.concat h "/.weaver/config.toml"),
+        Option.none => IO.pure Loaded.empty,
+        Option.some h => Settings.load_warned_of (String.concat h "/.weaver/config.toml"),
     }
 
 /// The project file is relative to the working directory -- Weaver's
 /// session starts wherever the user launched it.
-pub def Settings.load_project : IO Settings :=
-    Settings.load_of_path ".weaver/config.toml"
+pub def Settings.load_project : IO Loaded :=
+    Settings.load_warned_of ".weaver/config.toml"
 
-pub def Settings.load_of_path (path : String) : IO Settings :=
+/// One file, loaded with its failures visible: a missing or unreadable
+/// path is nothing at all (the absent file contributes nothing and
+/// says nothing), an unparsable one contributes nothing but warns.
+pub def Settings.load_warned_of (path : String) : IO Loaded :=
     match Path.of path {
-        Result.err _ => IO.pure Settings.empty,
-        Result.ok p => load_at p,
+        Result.err _ => IO.pure Loaded.empty,
+        Result.ok p => load_warned_at path p,
     }
 
-def load_at (p : Path) : IO Settings := do {
+def load_warned_at (path : String) (p : Path) : IO Loaded := do {
     let exists <- IO.file_exists p;
     if Bool.not exists
-    then IO.pure Settings.empty
+    then IO.pure Loaded.empty
     else do {
         let text <- IO.read_file p;
-        return (parse_settings text)
+        return (parse_warned path text)
     }
 }
+
+/// The settings-only projection -- the phase 6 contract (`load_of_path`
+/// stays `IO Settings`), for callers that do not surface warnings.
+pub def Settings.load_of_path (path : String) : IO Settings := do {
+    let l <- Settings.load_warned_of path;
+    return (l.settings)
+}
+
+/// The pure half of the visibility: a parse failure contributes the
+/// empty settings (exactly `parse_settings`'s contract) and a
+/// `settings`-tagged warning naming the file; a good file contributes
+/// its keys and no warnings.
+pub def parse_warned (path : String) (text : String) : Loaded :=
+    match Toml.parse text {
+        Result.err e => parse_failed path e,
+        Result.ok root => parse_loaded root,
+    }
+
+def parse_failed (path : String) (e : Toml.ParseError) : Loaded :=
+    let w : WeaverError := WeaverError.settings (String.concat "could not parse " (String.concat path (String.concat ": " (parse_error_show e)))) in
+    let l : Loaded := { settings := Settings.empty, warnings := [w] } in
+    l
+
+def parse_loaded (root : BTreeMap String Toml.Value) : Loaded :=
+    let s : Settings := settings_of root in
+    let l : Loaded := { settings := s, warnings := List.empty } in
+    l
+
+/// `toml`'s own `to_string` is package-private to that mote, so the
+/// warning renders the shape here -- `show` stays Weaver's one render
+/// point; this is the detail it renders.
+def parse_error_show (e : Toml.ParseError) : String :=
+    match e {
+        Toml.ParseError.expected x f => String.concat "expected " (String.concat x (String.concat ", found " f)),
+        Toml.ParseError.generic s => s,
+    }
 
 // ── Parsing ─────────────────────────────────────────────────────────────
 

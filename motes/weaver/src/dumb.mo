@@ -17,9 +17,10 @@ use shuttle::loop {Loop.iterate}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
-use weaver::commands {WeaverState, Effect, Commands.dispatch}
+use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch}
 use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
+use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 use init::transformers {ResultT}
 
 /// One loop step's outcome: the advanced state, and whether the loop
@@ -67,7 +68,20 @@ def route (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : 
 // ── The command half ───────────────────────────────────────────────────
 
 def command_turn (write : String -> IO Unit) (st : WeaverState) (line : String) : IO Step := do {
-    let e <- Commands.dispatch line st;
+    let r <- Commands.dispatch line st;
+    command_result write st r
+}
+
+/// A failed command is the typed error (the dispatch's `Result.err`,
+/// no state attached -- the caller's stands, session intact); a
+/// successful one prints its output and continues (or quits).
+def command_result (write : String -> IO Unit) (st : WeaverState) (r : Result WeaverError Effect) : IO Step :=
+    match r {
+        Result.err e => failed_step write st e,
+        Result.ok e => command_ok write e,
+    }
+
+def command_ok (write : String -> IO Unit) (e : Effect) : IO Step := do {
     let _ <- write (String.concat e.output "\n");
     command_step e
 }
@@ -96,17 +110,22 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
     turn_result write st r
 }
 
-def turn_result (write : String -> IO Unit) (st : WeaverState) (r : Result String RunState) : IO Step :=
+def turn_result (write : String -> IO Unit) (st : WeaverState) (r : Result WeaverError RunState) : IO Step :=
     match r {
-        Result.err e => turn_err write st e,
+        Result.err e => failed_step write st e,
         Result.ok run2 => turn_ok write st run2,
     }
 
-/// A provider or wire failure keeps the session as it was: the input
-/// is not lost to the transcript, the user simply retries.
-def turn_err (write : String -> IO Unit) (st : WeaverState) (e : String) : IO Step := do {
-    let _ <- write (String.concat "error: " (String.concat e "\n"));
-    IO.pure (mk_step st true)
+/// One failure, classified through the one classification point: a
+/// recoverable error prints `error: <show>` and the loop continues
+/// with the session exactly as it was (the Phase 3 behavior, now
+/// typed); a fatal one ALSO prints, then ends the run -- the state
+/// carries the error out so `main` can exit 1.
+def failed_step (write : String -> IO Unit) (st : WeaverState) (e : WeaverError) : IO Step := do {
+    let _ <- write (String.concat "error: " (String.concat (WeaverError.show e) "\n"));
+    if WeaverError.recoverable e
+    then IO.pure (mk_step st true)
+    else IO.pure (mk_step (set_fatal st e) false)
 }
 
 /// The turn's text reached stdout live through `emit`; all that is
@@ -125,8 +144,11 @@ def advance_run (st : WeaverState) (run2 : RunState) : WeaverState :=
 /// Append the user message, rebuild the gate for the CURRENT mode (the
 /// gate closes over the mode it was built with), and drive the loop to
 /// the end of the turn -- the returned `RunState` carries the advanced
-/// session, the spent budget and the grown always-cache.
-def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT String IO RunState := do {
+/// session, the spent budget and the grown always-cache. Phase 9: the
+/// drive seam is `ResultT WeaverError IO` -- shuttle's `String` errors
+/// cross the boundary through `WeaverError.of_shuttle` (the one wrap,
+/// provider-tagged: everything this seam produces is a wire failure).
+def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let gated : RunState := gate_for st.mode read write st.run;
     let ready : RunState := append_user gated text;
     drive_loop ready
@@ -134,11 +156,24 @@ def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : 
 
 /// `Loop.run_state`'s shape minus the projection: `Agent.exec` gives
 /// back the WHOLE `RunState`, and Weaver needs it -- the always-cache
-/// lives there and must survive across inputs.
-def drive_loop (run : RunState) : ResultT String IO RunState := do {
-    let p <- Agent.exec Loop.iterate run;
-    ResultT.mk (return (Result.ok (run_of_pair p)))
-}
+/// lives there and must survive across inputs. `Agent.exec`'s own seam
+/// stays `ResultT String IO` (shuttle keeps `String`, Design 7); the
+/// conversion runs it to a `Result` and re-wraps. (NOT `ResultT.lift`:
+/// the lift-in-a-do-block shape crashes the compiled backend -- a
+/// scratch repro confirmed it in isolation, while this
+/// `ResultT.mk (do { let r <- ResultT.run ... })` shape is the one
+/// `main.mo`'s `mcp_proxy_run` already uses.)
+def drive_loop (run : RunState) : ResultT WeaverError IO RunState :=
+    ResultT.mk (do {
+        let r <- ResultT.run (Agent.exec Loop.iterate run);
+        return (shuttle_result r)
+    })
+
+def shuttle_result (r : Result String (Pair RunState Unit)) : Result WeaverError RunState :=
+    match r {
+        Result.err e => Result.err (WeaverError.of_shuttle e),
+        Result.ok p => Result.ok (run_of_pair p),
+    }
 
 def run_of_pair (p : Pair RunState Unit) : RunState :=
     match p { Pair.pair r _ => r }

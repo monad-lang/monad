@@ -31,6 +31,7 @@ use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
 use weaver::providers {Weaver.preset}
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
+use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run}
 use init::transformers {ResultT}
 use json::json {Json}
@@ -138,14 +139,16 @@ def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
 /// The start plan, resolved RUNTIME -> PROJECT -> GLOBAL -> default:
 /// a flag always wins over a settings file, a settings file over the
 /// built-in floor (ollama / the provider's default model / 40 turns).
-def plan_of (s : Settings) (c : CliArgs) : Result String Plan :=
+/// Phase 9: a bad plan is a `config` error -- the run was misshapen
+/// before it started, and `main` exits 1 on it.
+def plan_of (s : Settings) (c : CliArgs) : Result WeaverError Plan :=
     if Bool.not (String.is_empty c.error)
-    then Result.err c.error
+    then Result.err (WeaverError.config c.error)
     else
         let provider : String := resolve_provider s c.provider in
         let model : String := resolve_model s c.model in
         match Weaver.preset provider model {
-            Result.err e => Result.err e,
+            Result.err e => Result.err (WeaverError.config e),
             Result.ok cfg => plan_turns s c provider cfg,
         }
 
@@ -161,9 +164,9 @@ def resolve_model (s : Settings) (flag : String) : String :=
     then match s.model { Option.some m => m, Option.none => "" }
     else flag
 
-def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) : Result String Plan :=
+def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) : Result WeaverError Plan :=
     match resolve_max_turns s c.max_turns_str {
-        Result.err e => Result.err e,
+        Result.err e => Result.err (WeaverError.config e),
         Result.ok n => plan_done provider cfg n c.mcps,
     }
 
@@ -178,7 +181,7 @@ def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
 def turn_cap (n : I64) : Result String I64 :=
     if n < 1 then Result.err "--max-turns must be at least 1" else Result.ok n
 
-def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (mcps : List String) : Result String Plan :=
+def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (mcps : List String) : Result WeaverError Plan :=
     let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := mcps } in
     Result.ok p
 
@@ -256,9 +259,10 @@ def warn_each (names : List String) : IO Unit :=
 /// Mount every `--mcp` command, in order. On any failure the already
 /// mounted servers are disposed before the error returns (a failed
 /// connect/list has already torn its own child down -- the stdio
-/// module's failure-is-teardown contract).
+/// module's failure-is-teardown contract). Phase 9: a failed mount is
+/// an `mcp` error -- fatal by classification, `main` exits 1 on it.
 #[partial]
-def mount_all (client : McpClientInfo) (cmds : List String) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO (Result String (Pair ToolRegistry (List McpServer))) :=
+def mount_all (client : McpClientInfo) (cmds : List String) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO (Result WeaverError (Pair ToolRegistry (List McpServer))) :=
     match cmds {
         List.empty => IO.pure (Result.ok (Pair.pair reg servers)),
         List.cons cmd rest => do {
@@ -267,20 +271,20 @@ def mount_all (client : McpClientInfo) (cmds : List String) (s : Settings) (reg 
         },
     }
 
-def mount_connected (client : McpClientInfo) (rest : List String) (s : Settings) (cap : Capability) (reg : ToolRegistry) (servers : List McpServer) (c : Result String McpServer) : IO (Result String (Pair ToolRegistry (List McpServer))) :=
+def mount_connected (client : McpClientInfo) (rest : List String) (s : Settings) (cap : Capability) (reg : ToolRegistry) (servers : List McpServer) (c : Result String McpServer) : IO (Result WeaverError (Pair ToolRegistry (List McpServer))) :=
     match c {
         Result.err e => mount_fail servers (String.concat "mcp connect failed: " e),
         Result.ok m => mount_list client rest s cap reg servers m,
     }
 
 #[partial]
-def mount_list (client : McpClientInfo) (rest : List String) (s : Settings) (cap : Capability) (reg : ToolRegistry) (servers : List McpServer) (m : McpServer) : IO (Result String (Pair ToolRegistry (List McpServer))) := do {
+def mount_list (client : McpClientInfo) (rest : List String) (s : Settings) (cap : Capability) (reg : ToolRegistry) (servers : List McpServer) (m : McpServer) : IO (Result WeaverError (Pair ToolRegistry (List McpServer))) := do {
     let r <- Server.list_tools m;
     mount_listed client rest s cap reg servers m r
 }
 
 #[partial]
-def mount_listed (client : McpClientInfo) (rest : List String) (s : Settings) (cap : Capability) (reg : ToolRegistry) (servers : List McpServer) (m : McpServer) (r : Result String (Pair McpServer (List McpTool))) : IO (Result String (Pair ToolRegistry (List McpServer))) :=
+def mount_listed (client : McpClientInfo) (rest : List String) (s : Settings) (cap : Capability) (reg : ToolRegistry) (servers : List McpServer) (m : McpServer) (r : Result String (Pair McpServer (List McpTool))) : IO (Result WeaverError (Pair ToolRegistry (List McpServer))) :=
     match r {
         Result.err e => mount_fail servers (String.concat "mcp tools/list failed: " e),
         Result.ok p => match p {
@@ -291,9 +295,9 @@ def mount_listed (client : McpClientInfo) (rest : List String) (s : Settings) (c
         },
     }
 
-def mount_fail (servers : List McpServer) (e : String) : IO (Result String (Pair ToolRegistry (List McpServer))) := do {
+def mount_fail (servers : List McpServer) (e : String) : IO (Result WeaverError (Pair ToolRegistry (List McpServer))) := do {
     let _ <- dispose_all servers;
-    IO.pure (Result.err e)
+    IO.pure (Result.err (WeaverError.mcp e))
 }
 
 #[partial]
@@ -325,13 +329,28 @@ def initial_mode (s : Settings) : Mode :=
     match s.mode { Option.some m => m, Option.none => Mode.manual }
 
 pub def main (args : List String) : IO I64 := do {
-    let settings <- Settings.load;
-    main_plan settings (parse_args args)
+    let loaded <- Settings.load;
+    let _ <- warn_settings loaded.warnings;
+    main_plan loaded.settings (parse_args args)
 }
+
+/// Phase 9's settings visibility: the parse failures `Settings.load`
+/// swallowed silently now print at startup, one `warning:` line each
+/// (rendered through the one render point) -- and the run continues
+/// with whatever the files did contribute.
+#[partial]
+def warn_settings (ws : List WeaverError) : IO Unit :=
+    match ws {
+        List.empty => IO.pure unit,
+        List.cons w rest => do {
+            write_errln (String.concat "warning: " (WeaverError.show w));
+            warn_settings rest
+        }
+    }
 
 def main_plan (s : Settings) (c : CliArgs) : IO I64 :=
     match plan_of s c {
-        Result.err e => do { write_errln e; return 1 },
+        Result.err e => do { write_errln (String.concat "error: " (WeaverError.show e)); return 1 },
         Result.ok p => run_plan p s,
     }
 
@@ -342,9 +361,9 @@ def run_plan (p : Plan) (s : Settings) : IO I64 := do {
 
 /// `mount_all` disposes the mounted servers itself on error, so both
 /// arms here hand back an exit code and nothing else.
-def mounted_plan (p : Plan) (s : Settings) (r : Result String (Pair ToolRegistry (List McpServer))) : IO I64 :=
+def mounted_plan (p : Plan) (s : Settings) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
     match r {
-        Result.err e => do { write_errln e; return 1 },
+        Result.err e => do { write_errln (String.concat "error: " (WeaverError.show e)); return 1 },
         Result.ok pr => match pr {
             Pair.pair reg servers => start_loop p s reg servers,
         },
@@ -356,13 +375,21 @@ def mounted_plan (p : Plan) (s : Settings) (r : Result String (Pair ToolRegistry
 /// `enter_raw_mode` degrade `terminal.mo` already documents) and falls
 /// back to the line-based `Dumb.run` when stdin is not one -- a piped
 /// or scripted run is byte-identical to before this phase.
+/// Phase 9: the exit code follows the state -- a fatal error recorded
+/// mid-session exits 1 (today every post-mount path returned 0).
 def start_loop (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
     let st : WeaverState := initial_state p reg s;
     let ran_tui <- Tui.run st;
-    let _ <- run_fallback ran_tui st;
+    let final <- run_fallback ran_tui st;
     let _ <- dispose_all servers;
-    return 0
+    exit_of final
 }
+
+def exit_of (st : WeaverState) : IO I64 :=
+    match st.fatal {
+        Option.some _ => IO.pure 1,
+        Option.none => IO.pure 0,
+    }
 
 def run_fallback (ran_tui : Bool) (st : WeaverState) : IO WeaverState :=
     if ran_tui
