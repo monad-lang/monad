@@ -14,18 +14,42 @@
 /// The script path is `SHUTTLE_MOCK_TURNS` when set, else a PID-qualified
 /// default (`/tmp/shuttle_mock_turns_<pid>.json`). A test process cannot
 /// set its own environment, so the default is the path tests write; a
-/// human driver can point the env var anywhere.
+/// human driver can point the env var anywhere. `SHUTTLE_MOCK_DELAY_MS`
+/// sleeps the wire before each scripted turn (0 when unset/unparsable) --
+/// the weaver pty repro's way of watching a turn IN FLIGHT; the mock
+/// otherwise models no provider latency at all.
 use json::json {Json, Json.parse, Json.ParseError.to_string, Json.get_array}
+use parsec::number {parse_i64}
 use shuttle::message {Message, Turn}
 use shuttle::message_types {Role, Content}
 use shuttle::tool {ToolSpec}
 use init::transformers {ResultT}
+use std::concurrent::combine {sleepIO}
 use std::io {IO.get_env, IO.read_file, IO.file_exists}
 use std::path {Path.of, Path.to_string}
 use std::process {process_id}
 
 def default_script_path : String :=
     String.concat "/tmp/shuttle_mock_turns_" (String.concat (I64.to_string process_id) ".json")
+
+/// Milliseconds the wire sleeps before serving each scripted turn --
+/// `SHUTTLE_MOCK_DELAY_MS`, unset or unparsable meaning 0, which leaves
+/// the headless default byte-identical. The knob exists so the weaver
+/// pty repro can observe a turn IN FLIGHT (spinner, mid-turn input,
+/// Ctrl-C interrupt) against the otherwise-instant mock: a real
+/// provider's latency is exactly what the mock does not model.
+#[partial]
+def mock_delay_ms : IO I64 := do {
+    let env <- IO.get_env "SHUTTLE_MOCK_DELAY_MS";
+    return (match env {
+        Option.none => 0,
+        Option.some s =>
+            match parse_i64 s {
+                Option.none => 0,
+                Option.some n => n,
+            },
+    })
+}
 
 def mock_script_path : IO String := do {
     let env <- IO.get_env "SHUTTLE_MOCK_TURNS";
@@ -138,6 +162,8 @@ def mock_decode (loaded : Result String String) (index : I64) : Result String Tu
 /// driver's synthesis failed to resolve for this module.
 pub def Mock.send (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn :=
     ResultT.mk (do {
+        let delay <- mock_delay_ms;
+        sleepIO delay;
         let file <- mock_script_path;
         let loaded <- mock_load file;
         let turn <- mock_emit_turn emit (mock_decode loaded (assistant_count history));
