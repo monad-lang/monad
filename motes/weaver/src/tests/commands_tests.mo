@@ -237,14 +237,20 @@ def test_resume_missing_file_is_io_error : IO Bool := do {
     })
 }
 
-/// An unknown provider name is a `config` error -- the run's
-/// configuration is wrong, not its files or its wire.
+/// An unknown provider name is a session-local refusal: command output
+/// names it, state untouched, session alive. An argument typo must not
+/// end an otherwise healthy run (the STARTUP path keeps its own fatal
+/// shape for the same misspelling).
 #[test]
-def test_unknown_provider_is_config_error : IO Bool := do {
-    let r <- Commands.dispatch "/provider bogus" (state_of Mode.manual []);
+def test_unknown_provider_refuses_in_session : IO Bool := do {
+    let st0 : WeaverState := state_of Mode.manual [];
+    let r <- Commands.dispatch "/provider bogus" st0;
     return (match r {
-        Result.err e => is_config e,
-        Result.ok _ => false,
+        Result.err _ => false,
+        Result.ok e =>
+            Bool.not e.state.quit
+                && e.state.provider == st0.provider
+                && String.contains e.output "unknown provider",
     })
 }
 

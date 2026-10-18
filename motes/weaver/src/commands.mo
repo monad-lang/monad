@@ -174,11 +174,14 @@ def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effe
     then respond st (String.concat "provider: " st.provider)
     else provider_of arg st
 
-/// An unknown provider name is a `config` error: the run's
-/// configuration is wrong, not its files or its wire.
+/// An unknown provider name stays a session-local refusal (command
+/// output, state untouched): an argument typo must not kill an
+/// otherwise healthy interactive session -- that is what a config
+/// error's fatal classification would do. The STARTUP path keeps its
+/// own fatal shape for the same misspelling.
 def provider_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match Weaver.preset arg st.run.session.config.model st.keys {
-        Result.err e => IO.pure (Result.err (WeaverError.config e)),
+        Result.err e => respond st e,
         Result.ok cfg =>
             let st2 : WeaverState := set_config st cfg arg in
             respond st2 (String.concat "provider: " arg),
@@ -300,10 +303,19 @@ def resume_result (file : String) (st : WeaverState) (r : Result String Session)
 
 def resume_ok (file : String) (st : WeaverState) (s : Session) : IO (Result WeaverError Effect) :=
     let remaining : I64 := st.budget - s.turns in
-    let st2 : WeaverState := set_session st s st.budget in
+    let keyed : Session := { s with config := rekey_config st s.config } in
+    let st2 : WeaverState := set_session st keyed st.budget in
     if remaining < 1
     then respond st2 (String.concat "resumed " (String.concat file " -- the whole turn budget is already spent"))
     else respond st2 (String.concat "resumed " file)
+
+/// The redaction contract's other half: a save file carries only
+/// `api_key_env` (the direct key must never cross a `/save`), so the
+/// resumed config re-resolves the CURRENT provider's direct key from
+/// the merged `[api_keys]` table (the state's `keys`), env-second as
+/// everywhere else.
+def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
+    { cfg with api_key := Map.lookup st.provider st.keys }
 
 /// `/clear`: drop the transcript and the accounting, keep the config
 /// and the tools. The turn budget resets to the full amount.

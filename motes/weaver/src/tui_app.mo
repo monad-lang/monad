@@ -19,14 +19,14 @@ use shuttle::agent {RunState}
 use shuttle::gate {Pick, Approval, Gate}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
-use weaver::commands {WeaverState, Effect, Commands.dispatch}
+use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch}
 use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
 use weaver::gate {pick_header, capped_diff, gate_answer_prompt, gate_answer_feedback}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
-use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Model.scroll_step, Model.append_block, panel_height}
+use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Model.scroll_step, Model.append_block, list_length, panel_height}
 use weaver::theme {theme_line_style}
-use weaver::error {WeaverError, WeaverError.show}
+use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use tui::types {Event, Key, LayoutSize}
 use tui::widget {Widget, SizedWidget, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_key}
@@ -79,8 +79,37 @@ pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd Weav
         WeaverMsg.key_event e => update_event m e,
         WeaverMsg.turn_result run lines =>
             Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.append_block (set_run mm run) lines) m) Cmd.none,
+        WeaverMsg.turn_failed run e =>
+            Pair.pair (with_streak_reset (fn (mm : TuiModel) => model_for_failure mm run e) m) (failed_cmd e),
         WeaverMsg.command_result effect => command_result_step m effect,
+        WeaverMsg.command_failed e =>
+            Pair.pair (with_streak_reset (fn (mm : TuiModel) => model_for_command_failure mm e) m) (failed_cmd e),
     }
+
+/// A failed turn's model: the failure's run lands (the pre-error
+/// session), then the ONE classification point decides -- a recoverable
+/// error leaves the fatal slot empty (dumb failed_step's contract); a
+/// fatal one carries the error out. The error line block follows.
+def model_for_failure (m : TuiModel) (run : RunState) (e : WeaverError) : TuiModel :=
+    let m2 : TuiModel := set_run m run in
+    if WeaverError.recoverable e
+    then Model.append_block m2 [error_line e]
+    else Model.append_block (set_state m2 (set_fatal m2.state e)) [error_line e]
+
+/// A failed COMMAND keeps the run as it is; the fatal slot + line.
+def model_for_command_failure (m : TuiModel) (e : WeaverError) : TuiModel :=
+    let st : WeaverState := m.state in
+    model_for_failure m st.run e
+
+/// Dumb mode's `failed_step` contract, mirrored: a RECOVERABLE error
+/// leaves the session running; a fatal one ends the run -- the state
+/// carries the error out, `main` exits 1 through the fatal slot.
+def failed_cmd (e : WeaverError) : Cmd WeaverMsg :=
+    if WeaverError.recoverable e then Cmd.none else Cmd.quit
+
+/// `append_block` over a state swap (command failures keep the run).
+def append_block_state (m : TuiModel) (st : WeaverState) (lines : List String) : TuiModel :=
+    Model.append_block (set_state m st) lines
 
 def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
     let m2 : TuiModel := with_streak_reset
@@ -199,7 +228,7 @@ def command_step_tui (st : WeaverState) (line : String) : IO WeaverMsg := do {
 /// effect the update folds as before.
 def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :=
     match r {
-        Result.err e => WeaverMsg.turn_result st.run [error_line e],
+        Result.err e => WeaverMsg.command_failed e,
         Result.ok e => WeaverMsg.command_result e,
     }
 
@@ -217,7 +246,7 @@ def drive_turn_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
 
 def turn_result_of (st : WeaverState) (before : I64) (r : Result WeaverError RunState) : WeaverMsg :=
     match r {
-        Result.err e => WeaverMsg.turn_result st.run [error_line e],
+        Result.err e => WeaverMsg.turn_failed st.run e,
         Result.ok run2 =>
             WeaverMsg.turn_result run2
                 (transcript_lines_of_messages (drop_n_messages (before + 1) run2.session.history)),
@@ -367,7 +396,7 @@ def echo_answer (p : Pick) (diff_pair : Option (Pair String String)) (ap : Appro
     let lines : List String := overlay_lines p diff_pair;
     // The answer row is the LAST overlay line, and its prompt's own
     // length is where the echo starts (columns are 0-based here).
-    let row : I64 := list_str_length lines - 1;
+    let row : I64 := list_length lines - 1;
     let col : I64 := String.length (gate_answer_prompt p.cap);
     let _ <- Terminal.cursor_move row col;
     IO.write_stdout (gate_answer_feedback p.cap ap);
@@ -415,15 +444,6 @@ def overlay_row (line : String) : SizedWidget :=
 
 def overlay_lines (p : Pick) (diff_pair : Option (Pair String String)) : List String :=
     List.append [pick_header p] (List.append (diff_lines_of diff_pair) ["", gate_answer_prompt p.cap])
-
-/// The row-count helper `overlay_lines` feeds (same `#[partial]` shape
-/// as model.mo's `list_length`).
-#[partial]
-def list_str_length (xs : List String) : I64 :=
-    match xs {
-        List.empty => 0,
-        List.cons _ rest => 1 + list_str_length rest,
-    }
 
 def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
     match diff_pair {

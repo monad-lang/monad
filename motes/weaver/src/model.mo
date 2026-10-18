@@ -12,6 +12,7 @@
 /// single-selection menu's highlight, not a scrolling transcript).
 use shuttle::agent {RunState}
 use weaver::commands {WeaverState, Effect}
+use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {theme_line_style, theme_status_style}
 use tui::types {Event, LayoutSize}
@@ -20,10 +21,18 @@ use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, si
 
 /// The loop's message type: a raw terminal event not yet interpreted, or
 /// the folded-back result of a `Cmd.perform`'d turn or slash command.
+/// The `*_failed` variants carry the failure CLASS, so the update can
+/// apply the one recoverable/fatal classification (dumb mode's
+/// `failed_step` contract: fatal ends the run, recoverable leaves the
+/// session intact) -- the earlier shape folded every error into a plain
+/// transcript line and both the state's fatal slot and the
+/// classification were lost (a TUI session never exited nonzero).
 pub type WeaverMsg {
     key_event (e : Event),
     turn_result (run : RunState) (lines : List String),
+    turn_failed (run : RunState) (e : WeaverError),
     command_result (effect : Effect),
+    command_failed (e : WeaverError),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a
@@ -84,22 +93,28 @@ def transcript_column (m : TuiModel) : Widget :=
 def transcript_row (line : String) : SizedWidget :=
     sized (LayoutSize.fixed 1) (with_style (theme_line_style line) (label line))
 
-/// The visible window: when pinned to the bottom (scroll = 0), the
-/// last lines that fit; scrolled up, the block of lines that ends
-/// `scroll` lines above the bottom, with the indicator row in front.
-/// The scroll is clamped here too -- a shrink (`rows` collapsed) can
-/// leave the state above the new top, and the view never lies.
+/// The visible window. The scrolled panel spends ONE of its rows on
+/// the indicator, so the content window is `panel_height - 1` rows
+/// ending `scroll` lines above the bottom -- and the top scroll is
+/// therefore `len - (panel_height - 1)`: at max scroll the transcript's
+/// FIRST line is visible (the earlier `len - panel_height` room left
+/// it unreachable and overstated the indicator by one). Clamped here
+/// too -- a shrink (`rows` collapsed) can leave the state above the
+/// new top; the view never lies.
 pub def visible_transcript (m : TuiModel) : List String :=
-    let eff : I64 := scroll_clamp m.scroll m.transcript (panel_height m) in
+    let len : I64 := list_length m.transcript in
+    let eff : I64 := scroll_clamp m.scroll len (panel_height m) in
     if eff > 0
-    then List.cons (scroll_indicator eff)
+    then List.cons (scroll_indicator (len - eff - (panel_height m - 1)))
         (transcript_window m.transcript (panel_height m - 1) eff)
     else transcript_window m.transcript (panel_height m) eff
 
 /// `N lines above -- PgDn for latest`: the row the scrolled-up panel
-/// spends one of its rows on (the count is the scroll itself).
+/// spends one of its rows on; `n` is the count of lines STILL above
+/// the window's top.
 pub def scroll_indicator (n : I64) : String :=
-    String.concat (I64.to_string n) " lines above -- PgDn for latest"
+    let lines_word : String := if n == 1 then "line above -- PgDn for latest" else "lines above -- PgDn for latest" in
+    String.concat (String.concat (I64.to_string n) " ") lines_word
 
 /// The lines that fit, ending `scroll` above the bottom: the last
 /// `height + scroll` lines, minus their LAST scroll lines.
@@ -120,12 +135,13 @@ def take_n (n : I64) (xs : List String) : List String :=
         List.cons x rest => List.cons x (take_n (n - 1) rest),
     }
 
-/// The top scroll still allows: at most `len - height`, never less
-/// than 0.
+/// The top scroll still allows: at most `len - (height - 1)` (the
+/// scrolled window shows `height - 1` content rows and an indicator
+/// row), never less than 0 -- so the transcript's FIRST line is
+/// reachable at max scroll.
 #[partial]
-def scroll_clamp (scroll : I64) (all : List String) (height : I64) : I64 :=
-    let len : I64 := list_length all in
-    let headroom : I64 := len - height in
+def scroll_clamp (scroll : I64) (len : I64) (height : I64) : I64 :=
+    let headroom : I64 := len - (height - 1) in
     let room : I64 := if headroom < 0 then 0 else headroom in
     if scroll > room then room
     else if scroll < 0 then 0
@@ -140,7 +156,7 @@ pub def panel_height (m : TuiModel) : I64 :=
 /// older; PageDown/Ctrl+D negative), clamped at both ends.
 #[partial]
 pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
-    { m with scroll := scroll_clamp (m.scroll + delta) m.transcript (panel_height m) }
+    { m with scroll := scroll_clamp (m.scroll + delta) (list_length m.transcript) (panel_height m) }
 
 /// A new block of transcript lines: the blank separator row in front
 /// (Phase 11's spacing, skipped on an empty transcript), and a

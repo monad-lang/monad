@@ -69,12 +69,12 @@ def test_pinned_shows_the_tail : Bool :=
 #[test]
 def test_page_up_clamps_to_headroom : Bool :=
     let m := Model.scroll_step (filled 25) 20 in
-    m.scroll == 5
+    m.scroll == 6
 
 #[test]
 def test_scroll_clamps_at_top : Bool :=
     let m := Model.scroll_step (Model.scroll_step (filled 25) 5) 999999 in
-    m.scroll == 5
+    m.scroll == 6
 
 #[test]
 def test_scroll_clamps_at_zero : Bool :=
@@ -94,7 +94,7 @@ def test_indicator_count_is_the_scroll : Bool :=
 #[test]
 def test_scroll_window_shows_indicator_and_stops_a_row_short : Bool :=
     let vis := visible_transcript (Model.scroll_step (filled 25) 5) in
-    first_line_of vis == "5 lines above -- PgDn for latest" && last_of vis == "l20"
+    first_line_of vis == "1 line above -- PgDn for latest" && last_of vis == "l20"
 
 #[test]
 def test_stay_put_scroll_append_holds_the_visible_top : Bool :=
@@ -110,6 +110,14 @@ def test_pinned_append_stays_pinned : Bool :=
 def test_pinned_append_rides_the_tail : Bool :=
     let vis := visible_transcript (Model.append_block (filled 25) [nth_line 26]) in
     last_of vis == "l26"
+
+#[test]
+def test_full_scroll_reaches_the_first_line : Bool :=
+    let vis := visible_transcript (Model.scroll_step (filled 25) 6) in
+    match vis {
+        List.cons _ rest => first_line_of rest == "l1",
+        List.empty => false,
+    }
 
 #[test]
 def test_end_repins : Bool :=

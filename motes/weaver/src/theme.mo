@@ -1,96 +1,134 @@
 /// The palette -- weaver.md Phase 11: the colors both UIs share.
-/// TUI side: `TextStyle` per line class (the render contracts one style
-/// per row); dumb side: SGR wraps by line-prefix classification,
-/// suppressed when the session's colors flag is off (`NO_COLOR`; there
-/// is deliberately no auto tty probe -- a piped consumer should set
-/// NO_COLOR, the informal standard). `Diff.render` stays uncolored:
-/// classification is by the `- `/`+ ` prefix, so any line that
-/// carries one is colored wherever it surfaces.
+/// ONE classification, TWO renderers: `line_class` names a line's role
+/// by prefix, and the TUI renders it as a `TextStyle` while dumb mode
+/// renders the matching SGR code -- one enum each side renders from,
+/// so the two palettes cannot drift. Dumb side suppressed when the
+/// session's colors flag is off (`NO_COLOR`; there is deliberately no
+/// auto tty probe -- a piped consumer should set NO_COLOR, the
+/// informal standard). `Diff.render` stays uncolored: classification
+/// is by the `- `/`+ ` prefix, so any line that carries one is colored
+/// wherever it surfaces. `Theme.tint` maps over LINES (a multi-line
+/// write is not one class just because its first line is).
 use tui::types {TextStyle}
 use tui::core {style_default}
 use std::ansi {Color}
 use weaver::policy {Mode}
 
-pub struct Theme {
-    you : TextStyle,
-    assistant : TextStyle,
-    running : TextStyle,
-    error : TextStyle,
-    diff_plus : TextStyle,
-    diff_minus : TextStyle,
-    status : TextStyle,
-    hint : TextStyle,
+pub type LineClass {
+    user,
+    assistant,
+    running,
+    error,
+    diff_plus,
+    diff_minus,
+    hint,
+    plain,
 }
 
-pub def theme_default : Theme :=
-    {
-        you := { style_default with dim := true },
-        assistant := style_default,
-        running := { style_default with dim := true, fg := some Color.cyan },
-        error := { style_default with fg := some Color.red },
-        diff_plus := { style_default with fg := some Color.green },
-        diff_minus := { style_default with fg := some Color.red },
-        status := { style_default with dim := true },
-        hint := { style_default with dim := true },
-    }
-
-/// A transcript/overlay line's style, by prefix: diff marks, error
-/// entries, running-tool rows, the Ctrl+C hint -- everything else is
-/// the assistant's (plain) voice.
-pub def theme_line_style (line : String) : TextStyle :=
-    let theme := theme_default in
-    if String.starts_with "+ " line then theme.diff_plus
-    else if String.starts_with "- " line then theme.diff_minus
-    else if String.starts_with "error: " line then theme.error
-    else if String.starts_with "denied: " line then theme.error
-    else if String.starts_with "[approve] " line then theme.running
-    else if String.starts_with "[running " line then theme.running
-    else if String.starts_with "press Ctrl+C" line then theme.hint
-    else if String.starts_with "you: " line then theme.you
-    else theme.assistant
-
-/// The status bar's style per mode: `auto` is the red trust warning,
-/// `plan` cyan, every other mode dim.
-pub def theme_status_style (mode : Mode) : TextStyle :=
-    match mode {
-        Mode.auto => { style_default with dim := true, fg := some Color.red, bold := true },
-        Mode.plan => { style_default with dim := true, fg := some Color.cyan },
-        _ => { style_default with dim := true },
-    }
-
-// ── the dumb side: SGR string wraps, prefix-classified ────────────────
-
-def theme_code_red : String := "\u{1b}[31m"
-def theme_code_green : String := "\u{1b}[32m"
-def theme_code_cyan_dim : String := "\u{1b}[36;2m"
-def theme_code_dim : String := "\u{1b}[2m"
-
-/// The dumb line's SGR code by the same classification, "" = plain.
+/// The role of a line, by prefix: diff marks, error/denial entries,
+/// running rows, the you: prefix, the Ctrl+C hint -- everything else is
+/// the assistant's voice.
 #[terminating]
-def theme_line_code (line : String) : String :=
-    if String.starts_with "+ " line then theme_code_green
-    else if String.starts_with "- " line then theme_code_red
-    else if String.starts_with "error: " line then theme_code_red
-    else if String.starts_with "denied: " line then theme_code_red
-    else if String.starts_with "[approve] " line then theme_code_cyan_dim
-    else if String.starts_with "[running " line then theme_code_cyan_dim
-    else if String.starts_with "press Ctrl+C" line then theme_code_dim
-    else if String.starts_with "you: " line then theme_code_dim
-    else ""
+pub def line_class (line : String) : LineClass :=
+    if String.starts_with "+ " line then LineClass.diff_plus
+    else if String.starts_with "- " line then LineClass.diff_minus
+    else if String.starts_with "error: " line then LineClass.error
+    else if String.starts_with "denied: " line then LineClass.error
+    else if String.starts_with "refused: " line then LineClass.error
+    else if String.starts_with "[approve] " line then LineClass.running
+    else if String.starts_with "[running " line then LineClass.running
+    else if String.starts_with "press Ctrl+C" line then LineClass.hint
+    else if String.starts_with "you: " line then LineClass.user
+    else LineClass.assistant
 
-/// Wrap one dumb line in its SGR code (plain when off or unclassified).
-pub def Theme.tint (colors : Bool) (line : String) : String :=
+/// The TUI side: a class's `TextStyle`.
+pub def class_style (c : LineClass) : TextStyle :=
+    match c {
+        LineClass.user => { style_default with fg := some Color.cyan },
+        LineClass.assistant => style_default,
+        LineClass.running => { style_default with dim := true, fg := some Color.cyan },
+        LineClass.error => { style_default with fg := some Color.red },
+        LineClass.diff_plus => { style_default with fg := some Color.green },
+        LineClass.diff_minus => { style_default with fg := some Color.red },
+        LineClass.hint => { style_default with dim := true },
+        LineClass.plain => style_default,
+    }
+
+pub def theme_line_style (line : String) : TextStyle :=
+    class_style (line_class line)
+
+/// The dumb side: a class's SGR code (colors first, then attributes --
+/// the same order `tui::core::style_to_ansi` builds them in).
+pub def class_code (c : LineClass) : String :=
+    match c {
+        LineClass.user => "\u{1b}[36m",
+        LineClass.assistant => "",
+        LineClass.running => "\u{1b}[36;2m",
+        LineClass.error => "\u{1b}[31m",
+        LineClass.diff_plus => "\u{1b}[32m",
+        LineClass.diff_minus => "\u{1b}[31m",
+        LineClass.hint => "\u{1b}[2m",
+        LineClass.plain => "",
+    }
+
+/// The dumb line's tint: EVERY line of the write classified and
+/// wrapped ALONE (a multi-line write used to take its first line's
+/// class for the whole block -- the diff's `-`/`+` rows never
+/// colored), plain when off or unclassified.
+pub def Theme.tint (colors : Bool) (text : String) : String :=
     if Bool.not colors
-    then line
-    else
-        let code := theme_line_code line in
-        if code == "" then line else String.concat code (String.concat line "\u{1b}[0m")
+    then text
+    else if String.is_empty text
+    then text
+    else theme_tint_text (theme_split_lines text)
 
-/// The dumb status line's code, by mode (the same color the TUI chip
-/// carries).
+/// One line per `\n`; a trailing newline keeps its empty last line so
+/// the join reproduces the text's own shape.
+#[partial]
+def theme_split_lines (s : String) : List String :=
+    if String.is_empty s then List.empty else split_go s 0 0
+
+#[terminating]
+def split_go (s : String) (i : I64) (line_start : I64) : List String :=
+    if Bool.not (i < String.length s)
+    then List.cons (String.drop line_start s) List.empty
+    else if String.slice s i 1 == "\n"
+    then List.cons (String.slice s line_start (i - line_start)) (split_go s (i + 1) (i + 1))
+    else split_go s (i + 1) line_start
+
+/// Join the per-line tints back, `"\n"`-separated, in order.
+#[terminating]
+def theme_tint_text (lines : List String) : String :=
+    match lines {
+        List.empty => "",
+        List.cons l rest =>
+            match rest {
+                List.empty => theme_wrap l,
+                _ => String.concat (theme_wrap l) (String.concat "\n" (theme_tint_text rest)),
+            },
+    }
+
+/// A single line's wrap: class -> SGR code around it; a blank line and
+/// an unclassified line pass through bare.
+#[terminating]
+def theme_wrap (line : String) : String :=
+    let code := class_code (line_class line) in
+    if code == "" then line else String.concat code (String.concat line "\u{1b}[0m")
+
+/// The status bar's code, by mode (the same color the TUI chip
+/// carries): dim yellow -- the Claude-Code-like statusbar -- with the
+/// `auto` trust warning red.
 pub def theme_status_code (mode : Mode) : String :=
     match mode {
         Mode.auto => "\u{1b}[31;2;1m",
-        Mode.plan => "\u{1b}[36;2m",
-        _ => theme_code_dim,
+        _ => "\u{1b}[33;2m",
+    }
+
+/// The TUI status bar's style per mode: dim YELLOW for every mode (the
+/// statusbar's own voice), the `auto` warning red instead -- the
+/// WARNING: prefix the status text already carries is what turns red.
+pub def theme_status_style (mode : Mode) : TextStyle :=
+    match mode {
+        Mode.auto => { style_default with dim := true, fg := some Color.red, bold := true },
+        _ => { style_default with dim := true, fg := some Color.yellow },
     }

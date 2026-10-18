@@ -159,11 +159,14 @@ classification (`theme.mo`).
 
 ### Retries
 
-A failed provider call retries up to 3 times by default (2s, 4s, 6s
-backoff), each attempt announced as `retrying (n/3): <error>`. A 4xx
-status error is NOT retried -- a malformed request or an unknown key
-fails identically on every resend -- except 429 (rate limiting). The
-headless default is one attempt, byte-identical to the pre-retry loop.
+A failed provider call gets 3 attempts by default (backoff sleeps of
+2s then 4s before the second and third tries), each retry announced as
+`retrying (n/3): <error>` through the same live sink the turn's text
+streams through. The classification scans only the error's first bytes
+(the status marker lives there): a 4xx status error is NOT retried --
+a malformed request or an unknown key fails identically on every
+resend -- except 429 (rate limiting). The headless default is one
+attempt, byte-identical to the pre-retry loop.
 
 ### API keys
 

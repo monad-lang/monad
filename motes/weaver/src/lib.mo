@@ -14,7 +14,7 @@ pub use lib::policy {
     Mode.parse, Mode.show, Mode.approve_plan, Mode.warns_auto,
 }
 pub use lib::gate {cap_name, Gate.weaver, gate_answer_prompt, gate_answer_feedback}
-pub use lib::theme {Theme, theme_default, theme_line_style, theme_status_style, Theme.tint, theme_status_code}
+pub use lib::theme {LineClass, line_class, class_style, class_code, theme_line_style, theme_status_style, Theme.tint, theme_status_code}
 pub use lib::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 pub use lib::settings {
     Settings, Settings.empty, Settings.merge, Settings.load,

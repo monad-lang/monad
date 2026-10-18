@@ -10,7 +10,8 @@ use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use weaver::commands {WeaverState}
+use weaver::commands {WeaverState, set_fatal}
+use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::model {TuiModel, WeaverMsg, init_tui_model}
 use weaver::tui_app {TuiApp.update}
@@ -167,3 +168,27 @@ def test_resize_resets_ctrl_c_streak : Bool :=
                     }
             }
     }
+
+// ── failures carry their class: the dumb failed_step contract mirrored ──
+
+// A provider-class error is recoverable: the error line lands, the
+// session's fatal slot stays empty, no quit.
+#[test]
+def test_recoverable_turn_fails_keeps_running : Bool :=
+    match TuiApp.update (model_of Mode.manual) (WeaverMsg.turn_failed run_of (WeaverError.provider "wire down")) {
+        Pair.pair m2 cmd =>
+            cmd_is_none cmd
+                && Bool.not (fatal_is_some2 m2)
+                && transcript_contains "error: provider: wire down" m2.transcript
+    }
+
+// A config-class error is fatal: the fatal slot is set (main exits
+// 1) and the run ends.
+#[test]
+def test_fatal_turn_ends_the_tui : Bool :=
+    match TuiApp.update (model_of Mode.manual) (WeaverMsg.turn_failed run_of (WeaverError.config "startup misspelled")) {
+        Pair.pair m2 cmd => cmd_is_quit cmd && fatal_is_some2 m2
+    }
+
+def fatal_is_some2 (m : TuiModel) : Bool :=
+    match m.state.fatal { Option.some _ => true, Option.none => false }

@@ -416,19 +416,23 @@ def test_dumb_e2e_wire_failure_is_recoverable : IO Bool := do {
         && String.contains tap "error: provider: mock wire:")
 }
 
-/// A `config`-class failure mid-session (an unknown provider) is
-/// FATAL: printed the same way, but the run ENDS -- the state carries
-/// the error out (what `main` exits 1 on), where the wire failure above
-/// continued.
+/// A mid-session provider typo (a config-class misspelling) is a
+/// session-local refusal since the review round: the loop CONTINUES
+/// (the typo's message prints, the next input is served). The startup
+/// path keeps a config misspelling fatal (main_plan's own exit 1); a
+/// live session's argument typo must not be one.
 #[test]
-def test_dumb_e2e_config_failure_is_fatal : IO Bool := do {
+def test_dumb_e2e_provider_typo_refuses_keeps_session : IO Bool := do {
     let _ <- write_text inputs_path (Json.to_string (Json.make_array [
         Json.make_str "/provider bogus",
+        Json.make_str "go",
     ]));
+    let _ <- write_wire_script;
     let _ <- write_text cursor_path "0";
     let _ <- write_text tap_path "";
     let st <- Dumb.run scripted_read tap_write (state_of stamp_registry);
     let tap <- read_tap;
-    return (fatal_is_some st
-        && String.contains tap "error: config: unknown provider: bogus")
+    return (fatal_is_none st
+        && String.contains tap "unknown provider: bogus"
+        && history_mentions "done one" st.run.session.history)
 }

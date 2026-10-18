@@ -289,13 +289,21 @@ pub def Loop.retry_send
 /// status in their error text (`openai: HTTP 429: ...`). A `4`xx is a
 /// request error and fails identically on every resend -- EXCEPT 429,
 /// rate limiting, which is exactly what waiting is for. Anything
-/// without an `HTTP 4` marker is treated as transient.
+/// without an `HTTP 4` marker is treated as transient. The scan is
+/// bounded to the status MARKER's own neighborhood (the first bytes):
+/// a 5xx whose body happens to mention "HTTP 4" or a 4xx whose body
+/// mentions "429" must not flip the classification, and an
+/// unbounded scan over a large gateway body is its own pathology.
 #[terminating]
 def retry_worth_error (e : String) : Bool :=
-    if Bool.and (retry_contains e 0 "HTTP 4") (Bool.not (retry_contains e 0 "429"))
+    let head : String := String.slice e 0 24 in
+    if Bool.and (retry_contains head 0 "HTTP 4") (Bool.not (retry_contains head 0 "429"))
     then false
     else true
 
+/// The bounded contains: at most scan_to_scan... `i` runs to
+/// `String.length head` only, so this is linear in the marker's
+/// neighborhood, not in the error body.
 #[terminating]
 def retry_contains (s : String) (i : I64) (needle : String) : Bool :=
     if String.starts_with needle (String.drop i s)
