@@ -1,6 +1,6 @@
-/// Phase 11's scroll state machine, pure: the clamps, the stay-put
+/// Phase 11b's scroll state machine, pure: the clamps, the stay-put
 /// append, the indicator row. `TuiModel`s are built 24 rows tall, so
-/// `panel_height` is 20. (The theme classification lives in
+/// `panel_height` is 18 (the 3-row input box). (The theme
 /// `ui_theme_tests.mo`. Two parser corners worth knowing: an
 /// `--` comment line directly after `:=` breaks the parse, and an
 /// expression projection `(f x).field` binds looser than `==` -- bind
@@ -58,23 +58,23 @@ def last_of (lines : List String) : String :=
 
 #[test]
 def test_panel_height_is_rows_minus_four : Bool :=
-    panel_height model_of == 20
+    panel_height model_of == 18
 
 #[test]
 def test_pinned_shows_the_tail : Bool :=
     let vis := visible_transcript (filled 25) in
     let count : I64 := List.length vis in
-    first_line_of vis == "l6" && count == 20 && last_of vis == "l25"
+    first_line_of vis == "l8" && count == 18 && last_of vis == "l25"
 
 #[test]
 def test_page_up_clamps_to_headroom : Bool :=
     let m := Model.scroll_step (filled 25) 20 in
-    m.scroll == 6
+    m.scroll == 8
 
 #[test]
 def test_scroll_clamps_at_top : Bool :=
     let m := Model.scroll_step (Model.scroll_step (filled 25) 5) 999999 in
-    m.scroll == 6
+    m.scroll == 8
 
 #[test]
 def test_scroll_clamps_at_zero : Bool :=
@@ -85,7 +85,7 @@ def test_scroll_clamps_at_zero : Bool :=
 def test_tiny_terminal_clamps_to_zero : Bool :=
     let tiny : TuiModel := init_tui_model state_of 5 80 in
     let stepped := Model.scroll_step tiny 1 in
-    panel_height tiny == 1 && stepped.scroll == 0
+    panel_height tiny == 0 && stepped.scroll == 0
 
 #[test]
 def test_indicator_count_is_the_scroll : Bool :=
@@ -94,7 +94,7 @@ def test_indicator_count_is_the_scroll : Bool :=
 #[test]
 def test_scroll_window_shows_indicator_and_stops_a_row_short : Bool :=
     let vis := visible_transcript (Model.scroll_step (filled 25) 5) in
-    first_line_of vis == "1 line above -- PgDn for latest" && last_of vis == "l20"
+    first_line_of vis == "3 lines above -- PgDn for latest" && last_of vis == "l20"
 
 #[test]
 def test_stay_put_scroll_append_holds_the_visible_top : Bool :=
@@ -113,7 +113,7 @@ def test_pinned_append_rides_the_tail : Bool :=
 
 #[test]
 def test_full_scroll_reaches_the_first_line : Bool :=
-    let vis := visible_transcript (Model.scroll_step (filled 25) 6) in
+    let vis := visible_transcript (Model.scroll_step (filled 25) 8) in
     match vis {
         List.cons _ rest => first_line_of rest == "l1",
         List.empty => false,

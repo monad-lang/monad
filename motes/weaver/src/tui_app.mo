@@ -25,11 +25,11 @@ use weaver::gate {pick_header, capped_diff, gate_answer_prompt, gate_answer_feed
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Model.scroll_step, Model.append_block, list_length, panel_height}
-use weaver::theme {theme_line_style}
+use weaver::theme {theme_line_style, theme_split_lines, theme_border_style}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
-use tui::types {Event, Key, LayoutSize}
+use tui::types {Event, Key, MouseEvent, LayoutSize}
 use tui::widget {Widget, SizedWidget, sized, label, with_style}
-use tui::widgets::input {InputState, input_state, handle_input_key}
+use tui::widgets::input {InputState, input_state, handle_input_multiline_key}
 use tui::core {empty_screen, mk_rect}
 use tui::render {render, diff, apply_deltas}
 use tui::terminal {
@@ -107,10 +107,6 @@ def model_for_command_failure (m : TuiModel) (e : WeaverError) : TuiModel :=
 def failed_cmd (e : WeaverError) : Cmd WeaverMsg :=
     if WeaverError.recoverable e then Cmd.none else Cmd.quit
 
-/// `append_block` over a state swap (command failures keep the run).
-def append_block_state (m : TuiModel) (st : WeaverState) (lines : List String) : TuiModel :=
-    Model.append_block (set_state m st) lines
-
 def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
     let m2 : TuiModel := with_streak_reset
         (fn (mm : TuiModel) => Model.append_block (set_state mm effect.state) (Diff.lines effect.output)) m in
@@ -121,13 +117,30 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         Event.key k => update_key m k,
         Event.resize rows cols =>
             Pair.pair (with_streak_reset (fn (mm : TuiModel) => set_size mm rows cols) m) Cmd.none,
+        Event.mouse me => update_mouse m me,
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
+
+/// The mouse's one owned gesture -- the wheel, the scroll gesture a
+/// transcript UI is expected to honor (the SGR wheel reports decode
+/// even though nothing else is selected by it). Three lines a notch.
+def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg) :=
+    match me {
+        MouseEvent.scroll_up _ _ =>
+            Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm wheel_step) m) Cmd.none,
+        MouseEvent.scroll_down _ _ =>
+            Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (0 - wheel_step)) m) Cmd.none,
+        _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+    }
+
+def wheel_step : I64 := 3
 
 def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
     match k {
         Key.tab => Pair.pair (with_streak_reset cycle_mode m) Cmd.none,
         Key.enter => enter_key m,
+        Key.up => hist_key m,
+        Key.down => hist_down_key m,
         Key.page_up => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (panel_height mm)) m) Cmd.none,
         Key.page_down => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (0 - panel_height mm)) m) Cmd.none,
         Key.ctrl c =>
@@ -147,7 +160,62 @@ def half_page (m : TuiModel) : I64 :=
     if h < 2 then 1 else h / 2
 
 def streak_reset_input (m : TuiModel) (k : Key) : TuiModel :=
-    { (edit_input m k) with ctrl_c_streak := 0 }
+    { (multiline_input m k) with ctrl_c_streak := 0 }
+
+def multiline_input (m : TuiModel) (k : Key) : TuiModel :=
+    { m with input := handle_input_multiline_key k m.input }
+
+// ── prompt history (the up/down gesture) ────────────────────────────────
+
+/// ArrowUp: history from an EMPTY input (otherwise the gesture is the
+/// multiline cursor's, handled in the input field), and CONTINUED
+/// history while a walk is already open (a recalled value is not
+/// empty). Recall shows the entry and walks OLDER ones on repeats.
+#[partial]
+def hist_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    let browsing : Bool := Bool.not (m.hist_idx < 0) in
+    if Bool.or browsing (String.is_empty m.input.value)
+    then Pair.pair (with_streak_reset hist_up m) Cmd.none
+    else Pair.pair (streak_reset_input m Key.up) Cmd.none
+
+/// ArrowDown while browsing steps younger; at the first entry it
+/// returns to the live edit (empty box, placeholder back). Not
+/// browsing = the multiline cursor's move.
+#[partial]
+def hist_down_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    let browsing : Bool := Bool.not (m.hist_idx < 0) in
+    if browsing
+    then Pair.pair (with_streak_reset hist_down m) Cmd.none
+    else Pair.pair (streak_reset_input m Key.down) Cmd.none
+
+#[partial]
+def hist_up (m : TuiModel) : TuiModel :=
+    let next : I64 := m.hist_idx + 1 in
+    if Bool.not (next < list_length m.hist)
+    then m
+    else hist_show m next
+
+#[partial]
+def hist_down (m : TuiModel) : TuiModel :=
+    if m.hist_idx < 0
+    then m
+    else
+        let next : I64 := m.hist_idx - 1 in
+        if next < 0
+        then { m with hist_idx := 0 - 1, input := input_state "" input_placeholder }
+        else hist_show m next
+
+#[partial]
+def hist_show (m : TuiModel) (idx : I64) : TuiModel :=
+    let value : String := hist_at m.hist idx in
+    { m with hist_idx := idx, input := input_state value input_placeholder }
+
+#[partial]
+def hist_at (xs : List String) (i : I64) : String :=
+    match xs {
+        List.empty => "",
+        List.cons h rest => if i < 1 then h else hist_at rest (i - 1),
+    }
 
 /// `with_streak_reset f m` = apply `f`, then zero the streak.
 def with_streak_reset (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
@@ -184,8 +252,35 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     else
         let st : WeaverState := m.state in
         let m2 : TuiModel := with_streak_reset
-            (fn (mm : TuiModel) => Model.append_block (clear_input mm) [String.concat "you: " text]) m in
+            (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text)
+                (echo_lines text)) m in
         Pair.pair m2 (Cmd.perform (fn (_ : Unit) => run_submitted_line st text))
+
+/// A submitted line enters the history (most recent first, deduped
+/// against the current head) and the walk index returns to live.
+#[partial]
+def hist_push (m : TuiModel) (text : String) : TuiModel :=
+    let pushed : List String :=
+        match m.hist {
+            List.empty => hist_cons_empty text,
+            List.cons h rest => if h == text then m.hist else List.cons text m.hist,
+        } in
+    { m with hist := pushed, hist_idx := 0 - 1 }
+
+#[partial]
+def hist_cons_empty (text : String) : List String :=
+    List.cons text List.empty
+
+/// A submitted line is echoed as its OWN lines: the first carries the
+/// `you:` voice (the theme's user class), the rest -- a multiline
+/// submit -- plain below it.
+#[partial]
+def echo_lines (text : String) : List String :=
+    let lines : List String := theme_split_lines text in
+    match lines {
+        List.empty => List.empty,
+        List.cons first rest => List.cons (String.concat "you: " first) rest,
+    }
 
 def clear_input (m : TuiModel) : TuiModel :=
     { m with input := weaver_input_state }
@@ -394,10 +489,13 @@ def drain_stale_keys (budget : I64) : IO Unit :=
 /// turn's next render, so under a slow provider the prompt looked dead.
 def echo_answer (p : Pick) (diff_pair : Option (Pair String String)) (ap : Approval) : IO Unit := do {
     let lines : List String := overlay_lines p diff_pair;
-    // The answer row is the LAST overlay line, and its prompt's own
-    // length is where the echo starts (columns are 0-based here).
-    let row : I64 := list_length lines - 1;
-    let col : I64 := String.length (gate_answer_prompt p.cap);
+    // The answer row sits inside overlay_widget's border + padding:
+    // one border line, one padding row down (row), and one border + two
+    // padding columns across (col). Keep these in step with
+    // `overlay_widget`'s `border`/`padding 1 1 1 2` -- the coordinates
+    // are 0-based here.
+    let row : I64 := 1 + 1 + (list_length lines - 1);
+    let col : I64 := 1 + 2 + String.length (gate_answer_prompt p.cap);
     let _ <- Terminal.cursor_move row col;
     IO.write_stdout (gate_answer_feedback p.cap ap);
     IO.flush_stdout
@@ -437,7 +535,10 @@ def render_overlay_at (p : Pick) (diff_pair : Option (Pair String String)) (size
     }
 
 def overlay_widget (p : Pick) (diff_pair : Option (Pair String String)) : Widget :=
-    Widget.column (List.map overlay_row (overlay_lines p diff_pair))
+    Widget.column [
+        sized (LayoutSize.fill 1) (with_style theme_border_style (border BorderStyle.rounded
+            (padding 1 1 1 2 (Widget.column (List.map overlay_row (overlay_lines p diff_pair)))))),
+    ]
 
 def overlay_row (line : String) : SizedWidget :=
     sized (LayoutSize.fixed 1) (with_style (theme_line_style line) (label line))

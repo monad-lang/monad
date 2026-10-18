@@ -55,6 +55,11 @@ pub struct TuiModel {
     /// Lines above the pinned bottom; 0 = pinned to the latest output
     /// (Phase 11's scroll state machine).
     scroll : I64 := 0,
+    /// Submitted non-empty lines, most recent first (the up-arrow
+    /// history; ArrowUp recalls only from an empty input).
+    hist : List String := List.empty,
+    /// Where the history walk stands (-1 = live edit, not browsing).
+    hist_idx : I64 := 0 - 1,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -63,7 +68,11 @@ pub struct TuiModel {
 /// a struct literal whose new field is omitted has been seen to check
 /// clean and fill GARBAGE at runtime (the two-host divergence note).
 pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :=
-    { state := st, input := input_state "" "type a message, or /help", transcript := List.empty, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0 }
+    { state := st, input := input_state "" input_placeholder, transcript := List.empty, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, hist := List.empty, hist_idx := 0 - 1 }
+
+/// The input box's placeholder, shared by the live edit and a history
+/// walk's return-to-live.
+pub def input_placeholder : String := "type a message, or /help" 
 
 // ── view ─────────────────────────────────────────────────────────────────
 
@@ -74,9 +83,9 @@ pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :
 /// caught by checking the whole corpus, not just this mote).
 pub def Model.view (m : TuiModel) : Widget :=
     Widget.column [
-        sized (LayoutSize.fill 1) (border BorderStyle.plain (padding 1 0 1 0 (transcript_column m))),
+        sized (LayoutSize.fill 1) (with_style theme_border_style (border BorderStyle.rounded (padding 1 0 1 0 (transcript_column m)))),
         sized (LayoutSize.fixed 1) (with_style (theme_status_style m.state.mode) (label (status_line m))),
-        sized (LayoutSize.fixed 1) (text_input m.input),
+        sized (LayoutSize.fixed 3) (padding 1 0 1 0 (text_input m.input)),
     ]
 
 /// The transcript panel's content: the window of lines that fit, one
@@ -141,14 +150,16 @@ def take_n (n : I64) (xs : List String) : List String :=
 /// reachable at max scroll.
 #[partial]
 def scroll_clamp (scroll : I64) (len : I64) (height : I64) : I64 :=
-    let headroom : I64 := len - (height - 1) in
+    let headroom : I64 := if height < 1 then 0 else len - (height - 1) in
     let room : I64 := if headroom < 0 then 0 else headroom in
     if scroll > room then room
     else if scroll < 0 then 0
     else scroll
 
+/// `rows` minus the 3-row input box and the status row, minus the
+/// transcript border's own top/bottom lines.
 pub def panel_height (m : TuiModel) : I64 :=
-    let h := m.rows - 4 in
+    let h := m.rows - 6 in
     if h < 0 then 0 else h
 
 /// The scroll state machine: `scroll` counts lines above the pinned

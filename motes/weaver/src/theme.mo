@@ -57,6 +57,12 @@ pub def class_style (c : LineClass) : TextStyle :=
 pub def theme_line_style (line : String) : TextStyle :=
     class_style (line_class line)
 
+/// The transcript/overlay border's style: dim -- structure should read
+/// quieter than any live text (the border chars inherit the ambient
+/// style, so the BORDER wraps in this, not the rows).
+pub def theme_border_style : TextStyle :=
+    { style_default with dim := true }
+
 /// The dumb side: a class's SGR code (colors first, then attributes --
 /// the same order `tui::core::style_to_ansi` builds them in).
 pub def class_code (c : LineClass) : String :=
@@ -85,7 +91,7 @@ pub def Theme.tint (colors : Bool) (text : String) : String :=
 /// One line per `\n`; a trailing newline keeps its empty last line so
 /// the join reproduces the text's own shape.
 #[partial]
-def theme_split_lines (s : String) : List String :=
+pub def theme_split_lines (s : String) : List String :=
     if String.is_empty s then List.empty else split_go s 0 0
 
 #[terminating]

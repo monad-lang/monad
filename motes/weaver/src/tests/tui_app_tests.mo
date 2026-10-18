@@ -192,3 +192,81 @@ def test_fatal_turn_ends_the_tui : Bool :=
 
 def fatal_is_some2 (m : TuiModel) : Bool :=
     match m.state.fatal { Option.some _ => true, Option.none => false }
+
+// ── multiline input + prompt history ─────────────────────────────────────
+
+#[test]
+def test_alt_enter_inserts_a_newline : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "a")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.alt "\r")) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg (Key.char "b")) {
+                        Pair.pair m3 _ => m3.input.value == "a\nb"
+                    }
+            }
+    }
+
+// Alt+Enter at the start: the newline is IN the value, Enter still
+// submits the whole thing (the box clears, the echo is plain text).
+def model_of_step (m : TuiModel) (msg : WeaverMsg) : TuiModel :=
+    match TuiApp.update m msg { Pair.pair m2 _ => m2 }
+
+#[test]
+def test_multiline_value_routs_single_line_handler : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "a")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.alt "\r")) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg Key.enter) {
+                        Pair.pair m3 cmd =>
+                            cmd_is_perform cmd
+                                && Bool.not (String.contains (String.trim m3.input.value) "a")
+                                && transcript_contains "you: a" m3.transcript
+                    }
+            }
+    }
+
+#[test]
+def test_up_on_empty_input_recalls_history : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "h")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.char "i")) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg Key.enter) {
+                        Pair.pair m3 _ =>
+                            match TuiApp.update m3 (key_msg Key.up) {
+                                Pair.pair m4 cmd =>
+                                    cmd_is_none cmd && m4.input.value == "hi" && m4.hist_idx == 0
+                            }
+                    }
+            }
+    }
+
+// Recall then down: the live edit (empty box) is back.
+#[test]
+def test_down_from_history_returns_to_live : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "h")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg Key.enter) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg Key.up) {
+                        Pair.pair m3 _ =>
+                            match TuiApp.update m3 (key_msg Key.down) {
+                                Pair.pair m4 cmd =>
+                                    cmd_is_none cmd && String.is_empty m4.input.value && m4.hist_idx == 0 - 1
+                            }
+                    }
+            }
+    }
+
+// Only an EMPTY input recalls; a typed value's up-arrow is the
+// multiline cursor's (the reconciliation).
+#[test]
+def test_up_with_text_is_not_history : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "a")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg Key.up) {
+                Pair.pair m2 cmd => cmd_is_none cmd && m2.input.value == "a" && m2.hist_idx == 0 - 1
+            }
+    }
