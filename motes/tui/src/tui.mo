@@ -68,6 +68,7 @@ use lib::widget { Widget }
 use lib::input { Input.produce, InputReader, input_reader }
 use lib::terminal {
     Terminal.clear_screen, Terminal.cursor_hide, Terminal.cursor_move, Terminal.cursor_show,
+    Terminal.enable_mouse, Terminal.disable_mouse,
     Terminal.enter_alt_screen, Terminal.enter_raw_mode, Terminal.leave_alt_screen,
     Terminal.leave_raw_mode, Terminal.size
 }
