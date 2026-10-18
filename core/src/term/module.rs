@@ -3410,7 +3410,7 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
     // depends on. ABSOLUTE, via CARGO_MANIFEST_DIR -- a repo-relative path
     // resolves against the CWD, and a test binary's CWD is its own package
     // directory, where `init/mote.toml` is not.
-    let entries: [(ModulePath, &str, &str); 13] = [
+    let entries: [(ModulePath, &str, &str); 15] = [
       (
         mpt("'prelude"),
         concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/prelude.mo"),
@@ -3468,6 +3468,18 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
         concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/path.mo"),
         include_str!("../../../std/src/path.mo"),
       ),
+      // `std.io` uses `std.stream` (TCP's `FdStream`/`StreamError`), which
+      // uses `std.bytebuf`, so both load ahead of it.
+      (
+        ModulePath::new(vec![id("std"), id("bytebuf")]),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/bytebuf.mo"),
+        include_str!("../../../std/src/bytebuf.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("std"), id("stream")]),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/stream.mo"),
+        include_str!("../../../std/src/stream.mo"),
+      ),
       (
         ModulePath::new(vec![id("std"), id("io")]),
         concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/io.mo"),
@@ -3496,7 +3508,7 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
   {
     let init_dir = stdlib_dir();
     let std_dir = std_dir();
-    let entries: [(ModulePath, std::path::PathBuf); 13] = [
+    let entries: [(ModulePath, std::path::PathBuf); 15] = [
       (mpt("'prelude"), init_dir.join("prelude.mo")),
       (
         ModulePath::new(vec![id("init"), id("id")]),
@@ -3533,6 +3545,15 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
       (
         ModulePath::new(vec![id("std"), id("path")]),
         std_dir.join("path.mo"),
+      ),
+      // Ahead of `std.io`, which uses them: see the embed branch.
+      (
+        ModulePath::new(vec![id("std"), id("bytebuf")]),
+        std_dir.join("bytebuf.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("std"), id("stream")]),
+        std_dir.join("stream.mo"),
       ),
       (
         ModulePath::new(vec![id("std"), id("io")]),
@@ -3591,7 +3612,14 @@ pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
     "copy.mo",
     "lib.mo",
   ];
-  let std_files = ["path.mo", "io.mo", "process.mo", "lib.mo"];
+  let std_files = [
+    "path.mo",
+    "bytebuf.mo",
+    "stream.mo",
+    "io.mo",
+    "process.mo",
+    "lib.mo",
+  ];
   init_files
     .iter()
     .filter_map(|name| init_dir.join(name).canonicalize().ok())
