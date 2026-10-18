@@ -14,7 +14,7 @@ use shuttle::agent {RunState}
 use weaver::commands {WeaverState, Effect}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
-use weaver::theme {theme_line_style, theme_status_style}
+use weaver::theme {theme_line_style, theme_status_style, theme_border_style}
 use tui::types {Event, LayoutSize}
 use tui::widgets::input {InputState, input_state}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, sized, with_style, padding}

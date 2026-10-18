@@ -28,7 +28,7 @@ use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Mo
 use weaver::theme {theme_line_style, theme_split_lines, theme_border_style}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use tui::types {Event, Key, MouseEvent, LayoutSize}
-use tui::widget {Widget, SizedWidget, sized, label, with_style}
+use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_multiline_key}
 use tui::core {empty_screen, mk_rect}
 use tui::render {render, diff, apply_deltas}

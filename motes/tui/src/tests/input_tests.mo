@@ -10,7 +10,7 @@
 /// comparing with `==`: generic `BEq (Pair A B)` dispatch is the
 /// unreliable path this mote avoids throughout.
 
-use lib::widgets::input {InputState, input_state, handle_input_key, handle_input_multiline_key, input_line_move, input_lines, cursor_line}
+use lib::widgets::input {InputState, InputLine, input_state, handle_input_key, handle_input_multiline_key, input_line_move, input_lines, cursor_line}
 use lib::types {Key}
 
 /// All three fields of `st` at once, compared directly.
