@@ -117,6 +117,7 @@ pub def run_app {S : Type} {M : Type} (a : App S M) : IO Unit := do {
     let _ <- Terminal.enter_raw_mode;
     Terminal.enter_alt_screen;
     Terminal.cursor_hide;
+    Terminal.enable_mouse;
     Terminal.clear_screen;
     Terminal.cursor_move 0 0;
     run_with_size a size
@@ -307,6 +308,7 @@ def draw_frame {S : Type} (vw : S -> Widget) (model : S) (reader : InputReader) 
 /// mode. Every controlled exit lands here; nothing else writes these
 /// sequences, so an app cannot half-restore.
 def restore_terminal : IO Unit := do {
+    Terminal.disable_mouse;
     Terminal.leave_alt_screen;
     Terminal.cursor_show;
     let _ <- Terminal.leave_raw_mode;

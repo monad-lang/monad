@@ -24,7 +24,7 @@ use lib::core {
 use lib::layout { layout_row, layout_column, pad_rect }
 // The Phase 5 stateful widgets' states -- matched on in the new
 // `LeafWidget` arms below.
-use lib::widgets::input { InputState }
+use lib::widgets::input { InputState, input_lines, cursor_line, nth_lines, InputLine }
 use lib::widgets::list { ListState }
 // `LeafWidget`/`DecoratorKind` are matched on, never named in a term, so the
 // unused-import analysis reports them as unused -- the same blind spot
@@ -145,7 +145,13 @@ def underline_at (screen : Screen) (row : I64) (col : I64) : Screen :=
 /// last column), the cursor cell is a reverse block (see `underline_at`;
 /// a space reversed when the cursor sits past the value's end), and an
 /// empty value shows the placeholder dimmed, with no cursor.
-/// Single-line: `area.height < 1` is a no-op, extra height is ignored.
+///
+/// MULTILINE (Phase 11b, the input pass): a value containing newlines
+/// renders one row per line, the window showing the
+/// cursor-anchored LAST rows of the line list, each row keeping the
+/// single-line horizontal-window rule; the cursor cell sits on its
+/// line's row at the cursor's column. A single-line value takes the
+/// original one-row path, byte-identical to before.
 def render_text_input (st : InputState) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
     if area.height < 1
     then screen
@@ -160,12 +166,74 @@ def render_text_input (st : InputState) (area : Rect) (screen : Screen) (active 
             let dim : TextStyle := { style_default with dim := true } in
             render_label st.placeholder area screen (style_merge active dim)
         else
-            // Window start: 0 while the cursor fits, else pinned to the
-            // cursor one column from the right edge.
-            let win := if cur < area.width then 0 else cur - area.width + 1 in
-            let vis := clamp (len - win) 0 area.width in
-            let drawn := render_label_chars st.value win area.x area.y (win + vis) screen active in
-            underline_at drawn area.y (area.x + (cur - win))
+            let multi : Bool := contains_newline st.value 0 in
+            if Bool.not multi
+            then render_text_input_row st.value cur area.y area screen active
+            else render_text_input_multi st cur area screen active
+
+#[terminating]
+def contains_newline (s : String) (i : I64) : Bool :=
+    if Bool.not (i < String.length s)
+    then false
+    else if String.slice s i 1 == "\n"
+    then true
+    else contains_newline s (i + 1)
+
+/// The single-line body of `render_text_input`, factored for both the
+/// one-row and the multiline path: value `text` with the cursor at
+/// byte `cur`, rendered on row `row`.
+#[partial]
+def render_text_input_row (text : String) (cur : I64) (row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    let len := String.length text in
+    let win := if cur < area.width then 0 else cur - area.width + 1 in
+    let vis := clamp (len - win) 0 area.width in
+    let slice : String := String.slice text win (win + vis) in
+    let row_area : Rect := { area with y := row, height := 1 } in
+    let drawn := render_label slice row_area screen active in
+    underline_at drawn row (area.x + (cur - win))
+
+/// The multiline body: the value's lines, the CURSOR-anchored window
+/// (down-shifted so the cursor's line is the last visible row), each
+/// rendered on its row; the cursor cell lands on its line's row, at
+/// its (windowed) column.
+#[partial]
+def render_text_input_multi (st : InputState) (cur : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    let lines : List InputLine := input_lines st.value 0 in
+    match cursor_line lines 0 cur {
+        Option.none => screen,
+        Option.some found =>
+            match found {
+                Pair.pair row_idx cl =>
+                    // Shift the line window so the cursor's line is the
+                    // LAST row: the first visible line's index.
+                    let first : I64 := row_idx - (area.height - 1) in
+                    let shifted : List InputLine := nth_lines (input_lines st.value 0) (if first < 0 then 0 else first) in
+                    render_input_lines shifted
+                        (if first < 0 then 0 else first)
+                        (st.value) (cur) (row_idx - (if first < 0 then 0 else first))
+                        0 area screen active,
+            },
+    }
+
+/// Walk the shifted line window painting its rows; `display_row` is the
+/// first row's screen row, `row_cursor` tracks the cursor's row's
+/// display offset.
+#[terminating]
+def render_input_lines (lines : List InputLine) (line_idx : I64) (value : String) (cur : I64) (cursor_row : I64) (display_row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    if Bool.not (display_row < area.y + area.height)
+    then screen
+    else
+        match lines {
+            List.empty => screen,
+            List.cons l rest =>
+                let text : String := String.slice value l.start l.len in
+                let screen2 : Screen := render_label text ({ area with y := area.y + display_row, height := 1 }) screen active in
+                let screen3 : Screen :=
+                    if display_row == cursor_row
+                    then underline_at screen2 (area.y + display_row) (area.x + clamp (cur - l.start) 0 area.width)
+                    else screen2 in
+                render_input_lines rest (line_idx + 1) value cur cursor_row (display_row + 1) area screen3 active,
+        }
 
 /// One list row per line of `area`, starting at `st.offset`: the selected
 /// row gets the `"> "` marker and a bold style, other rows a two-space

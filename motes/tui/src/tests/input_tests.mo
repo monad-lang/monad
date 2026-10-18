@@ -10,7 +10,7 @@
 /// comparing with `==`: generic `BEq (Pair A B)` dispatch is the
 /// unreliable path this mote avoids throughout.
 
-use lib::widgets::input {InputState, input_state, handle_input_key}
+use lib::widgets::input {InputState, input_state, handle_input_key, handle_input_multiline_key, input_line_move, input_lines, cursor_line}
 use lib::types {Key}
 
 /// All three fields of `st` at once, compared directly.
@@ -37,6 +37,38 @@ def test_input_insert_at_end : Bool :=
 #[test]
 def test_input_insert_in_middle : Bool :=
     state_is "abcd" 2 "" (handle_input_key (Key.char "bc") (at_cursor "ad" 1 ""))
+
+// ── multiline (Phase 11b, the input pass) ────────────────────────────────
+
+#[partial]
+def line_at (ls : List InputLine) (i : I64) : InputLine :=
+    match ls {
+        List.empty => { start := 0, len := 0 },
+        List.cons h rest => if i < 1 then h else line_at rest (i - 1),
+    }
+
+#[test]
+def test_input_lines_trailing_newline_makes_a_last_empty_line : Bool :=
+    let ls : List InputLine := input_lines "a\n" 0 in
+    line_at ls 1 == ({ start := 2, len := 0 } : InputLine)
+
+#[test]
+def test_alt_enter_inserts_a_newline : Bool :=
+    state_is "a\n" 2 "" (handle_input_multiline_key (Key.alt "\r") (input_state "a" ""))
+
+// "a\nb", cursor at the end (byte 3, line 2): up keeps the column (1)
+// and lands on line 2's end byte (line one is a single char).
+#[test]
+def test_line_move_up_from_line_two : Bool :=
+    state_is "a\nb" 1 "" (input_line_move (0 - 1) (at_cursor "a\nb" 3 ""))
+
+#[test]
+def test_line_move_down_clamps_at_the_last_line : Bool :=
+    state_is "a" 1 "" (input_line_move 1 (at_cursor "a" 1 ""))
+
+#[test]
+def test_multiline_handler_passes_single_line_keys_through : Bool :=
+    state_is "abx" 3 "" (handle_input_multiline_key (Key.char "x") (input_state "ab" ""))
 
 #[test]
 def test_input_backspace_at_start_is_noop : Bool :=
@@ -97,3 +129,4 @@ def test_input_state_beq : Bool :=
     input_state "a" "p" == input_state "a" "p"
     && Bool.not (input_state "a" "p" == input_state "a" "q")
     && Bool.not (at_cursor "ab" 1 "p" == input_state "ab" "p")
+
