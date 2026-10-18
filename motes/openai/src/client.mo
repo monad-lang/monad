@@ -254,9 +254,21 @@ def openai_tool_fresh (obj : BTreeMap String Json) : ToolCall :=
 /// override when present, and an `arguments` fragment CONCATENATES --
 /// that is the whole streaming tool-call trick, arguments arrive as
 /// JSON text in pieces and the wire contract is simple concatenation.
+/// An EMPTY `id`/`name` string keeps the stored value: some servers
+/// (Mistral's zai-glm-5-3, recorded live 2026-10-18) repeat `name` as
+/// `""` in every continuation fragment, and an override-on-present
+/// merge would erase the name the first fragment carried.
 def openai_tool_patch (t : ToolCall) (obj : BTreeMap String Json) : ToolCall :=
-    let id : String := match openai_tc_field obj "id" { Option.some s => s, Option.none => t.id } in
-    let name : String := match openai_tc_function_field obj "name" { Option.some s => s, Option.none => t.name } in
+    let id : String :=
+        match openai_tc_field obj "id" {
+            Option.some s => if String.is_empty s then t.id else s,
+            Option.none => t.id,
+        } in
+    let name : String :=
+        match openai_tc_function_field obj "name" {
+            Option.some s => if String.is_empty s then t.name else s,
+            Option.none => t.name,
+        } in
     let args : String :=
         match openai_tc_function_field obj "arguments" {
             Option.some frag => String.concat t.arguments frag,

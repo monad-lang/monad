@@ -121,6 +121,22 @@ def test_stream_tool_call_fragments_merge_by_index : Bool :=
         (Bool.and (tool_matches tcs 0 "call_1" "read" "{\"path\":")
             (tool_matches tcs 1 "call_2" "write" "{\"pattern\":\"x\"}"))
 
+/// A continuation fragment that repeats `name` as an EMPTY string must
+/// not erase the name the first fragment established. Not hypothetical:
+/// Mistral's zai-glm-5-3 streams exactly this shape (recorded live
+/// 2026-10-18 against api.mistral.ai) -- the first chunk carries
+/// `{"name":"read","arguments":"{\"path\": \""}`, the next carries
+/// `{"name":"","arguments":"/tmp/example.txt\"}"}` and nothing else.
+/// An override-on-present merge turns the assembled name into "" and
+/// shuttle's loop reports `unknown tool: ` for every call.
+#[test]
+def test_stream_empty_name_fragment_keeps_name : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"chatcmpl-tool-8a7cfec979edf0d4","type":"function","function":{"name":"read","arguments":"{\"path\": \""},"index":0}]},"finish_reason":null}]}"# in
+    let a2 := fold_event a1 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"type":"function","function":{"name":"","arguments":"/tmp/example.txt\"}"},"index":0}]},"finish_reason":null}]}"# in
+    let a3 := fold_event a2 r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"# in
+    let tcs := assembled_tool_calls a3 in
+    tool_matches tcs 0 "chatcmpl-tool-8a7cfec979edf0d4" "read" "{\"path\": \"/tmp/example.txt\"}"
+
 /// An index GAP (the server opens 2 before 1) or an out-of-order
 /// fragment must not fan one tool call out into duplicates: fragments
 /// merge by the index they CLAIM, and a later fragment of the same
