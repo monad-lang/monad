@@ -12,9 +12,9 @@
 /// interpreter fails `unknown native: SSL_connect`, so nothing in this
 /// module is interpreter-testable beyond the pure helpers in `ffi.mo`.
 
-use std::bytebuf {ByteBuf, ByteBuf.alloc, ByteBuf.free, ByteBuf.of_list, ByteBuf.ptr, ByteBuf.to_list}
-use std::io {IO.tcp_close, IO.tcp_connect, IO.tcp_fd, Socket}
-use std::list {List.length}
+use std::bytebuf {ByteBuf, ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.ptr, ByteBuf.truncate}
+use std::io {IO.tcp_connect}
+use std::stream {Stream, StreamError, StreamError.of, StreamErrorKind, FdStream, FdStream.raw_fd}
 use lib::ffi {
   SSL_connect, SSL_CTX_free, SSL_CTX_new, SSL_CTX_set_default_verify_paths,
   SSL_ctrl_host, SSL_free, SSL_get_error, SSL_get_verify_result, SSL_new,
@@ -32,7 +32,7 @@ use lib::ffi {
 struct Tls.Stream {
   ssl : Ptr,
   ctx : Ptr,
-  sock : Socket
+  sock : FdStream
 }
 
 /// Open a TLS connection to `host:port` with certificate verification
@@ -46,9 +46,9 @@ pub def Tls.connect (host : String) (port : U16) : IO (Result String Tls.Stream)
   let ssl : Ptr := SSL_new ctx;
   let conn_res <- IO.tcp_connect host port;
   match conn_res {
-    Result.err e => return (Result.err (String.concat "tls: tcp_connect: " e)),
+    Result.err e => return (Result.err (String.concat "tls: " e.message)),
     Result.ok sock => do {
-      let fd <- IO.tcp_fd sock;
+      let fd <- FdStream.raw_fd sock;
       let set_fd : I32 := SSL_set_fd ssl fd;
       // The first int-returning step, and therefore where a NULL ctx or
       // ssl from the Ptr-returning steps above surfaces (ffi.mo).
@@ -92,10 +92,10 @@ pub def Tls.connect (host : String) (port : U16) : IO (Result String Tls.Stream)
 /// Release everything a failed handshake set up, then report the error.
 /// `SSL_shutdown` is deliberately absent: the connection never completed,
 /// so there is no shutdown to attempt, only three things to release.
-def Tls.abort (ssl : Ptr) (ctx : Ptr) (sock : Socket) (msg : String) : IO (Result String Tls.Stream) := do {
+def Tls.abort (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (msg : String) : IO (Result String Tls.Stream) := do {
   let free_ssl : Unit := SSL_free ssl;
   let free_ctx : Unit := SSL_CTX_free ctx;
-  let closed <- IO.tcp_close sock;
+  let closed <- Stream.close sock;
   return (Result.err msg)
 }
 
@@ -119,51 +119,53 @@ pub def Tls.ssl_error_message (code : I32) : String :=
 pub def Tls.close (s : Tls.Stream) : IO Unit := do {
   let ssl : Ptr := s.ssl;
   let ctx : Ptr := s.ctx;
-  let sock : Socket := s.sock;
+  let sock : FdStream := s.sock;
   let shutdown : I32 := SSL_shutdown ssl;
   let free_ssl : Unit := SSL_free ssl;
   let free_ctx : Unit := SSL_CTX_free ctx;
-  IO.tcp_close sock
+  Stream.close sock
 }
 
 // ── Reading and writing ─────────────────────────────────────────────────
 //
-// A fixed 4096-byte chunk on both sides: `SSL_read`/`SSL_write` take a C
-// `int` count, no U64-to-I32 conversion exists, and callers (`moose`) ask
-// for 4096 anyway. `max` is therefore interface parity with
-// `Transport.read`, not a live bound -- callers wanting less than a chunk
-// get up to a chunk.
+// `Stream`'s contract (std/stream.mo), so `Transport.secure` can carry
+// these where `Transport.plain` carries `Stream.read`/`write`: a read
+// hands back a `ByteBuf` the caller frees, a zero-length one at end of
+// stream; a write writes the whole buffer, which stays the caller's.
+// Errors are `StreamErrorKind.other` carrying OpenSSL's text.
+//
+// A fixed 4096-byte chunk on the read side: `SSL_read` takes a C `int`
+// count and callers (`moose`) ask for 4096 anyway. `max` is therefore
+// interface parity with `Stream.read`, not a live bound -- callers
+// wanting less than a chunk get up to a chunk.
 //
 // WANT_READ/WANT_WRITE get a BOUNDED retry (`#[terminating]` attempt
 // counters), not an unbounded loop: a blocking socket can still yield
 // them mid-renegotiation, but "retry forever" is how a client hangs
-// without a timeout to blame (see the plan's no-timeout limitation). A
-// zero return from `SSL_read` is end-of-stream -- `IO.tcp_read`'s
-// convention, so `moose`'s read loops terminate on exactly that.
+// without a timeout to blame (see the plan's no-timeout limitation).
+
+def Tls.error (msg : String) : StreamError := StreamError.of StreamErrorKind.other msg
 
 /// Read one chunk of up to 4096 bytes from the connection.
-pub def Tls.read (s : Tls.Stream) (max : U64) : IO (Result String (List U8)) := do {
+pub def Tls.read (s : Tls.Stream) (max : I64) : IO (Result StreamError ByteBuf) := do {
   let buf <- ByteBuf.alloc 4096;
   Tls.read_attempt s.ssl buf 16
 }
 
 /// One `SSL_read` attempt, or a bounded retry on WANT_READ/WANT_WRITE.
 /// `attempts` is the retry budget left; it shrinks by one per retry so
-/// the recursion terminates even on a pathological socket.
+/// the recursion terminates even on a pathological socket. A success
+/// truncates the buffer to what `SSL_read` wrote and hands it over.
 #[terminating]
-def Tls.read_attempt (ssl : Ptr) (buf : ByteBuf) (attempts : I64) : IO (Result String (List U8)) := do {
+def Tls.read_attempt (ssl : Ptr) (buf : ByteBuf) (attempts : I64) : IO (Result StreamError ByteBuf) := do {
   let n : I32 := SSL_read ssl (ByteBuf.ptr buf) (I64.to_i32 4096);
   if I32.gt n (I64.to_i32 0)
   then do {
-    let bytes <- ByteBuf.to_list buf (I32.to_i64 n);
-    let freed <- ByteBuf.free buf;
-    return (Result.ok bytes)
+    let _ <- ByteBuf.truncate buf (I32.to_i64 n);
+    return (Result.ok buf)
   }
   else if I32.beq n (I64.to_i32 0)
-  then do {
-    let freed <- ByteBuf.free buf;
-    return (Result.ok List.empty)
-  }
+  then Tls.read_eof buf
   else do {
     // n < 0: WANT_READ/WANT_WRITE retry with the SAME buffer, everything
     // else is a terminal verdict.
@@ -171,75 +173,60 @@ def Tls.read_attempt (ssl : Ptr) (buf : ByteBuf) (attempts : I64) : IO (Result S
     let want : Bool :=
       I32.beq code Ssl.error_want_read
       || I32.beq code Ssl.error_want_write;
-    if want
-    then do {
-      let freed <- ByteBuf.free buf;
-      if I64.gt attempts 0
-      then Tls.read_retry ssl (attempts - 1)
-      else return (Result.err "tls read: SSL_read stuck on WANT_READ/WANT_WRITE")
-    }
-    else do {
-      let freed <- ByteBuf.free buf;
-      if I32.beq code Ssl.error_zero_return
-      then return (Result.ok List.empty)
-      else return (Result.err (String.concat "tls read: " (Tls.ssl_error_message code)))
-    }
+    if want && I64.gt attempts 0
+    then Tls.read_attempt ssl buf (attempts - 1)
+    else if want
+    then Tls.read_failed buf "tls read: SSL_read stuck on WANT_READ/WANT_WRITE"
+    else if I32.beq code Ssl.error_zero_return
+    then Tls.read_eof buf
+    else Tls.read_failed buf (String.concat "tls read: " (Tls.ssl_error_message code))
   }
 }
 
-/// A WANT_READ/WANT_WRITE retry: a fresh buffer (the old one was freed)
-/// and a smaller budget.
-#[terminating]
-def Tls.read_retry (ssl : Ptr) (attempts : I64) : IO (Result String (List U8)) := do {
-  let buf <- ByteBuf.alloc 4096;
-  Tls.read_attempt ssl buf attempts
+/// End of stream: the same buffer, emptied (`Stream.read`'s convention).
+def Tls.read_eof (buf : ByteBuf) : IO (Result StreamError ByteBuf) := do {
+  let _ <- ByteBuf.truncate buf 0;
+  return (Result.ok buf)
 }
 
-/// Write all of `data` to the connection. The ok payload is the FULL
-/// length (`IO.tcp_write`'s contract). With OpenSSL's default mode
+/// A terminal read failure: nobody else will see the buffer, so free it.
+def Tls.read_failed (buf : ByteBuf) (msg : String) : IO (Result StreamError ByteBuf) := do {
+  let _ <- ByteBuf.free buf;
+  return (Result.err (Tls.error msg))
+}
+
+/// Write all of `buf` to the connection. The ok payload is the FULL
+/// length (`Stream.write`'s contract). With OpenSSL's default mode
 /// `SSL_write` writes all-or-fails, and a partial count cannot be
 /// resumed -- there is no pointer arithmetic to hand `SSL_write` a
 /// shifted buffer -- so a partial write is reported as an error rather
 /// than repeated (a repeat would duplicate the bytes that DID land).
-pub def Tls.write (s : Tls.Stream) (data : List U8) : IO (Result String U64) := do {
-  let len : I64 := List.length data;
-  let buf <- ByteBuf.of_list data;
-  Tls.write_attempt s.ssl buf len 16
-}
+pub def Tls.write (s : Tls.Stream) (buf : ByteBuf) : IO (Result StreamError I64) :=
+  Tls.write_attempt s.ssl buf (ByteBuf.length buf) 16
 
 /// One `SSL_write` attempt, retrying WANT_READ/WANT_WRITE with the SAME
-/// buffer (the data must not move between retries). The buffer is freed
-/// on every terminal outcome and kept alive across retries only.
+/// buffer (the data must not move between retries).
 #[terminating]
-def Tls.write_attempt (ssl : Ptr) (buf : ByteBuf) (len : I64) (attempts : I64) : IO (Result String U64) := do {
+def Tls.write_attempt (ssl : Ptr) (buf : ByteBuf) (len : I64) (attempts : I64) : IO (Result StreamError I64) := do {
   let n : I32 := SSL_write ssl (ByteBuf.ptr buf) (I64.to_i32 len);
-  if I32.beq n (I64.to_i32 len)
-  then do {
-    let freed <- ByteBuf.free buf;
-    return (Result.ok (I64.to_u64 len))
-  }
-  else if I32.gt n (I64.to_i32 0)
-  then do {
-    let freed <- ByteBuf.free buf;
-    return (Result.err "tls write: SSL_write returned a partial write it cannot resume")
-  }
-  else do {
-    let code : I32 := SSL_get_error ssl n;
-    let want : Bool :=
-      I32.beq code Ssl.error_want_read
-      || I32.beq code Ssl.error_want_write;
-    if want
-    then do {
-      if I64.gt attempts 0
-      then Tls.write_attempt ssl buf len (attempts - 1)
-      else do {
-        let freed <- ByteBuf.free buf;
-        return (Result.err "tls write: SSL_write stuck on WANT_READ/WANT_WRITE")
-      }
-    }
-    else do {
-      let freed <- ByteBuf.free buf;
-      return (Result.err (String.concat "tls write: " (Tls.ssl_error_message code)))
-    }
-  }
+  Tls.write_once ssl buf len attempts n
 }
+
+#[terminating]
+def Tls.write_once (ssl : Ptr) (buf : ByteBuf) (len : I64) (attempts : I64) (n : I32) : IO (Result StreamError I64) :=
+  if I32.beq n (I64.to_i32 len)
+  then IO.pure (Result.ok len)
+  else if I32.gt n (I64.to_i32 0)
+  then IO.pure (Result.err (Tls.error "tls write: SSL_write returned a partial write it cannot resume"))
+  else Tls.write_failed ssl buf len attempts (SSL_get_error ssl n)
+
+#[terminating]
+def Tls.write_failed (ssl : Ptr) (buf : ByteBuf) (len : I64) (attempts : I64) (code : I32) : IO (Result StreamError I64) :=
+  let want : Bool :=
+    I32.beq code Ssl.error_want_read
+    || I32.beq code Ssl.error_want_write in
+  if want && I64.gt attempts 0
+  then Tls.write_attempt ssl buf len (attempts - 1)
+  else if want
+  then IO.pure (Result.err (Tls.error "tls write: SSL_write stuck on WANT_READ/WANT_WRITE"))
+  else IO.pure (Result.err (Tls.error (String.concat "tls write: " (Tls.ssl_error_message code))))

@@ -2,9 +2,12 @@
 ///
 /// Shared by the `moose` client and `moon` server motes. Depends only on the
 /// auto-loaded stdlib (`String`, `List`, `Option`, `Pair`, `U16`, `U8`, `IO`)
-/// plus `std.show` for the `Show` class.
+/// plus `std.show` for the `Show` class and, for `Transport`, `std.stream`'s
+/// byte streams over `std.bytebuf`'s buffers.
 
 use std::show {Show}
+use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.to_list}
+use std::stream {Stream, StreamError, FdStream}
 
 // ── Method ──────────────────────────────────────────────────────────────
 // Variants mirror RFC 9110 §9.
@@ -202,25 +205,29 @@ def Body.is_text (b : Body) (s : String) : Bool :=
 // opt-in at the mote level -- `http` depends on neither, and `moose` is
 // where the two are joined, at connect time. `Body.stream` above is the
 // precedent for a closure-carrying constructor field.
+//
+// Both arms speak `Stream`'s contract (std/stream.mo): a read hands back
+// a `ByteBuf` the caller frees, a zero-length one at end of stream; a
+// write writes the whole buffer, which stays the caller's to free.
 
 type Transport {
-  plain (sock : Socket),
-  secure (read : U64 -> IO (Result String (List U8)))
-         (write : List U8 -> IO (Result String U64))
+  plain (s : FdStream),
+  secure (read : I64 -> IO (Result StreamError ByteBuf))
+         (write : ByteBuf -> IO (Result StreamError I64))
          (close : Unit -> IO Unit)
 }
 open Transport { plain, secure }
 
-def Transport.read (t : Transport) (max : U64) : IO (Result String (List U8)) :=
+pub def Transport.read (t : Transport) (max : I64) : IO (Result StreamError ByteBuf) :=
   match t {
-    Transport.plain sock => IO.tcp_read sock max,
+    Transport.plain s => Stream.read s max,
     Transport.secure read _ _ => read max
   }
 
-def Transport.write (t : Transport) (data : List U8) : IO (Result String U64) :=
+pub def Transport.write (t : Transport) (buf : ByteBuf) : IO (Result StreamError I64) :=
   match t {
-    Transport.plain sock => IO.tcp_write sock data,
-    Transport.secure _ write _ => write data
+    Transport.plain s => Stream.write s buf,
+    Transport.secure _ write _ => write buf
   }
 
 // `close` takes a `Unit` where the two payload fields are called with the
@@ -229,10 +236,47 @@ def Transport.write (t : Transport) (data : List U8) : IO (Result String U64) :=
 // field crashes when the arm returns it for execution — the call is the one
 // shape that survives (probed 2026-10-08; `Body.stream`'s action field is
 // the same trap, never constructed anywhere).
-def Transport.close (t : Transport) : IO Unit :=
+pub def Transport.close (t : Transport) : IO Unit :=
   match t {
-    Transport.plain sock => IO.tcp_close sock,
+    Transport.plain s => Stream.close s,
     Transport.secure _ _ close => close unit
+  }
+
+// The wire parsers work on `List U8`, so the clients and servers above the
+// transport convert at this boundary, once per read and once per write.
+// Errors become their `message`: callers report failures as text.
+
+/// One read of at most `max` bytes as a list; `Result.ok List.empty` at
+/// end of stream.
+pub def Transport.read_bytes (t : Transport) (max : I64) : IO (Result String (List U8)) := do {
+  let r <- Transport.read t max;
+  Transport.read_bytes_got r
+}
+
+def Transport.read_bytes_got (r : Result StreamError ByteBuf) : IO (Result String (List U8)) :=
+  match r {
+    Result.err e => IO.pure (Result.err e.message),
+    Result.ok buf => Transport.buf_bytes buf
+  }
+
+def Transport.buf_bytes (buf : ByteBuf) : IO (Result String (List U8)) := do {
+  let bytes <- ByteBuf.to_list buf (ByteBuf.length buf);
+  let _ <- ByteBuf.free buf;
+  return (Result.ok bytes)
+}
+
+/// Write all of `bytes`; the ok payload is the full length.
+pub def Transport.write_bytes (t : Transport) (bytes : List U8) : IO (Result String U64) := do {
+  let buf <- ByteBuf.of_list bytes;
+  let r <- Transport.write t buf;
+  let _ <- ByteBuf.free buf;
+  return (Transport.wrote r)
+}
+
+def Transport.wrote (r : Result StreamError I64) : Result String U64 :=
+  match r {
+    Result.err e => Result.err e.message,
+    Result.ok n => Result.ok (I64.to_u64 n)
   }
 
 // ── Framing ─────────────────────────────────────────────────────────────

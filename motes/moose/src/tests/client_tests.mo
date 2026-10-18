@@ -11,7 +11,9 @@ use moose::client {
   Client.read_response, Client.redirect_request, Client.stream_response,
   Client.write_request, Connection,
 }
+use std::stream {Stream, FdStream}
 use http::types {
+  Transport, Transport.read_bytes, Transport.write_bytes,
   Body.is_empty, GET, HEAD, Headers, Headers.empty, Headers.get, Headers.set,
   POST, Request, Response, Status.found, Status.moved_permanently, Status.ok,
   Status.permanent_redirect, Status.see_other, Status.temporary_redirect, Uri,
@@ -20,6 +22,19 @@ use http::types {
 use http::wire {Wire.format_response, Wire.parse_request}
 use http::body {Body.from_text, Body.to_bytes_pure}
 use http::uri {Uri.parse, Uri.resolve}
+
+// ── socket bytes ────────────────────────────────────────────────────────
+
+/// One read of at most `max` bytes, as a list (`Transport.read_bytes`
+/// over a bare socket).
+def tcp_read_bytes (sock : FdStream) (max : I64) : IO (Result String (List U8)) :=
+  let t : Transport := Transport.plain sock in
+  Transport.read_bytes t max
+
+/// Write all of `bytes` (`Transport.write_bytes` over a bare socket).
+def tcp_write_bytes (sock : FdStream) (bytes : List U8) : IO (Result String U64) :=
+  let t : Transport := Transport.plain sock in
+  Transport.write_bytes t bytes
 
 // ── test infrastructure ─────────────────────────────────────────────────
 
@@ -59,30 +74,30 @@ def server_res_bytes (res : Response) : List U8 :=
   }
 
 /// Server writes a response and closes (assumes request already read).
-def server_write_close (sock : Socket) (res : Response) : IO Unit := do {
-  IO.tcp_write sock (server_res_bytes res);
-  IO.tcp_close sock
+def server_write_close (sock : FdStream) (res : Response) : IO Unit := do {
+  tcp_write_bytes sock (server_res_bytes res);
+  Stream.close sock
 }
 
 /// Server reads and discards the request bytes, then writes a response.
-def server_read_respond (sock : Socket) (res : Response) : IO Unit := do {
-  IO.tcp_read sock 8192u64;
+def server_read_respond (sock : FdStream) (res : Response) : IO Unit := do {
+  tcp_read_bytes sock 8192;
   server_write_close sock res
 }
 
 /// Server reads the request, echoes the body back as text response, closes.
-def server_read_echo (sock : Socket) : IO Unit := do {
-  let read_res <- IO.tcp_read sock 8192u64;
+def server_read_echo (sock : FdStream) : IO Unit := do {
+  let read_res <- tcp_read_bytes sock 8192;
   server_echo_send sock read_res
 }
 
 /// After reading: parse the request and echo the body.
-def server_echo_send (sock : Socket) (read_res : Result String (List U8)) : IO Unit :=
+def server_echo_send (sock : FdStream) (read_res : Result String (List U8)) : IO Unit :=
   match read_res {
-    Result.err _ => IO.tcp_close sock,
+    Result.err _ => Stream.close sock,
     Result.ok req_bytes =>
       match Wire.parse_request req_bytes {
-        Result.err _ => IO.tcp_close sock,
+        Result.err _ => Stream.close sock,
         Result.ok req => do {
           let echo := String.from_list (Body.to_bytes_pure req.body);
           server_write_close sock (Response.ok_text echo)
@@ -91,18 +106,18 @@ def server_echo_send (sock : Socket) (read_res : Result String (List U8)) : IO U
   }
 
 /// Server reads the request, checks Host header, responds, closes.
-def server_read_check_host (sock : Socket) : IO Unit := do {
-  let read_res <- IO.tcp_read sock 4096u64;
+def server_read_check_host (sock : FdStream) : IO Unit := do {
+  let read_res <- tcp_read_bytes sock 4096;
   server_check_host_send sock read_res
 }
 
 /// After reading: parse and check Host header.
-def server_check_host_send (sock : Socket) (read_res : Result String (List U8)) : IO Unit :=
+def server_check_host_send (sock : FdStream) (read_res : Result String (List U8)) : IO Unit :=
   match read_res {
-    Result.err _ => IO.tcp_close sock,
+    Result.err _ => Stream.close sock,
     Result.ok req_bytes =>
       match Wire.parse_request req_bytes {
-        Result.err _ => IO.tcp_close sock,
+        Result.err _ => Stream.close sock,
         Result.ok req =>
           let body := match Headers.get "Host" req.headers {
             Option.some h => String.concat "host:" h,
@@ -139,10 +154,10 @@ def test_get_simple : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
@@ -169,10 +184,10 @@ def test_post_echo : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
@@ -199,18 +214,18 @@ def test_redirect_302 : IO Bool := do {
       let p1 <- IO.tcp_local_port l1;
       let l2_res <- IO.tcp_listen 0u16;
       match l2_res {
-        Result.err _ => do { IO.tcp_close_listener l1; return false },
+        Result.err _ => do { Stream.close l1; return false },
         Result.ok l2 => do {
           let p2 <- IO.tcp_local_port l2;
           // Server1: connect, accept, write redirect.
           let conn1_res : Result String Connection <- Client.connect (url_for p1);
           match conn1_res {
-            Result.err _ => do { IO.tcp_close_listener l1; IO.tcp_close_listener l2; return false },
+            Result.err _ => do { Stream.close l1; Stream.close l2; return false },
             Result.ok conn1 => do {
               let acc1_res <- IO.tcp_accept l1;
-              IO.tcp_close_listener l1;
+              Stream.close l1;
               match acc1_res {
-                Result.err _ => do { Client.close conn1; IO.tcp_close_listener l2; return false },
+                Result.err _ => do { Client.close conn1; Stream.close l2; return false },
                 Result.ok sock1 => do {
                   // Client writes request 1, server reads + writes redirect.
                   Client.write_request conn1 (get_req p1);
@@ -221,10 +236,10 @@ def test_redirect_302 : IO Bool := do {
                   // Server2: connect, accept, write ok.
                   let conn2_res : Result String Connection <- Client.connect (url_for p2);
                   match conn2_res {
-                    Result.err _ => do { IO.tcp_close_listener l2; return false },
+                    Result.err _ => do { Stream.close l2; return false },
                     Result.ok conn2 => do {
                       let acc2_res <- IO.tcp_accept l2;
-                      IO.tcp_close_listener l2;
+                      Stream.close l2;
                       match acc2_res {
                         Result.err _ => do { Client.close conn2; return false },
                         Result.ok sock2 => do {
@@ -270,7 +285,7 @@ def test_connect_refused : IO Bool := do {
     Result.err _ => return false,
     Result.ok listener => do {
       let port <- IO.tcp_local_port listener;
-      IO.tcp_close_listener listener;
+      Stream.close listener;
       let resp <- Client.get (uri_of (url_for port)) Headers.empty;
       return (match resp {
         Result.ok _ => false,
@@ -298,10 +313,10 @@ def test_get_with_headers : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
@@ -329,24 +344,24 @@ def test_keep_alive_reuse : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               // Request 1: client writes, server reads+writes, client reads.
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock (server_res_bytes (Response.ok_text "one"));
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (server_res_bytes (Response.ok_text "one"));
               let resp1 <- Client.read_response conn.socket Method.GET;
               // Request 2: same pattern on the same connection.
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock (server_res_bytes (Response.ok_text "two"));
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (server_res_bytes (Response.ok_text "two"));
               let resp2 <- Client.read_response conn.socket Method.GET;
-              IO.tcp_close sock;
+              Stream.close sock;
               Client.close conn;
               return (Bool.and (resp_ok resp1 Status.ok "one") (resp_ok resp2 Status.ok "two"))
             }
@@ -371,16 +386,16 @@ def test_head_response_has_no_body : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               Client.write_request conn (head_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock head_response_bytes;
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock head_response_bytes;
               let resp : Result String Response <- Client.read_response conn.socket Method.HEAD;
               Client.close conn;
               return (resp_ok resp Status.ok "")
@@ -404,17 +419,17 @@ def test_truncated_response_fails : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock head_response_bytes;
-              IO.tcp_close sock;
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock head_response_bytes;
+              Stream.close sock;
               let resp : Result String Response <- Client.read_response conn.socket Method.GET;
               Client.close conn;
               match resp {
@@ -447,18 +462,18 @@ def test_chunked_response_roundtrip : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n");
-              IO.tcp_write sock (String.to_list "0\r\n\r\n");
-              IO.tcp_close sock;
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n");
+              tcp_write_bytes sock (String.to_list "0\r\n\r\n");
+              Stream.close sock;
               let resp : Result String Response <- Client.read_response conn.socket Method.GET;
               Client.close conn;
               return (resp_ok resp Status.ok "hello")
@@ -481,17 +496,17 @@ def test_chunked_response_eof_mid_chunk_fails : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel");
-              IO.tcp_close sock;
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel");
+              Stream.close sock;
               let resp : Result String Response <- Client.read_response conn.socket Method.GET;
               Client.close conn;
               match resp {
@@ -656,20 +671,20 @@ def test_stream_response_chunked : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               let init_seen : String := "";
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n8\r\ndata: a\n");
-              IO.tcp_write sock (String.to_list "\r\n9\r\ndata: b\n\n");
-              IO.tcp_write sock (String.to_list "\r\n0\r\n\r\n");
-              IO.tcp_close sock;
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n8\r\ndata: a\n");
+              tcp_write_bytes sock (String.to_list "\r\n9\r\ndata: b\n\n");
+              tcp_write_bytes sock (String.to_list "\r\n0\r\n\r\n");
+              Stream.close sock;
               let res <- Client.stream_response Method.GET conn.socket init_seen seen_concat;
               Client.close conn;
               match res {
@@ -700,19 +715,19 @@ def test_stream_response_content_length : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               let init_seen : String := "";
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\ndata: a\n");
-              IO.tcp_write sock (String.to_list "data: b\n\n");
-              IO.tcp_close sock;
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (String.to_list "HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\ndata: a\n");
+              tcp_write_bytes sock (String.to_list "data: b\n\n");
+              Stream.close sock;
               let res <- Client.stream_response Method.GET conn.socket init_seen seen_concat;
               Client.close conn;
               match res {
@@ -743,18 +758,18 @@ def test_stream_response_callback_error_aborts : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res : Result String Connection <- Client.connect (url_for port);
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok conn => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
             Result.err _ => do { Client.close conn; return false },
             Result.ok sock => do {
               let init_seen : String := "";
               Client.write_request conn (get_req port);
-              IO.tcp_read sock 8192u64;
-              IO.tcp_write sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n8\r\ndata: a\n\r\n0\r\n\r\n");
-              IO.tcp_close sock;
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n8\r\ndata: a\n\r\n0\r\n\r\n");
+              Stream.close sock;
               let res <- Client.stream_response Method.GET conn.socket init_seen seen_fail;
               Client.close conn;
               match res {

@@ -29,7 +29,7 @@
 /// HTTPS goes through `motes/tls`: the connection's transport is
 /// `Transport.secure` carrying `Tls.read`/`write`/`close` over a
 /// verified handshake (certificate chain AND hostname), and everything
-/// below `Client.connect` speaks `Transport`, not `Socket`, so the two
+/// below `Client.connect` speaks `Transport`, not `FdStream`, so the two
 /// schemes share one request/response path.
 
 use http::types {
@@ -38,6 +38,7 @@ use http::types {
   Status.temporary_redirect, Transport, Uri, http1_1,
 }
 use tls::stream {Tls.Stream, Tls.close, Tls.connect, Tls.read, Tls.write}
+use std::stream {StreamError, FdStream}
 use http::strings {Strings.drop_bytes}
 use http::wire {
   Wire.body_of, Wire.chunk_step, Wire.find_body_start,
@@ -117,7 +118,7 @@ def Client.read_message (method : Method) (t : Transport) (carry : List U8) : IO
       match opt {
         Option.some n => return (Client.parse_framed method (Wire.take_bytes n carry)),
         Option.none => do {
-          let read_res <- Transport.read t 4096u64;
+          let read_res <- Transport.read_bytes t 4096;
           Client.read_message_step method t carry read_res
         }
       }
@@ -171,9 +172,9 @@ def Client.connect_tcp (u : Uri) : IO (Result String Connection) :=
     Client.connect_done hp connect_res)
 
 /// Wrap a successful `tcp_connect` result in a `Connection`.
-def Client.connect_done (hp : Pair String U16) (connect_res : Result String Socket) : IO (Result String Connection) :=
+def Client.connect_done (hp : Pair String U16) (connect_res : Result StreamError FdStream) : IO (Result String Connection) :=
   match connect_res {
-    Result.err e => return (Result.err e),
+    Result.err e => return (Result.err e.message),
     Result.ok sock =>
       // Bare bindings, not `hp.first`/`hp.second` inline: the self-hosted
       // checker types a `Pair` read with the inductive's parameter left
@@ -216,7 +217,7 @@ def Client.connect_tls_done (hp : Pair String U16) (tls_res : Result String Tls.
 def Client.write_request (conn : Connection) (req : Request) : IO (Result String U64) :=
   match Wire.format_request (Client.prepare_request req) {
     Result.err e => return (Result.err e),
-    Result.ok bytes => Transport.write conn.socket bytes
+    Result.ok bytes => Transport.write_bytes conn.socket bytes
   }
 
 /// Send a request on an existing connection and read the response.
@@ -229,7 +230,7 @@ def Client.send (conn : Connection) (req : Request) : IO (Result String Response
   match Wire.format_request (Client.prepare_request req) {
     Result.err e => return (Result.err e),
     Result.ok bytes =>
-      Monad.bind (Transport.write conn.socket bytes) (fn write_res =>
+      Monad.bind (Transport.write_bytes conn.socket bytes) (fn write_res =>
         Client.send_after_write conn.socket req.method write_res)
   }
 
@@ -448,7 +449,7 @@ def Client.post_stream_conn {S : Type} (bytes : List U8) (conn_res : Result Stri
   match conn_res {
     Result.err e => return (Result.err e),
     Result.ok conn =>
-      Monad.bind (Transport.write conn.socket bytes) (fn write_res =>
+      Monad.bind (Transport.write_bytes conn.socket bytes) (fn write_res =>
         Client.post_stream_sent conn write_res init on_bytes)
   }
 
@@ -560,7 +561,7 @@ def Client.feed {S : Type} (on_bytes : S -> List U8 -> IO (Result String (Pair S
 def Client.read_head (t : Transport) (carry : List U8) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
   match Wire.find_body_start carry {
     Option.none => do {
-      let read_res <- Transport.read t 4096u64;
+      let read_res <- Transport.read_bytes t 4096;
       Client.read_head_step t carry read_res
     },
     Option.some head_end => Client.parse_head head_end carry
@@ -635,7 +636,7 @@ def Client.stream_length {S : Type} (t : Transport) (on_bytes : S -> List U8 -> 
   if Bool.not (I64.gt remaining 0i64)
   then return (Result.ok (Pair.pair s acc))
   else do {
-    let read_res <- Transport.read t 4096u64;
+    let read_res <- Transport.read_bytes t 4096;
     Client.stream_length_step t on_bytes s acc remaining read_res
   }
 }
@@ -689,7 +690,7 @@ def Client.stream_eof_fed_ok {S : Type} (t : Transport) (status : U16) (headers 
 
 #[terminating]
 def Client.stream_eof {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) : IO (Result String (Pair S (List U8))) := do {
-  let read_res <- Transport.read t 4096u64;
+  let read_res <- Transport.read_bytes t 4096;
   Client.stream_eof_step t on_bytes s acc read_res
 }
 
@@ -759,7 +760,7 @@ def Client.stream_chunked_fed {S : Type} (t : Transport) (on_bytes : S -> List U
 
 #[terminating]
 def Client.stream_chunked_read {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) : IO (Result String (Pair S (List U8))) := do {
-  let read_res <- Transport.read t 4096u64;
+  let read_res <- Transport.read_bytes t 4096;
   Client.stream_chunked_step t on_bytes s acc pending read_res
 }
 

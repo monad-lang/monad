@@ -20,6 +20,8 @@
 
 use std::io {IO.get_env, IO.println}
 use lib::stream {Tls.Stream, Tls.close, Tls.connect, Tls.read, Tls.write}
+use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
+use std::stream {StreamError}
 
 /// True when the network gate is set. Unset means "not running these".
 def tls_network_enabled : IO Bool := do {
@@ -91,25 +93,36 @@ def test_tls_handshake_known_good : IO Bool := do {
     let res <- connect_retry "badssl.com" 5;
     match res {
       Result.err e => do { IO.println ("badssl.com: " ++ e); return false },
-      Result.ok s => do {
-        let get : List U8 :=
-          String.to_list "GET / HTTP/1.1\r\nHost: badssl.com\r\nConnection: close\r\n\r\n";
-        let w <- Tls.write s get;
-        let r <- Tls.read s 4096u64;
-        Tls.close s;
-        match w {
-          Result.err e => do { IO.println ("badssl.com write: " ++ e); return false },
-          Result.ok _ =>
-            match r {
-              Result.err e => do { IO.println ("badssl.com read: " ++ e); return false },
-              Result.ok chunk =>
-                return (String.contains (String.from_list chunk) "HTTP/1.1")
-            }
-        }
-      }
+      Result.ok s => known_good_exchange s
     }
   }
 }
+
+/// One GET written, one chunk read back; true when it is an HTTP/1.1 reply.
+def known_good_exchange (s : Tls.Stream) : IO Bool := do {
+  let get <- ByteBuf.of_string "GET / HTTP/1.1\r\nHost: badssl.com\r\nConnection: close\r\n\r\n";
+  let w <- Tls.write s get;
+  let _ <- ByteBuf.free get;
+  let r <- Tls.read s 4096;
+  Tls.close s;
+  known_good_verdict w r
+}
+
+def known_good_verdict (w : Result StreamError I64) (r : Result StreamError ByteBuf) : IO Bool :=
+  match w {
+    Result.err e => do { IO.println ("badssl.com write: " ++ e.message); return false },
+    Result.ok _ => known_good_reply r
+  }
+
+def known_good_reply (r : Result StreamError ByteBuf) : IO Bool :=
+  match r {
+    Result.err e => do { IO.println ("badssl.com read: " ++ e.message); return false },
+    Result.ok chunk => do {
+      let text <- ByteBuf.to_string chunk (ByteBuf.length chunk);
+      let _ <- ByteBuf.free chunk;
+      return (String.contains text "HTTP/1.1")
+    }
+  }
 
 /// An expired certificate is rejected by the chain check.
 #[test]
