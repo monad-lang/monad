@@ -14,6 +14,7 @@ pub use lib::policy {
     Mode.parse, Mode.show, Mode.approve_plan, Mode.warns_auto,
 }
 pub use lib::gate {cap_name, Gate.weaver}
+pub use lib::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 pub use lib::settings {
     Settings, Settings.empty, Settings.merge, Settings.load,
     Settings.load_of_path, Settings.cap_of, parse_settings, parse_cap,
