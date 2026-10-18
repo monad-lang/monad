@@ -27,8 +27,12 @@ use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
 use lib::codegen::emit {compile_loaded_modules_to_ir}
 
+/// Build `source` to a native binary through the self-hosted pipeline:
+/// `Result.ok <binary path>` with the intermediates already removed, or
+/// `Result.err <which stage failed>`. The caller runs and removes the
+/// binary.
 #[partial]
-pub def compile_source_run_expect (source : String) (basename : String) (expected : I64) : IO Bool := do {
+pub def build_source_binary (source : String) (basename : String) : IO (Result String String) := do {
     let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let src_path := output_dir ++ "/" ++ basename ++ ".mo";
     let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
@@ -41,46 +45,76 @@ pub def compile_source_run_expect (source : String) (basename : String) (expecte
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {
-        Result.err e => do {
-            println (basename ++ ": failed to load: " ++ e);
-            return false
-        },
+        Result.err e => return (Result.err ("failed to load: " ++ e)),
         Result.ok loaded => do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
             match mod_result {
-                Result.err e => do {
-                    println (basename ++ ": failed to resolve class-method calls: " ++ e);
-                    return false
-                },
+                Result.err e => return (Result.err ("failed to resolve class-method calls: " ++ e)),
                 Result.ok mod_ => do {
                     let ir_text := emit_module mod_;
                     IO.write_file (Path.path ir_path) ir_text;
 
                     let llc_result <- compile_ir_to_obj ir_path obj_path;
                     if not (llc_result == 0) then do {
-                        println (basename ++ ": llc failed");
-                        return false
+                        return (Result.err "llc failed")
                     } else do {
                         let runtime_src <- resolve_runtime_src (extract_directory src_path);
                         let rt_result <- compile_runtime_obj runtime_src [] runtime_obj;
                         if not (rt_result == 0) then do {
-                            println (basename ++ ": compiling runtime failed");
-                            return false
+                            return (Result.err "compiling runtime failed")
                         } else do {
                             let link_result <- link_objects [obj_path, runtime_obj] output_path [];
+                            exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj];
                             if not (link_result == 0) then do {
-                                println (basename ++ ": clang linker failed");
-                                return false
+                                return (Result.err "clang linker failed")
                             } else do {
-                                let exec_result <- exec_cmd output_path [];
-                                exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj, output_path];
-                                println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
-                                return (exec_result == expected)
+                                return (Result.ok output_path)
                             }
                         }
                     }
                 },
             }
+        },
+    }
+}
+
+/// Build `source`, run the binary, and compare its exit code against
+/// `expected`.
+#[partial]
+pub def compile_source_run_expect (source : String) (basename : String) (expected : I64) : IO Bool := do {
+    let built <- build_source_binary source basename;
+    match built {
+        Result.err e => do {
+            println (basename ++ ": " ++ e);
+            return false
+        },
+        Result.ok bin => do {
+            let exec_result <- exec_cmd bin [];
+            exec_cmd "rm" ["-f", bin];
+            println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
+            return (exec_result == expected)
+        },
+    }
+}
+
+/// Like `compile_source_run_expect`, but the binary's stdout is piped
+/// into `head -n 1`, which exits after the first line. `expected` is
+/// compared against the BINARY's exit status (bash's `PIPESTATUS[0]`),
+/// not head's: what a program does once its stdout reader has gone,
+/// 141 being death by SIGPIPE.
+#[partial]
+pub def compile_source_run_piped_expect (source : String) (basename : String) (expected : I64) : IO Bool := do {
+    let built <- build_source_binary source basename;
+    match built {
+        Result.err e => do {
+            println (basename ++ ": " ++ e);
+            return false
+        },
+        Result.ok bin => do {
+            let exec_result <- exec_cmd "bash" ["-c", "\"$0\" | head -n 1 >/dev/null; exit \"${PIPESTATUS[0]}\"", bin];
+            exec_cmd "rm" ["-f", bin];
+            println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
+            return (exec_result == expected)
         },
     }
 }

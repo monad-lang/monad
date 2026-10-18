@@ -869,8 +869,35 @@ void* monad_scope_drop(void* handle) {
     return alloc_constructor(0, 0);
 }
 
+/* SIGPIPE back to its default action. `sigaction` rather than `signal`
+   because the fork children below call this between `fork` and `exec`,
+   where a multithreaded process may only use async-signal-safe calls. */
+static void sigpipe_default(void) {
+    struct sigaction sa = {0};
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPIPE, &sa, NULL);
+}
+
+/* `main` ignores SIGPIPE so a write to a vanished pipe or socket peer is
+   an EPIPE the caller sees. For the process's OWN stdout/stderr that
+   would be a regression: no stdio write here checks its result, so
+   `prog | head` would keep producing output into nothing (an endless
+   printer never stops) where it used to die of SIGPIPE. Every stdio
+   writer therefore passes its result through this, and an EPIPE dies
+   the way it always did -- by the signal, exit status 141. */
+static void stdio_die_on_epipe(int failed) {
+    if (failed && errno == EPIPE) {
+        sigpipe_default();
+        raise(SIGPIPE);
+    }
+}
+
 void monad_print_str(char* s) {
-    if (s) printf("%s\n", s);
+    if (s) {
+        errno = 0;
+        stdio_die_on_epipe(printf("%s\n", s) < 0);
+    }
 }
 
 /* `#[native string_length]` (init/string.mo's `String.length`) dispatches
@@ -1579,7 +1606,7 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     pid_t pid = fork();
     if (pid < 0) { free(argv); return -1; }
     if (pid == 0) {
-        signal(SIGPIPE, SIG_DFL); /* see `main`: SIG_IGN would survive exec */
+        sigpipe_default(); /* see `main`: SIG_IGN would survive exec */
         execvp(cmd, argv);
         _exit(127);            /* exec failed -- conventional shell code */
     }
@@ -1742,7 +1769,7 @@ void* monad_proc_spawn(char* cmd, void* args) {
         close(out_pipe[0]); close(out_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
         close(status_pipe[0]);
-        signal(SIGPIPE, SIG_DFL); /* see `main`: SIG_IGN would survive exec */
+        sigpipe_default(); /* see `main`: SIG_IGN would survive exec */
         execvp(cmd, argv);
         unsigned char exec_errno = (errno > 0 && errno < 256) ? (unsigned char)errno : 127;
         ssize_t ignored = write(status_pipe[1], &exec_errno, 1);
@@ -2654,7 +2681,10 @@ char* monad_read_stdin_exact(int64_t n) {
    no flush (a frame's pieces go out first, then `monad_flush_stdout`
    once). Null-tolerant like its neighbours. */
 void* monad_write_stdout(char* s) {
-    if (s) fputs(s, stdout);
+    if (s) {
+        errno = 0;
+        stdio_die_on_epipe(fputs(s, stdout) == EOF);
+    }
     return tcp_unit();
 }
 
@@ -2662,7 +2692,8 @@ void* monad_write_stdout(char* s) {
    when it is a pipe (which is how a language server's peer reads it), so
    a written frame stays invisible until this runs. */
 void* monad_flush_stdout(void) {
-    fflush(stdout);
+    errno = 0;
+    stdio_die_on_epipe(fflush(stdout) == EOF);
     return tcp_unit();
 }
 
@@ -2674,8 +2705,9 @@ void* monad_flush_stdout(void) {
    stream the peer is parsing. */
 void* monad_write_stderr(char* s) {
     if (s) {
-        fputs(s, stderr);
-        fflush(stderr);
+        errno = 0;
+        int failed = fputs(s, stderr) == EOF;
+        stdio_die_on_epipe(fflush(stderr) == EOF || failed);
     }
     return tcp_unit();
 }
@@ -2764,7 +2796,8 @@ int main(int argc, char** argv) {
        exited had no such cover. Ignored dispositions survive `exec`, so
        every fork child (`monad_exec_cmd`, `monad_proc_spawn`) restores
        the default before exec'ing, or `yes | head` in a spawned shell
-       would never stop. */
+       would never stop. The process's own stdout/stderr keep dying of
+       SIGPIPE through `stdio_die_on_epipe`. */
     signal(SIGPIPE, SIG_IGN);
     /* Exclude argv[0] (the binary's own path) -- matches the
        interpreter's own `run <file> <args...>` semantics (args passed to
