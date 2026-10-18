@@ -32,7 +32,9 @@
 /// layer does not expose yet.
 
 use std::concurrent::fiber {Fiber, await_fiber, forkIO}
+use std::stream {Stream, FdStream}
 use http::types {
+  Transport, Transport.read_bytes, Transport.write_bytes,
   Body, Headers, Request, Response, Status.bad_request,
   Status.internal_server_error, Status.not_found, Status.ok, http1_0, http1_1,
 }
@@ -41,6 +43,19 @@ use http::wire {
   Wire.format_response, Wire.frame_request, Wire.parse_request,
   Wire.take_bytes,
 }
+
+// ── socket bytes ────────────────────────────────────────────────────────
+
+/// One read of at most `max` bytes, as a list (`Transport.read_bytes`
+/// over a bare socket).
+def Server.read_bytes (sock : FdStream) (max : I64) : IO (Result String (List U8)) :=
+  let t : Transport := Transport.plain sock in
+  Transport.read_bytes t max
+
+/// Write all of `bytes` (`Transport.write_bytes` over a bare socket).
+def Server.write_bytes (sock : FdStream) (bytes : List U8) : IO (Result String U64) :=
+  let t : Transport := Transport.plain sock in
+  Transport.write_bytes t bytes
 
 // ── error responses ─────────────────────────────────────────────────────
 
@@ -84,7 +99,7 @@ def Server.canned_bytes (res : Response) : List U8 :=
 /// reporting a half-arrived message as a complete one is how a truncated
 /// request becomes a successful parse, and it is checked below.
 #[terminating]
-def Server.read_message (frame_of : List U8 -> Result String (Option I64)) (sock : Socket) (carry : List U8) : IO (Result String (Option (Pair (List U8) (List U8)))) := do {
+def Server.read_message (frame_of : List U8 -> Result String (Option I64)) (sock : FdStream) (carry : List U8) : IO (Result String (Option (Pair (List U8) (List U8)))) := do {
   let frame : Result String (Option I64) := frame_of carry;
   match frame {
     Result.err e => return (Result.err e),
@@ -92,16 +107,16 @@ def Server.read_message (frame_of : List U8 -> Result String (Option I64)) (sock
       match opt {
         Option.some n => return (Result.ok (Option.some (Pair.pair (Wire.take_bytes n carry) (Strings.drop_bytes n carry)))),
         Option.none => do {
-          let read_res <- IO.tcp_read sock 4096u64;
+          let read_res <- Server.read_bytes sock 4096;
           Server.read_message_step frame_of sock carry read_res
         }
       }
   }
 }
 
-/// One `tcp_read` result, while the message is still incomplete.
+/// One read result, while the message is still incomplete.
 #[terminating]
-def Server.read_message_step (frame_of : List U8 -> Result String (Option I64)) (sock : Socket) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String (Option (Pair (List U8) (List U8)))) :=
+def Server.read_message_step (frame_of : List U8 -> Result String (Option I64)) (sock : FdStream) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String (Option (Pair (List U8) (List U8)))) :=
   match read_res {
     Result.err e => return (Result.err e),
     Result.ok chunk =>
@@ -119,7 +134,7 @@ def Server.read_message_step (frame_of : List U8 -> Result String (Option I64)) 
 /// Read one whole request. The framing rule is `Wire.frame_request`, so a
 /// request body ends at its `Content-Length` and whatever follows it is kept
 /// for the next message rather than being read as part of this one.
-def Server.read_request (sock : Socket) (carry : List U8) : IO (Result String (Option (Pair (List U8) (List U8)))) :=
+def Server.read_request (sock : FdStream) (carry : List U8) : IO (Result String (Option (Pair (List U8) (List U8)))) :=
   Server.read_message (fn bytes => Wire.frame_request bytes) sock carry
 
 // ── keep-alive ──────────────────────────────────────────────────────────
@@ -177,7 +192,7 @@ def Server.with_connection_header (closing : Bool) (res : Response) : Response :
 /// stay open. A request that does not parse gets a 400 and reports `false`:
 /// the framing of whatever follows a malformed message cannot be trusted, so
 /// the connection ends there rather than being read as more requests.
-def Server.serve_one (handler : Request -> IO Response) (sock : Socket) (bytes : List U8) (served : I64) : IO Bool :=
+def Server.serve_one (handler : Request -> IO Response) (sock : FdStream) (bytes : List U8) (served : I64) : IO Bool :=
   match Wire.parse_request bytes {
     Result.err _ => do {
       Server.send_error sock;
@@ -196,14 +211,14 @@ def Server.serve_one (handler : Request -> IO Response) (sock : Socket) (bytes :
 /// byte form -- becomes a 500 and ends the connection. Ending it is the point:
 /// the peer was promised a body and there is none, so a response it could read
 /// as complete would be a claim about bytes that do not exist.
-def Server.write_response (sock : Socket) (closing : Bool) (res : Response) : IO Bool :=
+def Server.write_response (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
   match Wire.format_response (Server.with_connection_header closing res) {
     Result.err _ => do {
-      IO.tcp_write sock (Server.canned_bytes Server.internal_error_response);
+      Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
       return false
     },
     Result.ok bytes => do {
-      IO.tcp_write sock bytes;
+      Server.write_bytes sock bytes;
       return (Bool.not closing)
     }
   }
@@ -216,23 +231,23 @@ def Server.write_response (sock : Socket) (closing : Bool) (res : Response) : IO
 /// the wire, so re-reading would block waiting for something already delivered,
 /// and discarding them would silently drop it.
 #[terminating]
-def Server.serve_connection (handler : Request -> IO Response) (sock : Socket) (carry : List U8) (served : I64) : IO Unit := do {
+def Server.serve_connection (handler : Request -> IO Response) (sock : FdStream) (carry : List U8) (served : I64) : IO Unit := do {
   let msg_res <- Server.read_request sock carry;
   match msg_res {
     Result.err _ => do {
       Server.send_error sock;
-      IO.tcp_close sock
+      Stream.close sock
     },
     Result.ok msg =>
       match msg {
-        Option.none => IO.tcp_close sock,
+        Option.none => Stream.close sock,
         Option.some pr =>
           match pr {
             Pair.pair bytes rest => do {
               let keep : Bool <- Server.serve_one handler sock bytes served;
               if keep
               then Server.serve_connection handler sock rest (I64.add served 1)
-              else IO.tcp_close sock
+              else Stream.close sock
             }
           }
       }
@@ -244,21 +259,21 @@ def Server.serve_connection (handler : Request -> IO Response) (sock : Socket) (
 /// reads around it in the same thread, which terminates only because it stops
 /// after the one request. Anything pipelined after it is dropped with the
 /// socket; `Server.serve_connection` is the loop that keeps it.
-def Server.handle_connection (handler : Request -> IO Response) (sock : Socket) : IO Unit := do {
+def Server.handle_connection (handler : Request -> IO Response) (sock : FdStream) : IO Unit := do {
   let msg_res <- Server.read_request sock List.empty;
   match msg_res {
     Result.err _ => do {
       Server.send_error sock;
-      IO.tcp_close sock
+      Stream.close sock
     },
     Result.ok msg =>
       match msg {
-        Option.none => IO.tcp_close sock,
+        Option.none => Stream.close sock,
         Option.some pr =>
           match pr {
             Pair.pair bytes _rest => do {
               let _keep <- Server.serve_one handler sock bytes 1;
-              IO.tcp_close sock
+              Stream.close sock
             }
           }
       }
@@ -267,8 +282,8 @@ def Server.handle_connection (handler : Request -> IO Response) (sock : Socket) 
 
 /// Write a 400 Bad Request. The caller closes: a malformed request ends the
 /// connection, so this always says so.
-def Server.send_error (sock : Socket) : IO Unit := do {
-  IO.tcp_write sock (Server.canned_bytes Server.bad_request_response);
+def Server.send_error (sock : FdStream) : IO Unit := do {
+  Server.write_bytes sock (Server.canned_bytes Server.bad_request_response);
   return unit
 }
 
@@ -287,10 +302,10 @@ def Server.serve (handler : Request -> IO Response) (port : U16) : IO Unit := do
 
 /// Accept one connection, serve it to completion, then recurse.
 #[terminating]
-def Server.serve_loop (handler : Request -> IO Response) (listener : Listener) : IO Unit := do {
+def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) : IO Unit := do {
   let accept_res <- IO.tcp_accept listener;
   match accept_res {
-    Result.err _ => IO.tcp_close_listener listener,
+    Result.err _ => Stream.close listener,
     Result.ok sock => do {
       Server.serve_connection handler sock List.empty 1;
       Server.serve_loop handler listener
@@ -331,7 +346,7 @@ def Server.static_ok (content : String) : Response :=
 // bound: at most `max_in_flight` connections are open at once.
 
 /// Fork a fiber to handle one connection.
-def Server.handle_connection_fiber (handler : Request -> IO Response) (sock : Socket) : IO (Fiber Unit) :=
+def Server.handle_connection_fiber (handler : Request -> IO Response) (sock : FdStream) : IO (Fiber Unit) :=
   forkIO (fn _ => Server.handle_connection handler sock)
 
 /// Await all pending fibers in order.
@@ -359,12 +374,12 @@ def Server.serve_concurrent (handler : Request -> IO Response) (port : U16) (max
 
 /// Internal accept loop: collect fibers until `max_in_flight`, then drain.
 #[terminating]
-def Server.serve_concurrent_loop (handler : Request -> IO Response) (listener : Listener) (max_in_flight : I64) (count : I64) (pending : List (Fiber Unit)) : IO Unit := do {
+def Server.serve_concurrent_loop (handler : Request -> IO Response) (listener : FdStream) (max_in_flight : I64) (count : I64) (pending : List (Fiber Unit)) : IO Unit := do {
   let accept_res <- IO.tcp_accept listener;
   match accept_res {
     Result.err _ => do {
       Server.drain_fibers pending;
-      IO.tcp_close_listener listener
+      Stream.close listener
     },
     Result.ok sock => do {
       let fiber <- Server.handle_connection_fiber handler sock;

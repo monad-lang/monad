@@ -11,10 +11,24 @@ use std::concurrent::fiber {Fiber, await_fiber}
 use moon::server {
   Server.drain_fibers, Server.handle_connection_fiber, Server.read_message,
 }
-use http::types {GET, Request, Response, Status.ok, Uri, uri}
+use std::stream {Stream, FdStream}
+use http::types {Transport, Transport.read_bytes, Transport.write_bytes, GET, Request, Response, Status.ok, Uri, uri}
 use http::wire {Wire.format_request, Wire.frame_response, Wire.parse_response}
 use http::body {Body.to_bytes_pure}
 use http::uri {Uri.parse}
+
+// ── socket bytes ────────────────────────────────────────────────────────
+
+/// One read of at most `max` bytes, as a list (`Transport.read_bytes`
+/// over a bare socket).
+def tcp_read_bytes (sock : FdStream) (max : I64) : IO (Result String (List U8)) :=
+  let t : Transport := Transport.plain sock in
+  Transport.read_bytes t max
+
+/// Write all of `bytes` (`Transport.write_bytes` over a bare socket).
+def tcp_write_bytes (sock : FdStream) (bytes : List U8) : IO (Result String U64) :=
+  let t : Transport := Transport.plain sock in
+  Transport.write_bytes t bytes
 
 // ── test infrastructure ─────────────────────────────────────────────────
 
@@ -51,14 +65,14 @@ def client_req_bytes (req : Request) : List U8 :=
   }
 
 /// Client writes a raw request to a socket.
-def client_write (sock : Socket) (req : Request) : IO Unit := do {
-  IO.tcp_write sock (client_req_bytes req);
+def client_write (sock : FdStream) (req : Request) : IO Unit := do {
+  tcp_write_bytes sock (client_req_bytes req);
   return unit
 }
 
 /// Read one response from a socket. Framed by `Content-Length` rather than
 /// read-to-close, so the connection stays usable for a second request.
-def client_read (sock : Socket) : IO (Result String Response) :=
+def client_read (sock : FdStream) : IO (Result String Response) :=
   Monad.bind (Server.read_message (fn bytes => Wire.frame_response bytes Method.GET) sock List.empty) (fn msg_res =>
     match msg_res {
       Result.err e => return (Result.err e),
@@ -93,12 +107,12 @@ def test_fork_await_single : IO Bool := do {
       let port <- IO.tcp_local_port listener;
       let conn_res <- IO.tcp_connect "127.0.0.1" port;
       match conn_res {
-        Result.err _ => do { IO.tcp_close_listener listener; return false },
+        Result.err _ => do { Stream.close listener; return false },
         Result.ok client_sock => do {
           let accept_res <- IO.tcp_accept listener;
-          IO.tcp_close_listener listener;
+          Stream.close listener;
           match accept_res {
-            Result.err _ => do { IO.tcp_close client_sock; return false },
+            Result.err _ => do { Stream.close client_sock; return false },
             Result.ok server_sock => do {
               client_write client_sock (get_req port);
               // Fork the handler as a fiber (deferred).
@@ -106,7 +120,7 @@ def test_fork_await_single : IO Bool := do {
               // Await the fiber (runs the handler synchronously).
               await_fiber fiber;
               let resp <- client_read client_sock;
-              IO.tcp_close client_sock;
+              Stream.close client_sock;
               return (resp_ok resp Status.ok "hello")
             }
           }
@@ -126,26 +140,26 @@ def test_fork_drain_two : IO Bool := do {
       let p1 <- IO.tcp_local_port l1;
       let c1_res <- IO.tcp_connect "127.0.0.1" p1;
       match c1_res {
-        Result.err _ => do { IO.tcp_close_listener l1; return false },
+        Result.err _ => do { Stream.close l1; return false },
         Result.ok client1 => do {
           let a1_res <- IO.tcp_accept l1;
-          IO.tcp_close_listener l1;
+          Stream.close l1;
           match a1_res {
-            Result.err _ => do { IO.tcp_close client1; return false },
+            Result.err _ => do { Stream.close client1; return false },
             Result.ok server1 => do {
               let l2_res <- IO.tcp_listen 0u16;
               match l2_res {
-                Result.err _ => do { IO.tcp_close client1; return false },
+                Result.err _ => do { Stream.close client1; return false },
                 Result.ok l2 => do {
                   let p2 <- IO.tcp_local_port l2;
                   let c2_res <- IO.tcp_connect "127.0.0.1" p2;
                   match c2_res {
-                    Result.err _ => do { IO.tcp_close_listener l2; IO.tcp_close client1; return false },
+                    Result.err _ => do { Stream.close l2; Stream.close client1; return false },
                     Result.ok client2 => do {
                       let a2_res <- IO.tcp_accept l2;
-                      IO.tcp_close_listener l2;
+                      Stream.close l2;
                       match a2_res {
-                        Result.err _ => do { IO.tcp_close client1; IO.tcp_close client2; return false },
+                        Result.err _ => do { Stream.close client1; Stream.close client2; return false },
                         Result.ok server2 => do {
                           // Client 1 writes, fork handler 1 (deferred).
                           client_write client1 (get_req p1);
@@ -158,8 +172,8 @@ def test_fork_drain_two : IO Bool := do {
                           // Read both responses.
                           let resp1 <- client_read client1;
                           let resp2 <- client_read client2;
-                          IO.tcp_close client1;
-                          IO.tcp_close client2;
+                          Stream.close client1;
+                          Stream.close client2;
                           return (Bool.and (resp_ok resp1 Status.ok "hello") (resp_ok resp2 Status.ok "fiber"))
                         }
                       }
