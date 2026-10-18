@@ -9,7 +9,7 @@
 use lib::types { Event }
 use lib::tui { Cmd, poll_turns, step_batch }
 use std::concurrent::combine {sleepIO}
-use std::concurrent::fiber {forkIO}
+use std::concurrent::fiber {Fiber, forkIO}
 use std::list { List.length }
 
 def cmds_be {M : Type} (a : Cmd M) (b : Cmd M) : Bool :=
