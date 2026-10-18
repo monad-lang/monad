@@ -1,0 +1,160 @@
+/* WASI platform (wasm32-unknown-wasip1).
+ *
+ * No Boehm GC, no pthreads, no processes or sockets: the heap is wasi-libc
+ * malloc with no free (codegen never emits monad_release, so this is the
+ * same leaky discipline the native Boehm build already has), and every
+ * IR-facing function uses the i64 word ABI from runtime_abi.h.
+ *
+ * v0 enables console I/O, time and the command-line entry point. File,
+ * stream, process, fiber, socket and terminal natives are deliberately
+ * unavailable (see lang/src/codegen/natives.mo); their C functions are not
+ * defined here, so a reachable call is caught by the target gate rather
+ * than becoming a link error.
+ */
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+rt_word monad_alloc(rt_size size) {
+    void* ptr = malloc((size_t)size);
+    if (ptr) {
+        Header* h = (Header*)ptr;
+        h->refcount = 1;
+        h->tag = 0;
+        h->flags = 0;
+    }
+    return RT_WORD(ptr);
+}
+
+rt_word monad_alloc_atomic(rt_size size) {
+    return RT_WORD(malloc((size_t)size));
+}
+
+void monad_retain(rt_word ptr) {
+    if (!ptr) return;
+    Header* h = (Header*)RT_PTR(ptr);
+    h->refcount += 1;
+}
+
+void monad_release(rt_word ptr) {
+    if (!ptr) return;
+    Header* h = (Header*)RT_PTR(ptr);
+    /* No free: the block is malloc'd and nothing reclaims it, matching the
+       native build's GC-owned blocks. */
+    h->refcount -= 1;
+}
+
+/* `IO.println`'s bootstrap shim. WASI stdout is line-buffered, so the
+   newline flushes the line; `main`'s exit flushes the rest. */
+rt_void monad_print_str(rt_str s) {
+    const char* str = RT_STR(s);
+    if (str) printf("%s\n", str);
+    RT_VOID_RETURN;
+}
+
+int64_t monad_current_time(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
+int64_t monad_current_time_nano(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+
+rt_str monad_read_stdin_exact(int64_t n) {
+    if (n <= 0) {
+        char* empty = (char*)RT_PTR(monad_alloc_atomic(1));
+        if (empty) empty[0] = '\0';
+        return RT_WORD(empty);
+    }
+    size_t want = (size_t)n;
+    char* buf = (char*)RT_PTR(monad_alloc_atomic((rt_size)(want + 1)));
+    if (!buf) {
+        char* empty = (char*)RT_PTR(monad_alloc_atomic(1));
+        if (empty) empty[0] = '\0';
+        return RT_WORD(empty);
+    }
+    size_t got = 0;
+    while (got < want) {
+        ssize_t r = read(0, buf + got, want - got);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (r == 0) break;
+        got += (size_t)r;
+    }
+    buf[got] = '\0';
+    return RT_WORD(buf);
+}
+
+rt_word monad_flush_stdout(void) {
+    fflush(stdout);
+    return alloc_constructor(0, 0);
+}
+
+/* ── byte streams over fds 0/1/2 ──────────────────────────────────────
+   `IO.println`/`IO.write_stdout`/`IO.read_line` are ordinary Monad over
+   `std/stream.mo`, so the three stdio descriptors need these even though
+   file streams (`stream_open`) stay unavailable in v0. Failures are
+   reported as an empty success: the caller's line reader already treats a
+   zero-length read as EOF, and console writes have no recovery path. */
+static rt_word wasm_ok(rt_word payload) {
+    Constructor* ok = (Constructor*)RT_PTR(alloc_constructor(10, 1));
+    if (ok) ok->fields[0] = RT_FIELD(payload);
+    return RT_WORD(ok);
+}
+
+rt_word monad_stream_write(int64_t fd, rt_word bufw) {
+    BufObj* obj = (BufObj*)RT_PTR(bufw);
+    int64_t n = obj ? obj->len : 0;
+    int64_t done = 0;
+    while (done < n) {
+        ssize_t w = write((int)fd, obj->payload + done, (size_t)(n - done));
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (w == 0) break;
+        done += w;
+    }
+    return wasm_ok((rt_word)done);
+}
+
+rt_word monad_stream_read(int64_t fd, int64_t max_bytes) {
+    if (max_bytes <= 0) return wasm_ok(RT_WORD(bytebuf_new(0)));
+    BufObj* obj = bytebuf_new(max_bytes);
+    if (!obj) return wasm_ok(0);
+    ssize_t got;
+    do {
+        got = read((int)fd, obj->payload, (size_t)max_bytes);
+    } while (got < 0 && errno == EINTR);
+    if (got < 0) got = 0;
+    obj->len = (int64_t)got;
+    return wasm_ok(RT_WORD(obj));
+}
+
+rt_word monad_stream_close(int64_t fd) {
+    if (fd > 2) close((int)fd);
+    return alloc_constructor(0, 0);
+}
+
+int64_t monad_stream_fd(int64_t fd) {
+    return fd;
+}
+
+int64_t monad_std_fd(int64_t which) {
+    return which;
+}
+
+int main(int argc, char** argv) {
+    rt_word args = monad_build_args(argc - 1, argv + 1);
+    return (int)(intptr_t)main_monad(args);
+}
