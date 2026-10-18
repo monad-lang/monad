@@ -871,6 +871,10 @@ pub struct WellKnownCtors {
   /// `Result E A`'s two constructors (`init/prelude.mo`) — same reason.
   pub result_ok: Option<CtorTag>,
   pub result_err: Option<CtorTag>,
+  /// `Pair A B`'s sole constructor (`init/prelude.mo`'s `pair`). The
+  /// `std/stream.mo` natives report a failure as `Result.err (Pair.pair
+  /// <kind code> <message>)`.
+  pub pair_pair: Option<CtorTag>,
   /// `Array A`'s sole constructor (`std/array.mo`'s `type Array A { mk }`).
   /// The `array_*` natives build and read it directly: an `Array` value
   /// IS a `Con` with this tag whose `args` are its elements, so its
@@ -891,6 +895,7 @@ impl WellKnownCtors {
     let io_path = NamePath::top("IO");
     let result_path = NamePath::top("Result");
     let array_path = NamePath::top("Array");
+    let pair_path = NamePath::top("Pair");
     WellKnownCtors {
       bool_true: find_ctor(program, &bool_path, "true"),
       bool_false: find_ctor(program, &bool_path, "false"),
@@ -902,6 +907,7 @@ impl WellKnownCtors {
       io_mk: find_ctor(program, &io_path, "mk"),
       result_ok: find_ctor(program, &result_path, "ok"),
       result_err: find_ctor(program, &result_path, "err"),
+      pair_pair: find_ctor(program, &pair_path, "pair"),
       array_mk: find_ctor(program, &array_path, "mk"),
     }
   }

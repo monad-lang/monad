@@ -160,6 +160,8 @@ const PURE_NATIVES: &[&str] = &[
   "ptr_null",
   // `ByteBuf.length` (std/bytebuf.mo): a registry lookup, no effect.
   "bytebuf_len",
+  // `std_fd` (std/stream.mo): names one of the preassigned stdio slots.
+  "std_fd",
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
@@ -365,6 +367,14 @@ pub fn exec_native(
     "bytebuf_free" => bytebuf_free(args, natives),
     "bytebuf_to_string" => bytebuf_to_string(args, natives),
     "bytebuf_of_string" => bytebuf_of_string(args, natives),
+    // `std/stream.mo`'s byte streams -- `RawIO` natives behind `.mo`
+    // wrappers, except the pure `std_fd` (in `PURE_NATIVES`).
+    "stream_open" => stream_open(args, natives),
+    "stream_read" => stream_read(args, natives),
+    "stream_write" => stream_write(args, natives),
+    "stream_close" => stream_close(args, natives),
+    "stream_fd" => stream_fd(args, natives),
+    "std_fd" => std_fd(args),
     "bytebuf_len" => bytebuf_len(args),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
@@ -1783,6 +1793,293 @@ fn bytebuf_of_string(args: &[Value], natives: &NativeTable) -> Result<Value, Cor
   raw_io_wrap(natives, handle_value(id))
 }
 
+// --- `std/stream.mo`'s byte streams --------------------------------
+//
+// An `FdStream` here is a slot in `FD_STREAMS`, an `I64` like `Child`'s
+// handle. Slots 0/1/2 are stdio, preassigned, so the pure `std_fd n`
+// is `n` -- the same value the compiled backend uses, where an
+// `FdStream` IS the descriptor. Handle values still never cross
+// backends.
+//
+// stdin is read raw (`read_fd_raw`), like every other stdin reader
+// here, so `poll(2)` on fd 0 and the next raw read see what this one
+// left. stdout and stderr are written through Rust's own handles, so a
+// stream write interleaves in order with `println!`-backed output.
+//
+// A failure is `Result.err (Pair.pair <kind code> <message>)`: the code
+// is `StreamErrorKind`'s declaration index (`stream_error_code`), which
+// `std/stream.mo`'s `stream_result` decodes.
+
+enum FdEntry {
+  Stdin,
+  Stdout,
+  Stderr,
+  File(std::fs::File),
+}
+
+static FD_STREAMS: std::sync::LazyLock<std::sync::Mutex<Vec<Option<FdEntry>>>> =
+  std::sync::LazyLock::new(|| {
+    std::sync::Mutex::new(vec![
+      Some(FdEntry::Stdin),
+      Some(FdEntry::Stdout),
+      Some(FdEntry::Stderr),
+    ])
+  });
+
+fn fd_streams() -> Result<std::sync::MutexGuard<'static, Vec<Option<FdEntry>>>, CoreEvalError> {
+  FD_STREAMS
+    .lock()
+    .map_err(|_| CoreEvalError::NativeArgError("stream registry poisoned".into()))
+}
+
+/// What a stream handle names, without holding the registry lock across
+/// the I/O: a `File` is `try_clone`d (a dup sharing the file offset).
+enum FdTarget {
+  Stdin,
+  Stdout,
+  Stderr,
+  File(std::fs::File),
+}
+
+fn fd_target(handle: i64, name: &str) -> Result<std::io::Result<FdTarget>, CoreEvalError> {
+  let reg = fd_streams()?;
+  let entry = usize::try_from(handle)
+    .ok()
+    .and_then(|i| reg.get(i))
+    .and_then(|e| e.as_ref());
+  Ok(match entry {
+    Some(FdEntry::Stdin) => Ok(FdTarget::Stdin),
+    Some(FdEntry::Stdout) => Ok(FdTarget::Stdout),
+    Some(FdEntry::Stderr) => Ok(FdTarget::Stderr),
+    Some(FdEntry::File(f)) => f.try_clone().map(FdTarget::File),
+    None => Err(std::io::Error::new(
+      std::io::ErrorKind::InvalidInput,
+      format!("{name}: no such stream {handle}"),
+    )),
+  })
+}
+
+/// `std::io::ErrorKind` -> `StreamErrorKind`'s declaration index
+/// (std/src/stream.mo; runtime.c's `stream_error_kind_of_errno` is the
+/// compiled twin). Code 8, `host_unresolved`, is compiled-only (there
+/// is no TCP here).
+fn stream_error_code(e: &std::io::Error) -> i64 {
+  use std::io::ErrorKind as K;
+  match e.kind() {
+    K::NotFound => 0,
+    K::PermissionDenied => 1,
+    K::ConnectionRefused => 2,
+    K::ConnectionReset => 3,
+    K::BrokenPipe => 4,
+    K::InvalidInput => 5,
+    K::TimedOut => 6,
+    K::AddrInUse => 7,
+    _ => 9,
+  }
+}
+
+/// `Result.err (Pair.pair <code> "<op>: <error>")`.
+fn make_stream_err(
+  natives: &NativeTable,
+  op: &str,
+  e: &std::io::Error,
+) -> Result<Value, CoreEvalError> {
+  let pair = require_ctor(natives.well_known.pair_pair, "Pair.pair")?;
+  let err = require_ctor(natives.well_known.result_err, "Result.err")?;
+  let payload = Value::Con {
+    tag: pair.tag,
+    args: std::sync::Arc::new(
+      vec![
+        Value::Lit(IrLit::Num(stream_error_code(e), NumSuffix::I64)),
+        Value::Lit(IrLit::Str(format!("{op}: {e}").into())),
+      ]
+      .into(),
+    ),
+  };
+  Ok(Value::Con {
+    tag: err.tag,
+    args: std::sync::Arc::new(vec![payload].into()),
+  })
+}
+
+fn stream_args<'a>(args: &'a [Value], n: usize, name: &str) -> Result<&'a [Value], CoreEvalError> {
+  if args.len() < n {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "{name} needs {n} arg(s)"
+    )));
+  }
+  Ok(args)
+}
+
+/// `stream_open : String -> I64 -> RawIO (Result (Pair I64 String)
+/// FdStream)` -- mode 0 reads, mode 1 creates-or-truncates (0644).
+fn stream_open(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let args = stream_args(args, 2, "stream_open")?;
+  let path = extract_string(&args[0])?;
+  let mode = extract_int(&args[1])?;
+  let opened = match mode {
+    0 => std::fs::File::open(path),
+    1 => {
+      use std::os::unix::fs::OpenOptionsExt;
+      std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .open(path)
+    }
+    _ => Err(std::io::Error::new(
+      std::io::ErrorKind::InvalidInput,
+      format!("unknown mode {mode}"),
+    )),
+  };
+  let result = match opened {
+    Err(e) => make_stream_err(natives, "stream_open", &e)?,
+    Ok(f) => {
+      let mut reg = fd_streams()?;
+      let slot = match reg.iter().skip(3).position(|e| e.is_none()) {
+        Some(i) => i + 3,
+        None => {
+          reg.push(None);
+          reg.len() - 1
+        }
+      };
+      reg[slot] = Some(FdEntry::File(f));
+      make_result_ok(natives, Value::Lit(IrLit::Num(slot as i64, NumSuffix::I64)))?
+    }
+  };
+  raw_io_wrap(natives, result)
+}
+
+/// One read of at most `max_bytes` from a `stdin`/`File` target; stdin
+/// hands over any `STDIN_CARRY` bytes first, since a previous
+/// `read_stdin_exact` already took them off fd 0.
+fn stream_read_target(target: FdTarget, max: usize) -> std::io::Result<Vec<u8>> {
+  use std::io::Read;
+  let mut buf = vec![0u8; max];
+  let n = match target {
+    FdTarget::Stdin => {
+      let mut carry = match STDIN_CARRY.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+      };
+      if carry.is_empty() {
+        drop(carry);
+        read_fd_raw(libc::STDIN_FILENO, &mut buf)?
+      } else {
+        let take = carry.len().min(max);
+        buf[..take].copy_from_slice(&carry[..take]);
+        carry.drain(..take);
+        take
+      }
+    }
+    FdTarget::File(mut f) => loop {
+      match f.read(&mut buf) {
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+        other => break other?,
+      }
+    },
+    FdTarget::Stdout | FdTarget::Stderr => {
+      return Err(std::io::Error::from_raw_os_error(libc::EBADF));
+    }
+  };
+  buf.truncate(n);
+  Ok(buf)
+}
+
+/// `stream_read : FdStream -> I64 -> RawIO (Result (Pair I64 String)
+/// ByteBuf)` -- ONE read of at most `max_bytes` into one fresh buffer
+/// sized to what arrived; an empty buffer is end of stream.
+fn stream_read(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let args = stream_args(args, 2, "stream_read")?;
+  let handle = extract_int(&args[0])?;
+  let max = extract_int(&args[1])?.max(0) as usize;
+  let read = if max == 0 {
+    Ok(Vec::new())
+  } else {
+    fd_target(handle, "stream_read")?.and_then(|t| stream_read_target(t, max))
+  };
+  let result = match read {
+    Err(e) => make_stream_err(natives, "stream_read", &e)?,
+    Ok(bytes) => {
+      let id = crate::runtime::global::register(bytes);
+      make_result_ok(natives, handle_value(id))?
+    }
+  };
+  raw_io_wrap(natives, result)
+}
+
+/// `stream_write : FdStream -> ByteBuf -> RawIO (Result (Pair I64
+/// String) I64)` -- ALL of the buffer; the ok payload is its length.
+fn stream_write(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::io::Write;
+  let args = stream_args(args, 2, "stream_write")?;
+  let handle = extract_int(&args[0])?;
+  let id = extract_handle_id(&args[1])?;
+  let bytes = crate::runtime::global::with::<Vec<u8>, _>(id, |v| v.clone()).ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("stream_write: no buffer for handle {id}"))
+  })?;
+  let written = fd_target(handle, "stream_write")?.and_then(|t| match t {
+    FdTarget::Stdout => std::io::stdout().write_all(&bytes),
+    FdTarget::Stderr => {
+      let mut err = std::io::stderr();
+      err.write_all(&bytes).and_then(|()| err.flush())
+    }
+    FdTarget::File(mut f) => f.write_all(&bytes),
+    FdTarget::Stdin => Err(std::io::Error::from_raw_os_error(libc::EBADF)),
+  });
+  let result = match written {
+    Err(e) => make_stream_err(natives, "stream_write", &e)?,
+    Ok(()) => make_result_ok(
+      natives,
+      Value::Lit(IrLit::Num(bytes.len() as i64, NumSuffix::I64)),
+    )?,
+  };
+  raw_io_wrap(natives, result)
+}
+
+/// `stream_close : FdStream -> RawIO Unit` -- never fails; the stdio
+/// slots stay open (closing them would let the process lose its stdio).
+fn stream_close(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let args = stream_args(args, 1, "stream_close")?;
+  let handle = extract_int(&args[0])?;
+  if handle > 2 {
+    let mut reg = fd_streams()?;
+    if let Some(slot) = reg.get_mut(handle as usize) {
+      *slot = None;
+    }
+  }
+  raw_io_wrap(natives, unit_value())
+}
+
+/// `stream_fd : FdStream -> RawIO I32` -- the OS descriptor behind the
+/// handle (-1 for a closed one).
+fn stream_fd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  use std::os::fd::AsRawFd;
+  let args = stream_args(args, 1, "stream_fd")?;
+  let handle = extract_int(&args[0])?;
+  let reg = fd_streams()?;
+  let fd = match usize::try_from(handle)
+    .ok()
+    .and_then(|i| reg.get(i))
+    .and_then(|e| e.as_ref())
+  {
+    Some(FdEntry::Stdin) => 0,
+    Some(FdEntry::Stdout) => 1,
+    Some(FdEntry::Stderr) => 2,
+    Some(FdEntry::File(f)) => f.as_raw_fd() as i64,
+    None => -1,
+  };
+  drop(reg);
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(fd, NumSuffix::I32)))
+}
+
+/// `std_fd : I64 -> FdStream` -- pure: the preassigned stdio slot.
+fn std_fd(args: &[Value]) -> Result<Value, CoreEvalError> {
+  let which = extract_int(&stream_args(args, 1, "std_fd")?[0])?;
+  Ok(Value::Lit(IrLit::Num(which, NumSuffix::I64)))
+}
+
 fn bytebuf_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let id = match args.first() {
     Some(v) => extract_handle_id(v)?,
@@ -2613,6 +2910,7 @@ mod tests {
         io_mk: Some(CtorTag { tag: 12, arity: 1 }),
         result_ok: Some(CtorTag { tag: 9, arity: 1 }),
         result_err: Some(CtorTag { tag: 10, arity: 1 }),
+        pair_pair: Some(CtorTag { tag: 13, arity: 2 }),
       },
     )
   }

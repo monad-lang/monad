@@ -2547,6 +2547,158 @@ int64_t monad_bytebuf_len(int64_t b) {
     return b ? ((BufObj*)b)->len : 0;
 }
 
+/* ─── Byte streams (`std/stream.mo`) ─────────────────────────────────
+   One read/write/close surface over a file descriptor, with a `ByteBuf`
+   payload. An `FdStream` value IS the descriptor (`Child`'s and
+   `Socket`'s opaque-word trick), so `std_fd`/`stream_fd` are identities.
+
+   Errors are `Result.err (Pair.pair <kind> <message>)` -- `err` tag 11
+   and `pair` tag 15, both fixed in `lang/src/codegen/ctors.mo`'s
+   `builtin_ctor_tags`. The kind is a CODE, not a `StreamErrorKind`
+   constructor: that type's tags are per-program, which a C function
+   cannot know, so `std/stream.mo`'s `stream_result` decodes it.
+
+   stdout and stderr are written through libc's stdio buffers, not with
+   `write(2)`, so a stream write interleaves in order with `IO.println`
+   (`printf`) and is flushed by `IO.flush_stdout`; stderr is flushed
+   after every write, as `monad_write_stderr` does. */
+
+/* errno -> `StreamErrorKind`'s declaration order (std/src/stream.mo).
+   Code 8, `host_unresolved`, has no errno: `tcp_connect`'s getaddrinfo
+   path passes it directly. */
+static int64_t stream_error_kind_of_errno(int errnum) {
+    switch (errnum) {
+        case ENOENT: return 0;
+        case EACCES: case EPERM: return 1;
+        case ECONNREFUSED: return 2;
+        case ECONNRESET: return 3;
+        case EPIPE: return 4;
+        case EINVAL: return 5;
+        case ETIMEDOUT: return 6;
+        case EADDRINUSE: return 7;
+        default: return 9;
+    }
+}
+
+/* `Result.err (Pair.pair kind "<a>: <b>[ (os error <n>)]")`, the message
+   formatted and GC-copied exactly as `tcp_err_pair` does. */
+static void* stream_err(int64_t kind, const char* a, const char* b, int errnum) {
+    char buf[512];
+    if (errnum != 0) {
+        snprintf(buf, sizeof(buf), "%s: %s (os error %d)", a, b, errnum);
+    } else {
+        snprintf(buf, sizeof(buf), "%s: %s", a, b);
+    }
+    size_t len = strlen(buf);
+    char* copy = (char*)monad_alloc_atomic(len + 1);
+    if (copy) memcpy(copy, buf, len + 1);
+    Constructor* pair = (Constructor*)alloc_constructor(15, 2);
+    if (pair) {
+        pair->fields[0] = (void*)kind;
+        pair->fields[1] = copy;
+    }
+    Constructor* err = (Constructor*)alloc_constructor(11, 1);
+    if (err) err->fields[0] = pair;
+    return err;
+}
+
+static void* stream_os_err(const char* op, int errnum) {
+    return stream_err(stream_error_kind_of_errno(errnum), op, strerror(errnum), errnum);
+}
+
+/* `stream_open : String -> I64 -> RawIO (Result (Pair I64 String)
+   FdStream)` -- mode 0 reads, mode 1 creates-or-truncates for writing
+   (0644). `O_CLOEXEC` so a spawned child never inherits the descriptor. */
+void* monad_stream_open(char* path, int64_t mode) {
+    int flags;
+    if (mode == 0) flags = O_RDONLY;
+    else if (mode == 1) flags = O_WRONLY | O_CREAT | O_TRUNC;
+    else return stream_err(5, "stream_open", "unknown mode", 0);
+    int fd;
+    do {
+        fd = open(path ? path : "", flags | O_CLOEXEC, 0644);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) return stream_os_err("stream_open", errno);
+    return tcp_ok((void*)(int64_t)fd);
+}
+
+/* `stream_read : FdStream -> I64 -> RawIO (Result (Pair I64 String)
+   ByteBuf)` -- ONE `read(2)` of at most `max_bytes`, copied into one
+   buffer sized to what actually arrived. A zero-length buffer is end of
+   stream; `max_bytes <= 0` reads nothing and returns one too. */
+void* monad_stream_read(int64_t fd, int64_t max_bytes) {
+    if (max_bytes <= 0) return tcp_ok(bytebuf_new(0));
+    unsigned char small[4096];
+    unsigned char* tmp = max_bytes <= (int64_t)sizeof(small)
+        ? small : (unsigned char*)malloc((size_t)max_bytes);
+    if (!tmp) return stream_err(9, "stream_read", "out of memory", 0);
+    ssize_t n;
+    do {
+        n = read((int)fd, tmp, (size_t)max_bytes);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) {
+        int e = errno;
+        if (tmp != small) free(tmp);
+        return stream_os_err("stream_read", e);
+    }
+    BufObj* obj = bytebuf_new((int64_t)n);
+    if (obj && n > 0) memcpy(obj->payload, tmp, (size_t)n);
+    if (tmp != small) free(tmp);
+    if (!obj) return stream_err(9, "stream_read", "out of memory", 0);
+    return tcp_ok(obj);
+}
+
+/* `stream_write : FdStream -> ByteBuf -> RawIO (Result (Pair I64 String)
+   I64)` -- ALL of the buffer, ok payload its full length. fds 1/2 go
+   through stdio (see the section comment); anything else is a `write`
+   loop, since a pipe or socket may take less than asked. SIGPIPE is
+   ignored (`main`), so a vanished reader is EPIPE -> `broken_pipe`. */
+void* monad_stream_write(int64_t fd, void* buf) {
+    BufObj* obj = (BufObj*)buf;
+    int64_t n = obj ? obj->len : 0;
+    if (n == 0) return tcp_ok((void*)(int64_t)0);
+    if (fd == 1 || fd == 2) {
+        FILE* f = fd == 1 ? stdout : stderr;
+        errno = 0;
+        int failed = fwrite(obj->payload, 1, (size_t)n, f) != (size_t)n;
+        if (fd == 2) failed = fflush(f) == EOF || failed;
+        /* The process's own stdout/stderr die of SIGPIPE like every other
+           stdio writer here (`stdio_die_on_epipe`); any other failure is
+           an ordinary `Result.err`. */
+        stdio_die_on_epipe(failed);
+        if (failed) return stream_os_err("stream_write", errno ? errno : EIO);
+        return tcp_ok((void*)n);
+    }
+    int64_t done = 0;
+    while (done < n) {
+        ssize_t w = write((int)fd, obj->payload + done, (size_t)(n - done));
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return stream_os_err("stream_write", errno);
+        }
+        done += w;
+    }
+    return tcp_ok((void*)n);
+}
+
+/* `stream_close : FdStream -> RawIO Unit` -- never fails. The three
+   standard descriptors are left open: closing one would let the next
+   `open` reuse fd 0/1/2 and silently receive the process's stdio. */
+void* monad_stream_close(int64_t fd) {
+    if (fd > 2) close((int)fd);
+    return tcp_unit();
+}
+
+/* `stream_fd : FdStream -> RawIO I32` -- the value already is the fd. */
+int64_t monad_stream_fd(int64_t fd) {
+    return fd;
+}
+
+/* `std_fd : I64 -> FdStream` -- pure; 0/1/2 name stdin/stdout/stderr. */
+int64_t monad_std_fd(int64_t which) {
+    return which;
+}
+
 /* ─── Raw stdio (`std/io.mo`'s raw-stdio group) ──────────────────────
    The byte-level half of stdio, added for the language server (`lsp`):
    it writes LSP frames to stdout with no extra newline, logs to stderr
