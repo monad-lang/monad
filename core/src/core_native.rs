@@ -2180,7 +2180,7 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
 // READ its stdout/stderr line by line while it runs, and kill it. That
 // requires state that outlives a single native call, so each child
 // lives in a registry and the `Child` value handed to Monad is the
-// 1-based slot index -- the same opaque-word trick `Socket` uses in
+// 1-based slot index -- the same opaque-word trick `FdStream` uses in
 // the compiled backend (`runtime.c`), never a constructor. The
 // compiled backend keeps its OWN registry beside `monad_exec_cmd` in
 // `runtime.c`; the two agree on the surface (`std/src/process.mo`) but

@@ -31,7 +31,7 @@ pub def process_id : I64
 // The wrappers are the public API; the natives are `priv` so no other
 // module can reach past them.
 //
-// `Child` is opaque the way `Socket` is (std/src/io.mo): the
+// `Child` is opaque the way `FdStream` is (std/src/stream.mo): the
 // constructor exists so the checker can see a type; the runtime value
 // is a registry handle, never a constructor. Nothing may pattern-match,
 // compare or print one. It is `pub` because `motes/mcp_client`
