@@ -1937,7 +1937,7 @@ fn stream_open(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
     }
     _ => Err(std::io::Error::new(
       std::io::ErrorKind::InvalidInput,
-      format!("unknown mode {mode}"),
+      "unknown mode",
     )),
   };
   let result = match opened {

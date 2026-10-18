@@ -92,6 +92,11 @@ class Stream S {
 /// evaluator's stream registry whose slots 0/1/2 are stdio. The
 /// constructor is never built -- never pattern-match, compare or print
 /// one.
+///
+/// Never use an `FdStream` after `Stream.close`: the same value may
+/// already name a LATER stream (the OS reuses the descriptor number
+/// compiled, the registry reuses the slot interpreted), so a stale
+/// read or write lands on someone else's file.
 pub type FdStream {
   fdstream
 }
