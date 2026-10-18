@@ -24,12 +24,13 @@ use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
 use weaver::gate {pick_header, capped_diff, gate_answer_prompt, gate_answer_feedback}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
-use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Model.scroll_step, Model.append_block, list_length, panel_height}
+use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Model.scroll_step, Model.append_block, list_length, panel_height, input_placeholder}
 use weaver::theme {theme_line_style, theme_split_lines, theme_border_style}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use tui::types {Event, Key, MouseEvent, LayoutSize}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_multiline_key}
+use tui::widgets::input {handle_input_key}
 use tui::core {empty_screen, mk_rect}
 use tui::render {render, diff, apply_deltas}
 use tui::terminal {
@@ -234,7 +235,7 @@ def ctrl_c_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
 
 def edit_input (m : TuiModel) (k : Key) : TuiModel :=
-    { m with input := handle_input_key k m.input }
+    { m with input := handle_input_multiline_key k m.input }
 
 def cycle_mode (m : TuiModel) : TuiModel :=
     let st2 : WeaverState := { (m.state) with mode := Mode.cycle m.state.mode } in
