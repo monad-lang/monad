@@ -70,6 +70,11 @@ jobs:
         uses: actions/configure-pages@v5
       - name: Build docs with mdBook
         run: cd docs && mdbook build
+      # `scripts/monadup` is canonical; Zola serves the generated copy at
+      # https://monad-lang.org/install. The copy is build output (gitignored),
+      # written here just before the site build.
+      - name: Stage the install script
+        run: scripts/sync-install.sh
       - name: Build site with Zola
         run: zola --root docs/site build -o docs/public --force
       - name: Add CNAME

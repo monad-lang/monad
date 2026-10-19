@@ -91,6 +91,7 @@ jobs:
           name: monad-x86_64-linux
           path: |
             dist/monad-nightly-x86_64-linux
+            dist/monadup-x86_64-linux
             dist/monad-src-x86_64-linux.tar.gz
             dist/commit.txt
             dist/monad-src.tar.gz
@@ -129,6 +130,7 @@ jobs:
           name: monad-${{ matrix.platform }}
           path: |
             dist/monad-nightly-${{ matrix.platform }}
+            dist/monadup-${{ matrix.platform }}
             dist/monad-src-${{ matrix.platform }}.tar.gz
             dist/commit.txt
           if-no-files-found: error
@@ -181,6 +183,7 @@ jobs:
           name: monad-aarch64-darwin
           path: |
             dist/monad-nightly-aarch64-darwin
+            dist/monadup-aarch64-darwin
             dist/monad-src-aarch64-darwin.tar.gz
             dist/commit.txt
           if-no-files-found: error
@@ -260,6 +263,10 @@ jobs:
             echo 'in its own repository build without a compiler checkout. (Older tags'
             echo 'have no such asset: `monadup` installs the binary alone and says'
             echo 'what is missing.)'
+            echo
+            echo 'Each platform also ships `monadup-<platform>`, the Monad-written'
+            echo 'toolchain manager and diagnostic tool. Install it with'
+            echo '`curl -fsSL https://monad-lang.org/install | bash`.'
             echo
             for p in x86_64-linux aarch64-darwin aarch64-linux riscv64-linux; do
               case "$p" in

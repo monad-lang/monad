@@ -323,6 +323,15 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/ci-self-compile.sh
 
+      # The clap spec parser/derive and the monadup mote, on the SELF-HOSTED
+      # binary. These are the files that exercise the meta evaluator's new
+      # String natives; passing under the Rust host is not enough.
+      - name: Self-hosted clap and monadup tests
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c "$PWD/target-monad/ci-self-compile/monad" test motes/clap motes/monadup
+
       # Phase 0-2 of plans/bootstrapping/wasm-target.md: the wasi fib
       # differential, the web loader smoke test, and clean target-gating
       # errors. Reuses the binary the step above just self-compiled, so it
@@ -333,6 +342,37 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c scripts/check-wasm-target.sh \
               "$PWD/target-monad/ci-self-compile/monad"
+
+  # The portable monadup binary and the distribution harness. `.#monadup`
+  # builds the compiler's IR once and relinks it statically; this job also
+  # grades the bootstrap stub, the fixture-driven install path, and
+  # doctor/env/new. `motes/monadup` changes are compiler-relevant (the
+  # classifier fails open), so this runs for them.
+  monadup-checks:
+    runs-on: [self-hosted, linux]
+    needs: changes
+    if: needs.changes.outputs.compiler == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the portable monadup
+        run: |
+          bin="$(nix build --no-link --print-out-paths --accept-flake-config .#monadup)"
+          echo "MONADUP_BIN=$bin/bin/monadup" >> "$GITHUB_ENV"
+          file "$bin/bin/monadup"
+
+      - name: Distribution and binary checks
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            -c env MONADUP_BIN="$MONADUP_BIN" scripts/check-monadup.sh
+
+      - name: Push monadup to the binary cache
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          paths="$(nix build --no-link --print-out-paths --accept-flake-config .#monadup)"
+          nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
 
   # `packages.monad` left the per-PR path when `test` became `compiler-checks`:
   # the compiler job self-compiles this checkout's sources directly, so on a
