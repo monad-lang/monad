@@ -1,32 +1,46 @@
 # The session-store repro: durable transcripts/history, restart resume,
 # disk-paged scrollback, bracketed paste, --no-color, and a memory probe.
 # Everything runs against the compiled target-monad/release/weaver under a
-# pty with WEAVER_SESSION_ROOT pointed at a temp directory, so the
-# developer's real ~/.weaver/sessions is never touched.
-import json, os, pty, re, select, shutil, signal, struct, termios, time, fcntl
+# pty with an isolated HOME and WEAVER_SESSION_ROOT, so neither the
+# developer's real ~/.weaver nor their ./weaver config is touched.
+import json, os, pty, re, select, shutil, signal, struct, sys, tempfile, termios, time, fcntl
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN = REPO + "/target-monad/release/weaver"
-TMP = os.environ.get("WV_SESSION_TMP", "/tmp/wv_sessions_repro")
+BASE_TMP = os.environ.get("WV_SESSION_TMP")
+TMP = (os.path.join(BASE_TMP, "wv_sessions_repro_%d" % os.getpid())
+       if BASE_TMP else tempfile.mkdtemp(prefix="wv_sessions_repro_"))
 SESSIONS = TMP + "/sessions"
+HOME = TMP + "/home"
 
 def strip(s): return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", s)
 def tight(s): return re.sub(r"[ \r\n\t]", "", strip(s))
-def has_color(t): return any(c in t for c in ("\x1b[33;2m", "\x1b[36m", "\x1b[32;2m", "\x1b[31m"))
+
+# Any SGR colour parameter: 30-37 / 90-97 (fg), 40-47 / 100-107 (bg).
+COLOR_RE = re.compile(r"\x1b\[[0-9;]*\b(?:3[0-7]|9[0-7]|4[0-7]|10[0-7])\b[0-9;]*m")
+def has_color(t): return COLOR_RE.search(t) is not None
 
 def spawn(args, env_extra=None):
+    if not (os.path.isfile(BIN) and os.access(BIN, os.X_OK)):
+        raise SystemExit("missing weaver binary: %s (build with --release)" % BIN)
     master, slave = pty.openpty()
     os.set_blocking(master, False)
     pid = os.fork()
     if pid == 0:
-        os.setsid()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
-        os.dup2(slave, 0); os.dup2(slave, 1); os.dup2(slave, 2)
-        os.close(master)
-        os.chdir(REPO)
-        env = dict(os.environ, WEAVER_SESSION_ROOT=SESSIONS)
-        if env_extra: env.update(env_extra)
-        os.execve(BIN, [BIN] + args, env)
+        try:
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
+            os.dup2(slave, 0); os.dup2(slave, 1); os.dup2(slave, 2)
+            os.close(master)
+            os.chdir(TMP)  # no ./.weaver/config.toml from the checkout
+            env = dict(os.environ)
+            env.pop("NO_COLOR", None)
+            env["HOME"] = HOME
+            env["WEAVER_SESSION_ROOT"] = SESSIONS
+            if env_extra: env.update(env_extra)
+            os.execve(BIN, [BIN] + args, env)
+        except BaseException:
+            os._exit(127)
     return master, pid
 
 def pump(master, sec, buf):
@@ -39,11 +53,38 @@ def pump(master, sec, buf):
             if not d: return
             buf.extend(d)
 
+def wait_nohang(pid):
+    """True once `pid` is reaped (or was already)."""
+    try:
+        return os.waitpid(pid, os.WNOHANG)[0] == pid
+    except ChildProcessError:
+        return True
+
 def finish(master, pid):
-    os.write(master, b"\x03\x03")
+    # A crashed child makes the write fail; the reap must never hang.
+    try:
+        os.write(master, b"\x03\x03")
+    except OSError:
+        pass
     pump(master, 0.8, bytearray())
     try: os.close(master)
     except OSError: pass
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if wait_nohang(pid):
+            return
+        time.sleep(0.05)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try: os.kill(pid, sig)
+        except ProcessLookupError:
+            reap(pid)
+            return
+        time.sleep(0.2)
+        if wait_nohang(pid):
+            return
+    reap(pid)
+
+def reap(pid):
     try: os.waitpid(pid, 0)
     except ChildProcessError: pass
 
@@ -94,21 +135,60 @@ def synth_session(sid, lines):
     write_meta(d, int(time.time() * 1000))
     return d
 
+def transcript_lines(d):
+    out, tdir = [], os.path.join(d, "transcript")
+    if os.path.isdir(tdir):
+        for n in sorted(os.listdir(tdir)):
+            if n.endswith(".json") and n != "index.json":
+                try:
+                    with open(os.path.join(tdir, n)) as f:
+                        out.extend(json.load(f).get("lines", []))
+                except (OSError, ValueError):
+                    pass
+    return out
+
+def history_messages(d):
+    out, hdir = [], os.path.join(d, "history")
+    if os.path.isdir(hdir):
+        for n in sorted(os.listdir(hdir)):
+            if n.endswith(".json"):
+                try:
+                    with open(os.path.join(hdir, n)) as f:
+                        out.extend(json.load(f))
+                except (OSError, ValueError):
+                    pass
+    return out
+
+def message_text(m):
+    return "".join(c.get("text", "") for c in m.get("content", [])
+                   if isinstance(c, dict) and c.get("type") == "text")
+
 def check(cond, label):
     print(("PASS " if cond else "FAIL ") + label)
     return bool(cond)
 
-results = []
+def new_session_since(before):
+    """The directory a run created, even when synthetic sessions sort last."""
+    new = [n for n in session_ids() if n not in before]
+    return new[-1] if new else ""
+
+def run(args, env_extra, before=1.0, keys_before=b"", after=1.2):
+    master, pid = spawn(args, env_extra)
+    buf = bytearray(); pump(master, before, buf)
+    if keys_before: os.write(master, keys_before); pump(master, after, buf)
+    frames = strip(buf.decode("utf-8", "replace"))
+    return master, pid, frames, buf
 
 def main():
     shutil.rmtree(TMP, ignore_errors=True)
-    os.makedirs(TMP)
+    os.makedirs(SESSIONS)
+    os.makedirs(HOME)
     turns1 = TMP + "/turns1.json"
     mock_turns(turns1, ["persisted-reply"])
     common = ["--provider", "mock", "--model", "mock"]
     env = {"SHUTTLE_MOCK_TURNS": turns1}
 
-    # S1: one turn, then exit; the session is on disk.
+    # S1: one turn, then exit; the session is on disk WITH the turn's text.
     master, pid = spawn(common, env)
     buf = bytearray(); pump(master, 1.0, buf)
     os.write(master, b"hi\r"); pump(master, 1.2, buf)
@@ -116,51 +196,69 @@ def main():
     finish(master, pid)
     ids = session_ids()
     ok = bool(ids)
+    lines = []
     if ok:
         d = os.path.join(SESSIONS, ids[-1])
         idx = json.load(open(os.path.join(d, "transcript", "index.json")))
-        ok = ok and idx["total"] >= 2 and os.path.isfile(os.path.join(d, "history", "000000000001.json"))
+        lines = transcript_lines(d)
+        hist = history_messages(d)
+        ok = (idx["total"] >= 3
+              and any("persisted-reply" in l for l in lines)
+              and "you: hi" in lines
+              and any(message_text(m) == "hi" for m in hist)
+              and os.path.isfile(os.path.join(d, "history", "000000000001.json")))
     results.append(check(ok and "persisted-reply" in frames1, "S1 turn persisted to a session directory"))
 
     # S2: restart with --resume <id>; the old transcript fills the first frame.
-    resumed = session_ids()[-1] if session_ids() else ""
-    master, pid = spawn(common + ["--resume", resumed], env)
-    buf = bytearray(); pump(master, 1.2, buf)
-    frames2 = strip(buf.decode("utf-8", "replace"))
+    resumed = ids[-1] if ids else ""
+    master, pid, frames2, _ = run(common + ["--resume", resumed], env, 1.2)
     finish(master, pid)
     results.append(check("persisted-reply" in frames2, "S2 --resume restores the transcript"))
 
     # S3: a synthetic session larger than the 512-line tail; Home pages to line 1.
     lines = ["EARLIEST-LINE-%04d" % i for i in range(1200)]
     d = synth_session("s-manual", lines)
-    master, pid = spawn(common + ["--resume", d], env)
-    buf = bytearray(); pump(master, 1.2, buf)
-    os.write(master, b"\x1b[H")  # Home
-    pump(master, 1.0, buf)
-    frames3 = strip(buf.decode("utf-8", "replace"))
+    master, pid, frames3, _ = run(common + ["--resume", d], env, 1.2, b"\x1b[H", 1.0)
     finish(master, pid)
     results.append(check("EARLIEST-LINE-0000" in frames3, "S3 Home pages older lines from disk"))
 
-    # S4: a bracketed paste stays literal (two lines, one submit).
+    # S4: a bracketed paste stays literal: one submit, one two-line prompt
+    # (a second "you: " prefix would mean the newline submitted).
+    before4 = set(session_ids())
     master, pid = spawn(common, env)
     buf = bytearray(); pump(master, 1.0, buf)
     os.write(master, b"\x1b[200~alpha\nbeta\x1b[201~"); pump(master, 0.5, buf)
     os.write(master, b"\r"); pump(master, 1.2, buf)
     frames4 = strip(buf.decode("utf-8", "replace"))
     finish(master, pid)
-    results.append(check("you: alpha" in frames4 and "beta" in frames4, "S4 bracketed paste lands verbatim"))
+    sid4 = new_session_since(before4)
+    hist4 = history_messages(os.path.join(SESSIONS, sid4)) if sid4 else []
+    users4 = [message_text(m) for m in hist4 if m.get("role") == "user"]
+    results.append(check("you: alpha" in frames4 and "you: beta" not in frames4
+                         and users4 == ["alpha\nbeta"],
+                         "S4 bracketed paste lands verbatim"))
 
-    # S5: --no-color silences the palette.
-    master, pid = spawn(common + ["--no-color"], env)
-    buf = bytearray(); pump(master, 1.0, buf)
-    raw5 = buf.decode("utf-8", "replace")
+    # S5: the palette is on by default and --no-color silences it.
+    colored_env = TMP + "/turns_color.json"
+    mock_turns(colored_env, ["colored"])
+    master, pid, frames5a, buf5a = run(common, dict(env, SHUTTLE_MOCK_TURNS=colored_env), 1.0)
+    raw5a = bytes(buf5a).decode("utf-8", "replace")
     finish(master, pid)
-    results.append(check(not has_color(raw5), "S5 --no-color emits no palette codes"))
+    master, pid, frames5b, buf5b = run(common + ["--no-color"], dict(env, SHUTTLE_MOCK_TURNS=colored_env), 1.0)
+    raw5b = bytes(buf5b).decode("utf-8", "replace")
+    finish(master, pid)
+    results.append(check(has_color(raw5a) and not has_color(raw5b),
+                         "S5 --no-color emits no palette codes"))
 
-    # S6: memory probe -- a ~18 MB transcript on disk must not be loaded:
-    # startup reads the index and the last 512 lines only, and idle RSS
-    # stays flat. (Per-frame renderer churn is a separate tui concern and
-    # is deliberately not what this asserts.)
+    # S6: a ~18 MB transcript on disk must not be loaded. The control is a
+    # tiny session: the huge one may cost no more than 10 MB over it, and
+    # idle RSS must stay flat.
+    small = synth_session("s-small", ["hello"])
+    master, pid = spawn(common + ["--resume", small], env)
+    buf = bytearray(); pump(master, 1.8, buf)
+    base_rss = rss_kb(pid)
+    finish(master, pid)
+
     huge = ["z" * 900 + "-%05d" % i for i in range(20000)]
     d = synth_session("s-huge", huge)
     master, pid = spawn(common + ["--resume", d], env)
@@ -170,12 +268,17 @@ def main():
     r2 = rss_kb(pid)
     frames6 = strip(buf.decode("utf-8", "replace"))
     finish(master, pid)
-    print("  rss after startup=%dKB after idle=%dKB (transcript ~18MB on disk)" % (r1, r2))
-    results.append(check(0 < r1 < 120000 and (r2 - r1) < 20000 and "z" in frames6,
+    print("  rss base=%dKB huge=%dKB idle=%dKB (transcript ~18MB on disk)" % (base_rss, r1, r2))
+    results.append(check(0 < r1 < base_rss + 10240 and (r2 - r1) < 20000 and "z" in frames6,
                          "S6 an 18MB session stays on disk (startup RSS bounded, idle flat)"))
 
     print("SESSION REPRO: " + ("ALL PASS" if all(results) else "FAILURES"))
     return 0 if all(results) else 1
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+results = []
+try:
+    code = main()
+finally:
+    if not os.environ.get("WV_SESSION_KEEP"):
+        shutil.rmtree(TMP, ignore_errors=True)
+sys.exit(code)

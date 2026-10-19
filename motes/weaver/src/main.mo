@@ -107,8 +107,32 @@ struct Plan {
     cont : Bool,
 }
 
+/// `take_opt` returns its default for BOTH "absent" and "present with no
+/// value", so a dangling `--resume` (or `--resume --continue`, which
+/// would swallow the flag as a token) is rejected here by scanning the
+/// raw argv before the parser chain.
+#[partial]
+def dangling_resume (args : List String) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest => match rest {
+            List.empty => a == "--resume",
+            List.cons b more =>
+                if a == "--resume"
+                then Bool.or (String.is_empty b) (String.starts_with "-" b)
+                else dangling_resume more,
+        },
+    }
+
+def resume_usage_error : CliArgs :=
+    let c : CliArgs := cli_of "" "" "" "" false false [] in
+    let c2 : CliArgs := { c with error := "--resume needs a session id or checkpoint file" } in
+    c2
+
 def parse_args (args : List String) : CliArgs :=
-    match Cli.take_opt "provider" "" "" args {
+    if dangling_resume args
+    then resume_usage_error
+    else match Cli.take_opt "provider" "" "" args {
         Cli.OptResult.opt_result provider rest => parse_model provider rest,
     }
 
@@ -176,6 +200,8 @@ def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
 def plan_of (s : Settings) (c : CliArgs) : Result WeaverError Plan :=
     if Bool.not (String.is_empty c.error)
     then Result.err (WeaverError.config c.error)
+    else if Bool.and c.cont (Bool.not (String.is_empty c.resume))
+    then Result.err (WeaverError.config "--resume and --continue are mutually exclusive")
     else
         let provider : String := resolve_provider s c.provider in
         let model : String := resolve_model s c.model in
@@ -471,10 +497,19 @@ def run_opened (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (s
     let st : WeaverState := initial_state p reg s colors o.store o.session;
     let tr0 <- startup_transcript o;
     let ran_tui <- Tui.run_resumed st tr0;
+    let _ <- if Bool.not ran_tui then announce_note o else IO.pure unit;
     let final <- run_fallback ran_tui st;
     let _ <- dispose_all servers;
     exit_of final
 }
+
+/// The degradation note rides the transcript for the TUI (where the
+/// first frame shows it) and stderr for the line-based fallback.
+def announce_note (o : OpenedSession) : IO Unit :=
+    match o.note {
+        Option.none => IO.pure unit,
+        Option.some n => IO.write_stderr (String.concat "warning: " (String.concat n "\n")),
+    }
 
 def startup_transcript (o : OpenedSession) : IO Transcript :=
     match o.store {
@@ -495,11 +530,21 @@ def absorb_live (s : StoreState) (tr : Transcript) (live : Option String) : IO T
         Option.some text => do {
             let block : List String := Transcript.next_block tr (List.cons "[interrupted turn output]" (theme_split_lines text));
             let total : I64 := tr.total;
-            let _ <- Store.append_transcript s.dir total block;
-            let _ <- Store.discard_live s;
-            IO.pure (Transcript.append tr block)
+            let r <- Store.append_transcript s.dir total block;
+            let tr2 : Transcript := Transcript.append tr block;
+            // Show the residue either way; delete it only once it is
+            // durable (it is the only copy of the interrupted output).
+            match r {
+                Result.err _ => IO.pure tr2,
+                Result.ok _ => absorb_kept s tr2,
+            }
         },
     }
+
+def absorb_kept (s : StoreState) (tr : Transcript) : IO Transcript := do {
+    let _ <- Store.discard_live s;
+    IO.pure tr
+}
 
 def note_block (tr : Transcript) (note : Option String) : Transcript :=
     match note {

@@ -110,7 +110,11 @@ def wrap_go (w : I64) (s : String) : List String :=
     else
         let sp : I64 := last_space_at_or_before s w in
         if sp > 0
-        then List.cons (String.slice s 0 sp) (wrap_go w (String.drop (sp + 1) s))
+        then
+            let rest : String := String.drop (sp + 1) s in
+            if String.is_empty rest
+            then [String.slice s 0 sp]
+            else List.cons (String.slice s 0 sp) (wrap_go w rest)
         else
             let valid : I64 := valid_prefix s w in
             let cut : I64 := if valid < 1 then w else valid in
@@ -149,6 +153,9 @@ def test_wrap_empty : Bool := wrap_text 4 "" == [""]
 
 #[test]
 def test_wrap_zero_width_advances : Bool := wrap_text 0 "ab" == ["a", "b"]
+
+#[test]
+def test_wrap_trailing_space_adds_no_row : Bool := wrap_text 3 "abc " == ["abc"]
 
 // ==================== Borders ====================
 

@@ -239,13 +239,22 @@ def Input.decode_tail (buf : String) (i : I64) (acc : List Event) : Pair (List E
 
 /// The bytes before a paste marker decode normally; an incomplete
 /// sequence there stops the scan (the marker is not really one yet).
+/// A LONE trailing ESC cannot be a prefix of the marker (`find_from`
+/// already found a separate one at `k`), so it is the Escape key --
+/// leaving it as the leftover would make `decode` return the same
+/// buffer forever.
 #[terminating]
 def Input.decode_prefix (buf : String) (i : I64) (k : I64) (acc : List Event) : Pair (List Event) String :=
     let pre : String := String.slice buf i (k - i) in
     match Input.walk pre 0 List.empty {
         Pair.pair evs stop =>
             if stop < String.length pre
-            then Pair.pair (List.append acc evs) (String.drop (i + stop) buf)
+            then
+                let lone_escape : Bool := Bool.and (stop + 1 == String.length pre)
+                    (String.slice pre stop 1 == "\u{1b}") in
+                if lone_escape
+                then Input.decode_paste buf k (List.append (List.append acc evs) [Event.key Key.escape])
+                else Pair.pair (List.append acc evs) (String.drop (i + stop) buf)
             else Input.decode_paste buf k (List.append acc evs)
     }
 
@@ -475,6 +484,17 @@ def Input.mouse_next (s : String) (k : I64) : Pair (Option Event) (Option I64) :
 // one buys nothing a pull cannot, because nothing else writes into a
 // TUI's event graph.
 
+/// A paste being accumulated: `chunks` newest-first (joined once, at
+/// the end -- `String.concat` per byte made a long paste quadratic),
+/// `tail` the last few bytes (the only part `ends_with` needs to see,
+/// so the marker check stays O(6)), and `size` the bytes so far (the
+/// cap that keeps an unterminated paste from swallowing the session).
+pub struct PasteState {
+    chunks : List String,
+    tail : String,
+    size : I64
+}
+
 /// The reader's state between polls. `closed` is set the first time a
 /// read reports EOF (a poll says "readable" at EOF; the empty read is
 /// what means closed), and a closed reader never yields events again.
@@ -485,7 +505,7 @@ pub struct InputReader {
     closed : Bool,
     /// Paste content accumulated so far (bracketed paste is verbatim
     /// until the end marker); none = the ordinary decoder.
-    paste : Option String
+    paste : Option PasteState
 }
 
 /// A reader that knows the terminal is `rows` x `cols` (so the first
@@ -610,24 +630,50 @@ def Input.drain (r : InputReader) (evs : List Event) (budget : I64) : IO (Pair (
         }
     }
 
-/// One byte through the decoder: paste content accumulates verbatim
-/// until the end marker; otherwise `decode` runs over pending ++ byte.
-/// O(1) per paste byte (`ends_with`, not a re-scan).
-def Input.step (r : InputReader) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
+/// An unterminated paste is flushed at this many bytes (as a paste
+/// event) and accumulation continues, so a writer that never sends the
+/// end marker cannot swallow the rest of the session's input.
+pub def Input.paste_cap : I64 := 262144
+
+/// One chunk through the decoder: paste content accumulates verbatim
+/// until the end marker; otherwise `decode` runs over pending ++ chunk.
+/// The marker check looks only at the last few bytes, and the content
+/// is joined once, so a paste is linear in its length.
+pub def Input.step (r : InputReader) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
     match r.paste {
-        Option.some acc => Input.paste_step r acc evs chunk,
+        Option.some ps => Input.paste_step r ps evs chunk,
         Option.none => Input.normal_step r evs chunk,
     }
 
-def Input.paste_step (r : InputReader) (acc : String) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
-    let acc2 : String := String.concat acc chunk in
-    if String.ends_with acc2 Input.paste_end
+/// The last `n` bytes of `s` (all of it when shorter).
+#[partial]
+def paste_last (n : I64) (s : String) : String :=
+    let len : I64 := String.length s in
+    if Bool.not (n < len) then s else String.slice s (len - n) n
+
+/// Join the newest-first chunks in order, one allocation.
+def paste_join (chunks : List String) : String :=
+    String.concat_list (List.reverse chunks)
+
+def Input.paste_step (r : InputReader) (ps : PasteState) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
+    let chunks2 : List String := List.cons chunk ps.chunks in
+    let tail2 : String := paste_last (String.length Input.paste_end) (String.concat ps.tail chunk) in
+    let size2 : I64 := ps.size + String.length chunk in
+    if tail2 == Input.paste_end
     then
-        let text : String := String.slice acc2 0 (String.length acc2 - String.length Input.paste_end) in
+        let all : String := paste_join chunks2 in
+        let text : String := String.slice all 0 (String.length all - String.length Input.paste_end) in
         let nr : InputReader := { r with paste := Option.none } in
         Pair.pair (List.append evs [Event.paste text]) nr
+    else if Bool.not (size2 < Input.paste_cap)
+    then
+        let text : String := paste_join chunks2 in
+        let ps2 : PasteState := { chunks := List.empty, tail := "", size := 0 } in
+        let nr : InputReader := { r with paste := Option.some ps2 } in
+        Pair.pair (List.append evs [Event.paste text]) nr
     else
-        let nr : InputReader := { r with paste := Option.some acc2 } in
+        let ps2 : PasteState := { chunks := chunks2, tail := tail2, size := size2 } in
+        let nr : InputReader := { r with paste := Option.some ps2 } in
         Pair.pair evs nr
 
 def Input.normal_step (r : InputReader) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
@@ -640,7 +686,9 @@ def Input.place_leftover (r : InputReader) (evs : List Event) (new_evs : List Ev
     if String.starts_with Input.paste_start leftover
     then
         let content : String := String.drop (String.length Input.paste_start) leftover in
-        let nr : InputReader := { r with pending := "", paste := Option.some content } in
+        let chunks : List String := if String.is_empty content then List.empty else List.singleton content in
+        let ps : PasteState := { chunks := chunks, tail := paste_last (String.length Input.paste_end) content, size := String.length content } in
+        let nr : InputReader := { r with pending := "", paste := Option.some ps } in
         Pair.pair all nr
     else
         let nr : InputReader := { r with pending := leftover } in

@@ -229,6 +229,7 @@ def test_append_mode_appends : IO Bool := do {
 #[test]
 def test_append_mode_creates : IO Bool := do {
     let path := st_path "append_create";
+    let _ <- exec_cmd "rm" ["-f", path];
     let opened <- FdStream.open_file (Path.path path) FdStream.append_mode;
     let wrote <- st_write_opened opened "fresh";
     let back <- st_read_file path;

@@ -13,7 +13,7 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
-use weaver::model {TuiModel, WeaverMsg, init_tui_model, Model.append_block, Model.scroll_step}
+use weaver::model {TuiModel, WeaverMsg, DisplayRow, init_tui_model, Model.append_block, Model.scroll_step, Model.display_rows}
 use weaver::store {StoreState, TranscriptPage}
 use std::path {Path, Path.of}
 use std::map {BTreeMap}
@@ -361,7 +361,7 @@ def test_dir : Path :=
     }
 
 def store_st : Option StoreState :=
-    let s : StoreState := { dir := test_dir, id := "s-1" } in
+    let s : StoreState := { root := Path.path "/tmp", dir := test_dir, id := "s-1" } in
     Option.some s
 
 def state_with_store (mode : Mode) : WeaverState :=
@@ -401,6 +401,42 @@ def test_page_loaded_clears_pending : Bool :=
             let p : TranscriptPage := { start := 0, lines := lines_go 1 17 } in
             match TuiApp.update m1 (WeaverMsg.page_loaded p) {
                 Pair.pair m2 _ => Bool.not m2.page_pending,
+            }
+    }
+
+#[partial]
+def row_has (rs : List DisplayRow) (s : String) : Bool :=
+    match rs {
+        List.empty => false,
+        List.cons r rest => Bool.or (r.text == s) (row_has rest s),
+    }
+
+/// A page load that EXTENDS the loaded range keeps the same start, so
+/// the rows cache must be dropped rather than compared by start alone.
+#[test]
+def test_page_loaded_refreshes_the_rows : Bool :=
+    match TuiApp.update (big_model true) (key_msg Key.home) {
+        Pair.pair m1 _ =>
+            let p : TranscriptPage := { start := 0, lines := lines_go 1 17 } in
+            match TuiApp.update m1 (WeaverMsg.page_loaded p) {
+                Pair.pair m2 _ => row_has (Model.display_rows m2) "l1",
+            }
+    }
+
+/// The same short page twice cannot cover the window; the second load
+/// stops (with a visible error) instead of re-requesting it forever.
+#[test]
+def test_page_load_that_makes_no_progress_stops : Bool :=
+    match TuiApp.update (big_model true) (key_msg Key.home) {
+        Pair.pair m1 _ =>
+            let p : TranscriptPage := { start := 0, lines := lines_go 1 5 } in
+            match TuiApp.update m1 (WeaverMsg.page_loaded p) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (WeaverMsg.page_loaded p) {
+                        Pair.pair m3 cmd =>
+                            cmd_is_none cmd
+                            && match m3.transcript.page_error { Option.some _ => true, Option.none => false },
+                    }
             }
     }
 

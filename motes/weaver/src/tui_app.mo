@@ -143,24 +143,39 @@ def persist_block_cmd (store : Option StoreState) (start : I64) (block : List St
         }),
     }
 
+/// `live.txt` is the only copy of the streamed text until the turn's
+/// block is written, so it is discarded ONLY after a successful write.
+def discard_live_msg (s : StoreState) : IO WeaverMsg := do {
+    let _ <- Store.discard_live s;
+    IO.pure (WeaverMsg.store_result Option.none)
+}
+
+def persist_turn_action (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List String) : IO WeaverMsg := do {
+    let r <- Store.record_turn s run.session delta start block;
+    match r {
+        Result.err e => IO.pure (WeaverMsg.store_result (Option.some e)),
+        Result.ok _ => discard_live_msg s,
+    }
+}
+
 def persist_turn_cmd (store : Option StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List String) : Cmd WeaverMsg :=
     match store {
         Option.none => repaint_cmd,
-        Option.some s => Cmd.perform (fn (_ : Unit) => do {
-            let r <- Store.record_turn s run.session delta start block;
-            let _ <- Store.discard_live s;
-            IO.pure (WeaverMsg.store_result (warning_of r))
-        }),
+        Option.some s => Cmd.perform (fn (_ : Unit) => persist_turn_action s run delta start block),
     }
+
+def persist_output_action (s : StoreState) (sess : Session) (start : I64) (block : List String) : IO WeaverMsg := do {
+    let r <- Store.record_output s sess block start;
+    match r {
+        Result.err e => IO.pure (WeaverMsg.store_result (Option.some e)),
+        Result.ok _ => discard_live_msg s,
+    }
+}
 
 def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (start : I64) (block : List String) (sess : Session) : Cmd WeaverMsg :=
     match store {
         Option.none => fallback,
-        Option.some s => Cmd.perform (fn (_ : Unit) => do {
-            let r <- Store.record_output s sess block start;
-            let _ <- Store.discard_live s;
-            IO.pure (WeaverMsg.store_result (warning_of r))
-        }),
+        Option.some s => Cmd.perform (fn (_ : Unit) => persist_output_action s sess start block),
     }
 
 def turn_result_step (m : TuiModel) (run : RunState) (lines : List String) (delta : List Message) : Pair TuiModel (Cmd WeaverMsg) :=
@@ -232,19 +247,39 @@ def load_page (st : StoreState) (start : I64) (count : I64) : IO WeaverMsg := do
     }
 }
 
+/// The rows cache keys on `page.start` only, so a page that EXTENDS the
+/// loaded range (same start) would otherwise reuse stale blank rows;
+/// every transcript/page replacement drops the key instead.
 def page_loaded_step (m : TuiModel) (p : TranscriptPage) : Pair TuiModel (Cmd WeaverMsg) :=
+    let prev : Option TranscriptPage := m.transcript.page in
     let tr : Transcript := Transcript.with_page m.transcript p in
-    let m2 : TuiModel := { m with transcript := tr, page_pending := false } in
-    maybe_page_cmd m2
+    let m2 : TuiModel := { m with transcript := tr, page_pending := false, rows_key := Option.none } in
+    if same_page prev p
+    then Pair.pair (with_page_error m2 "page read made no progress") Cmd.none
+    else maybe_page_cmd m2
 
-def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg) :=
+/// The same page served twice means the store cannot cover the window
+/// (a short block file, or a window taller than one page): stop rather
+/// than re-requesting it inline forever.
+def same_page (old : Option TranscriptPage) (p : TranscriptPage) : Bool :=
+    match old {
+        Option.none => false,
+        Option.some q => Bool.and (q.start == p.start) (list_length q.lines == list_length p.lines),
+    }
+
+def with_page_error (m : TuiModel) (e : String) : TuiModel :=
     let tr0 : Transcript := m.transcript in
     let tr : Transcript := { tr0 with page_error := Option.some e } in
-    let m2 : TuiModel := { m with transcript := tr, page_pending := false } in
-    Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) Cmd.none
+    let m2 : TuiModel := { m with transcript := tr } in
+    m2
+
+def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let m2 : TuiModel := { m with page_pending := false, rows_key := Option.none } in
+    let m3 : TuiModel := with_page_error m2 e in
+    Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m3) Cmd.none
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false } in
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none } in
     maybe_page_cmd m2
 
 /// A store write failure disables persistence for the rest of the run;
@@ -447,7 +482,12 @@ def ctrl_c_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
         let m1 : TuiModel := { m with ctrl_c_streak := 1 } in
         let start : I64 := m1.transcript.total in
         let m2 : TuiModel := Model.append_lines m1 [ctrl_c_hint_line] in
-        Pair.pair m2 (persist_block_cmd m2.state.store start [ctrl_c_hint_line])
+        // While a turn runs its fiber owns the store: an inline append
+        // would race the echoed prompt (and the shared index temp file),
+        // so the hint stays in memory -- it is a UI line, not content.
+        let cmd : Cmd WeaverMsg :=
+            if m.turn_pending then Cmd.none else persist_block_cmd m2.state.store start [ctrl_c_hint_line] in
+        Pair.pair m2 cmd
 
 def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
 
@@ -617,9 +657,9 @@ def persist_chunk (store : Option StoreState) (frag : String) : IO Unit :=
 
 /// The TUI turn's live progress sink: the model's streamed text, shown
 /// as ONE transparent-overwrite line on the transcript panel's LAST
-/// content row (`rows - 7`: fill is `rows - 4` after the status and
-/// input's rows, minus the border's two lines and the padding's two --
-/// content rows start at row 2). A dedicated row, not the status bar:
+/// content row (`rows - 6`: fill is `rows - 4` after the status and
+/// input's rows, minus the border's two lines; content rows start at
+/// row 1, 0-based). A dedicated row, not the status bar:
 /// the loop now redraws every tick while a turn runs, and the only
 /// mid-turn cell the diff pipeline rewrites is the spinner glyph at
 /// the status row's end -- this row's cells stay untouched by ticks,
@@ -645,7 +685,7 @@ pub def TuiApp.progress (frag : String) : IO Unit := do {
 
 /// The progress row's distance from the bottom edge (see
 /// `TuiApp.progress`'s comment for the arithmetic).
-def progress_row_offset : I64 := 7
+def progress_row_offset : I64 := 6
 
 /// `n` spaces: the row wipe (tui has no erase-line builder; spaces are
 /// blank cells and the forced repaint's blank-diff drops them anyway).
@@ -658,8 +698,16 @@ def blank_of (n : I64) : String :=
 def blank_of_go (n : I64) : String :=
     if n < 1 then "" else String.concat " " (blank_of_go (n - 1))
 
+/// The preview is ONE row, so only the fragment's last line is shown
+/// (a streamed newline would otherwise move the cursor onto the border).
 def progress_text (frag : String) (cols : I64) : String :=
-    String.slice (String.concat "[thinking] " frag) 0 (cols - 1)
+    String.slice (String.concat "[thinking] " (last_fragment_line frag)) 0 (cols - 1)
+
+def last_fragment_line (frag : String) : String :=
+    match List.reverse (theme_split_lines frag) {
+        List.cons l _ => l,
+        List.empty => "",
+    }
 
 // ── transcript rendering ─────────────────────────────────────────────────
 

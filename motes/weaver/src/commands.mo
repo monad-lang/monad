@@ -394,16 +394,26 @@ def rekey_session (st : WeaverState) (s : Session) : Session :=
     let s2 : Session := { s with config := rekey_config st s.config } in
     s2
 
-/// The store for a directory opened in place: the parent is the root.
+/// The store for a directory opened in place: keep the CURRENT root so
+/// `/clear` afterwards creates a sibling where `--resume` would, and
+/// fall back to the directory's parent when no store is open.
 def store_for_dir (p : Path) (st : WeaverState) : Option StoreState :=
+    match st.store {
+        Option.some cur => Option.some (store_at_root cur.root p),
+        Option.none => store_at_parent p,
+    }
+
+def store_at_root (root : Path) (dir : Path) : StoreState :=
+    let s : StoreState := { root := root, dir := dir, id := Store.base_name dir } in
+    s
+
+def store_at_parent (p : Path) : Option StoreState :=
     let parent : String := Path.parent p in
     if String.is_empty parent
-    then st.store
+    then Option.none
     else match Path.of parent {
-        Result.err _ => st.store,
-        Result.ok root =>
-            let s : StoreState := { root := root, dir := p, id := Store.base_name p } in
-            Option.some s,
+        Result.err _ => Option.none,
+        Result.ok root => Option.some (store_at_root root p),
     }
 
 /// The redaction contract's other half: a save file carries only

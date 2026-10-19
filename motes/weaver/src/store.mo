@@ -518,7 +518,7 @@ pub def Store.ensure_root (root : Path) : IO Bool := do {
     let there <- IO.is_dir root;
     if Bool.not there then IO.pure false
     else do {
-        let probe : Path := Store.child root ".probe";
+        let probe : Path := Store.child root (String.concat ".probe-" (I64.to_string process_id));
         let ok <- write_verified probe "ok";
         let _ <- exec_cmd "rm" ["-f", Path.to_string probe];
         return ok
@@ -616,6 +616,24 @@ def meta_from_text (text : String) : Result String StoreMeta :=
         Result.ok j => Store.decode_meta j,
     }
 
+/// A session's two child directories must exist before anything is
+/// written: `mkdir` failures are otherwise silent, leaving a directory
+/// that fails every later read.
+def dirs_ready (dir : Path) : IO Bool := do {
+    let t <- IO.is_dir (transcript_dir dir);
+    let h <- IO.is_dir (history_dir dir);
+    return (Bool.and t h)
+}
+
+def init_session_at (root : Path) (dir : Path) (id : String) (s : Session) : IO (Result String StoreState) := do {
+    let now <- Bench.now;
+    let mok <- write_meta_at dir (meta_of s now now 1);
+    let iok <- write_atomic (index_path dir) (Json.to_string (Store.encode_index Store.empty_index));
+    if Bool.and mok iok
+    then IO.pure (Result.ok (state_of root dir id))
+    else IO.pure (Result.err "could not initialise the session")
+}
+
 pub def Store.new_session (root : Path) (s : Session) : IO (Result String StoreState) := do {
     let ok <- Store.ensure_root root;
     if Bool.not ok then IO.pure (Result.err "session root is not writable")
@@ -626,12 +644,10 @@ pub def Store.new_session (root : Path) (s : Session) : IO (Result String StoreS
         mkdir_p (transcript_dir dir);
         mkdir_p (history_dir dir);
         let _ <- exec_cmd "chmod" ["700", Path.to_string dir];
-        let now <- Bench.now;
-        let mok <- write_meta_at dir (meta_of s now now 1);
-        let iok <- write_atomic (index_path dir) (Json.to_string (Store.encode_index Store.empty_index));
-        if Bool.and mok iok
-        then IO.pure (Result.ok (state_of root dir id))
-        else IO.pure (Result.err "could not initialise the session")
+        let ready <- dirs_ready dir;
+        if Bool.not ready
+        then IO.pure (Result.err "could not create the session directory")
+        else init_session_at root dir id s
     }
 }
 
@@ -716,10 +732,16 @@ def rebuilt (total : I64) (next_seq : I64) (acc : List StoreIndexBlock) : StoreI
     i
 
 def rebuild_index (dir : Path) : IO StoreIndex := do {
-    let names <- IO.list_dir (transcript_dir dir);
-    let idx <- rebuild_go dir names 1 0 List.empty;
-    let _ <- write_atomic (index_path dir) (Json.to_string (Store.encode_index idx));
-    return idx
+    let tdir : Path := transcript_dir dir;
+    let there <- IO.is_dir tdir;
+    if Bool.not there
+    then IO.pure Store.empty_index
+    else do {
+        let names <- IO.list_dir tdir;
+        let idx <- rebuild_go dir names 1 0 List.empty;
+        let _ <- write_atomic (index_path dir) (Json.to_string (Store.encode_index idx));
+        return idx
+    }
 }
 
 /// The cached index when it parses; rebuilds from the block files when it
@@ -754,10 +776,16 @@ pub def Store.checked_index (dir : Path) : IO (Result String StoreIndex) := do {
 }
 
 def check_index (dir : Path) (idx : StoreIndex) : IO (Result String StoreIndex) := do {
-    let names <- IO.list_dir (transcript_dir dir);
-    if count_blocks names == (idx.next_seq - 1)
-    then IO.pure (Result.ok idx)
-    else rebuild_ok dir
+    let tdir : Path := transcript_dir dir;
+    let there <- IO.is_dir tdir;
+    if Bool.not there
+    then rebuild_ok dir
+    else do {
+        let names <- IO.list_dir tdir;
+        if count_blocks names == (idx.next_seq - 1)
+        then IO.pure (Result.ok idx)
+        else rebuild_ok dir
+    }
 }
 
 // ── IO: appending and reading ─────────────────────────────────────────
@@ -890,19 +918,26 @@ def startup_of (dir : Path) (idx : StoreIndex) : IO Transcript := do {
 
 // ── IO: history and metadata ──────────────────────────────────────────
 
-#[partial]
-def load_history_names (hdir : Path) (names : List String) (acc : List Message) : IO (Result String (List Message)) :=
-    match names {
-        List.empty => IO.pure (Result.ok acc),
-        List.cons n rest =>
-            if Bool.not (String.ends_with n ".json") then load_history_names hdir rest acc
-            else do {
-                let text <- IO.read_file (Store.child hdir n);
-                match messages_from_text text {
-                    Result.err _ => IO.pure (Result.ok acc),
-                    Result.ok ms => load_history_names hdir rest (List.append acc ms),
-                }
-            },
+/// The COMMITTED history prefix: seq 1 .. history_next-1. A missing or
+/// unparsable block ends the run (a hole would pair a tool result with
+/// the wrong call), and a block at `history_next` is an uncommitted
+/// write from a crash -- ignored so its messages cannot be resurrected.
+#[terminating]
+def load_history_seq (hdir : Path) (seq : I64) (limit : I64) (acc : List Message) : IO (Result String (List Message)) :=
+    if Bool.not (seq < limit)
+    then IO.pure (Result.ok acc)
+    else do {
+        let p : Path := Store.child hdir (String.concat (Store.pad12 seq) ".json");
+        let there <- IO.file_exists p;
+        if Bool.not there
+        then IO.pure (Result.ok acc)
+        else do {
+            let text <- IO.read_file p;
+            match messages_from_text text {
+                Result.err _ => IO.pure (Result.ok acc),
+                Result.ok ms => load_history_seq hdir (seq + 1) limit (List.append acc ms),
+            }
+        }
     }
 
 def messages_from_text (text : String) : Result String (List Message) :=
@@ -924,11 +959,16 @@ pub def Store.load_session (dir : Path) : IO (Result String Session) := do {
 }
 
 def load_session_meta (dir : Path) (m : StoreMeta) : IO (Result String Session) := do {
-    let names <- IO.list_dir (history_dir dir);
-    let hist_r <- load_history_names (history_dir dir) names List.empty;
-    match hist_r {
-        Result.err e => IO.pure (Result.err e),
-        Result.ok ms => IO.pure (Result.ok (session_with_history m.session ms)),
+    let hdir : Path := history_dir dir;
+    let there <- IO.is_dir hdir;
+    if Bool.not there
+    then IO.pure (Result.ok (session_with_history m.session List.empty))
+    else do {
+        let hist_r <- load_history_seq hdir 1 m.history_next List.empty;
+        match hist_r {
+            Result.err e => IO.pure (Result.err e),
+            Result.ok ms => IO.pure (Result.ok (session_with_history m.session ms)),
+        }
     }
 }
 
@@ -1007,30 +1047,32 @@ def list_msg_len (ms : List Message) : I64 :=
 // ── IO: latest session ────────────────────────────────────────────────
 
 #[partial]
-def latest_go (root : Path) (names : List String) (best : Option String) (best_t : I64) : IO (Option String) :=
+def latest_go (root : Path) (names : List String) (best : Option String) (best_t : I64) (best_c : I64) : IO (Option String) :=
     match names {
         List.empty => IO.pure best,
         List.cons n rest => do {
             let dir : Path := Store.session_dir root n;
             let isd <- IO.is_dir dir;
-            if Bool.not isd then latest_go root rest best best_t
+            if Bool.not isd then latest_go root rest best best_t best_c
             else do {
                 let meta_r <- Store.read_meta dir;
                 match meta_r {
-                    Result.err _ => latest_go root rest best best_t,
+                    Result.err _ => latest_go root rest best best_t best_c,
                     Result.ok m =>
-                        if m.updated > best_t
-                        then latest_go root rest (Option.some n) m.updated
-                        else latest_go root rest best best_t,
+                        if Bool.or (m.updated > best_t) (Bool.and (m.updated == best_t) (m.created > best_c))
+                        then latest_go root rest (Option.some n) m.updated m.created
+                        else latest_go root rest best best_t best_c,
                 }
             }
         },
     }
 
-/// The session with the greatest `meta.updated` (the `/resume` default).
+/// The session with the greatest `meta.updated` (the `/resume` default);
+/// `created` breaks a same-millisecond tie (deterministically, without
+/// depending on the directory-name order).
 pub def Store.latest_session (root : Path) : IO (Option String) := do {
     let names <- IO.list_dir root;
-    latest_go root names Option.none 0
+    latest_go root names Option.none 0 0
 }
 
 /// Decode a block straight from its file text (used by page reads).

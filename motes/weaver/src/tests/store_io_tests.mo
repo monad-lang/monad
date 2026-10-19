@@ -5,15 +5,18 @@ use weaver::store {
     Store.new_session, Store.import_session, Store.append_transcript,
     Store.read_page, Store.record_turn, Store.load_session, Store.latest_session,
     Store.ensure_root, Store.startup_transcript, Store.tail_lines, Store.child,
-    Store.append_chunk, Store.read_live, Store.discard_live,
+    Store.append_chunk, Store.read_live, Store.discard_live, Store.update_meta,
 }
-use shuttle::session {Session}
+use shuttle::session {Session, Session.messages_to_json}
 use shuttle::provider {ProviderConfig, mock}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {text, user, assistant}
 use std::path {Path, Path.of, Path.to_string}
 use std::process {process_id, exec_cmd}
 use std::list {List.length}
+use std::io {IO.write_file}
+use std::concurrent::combine {sleepIO}
+use json::json {Json}
 
 #[partial]
 def lines_go (i : I64) (n : I64) : List String :=
@@ -176,6 +179,83 @@ def check_loaded (r : Result String Session) : IO Bool :=
             IO.pure (n == 4),
     }
 
+// ── the commit point: history_next ────────────────────────────────────
+
+def write_orphan (st : StoreState) : IO Unit := do {
+    let p : Path := Store.child (Store.child st.dir "history") "000000000002.json";
+    IO.write_file p (Json.to_string (Session.messages_to_json [user_msg "orphan"]))
+}
+
+def orphan_finish (st : StoreState) : IO Bool := do {
+    write_orphan st;
+    let loaded <- Store.load_session st.dir;
+    match loaded {
+        Result.err _ => IO.pure false,
+        Result.ok s => IO.pure (List.length s.history == 2),
+    }
+}
+
+def orphan_step (st : StoreState) : IO Bool := do {
+    let r <- Store.record_turn st test_session [user_msg "hi", assistant_msg "hello"] 0 ["you: hi", "hello"];
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok _ => orphan_finish st,
+    }
+}
+
+/// An uncommitted block (written, but `history_next` never advanced) is
+/// ignored -- otherwise the next turn overwrites it and resurrects its
+/// messages in the meantime.
+#[test]
+def test_history_loads_only_the_committed_prefix : IO Bool := do {
+    let root : Path := root_for "orphan";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => orphan_step st,
+    }
+}
+
+def gap_finish (st : StoreState) : IO Bool := do {
+    let p : Path := Store.child (Store.child st.dir "history") "000000000001.json";
+    let _ <- exec_cmd "rm" ["-f", Path.to_string p];
+    let loaded <- Store.load_session st.dir;
+    match loaded {
+        Result.err _ => IO.pure false,
+        Result.ok s => IO.pure (List.length s.history == 0),
+    }
+}
+
+def gap_second (st : StoreState) : IO Bool := do {
+    let r <- Store.record_turn st test_session [user_msg "c", assistant_msg "d"] 2 ["c", "d"];
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok _ => gap_finish st,
+    }
+}
+
+def gap_first (st : StoreState) : IO Bool := do {
+    let r <- Store.record_turn st test_session [user_msg "a", assistant_msg "b"] 0 ["a", "b"];
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok _ => gap_second st,
+    }
+}
+
+/// A hole in the committed prefix would pair a tool result with the
+/// wrong call, so the load stops there rather than skipping the block.
+#[test]
+def test_history_stops_at_a_missing_block : IO Bool := do {
+    let root : Path := root_for "gap";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => gap_first st,
+    }
+}
+
 #[test]
 def test_import_session_keeps_history : IO Bool := do {
     let root : Path := root_for "import";
@@ -212,6 +292,44 @@ def test_latest_session_is_some : IO Bool := do {
     match r {
         Result.err _ => IO.pure false,
         Result.ok _ => check_latest root,
+    }
+}
+
+def latest_order_read (root : Path) (st1 : StoreState) : IO Bool := do {
+    let l <- Store.latest_session root;
+    match l {
+        Option.some id => IO.pure (id == st1.id),
+        Option.none => IO.pure false,
+    }
+}
+
+def latest_order_finish (root : Path) (st1 : StoreState) : IO Bool := do {
+    let _ <- sleepIO 5;
+    let u <- Store.update_meta st1.dir test_session;
+    match u {
+        Result.err _ => IO.pure false,
+        Result.ok _ => latest_order_read root st1,
+    }
+}
+
+def latest_order_second (root : Path) (st1 : StoreState) : IO Bool := do {
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok _ => latest_order_finish root st1,
+    }
+}
+
+/// The newest session is the greatest `updated`, not the first or last
+/// directory name encountered.
+#[test]
+def test_latest_session_is_the_most_recently_updated : IO Bool := do {
+    let root : Path := root_for "latest_order";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st1 => latest_order_second root st1,
     }
 }
 

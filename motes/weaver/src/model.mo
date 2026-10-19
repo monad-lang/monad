@@ -324,7 +324,18 @@ pub def Model.page_request (m : TuiModel) (w : Window) : Option (Pair I64 I64) :
 pub def visible_transcript (m : TuiModel) : List String :=
     let w : Window := Model.window m in
     let content : List String := Transcript.slice m.transcript w.start w.count in
-    if w.eff > 0 then List.cons (scroll_indicator w.start) content else content
+    if w.eff > 0 then List.cons (scrolled_indicator m w) content else content
+
+/// The indicator row: a page-read failure replaces the line count while
+/// the window still cannot be covered (otherwise the count is the truth).
+def scrolled_indicator (m : TuiModel) (w : Window) : String :=
+    if Model.needs_page m w then indicator_or_error m w.start else scroll_indicator w.start
+
+def indicator_or_error (m : TuiModel) (n : I64) : String :=
+    match m.transcript.page_error {
+        Option.some e => String.concat "page load failed: " e,
+        Option.none => scroll_indicator n,
+    }
 
 /// `N lines above -- PgDn for latest`: the row the scrolled-up panel
 /// spends one of its rows on; `n` is the count of lines STILL above

@@ -8,7 +8,10 @@
 // because the reader's contract is to prefix it to the next chunk.
 
 use lib::types { Event, Key, MouseEvent, MouseButton }
-use lib::input { Input.decode, Input.pending_escape }
+use lib::input {
+    Input.decode, Input.pending_escape, Input.step, Input.pasting, Input.paste_cap,
+    InputReader, PasteState, input_reader,
+}
 use std::list { List.length }
 
 def decoded_events (s : String) : List Event :=
@@ -260,3 +263,92 @@ def test_paste_split_across_calls : Bool :=
 def test_pending_escape_false_during_a_paste : Bool :=
     Bool.not (Input.pending_escape (decoded_leftover "\u{1b}[200~\u{1b}"))
         && Bool.not (Input.pending_escape (decoded_leftover "\u{1b}[20"))
+
+#[test]
+def test_lone_escape_before_a_paste_makes_progress : Bool :=
+    events_be (decoded_events "a\u{1b}\u{1b}[200~hi\u{1b}[201~")
+        [Event.key (Key.char "a"), Event.key Key.escape, Event.paste "hi"]
+    && decoded_leftover "a\u{1b}\u{1b}[200~hi\u{1b}[201~" == ""
+
+// ── the reader's paste state machine (one chunk at a time) ─────────────
+
+#[partial]
+def chars_from (s : String) (i : I64) : List String :=
+    if Bool.not (i < String.length s) then List.empty
+    else List.cons (String.slice s i 1) (chars_from s (i + 1))
+
+#[partial]
+def feed_all (r : InputReader) (bytes : List String) (evs : List Event) : Pair (List Event) InputReader :=
+    match bytes {
+        List.empty => Pair.pair evs r,
+        List.cons b rest => match Input.step r evs b {
+            Pair.pair evs2 r2 => feed_all r2 rest evs2,
+        },
+    }
+
+#[test]
+def test_reader_paste_one_byte_at_a_time : Bool :=
+    let out := feed_all (input_reader 24 80) (chars_from "\u{1b}[200~hello\u{1b}[201~" 0) List.empty in
+    match out {
+        Pair.pair evs r2 => events_be evs [Event.paste "hello"] && Bool.not (Input.pasting r2),
+    }
+
+def paste_is (e : Event) (want : String) : Bool :=
+    match e {
+        Event.paste t => t == want,
+        _ => false,
+    }
+
+def only_paste_is (evs : List Event) (want : String) : Bool :=
+    match evs {
+        List.empty => false,
+        List.cons e rest => match rest {
+            List.empty => paste_is e want,
+            _ => false,
+        },
+    }
+
+def paste_len_of (e : Event) : I64 :=
+    match e {
+        Event.paste t => String.length t,
+        _ => 0 - 1,
+    }
+
+def only_paste_len (evs : List Event) : I64 :=
+    match evs {
+        List.empty => 0 - 1,
+        List.cons e rest => match rest {
+            List.empty => paste_len_of e,
+            _ => 0 - 1,
+        },
+    }
+
+def finish_split (r : InputReader) (evs : List Event) : Bool :=
+    match feed_all r (chars_from "1~" 0) evs {
+        Pair.pair evs2 r2 => Bool.and (only_paste_is evs2 "hi") (Bool.not (Input.pasting r2)),
+    }
+
+#[test]
+def test_reader_paste_terminator_split_across_drains : Bool :=
+    let first := feed_all (input_reader 24 80) (chars_from "\u{1b}[200~hi\u{1b}[20" 0) List.empty in
+    match first {
+        Pair.pair evs r2 =>
+            Bool.and (List.length evs == 0) (Bool.and (Input.pasting r2) (finish_split r2 evs)),
+    }
+
+#[test]
+def test_reader_key_after_a_paste : Bool :=
+    let out := feed_all (input_reader 24 80) (chars_from "\u{1b}[200~hi\u{1b}[201~x" 0) List.empty in
+    match out {
+        Pair.pair evs _ => events_be evs [Event.paste "hi", Event.key (Key.char "x")],
+    }
+
+#[test]
+def test_reader_cap_flushes_an_unterminated_paste : Bool :=
+    let ps : PasteState := { chunks := ["zzzzzzzzzz"], tail := "zzzzzz", size := Input.paste_cap - 1 } in
+    let r0 : InputReader := input_reader 24 80 in
+    let r : InputReader := { r0 with paste := Option.some ps } in
+    match Input.step r List.empty "z" {
+        Pair.pair evs r2 =>
+            Bool.and (List.length evs == 1) (Bool.and (Input.pasting r2) (only_paste_len evs == 11)),
+    }

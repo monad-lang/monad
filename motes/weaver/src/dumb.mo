@@ -155,20 +155,40 @@ def failed_step (write : String -> IO Unit) (st : WeaverState) (e : WeaverError)
 /// .. }` parses only in a plain body, not inside a do-block.)
 def turn_ok (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
     let _ <- write "\n\n";
-    let _ <- persist_turn st run2;
-    IO.pure (mk_step (advance_run st run2) true)
+    let warn <- persist_turn st run2;
+    finish_turn write st run2 warn
 }
 
+/// Same contract as the TUI: a store error disables persistence and
+/// says so ONCE, instead of silently rewriting the same history block
+/// on every later turn.
+def finish_turn (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) (warn : Option String) : IO Step :=
+    match warn {
+        Option.none => IO.pure (mk_step (advance_run st run2) true),
+        Option.some e => warn_turn write st run2 e,
+    }
+
+def warn_turn (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) (e : String) : IO Step := do {
+    let line : String := String.concat "warning: session persistence disabled: " (String.concat e "\n");
+    let _ <- write line;
+    IO.pure (mk_step (disable_store (advance_run st run2)) true)
+}
+
+def disable_store (st : WeaverState) : WeaverState :=
+    let st2 : WeaverState := { st with store := Option.none } in
+    st2
+
 /// The history delta of a successful dumb-mode turn (dumb mode has no
-/// transcript block log -- the session file is the record).
-def persist_turn (st : WeaverState) (run2 : RunState) : IO Unit :=
+/// transcript block log -- the session file is the record). An error
+/// rides back to `turn_ok`, which disables persistence.
+def persist_turn (st : WeaverState) (run2 : RunState) : IO (Option String) :=
     match st.store {
-        Option.none => IO.pure unit,
+        Option.none => IO.pure Option.none,
         Option.some s => do {
             let before : I64 := msg_len st.run.session.history;
             let delta : List Message := drop_msgs before run2.session.history;
-            let _ <- Store.record_history s run2.session delta;
-            IO.pure unit
+            let r <- Store.record_history s run2.session delta;
+            IO.pure (match r { Result.err e => Option.some e, Result.ok _ => Option.none })
         },
     }
 

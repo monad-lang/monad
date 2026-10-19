@@ -167,7 +167,8 @@ ollama / the provider's default model / 40 turns / manual mode.
 ### Colors
 
 The dumb UI follows the informal standard: colors are ON unless
-`NO_COLOR` is set (the TUI always colors its own screen). Transcript
+`NO_COLOR` is set (the TUI honors the same rules: `NO_COLOR` or
+`--no-color` turns its palette off too). Transcript
 lines classify by prefix -- user lines cyan, `[running]` rows dim
 cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
 `+` rows green, the Ctrl+C hint dim. The status bar is dim YELLOW --
@@ -190,11 +191,15 @@ attempt, byte-identical to the pre-retry loop.
 
 ## Sessions
 
-Every run writes to `~/.weaver/sessions/<id>/` (`id` is `s-<pid>`):
+A run that can open the store writes to `~/.weaver/sessions/<id>/`
+(`id` is `s-<pid>`, with `-2`, `-3`, ... when that directory exists):
 `meta.json` (session config, turn/spend totals), `transcript/` (rendered
 lines in append-only blocks, with a small `index.json` cache), and
 `history/` (each turn's model messages). `WEAVER_SESSION_ROOT` overrides
-the root.
+the root; when HOME is unset or the root is not writable the run
+degrades to the pre-store in-memory behavior with one warning line. The
+line-based (piped) UI persists the per-turn history only -- it has no
+rendered transcript to store.
 
 The TUI keeps only a window: the last 512 transcript lines plus at most
 one older page. Scrolling above that reads the needed blocks back from
@@ -208,12 +213,12 @@ checkpoint (imported into a new session directory). `--resume` and
 `--continue` do the same at startup. `/clear` starts a NEW session
 directory and leaves the old one resumable.
 
-A streamed turn's text is appended to `live.txt` as it arrives; a turn
-that completes removes it, and one interrupted by a crash leaves it as
-an `[interrupted turn output]` block on the next resume (never fed to
-the model). Writes are process-crash safe, not power-loss safe (there
-is no fsync native), and two processes must not resume the same session
-directory at once.
+A streamed TUI turn's text is appended to `live.txt` as it arrives; a
+turn that completes removes it, and one interrupted by a crash leaves
+it as an `[interrupted turn output]` block on the next resume (never
+fed to the model). Writes are process-crash safe, not power-loss safe
+(there is no fsync native), and two processes must not resume the same
+session directory at once.
 
 ### API keys
 

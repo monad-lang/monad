@@ -134,7 +134,9 @@ pub type App (S : Type) (M : Type) {
     /// Like `app`, but a tick-only batch draws ONLY when `tick_redraw`
     /// says the state moved (weaver: the spinner while a turn runs). An
     /// idle app then allocates no frames at all -- the immutable screen
-    /// copies are the renderer's largest cost.
+    /// copies are the renderer's largest cost. The predicate sees the
+    /// state BEFORE the batch folds: a tick whose effect only becomes
+    /// visible after folding draws on the following tick.
     app_ticked (init : S)
         (on_event : Event -> M)
         (update : S -> M -> Pair S (Cmd M))

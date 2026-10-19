@@ -51,13 +51,28 @@ def input_insert (c : String) (st : InputState) : InputState :=
 
 /// Insert a whole string (a paste) at the cursor, advancing by its
 /// length; CRLF/CR become `\n`, the input state's own newline spelling.
+/// The cursor is snapped to a character boundary first: `String.slice`/
+/// `String.drop` off a boundary return `""`, which would otherwise
+/// replace the whole field with the pasted text.
 pub def insert_text (text : String) (st : InputState) : InputState :=
     let t : String := normalize_newlines text in
-    let len := String.length st.value in
-    let cur := clamp st.cursor 0 len in
+    let cur := clamp_to_boundary st.value st.cursor in
     let before := String.slice st.value 0 cur in
     let after := String.drop cur st.value in
     { st with value := before ++ t ++ after, cursor := cur + String.length t }
+
+#[terminating]
+def boundary_below (s : String) (i : I64) : I64 :=
+    if i < 1 then 0
+    else if Bool.not (String.slice s i 1 == "") then i
+    else boundary_below s (i - 1)
+
+/// `i`, clamped to `[0, len]` and then walked back to a character
+/// boundary (a mid-code-point slice reads as empty in both runtimes).
+def clamp_to_boundary (s : String) (i : I64) : I64 :=
+    let len : I64 := String.length s in
+    let c : I64 := if i < 0 then 0 else if len < i then len else i in
+    if c == len then c else boundary_below s c
 
 /// CRLF -> LF, a lone CR -> LF. Byte-wise: the input state is
 /// byte-offset based and v1 is ASCII.
