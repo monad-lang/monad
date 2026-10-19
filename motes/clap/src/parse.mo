@@ -7,7 +7,8 @@ use std::list {List.length}
 use std::io {IO.write_stderr}
 use lib::spec {
     Cli.ArgKind, Cli.ArgSpec, Cli.ArgValue, Cli.ArgValueType, Cli.CommandSpec,
-    Cli.ParseResult, Cli.Parsed, Cli.digit_of, Cli.same_kind,
+    Cli.ParseResult, Cli.Parsed, Cli.arg_value, Cli.digit_of, Cli.parse_i64,
+    Cli.parsed, Cli.same_kind,
 }
 use lib::help {Cli.help_text, Cli.usage}
 

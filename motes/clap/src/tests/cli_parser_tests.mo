@@ -1,5 +1,15 @@
 /// Spec-parser tests: the strict, typed parser new CLIs use.
 use clap::args {*}
+use lib::parse {Cli.parse}
+use lib::spec {
+    Cli.CommandSpec, Cli.ParseResult, Cli.Parsed,
+    Cli.command, Cli.flag, Cli.flag_count, Cli.flag_set,
+    Cli.option, Cli.option_i64_optional, Cli.option_optional,
+    Cli.option_value, Cli.option_value_i64,
+    Cli.positional, Cli.positional_optional, Cli.required_positional,
+    Cli.with_args, Cli.with_subcommands, Cli.with_version,
+    parse_err, parse_help, parse_ok, parse_version,
+}
 
 def demo_spec : Cli.CommandSpec :=
     Cli.with_args [

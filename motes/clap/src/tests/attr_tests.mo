@@ -1,6 +1,7 @@
 /// Attribute-string decoding tests: the canonical form the compiler's
 /// reflection writes into `FieldInfo.attrs`.
 use clap::args {*}
+use lib::attr {Cli.attr_arg, Cli.attr_has, Cli.attr_name, Cli.kebab}
 
 def opt_is (o : Option String) (v : String) : Bool :=
     match o {
