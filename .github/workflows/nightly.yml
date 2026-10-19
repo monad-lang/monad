@@ -93,6 +93,7 @@ jobs:
             dist/monad-nightly-x86_64-linux
             dist/monadup-x86_64-linux
             dist/monad-src-x86_64-linux.tar.gz
+            dist/*.sha256
             dist/commit.txt
             dist/monad-src.tar.gz
           if-no-files-found: error
@@ -132,6 +133,7 @@ jobs:
             dist/monad-nightly-${{ matrix.platform }}
             dist/monadup-${{ matrix.platform }}
             dist/monad-src-${{ matrix.platform }}.tar.gz
+            dist/*.sha256
             dist/commit.txt
           if-no-files-found: error
 
@@ -185,6 +187,7 @@ jobs:
             dist/monad-nightly-aarch64-darwin
             dist/monadup-aarch64-darwin
             dist/monad-src-aarch64-darwin.tar.gz
+            dist/*.sha256
             dist/commit.txt
           if-no-files-found: error
 
@@ -275,7 +278,7 @@ jobs:
                 aarch64-linux) how='cross-built from x86_64-linux and verified under QEMU.' ;;
                 riscv64-linux) how='**experimental**, cross-built and verified under QEMU; nothing runs it natively, and `monadup` installs it only on a riscv64 machine.' ;;
               esac
-              if [ -f "release/monad-nightly-$p" ]; then
+              if [ -f "release/monad-nightly-$p" ] && [ -f "release/monadup-$p" ]; then
                 printf '* `%s` — %s\n' "$p" "$how"
               else
                 printf '* `%s` — **not published by this run.**\n' "$p"

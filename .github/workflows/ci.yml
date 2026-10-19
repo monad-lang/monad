@@ -366,10 +366,27 @@ jobs:
           # built and runs; the derivation's checkPhase asserts the same.
           "$bin/bin/monadup" --version
 
+      - name: Portability check
+        run: |
+          # The point of `.#monadup` is a binary that runs without a Nix
+          # store. `nightly-release.sh` asserts this too, but only at publish
+          # time; without this step a dynamic link would be green here.
+          nix develop --no-pure-eval --accept-flake-config -c sh -c '
+            file "$MONADUP_BIN"
+            out="$(ldd "$MONADUP_BIN" 2>&1)" || true
+            printf "%s\n" "$out"
+            if printf "%s\n" "$out" | grep -q /nix/store; then
+              echo "monadup links a /nix/store library" >&2
+              exit 1
+            fi
+          '
+
       - name: Distribution and binary checks
         run: |
           nix develop --no-pure-eval --accept-flake-config \
-            -c env MONADUP_BIN="$MONADUP_BIN" scripts/check-monadup.sh
+            -c env MONADUP_BIN="$MONADUP_BIN" \
+                 MONAD_BIN="cargo run --release --quiet --" \
+                 scripts/check-monadup.sh
 
       - name: Push monadup to the binary cache
         env:

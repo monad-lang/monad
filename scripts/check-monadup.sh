@@ -107,14 +107,6 @@ SH
   printf '[{"tag_name":"%s","assets":[%s]}]' "$tag" "$assets" > "$dir/releases"
 }
 
-run_monadup() {
-  if [ -n "${MONADUP_BIN:-}" ]; then
-    "$MONADUP_BIN" "$@"
-  else
-    "$root/scripts/monadup" "$@"
-  fi
-}
-
 # ---------------------------------------------------------------------------
 # 3. Bootstrap stub: pipe-safe fetch/exec and no-arg install
 # ---------------------------------------------------------------------------
@@ -175,7 +167,6 @@ ok "the no-arg stub installs bin/monadup and prints the PATH hint"
 
 # Pipe-safety: the stub is read from stdin exactly as `curl | bash` does,
 # and must not consume the rest of the stream.
-if printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$work/pipe.marker"; then :; fi
 (cat "$root/scripts/monadup" | MONAD_HOME="$work/home-pipe" \
   MONADUP_API_URL="file://${fix_stub}/releases" MONADUP_UNAME="Linux x86_64" bash) \
   > "$work/stub-pipe.log" 2>&1 \
@@ -183,12 +174,45 @@ if printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$work/pipe.marker"; then :; f
 [ -x "$work/home-pipe/bin/monadup" ] || die "the pipe-installed stub produced no binary"
 ok "the stub is pipe-safe (curl … | bash)"
 
+# With arguments the stub execs the downloaded binary; that child must not
+# consume stdin either. A sentinel read AFTER the stub runs proves it.
+printf 'SENTINEL\n' | {
+  MONAD_HOME="$work/home-pipe-args" \
+  MONADUP_API_URL="file://${fix_stub}/releases" MONADUP_UNAME="Linux x86_64" \
+    bash "$root/scripts/monadup" install > "$work/stub-pipe-args.log" 2>&1 \
+    || { cat "$work/stub-pipe-args.log" >&2; die "the stub failed with args on a pipe"; }
+  IFS= read -r leftover || true
+  [ "$leftover" = "SENTINEL" ] || die "the stub (or its child) consumed stdin"
+} || exit 1
+ok "the stub's exec path leaves stdin untouched"
+
+# The stub enforces a published checksum too.
+fix_stub_sum="$work/release-stub-sum"
+home_stub_sum="$work/home-stub-sum"
+make_release "$fix_stub_sum" x86_64-linux no
+sha256sum "$fix_stub_sum/monadup-x86_64-linux" > "$fix_stub_sum/monadup-x86_64-linux.sha256"
+MONAD_HOME="$home_stub_sum" MONADUP_API_URL="file://${fix_stub_sum}/releases" \
+MONADUP_UNAME="Linux x86_64" \
+  "$root/scripts/monadup" install > "$work/stub-sum.log" 2>&1 \
+  || { cat "$work/stub-sum.log" >&2; die "the stub rejected a matching checksum"; }
+ok "the stub accepts a matching checksum"
+
+printf '%064d  monadup-x86_64-linux\n' 0 > "$fix_stub_sum/monadup-x86_64-linux.sha256"
+if MONAD_HOME="$work/home-stub-sum-bad" MONADUP_API_URL="file://${fix_stub_sum}/releases" \
+     MONADUP_UNAME="Linux x86_64" \
+     "$root/scripts/monadup" install > "$work/stub-sum-bad.log" 2>&1; then
+  die "the stub accepted a mismatched checksum"
+fi
+grep -q "checksum mismatch" "$work/stub-sum-bad.log" \
+  || { cat "$work/stub-sum-bad.log" >&2; die "the stub's checksum failure was not reported"; }
+ok "the stub refuses a mismatched checksum"
+
 # Both JSON parsers, when both exist, driven with the other hidden.
 path_without() {
   local what="$1" p t
   local dir="$work/path-without-${what}"
   mkdir -p "$dir"
-  for t in env bash uname curl tar gzip mkdir chmod rm ln cat basename jq python3; do
+  for t in env bash uname curl tar gzip mkdir chmod rm ln cat basename jq python3 mktemp mv sha256sum shasum; do
     [ "$t" = "$what" ] && continue
     p="$(command -v "$t" 2>/dev/null || true)"
     [ -n "$p" ] && ln -sf "$p" "$dir/$t"
@@ -331,6 +355,47 @@ grep -q "already installed" "$work/reinstall.log" || die "re-running install did
 for m in init std llvm runtime; do [ -d "$vdir_old/$m" ] || die "re-running install did not add ${m}/"; done
 ok "re-running install repairs a binary-only version directory"
 
+# 4e-bis. Checksum verification: a published `.sha256` is enforced.
+fix_sum="$work/release-sum"
+home_sum="$work/home-sum"
+make_release "$fix_sum" x86_64-linux no
+sha256sum "$fix_sum/monad-nightly-x86_64-linux" > "$fix_sum/monad-nightly-x86_64-linux.sha256"
+MONAD_HOME="$home_sum" MONADUP_API_URL="file://${fix_sum}/releases" MONADUP_UNAME="Linux x86_64" \
+  "$MONADUP_BIN" install > "$work/install-sum.log" 2>&1 \
+  || { cat "$work/install-sum.log" >&2; die "a matching checksum was rejected"; }
+[ -x "$home_sum/downloads/${tag}/monad-nightly-x86_64-linux" ] \
+  || die "the checksum-verified install produced no binary"
+ok "a matching checksum is accepted"
+
+home_sum_bad="$work/home-sum-bad"
+printf '%064d  monad-nightly-x86_64-linux\n' 0 > "$fix_sum/monad-nightly-x86_64-linux.sha256"
+if MONAD_HOME="$home_sum_bad" MONADUP_API_URL="file://${fix_sum}/releases" MONADUP_UNAME="Linux x86_64" \
+     "$MONADUP_BIN" install > "$work/install-sum-bad.log" 2>&1; then
+  die "a mismatched checksum was accepted"
+fi
+grep -q "checksum mismatch" "$work/install-sum-bad.log" \
+  || { cat "$work/install-sum-bad.log" >&2; die "the mismatch was not reported as a checksum error"; }
+ok "a mismatched checksum is refused"
+
+# 4e-ter. `update` and uninstalling a non-active tag.
+fix_upd="$work/release-update"
+home_upd="$work/home-update"
+make_release "$fix_upd" x86_64-linux no
+MONAD_HOME="$home_upd" MONADUP_API_URL="file://${fix_upd}/releases" MONADUP_UNAME="Linux x86_64" \
+  "$MONADUP_BIN" default > "$work/default-upd.log" 2>&1 \
+  || { cat "$work/default-upd.log" >&2; die "default failed"; }
+mkdir -p "$home_upd/downloads/nightly-OLD"
+MONAD_HOME="$home_upd" "$MONADUP_BIN" uninstall nightly-OLD > "$work/uninstall-old.log" 2>&1 \
+  || { cat "$work/uninstall-old.log" >&2; die "uninstall of a non-active tag failed"; }
+[ ! -d "$home_upd/downloads/nightly-OLD" ] || die "uninstall left the non-active directory"
+ok "uninstall removes a non-active nightly"
+
+MONAD_HOME="$home_upd" MONADUP_API_URL="file://${fix_upd}/releases" MONADUP_UNAME="Linux x86_64" \
+  "$MONADUP_BIN" update > "$work/update.log" 2>&1 \
+  || { cat "$work/update.log" >&2; die "update failed"; }
+[ -x "$home_upd/bin/monad" ] || die "update left no bin/monad"
+ok "update keeps the latest nightly active"
+
 # 4f. doctor, doctor --json, env, new, self-install, upgrade.
 fix_x86="$work/release-x86_64-linux"
 home_x86="$work/home-x86_64-linux"
@@ -349,6 +414,17 @@ jq -e '.tool == "monadup"
   || die "doctor --json is not valid JSON with the expected keys"
 ok "doctor --json is machine-readable"
 
+# On an unrecognised machine the fallback note must go to stderr; anything
+# on stdout would prefix (and break) the JSON report.
+MONAD_HOME="$home_x86" MONADUP_API_URL="file://${fix_x86}/releases" MONADUP_UNAME="SunOS sun4u" \
+  "$MONADUP_BIN" doctor --json --no-network > "$work/doctor-fallback.json" 2> "$work/doctor-fallback.err" || true
+jq -e '.platform == "x86_64-linux" and (.checks | type == "array")' \
+  "$work/doctor-fallback.json" >/dev/null \
+  || die "doctor --json is not valid JSON on a fallback platform"
+grep -q "no nightly is published" "$work/doctor-fallback.err" \
+  || die "the fallback note did not reach stderr"
+ok "fallback-platform doctor --json keeps stdout machine-readable"
+
 MONAD_HOME="$home_x86" "$MONADUP_BIN" env > "$work/env.log" 2>&1 || die "env failed"
 grep -q "^platform:" "$work/env.log" || die "env printed no platform"
 grep -q "^toolchain root:" "$work/env.log" || die "env printed no toolchain root"
@@ -361,7 +437,15 @@ for f in mote.toml src/main.mo README.md .gitignore; do
   [ -f "$work/scaffold/demo/$f" ] || die "new did not write $f"
 done
 grep -q 'name = "demo"' "$work/scaffold/demo/mote.toml" || die "new's manifest does not name the project"
-ok "new scaffolds a buildable project"
+if [ -n "${MONAD_BIN:-}" ]; then
+  # MONAD_BIN is a command plus flags (`cargo run --release --quiet --`),
+  # split deliberately, like scripts/check-docs.sh.
+  # shellcheck disable=SC2086
+  $MONAD_BIN check "$work/scaffold/demo" || die "the scaffold does not type-check"
+  ok "new scaffolds a project that type-checks"
+else
+  ok "new scaffolds a buildable project (MONAD_BIN unset; compile skipped)"
+fi
 
 MONAD_HOME="$home_x86" "$MONADUP_BIN" self-install > "$work/self-install.log" 2>&1 \
   || { cat "$work/self-install.log" >&2; die "self-install failed"; }

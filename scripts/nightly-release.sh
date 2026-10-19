@@ -217,6 +217,20 @@ fi
 # label, so the two artifacts of a leg are always for the same platform.
 "$root/scripts/stage-mote-sources.sh" "$root/dist" "$MONAD_PLATFORM"
 
+# Checksums for every downloadable artifact, published beside it and
+# verified by `monadup`/the bootstrap stub when present. `commit.txt` and
+# the tarball are not executables, but the sources become the toolchain a
+# later build reads, so they are covered too.
+for asset in \
+  "$root/dist/monad-nightly-${MONAD_PLATFORM}" \
+  "$root/dist/monadup-${MONAD_PLATFORM}" \
+  "$root/dist/monad-src-${MONAD_PLATFORM}.tar.gz" \
+  "$root/dist/monad-src.tar.gz"; do
+  if [ -f "$asset" ]; then
+    ( cd "$(dirname "$asset")" && sha256sum "$(basename "$asset")" > "$(basename "$asset").sha256" )
+  fi
+done
+
 # The workflow's `tag`/`date` step outputs, for the release step. Written
 # here rather than in a second `nix develop` step of their own: they are this
 # script's own output, so a second entry would buy nothing and add a second

@@ -16,6 +16,9 @@ Before getting started, ensure you have:
 - `llc`, `clang`, `pkg-config`, and the Boehm GC development files, which the
   compiler links against. `devenv shell` provides all of them, and
   `monadup doctor` reports which are missing on your machine.
+- A text editor. There is no syntax-highlighting plugin yet; the bootstrap host
+  ships an [LSP server](./bootstrap-host.md#editor-and-agent-tooling) for
+  diagnostics.
 
 The quickest start is to let monadup write the project:
 
@@ -24,9 +27,6 @@ monadup new hello
 cd hello
 monad run .
 ```
-- A text editor. There is no syntax-highlighting plugin yet; the bootstrap host
-  ships an [LSP server](./bootstrap-host.md#editor-and-agent-tooling) for
-  diagnostics.
 
 ## Your First Program
 

@@ -46,7 +46,8 @@ set under `~/.monad`. `monadup env` prints the resolved environment,
 `monadup doctor --json` is a machine-readable report, and `monadup new <name>`
 scaffolds a project. The bootstrap stub needs `curl` and either `jq` or
 `python3`; the installed binary parses JSON itself and needs only `curl` and
-`tar`.
+`tar`. When a release publishes a `<asset>.sha256` beside an artifact, both
+the stub and the binary verify it with `sha256sum` or `shasum`.
 
 > **The ELF is portable; the build toolchain is not bundled.** Linux binaries
 > are fully static and the macOS one links only libSystem, so `monad`,

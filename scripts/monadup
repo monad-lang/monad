@@ -19,7 +19,8 @@
 #   MONADUP_UNAME    the `<system> <machine>` pair `uname -sm` would print
 #
 # jq or python3 is needed for this BOOTSTRAP hop only; the installed binary
-# parses JSON in-language.
+# parses JSON in-language. When a release publishes `<asset>.sha256`, the
+# downloaded asset is verified with sha256sum or shasum.
 set -euo pipefail
 
 REPO="monad-lang/monad"
@@ -45,6 +46,28 @@ up_asset() { echo "monadup-$1"; }
 json_ok() {
   command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 \
     || die "neither jq nor python3 is available (needed by the bootstrap stub)"
+}
+
+# Verify a downloaded asset against the `<url>.sha256` published beside it.
+# Older tags publish none, in which case there is nothing to check. A
+# published checksum that cannot be verified is an error, not a pass.
+verify_download() {
+  local url="$1" file="$2" sums expected actual
+  sums="$(curl -fsSL "${url}.sha256" 2>/dev/null)" || return 0
+  expected="${sums%%[[:space:]]*}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file")"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$file")"
+  else
+    rm -f "$file"
+    die "neither sha256sum nor shasum is available to verify ${url}"
+  fi
+  actual="${actual%%[[:space:]]*}"
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$file"
+    die "checksum mismatch for ${url}"
+  fi
 }
 
 json_asset_url() {
@@ -108,22 +131,26 @@ mkdir -p "$home/bin"
 
 # No arguments: install the binary and tell the user what to run next.
 if [[ $# -eq 0 ]]; then
-  tmp="$bin.tmp.$$"
-  curl -fsSL -o "$tmp" "$asset_url" || die "failed to download $(up_asset "$asset_platform")"
+  tmp="$(mktemp "${bin}.tmp.XXXXXX")"
+  curl -fsSL -o "$tmp" "$asset_url" || { rm -f "$tmp"; die "failed to download $(up_asset "$asset_platform")"; }
+  verify_download "$asset_url" "$tmp"
   chmod +x "$tmp"
   mv -f "$tmp" "$bin"
   echo "monadup: installed $bin"
-  echo "Add ~/.monad/bin to your PATH:"
-  echo "  export PATH=\"\$HOME/.monad/bin:\$PATH\""
+  echo "Add ${home}/bin to your PATH:"
+  echo "  export PATH=\"${home}/bin:\$PATH\""
   echo "Then install a nightly:"
   echo "  monadup default"
   exit 0
 fi
 
-# With arguments: exec the fetched binary. The temp path is left for
-# self-install/upgrade to copy if the platform has no procfs (Darwin).
-tmp="${TMPDIR:-/tmp}/monadup-bin.$$"
-trap 'rm -f "$tmp"' EXIT
-curl -fsSL -o "$tmp" "$asset_url" || die "failed to download $(up_asset "$asset_platform")"
+# With arguments: exec the fetched binary. `mktemp` matters here -- a
+# predictable name in /tmp is a symlink target, and `curl -o` follows
+# symlinks. The binary is told its own path (MONADUP_SELF_BIN) so
+# `self-install` can copy it on platforms without procfs, and removes it
+# once the command returns.
+tmp="$(mktemp "${TMPDIR:-/tmp}/monadup-bin.XXXXXX")"
+curl -fsSL -o "$tmp" "$asset_url" || { rm -f "$tmp"; die "failed to download $(up_asset "$asset_platform")"; }
+verify_download "$asset_url" "$tmp"
 chmod +x "$tmp"
 MONADUP_SELF_BIN="$tmp" exec "$tmp" "$@"

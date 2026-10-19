@@ -670,23 +670,26 @@
 
       # ── monadup ────────────────────────────────────────────────────────
       #
-      # The compiler emits monadup's IR ONCE (natively) from the packaged
-      # `monad`; every published platform relinks that same `.ll`. The
-      # header's triple is overridden by `llc -mtriple` (measured for the
-      # compiler's own rung-1 relink), so one interpretation serves all
-      # four platforms. The relink is `monadFor`'s shape without the
-      # makeWrapper: a consumer downloads the bare binary, not a store
-      # wrapper.
+      # The compiler emits monadup's IR ONCE (natively) from the commit-free
+      # rung-1 compiler; every published platform relinks that same `.ll`.
+      # Using `monadRung1` rather than the stamped `monad` keeps this
+      # derivation's hash off the per-commit revision: the emitted IR does
+      # not depend on the stamp, and keying on it made every compiler change
+      # rebuild the ~26-minute interpretation. The header's triple is
+      # overridden by `llc -mtriple` (measured for the compiler's own rung-1
+      # relink), so one interpretation serves all four platforms. The relink
+      # is `monadFor`'s shape without the makeWrapper: a consumer downloads
+      # the bare binary, not a store wrapper.
       monadupIr = pkgs.stdenv.mkDerivation {
         pname = "monadup-ir";
         version = monadVersion;
         src = monadupSrc;
-        nativeBuildInputs = [ config.packages.monad pkgs.llvm pkgs.clang pkgs.coreutils pkgs.bash ];
+        nativeBuildInputs = [ config.packages.monadRung1 pkgs.llvm pkgs.clang pkgs.coreutils pkgs.bash ];
         buildPhase = ''
           runHook preBuild
           export MONAD_ROOT="$PWD"
           export MONAD_TARGET_DIR="$TMPDIR/monad-target"
-          ${lib.getExe config.packages.monad} build motes/monadup --bin monadup \
+          ${lib.getExe config.packages.monadRung1} build motes/monadup --bin monadup \
             --release --no-cache -o "$PWD/monadup"
           test -f "$PWD/monadup.ll"
           runHook postBuild
