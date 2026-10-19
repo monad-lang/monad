@@ -33,3 +33,8 @@ pub use lib::html_t {
     HtmlT.head_node, HtmlT.head_nodes, HtmlT.body_node, HtmlT.body_nodes,
     HtmlT.seal, HtmlT.emit
 }
+
+pub use lib::app {
+    App, App.init, App.run_batch, App.step, App.view,
+    Cmd, Host, Host.run_effect
+}
