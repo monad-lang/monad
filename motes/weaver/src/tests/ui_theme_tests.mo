@@ -43,12 +43,17 @@ def test_class_style_and_code_agree_on_the_enum : Bool :=
 #[test]
 def test_theme_status_style_dim_yellow : Bool :=
     theme_status_style Mode.manual == ({ style_default with dim := true, fg := some Color.yellow } : TextStyle)
-        && theme_status_style Mode.plan == ({ style_default with dim := true, fg := some Color.yellow } : TextStyle)
+        && theme_status_style Mode.allow_edit == ({ style_default with dim := true, fg := some Color.yellow } : TextStyle)
         && theme_status_style Mode.auto == ({ style_default with dim := true, fg := some Color.red, bold := true } : TextStyle)
+
+#[test]
+def test_theme_status_style_plan_green : Bool :=
+    theme_status_style Mode.plan == ({ style_default with dim := true, fg := some Color.green } : TextStyle)
 
 #[test]
 def test_theme_status_code_yellow_dim : Bool :=
     theme_status_code Mode.manual == "\u{1b}[33;2m"
+        && theme_status_code Mode.plan == "\u{1b}[32;2m"
         && theme_status_code Mode.auto == "\u{1b}[31;2;1m"
 
 #[test]

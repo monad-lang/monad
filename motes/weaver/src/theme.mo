@@ -122,19 +122,23 @@ def theme_wrap (line : String) : String :=
     if code == "" then line else String.concat code (String.concat line "\u{1b}[0m")
 
 /// The status bar's code, by mode (the same color the TUI chip
-/// carries): dim yellow -- the Claude-Code-like statusbar -- with the
-/// `auto` trust warning red.
+/// carries): dim yellow -- the Claude-Code-like statusbar -- plan GREEN
+/// (read-only is the one mode that is always safe), and the `auto`
+/// trust warning red.
 pub def theme_status_code (mode : Mode) : String :=
     match mode {
         Mode.auto => "\u{1b}[31;2;1m",
+        Mode.plan => "\u{1b}[32;2m",
         _ => "\u{1b}[33;2m",
     }
 
-/// The TUI status bar's style per mode: dim YELLOW for every mode (the
-/// statusbar's own voice), the `auto` warning red instead -- the
-/// WARNING: prefix the status text already carries is what turns red.
+/// The TUI status bar's style per mode: dim YELLOW for the ordinary
+/// modes (the statusbar's own voice), plan green, and the `auto`
+/// warning red -- the WARNING: prefix the status text already carries
+/// is what turns red.
 pub def theme_status_style (mode : Mode) : TextStyle :=
     match mode {
         Mode.auto => { style_default with dim := true, fg := some Color.red, bold := true },
+        Mode.plan => { style_default with dim := true, fg := some Color.green },
         _ => { style_default with dim := true, fg := some Color.yellow },
     }
