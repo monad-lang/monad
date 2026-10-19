@@ -408,12 +408,9 @@ def store_at_root (root : Path) (dir : Path) : StoreState :=
     s
 
 def store_at_parent (p : Path) : Option StoreState :=
-    let parent : String := Path.parent p in
-    if String.is_empty parent
-    then Option.none
-    else match Path.of parent {
-        Result.err _ => Option.none,
-        Result.ok root => Option.some (store_at_root root p),
+    match Path.parent p {
+        Option.none => Option.none,
+        Option.some root => Option.some (store_at_root root p),
     }
 
 /// The redaction contract's other half: a save file carries only

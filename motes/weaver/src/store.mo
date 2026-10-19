@@ -10,8 +10,8 @@ use json::json {
     Json.make_str, Json.make_num_int, Json.get_object, Json.get_array,
     Json.get_str, Json.get_num, Json.get_num_i64, Json.object_get,
 }
-use std::io {IO.read_file, IO.write_file, IO.file_exists, IO.is_dir, IO.list_dir, IO.get_env}
-use std::path {Path, Path.of, Path.to_string, Path.join, Path.with_suffix, Path.parent}
+use std::io {IO.read_file, IO.write_file, IO.is_dir, IO.list_dir, IO.get_env}
+use std::path {Path, Path.of, Path.to_string, Path.join, Path.with_suffix, Path.file_name}
 use std::process {exec_cmd, process_id}
 use std::bench {Bench.now}
 use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
@@ -464,10 +464,7 @@ pub def Store.child (dir : Path) (name : String) : Path :=
 
 /// The last path component; for a session directory that is its id.
 pub def Store.base_name (p : Path) : String :=
-    let parent : String := Path.parent p in
-    let s : String := Path.to_string p in
-    if String.is_empty parent then s
-    else String.drop (String.length parent + 1) s
+    Path.file_name p
 
 /// Split a line block into `block_lines` chunks (none for empty input).
 #[partial]
@@ -494,12 +491,22 @@ def mkdir_p (p : Path) : IO Unit := do {
     return unit
 }
 
-/// `IO.write_file` cannot report failure compiled (it returns Unit), so a
-/// write is trusted only after a read-back.
+/// `IO.write_file` reports its own failure now; the read-back still
+/// guards a short or silently truncated write.
 def write_verified (p : Path) (text : String) : IO Bool := do {
-    IO.write_file p text;
-    let back <- IO.read_file p;
-    return (back == text)
+    let w <- IO.write_file p text;
+    match w {
+        Result.err _ => IO.pure false,
+        Result.ok _ => read_back p text,
+    }
+}
+
+def read_back (p : Path) (text : String) : IO Bool := do {
+    let r <- IO.read_file p;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok back => IO.pure (back == text),
+    }
 }
 
 /// Data first, cache second: `mv` makes the replacement atomic.
@@ -569,12 +576,10 @@ pub def Store.append_chunk (st : StoreState) (text : String) : IO Unit := do {
 }
 
 pub def Store.read_live (st : StoreState) : IO (Option String) := do {
-    let p : Path := Store.live_path st.dir;
-    let there <- IO.file_exists p;
-    if Bool.not there then IO.pure Option.none
-    else do {
-        let text <- IO.read_file p;
-        if String.is_empty text then IO.pure Option.none else IO.pure (Option.some text)
+    let r <- IO.read_file (Store.live_path st.dir);
+    match r {
+        Result.err _ => IO.pure Option.none,
+        Result.ok text => if String.is_empty text then IO.pure Option.none else IO.pure (Option.some text),
     }
 }
 
@@ -601,12 +606,10 @@ def write_meta_at (dir : Path) (m : StoreMeta) : IO Bool :=
     write_atomic (meta_path dir) (Json.to_string (Store.encode_meta m))
 
 pub def Store.read_meta (dir : Path) : IO (Result String StoreMeta) := do {
-    let p : Path := meta_path dir;
-    let there <- IO.file_exists p;
-    if Bool.not there then IO.pure (Result.err "session meta is missing")
-    else do {
-        let text <- IO.read_file p;
-        return (meta_from_text text)
+    let r <- IO.read_file (meta_path dir);
+    match r {
+        Result.err _ => IO.pure (Result.err "session meta is missing"),
+        Result.ok text => IO.pure (meta_from_text text),
     }
 }
 
@@ -678,10 +681,10 @@ def is_block_name (name : String) : Bool :=
     Bool.and (String.ends_with name ".json") (Bool.not (name == "index.json"))
 
 #[partial]
-def count_blocks (names : List String) : I64 :=
+def count_blocks (names : List Path) : I64 :=
     match names {
         List.empty => 0,
-        List.cons n rest => if is_block_name n then 1 + count_blocks rest else count_blocks rest,
+        List.cons n rest => if is_block_name (Path.file_name n) then 1 + count_blocks rest else count_blocks rest,
     }
 
 def index_from_text (text : String) : Option StoreIndex :=
@@ -703,23 +706,25 @@ def reverse_blocks (bs : List StoreIndexBlock) (acc : List StoreIndexBlock) : Li
 /// Walk the sorted block names, accepting a contiguous run whose `seq`
 /// and `start` agree; the first torn/missing block ends the run.
 #[partial]
-def rebuild_go (dir : Path) (names : List String) (seq : I64) (at : I64) (acc : List StoreIndexBlock) : IO StoreIndex :=
+def rebuild_go (names : List Path) (seq : I64) (at : I64) (acc : List StoreIndexBlock) : IO StoreIndex :=
     match names {
         List.empty => IO.pure (rebuilt at seq acc),
         List.cons n rest =>
-            if Bool.not (is_block_name n) then rebuild_go dir rest seq at acc
+            if Bool.not (is_block_name (Path.file_name n)) then rebuild_go rest seq at acc
             else do {
-                let p : Path := Store.child (transcript_dir dir) n;
-                let text <- IO.read_file p;
-                match Json.parse text {
+                let r <- IO.read_file n;
+                match r {
                     Result.err _ => IO.pure (rebuilt at seq acc),
-                    Result.ok j => match Store.decode_block j {
+                    Result.ok text => match Json.parse text {
                         Result.err _ => IO.pure (rebuilt at seq acc),
-                        Result.ok pr => match pr {
-                            Pair.pair b lines =>
-                                if Bool.and (b.seq == seq) (b.start == at)
-                                then rebuild_go dir rest (seq + 1) (at + b.count) (List.cons b acc)
-                                else IO.pure (rebuilt at seq acc),
+                        Result.ok j => match Store.decode_block j {
+                            Result.err _ => IO.pure (rebuilt at seq acc),
+                            Result.ok pr => match pr {
+                                Pair.pair b lines =>
+                                    if Bool.and (b.seq == seq) (b.start == at)
+                                    then rebuild_go rest (seq + 1) (at + b.count) (List.cons b acc)
+                                    else IO.pure (rebuilt at seq acc),
+                            },
                         },
                     },
                 }
@@ -738,7 +743,7 @@ def rebuild_index (dir : Path) : IO StoreIndex := do {
     then IO.pure Store.empty_index
     else do {
         let names <- IO.list_dir tdir;
-        let idx <- rebuild_go dir names 1 0 List.empty;
+        let idx <- rebuild_go names 1 0 List.empty;
         let _ <- write_atomic (index_path dir) (Json.to_string (Store.encode_index idx));
         return idx
     }
@@ -747,15 +752,13 @@ def rebuild_index (dir : Path) : IO StoreIndex := do {
 /// The cached index when it parses; rebuilds from the block files when it
 /// does not. Callers compare block counts themselves (`checked_index`).
 pub def Store.read_index (dir : Path) : IO (Result String StoreIndex) := do {
-    let p : Path := index_path dir;
-    let there <- IO.file_exists p;
-    if Bool.not there then rebuild_ok dir
-    else do {
-        let text <- IO.read_file p;
-        match index_from_text text {
+    let r <- IO.read_file (index_path dir);
+    match r {
+        Result.err _ => rebuild_ok dir,
+        Result.ok text => match index_from_text text {
             Option.some idx => IO.pure (Result.ok idx),
             Option.none => rebuild_ok dir,
-        }
+        },
     }
 }
 
@@ -850,16 +853,19 @@ def read_wanted (dir : Path) (bs : List StoreIndexBlock) (s : I64) (e : I64) (ac
     match bs {
         List.empty => IO.pure (Result.ok acc),
         List.cons b rest => do {
-            let text <- IO.read_file (block_path dir b.seq);
-            match Store.decode_block_of_text text {
-                Result.err e0 => IO.pure (Result.err e0),
-                Result.ok pr => match pr {
-                    Pair.pair meta lines =>
-                        let bs0 : I64 := max_i s meta.start in
-                        let be0 : I64 := min_i e (meta.start + meta.count) in
-                        let part : List String :=
-                            if be0 - bs0 > 0 then take_n (be0 - bs0) (drop_n (bs0 - meta.start) lines) else List.empty in
-                        read_wanted dir rest s e (List.append acc part),
+            let r <- IO.read_file (block_path dir b.seq);
+            match r {
+                Result.err e0 => IO.pure (Result.err (String.concat "could not read a transcript block: " e0.message)),
+                Result.ok text => match Store.decode_block_of_text text {
+                    Result.err e0 => IO.pure (Result.err e0),
+                    Result.ok pr => match pr {
+                        Pair.pair meta lines =>
+                            let bs0 : I64 := max_i s meta.start in
+                            let be0 : I64 := min_i e (meta.start + meta.count) in
+                            let part : List String :=
+                                if be0 - bs0 > 0 then take_n (be0 - bs0) (drop_n (bs0 - meta.start) lines) else List.empty in
+                            read_wanted dir rest s e (List.append acc part),
+                    },
                 },
             }
         },
@@ -927,16 +933,13 @@ def load_history_seq (hdir : Path) (seq : I64) (limit : I64) (acc : List Message
     if Bool.not (seq < limit)
     then IO.pure (Result.ok acc)
     else do {
-        let p : Path := Store.child hdir (String.concat (Store.pad12 seq) ".json");
-        let there <- IO.file_exists p;
-        if Bool.not there
-        then IO.pure (Result.ok acc)
-        else do {
-            let text <- IO.read_file p;
-            match messages_from_text text {
+        let r <- IO.read_file (Store.child hdir (String.concat (Store.pad12 seq) ".json"));
+        match r {
+            Result.err _ => IO.pure (Result.ok acc),
+            Result.ok text => match messages_from_text text {
                 Result.err _ => IO.pure (Result.ok acc),
                 Result.ok ms => load_history_seq hdir (seq + 1) limit (List.append acc ms),
-            }
+            },
         }
     }
 
@@ -1047,21 +1050,20 @@ def list_msg_len (ms : List Message) : I64 :=
 // ── IO: latest session ────────────────────────────────────────────────
 
 #[partial]
-def latest_go (root : Path) (names : List String) (best : Option String) (best_t : I64) (best_c : I64) : IO (Option String) :=
+def latest_go (names : List Path) (best : Option String) (best_t : I64) (best_c : I64) : IO (Option String) :=
     match names {
         List.empty => IO.pure best,
-        List.cons n rest => do {
-            let dir : Path := Store.session_dir root n;
+        List.cons dir rest => do {
             let isd <- IO.is_dir dir;
-            if Bool.not isd then latest_go root rest best best_t best_c
+            if Bool.not isd then latest_go rest best best_t best_c
             else do {
                 let meta_r <- Store.read_meta dir;
                 match meta_r {
-                    Result.err _ => latest_go root rest best best_t best_c,
+                    Result.err _ => latest_go rest best best_t best_c,
                     Result.ok m =>
                         if Bool.or (m.updated > best_t) (Bool.and (m.updated == best_t) (m.created > best_c))
-                        then latest_go root rest (Option.some n) m.updated m.created
-                        else latest_go root rest best best_t best_c,
+                        then latest_go rest (Option.some (Path.file_name dir)) m.updated m.created
+                        else latest_go rest best best_t best_c,
                 }
             }
         },
@@ -1072,7 +1074,7 @@ def latest_go (root : Path) (names : List String) (best : Option String) (best_t
 /// depending on the directory-name order).
 pub def Store.latest_session (root : Path) : IO (Option String) := do {
     let names <- IO.list_dir root;
-    latest_go root names Option.none 0 0
+    latest_go names Option.none 0 0
 }
 
 /// Decode a block straight from its file text (used by page reads).

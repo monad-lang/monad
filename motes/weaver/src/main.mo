@@ -45,8 +45,7 @@ use init::transformers {ResultT}
 use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env, IO.is_dir}
 use std::stream {StreamError}
-use std::path {Path, Path.of, Path.parent}
-use std::map {BTreeMap}
+use std::path {Path, Path.of}
 use std::list {List.intercalate}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's

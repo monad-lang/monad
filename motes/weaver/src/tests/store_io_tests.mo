@@ -183,7 +183,8 @@ def check_loaded (r : Result String Session) : IO Bool :=
 
 def write_orphan (st : StoreState) : IO Unit := do {
     let p : Path := Store.child (Store.child st.dir "history") "000000000002.json";
-    IO.write_file p (Json.to_string (Session.messages_to_json [user_msg "orphan"]))
+    let _ <- IO.write_file p (Json.to_string (Session.messages_to_json [user_msg "orphan"]));
+    return unit
 }
 
 def orphan_finish (st : StoreState) : IO Bool := do {
