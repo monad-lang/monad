@@ -10,3 +10,4 @@ pub use lib::scaffold {*}
 pub use lib::doctor {*}
 pub use lib::env_report {*}
 pub use lib::command {*}
+pub use lib::dispatch {*}

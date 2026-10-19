@@ -1,6 +1,7 @@
 /// monadup's entry point.
-use clap::args {*}
+use clap::parse {Cli.run}
 use lib::command {*}
+use lib::dispatch {*}
 use lib::platform {*}
 use lib::shell {*}
 
