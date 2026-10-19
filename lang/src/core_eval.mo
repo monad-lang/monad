@@ -522,34 +522,31 @@ def exec_native (name : Identifier) (args : List Value) : Result CoreEvalError V
   }
 
 def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError Value :=
-  if String.beq s "i64_add" then native_i64_binop I64.add args
-  else if String.beq s "i64_sub" then native_i64_binop I64.sub args
-  else if String.beq s "i64_mul" then native_i64_binop I64.mul args
-  else if String.beq s "i64_eq" then native_i64_bool_binop I64.beq args
-  else if String.beq s "i64_lt" then native_i64_bool_binop I64.lt args
-  else if String.beq s "string_concat" then native_string_binop_str_result String.concat args
-  else if String.beq s "string_eq" then native_string_binop_bool_result String.beq args
-  else if String.beq s "string_to_lowercase" then native_string_unop_str_result String.to_lowercase args
-  else if String.beq s "string_length" then native_string_length_result args
-  else if String.beq s "string_slice" then native_string_slice_result args
-  else if String.beq s "string_drop" then native_string_drop_result args
-  else if String.beq s "string_starts_with" then native_string_binop_bool_result String.starts_with args
+  if s == "i64_add" then native_i64_binop I64.add args
+  else if s == "i64_sub" then native_i64_binop I64.sub args
+  else if s == "i64_mul" then native_i64_binop I64.mul args
+  else if s == "i64_eq" then native_i64_bool_binop I64.beq args
+  else if s == "i64_lt" then native_i64_bool_binop I64.lt args
+  else if s == "string_concat" then native_string_binop_str_result String.concat args
+  else if s == "string_eq" then native_string_binop_bool_result String.beq args
+  else if s == "string_to_lowercase" then native_string_unop_str_result String.to_lowercase args
+  else if s == "string_length" then native_string_length_result args
+  else if s == "string_slice" then native_string_slice_result args
+  else if s == "string_drop" then native_string_drop_result args
+  else if s == "string_starts_with" then native_string_binop_bool_result String.starts_with args
   else Result.err (CoreEvalError.ce_native_arg_error (String.concat "unknown native: " s))
 
 /// A fixed 12-entry native table matching `exec_native_by_name` above --
 /// what `lang/lower_core_ir.mo` and this module's own tests build
-/// `NativeTable`s from. The 3 string natives (ids 5/6/7) exist to
-/// support self-hosted `reflect_type_info!` evaluation
-/// (`lang/typecheck/meta_eval.mo`) -- `std/derive.mo`'s
-/// `derive_lens_meta`/`derive_beq_meta`/etc and `motes/clap/src/args.mo`'s
-/// `derive_cli_meta` transitively call exactly `String.concat`/
-/// `String.beq`/`String.to_lowercase` among natives (everything else
-/// they use is ordinary Monad-defined code, no native involved).
-///
-/// Ids 8-11 (`string_length`/`slice`/`drop`/`starts_with`) are here for
-/// `derive_cli_meta`'s attribute-argument parser: `FieldInfo.attrs`
-/// carries `arg(short:="v",help:="...")`, and scanning it needs the
-/// byte-oriented String primitives the Rust host already exposes. They
+/// `NativeTable`s from. Seven string natives (ids 5-11) exist to support
+/// self-hosted `reflect_type_info!` evaluation (`lang/typecheck/
+/// meta_eval.mo`): `std/derive.mo`'s `derive_lens_meta`/`derive_beq_meta`/
+/// etc. and `motes/clap/src/args.mo`'s `derive_cli_meta` use
+/// `String.concat`/`String.beq`/`String.to_lowercase`, and the latter's
+/// attribute-argument parser (`FieldInfo.attrs` carries
+/// `arg(short:="v",help:="...")`) also needs the byte-oriented
+/// `string_length`/`slice`/`drop`/`starts_with` primitives the Rust host
+/// already exposes. Everything else is ordinary Monad-defined code. All
 /// are pure, so no effect is hidden behind `reflect_type_info!`.
 pub def basic_native_table : NativeTable :=
   NativeTable.native_table

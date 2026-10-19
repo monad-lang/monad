@@ -140,21 +140,42 @@ def show_identifier_ (id : Identifier) : String := match id { Identifier.id s =>
 def ctor_bare_name (ctor : InductConstructor) : String :=
     match ctor { InductConstructor.mk name _ _ => show_name_path name }
 
-/// Escape `\` and `"` inside an attribute's string argument. The format
-/// is shared byte-for-byte with `core/src/eval/meta_reflect.rs`'s
-/// `escape_attr_str`.
-#[partial]
-def escape_attr_str (s : String) : String :=
-    escape_attr_str_from s 0 ""
+/// UTF-8 width from a lead byte (1 for ASCII and stray continuation
+/// bytes, which are copied rather than dropped).
+def attr_utf8_width (b : U8) : I64 :=
+    if U8.gt b 239u8 then 4
+    else if U8.gt b 223u8 then 3
+    else if U8.gt b 191u8 then 2
+    else 1
 
 #[partial]
-def escape_attr_str_from (s : String) (i : I64) (acc : String) : String :=
-    if I64.lt i (String.length s) then
-        let c : String := String.slice s i 1 in
-        if String.beq c "\\" then escape_attr_str_from s (I64.add i 1) (String.concat acc "\\\\")
-        else if String.beq c "\"" then escape_attr_str_from s (I64.add i 1) (String.concat acc "\\\"")
-        else escape_attr_str_from s (I64.add i 1) (String.concat acc c)
-    else acc
+def attr_drop_bytes (n : I64) (bs : List U8) : List U8 :=
+    if I64.lt n 1 then bs
+    else match bs {
+        List.empty => List.empty,
+        List.cons _ rest => attr_drop_bytes (I64.sub n 1) rest,
+    }
+
+/// Escape `\` and `"` inside an attribute's string argument. The format
+/// is shared byte-for-byte with `core/src/eval/meta_reflect.rs`'s
+/// `escape_attr_str`. Characters are copied by UTF-8 width, not one byte
+/// at a time: `String.slice s i 1` returns `""` when its end lands
+/// mid-character, which silently deleted non-ASCII text.
+#[partial]
+def escape_attr_str (s : String) : String :=
+    escape_attr_str_at s (String.to_list s) 0 ""
+
+#[partial]
+def escape_attr_str_at (s : String) (bs : List U8) (i : I64) (acc : String) : String :=
+    match bs {
+        List.empty => acc,
+        List.cons b rest =>
+            let w : I64 := attr_utf8_width b in
+            let rest2 : List U8 := attr_drop_bytes (I64.sub w 1) rest in
+            if U8.beq b 92u8 then escape_attr_str_at s rest2 (I64.add i w) (String.concat acc "\\\\")
+            else if U8.beq b 34u8 then escape_attr_str_at s rest2 (I64.add i w) (String.concat acc "\\\"")
+            else escape_attr_str_at s rest2 (I64.add i w) (String.concat acc (String.slice s i w)),
+    }
 
 /// One attribute argument, in the canonical format `FieldInfo.attrs`
 /// carries (shared with the Rust host):
@@ -186,27 +207,17 @@ def attr_args_string (args : List AttrArg) : String :=
     }
 
 /// One field's attribute. A bare `#[arg]` stays `arg`; a named block
-/// becomes `arg(short:="v",help:="...")`. A single top-level `group` is
-/// unwrapped because the self-hosted parser wraps `{...}` in one, while
-/// the Rust parser flattens it.
+/// becomes `arg(short:="v",help:="...")`. Both parsers flatten `{...}`
+/// onto the arg list, so a `group` only comes from `[...]` and keeps its
+/// brackets.
 #[partial]
 def attribute_string (a : Attribute) : String :=
     match a {
         Attribute.mk name args =>
             match args {
                 List.empty => show_identifier_ name,
-                List.cons first rest =>
-                    match rest {
-                        List.empty =>
-                            match first {
-                                AttrArg.group items =>
-                                    String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_args_string items) ")")),
-                                _ =>
-                                    String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_arg_string first) ")")),
-                            },
-                        List.cons _ _ =>
-                            String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_args_string args) ")")),
-                    },
+                List.cons _ _ =>
+                    String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_args_string args) ")")),
             },
     }
 
@@ -1024,16 +1035,30 @@ def test_attribute_string_named_args : Bool :=
     String.beq (attribute_string a) "arg(short:=\"v\",help:=\"a, b\")"
 
 #[test]
-def test_attribute_string_flattens_one_top_level_group : Bool :=
+def test_attribute_string_keeps_bracket_group : Bool :=
     let a : Attribute := Attribute.mk (Identifier.id "arg") [
         AttrArg.group [AttrArg.named (Identifier.id "short") (AttrArg.str "v")],
     ] in
-    String.beq (attribute_string a) "arg(short:=\"v\")"
+    String.beq (attribute_string a) "arg([short:=\"v\"])"
 
 #[test]
 def test_attribute_string_escapes_quotes_and_backslashes : Bool :=
     let a : Attribute := Attribute.mk (Identifier.id "x") [AttrArg.str "a\"b\\c"] in
     String.beq (attribute_string a) "x(\"a\\\"b\\\\c\")"
+
+#[test]
+def test_attribute_string_preserves_non_ascii : Bool :=
+    let a : Attribute := Attribute.mk (Identifier.id "x") [AttrArg.str "café"] in
+    String.beq (attribute_string a) "x(\"café\")"
+
+#[test]
+def test_attribute_string_mixed_args : Bool :=
+    let a : Attribute := Attribute.mk (Identifier.id "custom") [
+        AttrArg.str "a",
+        AttrArg.named (Identifier.id "key") (AttrArg.num 42),
+        AttrArg.ident (Identifier.id "b"),
+    ] in
+    String.beq (attribute_string a) "custom(\"a\",key:=42,b)"
 
 #[test]
 def test_term_to_expr_value_qualified_var_and_app : Bool :=

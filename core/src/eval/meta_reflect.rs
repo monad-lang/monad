@@ -304,9 +304,10 @@ pub fn term_to_expr_value(
 ///   - `Named { name, value }` -> `name:=<value>`
 ///   - `Group` -> `[<joined items>]`
 ///
-/// Named and group shapes are both retained rather than flattened here;
-/// `attribute_string` flattens the self-hosted parser's single top-level
-/// group so both hosts agree.
+/// Named and group shapes are both retained rather than flattened here.
+/// Both parsers flatten a `{...}` named block onto the attribute's arg
+/// list, so a `Group` only ever comes from a bracketed `[...]` form, which
+/// renders as `[<joined items>]` in both hosts.
 fn attr_arg_reflection(arg: &AttrArg) -> String {
   match arg {
     AttrArg::Ident(id) => id.as_str().to_string(),
@@ -334,26 +335,19 @@ fn escape_attr_str(s: &str) -> String {
 ///
 /// A bare `#[arg]` stays exactly `"arg"`, so every existing derive and
 /// test is unchanged. `#[arg {short := "v", help := "a, b"}]` becomes
-/// `arg(short:="v",help:="a, b")`.
-///
-/// The self-hosted parser wraps a `{...}` named block in one
-/// `AttrArg::Group`, while the Rust parser flattens its entries; a single
-/// top-level group is therefore unwrapped so the two hosts produce the
-/// same string.
+/// `arg(short:="v",help:="a, b")`, and a bracketed group keeps its
+/// brackets: `#[arg [short := "v"]]` becomes `arg([short:="v"])`.
 fn attribute_string(attr: &Attribute) -> String {
-  let args: Vec<&AttrArg> = match attr.args.as_slice() {
-    [AttrArg::Group(items)] => items.iter().collect(),
-    other => other.iter().collect(),
-  };
-  if args.is_empty() {
+  if attr.args.is_empty() {
     attr.name.as_str().to_string()
   } else {
     format!(
       "{}({})",
       attr.name.as_str(),
-      args
+      attr
+        .args
         .iter()
-        .map(|a| attr_arg_reflection(a))
+        .map(attr_arg_reflection)
         .collect::<Vec<_>>()
         .join(",")
     )
@@ -721,7 +715,7 @@ mod attribute_reflection_tests {
   }
 
   #[test]
-  fn a_single_top_level_group_is_flattened() {
+  fn a_bracket_group_keeps_its_brackets() {
     let a = attribute(
       ident("arg"),
       vec![AttrArg::Group(vec![AttrArg::Named {
@@ -729,7 +723,7 @@ mod attribute_reflection_tests {
         value: Box::new(AttrArg::Str("v".into())),
       }])],
     );
-    assert_eq!(attribute_string(&a), "arg(short:=\"v\")");
+    assert_eq!(attribute_string(&a), "arg([short:=\"v\"])");
   }
 
   #[test]

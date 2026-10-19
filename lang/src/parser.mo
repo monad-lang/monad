@@ -544,49 +544,61 @@ def skip_one_attr_content (r : ParseResult String) (orig : String) : String :=
 /// completeness against the reference grammar but are correspondingly
 /// lower-confidence/less-tested.
 #[partial]
-def attr_arg_parser (input : String) : ParseResult AttrArg :=
+def attr_arg_parser (input : String) : ParseResult (List AttrArg) :=
 	attr_arg_try_group (tag "[" input) input
 
+/// Rust's `wrap_args`: a single element collapses; anything else (including
+/// no element at all) becomes one group.
+def attr_wrap_args (args : List AttrArg) : AttrArg :=
+	match args {
+		List.cons only rest =>
+			match rest {
+				List.empty => only,
+				_ => AttrArg.group args,
+			},
+		List.empty => AttrArg.group args,
+	}
+
 #[partial]
-def attr_arg_try_group (r : ParseResult String) (orig : String) : ParseResult AttrArg :=
+def attr_arg_try_group (r : ParseResult String) (orig : String) : ParseResult (List AttrArg) :=
 	match r {
 		success rem _ => attr_arg_group_items (skip_spaces rem) List.empty,
 		fail _ => attr_arg_try_named_block (tag "{" orig) orig
 	}
 
 #[partial]
-def attr_arg_group_items (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+def attr_arg_group_items (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
 	match attr_arg_parser input {
-		success rem item => attr_arg_group_sep (skip_spaces rem) (List.cons item acc),
-		fail _ => attr_arg_group_close input (list_reverse acc)
+		success rem items => attr_arg_group_sep (skip_spaces rem) (List.append acc items),
+		fail _ => attr_arg_group_close input acc
 	}
 
 #[partial]
-def attr_arg_group_sep (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+def attr_arg_group_sep (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
 	match tag "," input {
 		success rem _ => attr_arg_group_items (skip_spaces rem) acc,
-		fail _ => attr_arg_group_close input (list_reverse acc)
+		fail _ => attr_arg_group_close input acc
 	}
 
 #[partial]
-def attr_arg_group_close (input : String) (items : List AttrArg) : ParseResult AttrArg :=
+def attr_arg_group_close (input : String) (items : List AttrArg) : ParseResult (List AttrArg) :=
 	match tag "]" (skip_spaces input) {
-		success rem _ => success rem (AttrArg.group items),
+		success rem _ => success rem [AttrArg.group items],
 		fail e => fail (ParseError.custom "expected ] to close attribute arg group" input)
 	}
 
 #[partial]
-def attr_arg_try_named_block (r : ParseResult String) (orig : String) : ParseResult AttrArg :=
+def attr_arg_try_named_block (r : ParseResult String) (orig : String) : ParseResult (List AttrArg) :=
 	match r {
 		success rem _ => attr_arg_named_items (skip_spaces rem) List.empty,
 		fail _ => attr_arg_try_bare orig
 	}
 
 #[partial]
-def attr_arg_named_items (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+def attr_arg_named_items (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
 	match attr_arg_named_one input {
-		success rem item => attr_arg_named_sep (skip_spaces rem) (List.cons item acc),
-		fail _ => attr_arg_named_close input (list_reverse acc)
+		success rem item => attr_arg_named_sep (skip_spaces rem) (List.append acc [item]),
+		fail _ => attr_arg_named_close input acc
 	}
 
 #[partial]
@@ -603,47 +615,43 @@ def attr_arg_named_val (r : ParseResult String) (name : Identifier) : ParseResul
 		fail e => fail e
 	}
 
+/// A named value's own args collapse exactly like Rust's `wrap_args`.
 #[partial]
-def attr_arg_named_value (r : ParseResult AttrArg) (name : Identifier) : ParseResult AttrArg :=
+def attr_arg_named_value (r : ParseResult (List AttrArg)) (name : Identifier) : ParseResult AttrArg :=
 	match r {
-		success rem v => success rem (AttrArg.named name v),
+		success rem args => success rem (AttrArg.named name (attr_wrap_args args)),
 		fail e => fail e
 	}
 
 #[partial]
-def attr_arg_named_sep (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+def attr_arg_named_sep (input : String) (acc : List AttrArg) : ParseResult (List AttrArg) :=
 	match tag "," input {
 		success rem _ => attr_arg_named_items (skip_spaces rem) acc,
-		fail _ => attr_arg_named_close input (list_reverse acc)
+		fail _ => attr_arg_named_close input acc
 	}
 
-/// A `{name := value, ...}` block wraps its entries in a single
-/// `AttrArg.group` here, rather than flattening each `named` entry
-/// directly onto the enclosing attribute's own arg list the way the
-/// Rust reference's `attr_arg_parser` does (it returns a `Vec<AttrArg>`
-/// per call specifically to support that flattening) — a deliberate
-/// simplification: with zero real corpus usage of this form either
-/// way, matching the reference's own multi-return-per-call shape isn't
-/// worth the added complexity it would need throughout this whole
-/// chain (`attr_arg_parser` would need to return `List AttrArg`
-/// everywhere, not just here).
+/// A `{name := value, ...}` block FLATTENS its entries onto the enclosing
+/// attribute's arg list, matching the Rust reference's `attr_arg_parser`
+/// (which returns a `Vec` per call). It is not an `AttrArg.group`: a
+/// `[...]` group is, and the difference is observable through
+/// `FieldInfo.attrs`.
 #[partial]
-def attr_arg_named_close (input : String) (items : List AttrArg) : ParseResult AttrArg :=
+def attr_arg_named_close (input : String) (items : List AttrArg) : ParseResult (List AttrArg) :=
 	match tag "}" (skip_spaces input) {
-		success rem _ => success rem (AttrArg.group items),
+		success rem _ => success rem items,
 		fail e => fail (ParseError.custom "expected } to close attribute named block" input)
 	}
 
 #[partial]
-def attr_arg_try_bare (input : String) : ParseResult AttrArg :=
+def attr_arg_try_bare (input : String) : ParseResult (List AttrArg) :=
 	attr_arg_try_str (string_parse input) input
 
 #[partial]
-def attr_arg_try_str (r : ParseResult ParseTerm) (orig : String) : ParseResult AttrArg :=
+def attr_arg_try_str (r : ParseResult ParseTerm) (orig : String) : ParseResult (List AttrArg) :=
 	match r {
 		success rem t =>
 			match term_lit_to_attr_str t {
-				Option.some a => success rem a,
+				Option.some a => success rem [a],
 				Option.none => attr_arg_try_num (numeric_literal orig) orig,
 			},
 		fail _ => attr_arg_try_num (numeric_literal orig) orig
@@ -667,11 +675,11 @@ def term_lit_to_attr_str (t : ParseTerm) : Option AttrArg :=
 	}
 
 #[partial]
-def attr_arg_try_num (r : ParseResult ParseTerm) (orig : String) : ParseResult AttrArg :=
+def attr_arg_try_num (r : ParseResult ParseTerm) (orig : String) : ParseResult (List AttrArg) :=
 	match r {
 		success rem t =>
 			match term_lit_to_attr_num t {
-				Option.some a => success rem a,
+				Option.some a => success rem [a],
 				Option.none => attr_arg_try_ident (identifier orig),
 			},
 		fail _ => attr_arg_try_ident (identifier orig)
@@ -690,9 +698,9 @@ def term_lit_to_attr_num (t : ParseTerm) : Option AttrArg :=
 	}
 
 #[partial]
-def attr_arg_try_ident (r : ParseResult String) : ParseResult AttrArg :=
+def attr_arg_try_ident (r : ParseResult String) : ParseResult (List AttrArg) :=
 	match r {
-		success rem name => success rem (AttrArg.ident (Identifier.id name)),
+		success rem name => success rem [AttrArg.ident (Identifier.id name)],
 		fail e => fail e
 	}
 
@@ -720,8 +728,8 @@ def attribute_name (r : ParseResult String) : ParseResult Attribute :=
 #[partial]
 def attribute_args (input : String) (name : Identifier) (acc : List AttrArg) : ParseResult Attribute :=
 	match attr_arg_parser input {
-		success rem arg => attribute_args (skip_spaces rem) name (List.cons arg acc),
-		fail _ => attribute_close input name (list_reverse acc)
+		success rem args => attribute_args (skip_spaces rem) name (List.append acc args),
+		fail _ => attribute_close input name acc
 	}
 
 #[partial]
@@ -735,11 +743,11 @@ def attribute_close (input : String) (name : Identifier) (args : List AttrArg) :
 /// INNER attribute, i.e. `attribute_parser` with a `!` after the `#`.
 ///
 /// It reuses the whole name/args/close chain verbatim, so the `{ ... }`
-/// body parses as one `AttrArg.group` of `AttrArg.named` entries (see
-/// `attr_arg_named_close`'s comment: that is this parser's shape, and it
-/// differs from the Rust reference's flattened one). Anything reading
-/// the attribute must therefore tolerate BOTH shapes -- see
-/// `Mote.mote_attr_named` (lang/mote.mo), which flattens unconditionally.
+/// body parses as direct `AttrArg.named` entries, flattened onto the
+/// attribute's arg list exactly as the Rust reference does (see
+/// `attr_arg_named_close`'s comment). `Mote.mote_attr_named`
+/// (lang/mote.mo) still flattens a group unconditionally so it accepts
+/// both shapes.
 ///
 /// Deliberately a `decl_parsers` alternative rather than something
 /// `decls_skip` special-cases: keeping it a declaration is what makes a
@@ -9189,6 +9197,100 @@ def test_attribute_parser_multi_ident_args : Bool :=
             match attr {
                 Attribute.mk name args =>
                     id_eq name (Identifier.id "derive") && I64.beq (List.length args) 4,
+            },
+        fail _ => false
+    }
+
+def attr_arg_is_named (a : AttrArg) (key : String) : Bool :=
+    match a { AttrArg.named n _ => id_eq n (Identifier.id key), _ => false }
+
+def attr_arg_named_payload (a : AttrArg) : Option AttrArg :=
+    match a { AttrArg.named _ v => Option.some v, _ => Option.none }
+
+def attr_arg_is_num (a : AttrArg) (n : I64) : Bool :=
+    match a { AttrArg.num x => I64.beq x n, _ => false }
+
+def attr_arg_is_ident (a : AttrArg) (s : String) : Bool :=
+    match a { AttrArg.ident i => id_eq i (Identifier.id s), _ => false }
+
+/// A named block mixes into the enclosing attribute's args, as the Rust
+/// reference's `attr_arg_parser` does: `custom("a", key:=42, b)`.
+#[test]
+def test_attribute_parser_mixed_named_block : Bool :=
+    match attribute_parser "#[custom \"a\" {key := 42} b]" {
+        success rem attr =>
+            String.beq rem "" &&
+            match attr {
+                Attribute.mk _ args =>
+                    match args {
+                        List.cons a1 rest1 =>
+                            (match a1 { AttrArg.str s => String.beq s "a", _ => false }) &&
+                            match rest1 {
+                                List.cons a2 rest2 =>
+                                    attr_arg_is_named a2 "key" &&
+                                    (match attr_arg_named_payload a2 {
+                                        Option.some v => attr_arg_is_num v 42,
+                                        Option.none => false,
+                                    }) &&
+                                    match rest2 {
+                                        List.cons a3 rest3 => attr_arg_is_ident a3 "b" && List.is_empty rest3,
+                                        List.empty => false,
+                                    },
+                                List.empty => false,
+                            },
+                        List.empty => false,
+                    },
+            },
+        fail _ => false
+    }
+
+/// A lone named block still flattens onto the attribute's args: it is not
+/// wrapped in an `AttrArg.group` (the shape `attribute_string` used to
+/// compensate for).
+#[test]
+def test_attribute_parser_lone_named_block_flattens : Bool :=
+    match attribute_parser "#[arg {short := \"v\"}]" {
+        success rem attr =>
+            String.beq rem "" &&
+            match attr {
+                Attribute.mk _ args =>
+                    match args {
+                        List.cons a rest =>
+                            attr_arg_is_named a "short" &&
+                            (match attr_arg_named_payload a {
+                                Option.some v => match v { AttrArg.str s => String.beq s "v", _ => false },
+                                Option.none => false,
+                            }) &&
+                            List.is_empty rest,
+                        List.empty => false,
+                    },
+            },
+        fail _ => false
+    }
+
+/// A nested named block collapses like Rust's `wrap_args`: `outer:=inner:=value`.
+#[test]
+def test_attribute_parser_nested_named_block : Bool :=
+    match attribute_parser "#[custom {outer := {inner := value}}]" {
+        success rem attr =>
+            String.beq rem "" &&
+            match attr {
+                Attribute.mk _ args =>
+                    match args {
+                        List.cons a rest =>
+                            attr_arg_is_named a "outer" &&
+                            (match attr_arg_named_payload a {
+                                Option.some v =>
+                                    attr_arg_is_named v "inner" &&
+                                    (match attr_arg_named_payload v {
+                                        Option.some inner => attr_arg_is_ident inner "value",
+                                        Option.none => false,
+                                    }),
+                                Option.none => false,
+                            }) &&
+                            List.is_empty rest,
+                        List.empty => false,
+                    },
             },
         fail _ => false
     }

@@ -1690,14 +1690,14 @@ fn attribute_parser<X: Clone>(input: Span<X>) -> Res<Attribute, X> {
 /// itself only parses it — there is no module-level metadata-validation pass
 /// here — and `Module::add_decl` ignores the variant.
 ///
-/// Note the args shape differs from the self-hosted parser's: Rust's
-/// `attr_arg_parser` returns a `Vec` per call, so a `{ ... }` block
-/// FLATTENS its `AttrArg::Named` entries directly onto `attr.args`,
-/// while `lang/src/parser.mo`'s `attr_arg_named_close` wraps them in one
-/// `AttrArg::Group`. Anything reading this attribute must accept both —
-/// see `Mote.mote_attr_flatten` (`lang/src/mote.mo`), which does.
+/// Note the args shape: Rust's `attr_arg_parser` returns a `Vec` per call,
+/// so a `{ ... }` block FLATTENS its `AttrArg::Named` entries directly
+/// onto `attr.args`; `lang/src/parser.mo`'s `attr_arg_named_close` does
+/// the same. A bracketed `[...]` group is one `AttrArg::Group` under both
+/// parsers. Readers that accept either shape (`Mote.mote_attr_flatten`,
+/// `lang/src/mote.mo`) still work.
 ///
-/// A second, smaller divergence: Rust's named block is `many1`, so an
+/// A remaining divergence: Rust's named block is `many1`, so an
 /// empty `#![mote {}]` fails here but parses self-hosted. No real file
 /// writes one (it declares nothing), and the reader treats "no named
 /// args" as "no fields set" either way.
