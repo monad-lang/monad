@@ -263,6 +263,38 @@
         );
       };
 
+      # monadup's inputs. The compiler itself is a packaged binary, so this
+      # tree only needs the motes monadup imports (its closure includes
+      # `runtime`, hence `llvm`) and `runtime/src/runtime.c`, which the final
+      # relink compiles. `motes/serde` is present because `motes/json`'s
+      # manifest declares it. Kept OUT of `compilerSrc`: monadup is a
+      # consumer of the compiler, not part of it.
+      monadupSrc = lib.fileset.toSource {
+        root = ../.;
+        fileset = lib.fileset.unions (
+          [ ../mote.toml ]
+          ++
+            map
+              (
+                tree:
+                lib.fileset.fileFilter (f: f.hasExt "mo" || f.hasExt "c" || f.hasExt "h" || f.name == "mote.toml") (
+                  ../. + "/${tree}"
+                )
+              )
+              [
+                "init"
+                "std"
+                "llvm"
+                "runtime"
+                "motes/clap"
+                "motes/json"
+                "motes/parsec"
+                "motes/serde"
+                "motes/monadup"
+              ]
+        );
+      };
+
       # The interpretation. Commit-free by construction: no phase below
       # mentions `commit`, and neither does `nix/host.nix`, which takes only
       # `monadVersion` -- so nothing in this derivation's inputs can move with
@@ -636,6 +668,160 @@
         llcFlags = " -mtriple=riscv64-unknown-linux-gnu -mattr=+m,+a,+f,+d,+c -target-abi=lp64d -relocation-model=pic";
       };
 
+      # ── monadup ────────────────────────────────────────────────────────
+      #
+      # The compiler emits monadup's IR ONCE (natively) from the packaged
+      # `monad`; every published platform relinks that same `.ll`. The
+      # header's triple is overridden by `llc -mtriple` (measured for the
+      # compiler's own rung-1 relink), so one interpretation serves all
+      # four platforms. The relink is `monadFor`'s shape without the
+      # makeWrapper: a consumer downloads the bare binary, not a store
+      # wrapper.
+      monadupIr = pkgs.stdenv.mkDerivation {
+        pname = "monadup-ir";
+        version = monadVersion;
+        src = monadupSrc;
+        nativeBuildInputs = [ config.packages.monad pkgs.llvm pkgs.clang pkgs.coreutils pkgs.bash ];
+        buildPhase = ''
+          runHook preBuild
+          export MONAD_ROOT="$PWD"
+          export MONAD_TARGET_DIR="$TMPDIR/monad-target"
+          ${lib.getExe config.packages.monad} build motes/monadup --bin monadup \
+            --release --no-cache -o "$PWD/monadup"
+          test -f "$PWD/monadup.ll"
+          runHook postBuild
+        '';
+        installPhase = ''
+          runHook preInstall
+          install -Dm644 "$PWD/monadup.ll" $out/share/monadup/monadup.ll
+          runHook postInstall
+        '';
+        meta = {
+          description = "monadup's emitted IR";
+          homepage = "https://monad-lang.org";
+          license = lib.licenses.asl20;
+        };
+      };
+
+      monadupCrossShim =
+        { crossPkgs, gc, glibcStatic }:
+        pkgs.writeShellScriptBin "clang" ''
+          staticFlags=""
+          for arg in "$@"; do
+            if [ "$arg" = "-static" ]; then staticFlags="-L${glibcStatic}/lib"; fi
+          done
+          exec ${crossPkgs.stdenv.cc}/bin/${crossPkgs.stdenv.cc.targetPrefix}cc \
+            -isystem ${lib.getDev gc}/include \
+            -L${lib.getLib gc}/lib \
+            $staticFlags \
+            "$@"
+        '';
+
+      monadupFor =
+        {
+          gc,
+          gcLink,
+          glibcStatic ? pkgs.glibc.static,
+          llcFlags ? "",
+          ccPath ? null,
+          linkFlags ? "",
+          checkPhase ? null,
+        }:
+        pkgs.stdenv.mkDerivation (
+          {
+            pname = "monadup";
+            version = monadVersion;
+            src = monadupSrc;
+            nativeBuildInputs = [
+              pkgs.llvm
+              pkgs.clang
+              pkgs.lld
+              pkgs.coreutils
+              pkgs.bash
+              pkgs.gnugrep
+            ];
+            buildInputs = [ gc ] ++ lib.optionals (linkFlags != "") [ glibcStatic ];
+            buildPhase = ''
+              runHook preBuild
+              ${lib.optionalString (ccPath != null) "export PATH=${ccPath}:$PATH\n"}install -Dm644 ${monadupIr}/share/monadup/monadup.ll "$PWD/monadup.ll"
+              llc -filetype=obj${llcFlags} "$PWD/monadup.ll" -o "$PWD/monadup.o"
+              clang -pthread -c runtime/src/runtime.c \
+                "-DMONAD_BUILD_COMMIT=\"${commit}\"" \
+                -o "$PWD/monadup_runtime.o"
+              clang${linkFlags} -pthread "$PWD/monadup.o" "$PWD/monadup_runtime.o" ${gcLink} -o "$PWD/monadup"
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 "$PWD/monadup" $out/bin/monadup
+              runHook postInstall
+            '';
+            meta = {
+              description = "Manage Monad nightly toolchains";
+              homepage = "https://monad-lang.org";
+              license = lib.licenses.asl20;
+              mainProgram = "monadup";
+            };
+          }
+          // lib.optionalAttrs (checkPhase != null) {
+            doCheck = true;
+            inherit checkPhase;
+          }
+        );
+
+      monadup = monadupFor {
+        gc = gcStatic;
+        gcLink = "${lib.getLib gcStatic}/lib/libgc.a";
+        linkFlags = lib.optionalString (!pkgs.stdenv.hostPlatform.isDarwin) " -static";
+        checkPhase = ''
+          runHook preCheck
+          "$PWD/monadup" --version | grep -q '^monadup '
+          runHook postCheck
+        '';
+      };
+
+      monadupAarch64Linux =
+        let
+          crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+          gc = crossPkgs.boehmgc.override { enableStatic = true; };
+          glibcStatic = crossPkgs.glibc.static;
+          shim = monadupCrossShim { inherit crossPkgs gc glibcStatic; };
+          emulator = crossPkgs.stdenv.hostPlatform.emulator pkgs;
+        in
+        monadupFor {
+          inherit gc glibcStatic;
+          gcLink = "${lib.getLib gc}/lib/libgc.a";
+          llcFlags = " -mtriple=aarch64-unknown-linux-gnu";
+          ccPath = "${shim}/bin";
+          linkFlags = " -static";
+          checkPhase = ''
+            runHook preCheck
+            ${emulator} "$PWD/monadup" --version | grep -q '^monadup '
+            runHook postCheck
+          '';
+        };
+
+      monadupRiscv64Linux =
+        let
+          crossPkgs = pkgs.pkgsCross.riscv64;
+          gc = crossPkgs.boehmgc.override { enableStatic = true; };
+          glibcStatic = crossPkgs.glibc.static;
+          shim = monadupCrossShim { inherit crossPkgs gc glibcStatic; };
+          emulator = crossPkgs.stdenv.hostPlatform.emulator pkgs;
+        in
+        monadupFor {
+          inherit gc glibcStatic;
+          gcLink = "${lib.getLib gc}/lib/libgc.a";
+          llcFlags = " -mtriple=riscv64-unknown-linux-gnu -mattr=+m,+a,+f,+d,+c -target-abi=lp64d -relocation-model=pic";
+          ccPath = "${shim}/bin";
+          linkFlags = " -static";
+          checkPhase = ''
+            runHook preCheck
+            ${emulator} "$PWD/monadup" --version | grep -q '^monadup '
+            runHook postCheck
+          '';
+        };
+
       # `nix run .#monad`; the same program under two names, because
       # `apps.default` is what a bare `nix run` resolves and the named one is
       # what the flake's own documentation and CI use.
@@ -653,6 +839,7 @@
         # compiler's sources, and it is where the `.ll` that ladder compares
         # against now comes from.
         monadRung1 = rung1;
+        monadup = monadup;
       }
       // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
         # Named for the platform they are FOR, which is not one this flake
@@ -660,9 +847,15 @@
         # builds them, and to that system alone.
         monad-aarch64-linux = monadAarch64Linux;
         monad-riscv64-linux = monadRiscv64Linux;
+        monadup-aarch64-linux = monadupAarch64Linux;
+        monadup-riscv64-linux = monadupRiscv64Linux;
       };
 
       apps.monad = app;
+      apps.monadup = {
+        type = "app";
+        program = "${monadup}/bin/monadup";
+      };
       apps.default = app;
     };
 }
