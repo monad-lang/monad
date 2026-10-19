@@ -28,6 +28,7 @@ use weaver::model {
     TuiModel, WeaverMsg, Window, on_event, init_tui_model, init_tui_model_with,
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
+    DisplayRow, Model.display_line, Model.take_last_rows, Model.display_row_widget,
     list_length, panel_height, input_placeholder,
 }
 use weaver::store {
@@ -716,7 +717,7 @@ def prompt_overlay (colors : Bool) (p : Pick) : IO Approval := do {
     let _ <- drain_stale_keys 64;
     let key_opt <- read_one_key;
     let ap : Approval := approval_of_key key_opt;
-    let _ <- echo_answer p diff_pair ap;
+    let _ <- echo_answer colors p diff_pair ap;
     return ap
 }
 
@@ -743,19 +744,31 @@ def drain_stale_keys (budget : I64) : IO Unit :=
 /// last line of the overlay): the answer's echo, written before the
 /// gate returns -- an approval used to show nothing until the whole
 /// turn's next render, so under a slow provider the prompt looked dead.
-def echo_answer (p : Pick) (diff_pair : Option (Pair String String)) (ap : Approval) : IO Unit := do {
-    let lines : List String := overlay_lines p diff_pair;
+def echo_answer (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (ap : Approval) : IO Unit := do {
+    let size <- Terminal.size;
+    match size {
+        Pair.pair rows cols => echo_answer_at colors p diff_pair ap rows cols,
+    }
+}
+
+def echo_answer_at (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (ap : Approval) (rows : I64) (cols : I64) : IO Unit := do {
+    let lines : List DisplayRow := overlay_rows_at colors p diff_pair rows cols;
     // The answer row sits inside overlay_widget's border + padding:
     // one border line, one padding row down (row), and one border + two
     // padding columns across (col). Keep these in step with
-    // `overlay_widget`'s `border`/`padding 1 1 1 2` -- the coordinates
-    // are 0-based here.
-    let row : I64 := 1 + 1 + (list_length lines - 1);
+    // `overlay_widget`'s `border`/`padding 1 1 1 2`.
+    let row : I64 := 1 + 1 + (list_length_rows lines - 1);
     let col : I64 := 1 + 2 + String.length (gate_answer_prompt p.cap);
     let _ <- Terminal.cursor_move row col;
     IO.write_stdout (gate_answer_feedback p.cap ap);
     IO.flush_stdout
 }
+
+def list_length_rows (rs : List DisplayRow) : I64 :=
+    match rs {
+        List.empty => 0,
+        List.cons _ rest => 1 + list_length_rows rest,
+    }
 
 def approval_of_key (k : Option Key) : Approval :=
     match k {
@@ -783,21 +796,32 @@ def render_overlay_at (colors : Bool) (p : Pick) (diff_pair : Option (Pair Strin
             // shows through around the prompt.
             Terminal.clear_screen;
             Terminal.cursor_move 0 0;
-            let screen := render (overlay_widget colors p diff_pair) (mk_rect 0 0 cols rows) (empty_screen rows cols);
+            let screen := render (overlay_widget colors p diff_pair rows cols) (mk_rect 0 0 cols rows) (empty_screen rows cols);
             let deltas := diff (empty_screen rows cols) screen;
             IO.write_stdout (apply_deltas deltas);
             IO.flush_stdout
         }
     }
 
-def overlay_widget (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) : Widget :=
+def overlay_widget (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (rows : I64) (cols : I64) : Widget :=
     Widget.column [
         sized (LayoutSize.fill 1) (with_style (theme_border_style_with colors) (border BorderStyle.rounded
-            (padding 1 1 1 2 (Widget.column (List.map (fn (line : String) => overlay_row colors line) (overlay_lines p diff_pair)))))),
+            (padding 1 1 1 2 (Widget.column (List.map Model.display_row_widget (overlay_rows_at colors p diff_pair rows cols)))))),
     ]
 
-def overlay_row (colors : Bool) (line : String) : SizedWidget :=
-    sized (LayoutSize.fixed 1) (with_style (theme_line_style_with colors line) (label line))
+/// The overlay's wrapped rows, capped at its content height (`rows - 5`:
+/// the border's two lines and the top/bottom padding) with the answer
+/// prompt last, so `echo_answer`'s row arithmetic can index it.
+def overlay_rows_at (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (rows : I64) (cols : I64) : List DisplayRow :=
+    let width : I64 := if cols - 4 < 1 then 1 else cols - 4 in
+    Model.take_last_rows (if rows - 5 < 0 then 0 else rows - 5) (overlay_wrap_lines colors width (overlay_lines p diff_pair))
+
+#[partial]
+def overlay_wrap_lines (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
+    match lines {
+        List.empty => List.empty,
+        List.cons l rest => List.append (Model.display_line colors width l) (overlay_wrap_lines colors width rest),
+    }
 
 def overlay_lines (p : Pick) (diff_pair : Option (Pair String String)) : List String :=
     List.append [pick_header p] (List.append (diff_lines_of diff_pair) ["", gate_answer_prompt p.cap])

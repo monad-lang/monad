@@ -69,6 +69,62 @@ def render_label_chars (text : String) (i : I64) (col : I64) (row : I64) (stop :
         render_label_chars text (i + 1) (col + 1) row stop s active
     else screen
 
+// ==================== Wrapping ====================
+
+/// Split `line` into rows of at most `width` chars: word-wrap at the
+/// last space that fits, hard-break a word longer than the width.
+/// Widths below 1 clamp to 1 (a zero width would never advance).
+pub def wrap_text (width : I64) (line : String) : List String :=
+    let w : I64 := if width < 1 then 1 else width in
+    if String.is_empty line then [""] else wrap_go w line
+
+#[terminating]
+def wrap_go (w : I64) (s : String) : List String :=
+    if Bool.not (w < String.length s)
+    then [s]
+    else
+        let sp : I64 := last_space_at_or_before s w in
+        if sp > 0
+        then List.cons (String.slice s 0 sp) (wrap_go w (String.drop (sp + 1) s))
+        else
+            let valid : I64 := valid_prefix s w in
+            let cut : I64 := if valid < 1 then w else valid in
+            List.cons (String.slice s 0 cut) (wrap_go w (String.drop cut s))
+
+/// The last space byte at index <= `i`, or -1.
+#[terminating]
+def last_space_at_or_before (s : String) (i : I64) : I64 :=
+    if i < 1 then 0 - 1
+    else if String.slice s i 1 == " " then i
+    else last_space_at_or_before s (i - 1)
+
+/// The largest n <= w whose prefix ends on a character boundary (the
+/// renderer is ASCII-only; this only avoids splitting a UTF-8 code
+/// point where the width allows).
+#[terminating]
+def valid_prefix (s : String) (n : I64) : I64 :=
+    if n < 1 then 0
+    else if Bool.not (String.slice s 0 n == "") then n
+    else valid_prefix s (n - 1)
+
+#[test]
+def test_wrap_exact_fit : Bool := wrap_text 5 "abcde" == ["abcde"]
+
+#[test]
+def test_wrap_hard_break : Bool := wrap_text 3 "abcdefg" == ["abc", "def", "g"]
+
+#[test]
+def test_wrap_word_boundary : Bool := wrap_text 6 "hello world" == ["hello", "world"]
+
+#[test]
+def test_wrap_width_one : Bool := wrap_text 1 "abc" == ["a", "b", "c"]
+
+#[test]
+def test_wrap_empty : Bool := wrap_text 4 "" == [""]
+
+#[test]
+def test_wrap_zero_width_advances : Bool := wrap_text 0 "ab" == ["a", "b"]
+
 // ==================== Borders ====================
 
 /// The six box-drawing glyphs a `BorderStyle` resolves to.

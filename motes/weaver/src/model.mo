@@ -17,15 +17,17 @@ use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {
     theme_line_style_with, theme_status_style_with, theme_border_style_with,
+    theme_split_lines,
 }
 use weaver::policy {Mode}
 use weaver::store {
     Transcript, TranscriptPage, Store.page_lines,
     Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
 }
-use tui::types {Event, LayoutSize}
+use tui::types {Event, LayoutSize, TextStyle}
 use tui::widgets::input {InputState, input_state}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, sized, with_style, padding}
+use tui::render {wrap_text}
 
 /// The loop's message type: a raw terminal event not yet interpreted, or
 /// the folded-back result of a `Cmd.perform`'d turn or slash command.
@@ -130,14 +132,84 @@ pub def Model.view (m : TuiModel) : Widget :=
 /// top/bottom lines; clamped so a tiny or not-yet-known terminal never
 /// asks for a negative slice. Scrolled up (scroll > 0), the panel's
 /// first row shows the count indicator.
-def transcript_column (m : TuiModel) : Widget :=
-    let colors : Bool := m.state.colors in
-    Widget.column (List.map (fn (line : String) => transcript_row colors line) (visible_transcript m))
+/// One display row: wrapped text plus the style of its ORIGINAL logical
+/// line (a continuation row must not be reclassified by a prefix it
+/// happens to start with).
+pub struct DisplayRow {
+    text : String,
+    style : TextStyle,
+}
 
-/// One row, class-styled through the theme's palette (diff marks,
-/// errors, running rows, the you: prefix).
-def transcript_row (colors : Bool) (line : String) : SizedWidget :=
-    sized (LayoutSize.fixed 1) (with_style (theme_line_style_with colors line) (label line))
+def mk_row (style : TextStyle) (text : String) : DisplayRow :=
+    let r : DisplayRow := { text := text, style := style } in
+    r
+
+/// The panel's content width: the terminal minus the rounded border (2)
+/// and the horizontal padding (2).
+pub def Model.content_width (m : TuiModel) : I64 :=
+    let w : I64 := m.cols - 4 in
+    if w < 1 then 1 else w
+
+#[partial]
+def rows_len (rs : List DisplayRow) : I64 :=
+    match rs {
+        List.empty => 0,
+        List.cons _ rest => 1 + rows_len rest,
+    }
+
+#[partial]
+def drop_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
+    if n < 1 then rs
+    else match rs {
+        List.empty => rs,
+        List.cons _ rest => drop_rows (n - 1) rest,
+    }
+
+/// The last `n` rows (never more than the panel holds).
+#[partial]
+pub def Model.take_last_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
+    if n < 1 then List.empty
+    else
+        let cut : I64 := rows_len rs - n in
+        drop_rows (if cut < 0 then 0 else cut) rs
+
+/// One logical line, split on its own newlines and wrapped.
+pub def Model.display_line (colors : Bool) (width : I64) (line : String) : List DisplayRow :=
+    let style : TextStyle := theme_line_style_with colors line in
+    if String.is_empty line
+    then List.singleton (mk_row style "")
+    else List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines line))
+
+#[partial]
+def display_lines (m : TuiModel) (width : I64) (lines : List String) : List DisplayRow :=
+    match lines {
+        List.empty => List.empty,
+        List.cons l rest => List.append (Model.display_line m.state.colors width l) (display_lines m width rest),
+    }
+
+/// The rows to paint: the logical window, wrapped, capped at the panel's
+/// height. The scrolled window keeps its indicator row and spends one
+/// row on it.
+pub def Model.display_rows (m : TuiModel) : List DisplayRow :=
+    let w : Window := Model.window m in
+    let width : I64 := Model.content_width m in
+    let lines : List String := visible_transcript m in
+    if w.eff > 0
+    then match lines {
+        List.cons ind rest =>
+            let style : TextStyle := theme_line_style_with m.state.colors ind in
+            List.cons (mk_row style ind) (Model.take_last_rows (panel_height m - 1) (display_lines m width rest)),
+        List.empty => List.empty,
+    }
+    else Model.take_last_rows (panel_height m) (display_lines m width lines)
+
+pub def Model.display_row_widget (r : DisplayRow) : SizedWidget :=
+    let style : TextStyle := r.style in
+    let text : String := r.text in
+    sized (LayoutSize.fixed 1) (with_style style (label text))
+
+def transcript_column (m : TuiModel) : Widget :=
+    Widget.column (List.map Model.display_row_widget (Model.display_rows m))
 
 /// The absolute window the panel shows. `eff` is the clamped scroll; the
 /// scrolled panel spends ONE row on the indicator, so the content window

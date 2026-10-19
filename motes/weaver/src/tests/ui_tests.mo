@@ -19,6 +19,7 @@ use weaver::model {
     TuiModel, Window, init_tui_model,
     Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
     Model.page_request, visible_transcript, panel_height, scroll_indicator,
+    Model.display_rows, Model.content_width, DisplayRow,
 }
 use weaver::store {TranscriptPage, Transcript.with_page}
 
@@ -175,3 +176,37 @@ def test_stay_put_append_holds_the_absolute_top : Bool :=
     let m2 := Model.append_block m [nth_line 601] in
     let w2 : Window := Model.window m2 in
     m2.scroll == before + 2 && w2.start == w0.start
+// ── line wrap (Phase 8) ───────────────────────────────────────────────
+
+def rows_fit (rs : List DisplayRow) (w : I64) : Bool :=
+    match rs {
+        List.empty => true,
+        List.cons r rest =>
+            let n : I64 := String.length r.text in
+            Bool.and (Bool.not (w < n)) (rows_fit rest w),
+    }
+
+#[test]
+def test_content_width_is_cols_minus_four : Bool :=
+    Model.content_width model_of == 76
+
+#[test]
+def test_long_lines_wrap_to_the_panel_width : Bool :=
+    let m := Model.append_block model_of [String.repeat "x" 200] in
+    let rows := Model.display_rows m in
+    List.length rows == 3 && rows_fit rows 76
+
+#[test]
+def test_wrapped_rows_are_capped_at_the_panel : Bool :=
+    let m := Model.append_block model_of (lines_up_to 100 1) in
+    let m2 := Model.append_block m [String.repeat "y" 500] in
+    Bool.not (panel_height m2 < List.length (Model.display_rows m2))
+
+#[test]
+def test_scrolled_window_keeps_the_indicator : Bool :=
+    let m := Model.scroll_step (filled 30) 5 in
+    let rows := Model.display_rows m in
+    match rows {
+        List.cons first _ => String.contains first.text "lines above" && Bool.not (panel_height m < List.length rows),
+        List.empty => false,
+    }
