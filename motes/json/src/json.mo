@@ -41,7 +41,7 @@ open Json.Number {beq, float, int, to_string}
 /// float parsing needs an I64/String -> F64 native conversion that doesn't exist yet.
 /// The `float` variant and its serialization exist so callers can construct/serialize
 /// floats manually with Json.make_num_float.
-type Json.Number {
+pub type Json.Number {
   int I64,
   float F64,
 }
@@ -181,7 +181,7 @@ def Json.from_parse_error (e : ParseError) : Json.ParseError :=
   }
 
 /// ParseError to string
-def Json.ParseError.to_string (e : Json.ParseError) : String :=
+pub def Json.ParseError.to_string (e : Json.ParseError) : String :=
   match e {
     expected e f => "expected: " ++ e ++ " found: " ++ f,
     generic s => s
@@ -632,12 +632,27 @@ instance Show Json {
 // ─── Construction helpers ───
 
 pub def Json.make_null : Json := null
-def Json.make_bool (b : Bool) : Json := bool b
-def Json.make_num_int (n : I64) : Json := num (int n)
+pub def Json.make_bool (b : Bool) : Json := bool b
+pub def Json.make_num_int (n : I64) : Json := num (int n)
 pub def Json.make_num_float (n : F64) : Json := num (float n)
-def Json.make_str (s : String) : Json := str s
-def Json.make_array (a : List Json) : Json := array a
-def Json.make_object (o : BTreeMap String Json) : Json := object o
+pub def Json.make_str (s : String) : Json := str s
+pub def Json.make_array (a : List Json) : Json := array a
+pub def Json.make_object (o : BTreeMap String Json) : Json := object o
+
+#[partial]
+def Json.object_pairs_insert (pairs : List (Pair String Json)) (acc : BTreeMap String Json) : BTreeMap String Json :=
+  match pairs {
+    List.empty => acc,
+    List.cons p rest =>
+      match p {
+        Pair.pair k v => Json.object_pairs_insert rest (Map.insert k v acc),
+      },
+  }
+
+/// Build an object from pairs, for callers (monadup's `doctor --json`)
+/// that do not want to depend on `BTreeMap`'s constructors.
+pub def Json.make_object_pairs (pairs : List (Pair String Json)) : Json :=
+  Json.make_object (Json.object_pairs_insert pairs BTreeMap.empty)
 
 // ─── Type checkers ───
 
@@ -661,24 +676,24 @@ def Json.is_object (j : Json) : Bool :=
 
 // ─── Accessors ───
 
-def Json.get_bool (j : Json) : Result String Bool :=
+pub def Json.get_bool (j : Json) : Result String Bool :=
   match j { bool b => ok b, _ => err "expected bool" }
 
-def Json.get_num (j : Json) : Result String Json.Number :=
+pub def Json.get_num (j : Json) : Result String Json.Number :=
   match j { num n => ok n, _ => err "expected number" }
 
-def Json.get_str (j : Json) : Result String String :=
+pub def Json.get_str (j : Json) : Result String String :=
   match j { str s => ok s, _ => err "expected string" }
 
-def Json.get_array (j : Json) : Result String (List Json) :=
+pub def Json.get_array (j : Json) : Result String (List Json) :=
   match j { array a => ok a, _ => err "expected array" }
 
-def Json.get_object (j : Json) : Result String (BTreeMap String Json) :=
+pub def Json.get_object (j : Json) : Result String (BTreeMap String Json) :=
   match j { object o => ok o, _ => err "expected object" }
 
 // ─── Object manipulation ───
 
-def Json.object_get (key : String) (o : BTreeMap String Json) : Option Json :=
+pub def Json.object_get (key : String) (o : BTreeMap String Json) : Option Json :=
   Map.lookup key o
 
 def Json.object_set (key : String) (value : Json) (o : BTreeMap String Json) : BTreeMap String Json :=
@@ -733,7 +748,7 @@ def Json.number_to_i64 (n : Json.Number) : Result String I64 :=
     float _ => err "expected integer"
   }
 
-def Json.get_num_i64 (r : Result String Json.Number) : Result String I64 :=
+pub def Json.get_num_i64 (r : Result String Json.Number) : Result String I64 :=
   match r {
     ok n => Json.number_to_i64 n,
     err e => err e
