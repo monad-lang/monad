@@ -11,7 +11,7 @@ use json::json {
     Json.get_str, Json.get_num, Json.get_num_i64, Json.object_get,
 }
 use std::io {IO.read_file, IO.write_file, IO.file_exists, IO.is_dir, IO.list_dir, IO.get_env}
-use std::path {Path, Path.of, Path.to_string, Path.join, Path.with_suffix}
+use std::path {Path, Path.of, Path.to_string, Path.join, Path.with_suffix, Path.parent}
 use std::process {exec_cmd, process_id}
 use std::bench {Bench.now}
 use std::map {BTreeMap}
@@ -36,8 +36,10 @@ pub struct Transcript {
     page_error : Option String,
 }
 
-/// The session directory plus its bare name (for display and `/resume`).
+/// The sessions root, the session directory, and its bare name (for
+/// display, `/resume` and allocating a sibling session on `/clear`).
 pub struct StoreState {
+    root : Path,
     dir : Path,
     id : String,
 }
@@ -458,6 +460,13 @@ pub def Store.session_dir (root : Path) (id : String) : Path :=
 pub def Store.child (dir : Path) (name : String) : Path :=
     Path.join dir (Path.path name)
 
+/// The last path component; for a session directory that is its id.
+pub def Store.base_name (p : Path) : String :=
+    let parent : String := Path.parent p in
+    let s : String := Path.to_string p in
+    if String.is_empty parent then s
+    else String.drop (String.length parent + 1) s
+
 /// Split a line block into `block_lines` chunks (none for empty input).
 #[partial]
 pub def Store.chunks (lines : List String) : List (List String) :=
@@ -539,8 +548,8 @@ def meta_of (s : Session) (created : I64) (updated : I64) (next : I64) : StoreMe
     let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next } in
     m
 
-def state_of (dir : Path) (id : String) : StoreState :=
-    let st : StoreState := { dir := dir, id := id } in
+def state_of (root : Path) (dir : Path) (id : String) : StoreState :=
+    let st : StoreState := { root := root, dir := dir, id := id } in
     st
 
 def write_meta_at (dir : Path) (m : StoreMeta) : IO Bool :=
@@ -576,7 +585,7 @@ pub def Store.new_session (root : Path) (s : Session) : IO (Result String StoreS
         let mok <- write_meta_at dir (meta_of s now now 1);
         let iok <- write_atomic (index_path dir) (Json.to_string (Store.encode_index Store.empty_index));
         if Bool.and mok iok
-        then IO.pure (Result.ok (state_of dir id))
+        then IO.pure (Result.ok (state_of root dir id))
         else IO.pure (Result.err "could not initialise the session")
     }
 }
@@ -903,18 +912,21 @@ pub def Store.record_turn (st : StoreState) (s : Session) (delta : List Message)
     let ar <- Store.append_transcript st.dir tstart tlines;
     match ar {
         Result.err e => IO.pure (Result.err e),
-        Result.ok _ =>
-            if list_msg_len delta < 1
-            then Store.update_meta st.dir s
-            else do {
-                let meta_r <- Store.read_meta st.dir;
-                match meta_r {
-                    Result.err e => IO.pure (Result.err e),
-                    Result.ok m => record_turn_meta st s delta m,
-                }
-            },
+        Result.ok _ => Store.record_history st s delta,
     }
 }
+
+/// The history half alone -- dumb mode has no transcript blocks.
+pub def Store.record_history (st : StoreState) (s : Session) (delta : List Message) : IO (Result String Unit) :=
+    if list_msg_len delta < 1
+    then Store.update_meta st.dir s
+    else do {
+        let meta_r <- Store.read_meta st.dir;
+        match meta_r {
+            Result.err e => IO.pure (Result.err e),
+            Result.ok m => record_turn_meta st s delta m,
+        }
+    }
 
 def meta_next (m : StoreMeta) (s : Session) (now : I64) (next : I64) : StoreMeta :=
     let m2 : StoreMeta := { m with session := s, updated := now, history_next := next } in

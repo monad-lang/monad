@@ -11,6 +11,7 @@
 /// `ListState.offset` bookkeeping is the wrong tool here (it drives a
 /// single-selection menu's highlight, not a scrolling transcript).
 use shuttle::agent {RunState}
+use shuttle::message {Message}
 use weaver::commands {WeaverState, Effect}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
@@ -33,7 +34,9 @@ use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, si
 /// classification were lost (a TUI session never exited nonzero).
 pub type WeaverMsg {
     key_event (e : Event),
-    turn_result (run : RunState) (lines : List String),
+    /// `delta` is the turn's FULL history delta (the user message
+    /// included); `lines` is the rendered display block.
+    turn_result (run : RunState) (lines : List String) (delta : List Message),
     turn_failed (run : RunState) (e : WeaverError),
     command_result (effect : Effect),
     command_failed (e : WeaverError),

@@ -31,9 +31,13 @@ use weaver::model {
     list_length, panel_height, input_placeholder,
 }
 use weaver::store {
-    Transcript, TranscriptPage, StoreState, Transcript.empty, Transcript.with_page,
-    Store.read_page,
+    Transcript, TranscriptPage, StoreState,
+    Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append,
+    Store.read_page, Store.append_transcript, Store.record_turn, Store.record_output,
+    Store.startup_transcript,
 }
+use weaver::commands {TranscriptChange}
+use shuttle::session {Session}
 use weaver::theme {theme_line_style, theme_split_lines, theme_border_style}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use tui::types {Event, Key, MouseEvent, LayoutSize}
@@ -97,17 +101,89 @@ def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64)
 pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
     match msg {
         WeaverMsg.key_event e => update_event m e,
-        WeaverMsg.turn_result run lines =>
-            Pair.pair (with_turn_end (fn (mm : TuiModel) => Model.append_block (set_run mm run) lines) m) repaint_cmd,
-        WeaverMsg.turn_failed run e =>
-            Pair.pair (with_turn_end (fn (mm : TuiModel) => model_for_failure mm run e) m) (failed_cmd e),
+        WeaverMsg.turn_result run lines delta => turn_result_step m run lines delta,
+        WeaverMsg.turn_failed run e => failure_step m run e,
         WeaverMsg.command_result effect => command_result_step m effect,
-        WeaverMsg.command_failed e =>
-            Pair.pair (with_turn_end (fn (mm : TuiModel) => model_for_command_failure mm e) m) (failed_cmd e),
+        WeaverMsg.command_failed e => failure_step m m.state.run e,
         WeaverMsg.page_loaded page => page_loaded_step m page,
         WeaverMsg.page_failed e => page_failed_step m e,
         WeaverMsg.transcript_reset tr => transcript_reset_step m tr,
         WeaverMsg.store_result e => store_result_step m e,
+    }
+
+// ── persistence commands ─────────────────────────────────────────────────
+
+def append_block_at (m : TuiModel) (lines : List String) : Pair TuiModel (Pair I64 (List String)) :=
+    let block : List String := Transcript.next_block m.transcript lines in
+    let start : I64 := m.transcript.total in
+    let m2 : TuiModel := Model.append_block m lines in
+    Pair.pair m2 (Pair.pair start block)
+
+def warning_of (r : Result String Unit) : Option String :=
+    match r {
+        Result.err e => Option.some e,
+        Result.ok _ => Option.none,
+    }
+
+def persist_block_cmd (store : Option StoreState) (start : I64) (block : List String) : Cmd WeaverMsg :=
+    match store {
+        Option.none => Cmd.none,
+        Option.some s => Cmd.perform (fn (_ : Unit) => do {
+            let r <- Store.append_transcript s.dir start block;
+            IO.pure (WeaverMsg.store_result (warning_of r))
+        }),
+    }
+
+def persist_turn_cmd (store : Option StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List String) : Cmd WeaverMsg :=
+    match store {
+        Option.none => repaint_cmd,
+        Option.some s => Cmd.perform (fn (_ : Unit) => do {
+            let r <- Store.record_turn s run.session delta start block;
+            IO.pure (WeaverMsg.store_result (warning_of r))
+        }),
+    }
+
+def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (start : I64) (block : List String) (sess : Session) : Cmd WeaverMsg :=
+    match store {
+        Option.none => fallback,
+        Option.some s => Cmd.perform (fn (_ : Unit) => do {
+            let r <- Store.record_output s sess block start;
+            IO.pure (WeaverMsg.store_result (warning_of r))
+        }),
+    }
+
+def turn_result_step (m : TuiModel) (run : RunState) (lines : List String) (delta : List Message) : Pair TuiModel (Cmd WeaverMsg) :=
+    let with_run : TuiModel := set_run m run in
+    let pair := append_block_at with_run lines in
+    match pair {
+        Pair.pair m2 at => match at {
+            Pair.pair start block =>
+                let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
+                let store : Option StoreState := m3.state.store in
+                Pair.pair m3 (persist_turn_cmd store run delta start block),
+        },
+    }
+
+/// A failed turn or command: the error line lands, then the failure's one
+/// classification decides. A fatal error quits without persisting the
+/// final line (`Cmd.quit` cannot ride with a `Cmd.perform`).
+def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiModel (Cmd WeaverMsg) :=
+    let with_run : TuiModel := set_run m run in
+    let pair := append_block_at with_run [error_line e] in
+    match pair {
+        Pair.pair m2 at => match at {
+            Pair.pair start block =>
+                if WeaverError.recoverable e
+                then
+                    let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
+                    let store : Option StoreState := m3.state.store in
+                    Pair.pair m3 (persist_output_cmd Cmd.none store start block m3.state.run.session)
+                else
+                    let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
+                    let st2 : WeaverState := set_fatal m3.state e in
+                    let m4 : TuiModel := set_state m3 st2 in
+                    Pair.pair m4 Cmd.quit,
+        },
     }
 
 // ── transcript paging ────────────────────────────────────────────────────
@@ -187,31 +263,48 @@ def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
 def repaint_cmd : Cmd WeaverMsg :=
     Cmd.perform (fn (_ : Unit) => IO.pure (WeaverMsg.key_event Event.tick))
 
-/// A failed turn's model: the failure's run lands (the pre-error
-/// session), then the ONE classification point decides -- a recoverable
-/// error leaves the fatal slot empty (dumb failed_step's contract); a
-/// fatal one carries the error out. The error line block follows.
-def model_for_failure (m : TuiModel) (run : RunState) (e : WeaverError) : TuiModel :=
-    let m2 : TuiModel := set_run m run in
-    if WeaverError.recoverable e
-    then Model.append_block m2 [error_line e]
-    else Model.append_block (set_state m2 (set_fatal m2.state e)) [error_line e]
-
-/// A failed COMMAND keeps the run as it is; the fatal slot + line.
-def model_for_command_failure (m : TuiModel) (e : WeaverError) : TuiModel :=
-    let st : WeaverState := m.state in
-    model_for_failure m st.run e
-
-/// Dumb mode's `failed_step` contract, mirrored: a RECOVERABLE error
-/// leaves the session running; a fatal one ends the run -- the state
-/// carries the error out, `main` exits 1 through the fatal slot.
-def failed_cmd (e : WeaverError) : Cmd WeaverMsg :=
-    if WeaverError.recoverable e then Cmd.none else Cmd.quit
-
 def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := with_turn_end
-        (fn (mm : TuiModel) => Model.append_block (set_state mm effect.state) (Diff.lines effect.output)) m in
-    if effect.state.quit then Pair.pair m2 Cmd.quit else Pair.pair m2 repaint_cmd
+    match effect.transcript {
+        TranscriptChange.keep => command_keep m effect,
+        TranscriptChange.reset => command_reset m effect,
+    }
+
+def command_keep (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
+    let with_state : TuiModel := set_state m effect.state in
+    let pair := append_block_at with_state (Diff.lines effect.output) in
+    match pair {
+        Pair.pair m2 at => match at {
+            Pair.pair start block =>
+                let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
+                if effect.state.quit then Pair.pair m3 Cmd.quit
+                else
+                    let store : Option StoreState := m3.state.store in
+                    Pair.pair m3 (persist_output_cmd repaint_cmd store start block m3.state.run.session),
+        },
+    }
+
+/// `/clear` and `/resume`: replace the window with the new session's
+/// tail (plus the command's own line).
+def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
+    let with_state : TuiModel := set_state m effect.state in
+    let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) with_state in
+    match m2.state.store {
+        Option.none => reset_in_memory m2 effect.output,
+        Option.some st => Pair.pair m2 (Cmd.perform (fn (_ : Unit) => reset_action st effect.output)),
+    }
+
+def reset_in_memory (m : TuiModel) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let tr : Transcript := Transcript.append Transcript.empty (theme_split_lines output) in
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false } in
+    Pair.pair m2 Cmd.none
+
+def reset_action (st : StoreState) (output : String) : IO WeaverMsg := do {
+    let tr0 <- Store.startup_transcript st.dir;
+    let total : I64 := tr0.total;
+    let block : List String := Transcript.next_block tr0 (theme_split_lines output);
+    let _ <- Store.append_transcript st.dir total block;
+    IO.pure (WeaverMsg.transcript_reset (Transcript.append tr0 block))
+}
 
 def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
     match e {
@@ -337,7 +430,11 @@ def with_streak_reset (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
 def ctrl_c_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     if m.ctrl_c_streak > 0
     then Pair.pair m Cmd.quit
-    else Pair.pair (append_lines ({ m with ctrl_c_streak := 1 } : TuiModel) [ctrl_c_hint_line]) Cmd.none
+    else
+        let m1 : TuiModel := { m with ctrl_c_streak := 1 } in
+        let start : I64 := m1.transcript.total in
+        let m2 : TuiModel := Model.append_lines m1 [ctrl_c_hint_line] in
+        Pair.pair m2 (persist_block_cmd m2.state.store start [ctrl_c_hint_line])
 
 def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
 
@@ -362,11 +459,26 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     then Pair.pair m Cmd.none
     else
         let st : WeaverState := m.state in
+        let echo : List String := echo_lines text in
+        let block : List String := Transcript.next_block m.transcript echo in
+        let start : I64 := m.transcript.total in
+        let store : Option StoreState := m.state.store in
         let m2 : TuiModel :=
             { (with_streak_reset
-                (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text)
-                    (echo_lines text)) m) with turn_pending := true } in
-        Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => run_submitted_line st text))
+                (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
+                with turn_pending := true } in
+        Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => do {
+            let _ <- write_echo store start block;
+            run_submitted_line st text
+        }))
+
+/// The submitted line's echo block is durable before the turn starts (it
+/// rides the async action -- a pure update cannot write).
+def write_echo (store : Option StoreState) (start : I64) (block : List String) : IO (Result String Unit) :=
+    match store {
+        Option.none => IO.pure (Result.ok unit),
+        Option.some s => Store.append_transcript s.dir start block,
+    }
 
 /// A submitted line enters the history (most recent first, deduped
 /// against the current head) and the walk index returns to live.
@@ -409,9 +521,6 @@ def set_run (m : TuiModel) (run : RunState) : TuiModel :=
 def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
     { m with rows := rows, cols := cols }
 
-def append_lines (m : TuiModel) (lines : List String) : TuiModel :=
-    Model.append_lines m lines
-
 // ── run_submitted_line: the dumb-mode twin over WeaverMsg ───────────────
 
 /// A submitted line, run to completion: a slash command through
@@ -441,7 +550,7 @@ def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :
 
 def model_step_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
     if st.run.turns_left < 1
-    then IO.pure (WeaverMsg.turn_result st.run ["turn budget spent -- /clear or restart with --max-turns"])
+    then IO.pure (WeaverMsg.turn_result st.run ["turn budget spent -- /clear or restart with --max-turns"] List.empty)
     else drive_turn_tui st text
 
 def drive_turn_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
@@ -455,8 +564,9 @@ def turn_result_of (st : WeaverState) (before : I64) (r : Result WeaverError Run
     match r {
         Result.err e => WeaverMsg.turn_failed st.run e,
         Result.ok run2 =>
-            WeaverMsg.turn_result run2
-                (transcript_lines_of_messages (drop_n_messages (before + 1) run2.session.history)),
+            let delta : List Message := drop_n_messages before run2.session.history in
+            let render : List Message := drop_n_messages 1 delta in
+            WeaverMsg.turn_result run2 (transcript_lines_of_messages render) delta,
     }
 
 /// The transcript's error entry: the one render point does the prose,

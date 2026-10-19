@@ -11,14 +11,14 @@
 /// contract; proxy tools are tagged `exec` (a server's catalogue is
 /// arbitrary code), the conservative default Weaver's settings
 /// (Phase 6) override per server.
-use clap::args {Cli.take_opt, Cli.take_positional, opt_result, pos_result}
+use clap::args {Cli.take_opt, Cli.take_flag, Cli.take_positional, opt_result, pos_result, flag_result}
 use parsec::number {parse_i64}
 use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
 use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
 use shuttle::agent {RunState, silent_sleep}
-use shuttle::session {Session}
+use shuttle::session {Session, Session.load}
 use shuttle::context {usage_zero}
 use shuttle::provider {ProviderConfig}
 use shuttle::message_types {Content}
@@ -27,16 +27,26 @@ use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
+use weaver::store {
+    StoreState, Transcript,
+    Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
+    Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
+    Store.base_name,
+    Transcript.empty, Transcript.append, Transcript.next_block,
+}
+use weaver::theme {theme_split_lines}
 use weaver::dumb {Dumb.run, Dumb.poll_sleep}
 use weaver::policy {Mode}
 use weaver::providers {Weaver.preset}
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
 use weaver::error {WeaverError, WeaverError.show}
-use weaver::tui_app {Tui.run}
+use weaver::tui_app {Tui.run_resumed}
 use init::transformers {ResultT}
 use json::json {Json}
-use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env}
+use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env, IO.is_dir}
 use std::stream {StreamError}
+use std::path {Path, Path.of, Path.parent}
+use std::map {BTreeMap}
 use std::list {List.intercalate}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's
@@ -81,6 +91,8 @@ struct CliArgs {
     model : String,
     max_turns_str : String,
     mcps : List String,
+    resume : String,
+    cont : Bool,
     error : String,
 }
 
@@ -90,6 +102,8 @@ struct Plan {
     cfg : ProviderConfig,
     max_turns : I64,
     mcps : List String,
+    resume : String,
+    cont : Bool,
 }
 
 def parse_args (args : List String) : CliArgs :=
@@ -104,30 +118,40 @@ def parse_model (provider : String) (args : List String) : CliArgs :=
 
 def parse_max_turns (provider : String) (model : String) (args : List String) : CliArgs :=
     match Cli.take_opt "max-turns" "" "" args {
-        Cli.OptResult.opt_result n rest => parse_mcps provider model n [] rest,
+        Cli.OptResult.opt_result n rest => parse_resume provider model n rest,
+    }
+
+def parse_resume (provider : String) (model : String) (max_turns_str : String) (args : List String) : CliArgs :=
+    match Cli.take_opt "resume" "" "" args {
+        Cli.OptResult.opt_result r rest => parse_continue provider model max_turns_str r rest,
+    }
+
+def parse_continue (provider : String) (model : String) (max_turns_str : String) (resume : String) (args : List String) : CliArgs :=
+    match Cli.take_flag "continue" "" args {
+        Cli.FlagResult.flag_result found rest => parse_mcps provider model max_turns_str resume found [] rest,
     }
 
 /// Repeatable `--mcp`: keep taking until absent.
 #[partial]
-def parse_mcps (provider : String) (model : String) (max_turns_str : String) (mcps : List String) (args : List String) : CliArgs :=
+def parse_mcps (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (mcps : List String) (args : List String) : CliArgs :=
     match Cli.take_opt "mcp" "" "" args {
         Cli.OptResult.opt_result v rest =>
             if String.is_empty v
-            then parse_done provider model max_turns_str mcps rest
-            else parse_mcps provider model max_turns_str (List.append mcps [v]) rest,
+            then parse_done provider model max_turns_str resume cont mcps rest
+            else parse_mcps provider model max_turns_str resume cont (List.append mcps [v]) rest,
     }
 
 /// An interactive entry has no positional arguments (the tasks come
 /// from stdin), so the FIRST one found is the whole error -- it fails
 /// the run, and the message says what to remove.
 #[partial]
-def parse_done (provider : String) (model : String) (max_turns_str : String) (mcps : List String) (args : List String) : CliArgs :=
+def parse_done (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (mcps : List String) (args : List String) : CliArgs :=
     match Cli.take_positional args {
-        Cli.PosResult.pos_result extra rest => parse_extra_step (cli_of provider model max_turns_str mcps) extra,
+        Cli.PosResult.pos_result extra rest => parse_extra_step (cli_of provider model max_turns_str resume cont mcps) extra,
     }
 
-def cli_of (provider : String) (model : String) (max_turns_str : String) (mcps : List String) : CliArgs :=
-    let c : CliArgs := { provider := provider, model := model, max_turns_str := max_turns_str, mcps := mcps, error := "" } in
+def cli_of (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (mcps : List String) : CliArgs :=
+    let c : CliArgs := { provider := provider, model := model, max_turns_str := max_turns_str, mcps := mcps, resume := resume, cont := cont, error := "" } in
     c
 
 def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
@@ -169,7 +193,7 @@ def resolve_model (s : Settings) (flag : String) : String :=
 def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) : Result WeaverError Plan :=
     match resolve_max_turns s c.max_turns_str {
         Result.err e => Result.err (WeaverError.config e),
-        Result.ok n => plan_done provider cfg n c.mcps,
+        Result.ok n => plan_done provider cfg n c,
     }
 
 def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
@@ -183,8 +207,8 @@ def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
 def turn_cap (n : I64) : Result String I64 :=
     if n < 1 then Result.err "--max-turns must be at least 1" else Result.ok n
 
-def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (mcps : List String) : Result WeaverError Plan :=
-    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := mcps } in
+def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : CliArgs) : Result WeaverError Plan :=
+    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := c.mcps, resume := c.resume, cont := c.cont } in
     Result.ok p
 
 // ── MCP mounting (shuttle main.mo's machinery, ported) ─────────────────
@@ -314,14 +338,27 @@ def dispose_all (servers : List McpServer) : IO Unit :=
 
 // ── The session ────────────────────────────────────────────────────────
 
-/// The initial interactive state: a fresh session (nothing spent, no
-/// history), the whole budget ahead, the settings' mode (manual is the
-/// safe default; `/mode` changes it), and a gate rebuilt from the mode
-/// before every turn -- `Gate.auto` here is never consulted.
-def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) : WeaverState :=
-    let session : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
-    let run : RunState := { session := session, reg := reg, turns_left := p.max_turns, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep } in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false, colors := colors, fatal := Option.none, store := Option.none } in
+/// A fresh session: nothing spent, no history.
+def fresh_session (p : Plan) (reg : ToolRegistry) : Session :=
+    let s : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
+    s
+
+/// The loaded session with its key re-resolved from this run's settings
+/// (a checkpoint never carries one).
+def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Session :=
+    let cfg0 : ProviderConfig := sess.config in
+    let cfg2 : ProviderConfig := { cfg0 with api_key := Map.lookup p.provider s.api_keys } in
+    let sess2 : Session := { sess with config := cfg2 } in
+    sess2
+
+/// The initial interactive state: the opened session, the remaining
+/// budget, the settings' mode (manual is the safe default; `/mode`
+/// changes it), and a gate rebuilt from the mode before every turn --
+/// `Gate.auto` here is never consulted.
+def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) : WeaverState :=
+    let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
+    let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false, colors := colors, fatal := Option.none, store := store } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -393,20 +430,160 @@ def mounted_plan (colors : Bool) (p : Plan) (s : Settings) (r : Result WeaverErr
         },
     }
 
+/// A start with its optional store and the startup note (the
+/// persistence degradation warning, when there is one).
+struct OpenedSession {
+    store : Option StoreState,
+    session : Session,
+    note : Option String,
+}
+
 /// The one place the interactive session ends, whatever ended it: EOF
 /// on stdin, `/quit`, or a crashed loop -- the mounted MCP servers come
-/// down on every path. `Tui.run` auto-detects a tty (via the same
-/// `enter_raw_mode` degrade `terminal.mo` already documents) and falls
-/// back to the line-based `Dumb.run` when stdin is not one -- a piped
-/// or scripted run is byte-identical to before this phase.
+/// down on every path. `Tui.run_resumed` auto-detects a tty (via the
+/// same `enter_raw_mode` degrade `terminal.mo` already documents) and
+/// falls back to the line-based `Dumb.run` when stdin is not one.
 /// Phase 9: the exit code follows the state -- a fatal error recorded
-/// mid-session exits 1 (today every post-mount path returned 0).
+/// mid-session exits 1.
 def start_loop (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
-    let st : WeaverState := initial_state p reg s colors;
-    let ran_tui <- Tui.run st;
+    let root_opt <- Store.sessions_root;
+    let opened <- open_session root_opt p s reg;
+    match opened {
+        Result.err e => fail_started servers e,
+        Result.ok o => run_opened colors p s reg servers o,
+    }
+}
+
+def fail_started (servers : List McpServer) (e : WeaverError) : IO I64 := do {
+    write_errln (String.concat "error: " (WeaverError.show e));
+    let _ <- dispose_all servers;
+    return 1
+}
+
+def run_opened (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
+    let st : WeaverState := initial_state p reg s colors o.store o.session;
+    let tr0 <- startup_transcript o;
+    let ran_tui <- Tui.run_resumed st tr0;
     let final <- run_fallback ran_tui st;
     let _ <- dispose_all servers;
     exit_of final
+}
+
+def startup_transcript (o : OpenedSession) : IO Transcript :=
+    match o.store {
+        Option.none => IO.pure (note_block Transcript.empty o.note),
+        Option.some s => do {
+            let tr <- Store.startup_transcript s.dir;
+            return (note_block tr o.note)
+        },
+    }
+
+def note_block (tr : Transcript) (note : Option String) : Transcript :=
+    match note {
+        Option.none => tr,
+        Option.some n =>
+            let block : List String := Transcript.next_block tr (theme_split_lines n) in
+            Transcript.append tr block,
+    }
+
+def resume_requested (p : Plan) : Bool :=
+    Bool.or (Bool.not (String.is_empty p.resume)) p.cont
+
+def open_session (root_opt : Option Path) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
+    match root_opt {
+        Option.none => open_no_root p reg,
+        Option.some root => open_with_root root p s reg,
+    }
+
+def open_no_root (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
+    if resume_requested p
+    then IO.pure (Result.err (WeaverError.config "session persistence unavailable: HOME is unset or unwritable"))
+    else IO.pure (Result.ok (degraded "session persistence unavailable (HOME unset); this run is in-memory" p reg))
+
+def open_with_root (root : Path) (p : Plan) (s : Settings) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
+    let ok <- Store.ensure_root root;
+    if Bool.not ok then open_unwritable p reg
+    else if resume_requested p then resume_open root p s
+    else fresh_open root p reg
+}
+
+def open_unwritable (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) :=
+    if resume_requested p
+    then IO.pure (Result.err (WeaverError.config "session persistence unavailable: the sessions root is not writable"))
+    else IO.pure (Result.ok (degraded "session persistence unavailable (the sessions root is not writable); this run is in-memory" p reg))
+
+def degraded (note : String) (p : Plan) (reg : ToolRegistry) : OpenedSession :=
+    let o : OpenedSession := { store := Option.none, session := fresh_session p reg, note := Option.some note } in
+    o
+
+def opened (store : Option StoreState) (s : Session) : OpenedSession :=
+    let o : OpenedSession := { store := store, session := s, note := Option.none } in
+    o
+
+def fresh_open (root : Path) (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
+    let sess : Session := fresh_session p reg;
+    let r <- Store.new_session root sess;
+    match r {
+        Result.err e => IO.pure (Result.ok (degraded (String.concat "session persistence disabled: " e) p reg)),
+        Result.ok st => IO.pure (Result.ok (opened (Option.some st) sess)),
+    }
+}
+
+def store_at (root : Path) (dir : Path) : StoreState :=
+    let s : StoreState := { root := root, dir := dir, id := Store.base_name dir } in
+    s
+
+def resume_open (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) :=
+    if p.cont then resume_latest root p s else resume_token root p s
+
+def resume_latest (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+    let l <- Store.latest_session root;
+    match l {
+        Option.none => IO.pure (Result.err (WeaverError.config "no saved sessions")),
+        Option.some id => resume_dir root (Store.session_dir root id) p s,
+    }
+}
+
+def resume_token (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) :=
+    match Path.of p.resume {
+        Result.err e => IO.pure (Result.err (WeaverError.config e)),
+        Result.ok path => resume_token_path root path p s,
+    }
+
+def resume_token_path (root : Path) (path : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+    let isd <- IO.is_dir path;
+    if isd then resume_dir root path p s
+    else resume_token_candidate root p s
+}
+
+def resume_token_candidate (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+    let cand : Path := Store.session_dir root p.resume;
+    let isd <- IO.is_dir cand;
+    if isd then resume_dir root cand p s else resume_file root p s
+}
+
+def resume_dir (root : Path) (dir : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+    let r <- Store.load_session dir;
+    match r {
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok sess => IO.pure (Result.ok (opened (Option.some (store_at root dir)) (rekey_loaded p s sess))),
+    }
+}
+
+def resume_file (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError OpenedSession) := do {
+    let r <- Session.load p.resume;
+    match r {
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok sess => resume_import_file root p s sess,
+    }
+}
+
+def resume_import_file (root : Path) (p : Plan) (s : Settings) (sess : Session) : IO (Result WeaverError OpenedSession) := do {
+    let imp <- Store.import_session root sess;
+    match imp {
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok st => IO.pure (Result.ok (opened (Option.some st) (rekey_loaded p s sess))),
+    }
 }
 
 def exit_of (st : WeaverState) : IO I64 :=

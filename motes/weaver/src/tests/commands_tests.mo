@@ -18,6 +18,9 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use weaver::commands {WeaverState, Effect, Commands.dispatch}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
+use weaver::store {StoreState, Store.new_session, Store.append_transcript}
+use std::path {Path, Path.of, Path.to_string}
+use std::process {exec_cmd}
 use json::json {Json}
 use std::map {BTreeMap}
 use std::process {process_id}
@@ -290,4 +293,90 @@ def test_provider_swap_without_settings_key_is_env_only : IO Bool := do {
 /// carries a mistral entry.
 def state_with_keys : WeaverState := {
     (state_of Mode.manual []) with keys := Map.insert "mistral" "sk-file-mistral" BTreeMap.empty,
+}
+
+// ── session directories: /clear and /resume (Phase 4) ──────────────────
+
+def test_root (name : String) : Path :=
+    match Path.of (String.concat "/tmp/weaver_cmd_store_" (String.concat (I64.to_string process_id) (String.concat "_" name))) {
+        Result.err _ => Path.path "/tmp/weaver_cmd_store_fallback",
+        Result.ok p => p,
+    }
+
+def clean_dir (p : Path) : IO Unit := do {
+    let _ <- exec_cmd "rm" ["-rf", Path.to_string p];
+    return unit
+}
+
+def with_store (st : WeaverState) (s : StoreState) : WeaverState :=
+    let st2 : WeaverState := { st with store := Option.some s } in
+    st2
+
+def effect_state (r : Result WeaverError Effect) : Option WeaverState :=
+    match r {
+        Result.err _ => Option.none,
+        Result.ok e => Option.some e.state,
+    }
+
+def store_dir (st : WeaverState) : String :=
+    match st.store {
+        Option.none => "",
+        Option.some s => Path.to_string s.dir,
+    }
+
+#[test]
+def test_clear_rotates_the_session_directory : IO Bool := do {
+    let root : Path := test_root "clear";
+    clean_dir root;
+    let base : WeaverState := state_of Mode.manual [];
+    let r <- Store.new_session root base.run.session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok s0 => check_clear_rotation base s0,
+    }
+}
+
+def check_clear_rotation (base : WeaverState) (s0 : StoreState) : IO Bool := do {
+    let st : WeaverState := with_store base s0;
+    let r <- Commands.dispatch "/clear" st;
+    match effect_state r {
+        Option.none => IO.pure false,
+        Option.some st2 =>
+            let before : String := Path.to_string s0.dir in
+            let after : String := store_dir st2 in
+            IO.pure (Bool.not (after == before) && Bool.not (String.is_empty after)),
+    }
+}
+
+#[test]
+def test_resume_without_a_store_says_unavailable : IO Bool := do {
+    let r <- Commands.dispatch "/resume" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (String.contains e.output "persistence unavailable"),
+    }
+}
+
+#[test]
+def test_resume_by_directory_loads_history : IO Bool := do {
+    let root : Path := test_root "resume";
+    clean_dir root;
+    let base : WeaverState := state_of Mode.manual [];
+    let r <- Store.new_session root base.run.session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok s0 => check_resume_dir base s0 root,
+    }
+}
+
+def check_resume_dir (base : WeaverState) (s0 : StoreState) (root : Path) : IO Bool := do {
+    let _ <- Store.append_transcript s0.dir 0 ["you: x"] ;
+    let r <- Commands.dispatch (String.concat "/resume " (Path.to_string s0.dir)) (with_store base s0);
+    match effect_state r {
+        Option.none => IO.pure false,
+        Option.some st2 => IO.pure (match st2.store {
+            Option.none => false,
+            Option.some s2 => Path.to_string s2.dir == Path.to_string s0.dir,
+        }),
+    }
 }

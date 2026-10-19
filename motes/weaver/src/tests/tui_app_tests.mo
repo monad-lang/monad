@@ -13,7 +13,7 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
-use weaver::model {TuiModel, WeaverMsg, init_tui_model, Model.append_block}
+use weaver::model {TuiModel, WeaverMsg, init_tui_model, Model.append_block, Model.scroll_step}
 use weaver::store {StoreState, TranscriptPage}
 use std::path {Path, Path.of}
 use std::map {BTreeMap}
@@ -341,7 +341,7 @@ def enter_pending (m : TuiModel) : TuiModel :=
 // (the progress fragment's cleanup); a run rides back into the state.
 #[test]
 def test_turn_result_ends_the_turn : Bool :=
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.turn_result run_of ["assistant: done"]) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.turn_result run_of ["assistant: done"] List.empty) {
         Pair.pair m2 cmd =>
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending

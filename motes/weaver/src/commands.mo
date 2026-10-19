@@ -28,7 +28,12 @@ use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset}
 use weaver::error {WeaverError}
-use weaver::store {StoreState}
+use weaver::store {
+    StoreState, Store.new_session, Store.latest_session, Store.load_session,
+    Store.import_session, Store.session_dir, Store.base_name,
+}
+use std::path {Path, Path.of, Path.parent}
+use std::io {IO.is_dir}
 use std::map {BTreeMap}
 use std::list {List.intercalate}
 
@@ -61,13 +66,21 @@ pub struct WeaverState {
     store : Option StoreState,
 }
 
-/// One command's outcome: the advanced state and the line(s) to print.
-/// The caller owns the printing -- a command talks only through this.
-/// This is the SUCCESS shape only: a failure is the dispatch's
-/// `Result.err` and never builds an `Effect`.
+/// What a command did to the transcript: ordinary output appends,
+/// `/clear` and `/resume` replace the window with another session's.
+pub type TranscriptChange {
+    keep,
+    reset,
+}
+
+/// One command's outcome: the advanced state, the line(s) to print, and
+/// whether the transcript window is replaced. The caller owns the
+/// printing -- a command talks only through this. This is the SUCCESS
+/// shape only: a failure is the dispatch's `Result.err`.
 pub struct Effect {
     state : WeaverState,
     output : String,
+    transcript : TranscriptChange,
 }
 
 /// One table entry -- a uniform signature, the Phase 7 rewiring point.
@@ -76,7 +89,12 @@ pub struct SlashCommand {
 }
 
 pub def Effect.ok (st : WeaverState) (output : String) : Effect :=
-    let e : Effect := { state := st, output := output } in
+    let e : Effect := { state := st, output := output, transcript := TranscriptChange.keep } in
+    e
+
+/// A command that switched sessions: the caller loads the new window.
+pub def Effect.reset (st : WeaverState) (output : String) : Effect :=
+    let e : Effect := { state := st, output := output, transcript := TranscriptChange.reset } in
     e
 
 /// Every handler's success shape: the effect, wrapped in the typed
@@ -287,31 +305,106 @@ def save_result (file : String) (st : WeaverState) (r : Result String Unit) : IO
         Result.ok _ => respond st (String.concat "saved " file),
     }
 
-/// `/resume <file>`: continue a saved session. The turn budget SPANS
-/// both halves (shuttle's own semantics): the remaining budget is the
-/// total minus the turns the loaded session already took. A load
-/// failure is an `io` error; the live session stands untouched.
+/// `/resume [<id|file>]`: continue a saved session. No argument picks
+/// the newest session (`meta.updated`). A directory or a session id
+/// under the root opens that directory in place; anything else is a
+/// shuttle checkpoint file, imported into a fresh directory. The turn
+/// budget SPANS both halves (the remaining budget is the total minus
+/// the turns the loaded session already took).
 def cmd_resume (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then respond st "usage: /resume <file>"
-    else do {
-        let r <- Session.load arg;
-        resume_result arg st r
+    then resume_latest st
+    else match Path.of arg {
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok p => resume_path st p arg,
     }
 
-def resume_result (file : String) (st : WeaverState) (r : Result String Session) : IO (Result WeaverError Effect) :=
+def resume_latest (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match st.store {
+        Option.none => respond st "session persistence unavailable (HOME unset or ~/.weaver/sessions unwritable)",
+        Option.some s => resume_latest_store st s,
+    }
+
+def resume_latest_store (st : WeaverState) (s : StoreState) : IO (Result WeaverError Effect) := do {
+    let l <- Store.latest_session s.root;
+    match l {
+        Option.none => respond st "no saved sessions",
+        Option.some id => resume_dir st (Store.session_dir s.root id) id,
+    }
+}
+
+def resume_path (st : WeaverState) (p : Path) (label : String) : IO (Result WeaverError Effect) := do {
+    let isd <- IO.is_dir p;
+    if isd then resume_dir st p label else resume_by_id st label;
+}
+
+def resume_by_id (st : WeaverState) (label : String) : IO (Result WeaverError Effect) :=
+    match st.store {
+        Option.none => resume_file st label,
+        Option.some s => resume_by_id_store st s label,
+    }
+
+def resume_by_id_store (st : WeaverState) (s : StoreState) (label : String) : IO (Result WeaverError Effect) := do {
+    let cand : Path := Store.session_dir s.root label;
+    let isd <- IO.is_dir cand;
+    if isd then resume_dir st cand label else resume_file st label;
+}
+
+def resume_dir (st : WeaverState) (p : Path) (label : String) : IO (Result WeaverError Effect) := do {
+    let r <- Store.load_session p;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok s => resume_ok file st s,
+        Result.ok s => IO.pure (Result.ok (resume_effect st s (store_for_dir p st) label)),
+    }
+}
+
+def resume_file (st : WeaverState) (label : String) : IO (Result WeaverError Effect) := do {
+    let r <- Session.load label;
+    match r {
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok s => resume_import st s label,
+    }
+}
+
+def resume_import (st : WeaverState) (s : Session) (label : String) : IO (Result WeaverError Effect) :=
+    match st.store {
+        Option.none => IO.pure (Result.ok (resume_effect st s Option.none label)),
+        Option.some old => resume_import_into st s old label,
     }
 
-def resume_ok (file : String) (st : WeaverState) (s : Session) : IO (Result WeaverError Effect) :=
-    let remaining : I64 := st.budget - s.turns in
-    let keyed : Session := { s with config := rekey_config st s.config } in
+def resume_import_into (st : WeaverState) (s : Session) (old : StoreState) (label : String) : IO (Result WeaverError Effect) := do {
+    let r <- Store.import_session old.root s;
+    match r {
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok ns => IO.pure (Result.ok (resume_effect st s (Option.some ns) label)),
+    }
+}
+
+/// The budget spans halves and the resumed config re-resolves the
+/// CURRENT provider's direct key (a checkpoint never carries one).
+def resume_effect (st : WeaverState) (s : Session) (store : Option StoreState) (label : String) : Effect :=
+    let keyed : Session := rekey_session st s in
     let st2 : WeaverState := set_session st keyed st.budget in
-    if remaining < 1
-    then respond st2 (String.concat "resumed " (String.concat file " -- the whole turn budget is already spent"))
-    else respond st2 (String.concat "resumed " file)
+    let st3 : WeaverState := set_store st2 store in
+    if st.budget - s.turns < 1
+    then Effect.reset st3 (String.concat "resumed " (String.concat label " -- the whole turn budget is already spent"))
+    else Effect.reset st3 (String.concat "resumed " label)
+
+def rekey_session (st : WeaverState) (s : Session) : Session :=
+    let s2 : Session := { s with config := rekey_config st s.config } in
+    s2
+
+/// The store for a directory opened in place: the parent is the root.
+def store_for_dir (p : Path) (st : WeaverState) : Option StoreState :=
+    let parent : String := Path.parent p in
+    if String.is_empty parent
+    then st.store
+    else match Path.of parent {
+        Result.err _ => st.store,
+        Result.ok root =>
+            let s : StoreState := { root := root, dir := p, id := Store.base_name p } in
+            Option.some s,
+    }
 
 /// The redaction contract's other half: a save file carries only
 /// `api_key_env` (the direct key must never cross a `/save`), so the
@@ -322,12 +415,29 @@ def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
     { cfg with api_key := Map.lookup st.provider st.keys }
 
 /// `/clear`: drop the transcript and the accounting, keep the config
-/// and the tools. The turn budget resets to the full amount.
+/// and the tools. The turn budget resets to the full amount. With a
+/// store, a NEW session directory starts and the old one stays
+/// resumable.
 def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     let base : Session := st.run.session in
-    let fresh : Session := { base with history := List.empty, turns := 0, spent := usage_zero } in
+    let fresh : Session := clear_session base in
     let st2 : WeaverState := set_session st fresh st.budget in
-    respond st2 "cleared"
+    match st.store {
+        Option.none => IO.pure (Result.ok (Effect.reset st2 "cleared")),
+        Option.some s => clear_with_store st2 s fresh,
+    }
+
+def clear_session (s : Session) : Session :=
+    let s2 : Session := { s with history := List.empty, turns := 0, spent := usage_zero } in
+    s2
+
+def clear_with_store (st : WeaverState) (s : StoreState) (fresh : Session) : IO (Result WeaverError Effect) := do {
+    let r <- Store.new_session s.root fresh;
+    match r {
+        Result.err e => IO.pure (Result.ok (Effect.reset (set_store st Option.none) (String.concat "cleared (persistence disabled: " (String.concat e ")")))),
+        Result.ok ns => IO.pure (Result.ok (Effect.reset (set_store st (Option.some ns)) "cleared")),
+    }
+}
 
 /// `/quit`: the loop's exit flag. Disposal (MCP servers) is the
 /// entry's job -- the command only says stop.
@@ -347,9 +457,9 @@ def help_text : String :=
         "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
         "/tools                               list tools with their capability tags",
         "/mcp                                 list mounted MCP servers",
-        "/save <file>                         checkpoint the session",
-        "/resume <file>                       continue a saved session (budget spans both halves)",
-        "/clear                               drop the transcript and reset the budget",
+        "/save <file>                         checkpoint the session as a JSON file",
+        "/resume [<id|file>]                  continue a session (newest by default)",
+        "/clear                               start a new session and reset the budget",
         "/help                                this table",
         "/quit                                exit (MCP servers are disposed)",
     ]
@@ -391,6 +501,10 @@ def set_config (st : WeaverState) (cfg : ProviderConfig) (provider : String) : W
 
 /// Swap the whole session and recompute the remaining budget from the
 /// total: `turns_left := max 0 (budget - session.turns)`.
+def set_store (st : WeaverState) (s : Option StoreState) : WeaverState :=
+    let st2 : WeaverState := { st with store := s } in
+    st2
+
 def set_session (st : WeaverState) (s : Session) (budget : I64) : WeaverState :=
     let remaining : I64 := if budget - s.turns < 0 then 0 else budget - s.turns in
     let run2 : RunState := { (st.run) with session := s, turns_left := remaining } in

@@ -21,6 +21,7 @@ use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch}
 use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
+use weaver::store {StoreState, Store.record_history}
 use weaver::theme {Theme.tint, theme_status_code}
 use init::transformers {ResultT}
 use tui::terminal {Terminal.poll}
@@ -154,8 +155,37 @@ def failed_step (write : String -> IO Unit) (st : WeaverState) (e : WeaverError)
 /// .. }` parses only in a plain body, not inside a do-block.)
 def turn_ok (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
     let _ <- write "\n\n";
+    let _ <- persist_turn st run2;
     IO.pure (mk_step (advance_run st run2) true)
 }
+
+/// The history delta of a successful dumb-mode turn (dumb mode has no
+/// transcript block log -- the session file is the record).
+def persist_turn (st : WeaverState) (run2 : RunState) : IO Unit :=
+    match st.store {
+        Option.none => IO.pure unit,
+        Option.some s => do {
+            let before : I64 := msg_len st.run.session.history;
+            let delta : List Message := drop_msgs before run2.session.history;
+            let _ <- Store.record_history s run2.session delta;
+            IO.pure unit
+        },
+    }
+
+#[partial]
+def msg_len (ms : List Message) : I64 :=
+    match ms {
+        List.empty => 0,
+        List.cons _ rest => 1 + msg_len rest,
+    }
+
+#[partial]
+def drop_msgs (n : I64) (ms : List Message) : List Message :=
+    if n < 1 then ms
+    else match ms {
+        List.empty => ms,
+        List.cons _ rest => drop_msgs (n - 1) rest,
+    }
 
 def advance_run (st : WeaverState) (run2 : RunState) : WeaverState :=
     let st2 : WeaverState := { st with run := run2 } in
