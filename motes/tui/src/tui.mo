@@ -130,7 +130,17 @@ pub type App (S : Type) (M : Type) {
         (on_event : Event -> M)
         (update : S -> M -> Pair S (Cmd M))
         (view : S -> Widget)
+        (tick_ms : I64),
+    /// Like `app`, but a tick-only batch draws ONLY when `tick_redraw`
+    /// says the state moved (weaver: the spinner while a turn runs). An
+    /// idle app then allocates no frames at all -- the immutable screen
+    /// copies are the renderer's largest cost.
+    app_ticked (init : S)
+        (on_event : Event -> M)
+        (update : S -> M -> Pair S (Cmd M))
+        (view : S -> Widget)
         (tick_ms : I64)
+        (tick_redraw : S -> Bool)
 }
 
 /// The app loop. Enters the alternate screen and cbreak, then folds
@@ -158,19 +168,49 @@ def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO
     match size {
         Pair.pair rows cols =>
             match a {
-                App.app init _ _ vw _ => do {
-                    let reader : InputReader := input_reader rows cols;
-                    // An initial frame BEFORE the first `Input.produce`:
-                    // with no ticks (`tick_ms < 0`) the first produce
-                    // blocks until a key, and the screen stayed blank
-                    // until then (the recorded UI-repair finding). This
-                    // draw also flushes run_app's setup writes, which
-                    // otherwise sat in the stdout buffer behind it.
-                    let prev <- draw_frame vw init reader (empty_screen rows cols) true false;
-                    let _ <- loop_app a reader init prev List.empty List.empty;
-                    restore_terminal
-                }
+                App.app init _ _ vw _ => run_loop a (fn (_ : S) => true) init vw rows cols,
+                App.app_ticked init _ _ vw _ redraw => run_loop a redraw init vw rows cols,
             }
+    }
+
+def run_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (init : S) (vw : S -> Widget) (rows : I64) (cols : I64) : IO Unit := do {
+    let reader : InputReader := input_reader rows cols;
+    // An initial frame BEFORE the first `Input.produce`: with no ticks
+    // (`tick_ms < 0`) the first produce blocks until a key, and the
+    // screen stayed blank until then (the recorded UI-repair finding).
+    // This draw also flushes run_app's setup writes, which otherwise sat
+    // in the stdout buffer behind it.
+    let prev <- draw_frame vw init reader (empty_screen rows cols) true false;
+    let _ <- loop_app a redraw reader init prev List.empty List.empty;
+    restore_terminal
+}
+
+/// Whether a batch needs a frame: queued messages and real input always
+/// do; a tick-only batch only when the app says the tick moved it.
+pub def App.should_draw {S : Type} {M : Type} (redraw : S -> Bool) (model : S) (pending : List M) (evs : List Event) : Bool :=
+    if Bool.not (List.length pending < 1) then true
+    else if App.has_non_tick evs then true
+    else if App.has_tick evs then redraw model
+    else false
+
+#[partial]
+pub def App.has_non_tick (evs : List Event) : Bool :=
+    match evs {
+        List.empty => false,
+        List.cons e rest => match e {
+            Event.tick => App.has_non_tick rest,
+            _ => true,
+        },
+    }
+
+#[partial]
+pub def App.has_tick (evs : List Event) : Bool :=
+    match evs {
+        List.empty => false,
+        List.cons e rest => match e {
+            Event.tick => true,
+            _ => App.has_tick rest,
+        },
     }
 
 /// One iteration: poll the pending turn fibers, produce a batch of raw
@@ -180,27 +220,33 @@ def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO
 /// `#[terminating]`: the loop's progress is the reader's stream, not a
 /// structural argument.
 #[terminating]
-def loop_app {S : Type} {M : Type} (a : App S M) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
+def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
     match a {
         // Explicit `Monad.bind` on the poll (the do-block form's binder
         // is untyped on the self-hosted side, and a
         // polymorphic-`.mo`-def result is exactly where its inference
         // goes wrong -- `poll_turns`'s own comment).
         App.app _ on_ev upd vw tick_ms =>
-            Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (Fiber M))) => do {
-                match polled {
-                    Pair.pair tmsgs turns2 => do {
-                        // Polling comes BEFORE the produce: with
-                        // `tick_ms < 0` the produce can block until a
-                        // key, and the host's poll (which RUNS the
-                        // deferred action) would then hang behind it.
-                        let batched : List M := List.append pending tmsgs;
-                        let out <- produce_for turns2 reader tick_ms;
-                        after_produce a upd vw on_ev model prev batched turns2 out
-                    }
-                }
-            })
+            loop_body a redraw on_ev upd vw tick_ms reader model prev pending turns,
+        App.app_ticked _ on_ev upd vw tick_ms _ =>
+            loop_body a redraw on_ev upd vw tick_ms reader model prev pending turns,
     }
+
+#[terminating]
+def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
+    Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (Fiber M))) => do {
+        match polled {
+            Pair.pair tmsgs turns2 => do {
+                // Polling comes BEFORE the produce: with `tick_ms < 0`
+                // the produce can block until a key, and the host's poll
+                // (which RUNS the deferred action) would then hang behind
+                // it.
+                let batched : List M := List.append pending tmsgs;
+                let out <- produce_for turns2 reader tick_ms;
+                after_produce a redraw upd vw on_ev model prev batched turns2 out
+            }
+        }
+    })
 
 /// The cycle's read half, decided by the turn state: `produce` normally,
 /// `produce_poll_only` while a turn is pending (tui.mo's header carries
@@ -250,13 +296,14 @@ def split_head {M : Type} (head : Option M) (f : Fiber M) (tail : Pair (List M) 
 /// (a piped script's last keystrokes still count) and then stops -- a
 /// controlled exit, `run_with_size` restores after us.
 #[terminating]
-def after_produce {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) (out : Pair (List Event) InputReader) : IO Unit :=
+def after_produce {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) (out : Pair (List Event) InputReader) : IO Unit :=
     match out {
         Pair.pair evs reader2 =>
             let msgs : List M := List.map on_ev evs in
+            let dirty : Bool := App.should_draw redraw model pending evs in
             if reader2.closed
             then final_frame upd vw reader2 model prev pending msgs
-            else step_loop a upd vw reader2 model prev turns pending msgs
+            else step_loop a redraw upd vw reader2 model prev turns pending msgs dirty
     }
 
 /// The exit draw: one fold, one frame, no recursion -- the loop is over
@@ -286,24 +333,24 @@ def final_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (
 /// The batch `step_loop` folds: `pending` (last frame's
 /// dispatched/performed messages) in front of the freshly produced ones.
 #[terminating]
-def step_loop {S : Type} {M : Type} (a : App S M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (Fiber M)) (pending : List M) (msgs : List M) : IO Unit :=
+def step_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (Fiber M)) (pending : List M) (msgs : List M) (dirty : Bool) : IO Unit :=
     let batch : List M := List.append pending msgs in
     do {
         let stepped <- step_batch upd model batch;
-        after_step a vw reader prev turns batch stepped
+        after_step a redraw vw reader prev turns batch stepped dirty
     }
 
 /// The fold's continuation: `quit` ends the loop, anything else draws
 /// the frame (when the batch was nonempty, or `perform` forced a
 /// repaint) and recurses with the queued `dispatch`/`perform` messages.
 #[terminating]
-def after_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) : IO Unit :=
+def after_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) (dirty : Bool) : IO Unit :=
     match stepped {
-        Pair.pair inner tail => continue_step a vw reader prev turns batch inner tail
+        Pair.pair inner tail => continue_step a redraw vw reader prev turns batch inner tail dirty
     }
 
 #[terminating]
-def continue_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) : IO Unit :=
+def continue_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) (dirty : Bool) : IO Unit :=
     match inner {
         Pair.pair model2 cmd =>
             match cmd {
@@ -318,14 +365,14 @@ def continue_step {S : Type} {M : Type} (a : App S M) (vw : S -> Widget) (reader
                             // once -- here it is born, in `poll_turns`
                             // it dies.
                             let f <- forkIO action;
-                            let frame <- draw_frame vw model2 reader prev (List.length batch > 0) forced;
-                            loop_app a reader model2 frame pending2 (List.cons f turns)
+                            let frame <- draw_frame vw model2 reader prev dirty forced;
+                            loop_app a redraw reader model2 frame pending2 (List.cons f turns)
                         }
                     },
                 _ => match tail {
                     Pair.pair pending2 forced => do {
-                        let frame <- draw_frame vw model2 reader prev (List.length batch > 0) forced;
-                        loop_app a reader model2 frame pending2 turns
+                        let frame <- draw_frame vw model2 reader prev dirty forced;
+                        loop_app a redraw reader model2 frame pending2 turns
                     }
                 }
             }

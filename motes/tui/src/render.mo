@@ -58,16 +58,41 @@ def render_label (text : String) (area : Rect) (screen : Screen) (active : TextS
         // `String.length` is a strlen over a raw char*, so it is measured once
         // here and carried, never re-measured per character.
         let stop := clamp (String.length text) 0 area.width in
-        render_label_chars text 0 area.x area.y stop screen active
+        screen_write_text screen area.y area.x text stop active
 
-/// Loop body: `i` is the char index (and column offset), `col = area.x + i`.
-#[terminating]
-def render_label_chars (text : String) (i : I64) (col : I64) (row : I64) (stop : I64) (screen : Screen) (active : TextStyle) : Screen :=
-    if i < stop then
-        let ch := String.slice text i 1 in
-        let s := screen_set_cell screen row col (mk_styled_cell ch active) in
-        render_label_chars text (i + 1) (col + 1) row stop s active
-    else screen
+/// Write `stop` chars of `text` at `(row, col)`, copying the row list and
+/// the row's cell list each ONCE. The per-cell `screen_set_cell` this
+/// replaces copied O(cols + rows) cells per character, which made a full
+/// screen of text the renderer's dominant allocation.
+#[partial]
+def write_cells (cells : List Cell) (i : I64) (col : I64) (text : String) (stop : I64) (style : TextStyle) (acc : List Cell) : List Cell :=
+    match cells {
+        List.empty => List.reverse acc,
+        List.cons c rest =>
+            if Bool.and (Bool.not (i < col)) (i - col < stop)
+            then write_cells rest (i + 1) col text stop style (List.cons (mk_styled_cell (String.slice text (i - col) 1) style) acc)
+            else write_cells rest (i + 1) col text stop style (List.cons c acc),
+    }
+
+#[partial]
+def write_rows (rows : List (List Cell)) (i : I64) (row : I64) (col : I64) (text : String) (stop : I64) (style : TextStyle) (acc : List (List Cell)) : List (List Cell) :=
+    match rows {
+        List.empty => List.reverse acc,
+        List.cons r rest =>
+            if i == row
+            then write_rows rest (i + 1) row col text stop style (List.cons (write_cells r 0 col text stop style List.empty) acc)
+            else write_rows rest (i + 1) row col text stop style (List.cons r acc),
+    }
+
+pub def screen_write_text (screen : Screen) (row : I64) (col : I64) (text : String) (stop : I64) (style : TextStyle) : Screen :=
+    let nrows : I64 := screen.rows in
+    let ncols : I64 := screen.cols in
+    if Bool.or (row < 0) (Bool.or (Bool.not (row < nrows)) (Bool.or (col < 0) (Bool.not (col < ncols)))) then screen
+    else
+        let cells : List (List Cell) := screen.row_cells in
+        let cells2 : List (List Cell) := write_rows cells 0 row col text stop style List.empty in
+        let s : Screen := { screen with row_cells := cells2 } in
+        s
 
 // ==================== Wrapping ====================
 
@@ -469,11 +494,12 @@ def apply_one (d : CellDelta) : String :=
             cursor_code r c ++ "\u{1b}[0m" ++ " "
     }
 
-/// Fold a delta list into one ANSI string. `String.concat_all` joins in one
-/// pass; a right-nested `++` recursion re-copies the accumulated suffix at
-/// every level, which is quadratic over a full frame's worth of deltas.
+/// Fold a delta list into one ANSI string in ONE allocation:
+/// `String.concat_all` is the quadratic fold (it recopies the
+/// accumulated tail at every step), and a full repaint is thousands of
+/// deltas.
 pub def apply_deltas (deltas : List CellDelta) : String :=
-    String.concat_all (List.map apply_one deltas)
+    String.concat_list (List.map apply_one deltas)
 
 // ==================== Tests ====================
 

@@ -6,8 +6,8 @@
 // IO halves (produce, draw, restore) are exercised end-to-end by
 // examples/tui_counter.mo.
 
-use lib::types { Event }
-use lib::tui { Cmd, poll_turns, step_batch }
+use lib::types { Event, Key }
+use lib::tui { App, Cmd, poll_turns, step_batch }
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, forkIO}
 use std::list { List.length }
@@ -240,3 +240,21 @@ def ordered_pair (r : Pair (List I64) (List (Fiber I64))) : Bool :=
                     }
             }
     }
+
+// ── the idle-tick draw rule (`App.app_ticked`) ────────────────────────
+
+#[test]
+def test_idle_tick_does_not_draw_for_a_static_app : Bool :=
+    Bool.not (App.should_draw (fn (_ : I64) => false) 0 List.empty [Event.tick])
+
+#[test]
+def test_animated_tick_draws : Bool :=
+    App.should_draw (fn (_ : I64) => true) 0 List.empty [Event.tick]
+
+#[test]
+def test_a_real_event_always_draws : Bool :=
+    App.should_draw (fn (_ : I64) => false) 0 List.empty [Event.key (Key.char "a")]
+
+#[test]
+def test_a_queued_message_always_draws : Bool :=
+    App.should_draw (fn (_ : I64) => false) 0 [1] List.empty
