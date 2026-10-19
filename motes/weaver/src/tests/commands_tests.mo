@@ -50,6 +50,9 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     mcps := mcps,
     keys := BTreeMap.empty,
     quit := false,
+    fatal := Option.none,
+    colors := true,
+    store := Option.none,
 }
 
 def run_of : RunState := {

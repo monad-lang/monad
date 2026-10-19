@@ -28,6 +28,7 @@ use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset}
 use weaver::error {WeaverError}
+use weaver::store {StoreState}
 use std::map {BTreeMap}
 use std::list {List.intercalate}
 
@@ -55,6 +56,9 @@ pub struct WeaverState {
     /// every WeaverState literal -- an omitted non-defaulted field has
     /// been seen to check clean and fill garbage at runtime.
     colors : Bool := true,
+    /// The active session directory, when persistence is available; none
+    /// degrades to the pre-store in-memory behaviour.
+    store : Option StoreState,
 }
 
 /// One command's outcome: the advanced state and the line(s) to print.

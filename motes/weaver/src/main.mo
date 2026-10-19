@@ -321,7 +321,7 @@ def dispose_all (servers : List McpServer) : IO Unit :=
 def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) : WeaverState :=
     let session : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
     let run : RunState := { session := session, reg := reg, turns_left := p.max_turns, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep } in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false, colors := colors } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false, colors := colors, fatal := Option.none, store := Option.none } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,

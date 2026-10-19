@@ -13,8 +13,14 @@ use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use weaver::commands {WeaverState}
 use weaver::policy {Mode}
+use std::map {BTreeMap}
 use std::list {List.length}
-use weaver::model {TuiModel, init_tui_model, Model.scroll_step, Model.append_block, visible_transcript, panel_height, scroll_indicator}
+use weaver::model {
+    TuiModel, Window, init_tui_model,
+    Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
+    Model.page_request, visible_transcript, panel_height, scroll_indicator,
+}
+use weaver::store {TranscriptPage, Transcript.with_page}
 
 def mock_config : ProviderConfig :=
     { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
@@ -26,7 +32,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep }
 
 def state_of : WeaverState :=
-    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, quit := false, colors := false }
+    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of : TuiModel := init_tui_model state_of 24 80
 
@@ -123,3 +129,49 @@ def test_full_scroll_reaches_the_first_line : Bool :=
 def test_end_repins : Bool :=
     let m := Model.scroll_step (Model.scroll_step (filled 25) 5) (0 - 5) in
     m.scroll == 0
+
+// ── the bounded window: overflow and pages ────────────────────────────
+
+#[test]
+def test_pinned_tail_after_overflow : Bool :=
+    let vis := visible_transcript (filled 600) in
+    let count : I64 := List.length vis in
+    first_line_of vis == "l583" && count == 18 && last_of vis == "l600"
+
+#[test]
+def test_home_window_precedes_the_tail : Bool :=
+    let m := Model.scroll_step (filled 600) 999999 in
+    let w : Window := Model.window m in
+    let at_top : Bool := w.start == 0 in
+    at_top && Model.needs_page m w
+
+#[test]
+def test_page_request_spans_the_pre_tail : Bool :=
+    let m := Model.scroll_step (filled 600) 999999 in
+    let w : Window := Model.window m in
+    match Model.page_request m w {
+        Option.none => false,
+        Option.some req => match req { Pair.pair s c => s == 0 && c == 17 },
+    }
+
+#[test]
+def test_loaded_page_covers_the_top : Bool :=
+    let base := filled 600 in
+    let tr0 := base.transcript in
+    let p : TranscriptPage := { start := 0, lines := lines_up_to 88 1 } in
+    let tr := Transcript.with_page tr0 p in
+    let m0 : TuiModel := { base with transcript := tr } in
+    let m := Model.scroll_step m0 999999 in
+    let w : Window := Model.window m in
+    let vis := visible_transcript m in
+    Bool.not (Model.needs_page m w)
+        && (match vis { List.cons _ rest => first_line_of rest == "l1", List.empty => false })
+
+#[test]
+def test_stay_put_append_holds_the_absolute_top : Bool :=
+    let m := Model.scroll_step (filled 600) 5 in
+    let before : I64 := m.scroll in
+    let w0 : Window := Model.window m in
+    let m2 := Model.append_block m [nth_line 601] in
+    let w2 : Window := Model.window m2 in
+    m2.scroll == before + 2 && w2.start == w0.start

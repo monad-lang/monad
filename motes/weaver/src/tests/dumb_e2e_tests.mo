@@ -221,6 +221,9 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     mcps := List.empty,
     keys := BTreeMap.empty,
     quit := false,
+    fatal := Option.none,
+    colors := true,
+    store := Option.none,
 }
 
 def run_of (reg : ToolRegistry) : RunState := {

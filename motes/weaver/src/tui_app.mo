@@ -24,7 +24,16 @@ use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
 use weaver::gate {pick_header, capped_diff, gate_answer_prompt, gate_answer_feedback}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
-use weaver::model {TuiModel, WeaverMsg, on_event, init_tui_model, Model.view, Model.scroll_step, Model.append_block, list_length, panel_height, input_placeholder}
+use weaver::model {
+    TuiModel, WeaverMsg, Window, on_event, init_tui_model, init_tui_model_with,
+    Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
+    Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
+    list_length, panel_height, input_placeholder,
+}
+use weaver::store {
+    Transcript, TranscriptPage, StoreState, Transcript.empty, Transcript.with_page,
+    Store.read_page,
+}
 use weaver::theme {theme_line_style, theme_split_lines, theme_border_style}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use tui::types {Event, Key, MouseEvent, LayoutSize}
@@ -50,17 +59,22 @@ use std::list {List.intercalate}
 /// other terminal write happens before this check, so the caller can
 /// fall back to `Dumb.run` cleanly. `true` runs the whole TUI to
 /// completion (quit or EOF) before returning.
-pub def Tui.run (st : WeaverState) : IO Bool := do {
+pub def Tui.run (st : WeaverState) : IO Bool :=
+    Tui.run_resumed st Transcript.empty
+
+/// The startup tail is loaded before `run_app` builds the model, so the
+/// first frame already shows the previous session.
+pub def Tui.run_resumed (st : WeaverState) (tr : Transcript) : IO Bool := do {
     let is_tty <- Terminal.enter_raw_mode;
     if Bool.not is_tty
     then return false
     else do {
         let size <- Terminal.size;
-        run_tui_with_size st size
+        run_tui_with_size st tr size
     }
 }
 
-def run_tui_with_size (st : WeaverState) (size : Pair I64 I64) : IO Bool :=
+def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64) : IO Bool :=
     match size {
         Pair.pair rows cols => do {
             // 100 ms: the tick is the spinner's frame clock AND the
@@ -69,7 +83,7 @@ def run_tui_with_size (st : WeaverState) (size : Pair I64 I64) : IO Bool :=
             // unchanged model are zero-diff draws. The tui default (-1)
             // stays untouched.
             let app : App TuiModel WeaverMsg :=
-                App.app (init_tui_model st rows cols) on_event TuiApp.update Model.view 100;
+                App.app (init_tui_model_with st rows cols tr) on_event TuiApp.update Model.view 100;
             let _ <- run_app app;
             return true
         }
@@ -90,6 +104,72 @@ pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd Weav
         WeaverMsg.command_result effect => command_result_step m effect,
         WeaverMsg.command_failed e =>
             Pair.pair (with_turn_end (fn (mm : TuiModel) => model_for_command_failure mm e) m) (failed_cmd e),
+        WeaverMsg.page_loaded page => page_loaded_step m page,
+        WeaverMsg.page_failed e => page_failed_step m e,
+        WeaverMsg.transcript_reset tr => transcript_reset_step m tr,
+        WeaverMsg.store_result e => store_result_step m e,
+    }
+
+// ── transcript paging ────────────────────────────────────────────────────
+
+/// The window after a scroll delta, plus a page load when the requested
+/// range is above the loaded tail and no page covers it.
+def scroll_with_pages (m : TuiModel) (delta : I64) : Pair TuiModel (Cmd WeaverMsg) :=
+    let m2 : TuiModel := with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm delta) m in
+    maybe_page_cmd m2
+
+def maybe_page_cmd (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    match m.state.store {
+        Option.none => Pair.pair m Cmd.none,
+        Option.some st => page_cmd_for m st,
+    }
+
+def page_cmd_for (m : TuiModel) (st : StoreState) : Pair TuiModel (Cmd WeaverMsg) :=
+    let w : Window := Model.window m in
+    if Bool.not (Model.needs_page m w) then Pair.pair m Cmd.none
+    else if m.page_pending then Pair.pair m Cmd.none
+    else match Model.page_request m w {
+        Option.none => Pair.pair m Cmd.none,
+        Option.some req => match req {
+            Pair.pair start count =>
+                let m2 : TuiModel := { m with page_pending := true } in
+                Pair.pair m2 (Cmd.perform (fn (_ : Unit) => load_page st start count)),
+        },
+    }
+
+def load_page (st : StoreState) (start : I64) (count : I64) : IO WeaverMsg := do {
+    let r <- Store.read_page st.dir start count;
+    match r {
+        Result.err e => IO.pure (WeaverMsg.page_failed e),
+        Result.ok p => IO.pure (WeaverMsg.page_loaded p),
+    }
+}
+
+def page_loaded_step (m : TuiModel) (p : TranscriptPage) : Pair TuiModel (Cmd WeaverMsg) :=
+    let tr : Transcript := Transcript.with_page m.transcript p in
+    let m2 : TuiModel := { m with transcript := tr, page_pending := false } in
+    maybe_page_cmd m2
+
+def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let tr0 : Transcript := m.transcript in
+    let tr : Transcript := { tr0 with page_error := Option.some e } in
+    let m2 : TuiModel := { m with transcript := tr, page_pending := false } in
+    Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) Cmd.none
+
+def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false } in
+    maybe_page_cmd m2
+
+/// A store write failure disables persistence for the rest of the run;
+/// the session keeps working in memory.
+def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd WeaverMsg) :=
+    match e {
+        Option.none => Pair.pair m Cmd.none,
+        Option.some msg =>
+            let st0 : WeaverState := m.state in
+            let st : WeaverState := { st0 with store := Option.none } in
+            let line : String := String.concat "warning: transcript persistence disabled: " msg in
+            Pair.pair (Model.append_lines { m with state := st } [line]) Cmd.none,
     }
 
 /// A turn's or command's completion: the fold `f` runs, the streak
@@ -156,10 +236,8 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
 /// even though nothing else is selected by it). Three lines a notch.
 def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg) :=
     match me {
-        MouseEvent.scroll_up _ _ =>
-            Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm wheel_step) m) Cmd.none,
-        MouseEvent.scroll_down _ _ =>
-            Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (0 - wheel_step)) m) Cmd.none,
+        MouseEvent.scroll_up _ _ => scroll_with_pages m wheel_step,
+        MouseEvent.scroll_down _ _ => scroll_with_pages m (0 - wheel_step),
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
@@ -171,15 +249,15 @@ def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
         Key.enter => enter_key m,
         Key.up => hist_key m,
         Key.down => hist_down_key m,
-        Key.page_up => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (panel_height mm)) m) Cmd.none,
-        Key.page_down => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (0 - panel_height mm)) m) Cmd.none,
+        Key.page_up => scroll_with_pages m (panel_height m),
+        Key.page_down => scroll_with_pages m (0 - panel_height m),
         Key.ctrl c =>
             if c == "c" then ctrl_c_step m
-            else if c == "u" then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (half_page mm)) m) Cmd.none
-            else if c == "d" then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm (0 - half_page mm)) m) Cmd.none
+            else if c == "u" then scroll_with_pages m (half_page m)
+            else if c == "d" then scroll_with_pages m (0 - half_page m)
             else Pair.pair (streak_reset_input m k) Cmd.none,
         Key.end => Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with scroll := 0 }) m) Cmd.none,
-        Key.home => Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.scroll_step mm 999999) m) Cmd.none,
+        Key.home => scroll_with_pages m 999999,
         _ => Pair.pair (streak_reset_input m k) Cmd.none,
     }
 
@@ -299,7 +377,7 @@ def hist_push (m : TuiModel) (text : String) : TuiModel :=
             List.empty => hist_cons_empty text,
             List.cons h rest => if h == text then m.hist else List.cons text m.hist,
         } in
-    { m with hist := pushed, hist_idx := 0 - 1 }
+    { m with hist := Model.hist_keep pushed, hist_idx := 0 - 1 }
 
 #[partial]
 def hist_cons_empty (text : String) : List String :=
@@ -332,7 +410,7 @@ def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
     { m with rows := rows, cols := cols }
 
 def append_lines (m : TuiModel) (lines : List String) : TuiModel :=
-    { m with transcript := List.append m.transcript lines }
+    Model.append_lines m lines
 
 // ── run_submitted_line: the dumb-mode twin over WeaverMsg ───────────────
 

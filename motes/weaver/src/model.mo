@@ -15,6 +15,10 @@ use weaver::commands {WeaverState, Effect}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {theme_line_style, theme_status_style, theme_border_style}
+use weaver::store {
+    Transcript, TranscriptPage, Store.page_lines,
+    Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
+}
 use tui::types {Event, LayoutSize}
 use tui::widgets::input {InputState, input_state}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, sized, with_style, padding}
@@ -33,6 +37,13 @@ pub type WeaverMsg {
     turn_failed (run : RunState) (e : WeaverError),
     command_result (effect : Effect),
     command_failed (e : WeaverError),
+    /// A page of older transcript lines came back from disk.
+    page_loaded (page : TranscriptPage),
+    page_failed (e : String),
+    /// `/clear` or `/resume` switched sessions.
+    transcript_reset (t : Transcript),
+    /// A store write reported a problem (none = success).
+    store_result (e : Option String),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a
@@ -45,7 +56,9 @@ pub def on_event (e : Event) : WeaverMsg :=
 pub struct TuiModel {
     state : WeaverState,
     input : InputState,
-    transcript : List String,
+    /// The bounded window into the session's transcript: the last
+    /// `Store.tail_lines` lines plus at most one older page read from disk.
+    transcript : Transcript,
     rows : I64,
     cols : I64,
     /// Consecutive Ctrl+C presses since the last other event (the
@@ -68,6 +81,9 @@ pub struct TuiModel {
     /// The spinner's tick counter (bumped only while `turn_pending`, so
     /// idle ticks are zero-diff draws).
     spinner_frame : I64 := 0,
+    /// A page read is in flight; only the synchronous `Cmd.perform`
+    /// pager sets it, so it clears in the same fold.
+    page_pending : Bool := false,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -76,7 +92,11 @@ pub struct TuiModel {
 /// a struct literal whose new field is omitted has been seen to check
 /// clean and fill GARBAGE at runtime (the two-host divergence note).
 pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :=
-    { state := st, input := input_state "" input_placeholder, transcript := List.empty, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0 }
+    init_tui_model_with st rows cols Transcript.empty
+
+/// The startup tail loaded from the session store.
+pub def init_tui_model_with (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
+    { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false }
 
 /// The input box's placeholder, shared by the live edit and a history
 /// walk's return-to-live.
@@ -110,21 +130,59 @@ def transcript_column (m : TuiModel) : Widget :=
 def transcript_row (line : String) : SizedWidget :=
     sized (LayoutSize.fixed 1) (with_style (theme_line_style line) (label line))
 
+/// The absolute window the panel shows. `eff` is the clamped scroll; the
+/// scrolled panel spends ONE row on the indicator, so the content window
+/// is `panel_height - 1` rows ending `eff` lines above the bottom.
+pub struct Window {
+    start : I64,
+    count : I64,
+    eff : I64,
+}
+
+pub def Model.window (m : TuiModel) : Window :=
+    let total : I64 := m.transcript.total in
+    let eff : I64 := scroll_clamp m.scroll total (panel_height m) in
+    let h : I64 := if eff > 0 then panel_height m - 1 else panel_height m in
+    let endp : I64 := total - eff in
+    let start : I64 := if endp - h < 0 then 0 else endp - h in
+    let count : I64 := if endp - start < 0 then 0 else endp - start in
+    let w : Window := { start := start, count := count, eff := eff } in
+    w
+
+/// `visible_transcript`'s absolute range still needs a page: its start
+/// is above the loaded tail and no loaded page covers the pre-tail part.
+pub def Model.needs_page (m : TuiModel) (w : Window) : Bool :=
+    let ts : I64 := m.transcript.tail_start in
+    if Bool.not (w.start < ts) then false
+    else Bool.not (covered_by_page m w)
+
+def covered_by_page (m : TuiModel) (w : Window) : Bool :=
+    let ts : I64 := m.transcript.tail_start in
+    let upto : I64 := if w.start + w.count < ts then w.start + w.count else ts in
+    match m.transcript.page {
+        Option.none => false,
+        Option.some p =>
+            let pe : I64 := p.start + list_length p.lines in
+            Bool.and (Bool.not (w.start < p.start)) (Bool.not (pe < upto)),
+    }
+
+/// The absolute range to load: ends at the top of the tail (or the
+/// window's top, whichever is lower) and reaches back one page.
+pub def Model.page_request (m : TuiModel) (w : Window) : Option (Pair I64 I64) :=
+    let ts : I64 := m.transcript.tail_start in
+    let upto : I64 := if w.start + w.count < ts then w.start + w.count else ts in
+    let req_start : I64 := if upto - Store.page_lines < 0 then 0 else upto - Store.page_lines in
+    if Bool.not (req_start < upto)
+    then Option.none
+    else Option.some (Pair.pair req_start (upto - req_start))
+
 /// The visible window. The scrolled panel spends ONE of its rows on
-/// the indicator, so the content window is `panel_height - 1` rows
-/// ending `scroll` lines above the bottom -- and the top scroll is
-/// therefore `len - (panel_height - 1)`: at max scroll the transcript's
-/// FIRST line is visible (the earlier `len - panel_height` room left
-/// it unreachable and overstated the indicator by one). Clamped here
-/// too -- a shrink (`rows` collapsed) can leave the state above the
-/// new top; the view never lies.
+/// the indicator; a requested range the loaded window does not cover
+/// renders `""` placeholders until the page loads.
 pub def visible_transcript (m : TuiModel) : List String :=
-    let len : I64 := list_length m.transcript in
-    let eff : I64 := scroll_clamp m.scroll len (panel_height m) in
-    if eff > 0
-    then List.cons (scroll_indicator (len - eff - (panel_height m - 1)))
-        (transcript_window m.transcript (panel_height m - 1) eff)
-    else transcript_window m.transcript (panel_height m) eff
+    let w : Window := Model.window m in
+    let content : List String := Transcript.slice m.transcript w.start w.count in
+    if w.eff > 0 then List.cons (scroll_indicator w.start) content else content
 
 /// `N lines above -- PgDn for latest`: the row the scrolled-up panel
 /// spends one of its rows on; `n` is the count of lines STILL above
@@ -132,17 +190,6 @@ pub def visible_transcript (m : TuiModel) : List String :=
 pub def scroll_indicator (n : I64) : String :=
     let lines_word : String := if n == 1 then "line above -- PgDn for latest" else "lines above -- PgDn for latest" in
     String.concat (String.concat (I64.to_string n) " ") lines_word
-
-/// The lines that fit, ending `scroll` above the bottom: the last
-/// `height + scroll` lines, minus their LAST scroll lines.
-#[partial]
-def transcript_window (all : List String) (height : I64) (scroll : I64) : List String :=
-    drop_last_n scroll (take_last (height + scroll) all)
-
-/// The FIRST `n` lines of the last-window slice (drop the last n).
-#[partial]
-def drop_last_n (n : I64) (xs : List String) : List String :=
-    take_n (list_length xs - n) xs
 
 #[partial]
 def take_n (n : I64) (xs : List String) : List String :=
@@ -171,44 +218,44 @@ pub def panel_height (m : TuiModel) : I64 :=
     if h < 0 then 0 else h
 
 /// The scroll state machine: `scroll` counts lines above the pinned
-/// bottom. The delta moves the window (PageUp/Ctrl+U positive, i.e.
-/// older; PageDown/Ctrl+D negative), clamped at both ends.
+/// bottom, in absolute transcript coordinates. The delta moves the
+/// window (PageUp/Ctrl+U positive, i.e. older; PageDown/Ctrl+D
+/// negative), clamped at both ends.
 #[partial]
 pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
-    { m with scroll := scroll_clamp (m.scroll + delta) (list_length m.transcript) (panel_height m) }
+    let total : I64 := m.transcript.total in
+    let m2 : TuiModel := { m with scroll := scroll_clamp (m.scroll + delta) total (panel_height m) } in
+    m2
 
 /// A new block of transcript lines: the blank separator row in front
-/// (Phase 11's spacing, skipped on an empty transcript), and a
-/// scrolled view HELD in place -- the scroll grows by the block's own
-/// size, so the visible lines do not slide (auto-pin only happens
-/// when the user was already at the bottom, i.e. scroll = 0: it stays
-/// 0 and the tail keeps riding).
+/// (skipped on an empty transcript), and a scrolled view HELD in place
+/// -- the scroll grows by the block's own size, so the visible lines do
+/// not slide (auto-pin only happens when the user was already at the
+/// bottom, i.e. scroll = 0: it stays 0 and the tail keeps riding).
 #[partial]
 pub def Model.append_block (m : TuiModel) (lines : List String) : TuiModel :=
-    let gap : List String :=
-        match m.transcript {
-            List.empty => List.empty,
-            _ => List.singleton "",
-        } in
-    let block : List String := List.append gap lines in
-    { m with transcript := List.append m.transcript block,
-             scroll := if m.scroll > 0 then m.scroll + list_length block else 0 }
+    let block : List String := Transcript.next_block m.transcript lines in
+    let tr2 : Transcript := Transcript.append m.transcript block in
+    let m2 : TuiModel := { m with transcript := tr2,
+        scroll := if m.scroll > 0 then m.scroll + list_length block else 0 } in
+    m2
 
-/// The last `n` elements of `xs`, in their original order. `#[partial]`:
-/// every clause terminates on `xs`, but the checker's totality pass
-/// does not see `length` as a measure here -- the same shape
-/// `diff.mo`'s `take_lines`/`drop_lines` already use.
+/// A gapless append (the Ctrl+C hint): no separator row, and no scroll
+/// adjustment -- the line joins the tail like any other output.
 #[partial]
-def take_last (n : I64) (xs : List String) : List String :=
-    drop_n (list_length xs - n) xs
+pub def Model.append_lines (m : TuiModel) (lines : List String) : TuiModel :=
+    let tr2 : Transcript := Transcript.append m.transcript lines in
+    let m2 : TuiModel := { m with transcript := tr2 } in
+    m2
 
-#[partial]
-def drop_n (n : I64) (xs : List String) : List String :=
-    if n < 1 then xs
-    else match xs {
-        List.empty => xs,
-        List.cons _ rest => drop_n (n - 1) rest,
-    }
+pub def Model.transcript_count (m : TuiModel) : I64 := m.transcript.total
+
+/// Prompt history is capped: an unbounded `List String` was the other
+/// per-process growth.
+pub def Model.hist_cap : I64 := 200
+
+pub def Model.hist_keep (xs : List String) : List String :=
+    take_n Model.hist_cap xs
 
 #[partial]
 pub def list_length (xs : List String) : I64 :=

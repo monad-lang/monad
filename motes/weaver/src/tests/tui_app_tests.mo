@@ -13,7 +13,10 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
-use weaver::model {TuiModel, WeaverMsg, init_tui_model}
+use weaver::model {TuiModel, WeaverMsg, init_tui_model, Model.append_block}
+use weaver::store {StoreState, TranscriptPage}
+use std::path {Path, Path.of}
+use std::map {BTreeMap}
 use weaver::tui_app {TuiApp.update}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
@@ -31,7 +34,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep }
 
 def state_of (mode : Mode) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, quit := false, colors := false }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
     init_tui_model (state_of mode) 24 80
@@ -99,7 +102,7 @@ def test_tab_does_not_touch_input : Bool :=
 def test_enter_on_empty_input_is_noop : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg Key.enter) {
         Pair.pair m2 cmd =>
-            cmd_is_none cmd && String.is_empty m2.input.value && List.length m2.transcript == 0
+            cmd_is_none cmd && String.is_empty m2.input.value && List.length m2.transcript.tail == 0
     }
 
 #[test]
@@ -110,7 +113,7 @@ def test_enter_with_text_echoes_clears_and_performs : Bool :=
                 Pair.pair m2 cmd =>
                     cmd_is_perform cmd
                         && String.is_empty m2.input.value
-                        && transcript_contains "you: h" m2.transcript
+                        && transcript_contains "you: h" m2.transcript.tail
             }
     }
 
@@ -133,7 +136,7 @@ def test_single_ctrl_c_appends_hint_keeps_running : Bool :=
         Pair.pair m2 cmd =>
             cmd_is_none cmd
                 && m2.ctrl_c_streak == 1
-                && transcript_contains "press Ctrl+C again to exit (or /quit)" m2.transcript
+                && transcript_contains "press Ctrl+C again to exit (or /quit)" m2.transcript.tail
     }
 
 #[test]
@@ -179,7 +182,7 @@ def test_recoverable_turn_fails_keeps_running : Bool :=
         Pair.pair m2 cmd =>
             cmd_is_none cmd
                 && Bool.not (fatal_is_some2 m2)
-                && transcript_contains "error: provider: wire down" m2.transcript
+                && transcript_contains "error: provider: wire down" m2.transcript.tail
     }
 
 // A config-class error is fatal: the fatal slot is set (main exits
@@ -222,7 +225,7 @@ def test_multiline_value_routs_single_line_handler : Bool :=
                         Pair.pair m3 cmd =>
                             cmd_is_perform cmd
                                 && Bool.not (String.contains (String.trim m3.input.value) "a")
-                                && transcript_contains "you: a" m3.transcript
+                                && transcript_contains "you: a" m3.transcript.tail
                     }
             }
     }
@@ -342,9 +345,77 @@ def test_turn_result_ends_the_turn : Bool :=
         Pair.pair m2 cmd =>
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending
-                && transcript_contains "assistant: done" m2.transcript
+                && transcript_contains "assistant: done" m2.transcript.tail
     }
 
 // The repaint cmd IS a plain perform (the forced blank repaint).
 def cmd_is_perform_repaint (c : Cmd WeaverMsg) : Bool :=
     match c { Cmd.perform _ => true, _ => false }
+
+// ── paging commands (Phase 3) ───────────────────────────────────────────
+
+def test_dir : Path :=
+    match Path.of "/tmp/weaver_paging_unit" {
+        Result.err _ => Path.path "/tmp",
+        Result.ok p => p,
+    }
+
+def store_st : Option StoreState :=
+    let s : StoreState := { dir := test_dir, id := "s-1" } in
+    Option.some s
+
+def state_with_store (mode : Mode) : WeaverState :=
+    { (state_of mode) with store := store_st }
+
+#[partial]
+def lines_go (i : I64) (n : I64) : List String :=
+    if n < i then List.empty
+    else List.cons (String.concat "l" (I64.to_string i)) (lines_go (i + 1) n)
+
+def big_model (stored : Bool) : TuiModel :=
+    let st : WeaverState := if stored then state_with_store Mode.manual else state_of Mode.manual in
+    Model.append_block (init_tui_model st 24 80) (lines_go 1 600)
+
+#[test]
+def test_home_with_a_store_requests_a_page : Bool :=
+    match TuiApp.update (big_model true) (key_msg Key.home) {
+        Pair.pair m2 cmd => m2.page_pending && cmd_is_perform_repaint cmd
+    }
+
+#[test]
+def test_home_without_a_store_is_pure : Bool :=
+    match TuiApp.update (big_model false) (key_msg Key.home) {
+        Pair.pair m2 cmd => Bool.not m2.page_pending
+    }
+
+#[test]
+def test_home_without_a_store_has_no_command : Bool :=
+    match TuiApp.update (big_model false) (key_msg Key.home) {
+        Pair.pair _ cmd => cmd_is_none cmd
+    }
+
+#[test]
+def test_page_loaded_clears_pending : Bool :=
+    match TuiApp.update (big_model true) (key_msg Key.home) {
+        Pair.pair m1 _ =>
+            let p : TranscriptPage := { start := 0, lines := lines_go 1 17 } in
+            match TuiApp.update m1 (WeaverMsg.page_loaded p) {
+                Pair.pair m2 _ => Bool.not m2.page_pending,
+            }
+    }
+
+#[test]
+def test_state_of_has_no_store : Bool :=
+    let st : WeaverState := state_of Mode.manual in
+    match st.store { Option.none => true, Option.some _ => false }
+
+#[test]
+def test_scroll_keeps_the_store_field : Bool :=
+    let m : TuiModel := big_model false in
+    let m2 := Model.scroll_step m 5 in
+    match m2.state.store { Option.none => true, Option.some _ => false }
+
+#[test]
+def test_big_model_state_store : Bool :=
+    let m : TuiModel := big_model false in
+    match m.state.store { Option.none => true, Option.some _ => false }
