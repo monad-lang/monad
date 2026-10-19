@@ -23,7 +23,7 @@ class Map (M: (K : Type) -> (V : Type) -> Type := HashMap) {
 }
 
 /// Balanced binary search tree (AVL) key-value map.
-type BTreeMap K V {
+pub type BTreeMap K V {
   empty,
   node (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) (height: I64)
 }
