@@ -9,7 +9,7 @@
 // (`Html.Node.node_text`, `Html.Attr.attr`); the `with Html` block only
 // prefixes the type names, not the constructors.
 
-use lib::html {Html.Node, Html.to_string, Html.beq}
+use lib::html {Html.Attr, Html.Node, Html.to_string, Html.beq}
 use lib::html {}
 
 def renders (n : Html.Node) (want : String) : Bool :=

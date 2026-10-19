@@ -3,7 +3,7 @@
 // Constructors referenced across modules go through the type
 // (`Xml.Node.node_text`, `Xml.Attr.attr`).
 
-use lib::xml {Xml.Node, Xml.to_string, Xml.beq}
+use lib::xml {Xml.Attr, Xml.Node, Xml.to_string, Xml.beq}
 use lib::xml {}
 
 def renders (n : Xml.Node) (want : String) : Bool :=
