@@ -160,6 +160,54 @@ else
   cat "$commit_file"
 fi
 
+# The monadup binary asset, beside the compiler. It is the same tool the
+# bash stub installed before, now a Monad-compiled binary. The native leg
+# gets `. #monadup`; a cross leg `. #monadup-<platform>`. Its checkPhase runs
+# `monadup --version` natively (or under qemu), so a leg that only builds
+# cannot publish a binary that does not start.
+up_attr="monadup"
+if [ "$runs_here" = no ]; then
+  up_attr="monadup-${MONAD_PLATFORM}"
+fi
+up_out="$(nix build --no-link --print-out-paths --accept-flake-config ".#${up_attr}")"
+up_bin="$root/dist/monadup-${MONAD_PLATFORM}"
+install -m755 "$up_out/bin/monadup" "$up_bin"
+test -x "$up_bin"
+file "$up_bin"
+case "$MONAD_PLATFORM" in
+  *-darwin)
+    linked="$(otool -L "$up_bin")"
+    printf '%s\n' "$linked"
+    if printf '%s\n' "$linked" | tail -n +2 | grep '/nix/store/' >/dev/null; then
+      echo "nightly-release: $up_bin links a library from /nix/store, so it cannot run" >&2
+      echo "  on a machine without that store path" >&2
+      exit 1
+    fi
+    ;;
+  *-linux)
+    ldd_output="$(ldd "$up_bin" 2>&1)" || true
+    printf '%s\n' "$ldd_output"
+    if printf '%s\n' "$ldd_output" | grep '/nix/store/' >/dev/null; then
+      echo "nightly-release: $up_bin links a library from /nix/store, so it cannot run" >&2
+      echo "  on a machine without that store path" >&2
+      exit 1
+    fi
+    ;;
+esac
+if [ "$runs_here" = yes ]; then
+  up_version="$("$up_bin" --version)"
+  printf '%s\n' "$up_version"
+  case "$up_version" in
+    monadup\ *) ;;
+    *)
+      echo "nightly-release: $up_bin did not report 'monadup <version>'" >&2
+      exit 1
+      ;;
+  esac
+else
+  echo "nightly-release: ${MONAD_PLATFORM} monadup does not run here; verified by the ${up_attr} checkPhase (qemu)"
+fi
+
 # The second artifact: `init`/`std`/`runtime`, which is what lets the binary
 # above compile anything OUTSIDE a compiler checkout. `monadup` unpacks it
 # into the same version directory as the binary, and the compiler then finds

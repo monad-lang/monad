@@ -23,6 +23,9 @@ devenv.local.yaml
 docs/public
 docs/site/public
 docs/site/static/docs
+# `scripts/sync-install.sh` generates this from the canonical
+# `scripts/monadup` for Zola to serve at /install; it is build output.
+docs/site/static/install
 
 # Nightly release artifacts (scripts/nightly-release.sh). Build output: the
 # release step uploads them from dist/, which git need not track.

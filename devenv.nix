@@ -31,11 +31,13 @@
 
   scripts.docs-serve.exec = ''
     mdbook build ${config.devenv.root}/docs
+    ${config.devenv.root}/scripts/sync-install.sh
     zola --root ${config.devenv.root}/docs/site serve --open
   '';
 
   scripts.docs-build.exec = ''
     mdbook build ${config.devenv.root}/docs
+    ${config.devenv.root}/scripts/sync-install.sh
     zola --root ${config.devenv.root}/docs/site build -o ${config.devenv.root}/docs/public --force
   '';
 
