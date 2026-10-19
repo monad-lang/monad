@@ -5,13 +5,12 @@
 /// file (read-modify-write -- the same no-`IORef` discipline as the
 /// dumb loop's cursor), and the sleep is `silent_sleep`, so nothing
 /// here waits.
+use std::test {Test.write_fixture, Test.read_fixture_or}
 use init::transformers {ResultT}
 use shuttle::loop {Loop.retry_send}
 use shuttle::message {Message, Turn, Usage}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::agent {silent_sleep}
-use std::io {IO.write_file, IO.read_file}
-use std::path {Path.of}
 use std::process {process_id}
 
 def pid : String := I64.to_string process_id
@@ -23,16 +22,10 @@ def emit_path : String :=
     String.concat "/tmp/shuttle_retry_emit_" (String.concat pid ".txt")
 
 def read_file_opt (path : String) : IO String :=
-    match Path.of path {
-        Result.ok p => IO.read_file p,
-        Result.err _ => IO.pure ""
-    }
+    Test.read_fixture_or path ""
 
 def write_text_opt (path : String) (text : String) : IO Unit :=
-    match Path.of path {
-        Result.ok p => IO.write_file p text,
-        Result.err _ => IO.pure unit,
-    }
+    do { let _w <- Test.write_fixture path text; return unit }
 
 /// Append one mark: read, concat, write (no truncate-to-append native).
 #[partial]

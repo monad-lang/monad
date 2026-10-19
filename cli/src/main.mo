@@ -1,6 +1,7 @@
 use std::list {List.length}
-open IO {println, read_file, write_file, file_exists}
+open IO {println, read_file, file_exists}
 use std::process {exec_cmd, process_id}
+use std::stream {StreamError}
 // The `--jobs` test runner's concurrency: `forkIO` starts a file's
 // compile-link-run tail on its own thread (a real OS thread on the
 // compiled runtime; deferred to the await under the Rust host), and the
@@ -41,7 +42,7 @@ use build::manage {
 }
 use std::map {}
 use lang::pretty {show_decls}
-use lang::codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, parse_driver_result}
+use lang::codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, driver_report_note, driver_report_parsed}
 use clap::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`std/src/log.mo` -- its own header documents the gating rules).
@@ -884,14 +885,10 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
     // every successful compile. `Option.none` (the gate's own load
     // failed) falls back to loading here, so the error path still
     // produces the same rendered diagnostic it always did.
-    // Fail FAST on a missing input. Without this the load below fails,
-    // the error path falls back to "parse without dependencies for error
-    // reporting", `read_file` on a nonexistent path yields empty text,
-    // the lenient parser happily "succeeds" with an EMPTY decl list, and
-    // the compile proceeds -- writing IR and invoking the linker for a
-    // file that does not exist. The linker error that eventually appears
-    // names an object file, not the missing source, which is a poor
-    // diagnostic for the simplest possible mistake.
+    // Fail FAST on a missing input, before any loading: otherwise the
+    // load below fails, the error path falls back to "parse without
+    // dependencies for error reporting", and the report names the
+    // fallback's read failure rather than the simplest possible mistake.
     let input_exists : Bool <- file_exists (Path.path file_path);
     if not input_exists then do {
         println ("error: file not found: " ++ file_path);
@@ -936,41 +933,58 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             // `file_path` was already used successfully by `load_file_modules`
             // just above (that's the error being handled), so it's known
             // non-empty -- `Path.path` directly, not `Path.of`.
-            let source <- IO.read_file (Path.path file_path);
-            match try_parse_decls source {
-                Option.some decl_list => do {
-                    let source_path : Option String := if debug then Option.some file_path else Option.none;
-                    compile_parsed_decls { decl_list := decl_list,
-                        base_dir := extract_directory file_path,
-                        output_dir := output_dir, output_name := output_name,
-                        ir := ir, verbose := verbose, source_path := source_path,
-                        target := target }
-                },
-                Option.none => do {
-                    // `try_parse_decls` (leniently truncate-and-succeed) just
-                    // told us decls_parser bailed outright — genuinely rare
-                    // (it usually silently "succeeds" with a truncated decl
-                    // list instead), but when it does happen there's no
-                    // information left to build a diagnostic from. Re-parse
-                    // with the strict twin specifically to recover a real,
-                    // rendered, Rust-diag.rs-style error instead of the bare
-                    // "Parse error: <path>" this used to print.
-                    match try_parse_decls_strict source (Option.some file_path) {
-                        Result.ok _ => do {
-                            // Can't actually happen (strict succeeding implies
-                            // lenient does too), but keep this path total.
-                            println (String.concat "Parse error: " file_path);
-                            return 1
+            let source_read <- read_source_reporting file_path;
+            match source_read {
+                Option.none => do { return 1 },
+                Option.some source =>
+                    match try_parse_decls source {
+                        Option.some decl_list => do {
+                            let source_path : Option String := if debug then Option.some file_path else Option.none;
+                            compile_parsed_decls { decl_list := decl_list,
+                                base_dir := extract_directory file_path,
+                                output_dir := output_dir, output_name := output_name,
+                                ir := ir, verbose := verbose, source_path := source_path,
+                                target := target }
                         },
-                        Result.err diagnostic => do {
-                            println diagnostic;
-                            return 1
+                        Option.none => do {
+                            // `try_parse_decls` (leniently truncate-and-succeed) just
+                            // told us decls_parser bailed outright — genuinely rare
+                            // (it usually silently "succeeds" with a truncated decl
+                            // list instead), but when it does happen there's no
+                            // information left to build a diagnostic from. Re-parse
+                            // with the strict twin specifically to recover a real,
+                            // rendered, Rust-diag.rs-style error instead of the bare
+                            // "Parse error: <path>" this used to print.
+                            match try_parse_decls_strict source (Option.some file_path) {
+                                Result.ok _ => do {
+                                    // Can't actually happen (strict succeeding implies
+                                    // lenient does too), but keep this path total.
+                                    println (String.concat "Parse error: " file_path);
+                                    return 1
+                                },
+                                Result.err diagnostic => do {
+                                    println diagnostic;
+                                    return 1
+                                }
+                            }
                         }
                     }
-                }
             }
         }
     }
+    }
+}
+
+/// The source at `path`, or `none` after printing why it could not be
+/// read -- every failure reported, a missing file included.
+def read_source_reporting (path : String) : IO (Option String) := do {
+    let r : Result StreamError String <- read_file (Path.path path);
+    match r {
+        Result.ok source => return (Option.some source),
+        Result.err e => do {
+            println ("error: reading " ++ path ++ ": " ++ e.message);
+            return Option.none
+        }
     }
 }
 
@@ -1742,16 +1756,8 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
                     Bench.report_since "test: run" t_run;
                     return unit
                 } else return unit;
-                let exists : Bool <- file_exists (Path.path result_path);
-                // Annotated, and load-bearing as before: the RHS is an
-                // `if` with two `do` branches, whose `IO` carrier is not
-                // resolved at this call site.
-                let parsed : Option I64 <- if exists then do {
-                    let raw : String <- read_file (Path.path result_path);
-                    return (parse_driver_result raw)
-                } else do {
-                    return Option.none
-                };
+                let report : Result StreamError String <- read_file (Path.path result_path);
+                let parsed : Option I64 := driver_report_parsed report;
                 // Bad = the driver died before writing a usable report:
                 // a signal death reaches `exec_cmd` as -1 (never forgiven
                 // by a parseable file -- the out dir is pid-unique, but a
@@ -1764,7 +1770,7 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
                     Option.none => true,
                 };
                 let bad : Bool := I64.lt exit_code 0 || unusable;
-                if bad then do { return (TestFileOutcome.fail_outcome ("driver exited " ++ I64.to_string exit_code)) }
+                if bad then do { return (TestFileOutcome.fail_outcome ("driver exited " ++ I64.to_string exit_code ++ driver_report_note report)) }
                 else do {
                     // `bad` is false, so `parsed` is `Option.some failed`
                     // with 0 <= failed <= total -- the `Option.none` arm is

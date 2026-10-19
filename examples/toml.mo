@@ -9,6 +9,7 @@
 // std/map_tests.mo for why (a pre-existing latent instance/dictionary-
 // resolution bug this explicit filter exposes).
 use std::map {BTreeMap}
+use std::stream {StreamError}
 use toml::toml {
   Toml.ParseError, Toml.ParseError.to_string, Toml.Value, Toml.parse,
   Toml.to_string,
@@ -27,16 +28,17 @@ def run_file (path : String) : IO Unit {
   match Path.of path {
     err e => IO.println (String.concat "invalid path: " e),
     ok p => do {
-      let exists <- IO.file_exists p;
-      if exists
-      then do {
-        let content <- IO.read_file p;
-        print_parsed (Toml.parse content)
-      }
-      else IO.println (String.concat "File not found: " path)
+      let r <- IO.read_file p;
+      print_read path r
     },
   }
 }
+
+def print_read (path : String) (r : Result StreamError String) : IO Unit :=
+  match r {
+    Result.err e => IO.println ("cannot read " ++ path ++ ": " ++ e.message),
+    Result.ok content => print_parsed (Toml.parse content)
+  }
 
 def main (args : List String) : IO Unit :=
   match List.last args {

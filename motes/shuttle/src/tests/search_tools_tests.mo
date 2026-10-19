@@ -1,9 +1,8 @@
+use std::test {Test.write_fixture}
 use shuttle::tools::search {grep_run, glob_run}
 use shuttle::tools::search_args {GrepArgs, GlobArgs}
 use shuttle::message_types {Content}
 use init::transformers {ResultT}
-use std::io {IO.write_file}
-use std::path {Path.of}
 use std::process {exec_cmd, process_id}
 
 /// PID-qualified so two sessions' test runs sharing this filesystem's
@@ -14,10 +13,7 @@ def test_file_path : String := String.concat test_dir "/a.txt"
 
 def setup_fixture : IO Unit := do {
     exec_cmd "mkdir" ["-p", test_dir];
-    match Path.of test_file_path {
-        Result.ok p => IO.write_file p "needle in a haystack\nanother line",
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.write_fixture test_file_path "needle in a haystack\nanother line"; return unit }
 }
 
 def grep_fixture_result : IO (Result String Content) :=

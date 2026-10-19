@@ -5,6 +5,7 @@
 
 
 use json::json {Json}
+use std::stream {StreamError}
 
 def print_parse_error (e : Json.ParseError) : IO Unit :=
   IO.println (String.concat "Parse error: " (Json.ParseError.to_string e))
@@ -19,16 +20,17 @@ def run_file (path : String) : IO Unit {
   match Path.of path {
     err e => IO.println (String.concat "invalid path: " e),
     ok p => do {
-      let exists <- IO.file_exists p;
-      if exists
-      then do {
-        let content <- IO.read_file p;
-        print_parsed (Json.parse content)
-      }
-      else IO.println (String.concat "File not found: " path)
+      let r <- IO.read_file p;
+      print_read path r
     },
   }
 }
+
+def print_read (path : String) (r : Result StreamError String) : IO Unit :=
+  match r {
+    Result.err e => IO.println ("cannot read " ++ path ++ ": " ++ e.message),
+    Result.ok content => print_parsed (Json.parse content)
+  }
 
 def main (args : List String) : IO Unit :=
   match List.last args {

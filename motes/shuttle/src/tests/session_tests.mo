@@ -3,14 +3,13 @@
 /// back, and assert the transcript (including a thinking block's
 /// API-authored signature), the config, the turn count and the
 /// accumulated usage all survive. A missing file is a named error.
+use std::test {Test.read_fixture_or}
 use shuttle::session {Session}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::tool {ToolSpec}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use json::json {Json}
-use std::io {IO.read_file}
-use std::path {Path.of}
 use std::process {process_id}
 use std::list {List.any, List.length}
 
@@ -112,10 +111,7 @@ def keyed_path : String :=
 /// A raw text read: the redaction test greps the saved file itself,
 /// not a re-decode of it.
 def read_text (path : String) : IO String :=
-    match Path.of path {
-        Result.err _ => IO.pure "",
-        Result.ok p => IO.read_file p,
-    }
+    Test.read_fixture_or path ""
 
 /// The pinned redaction: a session whose config carries a direct key
 /// saves to a file that contains no key material.

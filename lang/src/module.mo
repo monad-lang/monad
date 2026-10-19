@@ -4,6 +4,7 @@
 use std::io {}
 use std::bench {Bench.now}
 use std::process {exec_cmd, process_id}
+use std::stream {StreamError, StreamError.is_not_found}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lang::types {
   Attribute, Class, ClassDef, DebugName, Decl, DeclGroup, Def, Identifier,
@@ -80,7 +81,7 @@ use std::map {HashMap, HashMap.merge_buckets}
 // rather than repeated here.
 use runtime {Runtime.c_path}
 
-open IO {file_exists, is_dir, list_dir, println, read_file}
+open IO {file_exists, is_dir, list_dir, println}
 open ParseResult {fail, success}
 
 /// Module path for the prelude
@@ -1243,14 +1244,25 @@ def load_module_decls_of_text (mp : ModulePath) (content : String) : IO (Option 
 /// `file_path` named.
 #[partial]
 def load_module_decls_at (file_path : String) (mp : ModulePath) : IO (Option (List Decl)) {
-    let present : Bool <- file_exists (Path.path file_path);
-    if Bool.not present
-    then do { return Option.none }
-    else do {
-        let content : String <- IO.read_file (Path.path file_path);
-        load_module_decls_of_text mp content
-    }
+    let read : Result StreamError String <- IO.read_file (Path.path file_path);
+    load_module_decls_read file_path mp read
 }
+
+/// A missing file is `Option.none` quietly -- the caller reports an
+/// unresolved module -- but any other read failure is printed first,
+/// the same channel `load_module_decls_of_text` reports a parse failure
+/// on, so it never passes for a module that is simply absent.
+def load_module_decls_read (file_path : String) (mp : ModulePath) (read : Result StreamError String) : IO (Option (List Decl)) :=
+    match read {
+        Result.ok content => load_module_decls_of_text mp content,
+        Result.err e =>
+            if StreamError.is_not_found e
+            then IO.pure Option.none
+            else do {
+                println ("error: reading " ++ file_path ++ ": " ++ e.message);
+                return Option.none
+            }
+    }
 
 // --- No longer referenced: the ScopeData-per-module loading path ----
 //
@@ -8157,11 +8169,11 @@ def test_toolchain_first_existing_without_a_root_is_a_miss : IO Bool := do {
 #[test]
 def test_toolchain_first_existing_probes_the_root : IO Bool := do {
     let name := "monad_toolchain_probe_" ++ I64.to_string process_id ++ ".mo";
-    IO.write_file (Path.path ("/tmp/" ++ name)) "// written by lang/src/module.mo's toolchain-root row\n";
+    let w <- IO.write_file (Path.path ("/tmp/" ++ name)) "// written by lang/src/module.mo's toolchain-root row\n";
     let r <- toolchain_first_existing (Option.some "/tmp") [name];
     match r {
         Option.none => return false,
-        Option.some p => return (String.ends_with p name)
+        Option.some p => return (Result.is_ok w && String.ends_with p name)
     }
 }
 
@@ -8174,9 +8186,9 @@ def test_toolchain_first_existing_probes_the_root : IO Bool := do {
 def test_installed_mote_at_finds_a_provided_mote : IO Bool := do {
     let dir := "/tmp/monad_installed_" ++ I64.to_string process_id;
     exec_cmd "mkdir" ["-p", dir ++ "/probe"];
-    IO.write_file (Path.path (dir ++ "/probe/mote.toml")) "[mote]\nname = \"probe\"\nversion = \"0.1.0\"\n";
+    let w <- IO.write_file (Path.path (dir ++ "/probe/mote.toml")) "[mote]\nname = \"probe\"\nversion = \"0.1.0\"\n";
     let found <- installed_mote_at (Option.some dir) "probe";
-    return found
+    return (Result.is_ok w && found)
 }
 
 /// No root, no provided motes: the ordinary state of a machine with no

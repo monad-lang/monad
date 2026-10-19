@@ -16,7 +16,8 @@ use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.parse}
 use weaver::error {WeaverError}
 use toml::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.get_integer, Toml.get_table, Toml.table_get}
-use std::io {IO.get_env, IO.read_file, IO.file_exists}
+use std::io {IO.get_env, IO.read_file}
+use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of}
 use std::map {BTreeMap, BTreeMap.to_list}
 
@@ -137,9 +138,10 @@ def mark_project_keys (l : Loaded) : Loaded :=
 def key_name (kv : Pair String String) : String :=
     match kv { Pair.pair k _ => k }
 
-/// One file, loaded with its failures visible: a missing or unreadable
-/// path is nothing at all (the absent file contributes nothing and
-/// says nothing), an unparsable one contributes nothing but warns.
+/// One file, loaded with its failures visible: a missing path is
+/// nothing at all (the absent file contributes nothing and says
+/// nothing), an unreadable or unparsable one contributes nothing but
+/// warns.
 pub def Settings.load_warned_of (path : String) : IO Loaded :=
     match Path.of path {
         Result.err _ => IO.pure Loaded.empty,
@@ -147,14 +149,23 @@ pub def Settings.load_warned_of (path : String) : IO Loaded :=
     }
 
 def load_warned_at (path : String) (p : Path) : IO Loaded := do {
-    let exists <- IO.file_exists p;
-    if Bool.not exists
-    then IO.pure Loaded.empty
-    else do {
-        let text <- IO.read_file p;
-        return (parse_warned path text)
-    }
+    let r <- IO.read_file p;
+    return (read_warned path r)
 }
+
+def read_warned (path : String) (r : Result StreamError String) : Loaded :=
+    match r {
+        Result.ok text => parse_warned path text,
+        Result.err e =>
+            if StreamError.is_not_found e
+            then Loaded.empty
+            else read_failed path e
+    }
+
+def read_failed (path : String) (e : StreamError) : Loaded :=
+    let w : WeaverError := WeaverError.settings (String.concat "could not read " (String.concat path (String.concat ": " e.message))) in
+    let l : Loaded := { settings := Settings.empty, warnings := [w] } in
+    l
 
 /// The settings-only projection -- the phase 6 contract (`load_of_path`
 /// stays `IO Settings`), for callers that do not surface warnings.

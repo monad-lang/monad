@@ -11,6 +11,7 @@
 /// its own environment, so that default is the contract; see
 /// `wire/mock.mo`'s header. The fixture path here computes the same
 /// string, so the two must move together.
+use std::test {Test.write_fixture, Test.append_fixture, Test.read_fixture_or}
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Usage, Turn}
@@ -21,8 +22,6 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::loop {Loop.run}
 use shuttle::session {Session}
 use json::json {Json, Json.make_array, Json.make_str, Json.to_string}
-use std::io {IO.write_file, IO.read_file}
-use std::path {Path.of}
 use std::process {process_id}
 use std::list {List.any, List.length}
 
@@ -53,10 +52,7 @@ def mock_script : Json :=
     Json.make_array [Turn.serialize_json scripted_turn_1, Turn.serialize_json scripted_turn_2]
 
 def write_script : IO Unit := do {
-    match Path.of script_path {
-        Result.ok p => IO.write_file p (Json.to_string mock_script),
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.write_fixture script_path (Json.to_string mock_script); return unit }
 }
 
 // ── The echo tool: a real ToolImpl, the only moving part the loop
@@ -160,10 +156,7 @@ def mock_script_with_unknown : Json :=
     Json.make_array [Turn.serialize_json scripted_unknown_turn, Turn.serialize_json scripted_turn_2]
 
 def write_script_with_unknown : IO Unit := do {
-    match Path.of script_path {
-        Result.ok p => IO.write_file p (Json.to_string mock_script_with_unknown),
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.write_fixture script_path (Json.to_string mock_script_with_unknown); return unit }
 }
 
 #[test]
@@ -186,23 +179,13 @@ def tap_path : String :=
     String.concat "/tmp/shuttle_mock_tap_" (String.concat (I64.to_string process_id) ".txt")
 
 def emit_tap (t : String) : IO Unit :=
-    match Path.of tap_path {
-        Result.ok p =>
-            Monad.bind (IO.read_file p) (fn old => IO.write_file p (String.concat old t)),
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.append_fixture tap_path t; return unit }
 
 def reset_tap : IO Unit :=
-    match Path.of tap_path {
-        Result.ok p => IO.write_file p "",
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.write_fixture tap_path ""; return unit }
 
 def read_tap : IO String :=
-    match Path.of tap_path {
-        Result.ok p => IO.read_file p,
-        Result.err _ => return "TAP-READ-FAILED",
-    }
+    Test.read_fixture_or tap_path "TAP-READ-FAILED"
 
 def turn_2_text : String := String.concat "the echo tool said: " sentinel
 

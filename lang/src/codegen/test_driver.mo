@@ -71,6 +71,7 @@ use lib::scope {
 }
 use std::list {List.intercalate, List.length}
 use std::log {fail_line}
+use std::stream {StreamError, StreamError.is_not_found}
 
 // ─── Discovery ──────────────────────────────────────────────────────
 
@@ -129,17 +130,33 @@ pub def result_file_marker : String := "__MONAD_TEST__ "
 ///
 /// `Option.none` for anything the driver would not have written --
 /// empty content (the normal shape of "the driver died before writing
-/// it"), a missing/wrong marker, or a non-numeric remainder. The
-/// caller supplies `raw`; whether the file EXISTS at all is the
-/// caller's decision too (`monad_read_file` on a missing file hands a
-/// NULL straight through as the String, runtime.c, so the caller
-/// checks `IO.file_exists` first rather than reading blindly).
+/// it"), a missing/wrong marker, or a non-numeric remainder.
 pub def parse_driver_result (raw : String) : Option I64 :=
     if I64.lt (String.length raw) (String.length result_file_marker)
     then Option.none
     else if String.beq (String.slice raw 0 (String.length result_file_marker)) result_file_marker
     then parse_i64 (String.trim (String.drop (String.length result_file_marker) raw))
     else Option.none
+
+/// The driver's report as the parent read it: `none` when there is no
+/// usable count -- a missing file (the driver died before writing it) or
+/// any other read failure, which `driver_report_note` names.
+pub def driver_report_parsed (report : Result StreamError String) : Option I64 :=
+    match report {
+        Result.ok raw => parse_driver_result raw,
+        Result.err _ => Option.none
+    }
+
+/// What to add to "driver exited N" about the report read: nothing for a
+/// missing file (that IS the crash being reported), the reason for any
+/// other failure, so an unreadable report never passes for a crash.
+pub def driver_report_note (report : Result StreamError String) : String :=
+    match report {
+        Result.ok _ => "",
+        Result.err e =>
+            if StreamError.is_not_found e then ""
+            else " (reading its report failed: " ++ e.message ++ ")"
+    }
 
 /// Classify one `#[test]` def by its declared return type.
 ///

@@ -59,6 +59,14 @@ pub def StreamError.kind_of_code (code : I64) : StreamErrorKind :=
 pub def StreamError.of (kind : StreamErrorKind) (message : String) : StreamError :=
   let e : StreamError := { kind := kind, message := message } in e
 
+/// Whether `e` is `not_found` -- the one kind a caller may read as
+/// "absent" (an optional file) rather than as a failure.
+pub def StreamError.is_not_found (e : StreamError) : Bool :=
+  match e.kind {
+    StreamErrorKind.not_found => true,
+    _ => false
+  }
+
 /// Natives cannot build a `StreamErrorKind` -- its constructor tags are
 /// per-program, unlike `Result`'s and `Pair`'s fixed ones -- so they
 /// report `Pair.pair <kind code> <message>` and every wrapper passes the

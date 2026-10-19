@@ -43,7 +43,7 @@ use build::check {
   Build.root_find, CheckPlan,
 }
 use build::store {
-  Build.artifact_ir_path, Build.entry_root_dir, Build.store_path, Entry,
+  Build.artifact_ir_path, Build.entry_root_dir, Build.read_leaf, Build.store_path, Entry,
 }
 
 open Entry {artifact, check, test}
@@ -570,15 +570,14 @@ pub def Build.check_state (has_out : Bool) (has_errors : Bool) (errors_ok : Bool
 /// three facts about an entry the same way for both kinds.
 #[partial]
 def Build.errors_parse (path : String) : IO Bool := do {
-    let there <- IO.file_exists (Path.path path);
-    if Bool.not there then return false
-    else do {
-        let raw <- IO.read_file (Path.path path);
-        match parse_i64 (String.trim raw) {
-            Option.none => return false,
-            Option.some _n => return true
+    let raw <- Build.read_leaf path;
+    return (match raw {
+        Option.none => false,
+        Option.some text => match parse_i64 (String.trim text) {
+            Option.none => false,
+            Option.some _n => true
         }
-    }
+    })
 }
 
 /// Every entry under both populated kind directories, artifacts first.

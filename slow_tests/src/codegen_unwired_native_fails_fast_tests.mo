@@ -25,6 +25,7 @@
 /// comment), so an unreferenced `use_it` would be filtered out by
 /// `filter_reachable_decls` before the check ever saw it, silently
 /// passing for the wrong reason.
+use std::test {Test.write_fixture}
 use std::process {exec_cmd, process_id}
 use lang::module {LoadedModules, load_file_modules}
 use lang::codegen::emit {compile_loaded_modules_to_ir}
@@ -41,7 +42,7 @@ def main (args : List String) : IO I64 := do {
 }
 "#;
     exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file (Path.path src_path) source;
+    let _w <- Test.write_fixture src_path source;
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {

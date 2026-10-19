@@ -1,6 +1,7 @@
 /// Integration tests for parsing Monad files
 /// Tests that the self hosted parser can parse all Monad source files
 
+use std::test {Test.read_fixture}
 use lang::parser {decls_parser}
 use parsec::core {}
 
@@ -83,17 +84,22 @@ def lang_files_utf8 : List String :=
 
 /// Parse a single file and return success status.
 ///
-/// `IO.read_file`'s contents are reached through `Monad.bind` -- the `do`
-/// block below -- rather than by matching the `IO` value's own `io`
-/// constructor, which is deliberately not ambient.
+/// An unreadable file fails the test, named on stderr (`Test.read_fixture`).
 #[partial]
 def parse_file (path : String) : IO Bool := do {
-    let content <- IO.read_file (Path.path path);
-    match decls_parser content {
-        success _ _ => return true,
-        fail _ => return false
-    }
+    let content <- Test.read_fixture path;
+    return (match content {
+        Option.none => false,
+        Option.some text => text_parses text
+    })
 }
+
+#[partial]
+def text_parses (text : String) : Bool :=
+    match decls_parser text {
+        success _ _ => true,
+        fail _ => false
+    }
 
 /// Parse multiple files
 #[partial]
@@ -159,12 +165,19 @@ def test_parse_lang_all_utf8 : IO Bool := parse_all lang_files_utf8
 /// a non-empty remainder both count as "didn't fully parse."
 #[partial]
 def file_fully_parses (path : String) : IO Bool := do {
-    let content <- IO.read_file (Path.path path);
-    match decls_parser content {
-        success rem _ => return (String.is_empty rem),
-        fail _ => return false
-    }
+    let content <- Test.read_fixture path;
+    return (match content {
+        Option.none => false,
+        Option.some text => text_fully_parses text
+    })
 }
+
+#[partial]
+def text_fully_parses (text : String) : Bool :=
+    match decls_parser text {
+        success rem _ => String.is_empty rem,
+        fail _ => false
+    }
 
 #[test]
 def test_hello_fully_parses : IO Bool :=
@@ -193,11 +206,11 @@ def test_scope_fully_parses : IO Bool :=
 // these tests assert that directly instead of a conservative floor.
 #[test]
 def test_json_fully_parses : IO Bool :=
-    file_fully_parses "lang/src/json.mo"
+    file_fully_parses "motes/json/src/json.mo"
 
 #[test]
 def test_toml_fully_parses : IO Bool :=
-    file_fully_parses "lang/src/toml.mo"
+    file_fully_parses "motes/toml/src/toml.mo"
 
 #[test]
 def test_map_fully_parses : IO Bool :=

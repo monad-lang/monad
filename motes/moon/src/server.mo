@@ -32,7 +32,7 @@
 /// layer does not expose yet.
 
 use std::concurrent::fiber {Fiber, await_fiber, forkIO}
-use std::stream {Stream, FdStream}
+use std::stream {Stream, FdStream, StreamError, StreamError.is_not_found}
 use http::types {
   Transport, Transport.read_bytes, Transport.write_bytes,
   Body, Headers, Request, Response, Status.bad_request,
@@ -316,21 +316,21 @@ def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) :
 // ── static file serving ─────────────────────────────────────────────────
 
 /// Build a handler that serves files from `root` + request path.
-/// Returns 200 with file content if the file exists, 404 otherwise.
+/// Returns 200 with the file's content, 404 when it does not exist, and
+/// 500 when it exists but cannot be read.
 /// No path traversal protection in v1 — callers must sanitize paths.
 def Server.static (root : String) (req : Request) : IO Response := do {
-  let path := String.concat root req.uri.path;
-  let exists <- IO.file_exists_native path;
-  Server.static_respond path exists
+  let read <- IO.read_file_native (String.concat root req.uri.path);
+  return (Server.static_respond read)
 }
 
-/// Respond with file content if it exists, 404 otherwise.
-def Server.static_respond (path : String) (exists : Bool) : IO Response :=
-  if Bool.not exists
-  then return Server.not_found_response
-  else do {
-    let content <- IO.read_file_native path;
-    return (Server.static_ok content)
+def Server.static_respond (read : Result StreamError String) : Response :=
+  match read {
+    Result.ok content => Server.static_ok content,
+    Result.err e =>
+      if StreamError.is_not_found e
+      then Server.not_found_response
+      else Server.internal_error_response
   }
 
 /// Build a 200 response with text content.

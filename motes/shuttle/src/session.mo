@@ -20,7 +20,8 @@ use json::json {
     Json.object_get,
 }
 use std::map {BTreeMap}
-use std::io {IO.read_file, IO.write_file, IO.file_exists}
+use std::io {IO.read_file, IO.write_file}
+use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of, Path.to_string}
 use shuttle::provider {ProviderConfig}
 use shuttle::tool {ToolSpec}
@@ -158,8 +159,11 @@ pub def Session.deserialize_json (j : Json) : Result String Session :=
     }
 
 def save_at (s : Session) (p : Path) : IO (Result String Unit) := do {
-    IO.write_file p (Json.to_string (Session.serialize_json s));
-    return (Result.ok unit)
+    let w <- IO.write_file p (Json.to_string (Session.serialize_json s));
+    return (match w {
+        Result.ok _ => Result.ok unit,
+        Result.err e => Result.err (String.concat "session save failed: " e.message)
+    })
 }
 
 def save_failed (e : String) : IO (Result String Unit) := do {
@@ -178,10 +182,14 @@ def load_missing (path : String) : IO (Result String Session) := do {
     return (Result.err (String.concat "session file not found: " path))
 }
 
-def load_read (p : Path) : IO (Result String Session) := do {
-    let text <- IO.read_file p;
-    return (load_parse text)
-}
+def load_read (p : Path) (r : Result StreamError String) : IO (Result String Session) :=
+    match r {
+        Result.ok text => IO.pure (load_parse text),
+        Result.err e =>
+            if StreamError.is_not_found e
+            then load_missing (Path.to_string p)
+            else IO.pure (Result.err (String.concat "session load failed: " e.message))
+    }
 
 def load_parse (text : String) : Result String Session :=
     match Json.parse text {
@@ -190,8 +198,8 @@ def load_parse (text : String) : Result String Session :=
     }
 
 def load_at (p : Path) : IO (Result String Session) := do {
-    let exists <- IO.file_exists p;
-    if exists then load_read p else load_missing (Path.to_string p)
+    let r <- IO.read_file p;
+    load_read p r
 }
 
 /// Resume: load a session from `file`. A caller resuming a run pairs

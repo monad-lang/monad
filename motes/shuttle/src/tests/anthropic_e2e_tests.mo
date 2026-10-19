@@ -16,6 +16,7 @@
 /// and (once TLS exists) a self-hosted/compiled `monad`; the model
 /// comes from SHUTTLE_ANTHROPIC_MODEL (default claude-opus-5, the
 /// plan's own default).
+use std::test {Test.write_fixture}
 use init::transformers {ResultT}
 use shuttle::message_types {Role, Content}
 use shuttle::message {Message}
@@ -25,8 +26,6 @@ use shuttle::registry {ToolRegistry}
 use shuttle::loop {Loop.run}
 use shuttle::tools::file_tools {ReadTool.impl}
 use std::io {IO.get_env}
-use std::path {Path.of}
-use std::io {IO.write_file}
 use std::process {process_id}
 use std::list {List.any}
 
@@ -37,10 +36,7 @@ def sentinel : String := "SHUTTLE_ANTHROPIC_E2E_SENTINEL_42"
 def fixture_path : String := String.concat "/tmp/shuttle_anthropic_e2e_fixture_" (String.concat (I64.to_string process_id) ".txt")
 
 def write_fixture : IO Unit := do {
-    match Path.of fixture_path {
-        Result.ok p => IO.write_file p sentinel,
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.write_fixture fixture_path sentinel; return unit }
 }
 
 def e2e_registry : ToolRegistry := ToolRegistry.register ReadTool.impl ToolRegistry.empty

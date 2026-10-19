@@ -19,7 +19,7 @@ use build::check {
   Build.check_plan_active, Build.check_plan_key, Build.check_plan_reason,
   Build.check_plan_root, Build.check_worth_caching, Build.mote_root_of, CheckPlan,
 }
-use build::store {Build.ensure_dir}
+use build::store {Build.ensure_dir, Build.write_leaf}
 
 /// A pid-and-tag-scoped fixture root.
 def Build.check_fixture_root (tag : String) : String :=
@@ -37,8 +37,8 @@ def Build.check_fresh_fixture (tag : String) : IO String := do {
 
 #[partial]
 def Build.check_seed_file (d : String) (rel : String) (content : String) : IO I64 := do {
-    let _w <- IO.write_file (Path.path (String.concat d (String.concat "/" rel))) content;
-    return 0
+    let ok <- Build.write_leaf (String.concat d (String.concat "/" rel)) content;
+    return (if ok then 0 else 1)
 }
 
 #[partial]
@@ -287,8 +287,8 @@ def test_entry_without_a_warnings_leaf_is_a_hit_with_zero_warnings : IO Bool := 
     let d <- Build.check_fresh_fixture "oldfmt";
     let dir : String := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w1 <- IO.write_file (Path.path (String.concat dir "/errors")) "0";
-    let _w2 <- IO.write_file (Path.path (String.concat dir "/out")) "ok    a.mo";
+    let _w1 <- Build.write_leaf (String.concat dir "/errors") "0";
+    let _w2 <- Build.write_leaf (String.concat dir "/out") "ok    a.mo";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r {
@@ -321,7 +321,7 @@ def test_entry_read_without_the_output_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "noout";
     let dir : String := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w <- IO.write_file (Path.path (String.concat dir "/errors")) "1";
+    let _w <- Build.write_leaf (String.concat dir "/errors") "1";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }
@@ -336,7 +336,7 @@ def test_entry_read_without_the_count_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "nocount";
     let dir : String := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w <- IO.write_file (Path.path (String.concat dir "/out")) "FAIL  a.mo (1 error(s))\nboom";
+    let _w <- Build.write_leaf (String.concat dir "/out") "FAIL  a.mo (1 error(s))\nboom";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }
@@ -350,8 +350,8 @@ def test_entry_read_of_a_corrupt_count_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "corrupt";
     let dir : String := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w1 <- IO.write_file (Path.path (String.concat dir "/errors")) "3x";
-    let _w2 <- IO.write_file (Path.path (String.concat dir "/out")) "ok    a.mo";
+    let _w1 <- Build.write_leaf (String.concat dir "/errors") "3x";
+    let _w2 <- Build.write_leaf (String.concat dir "/out") "ok    a.mo";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }
@@ -365,8 +365,8 @@ def test_entry_read_of_an_empty_count_is_none : IO Bool := do {
     let d <- Build.check_fresh_fixture "emptycount";
     let dir : String := Build.check_entry_dir d "k";
     let _m <- Build.ensure_dir dir;
-    let _w1 <- IO.write_file (Path.path (String.concat dir "/errors")) "";
-    let _w2 <- IO.write_file (Path.path (String.concat dir "/out")) "ok    a.mo";
+    let _w1 <- Build.write_leaf (String.concat dir "/errors") "";
+    let _w2 <- Build.write_leaf (String.concat dir "/out") "ok    a.mo";
     let r <- Build.check_entry_read d "k";
     let _c <- Build.check_drop_fixture d;
     match r { Option.none => return true, Option.some _p => return false }

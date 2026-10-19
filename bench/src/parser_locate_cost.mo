@@ -28,7 +28,7 @@
 use lang::parser::whitespace {skip_spaces}
 use llvm::strmap {str_map_empty, str_map_lookup}
 use std::list {List.length}
-open IO {println, read_file}
+open IO {println}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {Decl, Location, ParseDecl}
 use parsec::core {ParseResult}
@@ -61,7 +61,18 @@ def table_probe (t : HashMap String Location) : I64 :=
 
 #[partial]
 def run_locate_cost (path : String) : IO Bool := do {
-    let src <- IO.read_file (Path.path path);
+    let r <- IO.read_file (Path.path path);
+    match r {
+        Result.err e => do {
+            println ("error: reading " ++ path ++ ": " ++ e.message);
+            return false
+        },
+        Result.ok src => run_locate_cost_on path src
+    }
+}
+
+#[partial]
+def run_locate_cost_on (path : String) (src : String) : IO Bool := do {
     println (String.concat "file: " (String.concat path
         (String.concat " (" (String.concat (I64.to_string (String.length src)) " bytes)"))));
 

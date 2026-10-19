@@ -2,11 +2,10 @@
 /// pinned cell by cell (identical, replace, insert, delete, new file),
 /// plus the `lines` splitter's edge cases and the `for_input` mapping
 /// from a pick's JSON to the diff's two sides.
+use std::test {Test.write_fixture}
 use weaver::diff {Diff.lines, Diff.render, Diff.for_input}
 use json::json {Json, Json.make_str, Json.make_object}
 use std::map {BTreeMap}
-use std::io {IO.write_file}
-use std::path {Path.of}
 use std::process {process_id}
 use std::list {List.length}
 
@@ -87,18 +86,12 @@ def test_for_input_edit : IO Bool := do {
 #[test]
 def test_for_input_write : IO Bool := do {
     let target : String := String.concat "/tmp/weaver_diff_target_" (String.concat (I64.to_string process_id) ".txt");
-    let _ <- match Path.of target {
-        Result.ok p => IO.write_file p "on disk\n",
-        Result.err _ => IO.pure unit,
-    };
+    let _ <- do { let _w <- Test.write_fixture target "on disk\n"; return unit };
     let input : Json := Json.make_object
         (Map.insert "path" (Json.make_str target)
             (obj_field "content" "replacement"));
     let existing <- Diff.for_input "write" input;
-    let _ <- match Path.of target {
-        Result.ok p => IO.write_file p "",
-        Result.err _ => IO.pure unit,
-    };
+    let _ <- do { let _w <- Test.write_fixture target ""; return unit };
     let fresh <- Diff.for_input "write" input;
     return (match existing {
         Option.some pr => match pr {

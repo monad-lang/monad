@@ -55,6 +55,7 @@ use lang::navigation {
   NavTarget, nav_at_checked, nav_target_detail, nav_target_file, nav_target_name,
   nav_target_range,
 }
+use lang::mote {read_file_or_none}
 use lang::types {SourceRange}
 use lsp::checks {Check, CheckStore, check_result, check_text, checkstore_lookup}
 use lsp::documents {document_uri}
@@ -309,7 +310,7 @@ def lsp_definition_far (enc : PositionEncoding) (t : NavTarget) : IO Json := do 
     match nav_target_file t {
         Option.none => return Json.make_null,
         Option.some path => do {
-            let text <- lsp_read_file_or_none path;
+            let text <- read_file_or_none path;
             return (lsp_location_in_file enc path text (nav_target_name t))
         },
     }
@@ -676,21 +677,7 @@ def lsp_join (dir : String) (name : String) : String :=
 def lsp_file_text (docs : DocStore) (path : String) : IO (Option String) := do {
     match docstore_text (docstore_uri_of_path path) docs {
         Option.some text => return (Option.some text),
-        Option.none => lsp_read_file_or_none path
+        Option.none => read_file_or_none path
     }
 }
 
-/// A file's text, or nothing when it is not there.
-///
-/// EXISTENCE FIRST IS MANDATORY, not defensive: `IO.read_file` on a missing path fails
-/// the whole program rather than answering an error, so a read of a file deleted since
-/// the module cache recorded it would take the server down mid-session.
-/// `lang/src/mote.mo`'s own `read_file_or_none` carries the same two-step and the same
-/// note; this is that def, in the mote that needs it, because it is not `pub` there.
-#[partial]
-def lsp_read_file_or_none (path : String) : IO (Option String) := do {
-    let exists <- IO.file_exists (Path.path path);
-    if exists
-    then do { let text <- IO.read_file (Path.path path); return (Option.some text) }
-    else return Option.none
-}

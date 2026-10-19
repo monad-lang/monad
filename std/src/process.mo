@@ -1,7 +1,8 @@
 // IO is ambient (init/io.mo, always a loaded root) -- no `use` needed.
 
 use lib::io {}
-open IO {current_time_nano, file_exists_native, read_file_native}
+use lib::stream {StreamError, StreamError.is_not_found}
+open IO {current_time_nano, read_file_native}
 
 #[native "exec_cmd"]
 pub def exec_cmd (cmd : String) (args : List String) : IO I64
@@ -243,24 +244,33 @@ def Proc.scratch_path : IO String := do {
     return ("/tmp/monad_capture_" ++ I64.to_string process_id ++ "_" ++ I64.to_string nanos)
 }
 
-/// Read the redirect file, then remove it. Missing means `sh` never got
-/// far enough to create it, which is not an error here: the caller still
-/// gets the exit status, with empty output.
+/// Read the redirect file, then remove it. Missing (`not_found`) means
+/// `sh` never got far enough to create it, which is not an error here:
+/// the caller still gets the exit status, with empty output.
 ///
-/// The existence check is not belt-and-braces -- `read_file_native` still
-/// carries a `TODO Return Option and none on failure` and has no failure
-/// channel at all, so reading a file that is not there is exactly the case
-/// to keep it away from.
+/// Any OTHER read failure must not pass for empty output, and
+/// `Proc.capture`'s type has no error channel of its own, so it is
+/// folded into the existing one: the reason replaces the output and a
+/// zero exit status becomes 1 (`Proc.capture_read`).
 ///
 /// `rm` rather than a native, because there is no removal native and this
 /// is already the established spelling (lang/src/codegen/test/
 /// e2e_harness.mo and four slow_tests files all do `exec_cmd "rm"`).
-def Proc.read_then_remove (path : String) : IO String := do {
-    let exists <- file_exists_native path;
-    let out <- (if exists then read_file_native path else return "");
+def Proc.read_then_remove (path : String) : IO (Result StreamError String) := do {
+    let out <- read_file_native path;
     let _removed <- exec_cmd "rm" ["-f", path];
     return out
 }
+
+/// The exit status and output of a capture whose redirect file read as `r`.
+def Proc.capture_read (code : I64) (r : Result StreamError String) : Pair I64 String :=
+    match r {
+        Result.ok out => Pair.pair code out,
+        Result.err e =>
+            if StreamError.is_not_found e
+            then Pair.pair code ""
+            else Pair.pair (if code == 0 then 1 else code) ("capture: reading the output failed: " ++ e.message)
+    }
 
 /// Run `cmd args` and return its exit status together with everything it
 /// wrote, stdout and stderr MERGED.
@@ -279,7 +289,7 @@ pub def Proc.capture (cmd : String) (args : List String) : IO (Pair I64 String) 
         Proc.quoted_argv cmd args ++ " > " ++ Proc.shell_quote tmp ++ " 2>&1";
     let code <- exec_cmd "sh" ["-c", script];
     let out <- Proc.read_then_remove tmp;
-    return (Pair.pair code out)
+    return (Proc.capture_read code out)
 }
 
 // Tests live in `std/src/process_tests.mo`, not here, and that is forced

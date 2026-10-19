@@ -33,7 +33,7 @@ use build::check {
 }
 use build::closure {Build.artifact_key, Build.input_hash}
 use build::store {
-  Build.artifact_ir_path, Build.ensure_dir, Build.entry_root_dir,
+  Build.artifact_ir_path, Build.ensure_dir, Build.entry_root_dir, Build.write_leaf,
   Build.store_path, artifact, check,
 }
 use build::manage {
@@ -87,8 +87,8 @@ def Build.manage_mote_fixture (tag : String) : IO String := do {
 #[partial]
 def Build.manage_seed (path : String) (content : String) : IO I64 := do {
     let _m <- Build.ensure_dir (extract_directory path);
-    IO.write_file (Path.path path) content;
-    return 0
+    let ok <- Build.write_leaf path content;
+    return (if ok then 0 else 1)
 }
 
 #[partial]

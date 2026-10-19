@@ -25,7 +25,8 @@ use shuttle::message_types {Role, Content}
 use shuttle::tool {ToolSpec}
 use init::transformers {ResultT}
 use std::concurrent::combine {sleepIO}
-use std::io {IO.get_env, IO.read_file, IO.file_exists}
+use std::io {IO.get_env, IO.read_file}
+use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of, Path.to_string}
 use std::process {process_id}
 
@@ -104,14 +105,18 @@ def mock_missing (path : String) : IO (Result String String) := do {
     return (Result.err (String.concat "mock wire: no script at " (String.concat path " (write a JSON array of serialized Turns)")))
 }
 
-def mock_read_at (p : Path) : IO (Result String String) := do {
-    let text <- IO.read_file p;
-    return (Result.ok text)
-}
+def mock_read_at (p : Path) (r : Result StreamError String) : IO (Result String String) :=
+    match r {
+        Result.ok text => IO.pure (Result.ok text),
+        Result.err e =>
+            if StreamError.is_not_found e
+            then mock_missing (Path.to_string p)
+            else IO.pure (Result.err (String.concat "mock wire: reading the script failed: " e.message))
+    }
 
 def mock_load_at (p : Path) : IO (Result String String) := do {
-    let exists <- IO.file_exists p;
-    if exists then mock_read_at p else mock_missing (Path.to_string p)
+    let r <- IO.read_file p;
+    mock_read_at p r
 }
 
 def mock_load (file : String) : IO (Result String String) :=

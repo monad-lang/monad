@@ -61,15 +61,20 @@ Other operations in `std.io`:
 | Function | Type |
 |----------|------|
 | `IO.println` | `String -> IO Unit` |
-| `IO.read_file` | `Path -> IO String` |
-| `IO.write_file` | `Path -> String -> IO Unit` |
+| `IO.read_file` | `Path -> IO (Result StreamError String)` |
+| `IO.write_file` | `Path -> String -> IO (Result StreamError Unit)` |
+| `IO.read_line` | `IO (Result StreamError (Option String))` |
 | `IO.file_exists` | `Path -> IO Bool` |
 | `IO.is_dir` | `Path -> IO Bool` |
 | `IO.list_dir` | `Path -> IO (List String)` |
 | `IO.get_env` | `String -> IO (Option String)` |
 | `IO.current_time` | `IO I64` (monotonic milliseconds) |
 
-There is no `getLine` — reading stdin is not implemented yet.
+An operation that can fail returns its failure as a `Result.err` carrying a
+`std.stream` `StreamError`: a `kind` to match on (`not_found`,
+`permission_denied`, ...) and the OS `message`. A missing file is
+`not_found`, never an empty string, so a caller decides for itself what
+absence means. `IO.read_line` is `Result.ok Option.none` at end of input.
 
 > **A wart worth knowing.** Naming `IO` in a *non-empty* `use` filter can break
 > `do`-notation's implicit `Monad IO` lookup at run time ("instance-Monad-IO not
@@ -308,10 +313,11 @@ and such a definition has no body. The name in the attribute is the runtime's
 identifier for the operation, which is not always the Monad-side name — the
 native behind `IO.read_stdin_exact` is a `priv` `read_stdin_exact` returning
 `RawIO String`, which the public def wraps. Not every IO operation is a native:
-`IO.println`, `IO.write_stdout`, `IO.write_stderr` and `IO.read_line` are
-ordinary Monad over `std/stream.mo`'s byte streams.
+`IO.println`, `IO.write_stdout`, `IO.write_stderr`, `IO.read_line`,
+`IO.read_file` and `IO.write_file` are ordinary Monad over `std/stream.mo`'s
+byte streams.
 
-There are 170 natives declared across `init/` and `std/`. Three — `eq_rec`, `string_to_chars`, and
+There are 169 natives declared across `init/` and `std/`. Three — `eq_rec`, `string_to_chars`, and
 `string_from_chars` — are declared but not implemented anywhere, and calling one
 fails at run time with `unknown native`. The compiler backend wires a subset of
 the rest; see [Compiling and Running](./compiling.md#native-coverage). The four

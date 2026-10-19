@@ -110,7 +110,8 @@ is not for call sites and is meant to become an implementation detail.
 ### `std.io` — ambient
 
 `IO.println` and the filesystem: `read_file`, `write_file`, `file_exists`,
-`is_dir`, `list_dir` (all `Path`-typed), plus `IO.get_env` and
+`is_dir`, `list_dir` (all `Path`-typed; `read_file`/`write_file` return
+`Result StreamError _`, a missing file being `not_found`), plus `IO.get_env` and
 `IO.current_time` (monotonic milliseconds — only differences are meaningful).
 
 It also holds TCP's setup calls: `tcp_connect`, `tcp_listen`, `tcp_accept`

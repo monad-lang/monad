@@ -36,6 +36,7 @@ use weaver::tui_app {Tui.run}
 use init::transformers {ResultT}
 use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env}
+use std::stream {StreamError}
 use std::list {List.intercalate}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's
@@ -417,4 +418,20 @@ def exit_of (st : WeaverState) : IO I64 :=
 def run_fallback (ran_tui : Bool) (st : WeaverState) : IO WeaverState :=
     if ran_tui
     then IO.pure st
-    else Dumb.run (fn (_ : Unit) => IO.read_line) stdout_write st
+    else Dumb.run (fn (_ : Unit) => read_stdin_line) stdout_write st
+
+/// The dumb loop's line source. A stdin read error ends the session like
+/// end of input, but is named on stderr first rather than passing for it.
+def read_stdin_line : IO (Option String) := do {
+    let r <- IO.read_line;
+    line_or_reported r
+}
+
+def line_or_reported (r : Result StreamError (Option String)) : IO (Option String) :=
+    match r {
+        Result.ok line => IO.pure line,
+        Result.err e => do {
+            IO.write_stderr ("weaver: reading stdin failed: " ++ e.message ++ "\n");
+            return Option.none
+        }
+    }

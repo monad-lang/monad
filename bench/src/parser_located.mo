@@ -38,7 +38,7 @@
 /// Run: `cargo run --release -- test bench/parser_located.mo`
 use lang::parser::whitespace {skip_spaces}
 use std::list {List.length}
-open IO {println, read_file}
+open IO {println}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {Decl, ParseDecl}
 use parsec::core {ParseResult}
@@ -97,7 +97,18 @@ def first_inversion_from (prev : I64) (offsets : List I64) (idx : I64) : I64 :=
 
 #[partial]
 def run_located_bench (path : String) : IO Bool := do {
-    let src <- IO.read_file (Path.path path);
+    let r <- IO.read_file (Path.path path);
+    match r {
+        Result.err e => do {
+            println ("error: reading " ++ path ++ ": " ++ e.message);
+            return false
+        },
+        Result.ok src => run_located_bench_on path src
+    }
+}
+
+#[partial]
+def run_located_bench_on (path : String) (src : String) : IO Bool := do {
     let bytes : I64 := String.length src;
     println (String.concat "file: " (String.concat path
         (String.concat " (" (String.concat (I64.to_string bytes) " bytes)"))));

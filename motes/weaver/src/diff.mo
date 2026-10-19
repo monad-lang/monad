@@ -11,7 +11,8 @@
 /// line boundary can land mid-character. `Diff.render` itself stays
 /// pure -- the gate (`gate.mo`) owns the I/O and the display cap.
 use json::json {Json, Json.get_object, Json.object_get, Json.get_str}
-use std::io {IO.file_exists, IO.read_file}
+use std::io {IO.read_file}
+use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of}
 use std::list {List.intercalate}
 
@@ -144,17 +145,21 @@ def read_old (path : String) (new : String) : IO (Option (Pair String String)) :
     }
 
 def read_old_at (p : Path) (new : String) : IO (Option (Pair String String)) := do {
-    let exists <- IO.file_exists p;
-    old_of exists p new
+    let r <- IO.read_file p;
+    return (old_of r new)
 }
 
-def old_of (exists : Bool) (p : Path) (new : String) : IO (Option (Pair String String)) :=
-    if Bool.not exists then IO.pure (Option.some (Pair.pair "" new)) else old_read p new
-
-def old_read (p : Path) (new : String) : IO (Option (Pair String String)) := do {
-    let text <- IO.read_file p;
-    return (Option.some (Pair.pair text new))
-}
+/// A file that does not exist yet diffs from empty. One that exists but
+/// cannot be read has no honest "before", so there is no preview -- and
+/// the write tool itself then reports that failure.
+def old_of (r : Result StreamError String) (new : String) : Option (Pair String String) :=
+    match r {
+        Result.ok text => Option.some (Pair.pair text new),
+        Result.err e =>
+            if StreamError.is_not_found e
+            then Option.some (Pair.pair "" new)
+            else Option.none
+    }
 
 def str_field (key : String) (j : Json) : Option String :=
     match Json.get_object j {

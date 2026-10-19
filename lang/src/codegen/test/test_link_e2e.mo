@@ -1,4 +1,5 @@
-open IO {println, write_file}
+use std::test {Test.write_fixture}
+open IO {println}
 use std::process {exec_cmd, process_id}
 use lang::types {Def, i64, id, lit, num, package_private, sort_n}
 use llvm::ir {emit_module}
@@ -51,7 +52,7 @@ def main : IO I64 {
     let ir_text := emit_module mod_;
 
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
-    IO.write_file (Path.path ir_path) ir_text;
+    let _w <- Test.write_fixture ir_path ir_text;
 
     let _llc <- compile_ir_to_obj ir_path obj_path;
     // The C runtime comes from the shared resolver, like every other

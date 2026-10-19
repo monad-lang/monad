@@ -14,6 +14,7 @@
 
 open IO {println}
 use std::process {exec_cmd, Proc.capture}
+use std::stream {StreamError}
 use std::bench {Bench.now, Bench.report_since}
 use std::log {fail_line, ok_line, stage}
 use lib::target {TargetSpec, TargetPlan, TargetKind}
@@ -388,72 +389,96 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
         else exec_cmd "mkdir" ["-p", ir_dir]);
 
     let t_write : I64 <- Bench.now;
-    IO.write_file ir_path ir_text;
     // The convenience copy, for a reader that already knows this path
     // because `-o` implies it. Skipped when it IS the IR (the callers with
     // no key to name one by), so the common case still writes one file.
     let beside : String := Path.to_string (Path.with_suffix target ".ll");
-    if Bool.not (String.beq beside ir_path_s) then do {
-        IO.write_file (Path.path beside) ir_text;
-        return unit
-    } else return unit;
+    let wrote <- write_ir_files ir_path ir_path_s beside ir_text;
     if verbose then do {
         Bench.report_since "link_ir: write .ll" t_write;
         return unit
     } else return unit;
-
-    // Stage trace (`std.log`): each line prints BEFORE its `Bench.now`
-    // start, so a user watching a long stage sees life before it ends.
-    stage verbose "link: llc";
-    let t_llc : I64 <- Bench.now;
-    let result <- compile_ir_to_obj_with spec ir_path_s obj_path_s;
-    if verbose then do {
-        Bench.report_since "link_ir: llc" t_llc;
-        return unit
-    } else return unit;
-    if not (result == 0) then do {
-        fail_line ("Compiling ir " ++ ir_path_s ++ " with llc failed");
+    if Bool.not (Result.is_ok wrote) then do {
+        fail_line ("Writing ir " ++ ir_path_s ++ " failed: " ++ write_failure wrote);
         return 1
     } else do {
-        stage verbose "link: clang runtime.c";
-        let t_rtc : I64 <- Bench.now;
-        let from_env <- IO.get_env "MONAD_BUILD_COMMIT";
-        let build_hash : String := build_commit_define from_env compiler_commit;
-        let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
-        let result <- compile_runtime_obj_for plan runtime_c (List.append [commit_flag] (verbose_argv verbose)) runtime_obj_s;
+
+        // Stage trace (`std.log`): each line prints BEFORE its `Bench.now`
+        // start, so a user watching a long stage sees life before it ends.
+        stage verbose "link: llc";
+        let t_llc : I64 <- Bench.now;
+        let result <- compile_ir_to_obj_with spec ir_path_s obj_path_s;
         if verbose then do {
-            Bench.report_since "link_ir: clang runtime.c" t_rtc;
+            Bench.report_since "link_ir: llc" t_llc;
             return unit
         } else return unit;
         if not (result == 0) then do {
-            fail_line "compiling runtime failed";
+            fail_line ("Compiling ir " ++ ir_path_s ++ " with llc failed");
             return 1
         } else do {
-            stage verbose "link: clang link";
-            let t_link : I64 <- Bench.now;
-            // `-l<lib>` for every library the program's motes declared,
-            // ahead of the verbose flag. An empty `link_libs` leaves the
-            // argv exactly as it was.
-            let dash_l : List String := map_dash_l link_libs;
-            // `-L` before the `-l`s it serves; `link_objects` puts both
-            // after the objects.
-            let pkg_flags : List String <- pkg_config_link_flags link_pkgs;
-            let link_flags : List String := List.append pkg_flags (List.append dash_l (verbose_argv verbose));
-            let result <- link_objects_for plan [obj_path_s, runtime_obj_s] output_path_s link_flags;
+            stage verbose "link: clang runtime.c";
+            let t_rtc : I64 <- Bench.now;
+            let from_env <- IO.get_env "MONAD_BUILD_COMMIT";
+            let build_hash : String := build_commit_define from_env compiler_commit;
+            let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
+            let result <- compile_runtime_obj_for plan runtime_c (List.append [commit_flag] (verbose_argv verbose)) runtime_obj_s;
             if verbose then do {
-                Bench.report_since "link_ir: clang link" t_link;
+                Bench.report_since "link_ir: clang runtime.c" t_rtc;
                 return unit
             } else return unit;
             if not (result == 0) then do {
-                fail_line "linking failed";
+                fail_line "compiling runtime failed";
                 return 1
             } else do {
-                ok_line "Compilation finished";
-                return 0
+                stage verbose "link: clang link";
+                let t_link : I64 <- Bench.now;
+                // `-l<lib>` for every library the program's motes declared,
+                // ahead of the verbose flag. An empty `link_libs` leaves the
+                // argv exactly as it was.
+                let dash_l : List String := map_dash_l link_libs;
+                // `-L` before the `-l`s it serves; `link_objects` puts both
+                // after the objects.
+                let pkg_flags : List String <- pkg_config_link_flags link_pkgs;
+                let link_flags : List String := List.append pkg_flags (List.append dash_l (verbose_argv verbose));
+                let result <- link_objects_for plan [obj_path_s, runtime_obj_s] output_path_s link_flags;
+                if verbose then do {
+                    Bench.report_since "link_ir: clang link" t_link;
+                    return unit
+                } else return unit;
+                if not (result == 0) then do {
+                    fail_line "linking failed";
+                    return 1
+                } else do {
+                    ok_line "Compilation finished";
+                    return 0
+                }
             }
         }
     }
 }
+
+/// Write the IR, then its convenience copy `beside` unless that IS the
+/// IR's own path; the first failure stops both.
+def write_ir_files (ir_path : Path) (ir_path_s : String) (beside : String) (ir_text : String) : IO (Result StreamError Unit) := do {
+    let w <- IO.write_file ir_path ir_text;
+    write_ir_beside w ir_path_s beside ir_text
+}
+
+def write_ir_beside (w : Result StreamError Unit) (ir_path_s : String) (beside : String) (ir_text : String) : IO (Result StreamError Unit) :=
+    match w {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok _ =>
+            if String.beq beside ir_path_s
+            then IO.pure (Result.ok Unit.unit)
+            else IO.write_file (Path.path beside) ir_text
+    }
+
+/// The reason a write failed, for the link error.
+def write_failure (w : Result StreamError Unit) : String :=
+    match w {
+        Result.ok _ => "",
+        Result.err e => e.message
+    }
 
 // `build_commit_define`'s three answers, pinned. Its whole job is to pick
 // between sources that disagree -- the flake's export, the compiler's own

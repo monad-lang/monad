@@ -1,4 +1,5 @@
 use lang::types {LocalScope, ModulePath, NameRef, Scope, ScopeData, id}
+use std::test {Test.read_fixture}
 use lang::module {parse_all_decls}
 use parsec::core {fail, success}
 use lang::scope {build_scope_from_decls, scope_resolve_name}
@@ -19,13 +20,14 @@ def name_ref (name : String) : NameRef := NameRef.nid (Identifier.id name)
 
 /// Read `file_path` and report whether its module scope resolves `Type`.
 ///
-/// The file's contents are reached through `Monad.bind` -- the `do` block
-/// below -- rather than by matching the `IO` value's own `io` constructor,
-/// which is deliberately not ambient.
+/// An unreadable file fails, named on stderr (`Test.read_fixture`).
 #[partial]
 def build_scope_for_file (file_path : String) (mod_name : String) : IO Bool := do {
-    let content <- IO.read_file (Path.path file_path);
-    return (build_scope_of_source content mod_name)
+    let content <- Test.read_fixture file_path;
+    return (match content {
+        Option.none => false,
+        Option.some text => build_scope_of_source text mod_name
+    })
 }
 
 /// The pure half of `build_scope_for_file`: does `content`'s module scope
@@ -62,7 +64,7 @@ def test_scope_init_math : IO Bool := build_scope_for_file "init/src/math.mo" "m
 def test_scope_init_number : IO Bool := build_scope_for_file "init/src/number.mo" "number"
 
 #[test]
-def test_scope_init_parser_file : IO Bool := build_scope_for_file "lang/src/parser/combinators.mo" "combinators"
+def test_scope_init_parser_file : IO Bool := build_scope_for_file "motes/parsec/src/combinators.mo" "combinators"
 
 #[test]
 def test_scope_init_prelude : IO Bool := build_scope_for_file "init/src/prelude.mo" "prelude"

@@ -27,7 +27,7 @@
 /// the pre-fix buggy code. Only a genuine monadic bind (`let x <- e1; e2`,
 /// or an escaping first-class lambda) forces real lambda-lifting, which is
 /// why every test below uses `<-`, not `:=`.
-open IO {println, write_file}
+open IO {println}
 use lib::codegen::test::e2e_harness {compile_source_run_expect}
 
 /// Primary regression test: `b`'s own bind-continuation transitively
@@ -86,6 +86,7 @@ def test_bind_capture_3level : IO Bool :=
 #[test]
 def test_sibling_lambda_preserves_outer_locals : IO Bool :=
     let source :=
+        "open IO {println}\n" ++
         "def helper (verbose : Bool) : IO I64 := do {\n" ++
         "    let n := 5;\n" ++
         "    if verbose then do {\n" ++

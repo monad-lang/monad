@@ -11,6 +11,7 @@
 /// sees), `/mode plan` mid-session, and a plan-mode pick refused by the
 /// POLICY before any input is consumed -- the cursor is the proof it
 /// never reached the read seam.
+use std::test {Test.write_fixture, Test.append_fixture, Test.read_fixture_or}
 use init::transformers {ResultT}
 use shuttle::agent {RunState, silent_sleep}
 use shuttle::context {usage_zero}
@@ -28,7 +29,7 @@ use weaver::policy {Mode}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.to_string}
 use parsec::number {parse_i64}
 use std::map {BTreeMap}
-use std::io {IO.write_file, IO.read_file, IO.file_exists}
+use std::io {IO.file_exists}
 use std::path {Path.of}
 use std::process {process_id}
 
@@ -52,10 +53,7 @@ def tap_path : String :=
     String.concat "/tmp/weaver_tap_" (String.concat pid ".txt")
 
 def write_text (path : String) (text : String) : IO Unit :=
-    match Path.of path {
-        Result.ok p => IO.write_file p text,
-        Result.err _ => IO.pure unit,
-    }
+    do { let _w <- Test.write_fixture path text; return unit }
 
 // ── The scripted wire: three tool asks, three answers ─────────────────
 
@@ -124,7 +122,7 @@ def cursor_step (p : Path) (exists : Bool) : IO I64 :=
     if Bool.not exists then IO.pure 0 else read_cursor_text p
 
 def read_cursor_text (p : Path) : IO I64 := do {
-    let text <- IO.read_file p;
+    let text <- Test.read_fixture_or (Path.to_string p) "";
     return (cursor_of_text text)
 }
 
@@ -141,7 +139,7 @@ def serve (idx : I64) : IO (Option String) :=
     }
 
 def serve_at (p : Path) (idx : I64) : IO (Option String) := do {
-    let text <- IO.read_file p;
+    let text <- Test.read_fixture_or (Path.to_string p) "";
     serve_input text idx
 }
 
@@ -186,14 +184,13 @@ def tap_write (s : String) : IO Unit :=
         Result.err _ => IO.pure unit,
     }
 
-def tap_at (p : Path) (s : String) : IO Unit :=
-    Monad.bind (IO.read_file p) (fn old => IO.write_file p (String.concat old s))
+def tap_at (p : Path) (s : String) : IO Unit := do {
+    let _w <- Test.append_fixture (Path.to_string p) s;
+    return unit
+}
 
 def read_tap : IO String :=
-    match Path.of tap_path {
-        Result.ok p => IO.read_file p,
-        Result.err _ => IO.pure "TAP-READ-FAILED",
-    }
+    Test.read_fixture_or tap_path "TAP-READ-FAILED"
 
 // ── The `stamp` tool: write-cap, side-effect-free (shuttle gate_tests') ──
 
@@ -345,10 +342,7 @@ def write_edit_inputs : IO Unit :=
     ]))
 
 def read_target (path : String) : IO String :=
-    match Path.of path {
-        Result.ok p => IO.read_file p,
-        Result.err _ => IO.pure "TARGET-READ-FAILED",
-    }
+    Test.read_fixture_or path "TARGET-READ-FAILED"
 
 def mode_is_manual (m : Mode) : Bool :=
     match m { Mode.manual => true, _ => false }

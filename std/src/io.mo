@@ -11,21 +11,175 @@
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
 use lib::path {Path}
-use lib::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.of_string}
+use lib::bytebuf {
+  ByteBuf, ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length,
+  ByteBuf.of_string, ByteBuf.to_string,
+}
 use lib::stream {
-  Stream, FdStream, FdStream.read_line_bounded, FdStream.stderr, FdStream.stdin,
-  FdStream.stdout, PartialLinePolicy, StreamError, stream_result,
+  Stream, FdStream, FdStream.open_file, FdStream.read_line_bounded,
+  FdStream.read_mode, FdStream.stderr, FdStream.stdin, FdStream.stdout,
+  FdStream.write_mode, PartialLinePolicy, StreamError, stream_result,
 }
 
 /// Write `s` and a newline to stdout (buffered; see `IO.flush_stdout`).
 pub def IO.println (s : String) : IO Unit := IO.write_to FdStream.stdout (String.concat s "\n")
 
-#[native "write_file"]
-def IO.write_file_native (path : String) (content : String) : IO Unit
+// ── Whole files ─────────────────────────────────────────────────────────
+// Built on `std/stream.mo`: open, a chunked read or one write, close.
+// Every failure is a `Result.err` -- a missing file is `not_found`,
+// never an empty string -- and the caller decides what absence means.
 
-// TODO Return Option and none on failure
-#[native "read_file"]
-def IO.read_file_native (path : String) : IO String
+/// Bytes asked for per `Stream.read` while reading a whole file.
+def IO.read_chunk_size : I64 := 65536
+
+/// Create or truncate `path` and write `content` to it.
+def IO.write_file_native (path : String) (content : String) : IO (Result StreamError Unit) := do {
+  let opened <- FdStream.open_file path FdStream.write_mode;
+  IO.write_opened opened content
+}
+
+def IO.write_opened (opened : Result StreamError FdStream) (content : String) : IO (Result StreamError Unit) :=
+  match opened {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok s => IO.write_all s content
+  }
+
+def IO.write_all (s : FdStream) (content : String) : IO (Result StreamError Unit) := do {
+  let buf <- ByteBuf.of_string content;
+  let r <- Stream.write s buf;
+  let _ <- ByteBuf.free buf;
+  let _ <- Stream.close s;
+  return (IO.written r)
+}
+
+def IO.written (r : Result StreamError I64) : Result StreamError Unit :=
+  match r {
+    Result.err e => Result.err e,
+    Result.ok _ => Result.ok Unit.unit
+  }
+
+/// The whole of `path` as text.
+///
+/// The chunks are gathered into ONE buffer and decoded once: decoding
+/// each 64 KiB chunk on its own would split a multi-byte character that
+/// straddles a chunk boundary, which the interpreter's lossy UTF-8
+/// decode turns into U+FFFD.
+def IO.read_file_native (path : String) : IO (Result StreamError String) := do {
+  let opened <- FdStream.open_file path FdStream.read_mode;
+  IO.read_opened opened
+}
+
+def IO.read_opened (opened : Result StreamError FdStream) : IO (Result StreamError String) :=
+  match opened {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok s => IO.read_all s
+  }
+
+def IO.read_all (s : FdStream) : IO (Result StreamError String) := do {
+  let chunks <- IO.read_chunks s List.empty;
+  let _ <- Stream.close s;
+  IO.read_joined chunks
+}
+
+def IO.read_joined (chunks : Result StreamError (List ByteBuf)) : IO (Result StreamError String) :=
+  match chunks {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok bufs => IO.read_text bufs
+  }
+
+def IO.read_text (bufs : List ByteBuf) : IO (Result StreamError String) := do {
+  let text <- IO.chunks_text bufs;
+  return (Result.ok text)
+}
+
+/// The chunks read so far are `acc_rev`, newest first. Every chunk is
+/// freed on the error path; on success the caller owns them.
+#[terminating]
+def IO.read_chunks (s : FdStream) (acc_rev : List ByteBuf) : IO (Result StreamError (List ByteBuf)) := do {
+  let r <- Stream.read s IO.read_chunk_size;
+  IO.read_chunk_got s acc_rev r
+}
+
+#[terminating]
+def IO.read_chunk_got (s : FdStream) (acc_rev : List ByteBuf) (r : Result StreamError ByteBuf) : IO (Result StreamError (List ByteBuf)) :=
+  match r {
+    Result.err e => IO.read_failed acc_rev e,
+    Result.ok buf =>
+      if ByteBuf.length buf == 0
+      then IO.read_at_eof acc_rev buf
+      else IO.read_chunks s (List.cons buf acc_rev)
+  }
+
+def IO.read_at_eof (acc_rev : List ByteBuf) (eof : ByteBuf) : IO (Result StreamError (List ByteBuf)) := do {
+  let _ <- ByteBuf.free eof;
+  return (Result.ok (List.reverse acc_rev))
+}
+
+def IO.read_failed (acc_rev : List ByteBuf) (e : StreamError) : IO (Result StreamError (List ByteBuf)) := do {
+  let _ <- IO.free_all acc_rev;
+  return (Result.err e)
+}
+
+#[terminating]
+def IO.free_all (bufs : List ByteBuf) : IO Unit :=
+  match bufs {
+    List.empty => IO.pure Unit.unit,
+    List.cons b rest => IO.free_then b rest
+  }
+
+#[terminating]
+def IO.free_then (b : ByteBuf) (rest : List ByteBuf) : IO Unit := do {
+  let _ <- ByteBuf.free b;
+  IO.free_all rest
+}
+
+/// Decode `bufs` as one text, freeing each. One chunk -- every file
+/// under 64 KiB -- decodes directly; more are copied into a single
+/// buffer first.
+def IO.chunks_text (bufs : List ByteBuf) : IO String :=
+  match bufs {
+    List.empty => IO.pure "",
+    List.cons one rest =>
+      match rest {
+        List.empty => IO.buf_text one,
+        List.cons _ _ => IO.gathered_text bufs
+      }
+  }
+
+def IO.buf_text (b : ByteBuf) : IO String := do {
+  let text <- ByteBuf.to_string b (ByteBuf.length b);
+  let _ <- ByteBuf.free b;
+  return text
+}
+
+def IO.gathered_text (bufs : List ByteBuf) : IO String := do {
+  let dst <- ByteBuf.alloc (IO.total_length bufs);
+  let _ <- IO.copy_chunks dst 0 bufs;
+  IO.buf_text dst
+}
+
+#[terminating]
+def IO.total_length (bufs : List ByteBuf) : I64 :=
+  match bufs {
+    List.empty => 0,
+    List.cons b rest => ByteBuf.length b + IO.total_length rest
+  }
+
+/// Copy each of `bufs` into `dst` from `offset` on, freeing each.
+#[terminating]
+def IO.copy_chunks (dst : ByteBuf) (offset : I64) (bufs : List ByteBuf) : IO Unit :=
+  match bufs {
+    List.empty => IO.pure Unit.unit,
+    List.cons b rest => IO.copy_chunk dst offset b rest
+  }
+
+#[terminating]
+def IO.copy_chunk (dst : ByteBuf) (offset : I64) (b : ByteBuf) (rest : List ByteBuf) : IO Unit := do {
+  let n := ByteBuf.length b;
+  let _ <- ByteBuf.copy_into dst offset b;
+  let _ <- ByteBuf.free b;
+  IO.copy_chunks dst (offset + n) rest
+}
 
 #[native "file_exists"]
 def IO.file_exists_native (path : String) : IO Bool
@@ -79,26 +233,19 @@ pub def IO.write_to (s : FdStream) (text : String) : IO Unit := do {
   ByteBuf.free buf
 }
 
-// One line from stdin, WITHOUT its trailing newline. `Option.none` at
-// EOF, meaning nothing at all was read -- a final line with no trailing
-// newline is still `Option.some line`, so a caller reading a sequence of
-// lines terminates on `none` rather than on an empty string. `\r` is
+// One line from stdin, WITHOUT its trailing newline. `Result.ok
+// Option.none` at EOF, meaning nothing at all was read -- a final line
+// with no trailing newline is still `Option.some line`, so a caller
+// reading a sequence of lines terminates on `none` rather than on an
+// empty string. `\r` is
 // NOT stripped (the caller wants the bytes the peer actually sent). A
-// read error is `none` too, as end of input.
+// read error is a `Result.err`, distinct from end of input.
 //
 // One byte per read (`FdStream.read_line_bounded`), so the bytes after
 // the line stay in the kernel for the caller's next `read_stdin_exact`
 // or `poll(2)` -- a reader that read ahead would desynchronize both.
-pub def IO.read_line : IO (Option String) := do {
-  let r <- FdStream.read_line_bounded FdStream.stdin 0 PartialLinePolicy.deliver;
-  return (IO.line_or_none r)
-}
-
-def IO.line_or_none (r : Result StreamError (Option String)) : Option String :=
-  match r {
-    Result.ok line => line,
-    Result.err _ => Option.none
-  }
+pub def IO.read_line : IO (Result StreamError (Option String)) :=
+  FdStream.read_line_bounded FdStream.stdin 0 PartialLinePolicy.deliver
 
 #[native "read_stdin_exact"]
 priv def read_stdin_exact (n : I64) : RawIO String
@@ -169,10 +316,13 @@ def IO.current_time : IO I64
 #[native current_time_nano]
 def IO.current_time_nano : IO I64
 
-pub def IO.write_file (path : Path) (content : String) : IO Unit :=
+/// Create or truncate `path` and write `content` to it. A missing parent
+/// directory is `not_found`; it is not created.
+pub def IO.write_file (path : Path) (content : String) : IO (Result StreamError Unit) :=
     IO.write_file_native (Path.to_string path) content
 
-pub def IO.read_file (path : Path) : IO String :=
+/// The whole file at `path` as text; a missing file is `not_found`.
+pub def IO.read_file (path : Path) : IO (Result StreamError String) :=
     IO.read_file_native (Path.to_string path)
 
 pub def IO.file_exists (path : Path) : IO Bool :=

@@ -35,6 +35,7 @@
 /// Field reads go through typed accessor defs (`nt_*`), never inline, per
 /// this repository's recorded `#[test]` plus struct-field codegen hazard.
 /// The `nt_` prefix keeps whole-program scope clean.
+use std::test {Test.write_fixture}
 use lib::module {
   DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck,
   check_file_cached_from_source_ranged, module_info_cache_empty, module_info_cache_insert,
@@ -195,7 +196,7 @@ def nt_probe_path (name : String) : String := nav_dir ++ "/" ++ name
 def nt_check (name : String) (src : String) : IO RangedFileCheck := do {
     exec_cmd "mkdir" ["-p", nav_dir];
     let path : String := nt_probe_path name;
-    IO.write_file (Path.path path) src;
+    let _w <- Test.write_fixture path src;
     let checked <- check_file_cached_from_source_ranged module_info_cache_empty path src false;
     return checked
 }

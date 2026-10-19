@@ -290,10 +290,10 @@ def test_static_file : IO Bool := do {
   // Process-scoped: `/tmp` is shared with every sibling worktree, so a fixed
   // name lets two concurrent runs write over each other's fixture.
   let path := String.concat "/tmp/moon_test_static_" (String.concat (I64.to_string process_id) ".txt");
-  IO.write_file_native path "static content";
+  let wrote <- IO.write_file_native path "static content";
   let res_ok : Response <- Server.static "" (static_req path);
   let res_404 : Response <- Server.static "" (static_req (String.concat path "_missing"));
-  return (Bool.and
+  return (Result.is_ok wrote && Bool.and
     (Bool.and (U16.beq res_ok.status Status.ok) (String.beq (String.from_list (Body.to_bytes_pure res_ok.body)) "static content"))
     (U16.beq res_404.status Status.not_found))
 }

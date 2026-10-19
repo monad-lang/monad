@@ -24,6 +24,12 @@
 /// args), since a missing/garbage length silently corrupts the write
 /// (reads whatever the register happened to hold) rather than crashing.
 ///
+/// `write_file`/`read_file` are no longer natives at all (io-streams Phase
+/// 4: ordinary defs over `FdStream`, returning `Result StreamError _`), so
+/// the fast path is gone; the round trip stays as an end-to-end check that
+/// a two-argument `write_file` call with non-literal arguments writes the
+/// exact bytes.
+///
 /// Uses non-literal (`let`-bound) path/content so this can't be hidden by
 /// any constant-folding. The COMPILED half only proves the original crash
 /// stays fixed (write, then a bare `return 0`); byte-exact content
@@ -39,6 +45,7 @@
 /// newly-found, not-yet-filed bug, unrelated to `write_file`'s own arity-2
 /// dispatch gap -- out of scope here.
 use std::process {process_id}
+use std::test {Test.read_fixture}
 use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 /// `IO.write_file path content;` as a bare do-block statement (exactly
@@ -52,12 +59,15 @@ def test_write_file_two_arg_native_dispatch_roundtrip : IO Bool := do {
     let source := r#"def main (args : List String) : IO I64 := do {
     let path := ""# ++ write_path ++ r#"";
     let content := "hello from the native write_file fast path";
-    IO.write_file_native path content;
-    return 0
+    let w <- IO.write_file_native path content;
+    return (if Result.is_ok w then 0 else 1)
 }
 "#;
     let compiled_ok <- compile_source_run_expect source "test_write_file_two_arg_native_dispatch_roundtrip" 0;
-    let written <- IO.read_file (Path.path write_path);
-    let content_matches := String.beq written content;
+    let written <- Test.read_fixture write_path;
+    let content_matches := match written {
+        Option.some text => String.beq text content,
+        Option.none => false
+    };
     return (compiled_ok && content_matches)
 }

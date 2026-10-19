@@ -52,13 +52,27 @@ fn feed_bytes(bytes: &'static [u8]) -> impl FnOnce(std::fs::File) + Send + 'stat
 /// LSP framing: `read_line` header lines, then a `read_stdin_exact` body,
 /// then more lines -- every byte lands with the reader that asked.
 const FRAMING: &str = r#"
-def is_line (o : Option String) (s : String) : Bool :=
+use std::stream {StreamError}
+
+def is_line (r : Result StreamError (Option String)) (s : String) : Bool :=
+  match r {
+    Result.ok o => line_is o s,
+    Result.err _ => false
+  }
+
+def line_is (o : Option String) (s : String) : Bool :=
   match o {
     Option.some l => String.beq l s,
     Option.none => false
   }
 
-def is_none (o : Option String) : Bool :=
+def is_none (r : Result StreamError (Option String)) : Bool :=
+  match r {
+    Result.ok o => opt_none o,
+    Result.err _ => false
+  }
+
+def opt_none (o : Option String) : Bool :=
   match o {
     Option.some _ => false,
     Option.none => true
@@ -81,10 +95,18 @@ def main (args : List String) : IO I64 := do {
 /// writer is still open -- the rest of the escape sequence must still be
 /// in the kernel, not in a reader's buffer.
 const POLL: &str = r#"
+use std::stream {StreamError}
+
 #[native "term_ctl"]
 priv def term_ctl (op : I64) (arg : I64) : RawIO I64
 
-def is_line (o : Option String) (s : String) : Bool :=
+def is_line (r : Result StreamError (Option String)) (s : String) : Bool :=
+  match r {
+    Result.ok o => line_is o s,
+    Result.err _ => false
+  }
+
+def line_is (o : Option String) (s : String) : Bool :=
   match o {
     Option.some l => String.beq l s,
     Option.none => false
@@ -102,6 +124,8 @@ def main (args : List String) : IO I64 := do {
 
 /// 10k lines through `IO.read_line`, counted.
 const MANY_LINES: &str = r#"
+use std::stream {StreamError}
+
 #[terminating]
 def count_lines (n : I64) : IO I64 := do {
   let line <- IO.read_line;
@@ -109,7 +133,14 @@ def count_lines (n : I64) : IO I64 := do {
 }
 
 #[terminating]
-def count_from (n : I64) (line : Option String) : IO I64 :=
+def count_from (n : I64) (r : Result StreamError (Option String)) : IO I64 :=
+  match r {
+    Result.ok line => count_line n line,
+    Result.err _ => IO.pure (0 - 1)
+  }
+
+#[terminating]
+def count_line (n : I64) (line : Option String) : IO I64 :=
   match line {
     Option.some _ => count_lines (n + 1),
     Option.none => IO.pure n

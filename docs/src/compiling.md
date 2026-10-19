@@ -209,8 +209,8 @@ REPL sessions are the supported shape.
 
 A reachable native the target cannot serve is a compile error naming the
 native and the target, not a link failure or a trap. The wasm profiles omit
-OS threads/processes/sockets/files (`fork_io`, `exec_cmd`, `tcp_*`, `read_file`,
-`get_env`, `stream_open`, ...); the web profile additionally omits C-library
+OS threads/processes/sockets/files (`fork_io`, `exec_cmd`, `tcp_*`, `file_exists`,
+`get_env`, `stream_open` -- so `IO.read_file`/`write_file` too, ...); the web profile additionally omits C-library
 float formatting (`f64_to_string`, `f64_of_string`). Console I/O (`IO.println`,
 `IO.write_stdout`, `IO.read_line`) and `std_fd`/`stream_read`/`stream_write`
 are available on both.
@@ -456,7 +456,7 @@ naming the reference exactly as written (`unknown variable 'Map.get'`).
 
 ## Native Coverage
 
-There are 170 natives declared across `init/` and `std/`. The backend wires `I64` arithmetic and
+There are 169 natives declared across `init/` and `std/`. The backend wires `I64` arithmetic and
 comparison, string operations, the file and directory natives, `get_env`,
 `current_time`, `process_id`, `exec_cmd`, the four `tcp_*` socket natives,
 `std.stream`'s byte streams, and `std.bytebuf`'s `ByteBuf`.

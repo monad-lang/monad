@@ -256,6 +256,14 @@ type Result E A {
 	err (e: E)
 }
 
+/// Whether `r` is `Result.ok` -- for a caller that checks an effect's
+/// outcome (a test asserting a write landed) without needing its value.
+def Result.is_ok {E A : Type} (r : Result E A) : Bool :=
+	match r {
+		Result.ok _ => true,
+		Result.err _ => false
+	}
+
 type Pair A B {
 	pair (first : A) (second : B)
 }

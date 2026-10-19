@@ -50,6 +50,7 @@
 // channel back from the fixture program -- `ffi_link_test.mo` in this
 // directory is where `sin`'s result, and the narrow-int round trips, are
 // asserted on directly, from plain `#[test]` defs.
+use std::test {Test.write_fixture}
 open IO {println}
 use std::process {exec_cmd, process_id}
 use lang::types {}
@@ -144,8 +145,8 @@ def compile_ffi_fixture_exit_code : IO I64 := do {
     // the source to the nearest `mote.toml`, so the fixture only gets
     // `-lm` if the manifest beside it actually declares it.
     exec_cmd "mkdir" ["-p", output_dir ++ "/src"];
-    IO.write_file (Path.path (output_dir ++ "/mote.toml")) ffi_fixture_manifest;
-    IO.write_file (Path.path src_path) ffi_fixture_source;
+    let _w <- Test.write_fixture (output_dir ++ "/mote.toml") ffi_fixture_manifest;
+    let _w <- Test.write_fixture src_path ffi_fixture_source;
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {
@@ -163,7 +164,7 @@ def compile_ffi_fixture_exit_code : IO I64 := do {
                 Result.ok mod_ => do {
                     let link_libs : List String <- collect_link_libs (get_loaded_all loaded);
                     let ir_text := emit_module mod_;
-                    IO.write_file (Path.path ir_path) ir_text;
+                    let _w <- Test.write_fixture ir_path ir_text;
 
                     // Stage 1: `llc`. This is the assertion that the
                     // wrapper's ABI casts are legal LLVM at all.
@@ -219,7 +220,7 @@ def test_extern_f64_return_type_declares_double : IO Bool := do {
     let output_dir := "/tmp/monad_ffi_e2e_" ++ I64.to_string process_id;
     let src_path := output_dir ++ "/ffi_f64_decl_probe.mo";
     exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file (Path.path src_path) ffi_fixture_source;
+    let _w <- Test.write_fixture src_path ffi_fixture_source;
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {
@@ -272,8 +273,8 @@ def test_extern_link_libs_flag : IO Bool := do {
     let output_dir := "/tmp/monad_ffi_libs_" ++ I64.to_string process_id;
     let src_path := output_dir ++ "/src/ffi_link_libs_probe.mo";
     exec_cmd "mkdir" ["-p", output_dir ++ "/src"];
-    IO.write_file (Path.path (output_dir ++ "/mote.toml")) ffi_fixture_manifest;
-    IO.write_file (Path.path src_path) ffi_fixture_source;
+    let _w <- Test.write_fixture (output_dir ++ "/mote.toml") ffi_fixture_manifest;
+    let _w <- Test.write_fixture src_path ffi_fixture_source;
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {

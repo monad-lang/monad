@@ -6,6 +6,7 @@
 /// `Settings.load_of_path` against real files. The file tests write
 /// under /tmp, PID-qualified -- never `.weaver/config.toml` in the repo,
 /// which would leak into every later manual run's resolution.
+use std::test {Test.write_fixture}
 use weaver::settings {
     Settings, Settings.empty, Settings.merge, Settings.load_of_path,
     Settings.cap_of, Settings.key_of, Loaded, parse_settings, parse_warned, parse_cap,
@@ -14,8 +15,6 @@ use weaver::error {WeaverError, WeaverError.show}
 use weaver::policy {Mode}
 use shuttle::gate {Capability}
 use std::map {BTreeMap}
-use std::io {IO.write_file}
-use std::path {Path.of}
 use std::process {process_id}
 
 // ── Option equality, field by field ─────────────────────────────────────
@@ -219,10 +218,7 @@ def present_toml : String :=
     "provider = \"mistral\"\n\n[mcp_caps]\nsrv = \"read\"\n"
 
 def write_present : IO Unit :=
-    match Path.of present_path {
-        Result.ok p => IO.write_file p present_toml,
-        Result.err _ => IO.pure unit,
-    }
+    do { let _w <- Test.write_fixture present_path present_toml; return unit }
 
 /// A missing file contributes nothing.
 #[test]

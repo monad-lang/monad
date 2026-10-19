@@ -9,14 +9,13 @@
 /// `signature_delta` for signed thinking, `input_json_delta`
 /// fragments for tool inputs, usage split between `message_start`
 /// (input half) and `message_delta` (output half).
+use std::test {Test.write_fixture, Test.append_fixture, Test.read_fixture_or}
 use anthropic::client {AnthropicAcc, anthropic_apply_event, anthropic_assemble, anthropic_bad_input, anthropic_stream_bytes}
 use anthropic::types {AnthropicMessage, MessagesRequest, MessagesResponse, AnthropicUsage, Block}
 use json::json {Json, Json.to_string, Json.parse}
 use http::sse {Sse.init}
 use std::list {List.length}
-use std::path {Path.of}
 use std::process {process_id}
-use std::io {IO.read_file, IO.write_file}
 
 /// The accumulator every fold starts from -- the same zero state
 /// `Anthropic.complete_stream` hands moose.
@@ -261,23 +260,13 @@ def tap_path : String :=
 /// write because `std::io` has no append mode and no `IORef` -- a
 /// single-threaded test makes the race moot.
 def text_tap (t : String) : IO Unit :=
-    match Path.of tap_path {
-        Result.ok p =>
-            Monad.bind (IO.read_file p) (fn old => IO.write_file p (String.concat old t)),
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.append_fixture tap_path t; return unit }
 
 def reset_tap : IO Unit :=
-    match Path.of tap_path {
-        Result.ok p => IO.write_file p "",
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.write_fixture tap_path ""; return unit }
 
 def read_tap : IO String :=
-    match Path.of tap_path {
-        Result.ok p => IO.read_file p,
-        Result.err _ => return "TAP-READ-FAILED",
-    }
+    Test.read_fixture_or tap_path "TAP-READ-FAILED"
 
 /// A `text_delta` split across two pushes (the first ends mid-JSON,
 /// no newline yet), with `event:` lines present exactly as the wire

@@ -22,6 +22,7 @@
 /// rather than inspecting IR text -- only running a compiled binary
 /// catches a wrong-layout read, which is how the v29 crash stayed
 /// invisible through `check` and `llc` both.
+use std::test {Test.write_fixture}
 open IO {println}
 use lang::codegen::test::e2e_harness {compile_source_run_expect}
 use std::process {process_id, exec_cmd}
@@ -134,7 +135,7 @@ def main (args : List String) : IO I64 :=
     return (if unwrap build == 6 then 7 else 1)
 "#;
     exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file (Path.path src_path) source;
+    let _w <- Test.write_fixture src_path source;
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {

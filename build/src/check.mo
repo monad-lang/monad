@@ -40,7 +40,7 @@ use parsec::number {parse_i64}
 use build::hash {Build.file_digest_with, Build.probe_digest_tool, DigestTool}
 use build::identity {Build.compiler_digest_with}
 use build::closure {Build.closure_digest_with}
-use build::store {Build.ensure_dir, Build.entry_root_dir, check}
+use build::store {Build.ensure_dir, Build.entry_root_dir, Build.read_leaf, Build.write_leaf, check}
 
 /// The working directory under ONE name.
 ///
@@ -406,27 +406,30 @@ def Build.fail_header (path : String) (n : I64) : String :=
 /// poisonous, which is the property a cache most needs.
 #[partial]
 pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair Build.CheckTally String)) := do {
-    let out_path : String := Build.check_entry_leaf root key "out";
-    let there <- IO.file_exists (Path.path out_path);
-    if Bool.not there
-    then return Option.none
-    else do {
-        let counts_path : String := Build.check_entry_leaf root key "errors";
-        let counts_there <- IO.file_exists (Path.path counts_path);
-        if Bool.not counts_there
-        then return Option.none
-        else do {
-            let raw <- IO.read_file (Path.path counts_path);
-            match parse_i64 raw {
-                Option.none => return Option.none,
-                Option.some n => do {
-                    let block <- IO.read_file (Path.path out_path);
-                    let warns <- Build.check_entry_warn_count root key;
-                    return (Option.some (Pair.pair (Build.CheckTally.mk n warns) block))
-                }
-            }
-        }
+    let raw <- Build.read_leaf (Build.check_entry_leaf root key "errors");
+    match Build.parsed_count raw {
+        Option.none => return Option.none,
+        Option.some n => Build.check_entry_read_out root key n
     }
+}
+
+/// A leaf's text as a count; `none` when it is absent or not a number.
+def Build.parsed_count (raw : Option String) : Option I64 :=
+    match raw {
+        Option.none => Option.none,
+        Option.some text => parse_i64 text
+    }
+
+/// The rest of a hit once the error count parsed: the `out` block is
+/// required (absent is a miss), the warning count is not.
+#[partial]
+def Build.check_entry_read_out (root : String) (key : String) (n : I64) : IO (Option (Pair Build.CheckTally String)) := do {
+    let block <- Build.read_leaf (Build.check_entry_leaf root key "out");
+    let warns <- Build.check_entry_warn_count root key;
+    return (match block {
+        Option.none => Option.none,
+        Option.some b => Option.some (Pair.pair (Build.CheckTally.mk n warns) b)
+    })
 }
 
 /// The warnings half of a stored tally: `0` when the leaf is absent or
@@ -436,29 +439,24 @@ pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair
 /// replay of what it recorded.
 #[partial]
 def Build.check_entry_warn_count (root : String) (key : String) : IO I64 := do {
-    let warn_path : String := Build.check_entry_leaf root key "warnings";
-    let there <- IO.file_exists (Path.path warn_path);
-    if Bool.not there then return 0
-    else do {
-        let raw <- IO.read_file (Path.path warn_path);
-        match parse_i64 raw {
-            Option.none => return 0,
-            Option.some n => return n,
-        }
-    }
+    let raw <- Build.read_leaf (Build.check_entry_leaf root key "warnings");
+    return (match Build.parsed_count raw {
+        Option.none => 0,
+        Option.some n => n,
+    })
 }
 
 /// Record a result. Best-effort by design: a store that cannot be written
 /// turns the next run into a miss, which is the same answer as never
-/// having tried. Reported nowhere, because there is nothing a user could
-/// do about it and nothing that would be wrong because of it.
+/// having tried -- so a failed write is reported on stderr
+/// (`Build.write_leaf`) and the check carries on.
 #[partial]
 pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (warnings : I64) (block : String) : IO I64 := do {
     let d : String := Build.check_entry_dir root key;
     let _mk <- Build.ensure_dir d;
-    let _c <- IO.write_file (Path.path (Build.check_entry_leaf root key "errors")) (I64.to_string errors);
-    let _w <- IO.write_file (Path.path (Build.check_entry_leaf root key "warnings")) (I64.to_string warnings);
-    let _o <- IO.write_file (Path.path (Build.check_entry_leaf root key "out")) block;
+    let _c <- Build.write_leaf (Build.check_entry_leaf root key "errors") (I64.to_string errors);
+    let _w <- Build.write_leaf (Build.check_entry_leaf root key "warnings") (I64.to_string warnings);
+    let _o <- Build.write_leaf (Build.check_entry_leaf root key "out") block;
     return 0
 }
 

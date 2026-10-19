@@ -21,6 +21,7 @@
 /// `e2e_tests.mo` these run ungated, under any runner that can load
 /// modules (they pass under the Rust host too).
 
+use std::test {Test.write_fixture}
 use std::process {process_id}
 use lang::module {collect_link_libs, collect_link_pkgs, get_loaded_all, load_file_modules}
 
@@ -54,8 +55,8 @@ def lib_listed (name : String) (libs : List String) : Bool :=
 def test_link_libs_plain_program_gets_no_ssl : IO Bool := do {
   let dir := "/tmp/monad_tls_libs_" ++ I64.to_string process_id;
   exec_cmd "mkdir" ["-p", dir ++ "/src"];
-  IO.write_file (Path.path (dir ++ "/mote.toml")) no_tls_fixture_manifest;
-  IO.write_file (Path.path (dir ++ "/src/probe.mo")) no_tls_fixture_source;
+  let _w <- Test.write_fixture (dir ++ "/mote.toml") no_tls_fixture_manifest;
+  let _w <- Test.write_fixture (dir ++ "/src/probe.mo") no_tls_fixture_source;
   let loaded <- load_file_modules (dir ++ "/src/probe.mo") false;
   match loaded {
     Result.err _ => return false,

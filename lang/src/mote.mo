@@ -19,6 +19,7 @@ use lang::types {AttrArg, Attribute, id, show_identifier}
 use std::io {}
 use std::map {BTreeMap, BTreeMap.to_list}
 use std::process {exec_cmd, process_id}
+use std::stream {StreamError, StreamError.is_not_found}
 
 /// What resolution needs from a `mote.toml`: who this mote is, where it
 /// lives, and what it declared. `[dependencies]` and `[dev-dependencies]`
@@ -192,19 +193,20 @@ def Mote.discover_config_target_dir_go (dir : String) (depth : I64) : IO (Option
     if I64.lt depth 1
     then return Option.none
     else do {
-        let candidate := tool_config_in dir;
-        let exists <- IO.file_exists (Path.path candidate);
-        if exists
-        then do {
-            let text <- IO.read_file (Path.path candidate);
-            match Mote.config_target_dir_of_text dir text {
-                Option.some d => return (Option.some d),
-                Option.none => Mote.discover_config_target_dir_above dir (depth - 1)
-            }
+        let text <- read_file_or_none (tool_config_in dir);
+        match Mote.config_target_dir_of_found dir text {
+            Option.some d => return (Option.some d),
+            Option.none => Mote.discover_config_target_dir_above dir (depth - 1)
         }
-        else Mote.discover_config_target_dir_above dir (depth - 1)
     }
 }
+
+/// `config_target_dir_of_text` of a config file that may not exist.
+def Mote.config_target_dir_of_found (dir : String) (text : Option String) : Option String :=
+    match text {
+        Option.none => Option.none,
+        Option.some t => Mote.config_target_dir_of_text dir t
+    }
 
 #[partial]
 def Mote.discover_config_target_dir_above (dir : String) (depth : I64) : IO (Option String) :=
@@ -355,38 +357,33 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
     if I64.lt depth 1
     then return Option.none
     else do {
-        let candidate := mote_toml_in dir;
-        let exists <- IO.file_exists (Path.path candidate);
-        if exists
-        then do {
-            let text <- IO.read_file (Path.path candidate);
-            match Mote.parse_manifest dir text {
-                Option.some m => return (Option.some m),
-                // A `mote.toml` with no `[mote]` is a virtual workspace
-                // root: stop there rather than walking past it, since
-                // nothing above a workspace root is part of this mote.
-                Option.none => return Option.none
-            }
+        let found <- read_file_or_none (mote_toml_in dir);
+        match found {
+            // A `mote.toml` with no `[mote]` is a virtual workspace
+            // root: stop there rather than walking past it, since
+            // nothing above a workspace root is part of this mote.
+            Option.some text => return (Mote.parse_manifest dir text),
+            Option.none => Mote.discover_above dir depth
         }
-        else if String.beq dir "" || String.beq dir "/"
-        then return Option.none
-        else Mote.discover_go (parent_of dir) (depth - 1)
     }
 }
+
+#[partial]
+def Mote.discover_above (dir : String) (depth : I64) : IO (Option MoteManifest) :=
+    if String.beq dir "" || String.beq dir "/"
+    then return Option.none
+    else Mote.discover_go (parent_of dir) (depth - 1)
 
 /// The manifest AT `dir`, with no walk -- unlike `Mote.discover`, whose
 /// walk is right for a file's own mote and wrong for a DECLARED dependency:
 /// `[dependencies.x] path` names `x`'s directory, so a manifest further up
 /// is somebody else's. Resolution needs the dependency's own `[lib] path`.
 pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
-    let candidate := mote_toml_in dir;
-    let exists <- IO.file_exists (Path.path candidate);
-    if exists
-    then do {
-        let text <- IO.read_file (Path.path candidate);
-        return (Mote.parse_manifest dir text)
-    }
-    else return Option.none
+    let text <- read_file_or_none (mote_toml_in dir);
+    return (match text {
+        Option.none => Option.none,
+        Option.some t => Mote.parse_manifest dir t
+    })
 }
 
 // ─── Workspace members ──────────────────────────────────────────────
@@ -412,21 +409,23 @@ pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
 /// is checked by the Rust host in CI anyway.
 #[partial]
 def Mote.workspace_members (dir : String) : IO (List String) := do {
-    let candidate := mote_toml_in dir;
-    let exists <- IO.file_exists (Path.path candidate);
-    if Bool.not exists then do { return List.empty }
-    else do {
-        let text <- IO.read_file (Path.path candidate);
-        match Toml.parse text {
-            err _ => do { return List.empty },
-            ok root =>
-                match Mote.workspace_member_patterns root {
-                    List.empty => do { return List.empty },
-                    List.cons p rest => Mote.expand_members dir (List.cons p rest),
-                }
-        }
+    let found <- read_file_or_none (mote_toml_in dir);
+    match found {
+        Option.none => return List.empty,
+        Option.some text => Mote.workspace_members_of_text dir text
     }
 }
+
+#[partial]
+def Mote.workspace_members_of_text (dir : String) (text : String) : IO (List String) :=
+    match Toml.parse text {
+        err _ => IO.pure List.empty,
+        ok root =>
+            match Mote.workspace_member_patterns root {
+                List.empty => IO.pure List.empty,
+                List.cons p rest => Mote.expand_members dir (List.cons p rest),
+            }
+    }
 
 /// The raw `[workspace] members` strings, before glob expansion.
 def Mote.workspace_member_patterns (root : BTreeMap String Toml.Value) : List String :=
@@ -866,19 +865,30 @@ def Mote.toolchain_root_in_home (home : String) (active : Option String) (versio
             if version_dir_exists then Option.some dir else Option.none
     }
 
-/// A file's contents, or `none` when it is not there at all.
+/// A file's contents, or `none` when it is not there at all (`not_found`)
+/// -- "no `~/.monad/active`", "no `mote.toml` in this directory" are the
+/// ordinary states every caller here probes for.
 ///
-/// `IO.read_file` cannot answer this (`std/src/io.mo` carries a TODO to
-/// return an `Option`; today the native fails the whole program), and "no
-/// `~/.monad/active`" is the ordinary state of every development checkout,
-/// so it must not be a failure. Existence first is the same two-step
-/// `Mote.discover` already does.
-def read_file_or_none (path : String) : IO (Option String) := do {
-    let exists <- IO.file_exists (Path.path path);
-    if exists
-    then do { let text <- IO.read_file (Path.path path); return (Option.some text) }
-    else return Option.none
+/// Any OTHER read failure is reported on stderr before it reads as
+/// absent: the callers' own types (`Option MoteManifest`, a member list)
+/// have no error channel, and an unreadable manifest must not pass
+/// silently for a missing one.
+pub def read_file_or_none (path : String) : IO (Option String) := do {
+    let r <- IO.read_file (Path.path path);
+    read_result_or_none path r
 }
+
+def read_result_or_none (path : String) (r : Result StreamError String) : IO (Option String) :=
+    match r {
+        Result.ok text => IO.pure (Option.some text),
+        Result.err e =>
+            if StreamError.is_not_found e
+            then IO.pure Option.none
+            else do {
+                IO.write_stderr ("error: reading " ++ path ++ ": " ++ e.message ++ "\n");
+                return Option.none
+            }
+    }
 
 /// `IO.is_dir` of a directory that may not have been named at all --
 /// `false` when nothing named one, so a caller probes unconditionally.
@@ -1653,22 +1663,22 @@ def test_the_walk_probes_above_the_working_directory : Bool :=
 /// half of that: the tree is built from scratch, not merged into whatever a
 /// previous run left at this pid.
 ///
-/// `IO.write_file` does NOT create the directory it writes into (it is
-/// `write_file_native`, which opens and fails), so `.monad/` is made
-/// explicitly beside `sub/deeper`. The first version of this row made only
-/// `sub/deeper`, the write silently failed, and the walk was left with no
-/// config to find -- which reads exactly like the walk being broken.
+/// `IO.write_file` does NOT create the directory it writes into (it fails
+/// `not_found`), so `.monad/` is made explicitly beside `sub/deeper`. The
+/// first version of this row made only `sub/deeper`, the write failed
+/// unseen, and the walk was left with no config to find -- which reads
+/// exactly like the walk being broken. The write's result is checked now.
 #[test]
 def test_discover_config_target_dir_walks_up_a_real_tree : IO Bool := do {
     let root := "/tmp/monad_cfgwalk_" ++ I64.to_string process_id;
     exec_cmd "rm" ["-rf", root];
     exec_cmd "mkdir" ["-p", root ++ "/sub/deeper", root ++ "/.monad"];
-    IO.write_file (Path.path (root ++ "/.monad/config.toml")) "[build]\ntarget-dir = \"out\"\n";
+    let w <- IO.write_file (Path.path (root ++ "/.monad/config.toml")) "[build]\ntarget-dir = \"out\"\n";
     let found <- Mote.discover_config_target_dir (root ++ "/sub/deeper");
-    return (match found {
+    return (Result.is_ok w && (match found {
         Option.none => false,
         Option.some d => String.beq d (root ++ "/out")
-    })
+    }))
 }
 
 #[test]

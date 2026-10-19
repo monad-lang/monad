@@ -6,15 +6,14 @@
 /// shapes from `localhost:11434/v1/chat/completions` (LF endings,
 /// `delta.content` fragments, `finish_reason` on the last chunk,
 /// `data: [DONE]` sentinel, `usage` usually absent or null).
+use std::test {Test.write_fixture, Test.append_fixture, Test.read_fixture_or}
 use openai::client {OpenaiAcc, openai_apply_event, openai_assemble, openai_stream_bytes}
 use openai::types {ChatRequest, ChatResponse, ChatMessage, Choice, ApiUsage}
 use openai::tool {ToolCall}
 use json::json {Json.to_string, Json.parse}
 use http::sse {Sse.init}
 use std::list {List.length}
-use std::path {Path.of}
 use std::process {process_id}
-use std::io {IO.read_file, IO.write_file}
 
 /// The accumulator every fold starts from -- the same zero state
 /// `OpenAI.complete_stream` hands moose.
@@ -236,23 +235,13 @@ def tap_path : String :=
 /// write because `std::io` has no append mode and no `IORef` -- a
 /// single-threaded test makes the race moot.
 def text_tap (t : String) : IO Unit :=
-    match Path.of tap_path {
-        Result.ok p =>
-            Monad.bind (IO.read_file p) (fn old => IO.write_file p (String.concat old t)),
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.append_fixture tap_path t; return unit }
 
 def reset_tap : IO Unit :=
-    match Path.of tap_path {
-        Result.ok p => IO.write_file p "",
-        Result.err _ => return unit,
-    }
+    do { let _w <- Test.write_fixture tap_path ""; return unit }
 
 def read_tap : IO String :=
-    match Path.of tap_path {
-        Result.ok p => IO.read_file p,
-        Result.err _ => return "TAP-READ-FAILED",
-    }
+    Test.read_fixture_or tap_path "TAP-READ-FAILED"
 
 /// One event split across two pushes (the first ends mid-JSON, no
 /// newline yet): the SSE state machine must buffer it, the completed
