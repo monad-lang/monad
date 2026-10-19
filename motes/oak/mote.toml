@@ -1,0 +1,20 @@
+# Oak: declarative HTML builders over the shared xml_html core, an indexed
+# page-assembly transformer, and a host-agnostic Cmd/App layer.
+#
+# `init` and `std` are ambient; declared anyway as every manifest here does.
+# `xml_html` owns Html.Attr/Html.Node and the serializer; Oak only builds
+# nodes, it never parses or escapes (one serializer, two producers).
+
+[mote]
+name = "oak"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.xml_html]
+path = "../xml_html"
