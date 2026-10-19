@@ -54,7 +54,7 @@ pub struct Doctor.Env {
     binary_version : Option String,
     sources : List String,
     root_manifest : Bool,
-    monad_link : Option String,
+    monad_link : Option Path,
     monad_link_ok : Bool,
     link_is_symlink : Bool,
     path_has_bin : Bool,
@@ -88,16 +88,100 @@ def Doctor.nightly_entries (entries : List String) : List String :=
     }
 
 #[partial]
-def Doctor.collect_sources (dir : String) (names : List String) : IO (List String) := do {
+def Doctor.collect_sources (dir : Path) (names : List String) : IO (List String) := do {
     match names {
         List.empty => return List.empty,
         List.cons n rest => do {
-            let present <- Shell.is_dir (String.concat dir (String.concat "/" n));
+            let present <- Shell.is_dir (Path.join dir (Path.path n));
             let tail <- Doctor.collect_sources dir rest;
             if present then return (List.cons n tail) else return tail
         },
     }
 }
+
+/// The active version directory, when the active tag is one monadup
+/// itself could have written (`valid_tag` also keeps `Path.join` from
+/// treating an absolute value as a replacement for the base).
+def Doctor.tag_dir (h : Layout.Home) (tag : Option String) : Option Path :=
+    match tag {
+        Option.some t =>
+            match Layout.tag_path t {
+                Result.ok tag_path => Option.some (Layout.version_dir h tag_path),
+                Result.err _ => Option.none,
+            },
+        Option.none => Option.none,
+    }
+
+def Doctor.tag_commit (h : Layout.Home) (tag : Option String) : Option Path :=
+    match tag {
+        Option.some t =>
+            match Layout.tag_path t {
+                Result.ok tag_path => Option.some (Layout.commit_file h tag_path),
+                Result.err _ => Option.none,
+            },
+        Option.none => Option.none,
+    }
+
+/// Join a directory-listing entry onto an optional directory.
+def Doctor.child (dir : Option Path) (name : String) : Option Path :=
+    match dir {
+        Option.some d => Option.some (Path.join d (Path.path name)),
+        Option.none => Option.none,
+    }
+
+def Doctor.is_dir_maybe (d : Option Path) : IO Bool :=
+    match d {
+        Option.some p => Shell.is_dir p,
+        Option.none => return false,
+    }
+
+def Doctor.list_dir_maybe (d : Option Path) : IO (List String) :=
+    match d {
+        Option.some p => Shell.list_dir p,
+        Option.none => return List.empty,
+    }
+
+def Doctor.file_exists_maybe (p : Option Path) : IO Bool :=
+    match p {
+        Option.some q => Shell.file_exists q,
+        Option.none => return false,
+    }
+
+def Doctor.read_maybe (p : Option Path) : IO (Option String) :=
+    match p {
+        Option.some q => do {
+            let r <- Shell.read_file q;
+            match r {
+                Result.ok raw => return (Option.some (Text.trim raw)),
+                Result.err _ => return Option.none,
+            }
+        },
+        Option.none => return Option.none,
+    }
+
+def Doctor.executable_maybe (p : Option Path) : IO Bool :=
+    match p {
+        Option.some q => Shell.is_executable q,
+        Option.none => return false,
+    }
+
+def Doctor.version_line (p : Option Path) : IO (Option String) :=
+    match p {
+        Option.some q => Shell.capture_line (Path.to_string q) ["version"],
+        Option.none => return Option.none,
+    }
+
+def Doctor.collect_sources_maybe (d : Option Path) (names : List String) : IO (List String) :=
+    match d {
+        Option.some p => Doctor.collect_sources p names,
+        Option.none => return List.empty,
+    }
+
+def Doctor.manifest_maybe (d : Option Path) : IO Bool :=
+    match d {
+        Option.some p => Shell.file_exists (Path.join p (Path.path "mote.toml")),
+        Option.none => return false,
+    }
 
 #[partial]
 def Doctor.collect_overrides (items : List String) : IO (List (Pair String String)) := do {
@@ -138,41 +222,27 @@ pub def Doctor.gather (no_network : Bool) : IO Doctor.Env := do {
     let h : Layout.Home := ctx.home;
     let pf : String := ctx.platform.platform;
     let active <- Install.active_tag h;
-    let active_dir : String :=
-        match active {
-            Option.some tag => Layout.version_dir h tag,
-            Option.none => "",
-        };
-    let active_dir_exists <-
-        if String.is_empty active_dir then return false else Shell.is_dir active_dir;
+    let active_dir : Option Path := Doctor.tag_dir h active;
+    let active_dir_exists <- Doctor.is_dir_maybe active_dir;
     let entries <-
-        if active_dir_exists then Shell.list_dir active_dir else return List.empty;
+        if active_dir_exists then Doctor.list_dir_maybe active_dir else return List.empty;
     let binary : Option String := Layout.find_nightly_binary entries;
-    let binary_path : String :=
+    let binary_path : Option Path :=
         match binary {
-            Option.some b => String.concat active_dir (String.concat "/" b),
-            Option.none => "",
+            Option.some b => Doctor.child active_dir b,
+            Option.none => Option.none,
         };
-    let binary_exec <-
-        if String.is_empty binary_path then return false else Shell.is_executable binary_path;
-    let commit_path : String :=
-        match active {
-            Option.some tag => Layout.commit_file h tag,
-            Option.none => "",
-        };
-    let commit_exists <-
-        if String.is_empty commit_path then return false else Shell.file_exists commit_path;
+    let binary_exec <- Doctor.executable_maybe binary_path;
+    let commit_path : Option Path := Doctor.tag_commit h active;
+    let commit_exists <- Doctor.file_exists_maybe commit_path;
     let commit <-
-        if commit_exists then do {
-            let raw <- Shell.read_file commit_path;
-            return (Option.some (Text.trim raw))
-        } else return Option.none;
+        if commit_exists then Doctor.read_maybe commit_path else return Option.none;
     let binary_version <-
-        if binary_exec then Shell.capture_line binary_path ["version"] else return Option.none;
+        if binary_exec then Doctor.version_line binary_path else return Option.none;
     let sources <-
-        if active_dir_exists then Doctor.collect_sources active_dir Layout.source_names else return List.empty;
+        if active_dir_exists then Doctor.collect_sources_maybe active_dir Layout.source_names else return List.empty;
     let root_manifest <-
-        if active_dir_exists then Shell.file_exists (String.concat active_dir "/mote.toml") else return false;
+        if active_dir_exists then Doctor.manifest_maybe active_dir else return false;
     let link <- Shell.readlink (Layout.monad_link h);
     let link_is_symlink <- Shell.is_symlink (Layout.monad_link h);
     let link_ok <- Shell.file_exists (Layout.monad_link h);
@@ -188,9 +258,12 @@ pub def Doctor.gather (no_network : Bool) : IO Doctor.Env := do {
             Option.some raw =>
                 let t : String := Text.trim raw in
                 if String.is_empty t then return false
-                else do {
-                    let isdir <- Shell.is_dir t;
-                    return (Bool.not isdir)
+                else match Path.of t {
+                    Result.ok p => do {
+                        let isdir <- Shell.is_dir p;
+                        return (Bool.not isdir)
+                    },
+                    Result.err _ => return true,
                 },
         };
     let api_ok <-
@@ -200,7 +273,7 @@ pub def Doctor.gather (no_network : Bool) : IO Doctor.Env := do {
             let code <- Shell.curl_head ctx.api_url;
             return (I64.beq code 0)
         };
-    let dl_dir : String := Layout.downloads h;
+    let dl_dir : Path := Layout.downloads h;
     let dl_exists <- Shell.is_dir dl_dir;
     let downloads <-
         if dl_exists then do {
@@ -277,15 +350,16 @@ pub def Doctor.checks (e : Doctor.Env) : List Doctor.Check := [
 
 def Doctor.tool_check (name : String) (present : Bool) (hint : String) : Doctor.Check :=
     if present
-    then Doctor.check name Doctor.Status.st_ok (String.concat name " found") ""
-    else Doctor.check name Doctor.Status.st_fail (String.concat name " not found") hint
+    then Doctor.check name Doctor.Status.st_ok (name ++ " found") ""
+    else Doctor.check name Doctor.Status.st_fail (name ++ " not found") hint
 
 def Doctor.home_check (e : Doctor.Env) : Doctor.Check :=
+    let home : String := Path.to_string e.home.path in
     let suffix : String := if e.home_exists then ")" else ", will be created)" in
-    let detail : String := String.concat e.home.path (String.concat " (" (String.concat e.home.source suffix)) in
+    let detail : String := home ++ " (" ++ e.home.source ++ suffix in
     if e.home_exists && Bool.not e.home_writable
-    then Doctor.check "home" Doctor.Status.st_fail (String.concat detail " is not writable")
-        (String.concat "make " (String.concat e.home.path " writable (or point MONAD_HOME elsewhere)"))
+    then Doctor.check "home" Doctor.Status.st_fail (detail ++ " is not writable")
+        ("make " ++ home ++ " writable (or point MONAD_HOME elsewhere)")
     else Doctor.check "home" Doctor.Status.st_ok detail ""
 
 def Doctor.platform_check (e : Doctor.Env) : Doctor.Check :=
@@ -294,17 +368,17 @@ def Doctor.platform_check (e : Doctor.Env) : Doctor.Check :=
     else if e.platform.used_fallback
     then Doctor.check "platform" Doctor.Status.st_warn e.platform.note "install a tag that ships this platform, or use the x86_64 artifacts"
     else Doctor.check "platform" Doctor.Status.st_ok
-        (String.concat e.platform.platform (String.concat " (from '" (String.concat e.platform.uname_sm "')"))) ""
+        (e.platform.platform ++ " (from '" ++ e.platform.uname_sm ++ "')") ""
 
 def Doctor.active_check (e : Doctor.Env) : Doctor.Check :=
     match e.active {
         Option.none => Doctor.check "active-installed" Doctor.Status.st_fail "no active nightly" "monadup default",
         Option.some tag =>
             if e.active_dir_exists
-            then Doctor.check "active-installed" Doctor.Status.st_ok (String.concat tag " installed") ""
+            then Doctor.check "active-installed" Doctor.Status.st_ok (tag ++ " installed") ""
             else Doctor.check "active-installed" Doctor.Status.st_fail
-                (String.concat "active names '" (String.concat tag "', but its version directory is missing"))
-                (String.concat "monadup install " tag),
+                ("active names '" ++ tag ++ "', but its version directory is missing")
+                ("monadup install " ++ tag),
     }
 
 def Doctor.binary_check (e : Doctor.Env) : Doctor.Check :=
@@ -313,7 +387,7 @@ def Doctor.binary_check (e : Doctor.Env) : Doctor.Check :=
         Option.some name =>
             if e.binary_exec
             then Doctor.check "binary" Doctor.Status.st_ok name ""
-            else Doctor.check "binary" Doctor.Status.st_warn (String.concat name " is not executable") "chmod +x <version dir>/<binary>",
+            else Doctor.check "binary" Doctor.Status.st_warn (name ++ " is not executable") "chmod +x <version dir>/<binary>",
     }
 
 def Doctor.commit_check (e : Doctor.Env) : Doctor.Check :=
@@ -321,12 +395,12 @@ def Doctor.commit_check (e : Doctor.Env) : Doctor.Check :=
         Option.none => Doctor.check "commit" Doctor.Status.st_warn "commit.txt is missing" "re-run monadup install <tag>",
         Option.some c =>
             match e.binary_version {
-                Option.none => Doctor.check "commit" Doctor.Status.st_ok (String.concat "commit.txt: " c) "",
+                Option.none => Doctor.check "commit" Doctor.Status.st_ok ("commit.txt: " ++ c) "",
                 Option.some v =>
                     if String.beq (Text.trim v) (Text.trim c)
-                    then Doctor.check "commit" Doctor.Status.st_ok (String.concat "commit.txt matches the binary: " c) ""
+                    then Doctor.check "commit" Doctor.Status.st_ok ("commit.txt matches the binary: " ++ c) ""
                     else Doctor.check "commit" Doctor.Status.st_warn
-                        (String.concat "commit.txt (" (String.concat c (String.concat ") does not match the binary's stamp (" (String.concat (Text.trim v) ")"))))
+                        ("commit.txt (" ++ c ++ ") does not match the binary's stamp (" ++ Text.trim v ++ ")")
                         "re-run monadup install <tag>",
             },
     }
@@ -334,7 +408,7 @@ def Doctor.commit_check (e : Doctor.Env) : Doctor.Check :=
 def Doctor.runs_check (e : Doctor.Env) : Doctor.Check :=
     match e.binary_version {
         Option.none => Doctor.check "binary-runs" Doctor.Status.st_warn "the installed compiler did not run (`monad version` failed)" "check the platform/fallback note; re-run monadup install <tag>",
-        Option.some v => Doctor.check "binary-runs" Doctor.Status.st_ok (String.concat "monad version: " (Text.trim v)) "",
+        Option.some v => Doctor.check "binary-runs" Doctor.Status.st_ok ("monad version: " ++ Text.trim v) "",
     }
 
 #[partial]
@@ -361,7 +435,7 @@ pub def Doctor.join_names (xs : List String) : String :=
         List.cons x rest =>
             match rest {
                 List.empty => x,
-                List.cons _ _ => String.concat x (String.concat " " (Doctor.join_names rest)),
+                List.cons _ _ => x ++ " " ++ Doctor.join_names rest,
             },
     }
 
@@ -374,8 +448,8 @@ def Doctor.sources_check (e : Doctor.Env) : Doctor.Check :=
             if List.is_empty missing
             then "missing: mote.toml"
             else if e.root_manifest
-                 then String.concat "missing: " (Doctor.join_names missing)
-                 else String.concat "missing: " (String.concat (Doctor.join_names missing) " mote.toml") in
+                 then ("missing: " ++ Doctor.join_names missing)
+                 else ("missing: " ++ Doctor.join_names missing ++ " mote.toml") in
         Doctor.check "toolchain-root" Doctor.Status.st_warn detail
             "monadup install <tag> (re-running install repairs a source-less version directory)"
 
@@ -384,7 +458,7 @@ def Doctor.link_check (e : Doctor.Env) : Doctor.Check :=
     then
         if e.monad_link_ok
         then Doctor.check "monad-symlink" Doctor.Status.st_ok
-            (String.concat "bin/monad -> " (match e.monad_link { Option.some t => t, Option.none => "" })) ""
+            ("bin/monad -> " ++ (match e.monad_link { Option.some t => Path.to_string t, Option.none => "" })) ""
         else Doctor.check "monad-symlink" Doctor.Status.st_fail "bin/monad is dangling" "monadup use <tag>"
     else if e.monad_link_ok
     then Doctor.check "monad-symlink" Doctor.Status.st_ok "bin/monad is a regular file (not a symlink)" ""
@@ -394,7 +468,7 @@ def Doctor.path_check (e : Doctor.Env) : Doctor.Check :=
     if e.path_has_bin
     then Doctor.check "path" Doctor.Status.st_ok "the monad bin directory is on PATH" ""
     else Doctor.check "path" Doctor.Status.st_warn "the monad bin directory is not on PATH"
-        (String.concat "export PATH=\"" (String.concat (Layout.bin_dir e.home) ":$PATH\""))
+        ("export PATH=\"" ++ Path.to_string (Layout.bin_dir e.home) ++ ":$PATH\"")
 
 def Doctor.overrides_check (e : Doctor.Env) : Doctor.Check :=
     if e.monad_root_bad
@@ -407,7 +481,7 @@ def Doctor.overrides_check (e : Doctor.Env) : Doctor.Check :=
 pub def Doctor.override_names (xs : List (Pair String String)) : List String :=
     match xs {
         List.empty => List.empty,
-        List.cons p rest => match p { Pair.pair k v => List.cons (String.concat k (String.concat "=" v)) (Doctor.override_names rest) },
+        List.cons p rest => match p { Pair.pair k v => List.cons (k ++ "=" ++ v) (Doctor.override_names rest) },
     }
 
 def Doctor.api_check (e : Doctor.Env) : Doctor.Check :=
@@ -424,7 +498,7 @@ def Doctor.download_join (xs : List String) : String :=
         List.cons x rest =>
             match rest {
                 List.empty => x,
-                List.cons _ _ => String.concat x (String.concat " " (Doctor.download_join rest)),
+                List.cons _ _ => x ++ " " ++ Doctor.download_join rest,
             },
     }
 
@@ -432,7 +506,7 @@ def Doctor.downloads_check (e : Doctor.Env) : Doctor.Check :=
     if List.is_empty e.downloads
     then Doctor.check "downloads" Doctor.Status.st_ok "no other nightlies installed" ""
     else Doctor.check "downloads" Doctor.Status.st_ok
-        (String.concat (I64.to_string (List.length e.downloads)) (String.concat ": " (Doctor.download_join e.downloads)))
+        (I64.to_string (List.length e.downloads) ++ ": " ++ Doctor.download_join e.downloads)
         "monadup update prunes older nightlies"
 
 // ─── Reporting ─────────────────────────────────────────────────────────
@@ -442,11 +516,10 @@ def Doctor.print_human_loop (checks : List Doctor.Check) : IO Unit :=
     match checks {
         List.empty => return unit,
         List.cons c rest => do {
-            IO.println (String.concat "[" (String.concat (Doctor.status_text c.status)
-                (String.concat "] " (String.concat c.name (String.concat ": " c.detail)))));
+            IO.println ("[" ++ Doctor.status_text c.status ++ "] " ++ c.name ++ ": " ++ c.detail);
             if String.is_empty c.hint || Doctor.status_ok c.status then Doctor.print_human_loop rest
             else do {
-                IO.println (String.concat "       fix: " c.hint);
+                IO.println ("       fix: " ++ c.hint);
                 Doctor.print_human_loop rest
             }
         },
@@ -477,9 +550,9 @@ def Doctor.status_eq (a : Doctor.Status) (b : Doctor.Status) : Bool :=
     }
 
 pub def Doctor.summary_line (checks : List Doctor.Check) : String :=
-    String.concat "summary: " (String.concat (I64.to_string (Doctor.count_status Doctor.Status.st_ok checks))
-        (String.concat " ok, " (String.concat (I64.to_string (Doctor.count_status Doctor.Status.st_warn checks))
-            (String.concat " warn, " (String.concat (I64.to_string (Doctor.count_status Doctor.Status.st_fail checks)) " fail")))))
+    "summary: " ++ I64.to_string (Doctor.count_status Doctor.Status.st_ok checks) ++ " ok, "
+        ++ I64.to_string (Doctor.count_status Doctor.Status.st_warn checks) ++ " warn, "
+        ++ I64.to_string (Doctor.count_status Doctor.Status.st_fail checks) ++ " fail"
 
 pub def Doctor.exit_code (checks : List Doctor.Check) : I64 :=
     if I64.lt 0 (Doctor.count_status Doctor.Status.st_fail checks) then 1 else 0
@@ -508,7 +581,11 @@ def Doctor.checks_json (checks : List Doctor.Check) : List Json :=
 pub def Doctor.env_json (e : Doctor.Env) (checks : List Doctor.Check) : Json :=
     let root : Json :=
         match e.active {
-            Option.some tag => Json.make_str (Layout.version_dir e.home tag),
+            Option.some tag =>
+                match Layout.tag_path tag {
+                    Result.ok tag_path => Json.make_str (Path.to_string (Layout.version_dir e.home tag_path)),
+                    Result.err _ => Json.make_null,
+                },
             Option.none => Json.make_null,
         } in
     Json.make_object_pairs [
@@ -517,7 +594,7 @@ pub def Doctor.env_json (e : Doctor.Env) (checks : List Doctor.Check) : Json :=
         Pair.pair "platform" (Json.make_str e.platform.platform),
         Pair.pair "uname" (Json.make_str e.platform.uname_sm),
         Pair.pair "platform_fallback" (Json.make_bool e.platform.used_fallback),
-        Pair.pair "home" (Json.make_str e.home.path),
+        Pair.pair "home" (Json.make_str (Path.to_string e.home.path)),
         Pair.pair "home_source" (Json.make_str e.home.source),
         Pair.pair "active" (Doctor.opt_json e.active),
         Pair.pair "toolchain_root" root,

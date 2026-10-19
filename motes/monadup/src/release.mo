@@ -52,7 +52,7 @@ pub def Release.selection
 
 def Release.required_str (name : String) (o : BTreeMap String Json) : Result String String :=
     match Json.object_get name o {
-        Option.none => Result.err (String.concat "release JSON is missing '" (String.concat name "'")),
+        Option.none => Result.err ("release JSON is missing '" ++ name ++ "'"),
         Option.some j => Json.get_str j,
     }
 
@@ -157,11 +157,9 @@ pub def Release.asset_url (name : String) (assets : List Release.Asset) : Option
     }
 
 def Release.no_asset_error (tag : String) (platform : String) : String :=
-    String.concat "release '" (String.concat tag
-        (String.concat "' has no " (String.concat (Platform.bin_asset platform)
-            (String.concat " asset, and no " (String.concat (Platform.bin_asset Platform.fallback)
-                (String.concat " one either, so it ships no binary for this machine ("
-                    (String.concat platform ")")))))))
+    "release '" ++ tag ++ "' has no " ++ Platform.bin_asset platform
+        ++ " asset, and no " ++ Platform.bin_asset Platform.fallback
+        ++ " one either, so it ships no binary for this machine (" ++ platform ++ ")"
 
 #[partial]
 def Release.resolve_binary_chain
@@ -176,9 +174,8 @@ def Release.resolve_binary_chain
                     let fallback : Bool := Bool.not (String.beq p original) in
                     let note : String :=
                         if fallback
-                        then String.concat "release '" (String.concat tag
-                            (String.concat "' ships no " (String.concat (Platform.bin_asset original)
-                                (String.concat " binary; installing the " (String.concat (Platform.bin_asset p) " one")))))
+                        then "release '" ++ tag ++ "' ships no " ++ Platform.bin_asset original
+                            ++ " binary; installing the " ++ Platform.bin_asset p ++ " one"
                         else "" in
                     Result.ok (Release.selection tag p (Platform.bin_asset p) url fallback note),
             },
@@ -193,10 +190,8 @@ def Release.resolve_up_chain
         (assets : List Release.Asset) : Result String Release.Selection :=
     match platforms {
         List.empty =>
-            Result.err (String.concat "release '" (String.concat tag
-                (String.concat "' has no " (String.concat (Platform.up_asset original)
-                    (String.concat " asset, and no " (String.concat (Platform.up_asset Platform.fallback)
-                        " one either")))))),
+            Result.err ("release '" ++ tag ++ "' has no " ++ Platform.up_asset original
+                ++ " asset, and no " ++ Platform.up_asset Platform.fallback ++ " one either"),
         List.cons p rest =>
             match Release.asset_url (Platform.up_asset p) assets {
                 Option.none => Release.resolve_up_chain tag original rest assets,
@@ -231,4 +226,4 @@ pub def Release.base_url (url : String) (asset : String) : String :=
     else url
 
 pub def Release.commit_url (sel : Release.Selection) : String :=
-    String.concat (Release.base_url sel.url sel.asset) "commit.txt"
+    (Release.base_url sel.url sel.asset) ++ "commit.txt"

@@ -28,42 +28,57 @@ pub def Scaffold.validate_name (name : String) : Result String String :=
     else Result.err "project name may contain only letters, digits, '_', '-' and '.'"
 
 pub def Scaffold.manifest (name : String) : String :=
-    String.concat "[mote]\nname = \"" (String.concat name
-        (String.concat "\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[[bin]]\nname = \""
-            (String.concat name "\"\npath = \"src/main.mo\"\n")))
+    "[mote]\nname = \"" ++ name
+        ++ "\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[[bin]]\nname = \""
+        ++ name ++ "\"\npath = \"src/main.mo\"\n"
 
 pub def Scaffold.main_source (name : String) : String :=
-    String.concat "open IO {println}\n\ndef main (args : List String) : IO Unit := println \"Hello from " (String.concat name "!\"\n")
+    "open IO {println}\n\ndef main (args : List String) : IO Unit := println \"Hello from " ++ name ++ "!\"\n"
 
 pub def Scaffold.readme (name : String) : String :=
-    String.concat "# " (String.concat name "\n\nA Monad project.\n\n```bash\nmonad run .\n```\n")
+    "# " ++ name ++ "\n\nA Monad project.\n\n```bash\nmonad run .\n```\n"
 
 pub def Scaffold.gitignore : String := "target/\n*.ll\n"
 
-pub def Scaffold.target_dir (base : Option String) (name : String) : String :=
+/// `name` must already satisfy `validate_name`: it is a single path
+/// component, so it cannot replace `base` in the join.
+pub def Scaffold.target_dir (base : Option String) (name : String) : Result String Path :=
     match base {
-        Option.some b => String.concat b (String.concat "/" name),
-        Option.none => name,
+        Option.some b =>
+            match Path.of b {
+                Result.ok dir => Result.ok (Path.join dir (Path.path name)),
+                Result.err e => Result.err e,
+            },
+        Option.none => Path.of name,
     }
 
 /// `IO.write_file`'s native returns silently when `fopen` fails, so a
 /// write is confirmed by reading the file back. A short or missing file
 /// therefore fails the command instead of printing "created".
 #[partial]
-def Scaffold.write_checked (path : String) (content : String) : IO (Result String Unit) := do {
-    Shell.write_file path content;
-    let exists <- Shell.file_exists path;
-    if Bool.not exists then return (Result.err (String.concat "failed to write " path))
-    else do {
-        let back <- Shell.read_file path;
-        if String.beq back content
-        then return (Result.ok unit)
-        else return (Result.err (String.concat "failed to write " path))
+def Scaffold.write_checked (path : Path) (content : String) : IO (Result String Unit) := do {
+    let w <- Shell.write_file path content;
+    match w {
+        Result.err e => return (Result.err e),
+        Result.ok _ => do {
+            let exists <- Shell.file_exists path;
+            if Bool.not exists then return (Result.err ("failed to write " ++ Path.to_string path))
+            else do {
+                let back <- Shell.read_file path;
+                match back {
+                    Result.err e => return (Result.err e),
+                    Result.ok text =>
+                        if String.beq text content
+                        then return (Result.ok unit)
+                        else return (Result.err ("failed to write " ++ Path.to_string path)),
+                }
+            }
+        },
     }
 }
 
 #[partial]
-def Scaffold.write_all (files : List (Pair String String)) : IO (Result String Unit) :=
+def Scaffold.write_all (files : List (Pair Path String)) : IO (Result String Unit) :=
     match files {
         List.empty => return (Result.ok unit),
         List.cons p rest =>
@@ -78,33 +93,38 @@ def Scaffold.write_all (files : List (Pair String String)) : IO (Result String U
             },
     }
 
-pub def Scaffold.create (base : Option String) (name : String) : IO (Result String String) := do {
+pub def Scaffold.create (base : Option String) (name : String) : IO (Result String Path) := do {
     match Scaffold.validate_name name {
         Result.err e => return (Result.err e),
         Result.ok n => do {
-            let dir : String := Scaffold.target_dir base n;
-            let exists <- Shell.file_exists dir;
-            let isdir <- Shell.is_dir dir;
-            if exists || isdir then return (Result.err (String.concat "destination already exists: " dir))
-            else do {
-                let mk <- Shell.mkdir_p (String.concat dir "/src");
-                if Bool.not (I64.beq mk 0) then return (Result.err (String.concat "failed to create " dir))
-                else do {
-                    let files : List (Pair String String) := [
-                        (String.concat dir "/mote.toml", Scaffold.manifest n),
-                        (String.concat dir "/src/main.mo", Scaffold.main_source n),
-                        (String.concat dir "/README.md", Scaffold.readme n),
-                        (String.concat dir "/.gitignore", Scaffold.gitignore),
-                    ];
-                    let written <- Scaffold.write_all files;
-                    match written {
-                        Result.err e => do {
-                            let _ <- Shell.rm_rf dir;
-                            return (Result.err e)
-                        },
-                        Result.ok _ => return (Result.ok dir),
+            match Scaffold.target_dir base n {
+                Result.err e => return (Result.err e),
+                Result.ok dir => do {
+                    let exists <- Shell.file_exists dir;
+                    let isdir <- Shell.is_dir dir;
+                    if exists || isdir then return (Result.err ("destination already exists: " ++ Path.to_string dir))
+                    else do {
+                        let src_dir : Path := Path.join dir (Path.path "src");
+                        let mk <- Shell.mkdir_p src_dir;
+                        if Bool.not (I64.beq mk 0) then return (Result.err ("failed to create " ++ Path.to_string dir))
+                        else do {
+                            let files : List (Pair Path String) := [
+                                (Path.join dir (Path.path "mote.toml"), Scaffold.manifest n),
+                                (Path.join src_dir (Path.path "main.mo"), Scaffold.main_source n),
+                                (Path.join dir (Path.path "README.md"), Scaffold.readme n),
+                                (Path.join dir (Path.path ".gitignore"), Scaffold.gitignore),
+                            ];
+                            let written <- Scaffold.write_all files;
+                            match written {
+                                Result.err e => do {
+                                    let _ <- Shell.rm_rf dir;
+                                    return (Result.err e)
+                                },
+                                Result.ok _ => return (Result.ok dir),
+                            }
+                        }
                     }
-                }
+                },
             }
         },
     }

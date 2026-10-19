@@ -35,7 +35,7 @@ def Platform.fell_back (uname_sm : String) : Platform.Resolution :=
     let note : String :=
         if String.is_empty uname_sm
         then "could not determine the platform (`uname -sm` failed or returned nothing); release installs will refuse rather than download the wrong architecture"
-        else String.concat "no nightly is published for '" (String.concat uname_sm "'; installing the x86_64-linux artifacts") in
+        else ("no nightly is published for '" ++ uname_sm ++ "'; installing the x86_64-linux artifacts") in
     let r : Platform.Resolution := {
         platform := Platform.fallback,
         uname_sm := uname_sm,
@@ -54,12 +54,12 @@ pub def Platform.of_uname (uname_sm : String) : Platform.Resolution :=
     else Platform.fell_back uname_sm
 
 pub def Platform.bin_asset (platform : String) : String :=
-    String.concat "monad-nightly-" platform
+    "monad-nightly-" ++ platform
 pub def Platform.src_asset (platform : String) : String :=
-    String.concat "monad-src-" (String.concat platform ".tar.gz")
+    "monad-src-" ++ platform ++ ".tar.gz"
 
 pub def Platform.up_asset (platform : String) : String :=
-    String.concat "monadup-" platform
+    "monadup-" ++ platform
 
 /// The platform, then the historical fallback, in lookup order.
 pub def Platform.chain (platform : String) : List String :=

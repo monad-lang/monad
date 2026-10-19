@@ -35,5 +35,10 @@ def test_main_source_greets : Bool :=
 
 #[test]
 def test_target_dir_respects_base : Bool :=
-    String.beq (Scaffold.target_dir (Option.some "/tmp") "demo") "/tmp/demo"
-        && String.beq (Scaffold.target_dir Option.none "demo") "demo"
+    match Scaffold.target_dir (Option.some "/tmp") "demo" {
+        Result.ok p => String.beq (Path.to_string p) "/tmp/demo",
+        Result.err _ => false,
+    } && match Scaffold.target_dir Option.none "demo" {
+        Result.ok p => String.beq (Path.to_string p) "demo",
+        Result.err _ => false,
+    }

@@ -4,9 +4,10 @@
 /// A validated filesystem path -- a plain `String` wrapper, following
 /// this codebase's existing newtype idiom (`Identifier`/`Operator`/
 /// `ModulePath`, `lang/types.mo`). Construct via `Path.of` (validating);
-/// the bare `Path.path` constructor is only for compile-time literals
-/// already known non-empty (see `default_output_dir` in `cli/src/main.mo`).
-type Path {
+/// the bare `Path.path` constructor is for a string the caller has
+/// already established is non-empty (a compile-time literal, or a value
+/// it checked -- see `default_output_dir` in `cli/src/main.mo`).
+pub type Path {
     path String
 }
 
@@ -21,12 +22,12 @@ type Path {
 /// output path silently doubling up when one half was already
 /// absolute), without taking on open-ended "what is a valid path"
 /// scope nothing in this corpus actually needs yet.
-def Path.of (s : String) : Result String Path :=
+pub def Path.of (s : String) : Result String Path :=
     if String.is_empty s
     then err "empty path"
     else ok (Path.path s)
 
-def Path.to_string (p : Path) : String :=
+pub def Path.to_string (p : Path) : String :=
     match p { Path.path s => s }
 
 /// Absolute in the only sense this corpus needs: a leading `/`.
@@ -36,7 +37,7 @@ def Path.to_string (p : Path) : String :=
 def raw_path_is_absolute (s : String) : Bool :=
     String.starts_with "/" s
 
-def Path.is_absolute (p : Path) : Bool :=
+pub def Path.is_absolute (p : Path) : Bool :=
     raw_path_is_absolute (Path.to_string p)
 
 /// Low-level, unvalidated join -- the same empty-component/trailing-
@@ -74,12 +75,12 @@ def raw_path_join (a : String) (b : String) : String :=
 /// non-empty invariant holds without re-validating (an absolute `b` is
 /// returned as-is and is non-empty by validation; concatenating two
 /// non-empty strings can't be empty either).
-def Path.join (a : Path) (b : Path) : Path :=
+pub def Path.join (a : Path) (b : Path) : Path :=
     Path.path (raw_path_join (Path.to_string a) (Path.to_string b))
 
 /// Append a literal suffix (extension, filename tail) -- no separator
 /// inserted. Targets `output_dir ++ "/" ++ name ++ ".ll"`-style code.
-def Path.with_suffix (p : Path) (suffix : String) : Path :=
+pub def Path.with_suffix (p : Path) (suffix : String) : Path :=
     Path.path (String.concat (Path.to_string p) suffix)
 
 /// The directory part of a path, or `""` when there is none ("hello.mo"
@@ -123,19 +124,19 @@ def raw_find_last_slash (s : String) (i : I64) : I64 :=
 
 /// The directory part of `p`, or none when it has none ("hello.mo",
 /// "/monad"): an empty `Path` is never constructed.
-def Path.parent (p : Path) : Option Path :=
+pub def Path.parent (p : Path) : Option Path :=
     let d : String := raw_parent_dir (Path.to_string p) in
     if String.is_empty d then Option.none else Option.some (Path.path d)
 
 /// The last component of `p` -- the whole of it when it has no `/`.
-def Path.file_name (p : Path) : String :=
+pub def Path.file_name (p : Path) : String :=
     let s : String := Path.to_string p in
     let last_slash : I64 := raw_find_last_slash s (String.length s) in
     if I64.lt last_slash 0
     then s
     else String.drop (last_slash + 1) s
 
-def Path.beq (a b : Path) : Bool :=
+pub def Path.beq (a b : Path) : Bool :=
     String.beq (Path.to_string a) (Path.to_string b)
 
 instance BEq Path {

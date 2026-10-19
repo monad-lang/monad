@@ -13,7 +13,7 @@ def base_platform : Platform.Resolution :=
     } in p
 
 def base_home : Layout.Home :=
-    let h : Layout.Home := { path := "/tmp/monadup-doctor", source := "default" } in h
+    let h : Layout.Home := { path := Path.path "/tmp/monadup-doctor", source := "default" } in h
 
 def base_tools : Doctor.Tools :=
     let t : Doctor.Tools := {
@@ -35,7 +35,7 @@ def base_env : Doctor.Env :=
         binary_version := Option.some "abc",
         sources := ["init", "std", "llvm", "runtime"],
         root_manifest := true,
-        monad_link := Option.some "../downloads/nightly-x/monad-nightly-x86_64-linux",
+        monad_link := Option.some (Path.path "../downloads/nightly-x/monad-nightly-x86_64-linux"),
         monad_link_ok := true,
         link_is_symlink := true,
         path_has_bin := true,

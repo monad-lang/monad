@@ -69,12 +69,12 @@ pub def Command.dispatch (cmd : Command) : IO I64 :=
             let r <- Scaffold.create dir name;
             match r {
                 Result.err e => do {
-                    IO.write_stderr (String.concat "monadup: error: " (String.concat e "\n"));
+                    IO.write_stderr ("monadup: error: " ++ e ++ "\n");
                     return 1
                 },
                 Result.ok path => do {
-                    IO.println (String.concat "monadup: created " path);
-                    IO.println (String.concat "  cd " path);
+                    IO.println ("monadup: created " ++ Path.to_string path);
+                    IO.println ("  cd " ++ Path.to_string path);
                     IO.println "  monad run .";
                     return 0
                 },
