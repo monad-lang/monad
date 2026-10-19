@@ -12,6 +12,7 @@
 
 use init::transformers {ResultT.run, mk}
 use std::io {IO.read_file, IO.write_file}
+use std::stream {StreamError}
 use std::path {Path, Path.of}
 use std::process {process_id}
 use lib::elements {Html.card, Html.navbar, Html.text, Html.title}
@@ -55,8 +56,33 @@ def stack_expected : String :=
 
 // ═══ A file-backed sink ═══
 
+/// The file-backed sink. `Render.write` has no error channel, so a failed
+/// write is named on stderr; the content assertion below then fails on its
+/// own, which is the test's verdict either way.
 def render_file (p : Path) : Render IO :=
-    Render.render (fn (s : String) => IO.write_file p s)
+    Render.render (fn (s : String) => oak_write p s)
+
+def oak_write (p : Path) (s : String) : IO Unit := do {
+    let r <- IO.write_file p s;
+    oak_wrote r
+}
+
+def oak_wrote (r : Result StreamError Unit) : IO Unit :=
+    match r {
+        Result.ok _ => IO.pure Unit.unit,
+        Result.err e => do {
+            IO.write_stderr ("oak test: writing the sink failed: " ++ e.message ++ "\n");
+            return Unit.unit
+        }
+    }
+
+/// Whether a file read back exactly `want`; any read failure is a `false`
+/// verdict for the test.
+def stack_text_is (r : Result StreamError String) (want : String) : Bool :=
+    match r {
+        Result.ok text => String.beq text want,
+        Result.err _ => false
+    }
 
 def stack_path_string (tag : String) : String :=
     String.concat "/tmp/oak_stack_"
@@ -84,7 +110,7 @@ def stack_success_at (p : Path) : IO Bool := do {
     let prog : HtmlT PageM Open Emitted Unit := stack_page;
     let r : Result String (Pair Page Unit) <- ResultT.run (PageM.run (HtmlT.run prog stack_sink Page.empty));
     let out <- IO.read_file p;
-    return (stack_ok r && String.beq out stack_expected)
+    return (stack_ok r && stack_text_is out stack_expected)
 }
 
 def stack_error_at (p : Path) : IO Bool := do {
@@ -94,7 +120,7 @@ def stack_error_at (p : Path) : IO Bool := do {
     let prog : HtmlT PageM Open Emitted Unit := stack_fail_page;
     let r : Result String (Pair Page Unit) <- ResultT.run (PageM.run (HtmlT.run prog stack_sink Page.empty));
     let out <- IO.read_file p;
-    return (stack_is_boom r && String.beq out "SENTINEL")
+    return (stack_is_boom r && stack_text_is out "SENTINEL")
 }
 
 // ═══ Tests ═══
