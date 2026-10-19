@@ -94,6 +94,15 @@ def test_session_codec_roundtrips_in_memory : Bool :=
         Result.ok s => s.turns == 2 && s.config.model == "test-model" && List.length s.history == 2,
     }
 
+/// The pub list wrappers another mote uses for append-only history: the
+/// derive-generated per-Message codecs stay package-private.
+#[test]
+def test_message_list_json_roundtrip : Bool :=
+    match Session.messages_of_json (Session.messages_to_json test_history) {
+        Result.err _ => false,
+        Result.ok ms => List.length ms == 2 && history_keeps_signed_thinking ms,
+    }
+
 // ── Phase 10: a direct key never crosses the save seam ──────────────────
 
 /// A config carrying a DIRECT key -- what `[api_keys]` in Weaver's

@@ -76,6 +76,17 @@ def decode_messages (js : List Json) : Result String (List Message) :=
             },
     }
 
+/// The per-Message codecs are derive-generated package-private defs; another
+/// mote needs the list forms across the boundary (weaver's session store).
+pub def Session.messages_to_json (ms : List Message) : Json :=
+    Json.make_array (List.map Message.serialize_json ms)
+
+pub def Session.messages_of_json (j : Json) : Result String (List Message) :=
+    match Json.get_array j {
+        Result.err e => Result.err e,
+        Result.ok js => decode_messages js,
+    }
+
 def session_field (obj : BTreeMap String Json) (name : String) : Result String Json :=
     match Json.object_get name obj {
         Option.some j => Result.ok j,
