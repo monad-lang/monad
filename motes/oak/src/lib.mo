@@ -24,3 +24,12 @@ pub use lib::elements {
     Html.node, Html.void, Html.text, Html.raw, Html.comment, Html.doctype,
     Html.fragment, Html.document, Html.navbar, Html.card
 }
+
+pub use lib::html_t {
+    Doc, Doc.empty, Doc.append_head, Doc.append_heads, Doc.append_body,
+    Doc.append_bodies, Emitted, HtmlT, Open, Render, Render.io,
+    Render.lift_resultt, Render.write, Sealed,
+    HtmlT.run, HtmlT.pure, HtmlT.bind, HtmlT.map, HtmlT.and_then, HtmlT.lift,
+    HtmlT.head_node, HtmlT.head_nodes, HtmlT.body_node, HtmlT.body_nodes,
+    HtmlT.seal, HtmlT.emit
+}
