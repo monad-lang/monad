@@ -360,7 +360,11 @@ jobs:
         run: |
           bin="$(nix build --no-link --print-out-paths --accept-flake-config .#monadup)"
           echo "MONADUP_BIN=$bin/bin/monadup" >> "$GITHUB_ENV"
-          file "$bin/bin/monadup"
+          # No `file(1)` here: this step runs outside `nix develop`, and the
+          # runner's PATH carries only bash/git/tar/coreutils (see
+          # scripts/nightly-release.sh). The binary's own `--version` proves it
+          # built and runs; the derivation's checkPhase asserts the same.
+          "$bin/bin/monadup" --version
 
       - name: Distribution and binary checks
         run: |
