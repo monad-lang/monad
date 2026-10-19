@@ -38,7 +38,7 @@ use lang::core_ir {IrLit, match_}
 use lib::core_value {Value}
 use lib::scope {struct_fields_to_params}
 use lang::types {
-  Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
+  AttrArg, Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
   NamePath, Param, Struct, Term, TypeConstraint, binder_anon, binder_named, i64, if_,
   many, match_, named, no_attrs, num, package_private, sentinel, show_name_path, str,
   unnamed,
@@ -140,8 +140,75 @@ def show_identifier_ (id : Identifier) : String := match id { Identifier.id s =>
 def ctor_bare_name (ctor : InductConstructor) : String :=
     match ctor { InductConstructor.mk name _ _ => show_name_path name }
 
-def attr_bare_name (a : Attribute) : String :=
-    match a { Attribute.mk name _ => show_identifier_ name }
+/// Escape `\` and `"` inside an attribute's string argument. The format
+/// is shared byte-for-byte with `core/src/eval/meta_reflect.rs`'s
+/// `escape_attr_str`.
+#[partial]
+def escape_attr_str (s : String) : String :=
+    escape_attr_str_from s 0 ""
+
+#[partial]
+def escape_attr_str_from (s : String) (i : I64) (acc : String) : String :=
+    if I64.lt i (String.length s) then
+        let c : String := String.slice s i 1 in
+        if String.beq c "\\" then escape_attr_str_from s (I64.add i 1) (String.concat acc "\\\\")
+        else if String.beq c "\"" then escape_attr_str_from s (I64.add i 1) (String.concat acc "\\\"")
+        else escape_attr_str_from s (I64.add i 1) (String.concat acc c)
+    else acc
+
+/// One attribute argument, in the canonical format `FieldInfo.attrs`
+/// carries (shared with the Rust host):
+///
+///   - `ident` -> its text
+///   - `str` -> `"` + escaped text + `"`
+///   - `num` -> decimal
+///   - `named` -> `name:=<value>`
+///   - `group` -> `[<joined items>]`
+#[partial]
+def attr_arg_string (a : AttrArg) : String :=
+    match a {
+        AttrArg.ident id => show_identifier_ id,
+        AttrArg.str value => String.concat "\"" (String.concat (escape_attr_str value) "\""),
+        AttrArg.num value => I64.to_string value,
+        AttrArg.named name value => String.concat (show_identifier_ name) (String.concat ":=" (attr_arg_string value)),
+        AttrArg.group items => String.concat "[" (String.concat (attr_args_string items) "]"),
+    }
+
+#[partial]
+def attr_args_string (args : List AttrArg) : String :=
+    match args {
+        List.empty => "",
+        List.cons a rest =>
+            match rest {
+                List.empty => attr_arg_string a,
+                List.cons _ _ => String.concat (attr_arg_string a) (String.concat "," (attr_args_string rest)),
+            },
+    }
+
+/// One field's attribute. A bare `#[arg]` stays `arg`; a named block
+/// becomes `arg(short:="v",help:="...")`. A single top-level `group` is
+/// unwrapped because the self-hosted parser wraps `{...}` in one, while
+/// the Rust parser flattens it.
+#[partial]
+def attribute_string (a : Attribute) : String :=
+    match a {
+        Attribute.mk name args =>
+            match args {
+                List.empty => show_identifier_ name,
+                List.cons first rest =>
+                    match rest {
+                        List.empty =>
+                            match first {
+                                AttrArg.group items =>
+                                    String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_args_string items) ")")),
+                                _ =>
+                                    String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_arg_string first) ")")),
+                            },
+                        List.cons _ _ =>
+                            String.concat (show_identifier_ name) (String.concat "(" (String.concat (attr_args_string args) ")")),
+                    },
+            },
+    }
 
 #[partial]
 def attr_names_val (attrs : List Attribute) : Value :=
@@ -151,7 +218,7 @@ def attr_names_val (attrs : List Attribute) : Value :=
 def attr_names_val_list (attrs : List Attribute) : List Value :=
     match attrs {
         List.empty => List.empty,
-        List.cons a rest => List.cons (str_val (attr_bare_name a)) (attr_names_val_list rest),
+        List.cons a rest => List.cons (str_val (attribute_string a)) (attr_names_val_list rest),
     }
 
 /// The default's own `Expr` conversion is independent of whether the
@@ -941,6 +1008,32 @@ def test_build_type_info_value_two_field_struct : Bool :=
         Result.err _ => false,
         Result.ok v => value_eq v expected_point_type_info,
     }
+
+// ─── attribute-argument reflection (shared format with the Rust host) ──
+
+#[test]
+def test_attribute_string_bare : Bool :=
+    String.beq (attribute_string (Attribute.mk (Identifier.id "arg") List.empty)) "arg"
+
+#[test]
+def test_attribute_string_named_args : Bool :=
+    let a : Attribute := Attribute.mk (Identifier.id "arg") [
+        AttrArg.named (Identifier.id "short") (AttrArg.str "v"),
+        AttrArg.named (Identifier.id "help") (AttrArg.str "a, b"),
+    ] in
+    String.beq (attribute_string a) "arg(short:=\"v\",help:=\"a, b\")"
+
+#[test]
+def test_attribute_string_flattens_one_top_level_group : Bool :=
+    let a : Attribute := Attribute.mk (Identifier.id "arg") [
+        AttrArg.group [AttrArg.named (Identifier.id "short") (AttrArg.str "v")],
+    ] in
+    String.beq (attribute_string a) "arg(short:=\"v\")"
+
+#[test]
+def test_attribute_string_escapes_quotes_and_backslashes : Bool :=
+    let a : Attribute := Attribute.mk (Identifier.id "x") [AttrArg.str "a\"b\\c"] in
+    String.beq (attribute_string a) "x(\"a\\\"b\\\\c\")"
 
 #[test]
 def test_term_to_expr_value_qualified_var_and_app : Bool :=

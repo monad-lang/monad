@@ -247,7 +247,7 @@ def force_global
 /// the effect carve-out the Rust evaluator's own `force_global` has
 /// (`core/src/core_eval.rs`, `GlobalDef::Effect` /
 /// `Native { arity: 0 }`). That is safe ONLY because this evaluator's
-/// native table is `basic_native_table` -- five I64 ops and three String
+/// native table is `basic_native_table` -- five I64 ops and seven String
 /// ops, all pure. Nothing it can evaluate has an effect to repeat.
 ///
 /// Adding an effectful native here would need that carve-out first.
@@ -454,6 +454,68 @@ def native_string_unop_str_result (f : String -> String) (args : List Value) : R
       },
   }
 
+/// `string_length s` -> I64. Added for attribute-argument reflection:
+/// `derive_cli_meta` parses `arg(short:="v",...)` in the meta evaluator.
+def native_string_length_result (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+    List.cons a _ =>
+      match value_as_str a {
+        Option.some x => Result.ok (i64_value (String.length x)),
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+      },
+  }
+
+/// `string_slice s start len` -> String.
+def native_string_slice_result (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 0"),
+    List.cons a rest1 =>
+      match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 1"),
+        List.cons b rest2 =>
+          match rest2 {
+            List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 3 args, got 2"),
+            List.cons c _ => native_string_slice_run a b c,
+          },
+      },
+  }
+
+def native_string_slice_run (s : Value) (start : Value) (len : Value) : Result CoreEvalError Value :=
+  match value_as_str s {
+    Option.some x =>
+      match value_as_i64 start {
+        Option.some i =>
+          match value_as_i64 len {
+            Option.some n => Result.ok (str_value (String.slice x i n)),
+            Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 length"),
+          },
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 start"),
+      },
+    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+  }
+
+/// `string_drop n s` -> String.
+def native_string_drop_result (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+    List.cons a rest1 =>
+      match rest1 {
+        List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+        List.cons b _ => native_string_drop_run a b,
+      },
+  }
+
+def native_string_drop_run (n : Value) (s : Value) : Result CoreEvalError Value :=
+  match value_as_i64 n {
+    Option.some i =>
+      match value_as_str s {
+        Option.some x => Result.ok (str_value (String.drop i x)),
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+      },
+    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 count"),
+  }
+
 def exec_native (name : Identifier) (args : List Value) : Result CoreEvalError Value :=
   match name {
     Identifier.id s => exec_native_by_name s args,
@@ -468,9 +530,13 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
   else if String.beq s "string_concat" then native_string_binop_str_result String.concat args
   else if String.beq s "string_eq" then native_string_binop_bool_result String.beq args
   else if String.beq s "string_to_lowercase" then native_string_unop_str_result String.to_lowercase args
+  else if String.beq s "string_length" then native_string_length_result args
+  else if String.beq s "string_slice" then native_string_slice_result args
+  else if String.beq s "string_drop" then native_string_drop_result args
+  else if String.beq s "string_starts_with" then native_string_binop_bool_result String.starts_with args
   else Result.err (CoreEvalError.ce_native_arg_error (String.concat "unknown native: " s))
 
-/// A fixed 8-entry native table matching `exec_native_by_name` above --
+/// A fixed 12-entry native table matching `exec_native_by_name` above --
 /// what `lang/lower_core_ir.mo` and this module's own tests build
 /// `NativeTable`s from. The 3 string natives (ids 5/6/7) exist to
 /// support self-hosted `reflect_type_info!` evaluation
@@ -479,12 +545,20 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
 /// `derive_cli_meta` transitively call exactly `String.concat`/
 /// `String.beq`/`String.to_lowercase` among natives (everything else
 /// they use is ordinary Monad-defined code, no native involved).
+///
+/// Ids 8-11 (`string_length`/`slice`/`drop`/`starts_with`) are here for
+/// `derive_cli_meta`'s attribute-argument parser: `FieldInfo.attrs`
+/// carries `arg(short:="v",help:="...")`, and scanning it needs the
+/// byte-oriented String primitives the Rust host already exposes. They
+/// are pure, so no effect is hidden behind `reflect_type_info!`.
 pub def basic_native_table : NativeTable :=
   NativeTable.native_table
     [Identifier.id "i64_add", Identifier.id "i64_sub", Identifier.id "i64_mul",
      Identifier.id "i64_eq", Identifier.id "i64_lt",
-     Identifier.id "string_concat", Identifier.id "string_eq", Identifier.id "string_to_lowercase"]
-    [2, 2, 2, 2, 2, 2, 2, 1]
+     Identifier.id "string_concat", Identifier.id "string_eq", Identifier.id "string_to_lowercase",
+     Identifier.id "string_length", Identifier.id "string_slice",
+     Identifier.id "string_drop", Identifier.id "string_starts_with"]
+    [2, 2, 2, 2, 2, 2, 2, 1, 1, 3, 2, 2]
 
 // ─── Tests (mirror core_eval.rs's #[cfg(test)] module) ─────────────────
 

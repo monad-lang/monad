@@ -29,8 +29,8 @@ use crate::Map;
 use crate::core_ir::IrLit;
 use crate::core_value::{ConArgs, Value};
 use crate::term::{
-  Decl, Identifier, Inductive, Literal, ModulePath, NamePath, NameRef, Named, NumSuffix, Term,
-  case, id, if_term, instance, lams, match_term, param, pi_typs, pvar, str,
+  AttrArg, Attribute, Decl, Identifier, Inductive, Literal, ModulePath, NamePath, NameRef, Named,
+  NumSuffix, Term, case, id, if_term, instance, lams, match_term, param, pi_typs, pvar, str,
 };
 
 use super::macro_expand::MacroError;
@@ -294,6 +294,72 @@ pub fn term_to_expr_value(
   }
 }
 
+/// One attribute argument, rendered into the canonical string that
+/// `FieldInfo.attrs` carries. The format is shared byte-for-byte with
+/// `lang/src/typecheck/meta_reflect.mo`:
+///
+///   - `Ident` -> its text
+///   - `Str` -> `"` + escaped text + `"` (`\` and `"` are escaped)
+///   - `Num` -> decimal
+///   - `Named { name, value }` -> `name:=<value>`
+///   - `Group` -> `[<joined items>]`
+///
+/// Named and group shapes are both retained rather than flattened here;
+/// `attribute_string` flattens the self-hosted parser's single top-level
+/// group so both hosts agree.
+fn attr_arg_reflection(arg: &AttrArg) -> String {
+  match arg {
+    AttrArg::Ident(id) => id.as_str().to_string(),
+    AttrArg::Str(s) => format!("\"{}\"", escape_attr_str(s)),
+    AttrArg::Num(n) => n.to_string(),
+    AttrArg::Named { name, value } => {
+      format!("{}:={}", name.as_str(), attr_arg_reflection(value))
+    }
+    AttrArg::Group(items) => format!(
+      "[{}]",
+      items
+        .iter()
+        .map(attr_arg_reflection)
+        .collect::<Vec<_>>()
+        .join(",")
+    ),
+  }
+}
+
+fn escape_attr_str(s: &str) -> String {
+  s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// One field's attribute, rendered for `FieldInfo.attrs`.
+///
+/// A bare `#[arg]` stays exactly `"arg"`, so every existing derive and
+/// test is unchanged. `#[arg {short := "v", help := "a, b"}]` becomes
+/// `arg(short:="v",help:="a, b")`.
+///
+/// The self-hosted parser wraps a `{...}` named block in one
+/// `AttrArg::Group`, while the Rust parser flattens its entries; a single
+/// top-level group is therefore unwrapped so the two hosts produce the
+/// same string.
+fn attribute_string(attr: &Attribute) -> String {
+  let args: Vec<&AttrArg> = match attr.args.as_slice() {
+    [AttrArg::Group(items)] => items.iter().collect(),
+    other => other.iter().collect(),
+  };
+  if args.is_empty() {
+    attr.name.as_str().to_string()
+  } else {
+    format!(
+      "{}({})",
+      attr.name.as_str(),
+      args
+        .iter()
+        .map(|a| attr_arg_reflection(a))
+        .collect::<Vec<_>>()
+        .join(",")
+    )
+  }
+}
+
 /// `Inductive` -> `TypeInfo` value — the reflection primitive
 /// (`reflect_type_info!`)'s core: walk `induct`'s constructors/fields
 /// directly (pure data construction, no evaluation).
@@ -314,7 +380,7 @@ pub fn build_type_info_value(
       let attr_values: Vec<Value> = field
         .attrs
         .iter()
-        .map(|a| str_value(a.name.as_str()))
+        .map(|a| str_value(&attribute_string(a)))
         .collect();
       let attrs_v = list_value(inductives, attr_values)?;
       // A struct field's default lives on `Inductive.defaults` (keyed by
@@ -619,4 +685,56 @@ pub fn reify_decls_value_to_decls(
     decls.push(reify_decl_value(dv, inductives)?);
   }
   Ok(decls)
+}
+
+#[cfg(test)]
+mod attribute_reflection_tests {
+  use super::attribute_string;
+  use crate::term::{AttrArg, Identifier, attribute};
+
+  fn ident(s: &str) -> Identifier {
+    Identifier::new(s.to_string())
+  }
+
+  #[test]
+  fn bare_attribute_keeps_its_name() {
+    let a = attribute(ident("arg"), vec![]);
+    assert_eq!(attribute_string(&a), "arg");
+  }
+
+  #[test]
+  fn named_attribute_arguments_are_readable() {
+    let a = attribute(
+      ident("arg"),
+      vec![
+        AttrArg::Named {
+          name: ident("short"),
+          value: Box::new(AttrArg::Str("v".into())),
+        },
+        AttrArg::Named {
+          name: ident("help"),
+          value: Box::new(AttrArg::Str("a, b".into())),
+        },
+      ],
+    );
+    assert_eq!(attribute_string(&a), "arg(short:=\"v\",help:=\"a, b\")");
+  }
+
+  #[test]
+  fn a_single_top_level_group_is_flattened() {
+    let a = attribute(
+      ident("arg"),
+      vec![AttrArg::Group(vec![AttrArg::Named {
+        name: ident("short"),
+        value: Box::new(AttrArg::Str("v".into())),
+      }])],
+    );
+    assert_eq!(attribute_string(&a), "arg(short:=\"v\")");
+  }
+
+  #[test]
+  fn quotes_and_backslashes_are_escaped() {
+    let a = attribute(ident("x"), vec![AttrArg::Str("a\"b\\c".into())]);
+    assert_eq!(attribute_string(&a), "x(\"a\\\"b\\\\c\")");
+  }
 }

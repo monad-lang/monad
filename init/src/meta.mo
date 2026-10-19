@@ -14,12 +14,25 @@
 
 /// One field of one constructor: its declared name, its type as a
 /// constructible `Expr` (so it can be echoed straight into generated
-/// code, e.g. a lens's `Lens T field_typ` type), its own attribute
-/// names (e.g. `["arg"]` for a `#[arg] verbose : Bool` field, `[]` for an
-/// unannotated one) — bare names only, no attribute arguments, matching
-/// what `derive_cli_meta` (`cli/src/args.mo`) needs to tell a flag field from
-/// a positional one — and its declared default value (`f : T := e`), as a
-/// constructible `Expr`, when it has one. A derive that treats a defaulted
+/// code, e.g. a lens's `Lens T field_typ` type), its own attributes
+/// (`[]` for an unannotated field), and its declared default value
+/// (`f : T := e`) as a constructible `Expr` when it has one.
+///
+/// Each attribute is rendered as one string in a canonical, cross-host
+/// format:
+///
+///   - a bare attribute is just its name: `#[arg]` -> `"arg"`;
+///   - arguments follow in parentheses, comma-separated:
+///     `#[arg {short := "v", help := "a, b"}]` ->
+///     `"arg(short:=\"v\",help:=\"a, b\")"`.
+///
+/// `Ident` renders as its text, `Str` as a quoted string with `\` and `"`
+/// escaped, `Num` as decimal, `Named` as `key:=<value>`, and `Group` as
+/// `[<items>]`. A single top-level group is unwrapped so the Rust and
+/// self-hosted parsers agree (the latter wraps a `{...}` block in a
+/// group, the former flattens it). This keeps `FieldInfo`'s arity stable
+/// while letting derives such as `#[derive Cli]` read
+/// `short`/`long`/`help`/`value_name` arguments. A derive that treats a defaulted
 /// field as optional (e.g. a generated JSON Schema's `required` list, or a
 /// decoder falling back to the default on a missing key) reads this field;
 /// before it existed that had to be faked by convention (an `Option`-typed

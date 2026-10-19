@@ -174,3 +174,87 @@ fn test_derive_cli_zero_arg_constructor_alone() {
   }
   assert!(r.is_ok());
 }
+
+#[test]
+fn test_derive_cli_rich_adt_generates_and_type_checks() {
+  // Options (required/optional/defaulted/typed), attribute arguments, and
+  // a multi-constructor ADT. The attribute string is
+  // `arg(short:="v",help:="verbose")`, parsed by `motes/clap/src/attr.mo`.
+  let src = r#"
+    #[derive Cli]
+    type Rich {
+        run (path : String)
+            (#[arg {short := "v", help := "verbose"}] verbose : Bool)
+            (#[opt {short := "o"}] output : Option String)
+            (#[opt {short := "n"}] count : I64),
+        list (#[opt] all : Option String),
+    }
+  "#;
+  let r = load(src);
+  if let Err(e) = &r {
+    eprintln!("rich ADT error: {e}");
+  }
+  assert!(r.is_ok(), "rich option ADT should type-check");
+}
+
+#[test]
+fn test_derive_cli_struct_default_is_optional() {
+  // Constructor params cannot carry `:=` defaults, but struct fields can
+  // (`Inductive.defaults`); the struct form's type inference makes such a
+  // positional optional and the decoder applies the default.
+  let src = r#"
+    #[derive Cli]
+    struct DArgs { input : String, count : I64 := 3 }
+  "#;
+  let r = load(src);
+  if let Err(e) = &r {
+    eprintln!("struct-default error: {e}");
+  }
+  assert!(r.is_ok(), "struct field default should type-check");
+}
+
+#[test]
+fn test_derive_cli_struct_form_generates_and_type_checks() {
+  // `term::stru()` drops struct-field attributes, so this form is
+  // type-inference only: Bool -> flag, everything else -> positional.
+  // It must not dispatch on the synthetic `mk` constructor.
+  let src = r#"
+    #[derive Cli]
+    struct SArgs { input : String, verbose : Bool }
+  "#;
+  let r = load(src);
+  if let Err(e) = &r {
+    eprintln!("struct-form error: {e}");
+  }
+  assert!(r.is_ok(), "struct form should type-check");
+}
+
+#[test]
+fn test_derive_cli_unsupported_type_rejected() {
+  let src = r#"
+    #[derive Cli]
+    type Bad { run (x : F64) }
+  "#;
+  let r = load(src);
+  assert!(r.is_err(), "F64 positional should be rejected");
+  let msg = r.unwrap_err();
+  assert!(
+    msg.contains("unsupported type"),
+    "error should explain the unsupported type: {msg}"
+  );
+}
+
+#[test]
+fn test_derive_cli_short_collision_rejected() {
+  let src = r#"
+    #[derive Cli]
+    type Coll { run (#[arg] verbose : Bool) (#[arg] version : Bool) }
+  "#;
+  let r = load(src);
+  assert!(r.is_err(), "duplicate short flags should be rejected");
+  let msg = r.unwrap_err();
+  assert!(
+    msg.contains("short flag"),
+    "error should explain the short collision: {msg}"
+  );
+}

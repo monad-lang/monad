@@ -381,3 +381,71 @@ def three_field_test_decls : List Decl :=
 #[test]
 def test_three_field_constructor_match_extracts_middle_field : Bool :=
   opt_value_num_is (lower_and_run (build_ctx three_field_test_decls) "main") 20
+
+// ─── Test 8: the four attribute-parsing natives (ids 8-11) ─────────────
+// `motes/clap`'s `derive_cli_meta` scans `FieldInfo.attrs` strings such as
+// `arg(short:="v",help:="...")`; it needs the same byte-oriented String
+// primitives the Rust host already exposes in `PURE_NATIVES`.
+
+def str_term (s : String) : CoreIr := CoreIr.lit (IrLit.ir_str s)
+def int_term (n : I64) : CoreIr := CoreIr.lit (IrLit.ir_num n NumSuffix.i64)
+
+def eval_native (id : I64) (args : List CoreIr) : Option Value :=
+  match eval (CoreIr.ntv id args) Env.env_nil (GlobalTable.global_table List.empty) basic_native_table (global_cache_new 0) {
+    Pair.pair r _ =>
+      match r {
+        Result.ok v => Option.some v,
+        Result.err _ => Option.none,
+      },
+  }
+
+def value_str_is (v : Value) (expected : String) : Bool :=
+  match v {
+    Value.v_lit l => match l {
+      IrLit.ir_str s => String.beq s expected,
+      _ => false,
+    },
+    _ => false,
+  }
+
+def value_bool_is (v : Value) (expected : Bool) : Bool :=
+  match v {
+    Value.v_con tag _ =>
+      if expected then I64.beq tag 0 else I64.beq tag 1,
+    _ => false,
+  }
+
+#[test]
+def test_ntv_string_length : Bool :=
+  match eval_native 8 [str_term "hello"] {
+    Option.some v => value_num_is v 5,
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_string_slice : Bool :=
+  match eval_native 9 [str_term "hello", int_term 1, int_term 3] {
+    Option.some v => value_str_is v "ell",
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_string_drop : Bool :=
+  match eval_native 10 [int_term 2, str_term "hello"] {
+    Option.some v => value_str_is v "llo",
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_string_starts_with : Bool :=
+  match eval_native 11 [str_term "he", str_term "hello"] {
+    Option.some v => value_bool_is v true,
+    Option.none => false,
+  }
+
+#[test]
+def test_ntv_string_starts_with_false : Bool :=
+  match eval_native 11 [str_term "xx", str_term "hello"] {
+    Option.some v => value_bool_is v false,
+    Option.none => false,
+  }

@@ -866,6 +866,10 @@ def native_id_for_name (name : Identifier) : Option I64 :=
       else if String.beq s "string_concat" then Option.some 5
       else if String.beq s "string_eq" then Option.some 6
       else if String.beq s "string_to_lowercase" then Option.some 7
+      else if String.beq s "string_length" then Option.some 8
+      else if String.beq s "string_slice" then Option.some 9
+      else if String.beq s "string_drop" then Option.some 10
+      else if String.beq s "string_starts_with" then Option.some 11
       else Option.none,
   }
 
