@@ -996,6 +996,10 @@ def test_wasm_gates_posix_only_natives : Bool :=
             NativeAvailability.unavailable _ => true,
             NativeAvailability.available => false,
         }
+        && match native_target_availability TargetKind.web "poll_fiber" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
 
 #[test]
 def test_wasm_keeps_console_and_arithmetic : Bool :=
