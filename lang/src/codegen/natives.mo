@@ -45,8 +45,7 @@ def lookup_native (name : String) : Option NativeOp := str_map_lookup name nativ
 /// below is left as dead code, not touched here (nothing reaches it, out
 /// of scope for this fix).
 ///
-/// Deliberately NO bare "read_file"/"write_file"/"file_exists"/"is_dir"
-/// keys (unlike "println", which keeps one): `std/io.mo`'s Path refactor
+/// Deliberately NO bare "file_exists"/"is_dir" keys: `std/io.mo`'s Path refactor
 /// split each into a bodyless `#[native "X"]` primitive
 /// (`IO.X_native`) plus a real-bodied `IO.X` wrapper (unwraps `Path` to
 /// `String` first). `try_compile_inline_native_db` matches purely on
@@ -61,11 +60,10 @@ def lookup_native (name : String) : Option NativeOp := str_map_lookup name nativ
 /// path "/tmp")` read garbage past the `Path` object's header instead
 /// of the real string, always false when compiled and run (correct
 /// under the tree-walking interpreter, which doesn't go through this
-/// codegen path at all -- invisible to `test`/`check`). `IO.write_file`/
-/// `read_file`/`file_exists` have the identical wrapper/native name
-/// collision and are called throughout `cli/src/main.mo`/`lang/module.mo`/
-/// `llvm/src/link.mo` -- this was silently corrupting the self-
-/// compile's own compiled-and-run behavior. `IO.list_dir` was never
+/// codegen path at all -- invisible to `test`/`check`). `IO.file_exists`
+/// had the identical wrapper/native name collision (as did `read_file`/
+/// `write_file` while they were natives) -- this was silently corrupting
+/// the self-compile's own compiled-and-run behavior. `IO.list_dir` was never
 /// given a bare key at all and was never affected -- confirms the fix:
 /// with no bare key, `IO.X_native`'s own call still dispatches
 /// correctly (through a separate, properly-scoped attribute-based
@@ -82,8 +80,6 @@ def native_op_table : HashMap String NativeOp :=
     let m := str_map_insert "I64_lt" NativeOp.op_lt m in
     let m := str_map_insert "I64_gt" NativeOp.op_gt m in
     let m := str_map_insert "I64_ne" NativeOp.op_ne m in
-    let m := str_map_insert "monad_read_file" NativeOp.op_read_file m in
-    let m := str_map_insert "monad_write_file" NativeOp.op_write_file m in
     let m := str_map_insert "monad_file_exists" NativeOp.op_file_exists m in
     let m := str_map_insert "monad_is_dir" NativeOp.op_is_dir m in
     let m := str_map_insert "monad_string_hash" NativeOp.op_string_hash m in
@@ -150,12 +146,11 @@ def lookup_native_any (name : String) : Option NativeOp :=
 type NativeWrapKind {
     passthrough (rt_fn_name : String),
     bool_result (rt_fn_name : String),
-    // `IO String`-returning natives (`monad_read_file`): call, then wrap
+    // `IO A`-returning natives (`monad_current_time`): call, then wrap
     // the raw result directly as `IO.mk (RawIO.io raw)` -- mirrors
-    // `wrap_io_value_native_result_go`'s own treatment of read_file at
-    // its (other, term-level fast-path) call site: this backend already
-    // treats a native-sourced C string as a valid `String` value with no
-    // extra boxing.
+    // `wrap_io_value_native_result_go` at the term-level fast-path call
+    // site: this backend already treats a native-sourced C string as a
+    // valid `String` value with no extra boxing.
     io_passthrough (rt_fn_name : String),
     // `RawIO A`-returning natives (the piped-subprocess family): call,
     // then wrap the raw result ONCE as `RawIO.io raw` -- no outer
@@ -170,11 +165,6 @@ type NativeWrapKind {
     // `bool_result`'s `monad_string_eq` assumes): `icmp_ne` against 0
     // first (`materialize_truthy_ptr_as_bool`), then IO-wrap the result.
     io_truthy_ptr_bool_result (rt_fn_name : String),
-    // `IO Unit`-returning `monad_write_file`: needs a 3rd `len` arg
-    // (`monad_string_length` on the content param) the mo-level call
-    // site never supplies -- mirrors `emit_native_call2_instr`'s own
-    // `op_write_file` special case.
-    io_write_file (rt_fn_name : String),
 }
 
 /// A `#[native <name>]`-attributed def has no real body (`Term.hole`,
@@ -233,9 +223,9 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "array_set_in_place" then Option.some (NativeWrapKind.io_passthrough "monad_array_set_in_place")
             else if String.beq target "array_freeze" then Option.some (NativeWrapKind.io_passthrough "monad_array_freeze")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
-            // result, same shape as `string_length`. `IO.write_file`/
-            // `read_file`/`file_exists`/`is_dir` (`std/io.mo`, `#[native
-            // "X_native"]` on the WRAPPED, `_native`-suffixed defs) were
+            // result, same shape as `string_length`. `IO.file_exists`/
+            // `is_dir` (`std/io.mo`, `#[native "X_native"]` on the
+            // WRAPPED, `_native`-suffixed defs) were
             // the same "confirmed as a real gap" stub for any reference
             // to them that doesn't go through the term-level fast path
             // (`try_compile_inline_native_db`/`lookup_native_any`) --
@@ -290,10 +280,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `RawIO` values (not `IO`), so `passthrough` is correct.
             else if String.beq target "io_pure" then Option.some (NativeWrapKind.passthrough "monad_io_pure")
             else if String.beq target "io_bind" then Option.some (NativeWrapKind.passthrough "monad_io_bind")
-            else if String.beq target "read_file" then Option.some (NativeWrapKind.io_passthrough "monad_read_file")
             else if String.beq target "file_exists" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_file_exists")
             else if String.beq target "is_dir" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_is_dir")
-            else if String.beq target "write_file" then Option.some (NativeWrapKind.io_write_file "monad_write_file")
             // `std/io.mo`'s two remaining raw-stdio natives -- the
             // byte-level half of stdio the stream primitives cannot
             // express (`read_stdin_exact`'s fill-to-n read and a real
@@ -688,8 +676,6 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d1 := mk_decl "monad_alloc" (List.cons "i64" List.empty) "i64" in
     let d2 := mk_decl "monad_retain" (List.cons "i64" List.empty) "void" in
     let d3 := mk_decl "monad_release" (List.cons "i64" List.empty) "void" in
-    let d5 := mk_decl "monad_read_file" (List.cons "i64" List.empty) "i64" in
-    let d6 := mk_decl "monad_write_file" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) void_ret in
     let d7 := mk_decl "monad_file_exists" (List.cons "i64" List.empty) "i64" in
     let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
@@ -927,7 +913,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     let d102 := mk_decl "monad_poll_fiber" (List.cons "i64" List.empty) "i64" in
     // `ByteBuf.copy_into` (runtime_core.c): dst, offset, src in; Unit out.
     let d103 := mk_decl "monad_bytebuf_copy_into" ["i64", "i64", "i64"] "i64" in
-    [d1, d2, d3, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
+    [d1, d2, d3, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
@@ -953,8 +939,8 @@ def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "exec_cmd", "process_id", "proc_spawn",
     "proc_write", "proc_read", "proc_wait", "tcp_connect", "tcp_listen",
-    "tcp_accept", "tcp_local_port", "read_file", "write_file",
-    "file_exists", "is_dir", "list_dir", "get_env", "stream_open", "term_ctl",
+    "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "list_dir",
+    "get_env", "stream_open", "term_ctl",
 ]
 
 /// Natives whose C implementation needs `snprintf`/`strtod`; the web

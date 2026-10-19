@@ -28,8 +28,7 @@ pub type PhiPair {
 
 pub type NativeOp {
     op_add, op_sub, op_mul, op_sdiv, op_eq, op_lt, op_gt, op_ne,
-    op_read_file, op_write_file, op_file_exists,
-    op_is_dir, op_string_hash,
+    op_file_exists, op_is_dir, op_string_hash,
     op_i64_to_string,
 }
 

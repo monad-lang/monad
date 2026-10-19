@@ -151,7 +151,7 @@ const PURE_NATIVES: &[&str] = &[
   // allocate a FRESH `Con` rather than writing through an existing one,
   // and `array_len`/`array_get` only read. `array_set_in_place` and
   // `array_freeze` are deliberately absent -- they are `IO`-typed, and
-  // belong with `read_file`/`write_file` in the excluded set below.
+  // belong with `file_exists`/`is_dir` in the excluded set below.
   "array_new",
   "array_len",
   "array_get",
@@ -168,7 +168,7 @@ const PURE_NATIVES: &[&str] = &[
 /// `is_pure_native` — the allowlist above is authoritative):
 /// `stream_read`/`stream_write` (IO), `current_time`/`current_time_nano`/`bench_report`
 /// (non-deterministic timing),
-/// `read_file`/`write_file`/`file_exists`/`is_dir`/`list_dir`/`get_env`/
+/// `file_exists`/`is_dir`/`list_dir`/`get_env`/
 /// `exec_cmd` (filesystem/process IO), `fork_io`/`cancel_fiber`/
 /// `sleep_io`/`scope_new`/`scope_fork`/`scope_drop`/`await_fiber`/
 /// `poll_fiber`
@@ -312,8 +312,6 @@ pub fn exec_native(
     "current_time" => current_time(natives),
     "current_time_nano" => current_time_nano(natives),
     "bench_report" => bench_report(args, natives),
-    "read_file" => read_file(args, natives),
-    "write_file" => write_file(args, natives),
     "file_exists" => file_exists(args, natives),
     "is_dir" => is_dir(args, natives),
     "list_dir" => list_dir(args, natives),
@@ -357,7 +355,7 @@ pub fn exec_native(
     // `std/bytebuf.mo`. Registry-id handles — see `bytebuf_alloc`'s own
     // doc comment. No `bytebuf_ptr` arm (this evaluator has no raw
     // address to hand out); the four `IO`-typed ones are not in
-    // `PURE_NATIVES` (like `read_file`), while `bytebuf_len` is.
+    // `PURE_NATIVES` (like `file_exists`), while `bytebuf_len` is.
     "bytebuf_alloc" => bytebuf_alloc(args, natives),
     "bytebuf_of_list" => bytebuf_of_list(args, natives),
     "bytebuf_to_list" => bytebuf_to_list(args, natives),
@@ -1123,10 +1121,8 @@ fn array_set_in_place(args: &[Value], natives: &NativeTable) -> Result<Value, Co
       elems.len()
     )));
   }
-  // `IO Unit`'s payload, spelled the way `write_file` (the other
-  // `IO Unit` native) already spells it: an empty string, never
-  // inspected -- `Unit` is not in `WellKnownCtors` and nothing reads
-  // this value.
+  // `IO Unit`'s payload: an empty string, never inspected -- `Unit` is
+  // not in `WellKnownCtors` and nothing reads this value.
   io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
 }
 
@@ -1186,47 +1182,10 @@ fn string_get_char(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
   make_option(natives, Some(Value::Lit(IrLit::Char(chars[idx as usize]))))
 }
 
-/// `IO.read_file (path : String) : IO String` — `Monad.bind`'s own `IO`
+/// `IO.file_exists (path : String) : IO Bool` — `Monad.bind`'s own `IO`
 /// instance (init/io.mo) pattern-matches its argument via `match a { io
 /// a => f a }`, so a real `IO.io`-wrapped `Con` is required, not a bare
-/// `String` (see `io_wrap`'s own doc comment); a read failure is a
-/// genuine evaluation error, same as the tree-walker's own
-/// `eval::native::read_file`.
-fn read_file(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError(
-      "read_file needs 1 arg".into(),
-    ));
-  }
-  let path = extract_string(&args[0])?;
-  let content = std::fs::read_to_string(path)
-    .map_err(|e| CoreEvalError::NativeArgError(format!("read_file {path} failed: {e}")))?;
-  // The key `SharedStr` construction site for the self-hosted parser's
-  // perf: the WHOLE file's content becomes one backing `Arc<str>`
-  // allocation here, and every subsequent `String.slice`/`String.drop`
-  // during parsing shares it (O(1) each) instead of re-copying.
-  io_wrap(natives, Value::Lit(IrLit::Str(content.into())))
-}
-
-/// `IO.write_file (path : String) (content : String) : IO Unit` — see
-/// `read_file`'s own doc comment on why the `IO.io` wrapping is
-/// required; `Unit`'s own runtime shape still doesn't matter (never
-/// pattern-matched), so any inner value works.
-fn write_file(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.len() < 2 {
-    return Err(CoreEvalError::NativeArgError(
-      "write_file needs 2 args".into(),
-    ));
-  }
-  let path = extract_string(&args[0])?;
-  let content = extract_string(&args[1])?;
-  std::fs::write(path, content)
-    .map_err(|e| CoreEvalError::NativeArgError(format!("write_file {path} failed: {e}")))?;
-  io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
-}
-
-/// `IO.file_exists (path : String) : IO Bool` — see `read_file`'s own
-/// doc comment on why the `IO.io` wrapping is required.
+/// value (see `io_wrap`'s own doc comment).
 fn file_exists(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.is_empty() {
     return Err(CoreEvalError::NativeArgError(
@@ -1283,7 +1242,7 @@ fn list_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   io_wrap(natives, result)
 }
 
-/// `IO.get_env (s : String) : IO (Option String)` — see `read_file`'s
+/// `IO.get_env (s : String) : IO (Option String)` — see `file_exists`'s
 /// own doc comment on why the `IO.io` wrapping is required; the INNER
 /// `Option` needs the same real-`Con` treatment as `string_get`'s own
 /// `Option U8`, for the same reason.
@@ -2079,7 +2038,7 @@ fn extract_string_list(v: &Value, natives: &NativeTable) -> Result<Vec<String>, 
 /// `Process.exec_cmd (cmd : String) (args : List String) : IO I64` —
 /// ports `eval::native::exec_cmd`'s logic (`core/src/eval/native.rs`,
 /// the tree-walker's own native table) near-verbatim, retargeted from
-/// `Term` to `Value`/`IrLit`; see `read_file`'s own doc comment on why
+/// `Term` to `Value`/`IrLit`; see `file_exists`'s own doc comment on why
 /// the `IO.io` wrapping is required.
 fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {

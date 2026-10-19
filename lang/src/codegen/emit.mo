@@ -2825,70 +2825,19 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
         _ => Option.none,
     }
 
-// `write_file` is declared `void` on the C side
-// (`runtime/src/runtime.c`) -- its LLVM `declare` says so (`mk_decl
-// "monad_write_file" ... "void"`), but every native CALL here is always
-// emitted `i64`-typed (`LLVMType.i64_`) regardless, so the call itself
-// produces an i64 "result" that's really just whatever garbage the C
-// ABI happened to leave in the return register, not a real value.
-// Harmless as long as nothing reads it -- but a native call used as a
-// do-notation statement's own VALUE (e.g. `write_file p x; return unit`
-// desugars to `Monad.bind (write_file p x) (\_ -> Monad.pure unit)`) feeds
-// that garbage straight into `bind`'s own first argument, which
-// `Monad_IO_bind` then treats as a real tagged pointer
-// (`monad_get_tag`/`monad_get_field`) -- confirmed as a real gap via a
-// direct repro (a do-block whose first statement was a bare `println`,
-// back when that was the inlined `print_str` native): compiled clean,
-// segfaulted on the very first line, before printing anything.
-//
-// Fixed narrowly, without touching the (apparently llc-tolerated)
-// call-type mismatch itself: `write_file`'s REAL declared
-// type is `IO Unit`, i.e. a properly tagged `IO.mk (RawIO.io Unit)` constructor
-// value (one field, holding the `Unit` value) -- exactly the shape
-// `Monad_IO_pure`'s own generated body builds (`alloc_constructor` at
-// `constructor_tag "RawIO.io"` + `constructor_tag "IO.mk"` + `monad_set_field`). A first attempt
-// at this fix used a BARE `Unit` value instead (via the already-
-// generated `monad_ctor_Unit_unit`) -- that alone doesn't crash
-// (`monad_get_tag` on it "works", it just reads the WRONG tag), but
-// `Monad_IO_bind`'s `monad_get_field(%p0, 0)` then reads past a
-// 0-field `Unit` object's empty `[0 x i8*]` fields array, a real
-// out-of-bounds read -- exactly the observed segfault. Reusing
-// `compile_con_ir`'s own `alloc_constructor`/`build_set_field_instrs`
-// helpers here (rather than hand-rolling the wrap) keeps this in sync
-// with however a real `IO.mk (RawIO.io _)` constructor literal compiles elsewhere.
-#[partial]
-def is_void_native (op : NativeOp) : Bool :=
-    match op {
-        NativeOp.op_write_file => true,
-        _ => false,
-    }
-
 /// Every native op whose Monad-level declared type is `IO _`
-/// (`init/io.mo`) -- `op_read_file`/`op_write_file`/
-/// `op_file_exists` -- needs its raw call result wrapped in a real
-/// `IO.mk (RawIO.io _)`-tagged constructor before it can be used as an `IO` value
-/// (do-notation's `<-`, `Monad_IO_bind`, ...). The 8 arithmetic/comparison
-/// ops and `op_i64_to_string` (`I64 -> String`, genuinely pure, no `IO` in
-/// its type at all) do not.
-///
-/// `is_void_native` (above) was previously the ONLY signal used to decide
-/// this, conflating "the C function is declared `void`" with "the Monad
-/// type is `IO _`" -- true for `write_file` (both void AND
-/// `IO Unit`), but `read_file`/`file_exists` are `IO _`-returning WITHOUT
-/// being C-`void` (`monad_read_file`/`monad_file_exists` return a real
-/// `char*`). Their raw call result was used AS-IS wherever an `IO` value
-/// was expected -- `Monad_IO_bind`'s own generated body calls
-/// `monad_get_field(io_val, 0)` on it, misreading the raw string pointer
-/// as if it were a tagged constructor object. Confirmed via a direct
-/// repro (`let s <- IO.read_file path; IO.println s; ...`): compiled and
-/// linked cleanly, segfaulted at runtime the moment `s` was used for
-/// anything beyond being bound-and-ignored -- silent as long as the bound
-/// value was never touched.
+/// (`std/io.mo`) -- `op_file_exists`/`op_is_dir` -- needs its raw call
+/// result wrapped in a real `IO.mk (RawIO.io _)`-tagged constructor
+/// before it can be used as an `IO` value (do-notation's `<-`,
+/// `Monad_IO_bind`, ...). The 8 arithmetic/comparison ops and
+/// `op_i64_to_string` (`I64 -> String`, genuinely pure, no `IO` in its
+/// type at all) do not. Used as-is, the raw result was misread by
+/// `Monad_IO_bind`'s `monad_get_field(io_val, 0)` as a tagged
+/// constructor object -- compiled and linked cleanly, then segfaulted the
+/// moment the bound value was used.
 #[partial]
 def needs_io_wrap (op : NativeOp) : Bool :=
     match op {
-        NativeOp.op_read_file => true,
-        NativeOp.op_write_file => true,
         NativeOp.op_file_exists => true,
         NativeOp.op_is_dir => true,
         // `String.hash : String -> U64` is pure (init/string.mo) -- no
@@ -2946,7 +2895,7 @@ def materialize_truthy_ptr_as_bool (c : CodegenCtx) (raw_val : LLVMValue) : Mate
 def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : CompileResult :=
     match compile_db_term_ir c arg {
         CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
-            // For unary native operations like read_file, call the runtime function
+            // For unary native operations like file_exists, call the runtime function
             match fresh_temp ctx1 {
                 CtxStrPair.mk ctx_t temp =>
                     let fn_name := native_op_to_fn_name op in
@@ -2959,9 +2908,7 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
                     // comment above `ends_with_terminator`).
                     match compose_seq ({ instrs := instrs1, blocks := blocks1, val := val1 }) ({ instrs := (List.cons assign_instr List.empty), blocks := List.empty, val := (LLVMValue.var_ temp) }) {
                         { instrs := new_instrs, blocks := new_blocks, val := _ } =>
-                            if is_void_native op then
-                                wrap_void_native_result ctx_t (LLVMValue.var_ temp) new_instrs new_blocks funcs1 globals1
-                            else if needs_io_wrap op then
+                            if needs_io_wrap op then
                                 if native_op_returns_truthy_ptr op then
                                     match materialize_truthy_ptr_as_bool ctx_t (LLVMValue.var_ temp) {
                                         { ctx := ctx_b, instrs := bool_instrs, val := bool_val } =>
@@ -2975,55 +2922,29 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
             },
     }
 
-/// Builds the tail every void native's result needs: an inner `Unit`
-/// value (`monad_ctor_Unit_unit`), then wrapped as `IO.mk (RawIO.io Unit)` --
-/// mirrors `compile_con_ir`'s own `alloc_constructor` +
-/// `build_set_field_instrs` pair, just with an already-computed field
-/// value instead of one still needing its own `compile_db_term_ir` call.
+/// Wraps an ALREADY-COMPUTED value (`inner_val`, e.g. `file_exists`'s
+/// materialized `Bool`) as `IO.mk (RawIO.io inner_val)`. See
+/// `needs_io_wrap`'s own doc comment for why this is needed.
+/// `extra_pre_instrs` (empty except at the truthy-pointer-to-`Bool` call
+/// site above, which must run its own materialization instructions BEFORE
+/// the `IO.mk (RawIO.io _)` alloc) comes before `prior_instrs`/
+/// `prior_blocks` positionally to match.
 ///
-/// `prior_val` -- the raw native call's OWN result value (`temp` at
-/// every call site below) -- is required, not optional: whenever the
-/// native's ARGUMENT was itself branching (`println (if p then "a" else
-/// "b")`), `prior_instrs`/`prior_blocks` already end in a real
-/// terminator (`compose_seq`'s own convention -- see its doc comment),
-/// and the ONLY way to correctly append more code is `compose_seq`
-/// again, which needs `prior_val` to find the right terminal block to
-/// splice into. Naively `List.append`-ing the wrap code onto
-/// `prior_instrs` used to put it right after that terminator instead --
-/// unreachable dead code, with the branching arg's own placeholder `ret`
-/// becoming the function's real, early, wrong answer. Confirmed live:
-/// `let is_d <- IO.is_dir p; IO.println (a ++ (if is_d then .. else
-/// ..)); let exists <- IO.file_exists p2; IO.println ...` -- compiled
-/// and run, printed only the first line and exited 0, silently dropping
-/// every statement after the `if`-using `println` (its own `Monad_IO_
-/// bind`-to-the-next-statement code landed in the WRONG, unreachable
-/// block). Same root cause class `compose_seq`'s own doc comment
-/// documents for its original bug, one level up: these two wrap
-/// functions were never updated to use it themselves.
-#[partial]
-def wrap_void_native_result (ctx : CodegenCtx) (prior_val : LLVMValue) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
-    match fresh_temp ctx {
-        CtxStrPair.mk ctx_unit temp_unit =>
-            let unit_call := LLVMValue.call "monad_ctor_Unit_unit" LLVMType.i64_ List.empty false in
-            let unit_instr := LLVMInstruction.assign temp_unit unit_call in
-            let unit_val := LLVMValue.var_ temp_unit in
-            wrap_io_value_native_result_go ctx_unit unit_val (List.cons unit_instr List.empty) prior_val prior_instrs prior_blocks funcs globals,
-    }
-
-/// Non-void sibling of `wrap_void_native_result`: wraps an ALREADY-
-/// COMPUTED value (`inner_val`, e.g. `read_file`'s real `char*`-as-`i64`
-/// result) as `IO.mk (RawIO.io inner_val)`, instead of always synthesizing a fresh
-/// `Unit`. See `needs_io_wrap`'s own doc comment for why this is needed,
-/// and `wrap_void_native_result`'s own doc comment for why `prior_val`
-/// is required and `extra_pre_instrs` (empty except at the truthy-
-/// pointer-to-`Bool` call site above, which must run its own
-/// materialization instructions BEFORE the `IO.mk (RawIO.io _)` alloc) comes before
-/// `prior_instrs`/`prior_blocks` positionally to match.
+/// `prior_val` -- the raw native call's OWN result value -- is required,
+/// not optional: whenever the native's ARGUMENT was itself branching
+/// (`IO.is_dir (if p then a else b)`), `prior_instrs`/`prior_blocks`
+/// already end in a real terminator (`compose_seq`'s own convention --
+/// see its doc comment), and the ONLY way to correctly append more code
+/// is `compose_seq` again, which needs `prior_val` to find the right
+/// terminal block to splice into. Naively `List.append`-ing the wrap code
+/// onto `prior_instrs` used to put it right after that terminator instead
+/// -- unreachable dead code, with the branching arg's own placeholder
+/// `ret` becoming the function's real, early, wrong answer.
 #[partial]
 def wrap_io_value_native_result (ctx : CodegenCtx) (prior_val : LLVMValue) (extra_pre_instrs : List LLVMInstruction) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (inner_val : LLVMValue) : CompileResult :=
     wrap_io_value_native_result_go ctx inner_val extra_pre_instrs prior_val prior_instrs prior_blocks funcs globals
 
-/// Shared tail for both wrap helpers above: `pre_instrs` computes
+/// The wrap helper's tail: `pre_instrs` computes
 /// `inner_val` (empty when it's already computed), then allocates the
 /// two-layer IO wrapper: `IO.mk (RawIO.io inner)`. The inner `RawIO.io`
 /// gets tag 7 / one field; the outer `IO.mk` gets tag 19 / one field
@@ -3064,8 +2985,6 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
     NativeOp.op_lt => "I64_lt",
     NativeOp.op_gt => "I64_gt",
     NativeOp.op_ne => "I64_ne",
-    NativeOp.op_read_file => "monad_read_file",
-    NativeOp.op_write_file => "monad_write_file",
     NativeOp.op_file_exists => "monad_file_exists",
     NativeOp.op_is_dir => "monad_is_dir",
     NativeOp.op_string_hash => "monad_string_hash",
@@ -3074,16 +2993,10 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
 
 /// `compile_native_app_db` is reached for ANY 2-arg saturated call whose
 /// head resolves via `lookup_native_any` -- not just the 8 arithmetic/
-/// comparison ops. `NativeOp.op_write_file` is the one IO op with arity 2
-/// (`IO.write_file path content`, `init/io.mo`), so a real call like
-/// `cli/src/main.mo`'s own `link_ir`'s `IO.write_file ir_path ir_text` reaches
-/// here too -- `compile_native_val`/`fold_native_const` (only 8 arms, no IO
-/// ops) used to be called UNCONDITIONALLY, panicking the Rust host
-/// interpreter with a non-exhaustive match on `NativeOp.op_write_file`
-/// (confirmed blocking `bootstrap compile cli/src/main.mo monad`'s self-
-/// compile -- see `implementations/2026-08-29-native-io-op-non-exhaustive-
-/// match-crash.md`). Route non-arithmetic ops to `emit_native_call2_instr`
-/// instead, which calls the real runtime function.
+/// comparison ops. `compile_native_val`/`fold_native_const` cover only
+/// those 8, so every other op is routed to `emit_native_call2_instr`,
+/// which calls the real runtime function, rather than reaching a
+/// non-exhaustive match.
 #[partial]
 def is_arith_native_op (op : NativeOp) : Bool := match op {
     NativeOp.op_add => true,
@@ -3094,8 +3007,6 @@ def is_arith_native_op (op : NativeOp) : Bool := match op {
     NativeOp.op_ne => true,
     NativeOp.op_lt => true,
     NativeOp.op_gt => true,
-    NativeOp.op_read_file => false,
-    NativeOp.op_write_file => false,
     NativeOp.op_file_exists => false,
     NativeOp.op_is_dir => false,
     NativeOp.op_string_hash => false,
@@ -3580,50 +3491,23 @@ def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : L
 
 /// Non-arithmetic sibling of `emit_arith_instr` for `compile_native_app_db`
 /// (see its own doc comment for why): `arg1_val`/`arg2_val` are the two
-/// already-compiled operand values in call order (`arg1_val` first).
-///
-/// `NativeOp.op_write_file` needs special handling: `monad_write_file`'s
-/// real C signature is `(path, data, len)` (`runtime/src/runtime.c`), but
-/// the mo-level call (`IO.write_file path content`, `init/io.mo`) only
-/// supplies 2 args -- `len` must be computed here via `monad_string_length`
-/// first, or the runtime call reads a garbage length from an unset
-/// register and `fwrite`s garbage. Every other non-arithmetic op that
-/// could reach this path is a plain 2-arg runtime call (none do today --
-/// the remaining IO ops are all arity-1, handled by
-/// `compile_native_app_unary_db` -- kept generic rather than crashing).
+/// already-compiled operand values in call order (`arg1_val` first). No
+/// 2-arg non-arithmetic op exists today -- the remaining IO ops are all
+/// arity-1, handled by `compile_native_app_unary_db` -- so this is kept
+/// generic rather than crashing.
 #[partial]
 def emit_native_call2_instr (c : CodegenCtx) (op : NativeOp) (arg1_val : LLVMValue) (arg2_val : LLVMValue) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
-    match op {
-        NativeOp.op_write_file =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx_len temp_len =>
-                    let len_call := LLVMValue.call "monad_string_length" LLVMType.i64_ (List.cons arg2_val List.empty) false in
-                    let len_instr := LLVMInstruction.assign temp_len len_call in
-                    match fresh_temp ctx_len {
-                        CtxStrPair.mk new_ctx temp =>
-                            let write_call := LLVMValue.call "monad_write_file" LLVMType.i64_ (List.cons arg1_val (List.cons arg2_val (List.cons (LLVMValue.var_ temp_len) List.empty))) false in
-                            let write_instr := LLVMInstruction.assign temp write_call in
-                            match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (List.cons len_instr (List.cons write_instr List.empty)), blocks := List.empty, val := (LLVMValue.var_ temp) }) {
-                                { instrs := new_instrs, blocks := new_blocks, val := _ } =>
-                                    wrap_void_native_result new_ctx (LLVMValue.var_ temp) new_instrs new_blocks funcs globals,
-                            },
-                    },
-            },
-        _ =>
-            match fresh_temp c {
-                CtxStrPair.mk new_ctx temp =>
-                    let fn_name := native_op_to_fn_name op in
-                    let call_val := LLVMValue.call fn_name LLVMType.i64_ (List.cons arg1_val (List.cons arg2_val List.empty)) false in
-                    let call_instr := LLVMInstruction.assign temp call_val in
-                    match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (List.cons call_instr List.empty), blocks := List.empty, val := (LLVMValue.var_ temp) }) {
-                        { instrs := new_instrs, blocks := new_blocks, val := _ } =>
-                            if is_void_native op then
-                                wrap_void_native_result new_ctx (LLVMValue.var_ temp) new_instrs new_blocks funcs globals
-                            else if needs_io_wrap op then
-                                wrap_io_value_native_result new_ctx (LLVMValue.var_ temp) List.empty new_instrs new_blocks funcs globals (LLVMValue.var_ temp)
-                            else
-                                CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
-                    },
+    match fresh_temp c {
+        CtxStrPair.mk new_ctx temp =>
+            let fn_name := native_op_to_fn_name op in
+            let call_val := LLVMValue.call fn_name LLVMType.i64_ (List.cons arg1_val (List.cons arg2_val List.empty)) false in
+            let call_instr := LLVMInstruction.assign temp call_val in
+            match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (List.cons call_instr List.empty), blocks := List.empty, val := (LLVMValue.var_ temp) }) {
+                { instrs := new_instrs, blocks := new_blocks, val := _ } =>
+                    if needs_io_wrap op then
+                        wrap_io_value_native_result new_ctx (LLVMValue.var_ temp) List.empty new_instrs new_blocks funcs globals (LLVMValue.var_ temp)
+                    else
+                        CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
             },
     }
 
@@ -4307,42 +4191,6 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                                             let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                                             let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
                                                             { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty },
-                                                    },
-                                            },
-                                    },
-                            },
-                    },
-            },
-        NativeWrapKind.io_write_file rt_fn_name =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 len_temp =>
-                    let len_call := LLVMValue.call "monad_string_length" LLVMType.i64_ (List.cons (LLVMValue.parm_ 1) List.empty) false in
-                    let len_instr := LLVMInstruction.assign len_temp len_call in
-                    match fresh_temp ctx1 {
-                        CtxStrPair.mk ctx2 write_temp =>
-                            let write_call := LLVMValue.call rt_fn_name LLVMType.i64_ (List.cons (LLVMValue.parm_ 0) (List.cons (LLVMValue.parm_ 1) (List.cons (LLVMValue.var_ len_temp) List.empty))) false in
-                            let write_instr := LLVMInstruction.assign write_temp write_call in
-                            match fresh_temp ctx2 {
-                                CtxStrPair.mk ctx3 unit_temp =>
-                                    let unit_call := LLVMValue.call "monad_ctor_Unit_unit" LLVMType.i64_ List.empty false in
-                                    let unit_instr := LLVMInstruction.assign unit_temp unit_call in
-                                    match fresh_temp ctx3 {
-                                        CtxStrPair.mk ctx4 raw_io_temp =>
-                                            let raw_alloc := LLVMValue.alloc_constructor (constructor_tag c "RawIO.io") (List.cons (LLVMValue.var_ unit_temp) List.empty) in
-                                            let raw_alloc_instr := LLVMInstruction.assign raw_io_temp raw_alloc in
-                                            match build_set_field_instrs (LLVMValue.var_ raw_io_temp) (List.cons (LLVMValue.var_ unit_temp) List.empty) 0 ctx4 {
-                                                { ctx := ctx_raw_set, instrs := raw_set_instrs } =>
-                                                    match fresh_temp ctx_raw_set {
-                                                        CtxStrPair.mk ctx5 io_temp =>
-                                                            let io_alloc := LLVMValue.alloc_constructor (constructor_tag ctx5 "IO.mk") (List.cons (LLVMValue.var_ raw_io_temp) List.empty) in
-                                                            let io_alloc_instr := LLVMInstruction.assign io_temp io_alloc in
-                                                            match build_set_field_instrs (LLVMValue.var_ io_temp) (List.cons (LLVMValue.var_ raw_io_temp) List.empty) 0 ctx5 {
-                                                                { ctx := ctx_set, instrs := io_set_instrs } =>
-                                                                    let entry_instrs := List.cons len_instr (List.cons write_instr (List.cons unit_instr (List.cons raw_alloc_instr (List.append raw_set_instrs (List.cons io_alloc_instr (List.append io_set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ io_temp)) List.empty))))))) in
-                                                                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
-                                                                    { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty },
-                                                            },
                                                     },
                                             },
                                     },
@@ -5330,8 +5178,8 @@ def strs_have_no_i8_star (ss : List String) : Bool :=
 #[test]
 def test_runtime_decls_i64_convention : Bool :=
     decls_have_no_i8_star runtime_declarations
-        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare void @monad_write_file(i64, i64, i64)"
-        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare i64 @monad_read_file(i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare void @monad_set_field(i64, i64, i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare i64 @monad_file_exists(i64)"
         && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare i64 @monad_i64_to_string(i64)"
 
 #[test]

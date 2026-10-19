@@ -419,8 +419,7 @@ static rt_word monad_array_with_impl(rt_word a, int64_t i, rt_word v) {
 
 /* Genuinely O(1) here, unlike the interpreter's copy-on-write (see
    `std/array.mo`'s own doc comment for why the two differ). Returns
-   `IO Unit` -- the payload is never inspected, matching
-   `monad_write_file`'s own convention. */
+   `IO Unit` -- the payload is never inspected. */
 static rt_word monad_array_set_in_place_impl(rt_word a, int64_t i, rt_word v) {
     int64_t len = monad_array_len_impl(a);
     if (i >= 0 && i < len) {
