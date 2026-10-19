@@ -251,3 +251,46 @@ def test_intercalate_empty : Bool :=
 #[test]
 def test_dedup_by : Bool :=
     String.beq (List.intercalate "," (List.dedup_by String.beq ["a", "b", "a", "c", "b"])) "a,b,c"
+
+/// Stable insertion sort with an explicit `lt` comparator. Stable: equal
+/// elements keep their relative order. The comparator is explicit for the
+/// same reason `contains_by`/`dedup_by` take one -- class-based dispatch is
+/// runtime-only and unreliable inside recursive self-hosted code.
+#[partial]
+pub def List.sort_by {A : Type} (lt : A -> A -> Bool) (xs : List A) : List A :=
+    match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.insert_sorted_by lt x (List.sort_by lt rest),
+        _ => List.empty
+    }
+
+#[partial]
+def List.insert_sorted_by {A : Type} (lt : A -> A -> Bool) (x : A) (xs : List A) : List A :=
+    match xs {
+        List.empty => [x],
+        List.cons y rest =>
+            if lt x y
+            then List.cons x xs
+            else List.cons y (List.insert_sorted_by lt x rest),
+        _ => [x]
+    }
+
+#[test]
+def test_sort_by_empty : Bool :=
+    List.is_empty (List.sort_by String.lt ([] : List String))
+
+#[test]
+def test_sort_by_single : Bool :=
+    String.beq (List.intercalate "," (List.sort_by String.lt ["b"])) "b"
+
+#[test]
+def test_sort_by_orders : Bool :=
+    String.beq (List.intercalate "," (List.sort_by String.lt ["b", "c", "a"])) "a,b,c"
+
+#[test]
+def test_sort_by_keeps_duplicates : Bool :=
+    String.beq (List.intercalate "," (List.sort_by String.lt ["b", "a", "b"])) "a,b,b"
+
+#[test]
+def test_sort_by_already_sorted : Bool :=
+    String.beq (List.intercalate "," (List.sort_by String.lt ["a", "b", "c"])) "a,b,c"

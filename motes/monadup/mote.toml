@@ -1,0 +1,33 @@
+# monadup: the toolchain manager and getting-started binary.
+#
+# A binary mote built by the self-hosted toolchain. `init`/`std` are
+# ambient but declared like every manifest here; `runtime` is declared
+# because the binary links the C runtime; `clap` and `json` are the CLI
+# and release-JSON libraries.
+#
+# Sub-table headers, not inline tables: the self-hosted TOML reader
+# supports headers only, and an unparseable manifest silently disables the
+# declared-dependency check.
+[mote]
+name = "monadup"
+version = "0.1.0"
+edition = "2026"
+
+[[bin]]
+name = "monadup"
+path = "src/main.mo"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.runtime]
+path = "../../runtime"
+
+[dependencies.clap]
+path = "../clap"
+
+[dependencies.json]
+path = "../json"
