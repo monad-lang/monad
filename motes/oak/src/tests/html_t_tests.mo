@@ -2,14 +2,14 @@
 // motes/tui/src/tests/tuit_tests.mo.
 //
 // The point of the suite is state threading: unlike TuiT (stateless), a
-// `map` or `and_then` that forgets to pass the updated `Doc` drops nodes.
+// `map` or `and_then` that forgets to pass the updated `Page` drops nodes.
 // The two regression tests below would pass on a stateless implementation
 // and fail on a broken stateful one.
 
 use std::list {List.length}
 use lib::elements {Html.document, Html.text, Html.title}
 use lib::html_t {
-    Doc, Doc.empty, Emitted, HtmlT, HtmlT.and_then, HtmlT.body_node,
+    Page, Page.empty, Emitted, HtmlT, HtmlT.and_then, HtmlT.body_node,
     HtmlT.body_nodes, HtmlT.emit, HtmlT.head_node, HtmlT.lift, HtmlT.map,
     HtmlT.run, HtmlT.seal, Open, Render, Sealed
 }
@@ -45,13 +45,13 @@ def mock_render : Render RenderM := Render.render mock_write
 
 // ═══ Reading the state back ═══
 
-def pair_doc {A : Type} (p : Pair Doc A) : Doc :=
+def pair_doc {A : Type} (p : Pair Page A) : Page :=
     match p { Pair.pair d _ => d }
 
-def mock_doc {A : Type} (m : RenderM (Pair Doc A)) : Doc :=
+def mock_doc {A : Type} (m : RenderM (Pair Page A)) : Page :=
     match m { RenderM.render_m _ p => pair_doc p }
 
-def doc_string (d : Doc) : String :=
+def doc_string (d : Page) : String :=
     Html.to_string (Html.document d.head d.body)
 
 def html_t_strs_eq (a : List String) (b : List String) : Bool :=
@@ -107,59 +107,59 @@ def prog_emit : HtmlT RenderM Open Emitted Unit :=
     let emit_phase : HtmlT RenderM Sealed Emitted Unit := HtmlT.emit in
     HtmlT.and_then open_phase (HtmlT.and_then seal_phase emit_phase)
 
-def run_prog {A : Type} (prog : HtmlT RenderM Open A Unit) : RenderM (Pair Doc Unit) :=
-    HtmlT.run prog mock_render Doc.empty
+def run_prog {A : Type} (prog : HtmlT RenderM Open A Unit) : RenderM (Pair Page Unit) :=
+    HtmlT.run prog mock_render Page.empty
 
 // ═══ Tests ═══
 
 #[test]
 def test_pure_empty_doc : Bool :=
     let prog : HtmlT RenderM Open Open Unit := HtmlT.pure Unit.unit in
-    let m : RenderM (Pair Doc Unit) := HtmlT.run prog mock_render Doc.empty in
-    let d : Doc := mock_doc m in
+    let m : RenderM (Pair Page Unit) := HtmlT.run prog mock_render Page.empty in
+    let d : Page := mock_doc m in
     String.beq (doc_string d) "<!DOCTYPE html><html><head></head><body></body></html>"
     && html_t_strs_eq (render_log m) List.empty
 
 #[test]
 def test_head_and_body : Bool :=
-    let d : Doc := mock_doc (run_prog prog_head_body) in
+    let d : Page := mock_doc (run_prog prog_head_body) in
     String.beq (doc_string d)
         "<!DOCTYPE html><html><head><title>T</title></head><body>ab</body></html>"
 
 #[test]
 def test_do_notation_open_open : Bool :=
-    let d : Doc := mock_doc (run_prog prog_do_open) in
+    let d : Page := mock_doc (run_prog prog_do_open) in
     String.beq (doc_string d)
         "<!DOCTYPE html><html><head>h</head><body>b</body></html>"
 
 #[test]
 def test_lift_interleaves : Bool :=
-    let m : RenderM (Pair Doc Unit) := run_prog prog_lift in
-    let d : Doc := mock_doc m in
+    let m : RenderM (Pair Page Unit) := run_prog prog_lift in
+    let d : Page := mock_doc m in
     String.beq (doc_string d)
         "<!DOCTYPE html><html><head>h</head><body></body></html>"
     && html_t_strs_eq (render_log m) ["before"]
 
 #[test]
 def test_map_threads_doc : Bool :=
-    let d : Doc := mock_doc (run_prog prog_map_thread) in
+    let d : Page := mock_doc (run_prog prog_map_thread) in
     String.beq (doc_string d)
         "<!DOCTYPE html><html><head></head><body>ab</body></html>"
 
 #[test]
 def test_and_then_threads_doc : Bool :=
-    let d : Doc := mock_doc (run_prog prog_and_then_thread) in
+    let d : Page := mock_doc (run_prog prog_and_then_thread) in
     String.beq (doc_string d)
         "<!DOCTYPE html><html><head></head><body>abc</body></html>"
 
 #[test]
 def test_indexed_map_threads_doc : Bool :=
-    let d : Doc := mock_doc (run_prog prog_indexed_map) in
+    let d : Page := mock_doc (run_prog prog_indexed_map) in
     String.beq (doc_string d)
         "<!DOCTYPE html><html><head></head><body>ab</body></html>"
 
 #[test]
 def test_emit_writes_document : Bool :=
-    let m : RenderM (Pair Doc Unit) := run_prog prog_emit in
+    let m : RenderM (Pair Page Unit) := run_prog prog_emit in
     html_t_strs_eq (render_log m)
         ["<!DOCTYPE html><html><head><title>T</title></head><body>ab</body></html>"]

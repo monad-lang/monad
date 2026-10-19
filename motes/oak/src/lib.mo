@@ -26,15 +26,15 @@ pub use lib::elements {
 }
 
 pub use lib::html_t {
-    Doc, Doc.empty, Doc.append_head, Doc.append_heads, Doc.append_body,
-    Doc.append_bodies, Emitted, HtmlT, Open, Render, Render.io,
-    Render.lift_resultt, Render.write, Sealed,
+    Page, Page.empty, Page.append_head, Page.append_heads, Page.append_body,
+    Page.append_bodies, Emitted, HtmlT, Open, PageM, PageM.pure, PageM.run,
+    Render, Render.io, Render.lift_page, Render.write, Sealed,
     HtmlT.run, HtmlT.pure, HtmlT.bind, HtmlT.map, HtmlT.and_then, HtmlT.lift,
     HtmlT.head_node, HtmlT.head_nodes, HtmlT.body_node, HtmlT.body_nodes,
     HtmlT.seal, HtmlT.emit
 }
 
 pub use lib::app {
-    App, App.init, App.run_batch, App.step, App.view,
-    Cmd, Host, Host.run_effect
+    Program, Program.init, Program.run_batch, Program.step, Program.view,
+    Command, Host, Host.run_effect
 }

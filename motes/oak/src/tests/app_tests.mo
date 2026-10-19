@@ -1,11 +1,11 @@
-// Cmd/App tests over a write-logging mock monad and a mock host.
+// Command/Program tests over a write-logging mock monad and a mock host.
 //
 // The host monad and its helpers are prefixed `AppM`/`app_`: the Rust host
 // flattens the directory's test modules into one program scope, so the
 // `RenderM` helpers in html_t_tests.mo must not collide with these.
 
 use std::list {List.length}
-use lib::app {App, App.run_batch, App.step, App.view, Cmd, Host}
+use lib::app {Program, Program.run_batch, Program.step, Program.view, Command, Host}
 use lib::elements {Html.li, Html.text, Html.ul}
 use xml_html::html {Html.Node, Html.to_string}
 
@@ -47,16 +47,16 @@ def app_mock_host : Host AppM String String :=
 def log_add (log : List String) (s : String) : List String :=
     List.append log (List.cons s List.empty)
 
-def app_update (log : List String) (m : String) : Pair (List String) (Cmd String String) :=
+def app_update (log : List String) (m : String) : Pair (List String) (Command String String) :=
     if String.beq m "dispatch"
-    then Pair.pair (log_add log "dispatch") (Cmd.dispatch "next")
+    then Pair.pair (log_add log "dispatch") (Command.dispatch "next")
     else if String.beq m "effect"
-    then Pair.pair (log_add log "effect") (Cmd.perform "effect")
+    then Pair.pair (log_add log "effect") (Command.perform "effect")
     else if String.beq m "silent"
-    then Pair.pair (log_add log "silent") (Cmd.perform "silent")
+    then Pair.pair (log_add log "silent") (Command.perform "silent")
     else if String.beq m "quit"
-    then Pair.pair (log_add log "quit") Cmd.quit
-    else Pair.pair (log_add log m) Cmd.none
+    then Pair.pair (log_add log "quit") Command.quit
+    else Pair.pair (log_add log m) Command.none
 
 def log_item (s : String) : Html.Node :=
     Html.li List.empty [Html.text s]
@@ -64,13 +64,13 @@ def log_item (s : String) : Html.Node :=
 def app_view (log : List String) : Html.Node :=
     Html.ul List.empty (List.map log_item log)
 
-def app_under_test : App (List String) String String :=
-    App.app List.empty app_update app_view
+def app_under_test : Program (List String) String String :=
+    Program.app List.empty app_update app_view
 
 // ═══ Reading the result back ═══
 
 def app_run (msgs : List String) : AppM (Pair (List String) Bool) :=
-    App.run_batch app_under_test app_mock_host List.empty msgs
+    Program.run_batch app_under_test app_mock_host List.empty msgs
 
 def pair_log (p : Pair (List String) Bool) : List String :=
     match p { Pair.pair log _ => log }
@@ -96,8 +96,8 @@ def app_strs_eq (a : List String) (b : List String) : Bool :=
         }
     }
 
-def cmd_is_none (c : Cmd String String) : Bool :=
-    match c { Cmd.none => true, _ => false }
+def cmd_is_none (c : Command String String) : Bool :=
+    match c { Command.none => true, _ => false }
 
 // ═══ Tests ═══
 
@@ -139,16 +139,16 @@ def test_empty_batch : Bool :=
 
 #[test]
 def test_step_is_pure : Bool :=
-    let p : Pair (List String) (Cmd String String) := App.step app_under_test List.empty "a" in
+    let p : Pair (List String) (Command String String) := Program.step app_under_test List.empty "a" in
     match p {
         Pair.pair log cmd => app_strs_eq log ["a"] && cmd_is_none cmd
     }
 
 #[test]
 def test_golden_view : Bool :=
-    String.beq (Html.to_string (App.view app_under_test ["a", "b"]))
+    String.beq (Html.to_string (Program.view app_under_test ["a", "b"]))
         "<ul><li>a</li><li>b</li></ul>"
 
 #[test]
 def test_init : Bool :=
-    app_strs_eq (App.init app_under_test) List.empty
+    app_strs_eq (Program.init app_under_test) List.empty
