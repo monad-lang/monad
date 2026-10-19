@@ -15,7 +15,7 @@
 /// instance at run time, and constrained instance dispatch is exactly
 /// what this backend does not honor (`unresolved global: BEq.beq`).
 
-use std::bytebuf {ByteBuf.alloc, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string, ByteBuf.truncate}
+use std::bytebuf {ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string, ByteBuf.truncate}
 use std::list {List.length}
 
 def empty_bytes : List U8 := List.empty
@@ -235,4 +235,36 @@ def test_truncate_clamps : IO Bool := do {
     let emptied : I64 := ByteBuf.length b;
     let _ <- ByteBuf.free b;
     return (I64.beq grown 3 && I64.beq emptied 0)
+}
+
+/// `copy_into` gathers two buffers into one at their running offsets --
+/// `IO.read_file`'s chunk join.
+#[test]
+def test_copy_into_gathers_buffers : IO Bool := do {
+    let a <- ByteBuf.of_list first_two;
+    let b <- ByteBuf.of_list three_bytes;
+    let dst <- ByteBuf.alloc 5;
+    let _ <- ByteBuf.copy_into dst 0 a;
+    let _ <- ByteBuf.copy_into dst 2 b;
+    let xs <- ByteBuf.to_list dst 5;
+    let _ <- ByteBuf.free a;
+    let _ <- ByteBuf.free b;
+    let _ <- ByteBuf.free dst;
+    return (bytes_eq xs [1u8, 2u8, 1u8, 2u8, 3u8])
+}
+
+/// A copy that would run past `dst` is clamped, and an out-of-range
+/// offset copies nothing; `dst` never grows.
+#[test]
+def test_copy_into_clamps : IO Bool := do {
+    let src <- ByteBuf.of_list three_bytes;
+    let dst <- ByteBuf.alloc 4;
+    let _ <- ByteBuf.copy_into dst 2 src;
+    let _ <- ByteBuf.copy_into dst 9 src;
+    let _ <- ByteBuf.copy_into dst (0 - 1) src;
+    let xs <- ByteBuf.to_list dst 9;
+    let len : I64 := ByteBuf.length dst;
+    let _ <- ByteBuf.free src;
+    let _ <- ByteBuf.free dst;
+    return (I64.beq len 4 && bytes_eq xs [0u8, 0u8, 1u8, 2u8])
 }

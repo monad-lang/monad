@@ -365,6 +365,7 @@ pub fn exec_native(
     "bytebuf_to_string" => bytebuf_to_string(args, natives),
     "bytebuf_of_string" => bytebuf_of_string(args, natives),
     "bytebuf_truncate" => bytebuf_truncate(args, natives),
+    "bytebuf_copy_into" => bytebuf_copy_into(args, natives),
     // `std/stream.mo`'s byte streams -- `RawIO` natives behind `.mo`
     // wrappers, except the pure `std_fd` (in `PURE_NATIVES`).
     "stream_open" => stream_open(args, natives),
@@ -1710,6 +1711,35 @@ fn bytebuf_truncate(args: &[Value], natives: &NativeTable) -> Result<Value, Core
   let n = extract_int(&args[1])?.max(0) as usize;
   crate::runtime::global::with_mut::<Vec<u8>, _>(id, |v| v.truncate(n)).ok_or_else(|| {
     CoreEvalError::NativeArgError(format!("bytebuf_truncate: no buffer for handle {id}"))
+  })?;
+  raw_io_wrap(natives, unit_value())
+}
+
+/// `bytebuf_copy_into : ByteBuf -> I64 -> ByteBuf -> RawIO Unit` -- copy
+/// all of `src` into `dst` at `offset`, clamped to `dst`'s length (never
+/// grows it); an offset outside `[0, len]` copies nothing. `src` is
+/// cloned out first, so `dst == src` cannot double-borrow the registry.
+fn bytebuf_copy_into(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError(
+      "bytebuf_copy_into needs 3 args".into(),
+    ));
+  }
+  let dst = extract_handle_id(&args[0])?;
+  let offset = extract_int(&args[1])?;
+  let src_id = extract_handle_id(&args[2])?;
+  let src = crate::runtime::global::with::<Vec<u8>, _>(src_id, |v| v.clone()).ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("bytebuf_copy_into: no buffer for handle {src_id}"))
+  })?;
+  crate::runtime::global::with_mut::<Vec<u8>, _>(dst, |v| {
+    if offset >= 0 && (offset as usize) <= v.len() {
+      let at = offset as usize;
+      let n = src.len().min(v.len() - at);
+      v[at..at + n].copy_from_slice(&src[..n]);
+    }
+  })
+  .ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("bytebuf_copy_into: no buffer for handle {dst}"))
   })?;
   raw_io_wrap(natives, unit_value())
 }

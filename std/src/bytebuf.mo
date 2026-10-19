@@ -76,6 +76,15 @@ pub def ByteBuf.of_string (s : String) : IO ByteBuf :=
 pub def ByteBuf.truncate (b : ByteBuf) (n : I64) : IO Unit :=
   IO.mk (bytebuf_truncate b n)
 
+/// Copy all of `src` into `dst` starting at byte `offset` -- one memmove.
+/// Clamped to `dst`'s length, so this never grows `dst`; an offset
+/// outside `[0, length dst]` copies nothing. Gathering chunks into one
+/// buffer this way is how `IO.read_file` decodes a file ONCE rather than
+/// chunk by chunk (a character split across two chunks would otherwise
+/// decode as U+FFFD under the interpreter).
+pub def ByteBuf.copy_into (dst : ByteBuf) (offset : I64) (src : ByteBuf) : IO Unit :=
+  IO.mk (bytebuf_copy_into dst offset src)
+
 #[native "bytebuf_to_string"]
 priv def bytebuf_to_string (b : ByteBuf) (len : I64) : RawIO String
 
@@ -84,3 +93,6 @@ priv def bytebuf_of_string (s : String) : RawIO ByteBuf
 
 #[native "bytebuf_truncate"]
 priv def bytebuf_truncate (b : ByteBuf) (n : I64) : RawIO Unit
+
+#[native "bytebuf_copy_into"]
+priv def bytebuf_copy_into (dst : ByteBuf) (offset : I64) (src : ByteBuf) : RawIO Unit

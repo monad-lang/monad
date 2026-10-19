@@ -622,6 +622,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "bytebuf_of_string" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_of_string")
             // `ByteBuf.truncate`'s raw half: a `RawIO Unit`, same kind.
             else if String.beq target "bytebuf_truncate" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_truncate")
+            else if String.beq target "bytebuf_copy_into" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_copy_into")
             // `std/stream.mo`'s byte streams: the five effectful ones are
             // `RawIO` natives behind `.mo` wrappers (`raw_io_passthrough`;
             // the `Result`/`Unit`/fd words come back raw), and `std_fd` is
@@ -924,6 +925,8 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // `Option` Constructor out (some=4/none=3) -- the async event
     // loop's poll primitive.
     let d102 := mk_decl "monad_poll_fiber" (List.cons "i64" List.empty) "i64" in
+    // `ByteBuf.copy_into` (runtime_core.c): dst, offset, src in; Unit out.
+    let d103 := mk_decl "monad_bytebuf_copy_into" ["i64", "i64", "i64"] "i64" in
     [d1, d2, d3, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
@@ -931,7 +934,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
-     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101, d102]
+     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101, d102, d103]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.
