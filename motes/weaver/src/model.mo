@@ -61,6 +61,17 @@ pub type WeaverMsg {
 pub def on_event (e : Event) : WeaverMsg :=
     WeaverMsg.key_event e
 
+/// What the cached display rows were computed for. Any transcript,
+/// viewport or scroll change invalidates them.
+pub struct RowsKey {
+    total : I64,
+    tail_start : I64,
+    cols : I64,
+    rows : I64,
+    scroll : I64,
+    page_start : I64,
+}
+
 pub struct TuiModel {
     state : WeaverState,
     input : InputState,
@@ -92,6 +103,11 @@ pub struct TuiModel {
     /// A page read is in flight; only the synchronous `Cmd.perform`
     /// pager sets it, so it clears in the same fold.
     page_pending : Bool := false,
+    /// The wrapped rows last computed, and the state they were computed
+    /// for. Wrapping a long line every 100 ms tick was the TUI's other
+    /// allocation hot spot; a tick reuses this.
+    rows_cache : List DisplayRow := List.empty,
+    rows_key : Option RowsKey := Option.none,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -104,7 +120,8 @@ pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false }
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none } in
+    Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
 /// walk's return-to-live.
@@ -181,27 +198,71 @@ pub def Model.display_line (colors : Bool) (width : I64) (line : String) : List 
     else List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines line))
 
 #[partial]
-def display_lines (m : TuiModel) (width : I64) (lines : List String) : List DisplayRow :=
+def rev_lines (lines : List String) (acc : List String) : List String :=
     match lines {
-        List.empty => List.empty,
-        List.cons l rest => List.append (Model.display_line m.state.colors width l) (display_lines m width rest),
+        List.empty => acc,
+        List.cons l rest => rev_lines rest (List.cons l acc),
     }
 
-/// The rows to paint: the logical window, wrapped, capped at the panel's
-/// height. The scrolled window keeps its indicator row and spends one
-/// row on it.
-pub def Model.display_rows (m : TuiModel) : List DisplayRow :=
+/// Rows from the END of the logical window, stopping once `budget` rows
+/// are collected: a long line is wrapped only when the view needs it,
+/// never the whole window on every frame.
+#[partial]
+def rows_from_end (colors : Bool) (width : I64) (budget : I64) (rev : List String) (acc : List DisplayRow) : List DisplayRow :=
+    if budget < 1 then acc
+    else match rev {
+        List.empty => acc,
+        List.cons l rest =>
+            let rows : List DisplayRow := Model.display_line colors width l in
+            let n : I64 := rows_len rows in
+            let take : I64 := if n < budget then n else budget in
+            let picked : List DisplayRow := Model.take_last_rows take rows in
+            rows_from_end colors width (budget - take) rest (List.append picked acc),
+    }
+
+pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
+    let pstart : I64 := match m.transcript.page { Option.some p => p.start, Option.none => 0 - 1 } in
+    let k : RowsKey := { total := m.transcript.total, tail_start := m.transcript.tail_start,
+                         cols := m.cols, rows := m.rows, scroll := m.scroll, page_start := pstart } in
+    k
+
+def rows_key_eq (a : RowsKey) (b : RowsKey) : Bool :=
+    a.total == b.total && a.tail_start == b.tail_start && a.cols == b.cols
+        && a.rows == b.rows && a.scroll == b.scroll && a.page_start == b.page_start
+
+/// Recompute the wrapped rows only when the transcript, the viewport or
+/// the scroll position actually moved.
+pub def Model.refresh_rows (m : TuiModel) : TuiModel :=
+    let k : RowsKey := Model.rows_key_of m in
+    match m.rows_key {
+        Option.some k0 => if rows_key_eq k k0 then m else rebuild_rows m k,
+        Option.none => rebuild_rows m k,
+    }
+
+def rebuild_rows (m : TuiModel) (k : RowsKey) : TuiModel :=
+    let rows : List DisplayRow := compute_rows m in
+    let m2 : TuiModel := { m with rows_cache := rows, rows_key := Option.some k } in
+    m2
+
+/// The wrapped window, capped at the panel's height; the scrolled window
+/// keeps its indicator row and spends one row on it.
+def compute_rows (m : TuiModel) : List DisplayRow :=
     let w : Window := Model.window m in
     let width : I64 := Model.content_width m in
+    let colors : Bool := m.state.colors in
     let lines : List String := visible_transcript m in
     if w.eff > 0
     then match lines {
         List.cons ind rest =>
-            let style : TextStyle := theme_line_style_with m.state.colors ind in
-            List.cons (mk_row style ind) (Model.take_last_rows (panel_height m - 1) (display_lines m width rest)),
+            let style : TextStyle := theme_line_style_with colors ind in
+            List.cons (mk_row style ind) (rows_from_end colors width (panel_height m - 1) (rev_lines rest List.empty) List.empty),
         List.empty => List.empty,
     }
-    else Model.take_last_rows (panel_height m) (display_lines m width lines)
+    else rows_from_end colors width (panel_height m) (rev_lines lines List.empty) List.empty
+
+/// The rows to paint (the cache `refresh_rows` keeps current).
+pub def Model.display_rows (m : TuiModel) : List DisplayRow :=
+    m.rows_cache
 
 pub def Model.display_row_widget (r : DisplayRow) : SizedWidget :=
     let style : TextStyle := r.style in
@@ -306,7 +367,7 @@ pub def panel_height (m : TuiModel) : I64 :=
 pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
     let total : I64 := m.transcript.total in
     let m2 : TuiModel := { m with scroll := scroll_clamp (m.scroll + delta) total (panel_height m) } in
-    m2
+    Model.refresh_rows m2
 
 /// A new block of transcript lines: the blank separator row in front
 /// (skipped on an empty transcript), and a scrolled view HELD in place
@@ -319,7 +380,7 @@ pub def Model.append_block (m : TuiModel) (lines : List String) : TuiModel :=
     let tr2 : Transcript := Transcript.append m.transcript block in
     let m2 : TuiModel := { m with transcript := tr2,
         scroll := if m.scroll > 0 then m.scroll + list_length block else 0 } in
-    m2
+    Model.refresh_rows m2
 
 /// A gapless append (the Ctrl+C hint): no separator row, and no scroll
 /// adjustment -- the line joins the tail like any other output.
@@ -327,7 +388,7 @@ pub def Model.append_block (m : TuiModel) (lines : List String) : TuiModel :=
 pub def Model.append_lines (m : TuiModel) (lines : List String) : TuiModel :=
     let tr2 : Transcript := Transcript.append m.transcript lines in
     let m2 : TuiModel := { m with transcript := tr2 } in
-    m2
+    Model.refresh_rows m2
 
 pub def Model.transcript_count (m : TuiModel) : I64 := m.transcript.total
 

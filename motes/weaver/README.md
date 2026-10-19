@@ -15,10 +15,14 @@ monad build motes/weaver/src/main.mo -o ./weaver
 
 ```
 usage: weaver [--provider <name>] [--model <name>] [--max-turns <n>] [--mcp <exe>]...
+              [--resume <id|file>] [--continue] [--no-color]
   --provider ollama|mistral|openrouter|anthropic|mock  (default ollama)
   --model <name>       (default: the provider's preset model)
   --max-turns <n>      (default 40, total across a save/resume)
   --mcp <exe>          (repeatable; bare executable, no arguments yet)
+  --resume <id|file>   open a session directory/id or a /save checkpoint
+  --continue           resume the newest session under ~/.weaver/sessions
+  --no-color           disable the palette in both UIs (NO_COLOR works too)
 ```
 
 Every flag overrides the settings files; see below. The session ends on
@@ -35,6 +39,8 @@ gate.mo            Gate.weaver: the mode + policy + approval prompt as
                    read seam as the input (scriptable without a tty)
 settings.mo        ~/.weaver/config.toml under .weaver/config.toml,
                    merged field by field (project wins), caps unioned
+store.mo           the session store: transcript blocks, per-turn model
+                   history, paged scrollback, ~/.weaver/sessions
 commands.mo        the slash-command table (BTreeMap) and the
                    interactive State it advances
 diff.mo            old -> new rendering for write/edit approvals,
@@ -84,6 +90,11 @@ off, so Ctrl+C arrives as a key rather than SIGINT; a single press just
 prints a hint, and DURING a turn Ctrl+C is only queued (a truly hung
 tool still needs `/quit` once the turn ends). A piped or scripted run
 (stdin not a tty) falls back to the line-based UI above automatically.
+
+Long transcript lines wrap (word-wrap at the last fitting space) and a
+bracketed paste lands as literal text in the input box, newlines
+included -- Enter submits it, so a pasted multi-line snippet is one
+prompt. `--no-color` (or `NO_COLOR`) turns the palette off in both UIs.
 
 The `mock` provider is shuttle's scripted wire: a JSON array of turns at
 `/tmp/shuttle_mock_turns_<pid>.json` (or `SHUTTLE_MOCK_TURNS`), indexed
@@ -160,8 +171,9 @@ The dumb UI follows the informal standard: colors are ON unless
 lines classify by prefix -- user lines cyan, `[running]` rows dim
 cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
 `+` rows green, the Ctrl+C hint dim. The status bar is dim YELLOW --
-the one place that reads as chrome, not content -- and turns red while
-`auto` mode is on (the trust warning). Borders are dim. Both UIs use
+the one place that reads as chrome, not content -- GREEN in plan mode
+(the read-only trust state) and red while `auto` mode is on (the trust
+warning). Borders are dim. Both UIs use
 the same classification (`theme.mo`: one LineClass enum, rendered by
 `class_style` in the TUI and `class_code` in dumb mode).
 
@@ -175,6 +187,33 @@ streams through. The classification scans only the error's first bytes
 a malformed request or an unknown key fails identically on every
 resend -- except 429 (rate limiting). The headless default is one
 attempt, byte-identical to the pre-retry loop.
+
+## Sessions
+
+Every run writes to `~/.weaver/sessions/<id>/` (`id` is `s-<pid>`):
+`meta.json` (session config, turn/spend totals), `transcript/` (rendered
+lines in append-only blocks, with a small `index.json` cache), and
+`history/` (each turn's model messages). `WEAVER_SESSION_ROOT` overrides
+the root.
+
+The TUI keeps only a window: the last 512 transcript lines plus at most
+one older page. Scrolling above that reads the needed blocks back from
+disk, so the full scrollback is reachable while memory stays bounded.
+The model's conversation history (what a provider call needs) remains
+in memory by design; the rendered copy no longer accumulates.
+
+`/resume` with no argument opens the newest session; `/resume <id>` a
+session id; `/resume <dir>` a directory; `/resume <file>` a `/save`
+checkpoint (imported into a new session directory). `--resume` and
+`--continue` do the same at startup. `/clear` starts a NEW session
+directory and leaves the old one resumable.
+
+A streamed turn's text is appended to `live.txt` as it arrives; a turn
+that completes removes it, and one interrupted by a crash leaves it as
+an `[interrupted turn output]` block on the next resume (never fed to
+the model). Writes are process-crash safe, not power-loss safe (there
+is no fsync native), and two processes must not resume the same session
+directory at once.
 
 ### API keys
 

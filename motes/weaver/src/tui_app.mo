@@ -29,6 +29,7 @@ use weaver::model {
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
     DisplayRow, Model.display_line, Model.take_last_rows, Model.display_row_widget,
+    Model.refresh_rows,
     list_length, panel_height, input_placeholder,
 }
 use weaver::store {
@@ -88,7 +89,8 @@ def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64)
             // unchanged model are zero-diff draws. The tui default (-1)
             // stays untouched.
             let app : App TuiModel WeaverMsg :=
-                App.app (init_tui_model_with st rows cols tr) on_event TuiApp.update Model.view 100;
+                App.app_ticked (init_tui_model_with st rows cols tr) on_event TuiApp.update Model.view 100
+                    (fn (m : TuiModel) => m.turn_pending);
             let _ <- run_app app;
             return true
         }
@@ -100,6 +102,12 @@ def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64)
 /// is exactly the shape that collides across a whole-program check
 /// (`Model.view` already did), so this one is qualified pre-emptively.
 pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
+    let step := update_msg m msg in
+    match step {
+        Pair.pair m2 cmd => Pair.pair (Model.refresh_rows m2) cmd,
+    }
+
+def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
     match msg {
         WeaverMsg.key_event e => update_event m e,
         WeaverMsg.turn_result run lines delta => turn_result_step m run lines delta,
