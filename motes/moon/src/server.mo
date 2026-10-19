@@ -320,7 +320,7 @@ def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) :
 /// 500 when it exists but cannot be read.
 /// No path traversal protection in v1 — callers must sanitize paths.
 def Server.static (root : String) (req : Request) : IO Response := do {
-  let read <- IO.read_file_native (String.concat root req.uri.path);
+  let read <- IO.read_file (Path.path (String.concat root req.uri.path));
   return (Server.static_respond read)
 }
 

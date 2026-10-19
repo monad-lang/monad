@@ -294,7 +294,7 @@ def renamed_entry_def (def_val : Def) : Def :=
 // (`lang/src/parser.mo`, at 288 tests, used to be refused outright for
 // exactly that reason). The driver therefore writes
 // `__MONAD_TEST__ <failed-count>` to a per-binary result file
-// (`IO.write_file_native`, path embedded by the parent via
+// (`IO.write_file`, path embedded by the parent via
 // `compile_loaded_modules_to_test_ir`) right before returning, and the
 // parent reads THAT back as the authoritative per-test result -- which
 // is what makes the parent's `X/Y total tests passed` summary count
@@ -522,7 +522,7 @@ pub def synthesize_test_driver_source (specs : List TestSpec) (file_path : Strin
     // trims anyway, and keeping the payload to `marker ++ digits` means
     // `parse_driver_result` never has to reason about which whitespace
     // the native write may or may not have appended.
-    "    let __w <- IO.write_file_native \"" ++ result_path ++ "\" (" ++
+    "    let __w <- IO.write_file (Path.path \"" ++ result_path ++ "\") (" ++
     "\"" ++ result_file_marker ++ "\" ++ I64.to_string " ++ last_fail ++ ");\n" ++
     "    return " ++ last_fail ++ ";\n" ++
     "}\n"
@@ -1050,7 +1050,7 @@ def test_is_no_tests_error_false_for_native_failure : Bool :=
 #[test]
 def test_driver_source_writes_the_result_marker : Bool :=
     let src : String := synthesize_test_driver_source (List.cons (bool_spec "t") List.empty) "m.mo" test_result_path in
-    String.contains src ("IO.write_file_native \"" ++ test_result_path ++ "\"")
+    String.contains src ("IO.write_file (Path.path \"" ++ test_result_path ++ "\")")
     && String.contains src ("\"" ++ result_file_marker ++ "\" ++ I64.to_string __f0")
 
 // Zero tests still writes the file (with the literal 0) -- "no tests"

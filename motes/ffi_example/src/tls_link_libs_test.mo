@@ -55,8 +55,8 @@ def lib_listed (name : String) (libs : List String) : Bool :=
 def test_link_libs_plain_program_gets_no_ssl : IO Bool := do {
   let dir := "/tmp/monad_tls_libs_" ++ I64.to_string process_id;
   exec_cmd "mkdir" ["-p", dir ++ "/src"];
-  let _w <- Test.write_fixture (dir ++ "/mote.toml") no_tls_fixture_manifest;
-  let _w <- Test.write_fixture (dir ++ "/src/probe.mo") no_tls_fixture_source;
+  let _w <- Test.write_fixture (Path.path (dir ++ "/mote.toml")) no_tls_fixture_manifest;
+  let _w <- Test.write_fixture (Path.path (dir ++ "/src/probe.mo")) no_tls_fixture_source;
   let loaded <- load_file_modules (dir ++ "/src/probe.mo") false;
   match loaded {
     Result.err _ => return false,

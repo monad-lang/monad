@@ -2,7 +2,7 @@
 
 use lib::io {}
 use lib::stream {StreamError, StreamError.is_not_found}
-open IO {current_time_nano, read_file_native}
+open IO {current_time_nano, read_file}
 
 #[native "exec_cmd"]
 pub def exec_cmd (cmd : String) (args : List String) : IO I64
@@ -257,7 +257,7 @@ def Proc.scratch_path : IO String := do {
 /// is already the established spelling (lang/src/codegen/test/
 /// e2e_harness.mo and four slow_tests files all do `exec_cmd "rm"`).
 def Proc.read_then_remove (path : String) : IO (Result StreamError String) := do {
-    let out <- read_file_native path;
+    let out <- read_file (Path.path path);
     let _removed <- exec_cmd "rm" ["-f", path];
     return out
 }

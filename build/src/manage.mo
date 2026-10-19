@@ -381,7 +381,10 @@ def Build.artifact_keys_for_one (file_digest : String) (closure : String) (compi
 #[partial]
 def Build.dir_names (d : String) : IO (List String) := do {
     let there <- IO.is_dir (Path.path d);
-    if there then IO.list_dir (Path.path d)
+    if there then do {
+        let entries <- IO.list_dir (Path.path d);
+        return (List.map Path.file_name entries)
+    }
     else return List.empty
 }
 
@@ -506,7 +509,7 @@ pub def Build.clean_run (target_dir : String) (all : Bool) : IO I64 := do {
         }
     }
     else do {
-        let names <- IO.list_dir (Path.path target_dir);
+        let names <- Build.dir_names target_dir;
         let outputs : List String := List.filter Build.is_output_dir names;
         let gone <- Build.remove_each target_dir outputs 0;
         if gone == 0 then do {
@@ -570,7 +573,7 @@ pub def Build.check_state (has_out : Bool) (has_errors : Bool) (errors_ok : Bool
 /// three facts about an entry the same way for both kinds.
 #[partial]
 def Build.errors_parse (path : String) : IO Bool := do {
-    let raw <- Build.read_leaf path;
+    let raw <- Build.read_leaf (Path.path path);
     return (match raw {
         Option.none => false,
         Option.some text => match parse_i64 (String.trim text) {

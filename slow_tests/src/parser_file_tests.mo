@@ -87,7 +87,7 @@ def lang_files_utf8 : List String :=
 /// An unreadable file fails the test, named on stderr (`Test.read_fixture`).
 #[partial]
 def parse_file (path : String) : IO Bool := do {
-    let content <- Test.read_fixture path;
+    let content <- Test.read_fixture (Path.path path);
     return (match content {
         Option.none => false,
         Option.some text => text_parses text
@@ -165,7 +165,7 @@ def test_parse_lang_all_utf8 : IO Bool := parse_all lang_files_utf8
 /// a non-empty remainder both count as "didn't fully parse."
 #[partial]
 def file_fully_parses (path : String) : IO Bool := do {
-    let content <- Test.read_fixture path;
+    let content <- Test.read_fixture (Path.path path);
     return (match content {
         Option.none => false,
         Option.some text => text_fully_parses text

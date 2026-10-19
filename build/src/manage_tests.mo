@@ -87,7 +87,7 @@ def Build.manage_mote_fixture (tag : String) : IO String := do {
 #[partial]
 def Build.manage_seed (path : String) (content : String) : IO I64 := do {
     let _m <- Build.ensure_dir (extract_directory path);
-    let ok <- Build.write_leaf path content;
+    let ok <- Build.write_leaf (Path.path path) content;
     return (if ok then 0 else 1)
 }
 

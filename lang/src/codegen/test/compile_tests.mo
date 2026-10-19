@@ -44,7 +44,7 @@ def test_compile_42 : IO Bool := do {
     let ir_text := emit_module mod_;
     // `ir_path` is always non-empty by construction (built from
     // non-empty literal fragments above) -- `Path.path` directly.
-    let _w <- Test.write_fixture ir_path ir_text;
+    let _w <- Test.write_fixture (Path.path ir_path) ir_text;
     println ("wrote ir to: " ++ ir_path);
 
     let llc_result <- compile_ir_to_obj ir_path obj_path;
@@ -104,7 +104,7 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
     let mod_ := compile_db_decls_ir defs;
     let ir_text := emit_module mod_;
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
-    let _w <- Test.write_fixture ir_path ir_text;
+    let _w <- Test.write_fixture (Path.path ir_path) ir_text;
 
     let llc_result <- compile_ir_to_obj ir_path obj_path;
     if not (llc_result == 0) then do {
@@ -374,7 +374,7 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
     let mod_ := compile_db_module decl_list;
     let ir_text := emit_module mod_;
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
-    let _w <- Test.write_fixture ir_path ir_text;
+    let _w <- Test.write_fixture (Path.path ir_path) ir_text;
 
     let llc_result <- compile_ir_to_obj ir_path obj_path;
     if not (llc_result == 0) then do {

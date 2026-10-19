@@ -192,35 +192,35 @@ pub def Build.ensure_dir (d : String) : IO I64 := do {
 /// ordinary miss. Any OTHER read failure is a miss too (a cache must not
 /// stop a build), but it is reported on stderr rather than passing for an
 /// absent entry: an unreadable store is something the user can fix.
-pub def Build.read_leaf (path : String) : IO (Option String) := do {
-    let r <- IO.read_file (Path.path path);
+pub def Build.read_leaf (path : Path) : IO (Option String) := do {
+    let r <- IO.read_file path;
     Build.leaf_of_read path r
 }
 
-def Build.leaf_of_read (path : String) (r : Result StreamError String) : IO (Option String) :=
+def Build.leaf_of_read (path : Path) (r : Result StreamError String) : IO (Option String) :=
     match r {
         Result.ok text => IO.pure (Option.some text),
         Result.err e =>
             if StreamError.is_not_found e
             then IO.pure Option.none
             else do {
-                IO.write_stderr ("warning: build store: reading " ++ path ++ ": " ++ e.message ++ "\n");
+                IO.write_stderr ("warning: build store: reading " ++ Path.to_string path ++ ": " ++ e.message ++ "\n");
                 return Option.none
             }
     }
 
 /// Write a store leaf; `false` after reporting the failure on stderr. A
 /// failed write only costs the next run a miss, so the caller carries on.
-pub def Build.write_leaf (path : String) (text : String) : IO Bool := do {
-    let r <- IO.write_file (Path.path path) text;
+pub def Build.write_leaf (path : Path) (text : String) : IO Bool := do {
+    let r <- IO.write_file path text;
     Build.leaf_written path r
 }
 
-def Build.leaf_written (path : String) (r : Result StreamError Unit) : IO Bool :=
+def Build.leaf_written (path : Path) (r : Result StreamError Unit) : IO Bool :=
     match r {
         Result.ok _ => IO.pure true,
         Result.err e => do {
-            IO.write_stderr ("warning: build store: writing " ++ path ++ ": " ++ e.message ++ "\n");
+            IO.write_stderr ("warning: build store: writing " ++ Path.to_string path ++ ": " ++ e.message ++ "\n");
             return false
         }
     }

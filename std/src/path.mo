@@ -121,8 +121,19 @@ def raw_find_last_slash (s : String) (i : I64) : I64 :=
         Option.none => -1
     }
 
-def Path.parent (p : Path) : String :=
-    raw_parent_dir (Path.to_string p)
+/// The directory part of `p`, or none when it has none ("hello.mo",
+/// "/monad"): an empty `Path` is never constructed.
+def Path.parent (p : Path) : Option Path :=
+    let d : String := raw_parent_dir (Path.to_string p) in
+    if String.is_empty d then Option.none else Option.some (Path.path d)
+
+/// The last component of `p` -- the whole of it when it has no `/`.
+def Path.file_name (p : Path) : String :=
+    let s : String := Path.to_string p in
+    let last_slash : I64 := raw_find_last_slash s (String.length s) in
+    if I64.lt last_slash 0
+    then s
+    else String.drop (last_slash + 1) s
 
 def Path.beq (a b : Path) : Bool :=
     String.beq (Path.to_string a) (Path.to_string b)

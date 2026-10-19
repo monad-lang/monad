@@ -22,10 +22,10 @@ def emit_path : String :=
     String.concat "/tmp/shuttle_retry_emit_" (String.concat pid ".txt")
 
 def read_file_opt (path : String) : IO String :=
-    Test.read_fixture_or path ""
+    Test.read_fixture_or (Path.path path) ""
 
 def write_text_opt (path : String) (text : String) : IO Unit :=
-    do { let _w <- Test.write_fixture path text; return unit }
+    do { let _w <- Test.write_fixture (Path.path path) text; return unit }
 
 /// Append one mark: read, concat, write (no truncate-to-append native).
 #[partial]

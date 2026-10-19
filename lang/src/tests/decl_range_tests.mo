@@ -191,7 +191,7 @@ def test_decl_ranges_name_the_four_named_kinds : Bool :=
 def test_ranged_check_ranges_a_type_error : IO Bool := do {
     exec_cmd "mkdir" ["-p", probe_dir];
     let path : String := probe_dir ++ "/probe.mo";
-    let _w <- Test.write_fixture path probe_source;
+    let _w <- Test.write_fixture (Path.path path) probe_source;
     let checked <- check_file_cached_from_source_ranged module_info_cache_empty path probe_source false;
     let diags : List Diagnostic := ranged_file_diagnostics checked;
     match diags {

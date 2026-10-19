@@ -310,7 +310,7 @@ def lsp_definition_far (enc : PositionEncoding) (t : NavTarget) : IO Json := do 
     match nav_target_file t {
         Option.none => return Json.make_null,
         Option.some path => do {
-            let text <- read_file_or_none path;
+            let text <- read_file_or_none (Path.path path);
             return (lsp_location_in_file enc path text (nav_target_name t))
         },
     }
@@ -606,21 +606,21 @@ def lsp_mo_files (dir : String) : IO (List String) := do {
 }
 
 #[partial]
-def lsp_mo_files_in (dir : String) (entries : List String) (acc : List String)
+def lsp_mo_files_in (dir : String) (entries : List Path) (acc : List String)
     : IO (List String) := do {
     match entries {
         List.empty => return acc,
-        List.cons name rest => lsp_mo_entry dir name rest acc
+        List.cons entry rest => lsp_mo_entry dir entry rest acc
     }
 }
 
 /// One directory entry: a subdirectory to walk, a `.mo` file to keep, or neither.
 #[partial]
-def lsp_mo_entry (dir : String) (name : String) (rest : List String) (acc : List String)
+def lsp_mo_entry (dir : String) (entry : Path) (rest : List Path) (acc : List String)
     : IO (List String) := do {
-    let full := lsp_join dir name;
-    let is_dir <- IO.is_dir (Path.path full);
-    if lsp_walk_into name is_dir
+    let full := Path.to_string entry;
+    let is_dir <- IO.is_dir entry;
+    if lsp_walk_into (Path.file_name entry) is_dir
     then do {
         let sub <- lsp_mo_files full;
         lsp_mo_files_in dir rest (List.append acc sub)
@@ -630,7 +630,7 @@ def lsp_mo_entry (dir : String) (name : String) (rest : List String) (acc : List
 
 /// A non-directory entry: kept when it is a `.mo` file, skipped otherwise.
 #[partial]
-def lsp_mo_file_entry (dir : String) (full : String) (is_dir : Bool) (rest : List String)
+def lsp_mo_file_entry (dir : String) (full : String) (is_dir : Bool) (rest : List Path)
     (acc : List String) : IO (List String) :=
   if lsp_keep_mo full is_dir
   then do { lsp_mo_files_in dir rest (List.append acc (List.cons full List.empty)) }
@@ -659,12 +659,6 @@ def lsp_keep_mo (name : String) (is_dir : Bool) : Bool :=
 def lsp_hidden (name : String) : Bool :=
   String.starts_with "." name || String.beq name "target"
 
-/// `dir`/`name`, tolerating a trailing separator on the directory (so a workspace root
-/// the client sent as `/a/b/` does not produce `/a/b//c.mo`).
-#[partial]
-def lsp_join (dir : String) (name : String) : String :=
-  if String.ends_with dir "/" then dir ++ name else dir ++ "/" ++ name
-
 /// A file's text: the client's buffer if the document is open, and the file on disk
 /// otherwise.
 ///
@@ -677,7 +671,7 @@ def lsp_join (dir : String) (name : String) : String :=
 def lsp_file_text (docs : DocStore) (path : String) : IO (Option String) := do {
     match docstore_text (docstore_uri_of_path path) docs {
         Option.some text => return (Option.some text),
-        Option.none => read_file_or_none path
+        Option.none => read_file_or_none (Path.path path)
     }
 }
 

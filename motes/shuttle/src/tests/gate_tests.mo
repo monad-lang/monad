@@ -69,7 +69,7 @@ def user_message : Message := { role := Role.user, content := [Content.text "ple
 
 def write_script (turns : List Json) : IO Unit := do {
     let script : Json := Json.make_array turns;
-    do { let _w <- Test.write_fixture script_path (Json.to_string script); return unit }
+    do { let _w <- Test.write_fixture (Path.path script_path) (Json.to_string script); return unit }
 }
 
 /// Turn 1 asks for `stamp` once; turn 2 is the final answer.
@@ -101,13 +101,13 @@ def tap_path : String :=
     String.concat "/tmp/shuttle_gate_tap_" (String.concat (I64.to_string process_id) ".txt")
 
 def gate_tap : IO Unit :=
-    do { let _w <- Test.append_fixture tap_path "x"; return unit }
+    do { let _w <- Test.append_fixture (Path.path tap_path) "x"; return unit }
 
 def reset_tap : IO Unit :=
-    do { let _w <- Test.write_fixture tap_path ""; return unit }
+    do { let _w <- Test.write_fixture (Path.path tap_path) ""; return unit }
 
 def read_tap : IO String :=
-    Test.read_fixture_or tap_path "TAP-READ-FAILED"
+    Test.read_fixture_or (Path.path tap_path) "TAP-READ-FAILED"
 
 // ── The gates under test ────────────────────────────────────────────────
 

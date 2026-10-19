@@ -59,12 +59,12 @@ def test_write_file_two_arg_native_dispatch_roundtrip : IO Bool := do {
     let source := r#"def main (args : List String) : IO I64 := do {
     let path := ""# ++ write_path ++ r#"";
     let content := "hello from the native write_file fast path";
-    let w <- IO.write_file_native path content;
+    let w <- IO.write_file (Path.path path) content;
     return (if Result.is_ok w then 0 else 1)
 }
 "#;
     let compiled_ok <- compile_source_run_expect source "test_write_file_two_arg_native_dispatch_roundtrip" 0;
-    let written <- Test.read_fixture write_path;
+    let written <- Test.read_fixture (Path.path write_path);
     let content_matches := match written {
         Option.some text => String.beq text content,
         Option.none => false

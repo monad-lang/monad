@@ -11,6 +11,7 @@
 /// process.
 
 use lib::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.to_list}
+use lib::path {Path}
 
 // ─── StreamError ────────────────────────────────────────────────────────
 
@@ -147,8 +148,8 @@ pub def FdStream.write_mode : I64 := 1
 
 /// Open `path` for reading (`FdStream.read_mode`) or writing
 /// (`FdStream.write_mode`: created 0644, or truncated).
-pub def FdStream.open_file (path : String) (mode : I64) : IO (Result StreamError FdStream) := do {
-  let r <- IO.mk (stream_open path mode);
+pub def FdStream.open_file (path : Path) (mode : I64) : IO (Result StreamError FdStream) := do {
+  let r <- IO.mk (stream_open (Path.to_string path) mode);
   return (stream_result r)
 }
 

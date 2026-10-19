@@ -52,7 +52,7 @@ def main : IO I64 {
     let ir_text := emit_module mod_;
 
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
-    let _w <- Test.write_fixture ir_path ir_text;
+    let _w <- Test.write_fixture (Path.path ir_path) ir_text;
 
     let _llc <- compile_ir_to_obj ir_path obj_path;
     // The C runtime comes from the shared resolver, like every other

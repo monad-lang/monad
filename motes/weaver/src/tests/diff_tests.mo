@@ -86,12 +86,12 @@ def test_for_input_edit : IO Bool := do {
 #[test]
 def test_for_input_write : IO Bool := do {
     let target : String := String.concat "/tmp/weaver_diff_target_" (String.concat (I64.to_string process_id) ".txt");
-    let _ <- do { let _w <- Test.write_fixture target "on disk\n"; return unit };
+    let _ <- do { let _w <- Test.write_fixture (Path.path target) "on disk\n"; return unit };
     let input : Json := Json.make_object
         (Map.insert "path" (Json.make_str target)
             (obj_field "content" "replacement"));
     let existing <- Diff.for_input "write" input;
-    let _ <- do { let _w <- Test.write_fixture target ""; return unit };
+    let _ <- do { let _w <- Test.write_fixture (Path.path target) ""; return unit };
     let fresh <- Diff.for_input "write" input;
     return (match existing {
         Option.some pr => match pr {

@@ -66,7 +66,7 @@ Other operations in `std.io`:
 | `IO.read_line` | `IO (Result StreamError (Option String))` |
 | `IO.file_exists` | `Path -> IO Bool` |
 | `IO.is_dir` | `Path -> IO Bool` |
-| `IO.list_dir` | `Path -> IO (List String)` |
+| `IO.list_dir` | `Path -> IO (List Path)` (entries joined onto the directory, sorted) |
 | `IO.get_env` | `String -> IO (Option String)` |
 | `IO.current_time` | `IO I64` (monotonic milliseconds) |
 

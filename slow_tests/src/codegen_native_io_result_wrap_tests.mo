@@ -39,8 +39,8 @@ def test_read_file_bind_result_used_downstream : IO Bool :=
     let source := r#"def main (args : List String) : IO I64 := do {
     let path := ""# ++ fixture_path ++ r#"";
     let content := "needs io wrap";
-    let _w <- IO.write_file_native path content;
-    let read_back <- IO.read_file_native path;
+    let _w <- IO.write_file (Path.path path) content;
+    let read_back <- IO.read_file (Path.path path);
     let matched := match read_back {
         Result.ok text => String.beq text content,
         Result.err _ => false

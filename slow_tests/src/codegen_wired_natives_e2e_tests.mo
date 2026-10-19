@@ -124,7 +124,8 @@ def main (args : List String) : IO I64 := do {
 "# in
     compile_source_run_expect source "c_exec_cmd" 7
 
-/// The C `monad_list_dir`: bare names, one level, SORTED. The sort is
+/// The C `monad_list_dir`: bare names (`IO.list_dir` joins them onto
+/// the directory), one level, SORTED. The sort is
 /// load-bearing rather than cosmetic -- readdir order is
 /// filesystem-dependent, and the reference sorts, so an unsorted
 /// implementation would make a compiled binary and the interpreter
@@ -140,7 +141,7 @@ def main (args : List String) : IO I64 := do {
     exec_cmd "touch" [dir ++ "/zeta", dir ++ "/alpha", dir ++ "/mid"];
     let entries <- IO.list_dir (Path.path dir);
     exec_cmd "rm" ["-rf", dir];
-    let at := \i => match List.get i entries { Option.some e => e, Option.none => "<missing>" };
+    let at := \i => match List.get i entries { Option.some e => Path.file_name e, Option.none => "<missing>" };
     // Index 3 must be absent -- that plus the three names below pins
     // both the contents and the sort order, without `List.length`
     // (which needs an explicit `use std.list` import to compile).

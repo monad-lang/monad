@@ -16,7 +16,7 @@ use lang::types {
   Decl, LocalScope, ModulePath, NamePath, id, module_path_to_string_colon, show_identifier, show_module_path,
 }
 use llvm::ir {LLVMModule, emit_module}
-use llvm::link {link_ir}
+use llvm::link {link_ir, mkdir_parent}
 use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
@@ -379,12 +379,11 @@ def build_cached_keyed (src : String) (target_dir : String) (h : String) (ir : O
     let hit <- IO.file_exists (Path.path entry);
     if hit
     then do {
-        // `Path.parent dest`, not `dest_dir`: `-o sub/hello` nests, and the
+        // `dest`'s own parent, not `dest_dir`: `-o sub/hello` nests, and the
         // MISS path gets that directory from `link_ir`'s own mkdir while a
         // hit has to make it here. Without it `cp` fails and the run still
         // prints `cached:` -- a success line over a failing exit code.
-        let parent : String := Path.parent (Path.path dest);
-        let _mk <- (if String.beq parent "" then return 0 else exec_cmd "mkdir" ["-p", parent]);
+        let _mk <- mkdir_parent (Path.path dest);
         let rc <- exec_cmd "cp" ["-f", entry, dest];
         let _ir <- replay_ir_beside ir dest;
         ok_line ("cached: " ++ dest ++ " (" ++ h ++ ")");

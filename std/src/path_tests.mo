@@ -91,21 +91,57 @@ def test_path_beq : Bool :=
         },
     }
 
-// `Path.parent` -- the directory half, with "" meaning "no directory"
-// (which callers must NOT pass to `mkdir -p`).
+// `Path.parent` -- the directory half, none when there is none (a
+// `Path` is never empty, and callers must not `mkdir -p` nothing).
+
+def parent_is (p : String) (want : Option String) : Bool :=
+    String.beq (parent_text (Path.parent (Path.path p))) (want_text want)
+
+def parent_text (d : Option Path) : String :=
+    match d { Option.some p => Path.to_string p, Option.none => "<none>" }
+
+def want_text (w : Option String) : String :=
+    match w { Option.some s => s, Option.none => "<none>" }
 
 #[test]
 def test_path_parent_of_nested_path : Bool :=
-    String.beq (Path.parent (Path.path "/tmp/out/monad")) "/tmp/out"
+    parent_is "/tmp/out/monad" (Option.some "/tmp/out")
 
 #[test]
-def test_path_parent_of_bare_filename_is_empty : Bool :=
-    String.beq (Path.parent (Path.path "hello.mo")) ""
+def test_path_parent_of_bare_filename_is_none : Bool :=
+    parent_is "hello.mo" Option.none
 
 #[test]
-def test_path_parent_of_root_child : Bool :=
-    String.beq (Path.parent (Path.path "/monad")) ""
+def test_path_parent_of_root_child_is_none : Bool :=
+    parent_is "/monad" Option.none
 
 #[test]
 def test_path_parent_keeps_relative_prefix : Bool :=
-    String.beq (Path.parent (Path.path "out/bin/monad")) "out/bin"
+    parent_is "out/bin/monad" (Option.some "out/bin")
+
+// `Path.file_name` -- the last component.
+
+#[test]
+def test_path_file_name_of_nested_path : Bool :=
+    String.beq (Path.file_name (Path.path "/tmp/out/monad.ll")) "monad.ll"
+
+#[test]
+def test_path_file_name_of_bare_name : Bool :=
+    String.beq (Path.file_name (Path.path "hello.mo")) "hello.mo"
+
+#[test]
+def test_path_file_name_of_list_dir_entry : Bool :=
+    String.beq (Path.file_name (Path.join (Path.path "lang/") (Path.path "src"))) "src"
+
+// A trailing slash on the directory is not doubled -- `IO.list_dir`
+// joins its entries this way, so `monad test lang/` reports
+// `lang/src/...`, and the fix has to hold at every level of a walk.
+
+#[test]
+def test_path_join_strips_trailing_slash : Bool :=
+    String.beq (Path.to_string (Path.join (Path.path "lang/") (Path.path "src"))) "lang/src"
+
+#[test]
+def test_path_join_nested_stays_single : Bool :=
+    let a : Path := Path.join (Path.path "lang/") (Path.path "src") in
+    String.beq (Path.to_string (Path.join a (Path.path "codegen"))) "lang/src/codegen"

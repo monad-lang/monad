@@ -32,8 +32,9 @@ pub def IO.println (s : String) : IO Unit := IO.write_to FdStream.stdout (String
 /// Bytes asked for per `Stream.read` while reading a whole file.
 def IO.read_chunk_size : I64 := 65536
 
-/// Create or truncate `path` and write `content` to it.
-def IO.write_file_native (path : String) (content : String) : IO (Result StreamError Unit) := do {
+/// Create or truncate `path` and write `content` to it. A missing parent
+/// directory is `not_found`; it is not created.
+pub def IO.write_file (path : Path) (content : String) : IO (Result StreamError Unit) := do {
   let opened <- FdStream.open_file path FdStream.write_mode;
   IO.write_opened opened content
 }
@@ -58,13 +59,13 @@ def IO.written (r : Result StreamError I64) : Result StreamError Unit :=
     Result.ok _ => Result.ok Unit.unit
   }
 
-/// The whole of `path` as text.
+/// The whole file at `path` as text; a missing file is `not_found`.
 ///
 /// The chunks are gathered into ONE buffer and decoded once: decoding
 /// each 64 KiB chunk on its own would split a multi-byte character that
 /// straddles a chunk boundary, which the interpreter's lossy UTF-8
 /// decode turns into U+FFFD.
-def IO.read_file_native (path : String) : IO (Result StreamError String) := do {
+pub def IO.read_file (path : Path) : IO (Result StreamError String) := do {
   let opened <- FdStream.open_file path FdStream.read_mode;
   IO.read_opened opened
 }
@@ -316,23 +317,18 @@ def IO.current_time : IO I64
 #[native current_time_nano]
 def IO.current_time_nano : IO I64
 
-/// Create or truncate `path` and write `content` to it. A missing parent
-/// directory is `not_found`; it is not created.
-pub def IO.write_file (path : Path) (content : String) : IO (Result StreamError Unit) :=
-    IO.write_file_native (Path.to_string path) content
-
-/// The whole file at `path` as text; a missing file is `not_found`.
-pub def IO.read_file (path : Path) : IO (Result StreamError String) :=
-    IO.read_file_native (Path.to_string path)
-
 pub def IO.file_exists (path : Path) : IO Bool :=
     IO.file_exists_native (Path.to_string path)
 
 pub def IO.is_dir (path : Path) : IO Bool :=
     IO.is_dir_native (Path.to_string path)
 
-pub def IO.list_dir (path : Path) : IO (List String) :=
-    IO.list_dir_native (Path.to_string path)
+/// The entries of the directory `path`, one level, sorted, each joined
+/// onto `path` (`Path.file_name` gives the bare name back).
+pub def IO.list_dir (path : Path) : IO (List Path) := do {
+    let names <- IO.list_dir_native (Path.to_string path);
+    return (List.map (fn (name : String) => Path.join path (Path.path name)) names)
+}
 
 // ── TCP networking ──────────────────────────────────────────────────────
 // Four blocking `#[native "tcp_*"]` defs, implemented ONLY by the

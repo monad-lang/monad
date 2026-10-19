@@ -111,7 +111,7 @@ def keyed_path : String :=
 /// A raw text read: the redaction test greps the saved file itself,
 /// not a re-decode of it.
 def read_text (path : String) : IO String :=
-    Test.read_fixture_or path ""
+    Test.read_fixture_or (Path.path path) ""
 
 /// The pinned redaction: a session whose config carries a direct key
 /// saves to a file that contains no key material.

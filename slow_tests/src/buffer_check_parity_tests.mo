@@ -56,7 +56,7 @@ def string_lists_equal (a : List String) (b : List String) : Bool := match a {
 def test_buffer_check_matches_disk_check : IO Bool := do {
     exec_cmd "mkdir" ["-p", parity_dir];
     let path : String := parity_dir ++ "/parity.mo";
-    let _w <- Test.write_fixture path parity_source;
+    let _w <- Test.write_fixture (Path.path path) parity_source;
     let disk <- check_file_cached module_info_cache_empty path false;
     let buffer <- check_file_cached_from_source module_info_cache_empty path parity_source false;
     let disk_diags : List String := parity_diags (parity_result disk);

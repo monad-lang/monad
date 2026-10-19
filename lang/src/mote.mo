@@ -193,7 +193,7 @@ def Mote.discover_config_target_dir_go (dir : String) (depth : I64) : IO (Option
     if I64.lt depth 1
     then return Option.none
     else do {
-        let text <- read_file_or_none (tool_config_in dir);
+        let text <- read_file_or_none (Path.path (tool_config_in dir));
         match Mote.config_target_dir_of_found dir text {
             Option.some d => return (Option.some d),
             Option.none => Mote.discover_config_target_dir_above dir (depth - 1)
@@ -357,7 +357,7 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
     if I64.lt depth 1
     then return Option.none
     else do {
-        let found <- read_file_or_none (mote_toml_in dir);
+        let found <- read_file_or_none (Path.path (mote_toml_in dir));
         match found {
             // A `mote.toml` with no `[mote]` is a virtual workspace
             // root: stop there rather than walking past it, since
@@ -379,7 +379,7 @@ def Mote.discover_above (dir : String) (depth : I64) : IO (Option MoteManifest) 
 /// `[dependencies.x] path` names `x`'s directory, so a manifest further up
 /// is somebody else's. Resolution needs the dependency's own `[lib] path`.
 pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
-    let text <- read_file_or_none (mote_toml_in dir);
+    let text <- read_file_or_none (Path.path (mote_toml_in dir));
     return (match text {
         Option.none => Option.none,
         Option.some t => Mote.parse_manifest dir t
@@ -409,7 +409,7 @@ pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
 /// is checked by the Rust host in CI anyway.
 #[partial]
 def Mote.workspace_members (dir : String) : IO (List String) := do {
-    let found <- read_file_or_none (mote_toml_in dir);
+    let found <- read_file_or_none (Path.path (mote_toml_in dir));
     match found {
         Option.none => return List.empty,
         Option.some text => Mote.workspace_members_of_text dir text
@@ -480,7 +480,7 @@ def Mote.expand_one_member (root_dir : String) (pat : String) : IO (List String)
         if Bool.not is_there then do { return List.empty }
         else do {
             let entries <- IO.list_dir (Path.path parent);
-            Mote.keep_mote_dirs parent entries
+            Mote.keep_mote_dirs entries
         }
     }
     else do {
@@ -496,13 +496,13 @@ def Mote.member_path (root_dir : String) (name : String) : String :=
     if String.beq root_dir "" then name else raw_path_join root_dir name
 
 #[partial]
-def Mote.keep_mote_dirs (parent : String) (entries : List String) : IO (List String) :=
+def Mote.keep_mote_dirs (entries : List Path) : IO (List String) :=
     match entries {
         List.empty => do { return List.empty },
-        List.cons name rest => do {
-            let path := raw_path_join parent name;
+        List.cons entry rest => do {
+            let path := Path.to_string entry;
             let is_mote <- IO.file_exists (Path.path (mote_toml_in path));
-            let tail <- Mote.keep_mote_dirs parent rest;
+            let tail <- Mote.keep_mote_dirs rest;
             return (if is_mote then List.cons path tail else tail)
         }
     }
@@ -873,19 +873,19 @@ def Mote.toolchain_root_in_home (home : String) (active : Option String) (versio
 /// absent: the callers' own types (`Option MoteManifest`, a member list)
 /// have no error channel, and an unreadable manifest must not pass
 /// silently for a missing one.
-pub def read_file_or_none (path : String) : IO (Option String) := do {
-    let r <- IO.read_file (Path.path path);
+pub def read_file_or_none (path : Path) : IO (Option String) := do {
+    let r <- IO.read_file path;
     read_result_or_none path r
 }
 
-def read_result_or_none (path : String) (r : Result StreamError String) : IO (Option String) :=
+def read_result_or_none (path : Path) (r : Result StreamError String) : IO (Option String) :=
     match r {
         Result.ok text => IO.pure (Option.some text),
         Result.err e =>
             if StreamError.is_not_found e
             then IO.pure Option.none
             else do {
-                IO.write_stderr ("error: reading " ++ path ++ ": " ++ e.message ++ "\n");
+                IO.write_stderr ("error: reading " ++ Path.to_string path ++ ": " ++ e.message ++ "\n");
                 return Option.none
             }
     }
@@ -933,7 +933,7 @@ def Mote.toolchain_root_from_home : IO (Option String) := do {
     match Mote.toolchain_home_of monad_home home {
         Option.none => return Option.none,
         Option.some h => do {
-            let contents <- read_file_or_none (raw_path_join h "active");
+            let contents <- read_file_or_none (Path.path (raw_path_join h "active"));
             let dir_exists <- path_option_is_dir (Mote.active_version_dir h contents);
             return (Mote.toolchain_root_in_home h contents dir_exists)
         }

@@ -53,7 +53,7 @@ def tap_path : String :=
     String.concat "/tmp/weaver_tap_" (String.concat pid ".txt")
 
 def write_text (path : String) (text : String) : IO Unit :=
-    do { let _w <- Test.write_fixture path text; return unit }
+    do { let _w <- Test.write_fixture (Path.path path) text; return unit }
 
 // ── The scripted wire: three tool asks, three answers ─────────────────
 
@@ -122,7 +122,7 @@ def cursor_step (p : Path) (exists : Bool) : IO I64 :=
     if Bool.not exists then IO.pure 0 else read_cursor_text p
 
 def read_cursor_text (p : Path) : IO I64 := do {
-    let text <- Test.read_fixture_or (Path.to_string p) "";
+    let text <- Test.read_fixture_or (Path.path (Path.to_string p)) "";
     return (cursor_of_text text)
 }
 
@@ -139,7 +139,7 @@ def serve (idx : I64) : IO (Option String) :=
     }
 
 def serve_at (p : Path) (idx : I64) : IO (Option String) := do {
-    let text <- Test.read_fixture_or (Path.to_string p) "";
+    let text <- Test.read_fixture_or (Path.path (Path.to_string p)) "";
     serve_input text idx
 }
 
@@ -185,12 +185,12 @@ def tap_write (s : String) : IO Unit :=
     }
 
 def tap_at (p : Path) (s : String) : IO Unit := do {
-    let _w <- Test.append_fixture (Path.to_string p) s;
+    let _w <- Test.append_fixture (Path.path (Path.to_string p)) s;
     return unit
 }
 
 def read_tap : IO String :=
-    Test.read_fixture_or tap_path "TAP-READ-FAILED"
+    Test.read_fixture_or (Path.path tap_path) "TAP-READ-FAILED"
 
 // ── The `stamp` tool: write-cap, side-effect-free (shuttle gate_tests') ──
 
@@ -342,7 +342,7 @@ def write_edit_inputs : IO Unit :=
     ]))
 
 def read_target (path : String) : IO String :=
-    Test.read_fixture_or path "TARGET-READ-FAILED"
+    Test.read_fixture_or (Path.path path) "TARGET-READ-FAILED"
 
 def mode_is_manual (m : Mode) : Bool :=
     match m { Mode.manual => true, _ => false }

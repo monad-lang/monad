@@ -260,13 +260,13 @@ def tap_path : String :=
 /// write because `std::io` has no append mode and no `IORef` -- a
 /// single-threaded test makes the race moot.
 def text_tap (t : String) : IO Unit :=
-    do { let _w <- Test.append_fixture tap_path t; return unit }
+    do { let _w <- Test.append_fixture (Path.path tap_path) t; return unit }
 
 def reset_tap : IO Unit :=
-    do { let _w <- Test.write_fixture tap_path ""; return unit }
+    do { let _w <- Test.write_fixture (Path.path tap_path) ""; return unit }
 
 def read_tap : IO String :=
-    Test.read_fixture_or tap_path "TAP-READ-FAILED"
+    Test.read_fixture_or (Path.path tap_path) "TAP-READ-FAILED"
 
 /// A `text_delta` split across two pushes (the first ends mid-JSON,
 /// no newline yet), with `event:` lines present exactly as the wire

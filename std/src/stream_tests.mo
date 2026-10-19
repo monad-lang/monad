@@ -37,7 +37,7 @@ def st_write_opened (opened : Result StreamError FdStream) (text : String) : IO 
 
 /// Create-or-truncate `path` holding exactly `text`.
 def st_write_file (path : String) (text : String) : IO Bool := do {
-    let opened <- FdStream.open_file path FdStream.write_mode;
+    let opened <- FdStream.open_file (Path.path path) FdStream.write_mode;
     st_write_opened opened text
 }
 
@@ -80,7 +80,7 @@ def st_read_and_close (s : FdStream) : IO (Option String) := do {
 }
 
 def st_read_file (path : String) : IO (Option String) := do {
-    let opened <- FdStream.open_file path FdStream.read_mode;
+    let opened <- FdStream.open_file (Path.path path) FdStream.read_mode;
     st_read_opened opened
 }
 
@@ -154,7 +154,7 @@ def st_line_err_kind (r : Result StreamError (Option String)) (code : I64) : Boo
 /// line unterminated): "ab", then "cd" if `partial_delivered` else end
 /// of stream, then end of stream.
 def st_three_lines (path : String) (policy : PartialLinePolicy) (partial_delivered : Bool) : IO Bool := do {
-    let opened <- FdStream.open_file path FdStream.read_mode;
+    let opened <- FdStream.open_file (Path.path path) FdStream.read_mode;
     st_three_lines_opened opened policy partial_delivered
 }
 
@@ -174,7 +174,7 @@ def st_three_lines_of (s : FdStream) (policy : PartialLinePolicy) (partial_deliv
 }
 
 def st_bounded_line (path : String) (max_len : I64) : IO (Result StreamError (Option String)) := do {
-    let opened <- FdStream.open_file path FdStream.read_mode;
+    let opened <- FdStream.open_file (Path.path path) FdStream.read_mode;
     st_bounded_line_opened opened max_len
 }
 
@@ -238,7 +238,7 @@ def test_empty_file_reads_as_end_of_stream : IO Bool := do {
 
 #[test]
 def test_open_of_a_missing_file_is_not_found : IO Bool := do {
-    let r <- FdStream.open_file (st_path "does_not_exist") FdStream.read_mode;
+    let r <- FdStream.open_file (Path.path (st_path "does_not_exist")) FdStream.read_mode;
     return (st_open_failed_with r 0)
 }
 
@@ -249,14 +249,14 @@ def test_open_of_an_unreadable_file_is_permission_denied : IO Bool := do {
     let _ <- st_write_file path "secret";
     exec_cmd "chmod" ["000", path];
     let is_root <- exec_cmd "sh" ["-c", "test \"$(id -u)\" = 0"];
-    let r <- FdStream.open_file path FdStream.read_mode;
+    let r <- FdStream.open_file (Path.path path) FdStream.read_mode;
     exec_cmd "rm" ["-f", path];
     return (is_root == 0 || st_open_failed_with r 1)
 }
 
 #[test]
 def test_open_with_an_unknown_mode_is_invalid_input : IO Bool := do {
-    let r <- FdStream.open_file (st_path "mode") 7;
+    let r <- FdStream.open_file (Path.path (st_path "mode")) 7;
     return (st_open_failed_with r 5)
 }
 

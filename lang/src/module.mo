@@ -993,12 +993,12 @@ def motes_src_paths (mp : ModulePath) : IO (List String) := do {
 }
 
 #[partial]
-def motes_src_paths_go (entries : List String) (file_stem : String) : IO (List String) :=
+def motes_src_paths_go (entries : List Path) (file_stem : String) : IO (List String) :=
     match entries {
         List.empty => do { return List.empty },
-        List.cons name rest => do {
+        List.cons entry rest => do {
             let tail <- motes_src_paths_go rest file_stem;
-            let src := String.concat "motes/" (String.concat name "/src");
+            let src := String.concat (Path.to_string entry) "/src";
             let is_there <- IO.is_dir (Path.path src);
             if Bool.not is_there
             then return tail
@@ -3224,8 +3224,8 @@ pub def check_file_cached_affine (cache : ModuleInfoCache) (file_path : String) 
 
 // --- Directory-recursive corpus collection (self-hosted `find *.mo`) ---
 //
-// `IO.list_dir`/`IO.is_dir` are directory-listing natives — one level,
-// bare entry names, sorted. Everything below builds a recursive walk on
+// `IO.list_dir`/`IO.is_dir` list one directory level, sorted, each
+// entry joined onto the directory. Everything below builds a recursive walk on
 // top of them, giving `check` (via `expand_check_paths`) parity with the
 // Rust reference's `check --workspace`/directory-argument support
 // without shelling out to `find`.
@@ -3234,36 +3234,20 @@ pub def check_file_cached_affine (cache : ModuleInfoCache) (file_path : String) 
 #[partial]
 def collect_mo_files (dir : String) : IO (List String) := do {
     let entries <- list_dir (Path.path dir);
-    collect_mo_files_entries dir entries
+    collect_mo_files_entries entries
 }
 
-/// Join a directory to one of its own entry names with exactly one
-/// separator, whatever the caller's own trailing slash looked like.
-///
-/// `dir` comes straight off the command line, and `monad test lang/`
-/// is at least as natural to type as `monad test lang` -- shell tab
-/// completion produces the trailing slash on its own. A plain
-/// `dir ++ "/" ++ name` then builds `lang//src`, which recursion
-/// compounds into `lang//src//codegen//emit.mo`: still a working path
-/// (POSIX collapses repeated slashes) but wrong in every line of
-/// output that echoes it back, which is the whole of `check`'s and
-/// `test`'s per-file reporting.
-///
-/// One slash is stripped, not all: `//` is genuinely
-/// implementation-defined at the START of a POSIX path, and nothing
-/// else here normalizes `.`/`..` either -- arguments stay as typed.
-pub def join_path_dir (dir : String) (name : String) : String :=
-    if String.ends_with dir "/" then dir ++ name else dir ++ "/" ++ name
-
-/// Walk `dir`'s own entries (as returned by `IO.list_dir`), recursing
-/// into subdirectories and keeping `.mo`-suffixed files.
+/// Walk a directory's own entries (as `IO.list_dir` joins them, with one
+/// separator however the command-line `dir` ended -- `monad test lang/`
+/// reports `lang/src/...`, not `lang//src//...`), recursing into
+/// subdirectories and keeping `.mo`-suffixed files.
 #[partial]
-def collect_mo_files_entries (dir : String) (entries : List String) : IO (List String) :=
+def collect_mo_files_entries (entries : List Path) : IO (List String) :=
     match entries {
         List.empty => do { return List.empty },
-        List.cons name rest => do {
-            let path : String := join_path_dir dir name;
-            let is_directory : Bool <- is_dir (Path.path path);
+        List.cons entry rest => do {
+            let path : String := Path.to_string entry;
+            let is_directory : Bool <- is_dir entry;
             let here : List String <- if is_directory then
                     collect_mo_files path
                 else if String.ends_with path ".mo" then do {
@@ -3271,7 +3255,7 @@ def collect_mo_files_entries (dir : String) (entries : List String) : IO (List S
                 } else do {
                     return List.empty
                 };
-            let there : List String <- collect_mo_files_entries dir rest;
+            let there : List String <- collect_mo_files_entries rest;
             return (list_append here there)
         }
     }
@@ -3292,24 +3276,6 @@ pub def expand_check_paths (paths : List String) : IO (List String) :=
             return (list_append here there)
         }
     }
-
-/// `join_path_dir` collapses the caller's trailing slash rather than
-/// doubling it -- `monad test lang/` used to report every file it found
-/// as `lang//src//...`.
-#[test]
-def test_join_path_dir_no_trailing_slash : Bool :=
-    String.beq (join_path_dir "lang" "src") "lang/src"
-
-#[test]
-def test_join_path_dir_strips_trailing_slash : Bool :=
-    String.beq (join_path_dir "lang/" "src") "lang/src"
-
-/// The fix has to hold at every directory level, not just the first:
-/// `collect_mo_files_entries` recurses on its own output, so a doubled
-/// slash that survived one join would compound at each one below it.
-#[test]
-def test_join_path_dir_nested_stays_single : Bool :=
-    String.beq (join_path_dir (join_path_dir "lang/" "src") "codegen") "lang/src/codegen"
 
 #[test]
 def test_parse_all_decls_empty : Bool :=

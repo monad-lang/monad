@@ -218,7 +218,7 @@ def present_toml : String :=
     "provider = \"mistral\"\n\n[mcp_caps]\nsrv = \"read\"\n"
 
 def write_present : IO Unit :=
-    do { let _w <- Test.write_fixture present_path present_toml; return unit }
+    do { let _w <- Test.write_fixture (Path.path present_path) present_toml; return unit }
 
 /// A missing file contributes nothing.
 #[test]

@@ -13,7 +13,7 @@ def test_file_path : String := String.concat test_dir "/a.txt"
 
 def setup_fixture : IO Unit := do {
     exec_cmd "mkdir" ["-p", test_dir];
-    do { let _w <- Test.write_fixture test_file_path "needle in a haystack\nanother line"; return unit }
+    do { let _w <- Test.write_fixture (Path.path test_file_path) "needle in a haystack\nanother line"; return unit }
 }
 
 def grep_fixture_result : IO (Result String Content) :=

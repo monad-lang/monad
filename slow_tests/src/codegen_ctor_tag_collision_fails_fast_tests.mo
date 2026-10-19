@@ -135,7 +135,7 @@ def main (args : List String) : IO I64 :=
     return (if unwrap build == 6 then 7 else 1)
 "#;
     exec_cmd "mkdir" ["-p", output_dir];
-    let _w <- Test.write_fixture src_path source;
+    let _w <- Test.write_fixture (Path.path src_path) source;
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {

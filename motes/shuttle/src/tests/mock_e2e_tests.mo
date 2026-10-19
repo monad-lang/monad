@@ -52,7 +52,7 @@ def mock_script : Json :=
     Json.make_array [Turn.serialize_json scripted_turn_1, Turn.serialize_json scripted_turn_2]
 
 def write_script : IO Unit := do {
-    do { let _w <- Test.write_fixture script_path (Json.to_string mock_script); return unit }
+    do { let _w <- Test.write_fixture (Path.path script_path) (Json.to_string mock_script); return unit }
 }
 
 // ── The echo tool: a real ToolImpl, the only moving part the loop
@@ -156,7 +156,7 @@ def mock_script_with_unknown : Json :=
     Json.make_array [Turn.serialize_json scripted_unknown_turn, Turn.serialize_json scripted_turn_2]
 
 def write_script_with_unknown : IO Unit := do {
-    do { let _w <- Test.write_fixture script_path (Json.to_string mock_script_with_unknown); return unit }
+    do { let _w <- Test.write_fixture (Path.path script_path) (Json.to_string mock_script_with_unknown); return unit }
 }
 
 #[test]
@@ -179,13 +179,13 @@ def tap_path : String :=
     String.concat "/tmp/shuttle_mock_tap_" (String.concat (I64.to_string process_id) ".txt")
 
 def emit_tap (t : String) : IO Unit :=
-    do { let _w <- Test.append_fixture tap_path t; return unit }
+    do { let _w <- Test.append_fixture (Path.path tap_path) t; return unit }
 
 def reset_tap : IO Unit :=
-    do { let _w <- Test.write_fixture tap_path ""; return unit }
+    do { let _w <- Test.write_fixture (Path.path tap_path) ""; return unit }
 
 def read_tap : IO String :=
-    Test.read_fixture_or tap_path "TAP-READ-FAILED"
+    Test.read_fixture_or (Path.path tap_path) "TAP-READ-FAILED"
 
 def turn_2_text : String := String.concat "the echo tool said: " sentinel
 

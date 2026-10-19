@@ -280,6 +280,14 @@ pub def build_commit_define (from_env : Option String) (compiler_commit : String
         (if String.is_empty (String.trim compiler_commit) then "unknown" else String.trim compiler_commit)
     else env_commit_hash from_env
 
+/// `mkdir -p` the directory `p` sits in; nothing when it names none
+/// (the current directory). The exit status, 0 for nothing to make.
+pub def mkdir_parent (p : Path) : IO I64 :=
+    match Path.parent p {
+        Option.none => IO.pure 0,
+        Option.some d => exec_cmd "mkdir" ["-p", Path.to_string d]
+    }
+
 /// Write LLVM IR to disk and link it into a native binary via llc + clang.
 /// Returns 0 on success, 1 on any tool failure (each reported on the way
 /// out).
@@ -370,12 +378,9 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
     // the JOINED target rather than `output_dir` alone, because
     // `Path.join` lets an absolute `output_name` replace `output_dir`
     // outright, and because a relative name like `out/hello` puts the
-    // real directory inside the NAME. An empty result means "current
-    // directory", which needs no mkdir.
-    let target_dir : String := Path.parent target;
-    let _mkdir <- (if String.beq target_dir ""
-        then return 0
-        else exec_cmd "mkdir" ["-p", target_dir]);
+    // real directory inside the NAME. No directory part means the
+    // current one, which needs no mkdir.
+    let _mkdir <- mkdir_parent target;
 
     // ...and the IR's own directory, which is a DIFFERENT one on the
     // cached `build` path: the target sits in `<target-dir>/<profile>/`
@@ -383,10 +388,7 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
     // one because which two directories those are is the caller's
     // business; `mkdir -p` is idempotent, and this is two forks against a
     // compile that costs tens of seconds.
-    let ir_dir : String := Path.parent ir_path;
-    let _mkdir_ir <- (if String.beq ir_dir ""
-        then return 0
-        else exec_cmd "mkdir" ["-p", ir_dir]);
+    let _mkdir_ir <- mkdir_parent ir_path;
 
     let t_write : I64 <- Bench.now;
     // The convenience copy, for a reader that already knows this path

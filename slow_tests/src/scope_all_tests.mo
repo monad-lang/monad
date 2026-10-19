@@ -23,7 +23,7 @@ def name_ref (name : String) : NameRef := NameRef.nid (Identifier.id name)
 /// An unreadable file fails, named on stderr (`Test.read_fixture`).
 #[partial]
 def build_scope_for_file (file_path : String) (mod_name : String) : IO Bool := do {
-    let content <- Test.read_fixture file_path;
+    let content <- Test.read_fixture (Path.path file_path);
     return (match content {
         Option.none => false,
         Option.some text => build_scope_of_source text mod_name

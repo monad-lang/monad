@@ -45,7 +45,7 @@ def sentinel : String := "SHUTTLE_OPENAI_COMPAT_E2E_SENTINEL_42"
 def fixture_path : String := String.concat "/tmp/shuttle_openai_compat_e2e_fixture_" (String.concat (I64.to_string process_id) ".txt")
 
 def write_fixture : IO Unit := do {
-    do { let _w <- Test.write_fixture fixture_path sentinel; return unit }
+    do { let _w <- Test.write_fixture (Path.path fixture_path) sentinel; return unit }
 }
 
 def e2e_registry : ToolRegistry := ToolRegistry.register ReadTool.impl ToolRegistry.empty

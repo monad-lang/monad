@@ -406,7 +406,7 @@ def Build.fail_header (path : String) (n : I64) : String :=
 /// poisonous, which is the property a cache most needs.
 #[partial]
 pub def Build.check_entry_read (root : String) (key : String) : IO (Option (Pair Build.CheckTally String)) := do {
-    let raw <- Build.read_leaf (Build.check_entry_leaf root key "errors");
+    let raw <- Build.read_leaf (Path.path (Build.check_entry_leaf root key "errors"));
     match Build.parsed_count raw {
         Option.none => return Option.none,
         Option.some n => Build.check_entry_read_out root key n
@@ -424,7 +424,7 @@ def Build.parsed_count (raw : Option String) : Option I64 :=
 /// required (absent is a miss), the warning count is not.
 #[partial]
 def Build.check_entry_read_out (root : String) (key : String) (n : I64) : IO (Option (Pair Build.CheckTally String)) := do {
-    let block <- Build.read_leaf (Build.check_entry_leaf root key "out");
+    let block <- Build.read_leaf (Path.path (Build.check_entry_leaf root key "out"));
     let warns <- Build.check_entry_warn_count root key;
     return (match block {
         Option.none => Option.none,
@@ -439,7 +439,7 @@ def Build.check_entry_read_out (root : String) (key : String) (n : I64) : IO (Op
 /// replay of what it recorded.
 #[partial]
 def Build.check_entry_warn_count (root : String) (key : String) : IO I64 := do {
-    let raw <- Build.read_leaf (Build.check_entry_leaf root key "warnings");
+    let raw <- Build.read_leaf (Path.path (Build.check_entry_leaf root key "warnings"));
     return (match Build.parsed_count raw {
         Option.none => 0,
         Option.some n => n,
@@ -454,9 +454,9 @@ def Build.check_entry_warn_count (root : String) (key : String) : IO I64 := do {
 pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (warnings : I64) (block : String) : IO I64 := do {
     let d : String := Build.check_entry_dir root key;
     let _mk <- Build.ensure_dir d;
-    let _c <- Build.write_leaf (Build.check_entry_leaf root key "errors") (I64.to_string errors);
-    let _w <- Build.write_leaf (Build.check_entry_leaf root key "warnings") (I64.to_string warnings);
-    let _o <- Build.write_leaf (Build.check_entry_leaf root key "out") block;
+    let _c <- Build.write_leaf (Path.path (Build.check_entry_leaf root key "errors")) (I64.to_string errors);
+    let _w <- Build.write_leaf (Path.path (Build.check_entry_leaf root key "warnings")) (I64.to_string warnings);
+    let _o <- Build.write_leaf (Path.path (Build.check_entry_leaf root key "out")) block;
     return 0
 }
 

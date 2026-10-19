@@ -42,7 +42,7 @@ pub def build_source_binary (source : String) (basename : String) : IO (Result S
     let output_path := output_dir ++ "/" ++ basename;
 
     exec_cmd "mkdir" ["-p", output_dir];
-    let _w <- Test.write_fixture src_path source;
+    let _w <- Test.write_fixture (Path.path src_path) source;
 
     let loaded_result <- load_file_modules src_path false;
     match loaded_result {
@@ -53,7 +53,7 @@ pub def build_source_binary (source : String) (basename : String) : IO (Result S
                 Result.err e => return (Result.err ("failed to resolve class-method calls: " ++ e)),
                 Result.ok mod_ => do {
                     let ir_text := emit_module mod_;
-                    let _w <- Test.write_fixture ir_path ir_text;
+                    let _w <- Test.write_fixture (Path.path ir_path) ir_text;
 
                     let llc_result <- compile_ir_to_obj ir_path obj_path;
                     if not (llc_result == 0) then do {

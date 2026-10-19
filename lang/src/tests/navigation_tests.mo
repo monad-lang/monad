@@ -196,7 +196,7 @@ def nt_probe_path (name : String) : String := nav_dir ++ "/" ++ name
 def nt_check (name : String) (src : String) : IO RangedFileCheck := do {
     exec_cmd "mkdir" ["-p", nav_dir];
     let path : String := nt_probe_path name;
-    let _w <- Test.write_fixture path src;
+    let _w <- Test.write_fixture (Path.path path) src;
     let checked <- check_file_cached_from_source_ranged module_info_cache_empty path src false;
     return checked
 }
