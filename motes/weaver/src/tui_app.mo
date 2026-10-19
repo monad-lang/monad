@@ -42,7 +42,7 @@ use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use tui::types {Event, Key, MouseEvent, LayoutSize}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
-use tui::widgets::input {InputState, input_state, handle_input_multiline_key}
+use tui::widgets::input {InputState, input_state, handle_input_multiline_key, insert_text}
 use tui::widgets::input {handle_input_key}
 use tui::core {empty_screen, mk_rect}
 use tui::render {render, diff, apply_deltas}
@@ -313,6 +313,8 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         Event.key k => update_key m k,
         Event.resize rows cols =>
             Pair.pair (with_streak_reset (fn (mm : TuiModel) => set_size mm rows cols) m) Cmd.none,
+        Event.paste text =>
+            Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with input := insert_text text mm.input }) m) Cmd.none,
         Event.mouse me => update_mouse m me,
         // The frame clock: the spinner advances ONLY while a turn is
         // pending, so an idle tick folds to an unchanged model (a

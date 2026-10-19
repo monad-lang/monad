@@ -84,6 +84,7 @@ use lib::input { Input.produce, Input.produce_poll_only, InputReader, input_read
 use lib::terminal {
     Terminal.clear_screen, Terminal.cursor_hide, Terminal.cursor_move, Terminal.cursor_show,
     Terminal.enable_mouse, Terminal.disable_mouse,
+    Terminal.enable_bracketed_paste, Terminal.disable_bracketed_paste,
     Terminal.enter_alt_screen, Terminal.enter_raw_mode, Terminal.leave_alt_screen,
     Terminal.leave_raw_mode, Terminal.size
 }
@@ -143,6 +144,7 @@ pub def run_app {S : Type} {M : Type} (a : App S M) : IO Unit := do {
     Terminal.enter_alt_screen;
     Terminal.cursor_hide;
     Terminal.enable_mouse;
+    Terminal.enable_bracketed_paste;
     Terminal.clear_screen;
     Terminal.cursor_move 0 0;
     run_with_size a size
@@ -417,6 +419,7 @@ def draw_frame {S : Type} (vw : S -> Widget) (model : S) (reader : InputReader) 
 /// mode. Every controlled exit lands here; nothing else writes these
 /// sequences, so an app cannot half-restore.
 def restore_terminal : IO Unit := do {
+    Terminal.disable_bracketed_paste;
     Terminal.disable_mouse;
     Terminal.leave_alt_screen;
     Terminal.cursor_show;

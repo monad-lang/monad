@@ -49,6 +49,35 @@ def input_insert (c : String) (st : InputState) : InputState :=
     let after := String.drop cur st.value in
     { st with value := before ++ c ++ after, cursor := cur + 1 }
 
+/// Insert a whole string (a paste) at the cursor, advancing by its
+/// length; CRLF/CR become `\n`, the input state's own newline spelling.
+pub def insert_text (text : String) (st : InputState) : InputState :=
+    let t : String := normalize_newlines text in
+    let len := String.length st.value in
+    let cur := clamp st.cursor 0 len in
+    let before := String.slice st.value 0 cur in
+    let after := String.drop cur st.value in
+    { st with value := before ++ t ++ after, cursor := cur + String.length t }
+
+/// CRLF -> LF, a lone CR -> LF. Byte-wise: the input state is
+/// byte-offset based and v1 is ASCII.
+#[terminating]
+def norm_bytes (bs : List U8) (acc : List U8) : List U8 :=
+    match bs {
+        List.empty => List.reverse acc,
+        List.cons b rest =>
+            if U8.beq b 13u8
+            then match rest {
+                List.cons b2 r2 => if U8.beq b2 10u8 then norm_bytes r2 (List.cons 10u8 acc) else norm_bytes rest (List.cons 10u8 acc),
+                List.empty => norm_bytes List.empty (List.cons 10u8 acc),
+            }
+            else norm_bytes rest (List.cons b acc),
+    }
+
+def normalize_newlines (s : String) : String :=
+    if Bool.not (String.contains s "\r") then s
+    else String.from_list (norm_bytes (String.to_list s) List.empty)
+
 /// Delete the byte before the cursor. No-op at the start of the value.
 def input_backspace (st : InputState) : InputState :=
     let len := String.length st.value in

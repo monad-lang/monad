@@ -419,3 +419,11 @@ def test_scroll_keeps_the_store_field : Bool :=
 def test_big_model_state_store : Bool :=
     let m : TuiModel := big_model false in
     match m.state.store { Option.none => true, Option.some _ => false }
+
+// ── bracketed paste ─────────────────────────────────────────────────────
+
+#[test]
+def test_paste_fills_the_box_without_submitting : Bool :=
+    match TuiApp.update (model_of Mode.manual) (WeaverMsg.key_event (Event.paste "one\ntwo")) {
+        Pair.pair m2 cmd => cmd_is_none cmd && m2.input.value == "one\ntwo" && Bool.not m2.turn_pending
+    }

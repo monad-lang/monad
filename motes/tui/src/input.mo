@@ -208,10 +208,56 @@ def Input.rev (l : List Event) (out : List Event) : List Event :=
 /// Decode every complete event in `buf`. The second component is the
 /// leftover: a trailing byte sequence too incomplete to name yet, which
 /// the caller feeds back to the next call prefixed to the next chunk.
+pub def Input.paste_start : String := "\u{1b}[200~"
+pub def Input.paste_end : String := "\u{1b}[201~"
+
+/// The first index of `needle` in `s` at or after `from`, or -1.
+#[partial]
+def Input.find_from (needle : String) (s : String) (from : I64) : I64 :=
+    let n : I64 := String.length needle in
+    if Bool.not (from + n < String.length s + 1) then 0 - 1
+    else if String.slice s from n == needle then from
+    else Input.find_from needle s (from + 1)
+
+/// Decode every complete event in `buf`, including a COMPLETE
+/// bracketed paste in one buffer. An unterminated paste comes back
+/// whole (marker included) as the leftover.
 pub def Input.decode (buf : String) : Pair (List Event) String :=
-    match Input.walk buf 0 List.empty {
-        Pair.pair evs stop => Pair.pair evs (String.drop stop buf)
+    Input.decode_scan buf 0 List.empty
+
+#[terminating]
+def Input.decode_scan (buf : String) (i : I64) (acc : List Event) : Pair (List Event) String :=
+    let k : I64 := Input.find_from Input.paste_start buf i in
+    if k < 0 then Input.decode_tail buf i acc else Input.decode_prefix buf i k acc
+
+#[terminating]
+def Input.decode_tail (buf : String) (i : I64) (acc : List Event) : Pair (List Event) String :=
+    let rest : String := String.drop i buf in
+    match Input.walk rest 0 List.empty {
+        Pair.pair evs stop => Pair.pair (List.append acc evs) (String.drop stop rest)
     }
+
+/// The bytes before a paste marker decode normally; an incomplete
+/// sequence there stops the scan (the marker is not really one yet).
+#[terminating]
+def Input.decode_prefix (buf : String) (i : I64) (k : I64) (acc : List Event) : Pair (List Event) String :=
+    let pre : String := String.slice buf i (k - i) in
+    match Input.walk pre 0 List.empty {
+        Pair.pair evs stop =>
+            if stop < String.length pre
+            then Pair.pair (List.append acc evs) (String.drop (i + stop) buf)
+            else Input.decode_paste buf k (List.append acc evs)
+    }
+
+#[terminating]
+def Input.decode_paste (buf : String) (k : I64) (acc : List Event) : Pair (List Event) String :=
+    let cs : I64 := k + String.length Input.paste_start in
+    let e : I64 := Input.find_from Input.paste_end buf cs in
+    if e < 0
+    then Pair.pair acc (String.drop k buf)
+    else
+        let text : String := String.slice buf cs (e - cs) in
+        Input.decode_scan buf (e + String.length Input.paste_end) (List.append acc [Event.paste text])
 
 /// Whether `leftover` is a bare ESC with nothing after it. The reader
 /// resolves the one ambiguity `decode` refuses to: a terminal sends an
@@ -436,14 +482,17 @@ pub struct InputReader {
     pending : String,
     last_rows : I64,
     last_cols : I64,
-    closed : Bool
+    closed : Bool,
+    /// Paste content accumulated so far (bracketed paste is verbatim
+    /// until the end marker); none = the ordinary decoder.
+    paste : Option String
 }
 
 /// A reader that knows the terminal is `rows` x `cols` (so the first
 /// `produce` does not mistake the current size for a resize) and has
 /// consumed nothing.
 pub def input_reader (rows : I64) (cols : I64) : InputReader :=
-    { pending := "", last_rows := rows, last_cols := cols, closed := false }
+    { pending := "", last_rows := rows, last_cols := cols, closed := false, paste := Option.none }
 
 /// Record `size` against the reader's last observation: the resize
 /// event (one, on the change) and the reader that now knows it.
@@ -519,13 +568,21 @@ def Input.poll_only_go (sized : Pair (List Event) InputReader) (timeout_ms : I64
 /// first and suppresses that cycle's tick: the escape key IS the
 /// batch's event.
 def Input.idle_cycle (r : InputReader) (evs : List Event) : IO (Pair (List Event) InputReader) := do {
-    if Input.pending_escape r.pending
+    if Input.pasting r
+    then return (Pair.pair (List.append evs [Event.tick]) r)
+    else if Input.pending_escape r.pending
     then do {
         let nr : InputReader := { r with pending := "" };
         return (Pair.pair (List.append evs [Event.key Key.escape]) nr)
     }
     else return (Pair.pair (List.append evs [Event.tick]) r)
 }
+
+pub def Input.pasting (r : InputReader) : Bool :=
+    match r.paste {
+        Option.some _ => true,
+        Option.none => false,
+    }
 
 /// The readable path: read one byte at a time until the non-blocking
 /// poll says nothing is left, decoding against `r.pending` as bytes
@@ -544,13 +601,47 @@ def Input.drain (r : InputReader) (evs : List Event) (budget : I64) : IO (Pair (
         }
         else do {
             let readable <- Terminal.poll 0;
-            match Input.decode (r.pending ++ chunk) {
-                Pair.pair new_evs leftover => do {
-                    let nr : InputReader := { r with pending := leftover };
+            match Input.step r evs chunk {
+                Pair.pair evs2 nr =>
                     if Bool.not readable
-                    then return (Pair.pair (List.append evs new_evs) nr)
-                    else Input.drain nr (List.append evs new_evs) (budget - 1)
-                }
+                    then return (Pair.pair evs2 nr)
+                    else Input.drain nr evs2 (budget - 1)
             }
         }
     }
+
+/// One byte through the decoder: paste content accumulates verbatim
+/// until the end marker; otherwise `decode` runs over pending ++ byte.
+/// O(1) per paste byte (`ends_with`, not a re-scan).
+def Input.step (r : InputReader) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
+    match r.paste {
+        Option.some acc => Input.paste_step r acc evs chunk,
+        Option.none => Input.normal_step r evs chunk,
+    }
+
+def Input.paste_step (r : InputReader) (acc : String) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
+    let acc2 : String := String.concat acc chunk in
+    if String.ends_with acc2 Input.paste_end
+    then
+        let text : String := String.slice acc2 0 (String.length acc2 - String.length Input.paste_end) in
+        let nr : InputReader := { r with paste := Option.none } in
+        Pair.pair (List.append evs [Event.paste text]) nr
+    else
+        let nr : InputReader := { r with paste := Option.some acc2 } in
+        Pair.pair evs nr
+
+def Input.normal_step (r : InputReader) (evs : List Event) (chunk : String) : Pair (List Event) InputReader :=
+    match Input.decode (String.concat r.pending chunk) {
+        Pair.pair new_evs leftover => Input.place_leftover r evs new_evs leftover,
+    }
+
+def Input.place_leftover (r : InputReader) (evs : List Event) (new_evs : List Event) (leftover : String) : Pair (List Event) InputReader :=
+    let all : List Event := List.append evs new_evs in
+    if String.starts_with Input.paste_start leftover
+    then
+        let content : String := String.drop (String.length Input.paste_start) leftover in
+        let nr : InputReader := { r with pending := "", paste := Option.some content } in
+        Pair.pair all nr
+    else
+        let nr : InputReader := { r with pending := leftover } in
+        Pair.pair all nr

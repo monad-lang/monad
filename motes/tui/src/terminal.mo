@@ -115,6 +115,11 @@ pub def Terminal.leave_alt_screen_code : String := "\u{1b}[?1049l"
 /// Enable mouse-button press/release reporting in SGR encoding
 /// (`?1006` -- decimal, unambiguous coordinates; the legacy encodings
 /// are ambiguous with arrow keys). Phase 6's input decoder consumes this.
+/// Bracketed paste (DECSET 2004): the terminal wraps paste content in
+/// `ESC[200~ … ESC[201~`, so the input layer can keep it literal.
+pub def Terminal.enable_bracketed_paste_code : String := "\u{1b}[?2004h"
+pub def Terminal.disable_bracketed_paste_code : String := "\u{1b}[?2004l"
+
 pub def Terminal.enable_mouse_code : String := "\u{1b}[?1000h\u{1b}[?1006h"
 
 /// Disable mouse reporting.
@@ -151,6 +156,12 @@ pub def Terminal.enable_mouse : IO Unit :=
 
 pub def Terminal.disable_mouse : IO Unit :=
     IO.write_stdout Terminal.disable_mouse_code
+
+pub def Terminal.enable_bracketed_paste : IO Unit :=
+    IO.write_stdout Terminal.enable_bracketed_paste_code
+
+pub def Terminal.disable_bracketed_paste : IO Unit :=
+    IO.write_stdout Terminal.disable_bracketed_paste_code
 
 // ==================== Tests ====================
 //

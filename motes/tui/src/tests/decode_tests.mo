@@ -225,3 +225,38 @@ def test_mixed_batch : Bool :=
         Event.key Key.left,
         Event.mouse (MouseEvent.press MouseButton.left 4 4)
     ]
+
+// ==================== bracketed paste ====================
+
+#[test]
+def test_paste_in_one_buffer : Bool :=
+    events_be (decoded_events "\u{1b}[200~hello\u{1b}[201~") [Event.paste "hello"]
+
+#[test]
+def test_empty_paste : Bool :=
+    events_be (decoded_events "\u{1b}[200~\u{1b}[201~") [Event.paste ""]
+
+#[test]
+def test_paste_content_is_literal : Bool :=
+    events_be (decoded_events "\u{1b}[200~a\n\tb\u{1b}[A\u{1b}[201~") [Event.paste "a\n\tb\u{1b}[A"]
+
+#[test]
+def test_keys_around_a_paste : Bool :=
+    events_be (decoded_events "x\u{1b}[200~hi\u{1b}[201~y")
+        [Event.key (Key.char "x"), Event.paste "hi", Event.key (Key.char "y")]
+
+#[test]
+def test_incomplete_paste_is_the_whole_leftover : Bool :=
+    let buf := "\u{1b}[200~half" in
+    List.length (decoded_events buf) == 0 && decoded_leftover buf == buf
+
+#[test]
+def test_paste_split_across_calls : Bool :=
+    let first := "\u{1b}[200~hal" in
+    let rest := String.concat (decoded_leftover first) "lo\u{1b}[201~" in
+    events_be (decoded_events rest) [Event.paste "hallo"]
+
+#[test]
+def test_pending_escape_false_during_a_paste : Bool :=
+    Bool.not (Input.pending_escape (decoded_leftover "\u{1b}[200~\u{1b}"))
+        && Bool.not (Input.pending_escape (decoded_leftover "\u{1b}[20"))

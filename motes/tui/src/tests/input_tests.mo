@@ -10,7 +10,7 @@
 /// comparing with `==`: generic `BEq (Pair A B)` dispatch is the
 /// unreliable path this mote avoids throughout.
 
-use lib::widgets::input {InputState, InputLine, input_state, handle_input_key, handle_input_multiline_key, input_line_move, input_lines, cursor_line}
+use lib::widgets::input {InputState, InputLine, input_state, handle_input_key, handle_input_multiline_key, input_line_move, input_lines, cursor_line, insert_text}
 use lib::types {Key}
 
 /// All three fields of `st` at once, compared directly.
@@ -130,3 +130,18 @@ def test_input_state_beq : Bool :=
     && Bool.not (input_state "a" "p" == input_state "a" "q")
     && Bool.not (at_cursor "ab" 1 "p" == input_state "ab" "p")
 
+
+// ==================== paste insertion ====================
+
+#[test]
+def test_insert_text_advances_by_length : Bool :=
+    state_is "abc" 3 "p" (insert_text "abc" (input_state "" "p"))
+
+#[test]
+def test_insert_text_normalizes_newlines : Bool :=
+    state_is "a\nb\nc" 5 "p" (insert_text "a\r\nb\rc" (input_state "" "p"))
+
+#[test]
+def test_insert_text_at_the_cursor : Bool :=
+    let st1 := insert_text "bc" (at_cursor "ad" 1 "p") in
+    state_is "abcd" 3 "p" st1

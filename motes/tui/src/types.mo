@@ -147,7 +147,9 @@ pub type Event {
     /// Terminal resize event
     resize (rows : I64) (cols : I64),
     /// Tick event (frame update)
-    tick
+    tick,
+    /// Bracketed-paste content, verbatim (newlines included).
+    paste (s : String)
 }
 
 /// The screen buffer — a 2D grid of cells represented as a list of rows
