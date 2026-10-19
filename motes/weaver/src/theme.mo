@@ -57,6 +57,17 @@ pub def class_style (c : LineClass) : TextStyle :=
 pub def theme_line_style (line : String) : TextStyle :=
     class_style (line_class line)
 
+/// Color-aware selectors: off returns the plain style -- the `--no-color`
+/// path through the TUI (dumb mode already gates its own SGR codes).
+pub def theme_line_style_with (colors : Bool) (line : String) : TextStyle :=
+    if colors then theme_line_style line else style_default
+
+pub def theme_status_style_with (colors : Bool) (mode : Mode) : TextStyle :=
+    if colors then theme_status_style mode else style_default
+
+pub def theme_border_style_with (colors : Bool) : TextStyle :=
+    if colors then theme_border_style else style_default
+
 /// The transcript/overlay border's style: dim -- structure should read
 /// quieter than any live text (the border chars inherit the ambient
 /// style, so the BORDER wraps in this, not the rows).

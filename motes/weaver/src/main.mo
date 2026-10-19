@@ -93,6 +93,7 @@ struct CliArgs {
     mcps : List String,
     resume : String,
     cont : Bool,
+    no_color : Bool,
     error : String,
 }
 
@@ -128,30 +129,35 @@ def parse_resume (provider : String) (model : String) (max_turns_str : String) (
 
 def parse_continue (provider : String) (model : String) (max_turns_str : String) (resume : String) (args : List String) : CliArgs :=
     match Cli.take_flag "continue" "" args {
-        Cli.FlagResult.flag_result found rest => parse_mcps provider model max_turns_str resume found [] rest,
+        Cli.FlagResult.flag_result found rest => parse_no_color provider model max_turns_str resume found rest,
+    }
+
+def parse_no_color (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (args : List String) : CliArgs :=
+    match Cli.take_flag "no-color" "" args {
+        Cli.FlagResult.flag_result found rest => parse_mcps provider model max_turns_str resume cont found [] rest,
     }
 
 /// Repeatable `--mcp`: keep taking until absent.
 #[partial]
-def parse_mcps (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (mcps : List String) (args : List String) : CliArgs :=
+def parse_mcps (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (no_color : Bool) (mcps : List String) (args : List String) : CliArgs :=
     match Cli.take_opt "mcp" "" "" args {
         Cli.OptResult.opt_result v rest =>
             if String.is_empty v
-            then parse_done provider model max_turns_str resume cont mcps rest
-            else parse_mcps provider model max_turns_str resume cont (List.append mcps [v]) rest,
+            then parse_done provider model max_turns_str resume cont no_color mcps rest
+            else parse_mcps provider model max_turns_str resume cont no_color (List.append mcps [v]) rest,
     }
 
 /// An interactive entry has no positional arguments (the tasks come
 /// from stdin), so the FIRST one found is the whole error -- it fails
 /// the run, and the message says what to remove.
 #[partial]
-def parse_done (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (mcps : List String) (args : List String) : CliArgs :=
+def parse_done (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (no_color : Bool) (mcps : List String) (args : List String) : CliArgs :=
     match Cli.take_positional args {
-        Cli.PosResult.pos_result extra rest => parse_extra_step (cli_of provider model max_turns_str resume cont mcps) extra,
+        Cli.PosResult.pos_result extra rest => parse_extra_step (cli_of provider model max_turns_str resume cont no_color mcps) extra,
     }
 
-def cli_of (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (mcps : List String) : CliArgs :=
-    let c : CliArgs := { provider := provider, model := model, max_turns_str := max_turns_str, mcps := mcps, resume := resume, cont := cont, error := "" } in
+def cli_of (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (no_color : Bool) (mcps : List String) : CliArgs :=
+    let c : CliArgs := { provider := provider, model := model, max_turns_str := max_turns_str, mcps := mcps, resume := resume, cont := cont, no_color := no_color, error := "" } in
     c
 
 def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
@@ -410,9 +416,10 @@ def warn_project_keys (names : List String) : IO Unit :=
     }
 
 def main_plan (colors : Bool) (s : Settings) (c : CliArgs) : IO I64 :=
+    let effective : Bool := Bool.and colors (Bool.not c.no_color) in
     match plan_of s c {
         Result.err e => do { write_errln (String.concat "error: " (WeaverError.show e)); return 1 },
-        Result.ok p => run_plan colors p s,
+        Result.ok p => run_plan effective p s,
     }
 
 def run_plan (colors : Bool) (p : Plan) (s : Settings) : IO I64 := do {

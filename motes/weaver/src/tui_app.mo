@@ -38,7 +38,7 @@ use weaver::store {
 }
 use weaver::commands {TranscriptChange}
 use shuttle::session {Session}
-use weaver::theme {theme_line_style, theme_split_lines, theme_border_style}
+use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_with}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use tui::types {Event, Key, MouseEvent, LayoutSize}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
@@ -586,7 +586,7 @@ def error_line (e : WeaverError) : String :=
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
-    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode, emit := progress_live st.store };
+    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode st.colors, emit := progress_live st.store };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
@@ -695,19 +695,19 @@ def list_msg_length (xs : List Message) : I64 :=
 /// read for `y`/`n`/`a`. `mode` is the only parameter -- same shape as
 /// `Gate.weaver`, minus the read/write seams dumb mode needs and this
 /// does not (it owns its own screen and its own stdin read).
-pub def Gate.weaver_tui (mode : Mode) : Gate :=
-    { ask := weaver_tui_ask mode }
+pub def Gate.weaver_tui (mode : Mode) (colors : Bool) : Gate :=
+    { ask := weaver_tui_ask mode colors }
 
-def weaver_tui_ask (mode : Mode) (p : Pick) : IO Approval :=
+def weaver_tui_ask (mode : Mode) (colors : Bool) (p : Pick) : IO Approval :=
     match Policy.decide p.cap mode {
         Decision.allow => IO.pure Approval.once,
-        Decision.ask => prompt_overlay p,
+        Decision.ask => prompt_overlay colors p,
         Decision.refuse reason => IO.pure (Approval.deny reason),
     }
 
-def prompt_overlay (p : Pick) : IO Approval := do {
+def prompt_overlay (colors : Bool) (p : Pick) : IO Approval := do {
     let diff_pair <- Diff.for_input p.name p.input;
-    let _ <- render_overlay p diff_pair;
+    let _ <- render_overlay colors p diff_pair;
     // Keys typed while the model call blocked sit in the tty buffer --
     // without this drain the overlay's one-shot read would consume the
     // STALE keystroke and phantom-answer the prompt.
@@ -767,12 +767,12 @@ def approval_of_key (k : Option Key) : Approval :=
         }
     }
 
-def render_overlay (p : Pick) (diff_pair : Option (Pair String String)) : IO Unit := do {
+def render_overlay (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) : IO Unit := do {
     let size <- Terminal.size;
-    render_overlay_at p diff_pair size
+    render_overlay_at colors p diff_pair size
 }
 
-def render_overlay_at (p : Pick) (diff_pair : Option (Pair String String)) (size : Pair I64 I64) : IO Unit :=
+def render_overlay_at (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (size : Pair I64 I64) : IO Unit :=
     match size {
         Pair.pair rows cols => do {
             // A real clear, not a diff: an overlay fires mid-batch, so
@@ -781,21 +781,21 @@ def render_overlay_at (p : Pick) (diff_pair : Option (Pair String String)) (size
             // shows through around the prompt.
             Terminal.clear_screen;
             Terminal.cursor_move 0 0;
-            let screen := render (overlay_widget p diff_pair) (mk_rect 0 0 cols rows) (empty_screen rows cols);
+            let screen := render (overlay_widget colors p diff_pair) (mk_rect 0 0 cols rows) (empty_screen rows cols);
             let deltas := diff (empty_screen rows cols) screen;
             IO.write_stdout (apply_deltas deltas);
             IO.flush_stdout
         }
     }
 
-def overlay_widget (p : Pick) (diff_pair : Option (Pair String String)) : Widget :=
+def overlay_widget (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) : Widget :=
     Widget.column [
-        sized (LayoutSize.fill 1) (with_style theme_border_style (border BorderStyle.rounded
-            (padding 1 1 1 2 (Widget.column (List.map overlay_row (overlay_lines p diff_pair)))))),
+        sized (LayoutSize.fill 1) (with_style (theme_border_style_with colors) (border BorderStyle.rounded
+            (padding 1 1 1 2 (Widget.column (List.map (fn (line : String) => overlay_row colors line) (overlay_lines p diff_pair)))))),
     ]
 
-def overlay_row (line : String) : SizedWidget :=
-    sized (LayoutSize.fixed 1) (with_style (theme_line_style line) (label line))
+def overlay_row (colors : Bool) (line : String) : SizedWidget :=
+    sized (LayoutSize.fixed 1) (with_style (theme_line_style_with colors line) (label line))
 
 def overlay_lines (p : Pick) (diff_pair : Option (Pair String String)) : List String :=
     List.append [pick_header p] (List.append (diff_lines_of diff_pair) ["", gate_answer_prompt p.cap])

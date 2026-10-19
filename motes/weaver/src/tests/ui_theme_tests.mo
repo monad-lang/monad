@@ -8,7 +8,7 @@ use tui::core {style_default}
 use tui::types {TextStyle}
 use std::ansi {Color}
 use weaver::policy {Mode}
-use weaver::theme {LineClass, line_class, class_style, class_code, theme_line_style, theme_status_style, Theme.tint, theme_status_code}
+use weaver::theme {LineClass, line_class, class_style, class_code, theme_line_style, theme_status_style, Theme.tint, theme_status_code, theme_line_style_with, theme_status_style_with, theme_border_style_with}
 
 #[test]
 def test_theme_diff_plus_is_green : Bool :=
@@ -69,3 +69,13 @@ def test_theme_tint_per_line : Bool :=
 #[test]
 def test_theme_tint_trailing_newline_kept : Bool :=
     Theme.tint true "error: x\n" == "\u{1b}[31merror: x\u{1b}[0m\n"
+#[test]
+def test_theme_off_is_the_plain_style : Bool :=
+    theme_line_style_with false "you: hi" == style_default
+        && theme_status_style_with false Mode.auto == style_default
+        && theme_border_style_with false == style_default
+
+#[test]
+def test_theme_on_matches_the_palette : Bool :=
+    theme_line_style_with true "you: hi" == theme_line_style "you: hi"
+        && theme_status_style_with true Mode.plan == theme_status_style Mode.plan

@@ -15,7 +15,10 @@ use shuttle::message {Message}
 use weaver::commands {WeaverState, Effect}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
-use weaver::theme {theme_line_style, theme_status_style, theme_border_style}
+use weaver::theme {
+    theme_line_style_with, theme_status_style_with, theme_border_style_with,
+}
+use weaver::policy {Mode}
 use weaver::store {
     Transcript, TranscriptPage, Store.page_lines,
     Transcript.empty, Transcript.next_block, Transcript.append, Transcript.slice,
@@ -113,9 +116,11 @@ pub def input_placeholder : String := "type a message, or /help"
 /// `Lens`, and a whole-program check loads both (a real collision,
 /// caught by checking the whole corpus, not just this mote).
 pub def Model.view (m : TuiModel) : Widget :=
+    let colors : Bool := m.state.colors in
+    let mode : Mode := m.state.mode in
     Widget.column [
-        sized (LayoutSize.fill 1) (with_style theme_border_style (border BorderStyle.rounded (padding 1 0 1 0 (transcript_column m)))),
-        sized (LayoutSize.fixed 1) (with_style (theme_status_style m.state.mode) (label (status_line m))),
+        sized (LayoutSize.fill 1) (with_style (theme_border_style_with colors) (border BorderStyle.rounded (padding 1 0 1 0 (transcript_column m)))),
+        sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))),
         sized (LayoutSize.fixed 3) (padding 1 0 1 0 (text_input m.input)),
     ]
 
@@ -126,12 +131,13 @@ pub def Model.view (m : TuiModel) : Widget :=
 /// asks for a negative slice. Scrolled up (scroll > 0), the panel's
 /// first row shows the count indicator.
 def transcript_column (m : TuiModel) : Widget :=
-    Widget.column (List.map transcript_row (visible_transcript m))
+    let colors : Bool := m.state.colors in
+    Widget.column (List.map (fn (line : String) => transcript_row colors line) (visible_transcript m))
 
 /// One row, class-styled through the theme's palette (diff marks,
 /// errors, running rows, the you: prefix).
-def transcript_row (line : String) : SizedWidget :=
-    sized (LayoutSize.fixed 1) (with_style (theme_line_style line) (label line))
+def transcript_row (colors : Bool) (line : String) : SizedWidget :=
+    sized (LayoutSize.fixed 1) (with_style (theme_line_style_with colors line) (label line))
 
 /// The absolute window the panel shows. `eff` is the clamped scroll; the
 /// scrolled panel spends ONE row on the indicator, so the content window
