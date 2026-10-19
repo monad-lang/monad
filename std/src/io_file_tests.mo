@@ -7,7 +7,7 @@
 /// helper, as in `stream_tests.mo`.
 
 use std::process {exec_cmd, process_id}
-use std::stream {StreamError, StreamError.is_not_found}
+use std::stream {StreamError, StreamError.is_not_found, StreamErrorKind}
 
 def iof_path (name : String) : String :=
     "/tmp/monad_io_file_tests_" ++ I64.to_string process_id ++ "_" ++ name
