@@ -60,3 +60,24 @@ the `N lines above` indicator, an SGR mouse wheel report scrolls,
 Alt+Enter folds a newline and the multiline submit echoes on its own
 lines (the pump after the submit must EXCEED the retry sleeps when the
 mock script is exhausted -- 2s+4s of backoff before the turn fails).
+
+## Async turns (`pty_repro_async.py`)
+
+With `turns_slow.json`: the UI redraws while a turn runs, the streamed
+fragment is visible mid-turn, mid-turn keys buffer in the tty and drain
+at completion, the completion repaints from blank without re-emitting,
+a Ctrl+C queued mid-turn exits cleanly after the turn, and the approval
+overlay still owns stdin (a paste cannot answer it).
+
+## Sessions (`pty_repro_sessions.py`)
+
+Spawns with `WEAVER_SESSION_ROOT` and `HOME` pointed at a temp root, so
+the developer's `~/.weaver` and config are untouched. S1 persists a
+turn (checked in the block files and history, not just the frame), S2
+resumes it, S3 pages a 1200-line synthetic session with Home, S4 keeps
+a bracketed paste literal (exactly one `you:` prefix, one `alpha\nbeta`
+user message), S5 runs a colored control and then `--no-color`, and S6
+requires an 18 MB session to raise startup RSS no more than 10 MB over a
+tiny-session baseline, flat while idle. The temp root is pid-qualified
+and removed at exit unless `WV_SESSION_KEEP` is set; `WV_SESSION_TMP`
+chooses its parent.
