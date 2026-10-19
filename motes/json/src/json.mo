@@ -589,9 +589,25 @@ pub def Json.to_string (j : Json) : String :=
     object o => Json.object_to_string o
   }
 
+/// Comma-joined pieces, ONE allocation: `List.intercalate` is a
+/// right-nested fold that recopies the accumulated suffix at every
+/// level, which made serializing a long history quadratic.
+#[partial]
+def Json.comma_list (ss : List String) : List String :=
+  match ss {
+    List.empty => List.empty,
+    List.cons h rest => match rest {
+      List.empty => List.cons h List.empty,
+      _ => List.cons h (List.cons "," (Json.comma_list rest))
+    }
+  }
+
+def Json.join_commas (ss : List String) : String :=
+  String.concat_list (Json.comma_list ss)
+
 #[partial]
 def Json.array_to_string (a : List Json) : String :=
-  String.concat "[" (String.concat (List.intercalate "," (List.map Json.to_string a)) "]")
+  String.concat "[" (String.concat (Json.join_commas (List.map Json.to_string a)) "]")
 
 #[partial]
 def Json.pair_to_string (p : Pair String Json) : String :=
@@ -601,7 +617,7 @@ def Json.pair_to_string (p : Pair String Json) : String :=
 
 #[partial]
 def Json.object_to_string (o : BTreeMap String Json) : String :=
-  String.concat "{" (String.concat (List.intercalate "," (List.map Json.pair_to_string (BTreeMap.to_list o))) "}")
+  String.concat "{" (String.concat (Json.join_commas (List.map Json.pair_to_string (BTreeMap.to_list o))) "}")
 
 // ─── Show instances ───
 
