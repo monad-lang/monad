@@ -30,19 +30,24 @@ Homepage: **[monad-lang.org](https://monad-lang.org)**
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/monad-lang/monad/main/scripts/monadup -o monadup
-chmod +x monadup
-./monadup self-install
+curl -fsSL https://monad-lang.org/install | bash
 export PATH="$HOME/.monad/bin:$PATH"
 monadup default       # install the latest nightly and make it active
+monadup doctor        # check the compiler and the LLVM/GC build prerequisites
 monad version
 ```
 
-`monadup` manages nightly builds under `~/.monad`. Use `monadup list`, `monadup
-use <tag>`, `monadup update`, and `monadup uninstall <tag>` to manage installed
-versions. Nightlies are published for `x86_64-linux` and `aarch64-darwin` (built
-natively), plus cross-built `aarch64-linux` and experimental `riscv64-linux`, and
-currently need Nix store paths; building from source is the portable alternative.
+`monadup` is a Monad-written binary. It manages nightly builds under
+`~/.monad`; use `monadup list`, `monadup use <tag>`, `monadup update`, and
+`monadup uninstall <tag>` to manage installed versions. `monadup env` prints
+the resolved environment, `monadup doctor --json` is the machine-readable
+health report an agent can act on, and `monadup new hello` scaffolds a project.
+
+Nightlies are published for `x86_64-linux` and `aarch64-darwin` (built
+natively), plus cross-built `aarch64-linux` and experimental `riscv64-linux`.
+The Linux binaries are fully static and the macOS one links only libSystem;
+compiling a Monad program still needs `llc`, `clang` and Boehm GC on the
+machine, which `monadup doctor` checks for you.
 
 ### Build from source
 

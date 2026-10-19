@@ -25,15 +25,15 @@
   <section class="install" id="install">
     <div class="install-box">
       <h3>Install with monadup</h3>
-      <div class="install-code"><span class="comment"># Download and install the monadup tool</span>
-<span class="cmd">curl</span> -fsSL https://raw.githubusercontent.com/monad-lang/monad/main/scripts/monadup -o monadup
-<span class="cmd">chmod</span> +x monadup
-<span class="cmd">./monadup</span> self-install
+      <div class="install-code"><span class="comment"># Install monadup (the Monad-written toolchain manager)</span>
+<span class="cmd">curl</span> -fsSL https://monad-lang.org/install | <span class="cmd">bash</span>
 <span class="cmd">export</span> PATH=<span class="str">"$HOME/.monad/bin:$PATH"</span>
 
-<span class="comment"># Install the latest nightly and set it active</span>
+<span class="comment"># Install the latest nightly, check the toolchain, start a project</span>
 <span class="cmd">monadup</span> default
-<span class="cmd">monad</span> version</div>
+<span class="cmd">monadup</span> doctor
+<span class="cmd">monadup</span> new hello
+<span class="cmd">cd</span> hello &amp;&amp; <span class="cmd">monad</span> run .</div>
     </div>
   </section>
 

@@ -214,8 +214,11 @@ defmacro derive_focus T := decls {
 ```
 
 `motes/clap/src/args.mo` does exactly this for `#[derive Cli]`, generating an
-argv parser from a struct's fields and their `#[arg]` annotations — the field
-attributes come through in `FieldInfo.attrs`.
+argv parser from a type's constructors and fields, with `#[arg]`/`#[opt]`/
+`#[pos]` and their named arguments (e.g. `#[arg {short := "v"}]`) coming
+through in `FieldInfo.attrs` as canonical strings. The richer surface is
+documented in [the reference](./reference.md#attributes); `cli/src/main.mo`
+still hand-writes its parser and is deliberately not a derive consumer.
 
 Registration rules:
 

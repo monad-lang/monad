@@ -317,6 +317,27 @@ parentheses or commas**:
 Attributes come before visibility: `#[test] pub def ...`, not
 `pub #[test] def ...`.
 
+A named-argument block uses `{ key := value, ... }` (the arguments are not
+parenthesized):
+
+```monad,ignore
+#[arg {short := "v", help := "Enable verbose output"}]
+#[opt {short := "o", value_name := "FILE"}]
+```
+
+`#[derive Cli]` reads these on constructor fields. `#[arg]` is a `Bool` flag
+(`--verbose` / `-v` by default); `#[opt]` is a value-taking option; `#[pos]`
+is a positional (the default for an unannotated field). Supported field types
+are `Bool`, `String`, `I64`, `Option String`/`Option I64`, and
+`List String` (repeatable). `#[no_short]` suppresses the derived short form.
+The generator emits `spec_<type>`, `decode_<type>`, and
+`parse_<type> : List String -> Result String T`; `Cli.run` adds
+`--help`/`--version`, usage text, and exit codes 0 (help/version/success) and
+2 (usage error). A single-constructor type (including a `struct`) is one
+command; a multi-constructor type is a subcommand ADT. Struct fields cannot
+carry attributes, so a `struct` gets type-based inference only
+(`Bool` -> flag, everything else -> positional).
+
 ## Native Functions
 
 ```monad,ignore

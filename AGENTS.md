@@ -76,6 +76,9 @@ active — run it before self-compile work). `monad build cli` (or
 `scripts/build-self-hosted.sh`) builds the self-hosted compiler from
 `cli/src/main.mo` as `monad`. `cargo run --release --` (or `monad-rs`) is the
 Rust host — use it when iterating on the Rust compiler itself.
+`monadup doctor` reports whether the active nightly and the `llc`/`clang`/
+`pkg-config`/Boehm-GC build prerequisites are healthy, and `monadup env`
+prints the resolved home/platform/toolchain roots.
 
 ```bash
 monad run examples/hello.mo            # compile and run a file

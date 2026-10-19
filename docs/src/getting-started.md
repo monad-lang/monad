@@ -10,11 +10,20 @@ Before getting started, ensure you have:
   built by the bootstrap host or installed as a nightly with `monadup` — see
   [Compiling and Running](./compiling.md#getting-a-compiler). (Nightlies are
   published for `x86_64-linux`, `aarch64-darwin`, `aarch64-linux` and —
-  experimental — `riscv64-linux`, and currently need Nix; building from source
-  is the portable route. A nightly also installs the `init`, `std`, `llvm` and
-  `runtime` sources, so it can compile a program that lives outside a checkout.)
-- `llc`, `clang`, and the Boehm GC development files, which the compiler links
-  against. `devenv shell` provides all three.
+  experimental — `riscv64-linux`. The binaries are portable; a nightly also
+  installs the `init`, `std`, `llvm` and `runtime` sources, so it can compile a
+  program that lives outside a checkout.)
+- `llc`, `clang`, `pkg-config`, and the Boehm GC development files, which the
+  compiler links against. `devenv shell` provides all of them, and
+  `monadup doctor` reports which are missing on your machine.
+
+The quickest start is to let monadup write the project:
+
+```bash
+monadup new hello
+cd hello
+monad run .
+```
 - A text editor. There is no syntax-highlighting plugin yet; the bootstrap host
   ships an [LSP server](./bootstrap-host.md#editor-and-agent-tooling) for
   diagnostics.

@@ -31,24 +31,28 @@ system — `devenv shell` provides all three.
 
 ### Or install a nightly
 
-Every push to `main` publishes a prerelease, and `scripts/monadup` installs one:
+Every push to `main` publishes a prerelease, and `monadup` installs one:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/monad-lang/monad/main/scripts/monadup -o monadup
-chmod +x monadup
-./monadup self-install
+curl -fsSL https://monad-lang.org/install | bash
 export PATH="$HOME/.monad/bin:$PATH"
 monadup default       # install the latest nightly and make it active
+monadup doctor        # check the compiler and the LLVM/GC build prerequisites
 monad version
 ```
 
 `monadup list` / `use <tag>` / `update` / `uninstall <tag>` manage the installed
-set under `~/.monad`. It needs `curl`, `tar` and either `jq` or `python3`.
+set under `~/.monad`. `monadup env` prints the resolved environment,
+`monadup doctor --json` is a machine-readable report, and `monadup new <name>`
+scaffolds a project. The bootstrap stub needs `curl` and either `jq` or
+`python3`; the installed binary parses JSON itself and needs only `curl` and
+`tar`.
 
-> **The nightly is built by the Nix flake** and links against store paths, so on
-> a machine without those it will not run — `monadup` says so rather than leaving
-> you to discover it. Until that is fixed, building from source is the portable
-> route.
+> **The ELF is portable; the build toolchain is not bundled.** Linux binaries
+> are fully static and the macOS one links only libSystem, so `monad`,
+> `monadup`, `version` and `check` run on a plain machine. `monad build` /
+> `run` / `test` still invoke `llc`, `clang`, `pkg-config` and Boehm GC from
+> `PATH` — `monadup doctor` checks all of them and tells you what to install.
 
 An install directory holds more than the compiler:
 
@@ -73,8 +77,9 @@ is not a monadup install (an unpacked copy, or a checkout):
 MONAD_ROOT=/path/to/tree-with-init-std-runtime monad check
 ```
 
-Two artifacts, per platform: `monad-nightly-<platform>` (the compiler) and
-`monad-src-<platform>.tar.gz` (the sources above). `x86_64-linux` and
+Three artifacts, per platform: `monad-nightly-<platform>` (the compiler),
+`monadup-<platform>` (the toolchain manager), and `monad-src-<platform>.tar.gz`
+(the sources above). `x86_64-linux` and
 `aarch64-darwin` are built and verified on the platform they are for;
 `aarch64-linux` and `riscv64-linux` are cross-built from `x86_64-linux` and
 verified under QEMU, and riscv64 is **experimental**. `monadup` reads the
