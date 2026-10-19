@@ -145,9 +145,12 @@ instance Stream FdStream {
 pub def FdStream.read_mode : I64 := 0
 /// Create or truncate.
 pub def FdStream.write_mode : I64 := 1
+/// Create or append (every write lands at the end).
+pub def FdStream.append_mode : I64 := 2
 
-/// Open `path` for reading (`FdStream.read_mode`) or writing
-/// (`FdStream.write_mode`: created 0644, or truncated).
+/// Open `path` for reading (`FdStream.read_mode`), writing
+/// (`FdStream.write_mode`: created 0644, or truncated) or appending
+/// (`FdStream.append_mode`).
 pub def FdStream.open_file (path : Path) (mode : I64) : IO (Result StreamError FdStream) := do {
   let r <- IO.mk (stream_open (Path.to_string path) mode);
   return (stream_result r)

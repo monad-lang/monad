@@ -34,7 +34,7 @@ use weaver::store {
     Transcript, TranscriptPage, StoreState,
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append,
     Store.read_page, Store.append_transcript, Store.record_turn, Store.record_output,
-    Store.startup_transcript,
+    Store.startup_transcript, Store.append_chunk, Store.discard_live,
 }
 use weaver::commands {TranscriptChange}
 use shuttle::session {Session}
@@ -139,6 +139,7 @@ def persist_turn_cmd (store : Option StoreState) (run : RunState) (delta : List 
         Option.none => repaint_cmd,
         Option.some s => Cmd.perform (fn (_ : Unit) => do {
             let r <- Store.record_turn s run.session delta start block;
+            let _ <- Store.discard_live s;
             IO.pure (WeaverMsg.store_result (warning_of r))
         }),
     }
@@ -148,6 +149,7 @@ def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (s
         Option.none => fallback,
         Option.some s => Cmd.perform (fn (_ : Unit) => do {
             let r <- Store.record_output s sess block start;
+            let _ <- Store.discard_live s;
             IO.pure (WeaverMsg.store_result (warning_of r))
         }),
     }
@@ -477,7 +479,10 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 def write_echo (store : Option StoreState) (start : I64) (block : List String) : IO (Result String Unit) :=
     match store {
         Option.none => IO.pure (Result.ok unit),
-        Option.some s => Store.append_transcript s.dir start block,
+        Option.some s => do {
+            let _ <- Store.discard_live s;
+            Store.append_transcript s.dir start block
+        },
     }
 
 /// A submitted line enters the history (most recent first, deduped
@@ -581,10 +586,23 @@ def error_line (e : WeaverError) : String :=
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
-    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode, emit := TuiApp.progress };
+    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode, emit := progress_live st.store };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
+
+/// The terminal row plus the session's per-chunk log: every streamed
+/// fragment is durable before the turn completes.
+def progress_live (store : Option StoreState) (frag : String) : IO Unit := do {
+    TuiApp.progress frag;
+    persist_chunk store frag
+}
+
+def persist_chunk (store : Option StoreState) (frag : String) : IO Unit :=
+    match store {
+        Option.none => IO.pure unit,
+        Option.some s => Store.append_chunk s frag,
+    }
 
 /// The TUI turn's live progress sink: the model's streamed text, shown
 /// as ONE transparent-overwrite line on the transcript panel's LAST

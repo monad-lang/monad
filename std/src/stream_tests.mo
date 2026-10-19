@@ -8,7 +8,7 @@
 
 use std::process {exec_cmd, process_id}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
-use std::stream {Stream, FdStream.read_line_bounded, StreamError, StreamError.kind_of_code, StreamErrorKind, FdStream, FdStream.open_file, FdStream.read_mode, FdStream.write_mode, PartialLinePolicy}
+use std::stream {Stream, FdStream.read_line_bounded, StreamError, StreamError.kind_of_code, StreamErrorKind, FdStream, FdStream.open_file, FdStream.read_mode, FdStream.write_mode, FdStream.append_mode, PartialLinePolicy}
 
 def st_path (name : String) : String :=
     "/tmp/monad_stream_tests_" ++ I64.to_string process_id ++ "_" ++ name
@@ -211,6 +211,29 @@ def test_file_larger_than_one_read_round_trips : IO Bool := do {
     let back <- st_read_file path;
     exec_cmd "rm" ["-f", path];
     return (wrote && st_some_is back text)
+}
+
+/// Append mode adds to the existing file instead of replacing it.
+#[test]
+def test_append_mode_appends : IO Bool := do {
+    let path := st_path "append";
+    let _ <- st_write_file path "one";
+    let opened <- FdStream.open_file (Path.path path) FdStream.append_mode;
+    let wrote <- st_write_opened opened "two";
+    let back <- st_read_file path;
+    exec_cmd "rm" ["-f", path];
+    return (wrote && st_some_is back "onetwo")
+}
+
+/// Append mode creates a missing file.
+#[test]
+def test_append_mode_creates : IO Bool := do {
+    let path := st_path "append_create";
+    let opened <- FdStream.open_file (Path.path path) FdStream.append_mode;
+    let wrote <- st_write_opened opened "fresh";
+    let back <- st_read_file path;
+    exec_cmd "rm" ["-f", path];
+    return (wrote && st_some_is back "fresh")
 }
 
 /// Write mode truncates: the second write replaces the first.

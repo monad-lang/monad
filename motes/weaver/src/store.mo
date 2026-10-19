@@ -14,6 +14,8 @@ use std::io {IO.read_file, IO.write_file, IO.file_exists, IO.is_dir, IO.list_dir
 use std::path {Path, Path.of, Path.to_string, Path.join, Path.with_suffix, Path.parent}
 use std::process {exec_cmd, process_id}
 use std::bench {Bench.now}
+use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
+use std::stream {FdStream, FdStream.open_file, FdStream.append_mode, Stream, StreamError}
 use std::map {BTreeMap}
 use std::list {List.length}
 use shuttle::session {Session, Session.messages_to_json, Session.messages_of_json}
@@ -537,6 +539,49 @@ def history_dir (dir : Path) : Path := Store.child dir "history"
 def index_path (dir : Path) : Path := Store.child (transcript_dir dir) "index.json"
 
 def meta_path (dir : Path) : Path := Store.child dir "meta.json"
+
+/// The in-flight streamed output of the running turn (append-only).
+pub def Store.live_path (dir : Path) : Path := Store.child dir "live.txt"
+
+// ── live streamed output (per-chunk durability) ───────────────────────
+
+def close_chunk (s : FdStream) (buf : ByteBuf) : IO Unit := do {
+    let _ <- ByteBuf.free buf;
+    Stream.close s
+}
+
+def write_chunk_to (opened : Result StreamError FdStream) (text : String) : IO Unit :=
+    match opened {
+        Result.err _ => IO.pure unit,
+        Result.ok s => do {
+            let buf <- ByteBuf.of_string text;
+            let _ <- Stream.write s buf;
+            close_chunk s buf
+        },
+    }
+
+/// Append one streamed fragment; O(1) (the native opens `live.txt` with
+/// `O_APPEND`). A write failure drops the fragment -- the turn's final
+/// block is the durable record.
+pub def Store.append_chunk (st : StoreState) (text : String) : IO Unit := do {
+    let opened <- FdStream.open_file (Store.live_path st.dir) FdStream.append_mode;
+    write_chunk_to opened text
+}
+
+pub def Store.read_live (st : StoreState) : IO (Option String) := do {
+    let p : Path := Store.live_path st.dir;
+    let there <- IO.file_exists p;
+    if Bool.not there then IO.pure Option.none
+    else do {
+        let text <- IO.read_file p;
+        if String.is_empty text then IO.pure Option.none else IO.pure (Option.some text)
+    }
+}
+
+pub def Store.discard_live (st : StoreState) : IO Unit := do {
+    let _ <- exec_cmd "rm" ["-f", Path.to_string (Store.live_path st.dir)];
+    return unit
+}
 
 def block_path (dir : Path) (seq : I64) : Path :=
     Store.child (transcript_dir dir) (String.concat (Store.pad12 seq) ".json")

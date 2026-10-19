@@ -5,6 +5,7 @@ use weaver::store {
     Store.new_session, Store.import_session, Store.append_transcript,
     Store.read_page, Store.record_turn, Store.load_session, Store.latest_session,
     Store.ensure_root, Store.startup_transcript, Store.tail_lines, Store.child,
+    Store.append_chunk, Store.read_live, Store.discard_live,
 }
 use shuttle::session {Session}
 use shuttle::provider {ProviderConfig, mock}
@@ -225,3 +226,27 @@ def test_unwritable_root_is_rejected : IO Bool :=
         Result.err _ => IO.pure true,
         Result.ok p => check_unwritable p,
     }
+
+// ── live streamed output ──────────────────────────────────────────────
+
+#[test]
+def test_chunks_append_and_discard : IO Bool := do {
+    let root : Path := root_for "chunks";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => check_chunks st,
+    }
+}
+
+def check_chunks (st : StoreState) : IO Bool := do {
+    let _ <- Store.append_chunk st "hel";
+    let _ <- Store.append_chunk st "lo";
+    let first <- Store.read_live st;
+    let _ <- Store.discard_live st;
+    let after <- Store.read_live st;
+    let text_ok : Bool := match first { Option.some t => t == "hello", Option.none => false };
+    let gone_ok : Bool := match after { Option.none => true, Option.some _ => false };
+    return (text_ok && gone_ok)
+}

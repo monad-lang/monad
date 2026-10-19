@@ -1822,7 +1822,8 @@ fn stream_args<'a>(args: &'a [Value], n: usize, name: &str) -> Result<&'a [Value
 }
 
 /// `stream_open : String -> I64 -> RawIO (Result (Pair I64 String)
-/// FdStream)` -- mode 0 reads, mode 1 creates-or-truncates (0644).
+/// FdStream)` -- mode 0 reads, mode 1 creates-or-truncates, mode 2
+/// creates-or-appends (both 0644).
 fn stream_open(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let args = stream_args(args, 2, "stream_open")?;
   let path = extract_string(&args[0])?;
@@ -1835,6 +1836,14 @@ fn stream_open(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
         .write(true)
         .create(true)
         .truncate(true)
+        .mode(0o644)
+        .open(path)
+    }
+    2 => {
+      use std::os::unix::fs::OpenOptionsExt;
+      std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
         .mode(0o644)
         .open(path)
     }

@@ -1284,12 +1284,14 @@ static void* stream_os_err(const char* op, int errnum) {
 }
 
 /* `stream_open : String -> I64 -> RawIO (Result (Pair I64 String)
-   FdStream)` -- mode 0 reads, mode 1 creates-or-truncates for writing
-   (0644). `O_CLOEXEC` so a spawned child never inherits the descriptor. */
+   FdStream)` -- mode 0 reads, mode 1 creates-or-truncates for writing,
+   mode 2 creates-or-appends (both 0644). `O_CLOEXEC` so a spawned child
+   never inherits the descriptor. */
 void* monad_stream_open(char* path, int64_t mode) {
     int flags;
     if (mode == 0) flags = O_RDONLY;
     else if (mode == 1) flags = O_WRONLY | O_CREAT | O_TRUNC;
+    else if (mode == 2) flags = O_WRONLY | O_CREAT | O_APPEND;
     else return stream_err(5, "stream_open", "unknown mode", 0);
     int fd;
     do {

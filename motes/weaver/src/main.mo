@@ -31,7 +31,7 @@ use weaver::store {
     StoreState, Transcript,
     Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
-    Store.base_name,
+    Store.base_name, Store.append_transcript, Store.read_live, Store.discard_live,
     Transcript.empty, Transcript.append, Transcript.next_block,
 }
 use weaver::theme {theme_split_lines}
@@ -474,7 +474,23 @@ def startup_transcript (o : OpenedSession) : IO Transcript :=
         Option.none => IO.pure (note_block Transcript.empty o.note),
         Option.some s => do {
             let tr <- Store.startup_transcript s.dir;
-            return (note_block tr o.note)
+            let live <- Store.read_live s;
+            let tr2 <- absorb_live s tr live;
+            return (note_block tr2 o.note)
+        },
+    }
+
+/// A `live.txt` left behind by a crash: shown as a read-only block, then
+/// persisted so it appears once, and never fed to the model.
+def absorb_live (s : StoreState) (tr : Transcript) (live : Option String) : IO Transcript :=
+    match live {
+        Option.none => IO.pure tr,
+        Option.some text => do {
+            let block : List String := Transcript.next_block tr (List.cons "[interrupted turn output]" (theme_split_lines text));
+            let total : I64 := tr.total;
+            let _ <- Store.append_transcript s.dir total block;
+            let _ <- Store.discard_live s;
+            IO.pure (Transcript.append tr block)
         },
     }
 
