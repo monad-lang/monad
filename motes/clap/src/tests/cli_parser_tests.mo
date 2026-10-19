@@ -1,12 +1,13 @@
 /// Spec-parser tests: the strict, typed parser new CLIs use.
 use clap::args {*}
+use lib::help {Cli.help_text, Cli.usage}
 use lib::parse {Cli.parse}
 use lib::spec {
-    Cli.CommandSpec, Cli.ParseResult, Cli.Parsed,
+    Cli.ArgValueType, Cli.CommandSpec, Cli.ParseResult, Cli.Parsed,
     Cli.command, Cli.flag, Cli.flag_count, Cli.flag_set,
     Cli.option, Cli.option_i64_optional, Cli.option_optional,
-    Cli.option_value, Cli.option_value_i64,
-    Cli.positional, Cli.positional_optional, Cli.required_positional,
+    Cli.option_value, Cli.option_value_i64, Cli.parse_i64,
+    Cli.positional, Cli.positional_optional, Cli.positional_spec, Cli.required_positional,
     Cli.with_args, Cli.with_subcommands, Cli.with_version,
     parse_err, parse_help, parse_ok, parse_version,
 }
@@ -204,3 +205,70 @@ def test_parse_missing_subcommand : Bool :=
 #[test]
 def test_parse_subcommand_help : Bool :=
     is_help (Cli.parse sub_spec ["--help"])
+
+def global_spec : Cli.CommandSpec :=
+    Cli.with_args [Cli.flag "verbose" "v" ""]
+        (Cli.with_subcommands [
+            Cli.with_args [Cli.positional "path" ""] (Cli.command "build" "build it"),
+        ] (Cli.command "tool" "a tool"))
+
+#[test]
+def test_subcommand_long_equals_unknown : Bool :=
+    err_contains (Cli.parse global_spec ["--bogus=1", "build", "a.mo"]) "unknown flag: --bogus"
+
+#[test]
+def test_subcommand_long_equals_flag_rejected : Bool :=
+    err_contains (Cli.parse global_spec ["--verbose=1", "build", "a.mo"]) "does not take a value"
+
+#[test]
+def test_subcommand_long_equals_option_accepted : Bool :=
+    match ok_parsed (Cli.parse global_spec ["--verbose", "build", "a.mo"]) {
+        Option.some p => String.beq p.name "build",
+        Option.none => false,
+    }
+
+#[test]
+def test_parse_i64_rejects_lone_minus : Bool :=
+    match Cli.parse_i64 "-" {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_parse_i64_rejects_overflow : Bool :=
+    match Cli.parse_i64 "99999999999999999999" {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_parse_i64_accepts_max_boundary : Bool :=
+    match Cli.parse_i64 "9223372036854775807" {
+        Option.some n => I64.beq n 9223372036854775807,
+        Option.none => false,
+    }
+
+#[test]
+def test_usage_omits_absent_sections : Bool :=
+    let text : String := Cli.usage (Cli.command "plain" "") in
+    Bool.not (String.contains text "[ARGS]") && Bool.not (String.contains text "<SUBCOMMAND>")
+
+#[test]
+def test_help_lists_builtins : Bool :=
+    String.contains (Cli.help_text versioned_spec) "-h, --help"
+        && String.contains (Cli.help_text versioned_spec) "-V, --version"
+
+def multi_i64_spec : Cli.CommandSpec :=
+    Cli.with_args [Cli.positional_spec Cli.ArgValueType.arg_i64 "n" false false "" true ""]
+        (Cli.command "nums" "")
+
+#[test]
+def test_multiple_i64_positionals_validate_all : Bool :=
+    err_contains (Cli.parse multi_i64_spec ["1", "x"]) "expected an integer"
+
+#[test]
+def test_multiple_i64_positionals_valid : Bool :=
+    match ok_parsed (Cli.parse multi_i64_spec ["1", "2", "3"]) {
+        Option.some _ => true,
+        Option.none => false,
+    }

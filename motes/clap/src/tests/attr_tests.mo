@@ -47,3 +47,15 @@ def test_kebab_replaces_underscores : Bool :=
 #[test]
 def test_kebab_drops_trailing_underscore : Bool :=
     String.beq (Cli.kebab "use_") "use"
+
+#[test]
+def test_kebab_preserves_non_ascii : Bool :=
+    String.beq (Cli.kebab "café_max") "café-max"
+
+#[test]
+def test_attr_arg_preserves_non_ascii : Bool :=
+    opt_is (Cli.attr_arg "arg" "help" ["arg(help:=\"café, b\")"]) "café, b"
+
+#[test]
+def test_attr_arg_escaped_non_ascii : Bool :=
+    opt_is (Cli.attr_arg "arg" "help" ["arg(help:=\"a\\é\")"]) "aé"

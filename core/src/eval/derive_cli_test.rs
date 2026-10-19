@@ -258,3 +258,51 @@ fn test_derive_cli_short_collision_rejected() {
     "error should explain the short collision: {msg}"
   );
 }
+
+#[test]
+fn test_derive_cli_duplicate_long_rejected() {
+  let src = r#"
+    #[derive Cli]
+    type Dup {
+      run (#[arg {long := "same", short := "a"}] first : Bool)
+          (#[arg {long := "same", short := "b"}] second : Bool)
+    }
+  "#;
+  let r = load(src);
+  assert!(r.is_err(), "duplicate long flags should be rejected");
+  let msg = r.unwrap_err();
+  assert!(
+    msg.contains("long flag"),
+    "error should explain the long collision: {msg}"
+  );
+}
+
+#[test]
+fn test_derive_cli_bool_default_rejected() {
+  let src = r#"
+    #[derive Cli]
+    struct BadFlag { verbose : Bool := true }
+  "#;
+  let r = load(src);
+  assert!(r.is_err(), "a Bool flag with a default is unrepresentable");
+  let msg = r.unwrap_err();
+  assert!(
+    msg.contains("cannot have a default"),
+    "error should explain the Bool default: {msg}"
+  );
+}
+
+#[test]
+fn test_derive_cli_long_short_rejected() {
+  let src = r#"
+    #[derive Cli]
+    type BadShort { run (#[arg {short := "vv"}] verbose : Bool) }
+  "#;
+  let r = load(src);
+  assert!(r.is_err(), "a two-character short should be rejected");
+  let msg = r.unwrap_err();
+  assert!(
+    msg.contains("longer than one character"),
+    "error should explain the short length: {msg}"
+  );
+}

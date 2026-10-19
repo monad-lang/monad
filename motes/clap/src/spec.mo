@@ -38,7 +38,6 @@ pub struct Cli.ArgSpec {
     has_default : Bool,
     default : String,
     multiple : Bool,
-    allow_hyphen_values : Bool,
     help : String,
     value_name : String,
 }
@@ -93,7 +92,6 @@ pub def Cli.flag (long : String) (short : String) (help : String) : Cli.ArgSpec 
         has_default := false,
         default := "",
         multiple := false,
-        allow_hyphen_values := false,
         help := help,
         value_name := "",
     } in a
@@ -113,7 +111,6 @@ pub def Cli.option_spec
         has_default := has_default,
         default := default,
         multiple := multiple,
-        allow_hyphen_values := false,
         help := help,
         value_name := value_name,
     } in a
@@ -151,7 +148,6 @@ pub def Cli.positional_spec
         has_default := has_default,
         default := default,
         multiple := multiple,
-        allow_hyphen_values := false,
         help := help,
         value_name := name,
     } in a
@@ -251,6 +247,19 @@ pub def Cli.has_option (name : String) (p : Cli.Parsed) : Bool :=
         Option.none => false,
     }
 
+/// The selected subcommand's spec, for printing its usage when decoding
+/// its result fails.
+#[partial]
+def Cli.find_subcommand (name : String) (subs : List Cli.CommandSpec) : Option Cli.CommandSpec :=
+    match subs {
+        List.empty => Option.none,
+        List.cons sub rest =>
+            if String.beq sub.name name then Option.some sub else Cli.find_subcommand name rest,
+    }
+
+pub def Cli.subcommand_named (name : String) (s : Cli.CommandSpec) : Option Cli.CommandSpec :=
+    Cli.find_subcommand name s.subcommands
+
 #[partial]
 def Cli.option_values_loop (name : String) (xs : List Cli.ArgValue) (acc : List String) : List String :=
     match xs {
@@ -313,10 +322,13 @@ pub def Cli.required_positional (i : I64) (p : Cli.Parsed) : String :=
 pub def Cli.parse_i64 (s : String) : Option I64 :=
     if String.is_empty s then Option.none
     else if String.beq (String.slice s 0 1) "-"
-    then match Cli.parse_i64_unsigned (String.drop 1 s) 0 {
-        Option.some n => Option.some (I64.sub 0 n),
-        Option.none => Option.none,
-    }
+    then
+        let magnitude : String := String.drop 1 s in
+        if String.is_empty magnitude then Option.none
+        else match Cli.parse_i64_unsigned magnitude 0 {
+            Option.some n => Option.some (I64.sub 0 n),
+            Option.none => Option.none,
+        }
     else Cli.parse_i64_unsigned s 0
 
 #[partial]
@@ -325,7 +337,10 @@ def Cli.parse_i64_unsigned (s : String) (acc : I64) : Option I64 :=
     else
         let c : String := String.slice s 0 1 in
         match Cli.digit_of c {
-            Option.some d => Cli.parse_i64_unsigned (String.drop 1 s) (I64.add (I64.mul acc 10) d),
+            Option.some d =>
+                if acc > (9223372036854775807 - d) / 10
+                then Option.none
+                else Cli.parse_i64_unsigned (String.drop 1 s) (I64.add (I64.mul acc 10) d),
             Option.none => Option.none,
         }
 

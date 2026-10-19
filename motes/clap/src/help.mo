@@ -3,13 +3,64 @@
 /// Kept in its own module so the parser (`parse.mo`) and the derive can
 /// call it without a cycle, and so the text is golden-testable on its own.
 use lib::spec {
-    Cli.ArgKind, Cli.ArgSpec, Cli.CommandSpec, Cli.same_kind,
+    Cli.ArgKind, Cli.ArgSpec, Cli.CommandSpec, Cli.flag, Cli.same_kind,
 }
 
+#[partial]
+def Cli.has_option_arg (args : List Cli.ArgSpec) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest =>
+            if Cli.same_kind Cli.ArgKind.arg_flag a.kind || Cli.same_kind Cli.ArgKind.arg_option a.kind
+            then true
+            else Cli.has_option_arg rest,
+    }
+
+#[partial]
+def Cli.has_positional_arg (args : List Cli.ArgSpec) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest =>
+            if Cli.same_kind Cli.ArgKind.arg_positional a.kind then true else Cli.has_positional_arg rest,
+    }
+
+#[partial]
+def Cli.has_long_arg (name : String) (args : List Cli.ArgSpec) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest =>
+            if String.beq a.long name then true else Cli.has_long_arg name rest,
+    }
+
+#[partial]
+def Cli.has_short_arg (short : String) (args : List Cli.ArgSpec) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest =>
+            if String.beq a.short short then true else Cli.has_short_arg short rest,
+    }
+
+/// `-h`/`--help` is available unless the user declared either spelling.
+pub def Cli.help_available (s : Cli.CommandSpec) : Bool :=
+    Bool.not (Cli.has_long_arg "help" s.args) && Bool.not (Cli.has_short_arg "h" s.args)
+
+/// `-V`/`--version` needs a version and is available unless the user
+/// declared either spelling.
+pub def Cli.version_available (s : Cli.CommandSpec) : Bool :=
+    Bool.not (String.is_empty s.version)
+        && Bool.not (Cli.has_long_arg "version" s.args)
+        && Bool.not (Cli.has_short_arg "V" s.args)
+
 pub def Cli.usage (s : Cli.CommandSpec) : String :=
-    if List.is_empty s.subcommands
-    then String.concat "Usage: " (String.concat s.name " [OPTIONS] [ARGS]")
-    else String.concat "Usage: " (String.concat s.name " [OPTIONS] <SUBCOMMAND>")
+    let opts : Bool :=
+        Cli.help_available s || Cli.version_available s || Cli.has_option_arg s.args in
+    let args : Bool := Cli.has_positional_arg s.args in
+    let subs : Bool := Bool.not (List.is_empty s.subcommands) in
+    let tail : String :=
+        String.concat (if opts then " [OPTIONS]" else "")
+            (String.concat (if subs then " <SUBCOMMAND>" else "")
+                (if args then " [ARGS]" else "")) in
+    String.concat "Usage: " (String.concat s.name tail)
 
 #[partial]
 def Cli.spaces (n : I64) : String :=
@@ -114,8 +165,13 @@ def Cli.section (title : String) (lines : List String) : String :=
 
 pub def Cli.help_text (s : Cli.CommandSpec) : String :=
     let positionals : List Cli.ArgSpec := Cli.filter_args Cli.ArgKind.arg_positional s.args in
+    let help_builtin : List Cli.ArgSpec :=
+        if Cli.help_available s then [Cli.flag "help" "h" "print help"] else [] in
+    let version_builtin : List Cli.ArgSpec :=
+        if Cli.version_available s then [Cli.flag "version" "V" "print version"] else [] in
+    let builtins : List Cli.ArgSpec := List.append help_builtin version_builtin in
     let options : List Cli.ArgSpec :=
-        List.append (Cli.filter_args Cli.ArgKind.arg_option s.args)
+        List.append (List.append builtins (Cli.filter_args Cli.ArgKind.arg_option s.args))
                     (Cli.filter_args Cli.ArgKind.arg_flag s.args) in
     let arg_width : I64 := Cli.string_len_max (Cli.arg_labels (List.append positionals options)) 0 in
     let sub_width : I64 := Cli.string_len_max (Cli.sub_labels s.subcommands) 0 in

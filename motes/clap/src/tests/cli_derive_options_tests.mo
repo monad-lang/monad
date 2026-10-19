@@ -2,6 +2,12 @@
 /// the single-command/struct forms. The pure parser is covered by
 /// `cli_parser_tests.mo`; this file proves the generated spec/decode pair.
 use clap::args {*}
+use lib::help {Cli.help_text}
+
+#[derive Cli]
+type HostCommand {
+    run (#[opt] host : Option String) (path : String),
+}
 
 #[derive Cli]
 type RichCommand {
@@ -136,3 +142,28 @@ def test_derive_no_short_rejects_short : Bool :=
         Result.ok _ => false,
         Result.err msg => String.contains msg "unknown flag",
     }
+
+/// A field whose auto-short is `h` must not disable the built-in
+/// `--help`; that only depends on a user arg claiming the LONG spelling.
+#[test]
+def test_help_survives_h_short_claim : Bool :=
+    match parse_hostcommand ["--help"] {
+        Result.err text => String.contains text "Usage:",
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_h_short_reaches_the_user_option : Bool :=
+    // If `-h` were treated as the built-in help flag, the generated parser
+    // would return `Result.err` (help text); accepting it proves the user's
+    // `host` option claimed the short spelling.
+    match parse_hostcommand ["-h", "example", "a.mo"] {
+        Result.ok _ => true,
+        Result.err _ => false,
+    }
+
+/// Numeric defaults make the field optional but are not rendered, so
+/// help must not show `(default: )`.
+#[test]
+def test_numeric_default_not_rendered_empty : Bool :=
+    Bool.not (String.contains (Cli.help_text spec_dargs) "(default: )")

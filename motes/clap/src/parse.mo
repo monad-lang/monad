@@ -8,7 +8,7 @@ use std::io {IO.write_stderr}
 use lib::spec {
     Cli.ArgKind, Cli.ArgSpec, Cli.ArgValue, Cli.ArgValueType, Cli.CommandSpec,
     Cli.ParseResult, Cli.Parsed, Cli.arg_value, Cli.digit_of, Cli.parse_i64,
-    Cli.parsed, Cli.same_kind,
+    Cli.parsed, Cli.same_kind, Cli.subcommand_named,
 }
 use lib::help {Cli.help_text, Cli.usage}
 
@@ -144,9 +144,9 @@ def Cli.scan_long
         (spec : Cli.CommandSpec) (hd : String) (tl : List String)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
-    if String.beq hd "--help" && Bool.not (Cli.flag_claimed spec "help" "h")
+    if String.beq hd "--help" && Bool.not (Cli.long_claimed spec "help")
     then Cli.ParseResult.parse_help (Cli.help_text spec)
-    else if String.beq hd "--version" && Bool.not (Cli.version_claimed spec "version" "V")
+    else if String.beq hd "--version" && Bool.not (Cli.long_claimed spec "version")
     then if String.is_empty spec.version
          then Cli.ParseResult.parse_err "unknown flag: --version"
          else Cli.ParseResult.parse_version (Cli.version_text spec)
@@ -199,7 +199,7 @@ def Cli.consume_option_value
         List.empty =>
             Cli.ParseResult.parse_err (String.concat "option '--" (String.concat a.long "' requires a value")),
         List.cons next rest =>
-            if Bool.not a.allow_hyphen_values && Cli.looks_like_flag next
+            if Cli.looks_like_flag next
             then Cli.ParseResult.parse_err (String.concat "option '--" (String.concat a.long "' requires a value"))
             else Cli.scan spec rest false flags (List.append options [Cli.arg_value a.long next]) positionals pos_index,
     }
@@ -211,9 +211,9 @@ def Cli.scan_short
         (spec : Cli.CommandSpec) (hd : String) (tl : List String)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
-    if String.beq hd "-h" && Bool.not (Cli.flag_claimed spec "help" "h")
+    if String.beq hd "-h" && Bool.not (Cli.short_claimed spec "h")
     then Cli.ParseResult.parse_help (Cli.help_text spec)
-    else if String.beq hd "-V" && Bool.not (Cli.version_claimed spec "version" "V")
+    else if String.beq hd "-V" && Bool.not (Cli.short_claimed spec "V")
     then if String.is_empty spec.version
          then Cli.ParseResult.parse_err "unknown flag: -V"
          else Cli.ParseResult.parse_version (Cli.version_text spec)
@@ -242,7 +242,7 @@ def Cli.scan_short_cluster
                         then match rest {
                             List.empty => Cli.ParseResult.parse_err (String.concat "option '-" (String.concat c "' requires a value")),
                             List.cons next rest2 =>
-                                if Bool.not a.allow_hyphen_values && Cli.looks_like_flag next
+                                if Cli.looks_like_flag next
                                 then Cli.ParseResult.parse_err (String.concat "option '-" (String.concat c "' requires a value"))
                                 else Cli.scan spec rest2 false flags (List.append options [Cli.arg_value a.long next]) positionals pos_index,
                         }
@@ -255,17 +255,17 @@ def Cli.scan_short_cluster
 
 // ─── Required/typed validation ─────────────────────────────────────────
 
-def Cli.flag_claimed (spec : Cli.CommandSpec) (long : String) (short : String) : Bool :=
+def Cli.long_claimed (spec : Cli.CommandSpec) (long : String) : Bool :=
     match Cli.find_long long spec {
         Option.some _ => true,
-        Option.none => match Cli.find_short short spec {
-            Option.some _ => true,
-            Option.none => false,
-        },
+        Option.none => false,
     }
 
-def Cli.version_claimed (spec : Cli.CommandSpec) (long : String) (short : String) : Bool :=
-    Cli.flag_claimed spec long short
+def Cli.short_claimed (spec : Cli.CommandSpec) (short : String) : Bool :=
+    match Cli.find_short short spec {
+        Option.some _ => true,
+        Option.none => false,
+    }
 
 #[partial]
 def Cli.check_required_options (args : List Cli.ArgSpec) (options : List Cli.ArgValue) : Option String :=
@@ -320,6 +320,20 @@ def Cli.first_bad_i64 (name : String) (options : List Cli.ArgValue) : Option Str
     }
 
 #[partial]
+def Cli.check_i64_range
+        (i : I64) (long : String) (positionals : List Cli.ArgValue) : Option String :=
+    match Cli.nth_positional i positionals {
+        Option.none => Option.none,
+        Option.some x =>
+            match Cli.parse_i64 x.value {
+                Option.some _ => Cli.check_i64_range (I64.add i 1) long positionals,
+                Option.none => Option.some
+                    (String.concat "invalid value '" (String.concat x.value
+                        (String.concat "' for '<" (String.concat long ">': expected an integer")))),
+            },
+    }
+
+#[partial]
 def Cli.check_i64_positionals_after
         (i : I64) (args : List Cli.ArgSpec) (positionals : List Cli.ArgValue) : Option String :=
     match args {
@@ -327,21 +341,24 @@ def Cli.check_i64_positionals_after
         List.cons a rest =>
             if Cli.same_kind Cli.ArgKind.arg_positional a.kind
             then
-                if Cli.same_value_type Cli.ArgValueType.arg_i64 a.value_type
-                then match Cli.nth_positional i positionals {
-                    Option.some x =>
-                        match Cli.parse_i64 x.value {
-                            Option.some _ =>
-                                if a.multiple
-                                then Cli.check_i64_positionals_after (I64.add i 1) rest positionals
-                                else Cli.check_i64_positionals_after (I64.add i 1) rest positionals,
-                            Option.none => Option.some (String.concat "invalid value '" (String.concat x.value (String.concat "' for '<" (String.concat a.long ">': expected an integer")))),
-                        },
-                    Option.none => Option.none,
-                }
-                else if a.multiple
-                     then Cli.check_i64_positionals_after (I64.add i 1) rest positionals
-                     else Cli.check_i64_positionals_after (I64.add i 1) rest positionals
+                if a.multiple
+                then
+                    if Cli.same_value_type Cli.ArgValueType.arg_i64 a.value_type
+                    then Cli.check_i64_range i a.long positionals
+                    else Option.none
+                else
+                    if Cli.same_value_type Cli.ArgValueType.arg_i64 a.value_type
+                    then match Cli.nth_positional i positionals {
+                        Option.some x =>
+                            match Cli.parse_i64 x.value {
+                                Option.some _ => Cli.check_i64_positionals_after (I64.add i 1) rest positionals,
+                                Option.none => Option.some
+                                    (String.concat "invalid value '" (String.concat x.value
+                                        (String.concat "' for '<" (String.concat a.long ">': expected an integer")))),
+                            },
+                        Option.none => Option.none,
+                    }
+                    else Cli.check_i64_positionals_after (I64.add i 1) rest positionals
             else Cli.check_i64_positionals_after i rest positionals,
     }
 
@@ -411,9 +428,9 @@ def Cli.parse_sub
             else if String.starts_with "-" hd
             then if String.beq hd "-" || Cli.is_negative_number hd
                  then Cli.select_subcommand spec hd tl
-                 else if String.beq hd "-h" && Bool.not (Cli.flag_claimed spec "help" "h")
+                 else if String.beq hd "-h" && Bool.not (Cli.short_claimed spec "h")
                       then Cli.ParseResult.parse_help (Cli.help_text spec)
-                      else if String.beq hd "-V" && Bool.not (Cli.version_claimed spec "version" "V")
+                      else if String.beq hd "-V" && Bool.not (Cli.short_claimed spec "V")
                            then if String.is_empty spec.version
                                 then Cli.ParseResult.parse_err "unknown flag: -V"
                                 else Cli.ParseResult.parse_version (Cli.version_text spec)
@@ -427,9 +444,9 @@ def Cli.parse_sub
 /// `--global-flag value` forms.
 #[partial]
 def Cli.parse_sub_flag_long (spec : Cli.CommandSpec) (hd : String) (tl : List String) : Cli.ParseResult :=
-    if String.beq hd "--help" && Bool.not (Cli.flag_claimed spec "help" "h")
+    if String.beq hd "--help" && Bool.not (Cli.long_claimed spec "help")
     then Cli.ParseResult.parse_help (Cli.help_text spec)
-    else if String.beq hd "--version" && Bool.not (Cli.version_claimed spec "version" "V")
+    else if String.beq hd "--version" && Bool.not (Cli.long_claimed spec "version")
     then if String.is_empty spec.version
          then Cli.ParseResult.parse_err "unknown flag: --version"
          else Cli.ParseResult.parse_version (Cli.version_text spec)
@@ -437,7 +454,25 @@ def Cli.parse_sub_flag_long (spec : Cli.CommandSpec) (hd : String) (tl : List St
         let body : String := String.drop 2 hd in
         match Cli.split_first_eq body {
             Option.some pair =>
-                match pair { Pair.pair _ _ => Cli.parse_sub spec tl false },
+                match pair {
+                    Pair.pair key _value =>
+                        match Cli.find_long key spec {
+                            Option.none =>
+                                if String.beq key "help" && Bool.not (Cli.long_claimed spec "help")
+                                then Cli.ParseResult.parse_err "flag '--help' does not take a value"
+                                else if String.beq key "version" && Bool.not (Cli.long_claimed spec "version")
+                                then Cli.ParseResult.parse_err "flag '--version' does not take a value"
+                                else Cli.ParseResult.parse_err (String.concat "unknown flag: --" key),
+                            Option.some a =>
+                                match a.kind {
+                                    Cli.ArgKind.arg_flag =>
+                                        Cli.ParseResult.parse_err (String.concat "flag '--" (String.concat key "' does not take a value")),
+                                    Cli.ArgKind.arg_option => Cli.parse_sub spec tl false,
+                                    Cli.ArgKind.arg_positional =>
+                                        Cli.ParseResult.parse_err (String.concat "unknown flag: --" key),
+                                },
+                        },
+                },
             Option.none =>
                 match Cli.find_long body spec {
                     Option.none => Cli.ParseResult.parse_err (String.concat "unknown flag: --" body),
@@ -491,8 +526,13 @@ pub def Cli.run {A : Type}
             match decode p {
                 Result.ok v => handler v,
                 Result.err msg => do {
+                    let shown : Cli.CommandSpec :=
+                        match Cli.subcommand_named p.name spec {
+                            Option.some sub => sub,
+                            Option.none => spec,
+                        };
                     IO.write_stderr (String.concat "error: " (String.concat msg "\n"));
-                    IO.write_stderr (String.concat (Cli.usage spec) "\n");
+                    IO.write_stderr (String.concat (Cli.usage shown) "\n");
                     return 2
                 },
             },

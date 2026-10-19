@@ -27,7 +27,7 @@ pub use lib::help {*}
 pub use lib::parse {*}
 pub use lib::attr {*}
 
-use std::list {List.any, List.filter, List.length}
+use std::list {List.length}
 // `String.concat_all` lives in `init/string.mo` (moved there by
 // c431ba0, which deleted this file's own `cli_concat_all` copy). An
 // explicit import is required, not optional: this module's defs are
@@ -282,6 +282,19 @@ def cli_has_default (f : FieldInfo) : Bool :=
         Option.none => false,
     }
 
+/// Help can only render a string default (`cli_default_string`); a
+/// numeric/bool default still makes the field optional, but rendering
+/// `(default: )` would be worse than omitting it.
+def cli_default_has_text (f : FieldInfo) : Bool :=
+    match cli_field_default f {
+        Option.some d =>
+            match d {
+                e_str _ => true,
+                _ => false,
+            },
+        Option.none => false,
+    }
+
 /// Help-text rendering only; numeric/bool defaults are applied by the
 /// decoder from the original `Expr` and are deliberately not stringified
 /// here (the meta evaluator has no `I64.to_string`).
@@ -350,11 +363,11 @@ def cli_arg_spec_expr (struct_form : Bool) (f : FieldInfo) : Expr :=
         Cli.ArgKind.arg_option =>
             cli_app9 "Cli.option_spec" (cli_value_type_expr f) (e_str long) (e_str short)
                 (e_str (cli_value_name k f)) (e_bool (cli_required k f))
-                (e_bool (cli_has_default f)) (e_str (cli_default_string f))
+                (e_bool (cli_default_has_text f)) (e_str (cli_default_string f))
                 (e_bool (cli_multiple f)) (e_str help),
         Cli.ArgKind.arg_positional =>
             cli_app7 "Cli.positional_spec" (cli_value_type_expr f) (e_str long)
-                (e_bool (cli_required k f)) (e_bool (cli_has_default f))
+                (e_bool (cli_required k f)) (e_bool (cli_default_has_text f))
                 (e_str (cli_default_string f)) (e_bool (cli_multiple f)) (e_str help),
     }
 
@@ -512,28 +525,47 @@ def cli_decode_expr (type_name : String) (ctors : List CtorInfo) (struct_form : 
 
 // ─── Validation ───────────────────────────────────────────────────────
 
+#[partial]
+def cli_bad_short (k : Cli.ArgKind) (ctor_display : String) (f : FieldInfo) : Option String :=
+    if cli_is_positional k then Option.none
+    else match cli_attr_value k "short" f {
+        Option.none => Option.none,
+        Option.some s =>
+            if String.is_empty s then Option.none
+            else if I64.lt 1 (String.length s)
+                 then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has a `short` longer than one character"])
+                 else if String.beq s "-" || String.beq s "="
+                      then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", cli_field_name f, "` has an invalid `short` (", s, ")"])
+                      else Option.none,
+    }
+
 def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInfo) : Option String :=
     let k : Cli.ArgKind := cli_field_kind struct_form f in
     let name : String := cli_field_name f in
-    match k {
-        Cli.ArgKind.arg_flag =>
-            match cli_type_class (cli_field_typ f) {
-                Option.some c =>
-                    if cli_class_is_bool c then Option.none
-                    else Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is a flag but is not `Bool`"]),
-                Option.none =>
-                    Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is a flag but its type is not supported"]),
-            },
-        _ =>
-            match cli_type_class (cli_field_typ f) {
-                Option.none =>
-                    Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` has an unsupported type (expected String, I64, Option String/I64, or List String)"]),
-                Option.some c =>
-                    if cli_class_is_bool c
-                    then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s Bool field `", name, "` must be annotated `#[arg]`"])
-                    else if Bool.not (cli_required k f) && Bool.not (cli_has_default f) && Bool.not (cli_class_is_option c) && Bool.not (cli_class_is_list c)
-                         then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is optional but has no default; use Option, List, or a `:=` default"])
-                         else Option.none,
+    match cli_bad_short k ctor_display f {
+        Option.some msg => Option.some msg,
+        Option.none =>
+            match k {
+                Cli.ArgKind.arg_flag =>
+                    match cli_type_class (cli_field_typ f) {
+                        Option.some c =>
+                            if Bool.not (cli_class_is_bool c) then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is a flag but is not `Bool`"])
+                            else if cli_has_default f then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s Bool flag `", name, "` cannot have a default -- remove `:= ...`"])
+                            else Option.none,
+                        Option.none =>
+                            Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is a flag but its type is not supported"]),
+                    },
+                _ =>
+                    match cli_type_class (cli_field_typ f) {
+                        Option.none =>
+                            Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` has an unsupported type (expected String, I64, Option String/I64, or List String)"]),
+                        Option.some c =>
+                            if cli_class_is_bool c
+                            then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s Bool field `", name, "` must be annotated `#[arg]`"])
+                            else if Bool.not (cli_required k f) && Bool.not (cli_has_default f) && Bool.not (cli_class_is_option c) && Bool.not (cli_class_is_list c)
+                                 then Option.some (String.concat_all ["#[derive Cli]: `", ctor_display, "`'s field `", name, "` is optional but has no default; use Option, List, or a `:=` default"])
+                                 else Option.none,
+                    },
             },
     }
 
@@ -599,6 +631,50 @@ def cli_short_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Optio
                     match cli_short_conflicts struct_form fields {
                         Option.some msg => Option.some msg,
                         Option.none => cli_short_conflicts_all struct_form rest,
+                    },
+            },
+    }
+
+#[partial]
+def cli_long_conflict
+        (long : String) (own_name : String) (struct_form : Bool)
+        (fields : List FieldInfo) : Option String :=
+    match fields {
+        List.empty => Option.none,
+        List.cons f rest =>
+            let k : Cli.ArgKind := cli_field_kind struct_form f in
+            let name : String := cli_field_name f in
+            if Bool.not (cli_is_positional k)
+                && String.beq (cli_long k f) long
+                && Bool.not (String.beq name own_name)
+            then Option.some (String.concat_all ["#[derive Cli]: long flag `--", long, "` is used by both `", own_name, "` and `", name, "`; rename one"])
+            else cli_long_conflict long own_name struct_form rest,
+    }
+
+#[partial]
+def cli_long_conflicts (struct_form : Bool) (fields : List FieldInfo) : Option String :=
+    match fields {
+        List.empty => Option.none,
+        List.cons f rest =>
+            let k : Cli.ArgKind := cli_field_kind struct_form f in
+            if cli_is_positional k
+            then cli_long_conflicts struct_form rest
+            else match cli_long_conflict (cli_long k f) (cli_field_name f) struct_form rest {
+                Option.some msg => Option.some msg,
+                Option.none => cli_long_conflicts struct_form rest,
+            },
+    }
+
+#[partial]
+def cli_long_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
+    match ctors {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match c {
+                ctor_info _cname fields =>
+                    match cli_long_conflicts struct_form fields {
+                        Option.some msg => Option.some msg,
+                        Option.none => cli_long_conflicts_all struct_form rest,
                     },
             },
     }
@@ -685,20 +761,24 @@ pub def derive_cli_meta (info : TypeInfo) : List Decl :=
                                     match cli_short_conflicts_all struct_form ctors {
                                         Option.some msg => [d_error msg],
                                         Option.none =>
-                                            let spec_expr : Expr := cli_spec_expr type_name ctors struct_form single_command in
-                                            let decode_expr : Expr := cli_decode_expr type_name ctors struct_form single_command in
-                                            let parse_expr : Expr := cli_parse_expr type_name in
-                                            [
-                                                d_def (String.concat "spec_" lower) List.empty (e_var "Cli.CommandSpec") spec_expr,
-                                                d_def (String.concat "decode_" lower)
-                                                    [meta_param "p" (e_var "Cli.Parsed")]
-                                                    (cli_app2 "Result" (e_var "String") (e_var type_name))
-                                                    decode_expr,
-                                                d_def (String.concat "parse_" lower)
-                                                    [meta_param "args" (e_app (e_var "List") (e_var "String"))]
-                                                    (cli_app2 "Result" (e_var "String") (e_var type_name))
-                                                    parse_expr,
-                                            ],
+                                            match cli_long_conflicts_all struct_form ctors {
+                                                Option.some msg => [d_error msg],
+                                                Option.none =>
+                                                    let spec_expr : Expr := cli_spec_expr type_name ctors struct_form single_command in
+                                                    let decode_expr : Expr := cli_decode_expr type_name ctors struct_form single_command in
+                                                    let parse_expr : Expr := cli_parse_expr type_name in
+                                                    [
+                                                        d_def (String.concat "spec_" lower) List.empty (e_var "Cli.CommandSpec") spec_expr,
+                                                        d_def (String.concat "decode_" lower)
+                                                            [meta_param "p" (e_var "Cli.Parsed")]
+                                                            (cli_app2 "Result" (e_var "String") (e_var type_name))
+                                                            decode_expr,
+                                                        d_def (String.concat "parse_" lower)
+                                                            [meta_param "args" (e_app (e_var "List") (e_var "String"))]
+                                                            (cli_app2 "Result" (e_var "String") (e_var type_name))
+                                                            parse_expr,
+                                                    ],
+                                            },
                                     },
                             },
                     },

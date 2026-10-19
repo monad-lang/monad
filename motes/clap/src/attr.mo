@@ -63,18 +63,47 @@ pub def Cli.attr_body (s : String) : String :=
             else rest,
     }
 
+/// The character starting at byte `i`. `String.slice` returns `""` when
+/// its end lands mid-character, so trying widths 1..4 in order finds the
+/// boundary. Uses only `String.slice`/`String.length`, which the
+/// self-hosted meta evaluator supports -- `derive_cli_meta` runs at
+/// compile time and cannot use `String.to_list`.
 #[partial]
-def Cli.unescape (s : String) : String :=
-    Cli.unescape_from s 0 ""
+def Cli.char_at (s : String) (i : I64) : String :=
+    let one : String := String.slice s i 1 in
+    if Bool.not (String.is_empty one) then one
+    else
+        let two : String := String.slice s i 2 in
+        if Bool.not (String.is_empty two) then two
+        else
+            let three : String := String.slice s i 3 in
+            if Bool.not (String.is_empty three) then three
+            else String.slice s i 4
 
+#[partial]
+def Cli.char_width (c : String) : I64 :=
+    if String.is_empty c then 1 else String.length c
+
+/// Drop a backslash and copy the character after it. Copying whole
+/// characters keeps non-ASCII text intact; a one-byte slice per character
+/// silently deletes it.
 #[partial]
 def Cli.unescape_from (s : String) (i : I64) (acc : String) : String :=
     if I64.lt i (String.length s) then
-        let c : String := String.slice s i 1 in
-        if String.beq c "\\" && I64.lt (I64.add i 1) (String.length s)
-        then Cli.unescape_from s (I64.add i 2) (String.concat acc (String.slice s (I64.add i 1) 1))
-        else Cli.unescape_from s (I64.add i 1) (String.concat acc c)
+        let c : String := Cli.char_at s i in
+        let w : I64 := Cli.char_width c in
+        if String.beq c "\\" then
+            if I64.lt (I64.add i 1) (String.length s) then
+                let next : String := Cli.char_at s (I64.add i 1) in
+                let nw : I64 := Cli.char_width next in
+                Cli.unescape_from s (I64.add i (I64.add 1 nw)) (String.concat acc next)
+            else Cli.unescape_from s (I64.add i 1) (String.concat acc c)
+        else Cli.unescape_from s (I64.add i w) (String.concat acc c)
     else acc
+
+#[partial]
+def Cli.unescape (s : String) : String :=
+    Cli.unescape_from s 0 ""
 
 #[partial]
 def Cli.decode_attr_value (v : String) : String :=
@@ -152,8 +181,18 @@ pub def Cli.attr_arg (name : String) (key : String) (attrs : List String) : Opti
     }
 
 /// `max_turns` -> `max-turns`; a trailing `_` is dropped first, so a
-/// reserved word can be a constructor (`use_` -> `use`).
+/// reserved word can be a constructor (`use_` -> `use`). Walks bytes and
+/// slices whole characters, so non-ASCII text is preserved.
 #[partial]
+def Cli.kebab_from (s : String) (i : I64) (acc : String) : String :=
+    if I64.lt i (String.length s) then
+        let c : String := Cli.char_at s i in
+        let w : I64 := Cli.char_width c in
+        if String.beq c "_"
+        then Cli.kebab_from s (I64.add i w) (String.concat acc "-")
+        else Cli.kebab_from s (I64.add i w) (String.concat acc c)
+    else acc
+
 pub def Cli.kebab (s : String) : String :=
     let n : I64 := String.length s in
     let t : String :=
@@ -161,12 +200,3 @@ pub def Cli.kebab (s : String) : String :=
         then String.slice s 0 (I64.sub n 1)
         else s in
     Cli.kebab_from t 0 ""
-
-#[partial]
-def Cli.kebab_from (s : String) (i : I64) (acc : String) : String :=
-    if I64.lt i (String.length s) then
-        let c : String := String.slice s i 1 in
-        if String.beq c "_"
-        then Cli.kebab_from s (I64.add i 1) (String.concat acc "-")
-        else Cli.kebab_from s (I64.add i 1) (String.concat acc c)
-    else acc
