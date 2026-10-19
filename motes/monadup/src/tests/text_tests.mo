@@ -36,6 +36,13 @@ def test_words_tab_and_space : Bool :=
         && String.beq (nth 2 ws) "c"
 
 #[test]
+def test_words_tab_only : Bool :=
+    let ws : List String := Text.words "a\tb" in
+    I64.beq (List.length ws) 2
+        && String.beq (nth 0 ws) "a"
+        && String.beq (nth 1 ws) "b"
+
+#[test]
 def test_sort : Bool :=
     let xs : List String := Text.sort ["b", "c", "a"] in
     String.beq (nth 0 xs) "a" && String.beq (nth 1 xs) "b" && String.beq (nth 2 xs) "c"

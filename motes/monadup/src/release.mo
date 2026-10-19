@@ -8,7 +8,7 @@ use std::map {BTreeMap}
 use lib::platform {*}
 use lib::text {*}
 use json::json {
-    Json, Json.ParseError, Json.parse, Json.get_array, Json.get_object,
+    Json, Json.parse, Json.get_array, Json.get_object,
     Json.get_str, Json.object_get,
 }
 

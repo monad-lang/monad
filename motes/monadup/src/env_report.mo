@@ -19,10 +19,18 @@ def EnvReport.tool_line (e : Doctor.Env) : String :=
             (String.concat ", pkg-config=" (String.concat (EnvReport.yesno e.tools.pkg_config)
                 (String.concat ", bdw-gc=" (EnvReport.yesno e.tools.bdw_gc)))))))
 
+def EnvReport.origin_of (uname : String) : String :=
+    String.concat "(from uname -sm, " (String.concat uname ")")
+
 pub def EnvReport.run : IO I64 := do {
     let e <- Doctor.gather true;
+    let origin_text : String := EnvReport.origin_of e.platform.uname_sm;
+    let origin : String :=
+        if String.is_empty e.platform.uname_sm
+        then "(uname -sm failed)"
+        else origin_text;
     IO.println (String.concat "platform:       " (String.concat e.platform.platform
-        (String.concat "   (from uname -sm, " (String.concat e.platform.uname_sm ")"))));
+        (String.concat "   " origin)));
     if e.platform.used_fallback then IO.println (String.concat "                " e.platform.note) else return unit;
     IO.println (String.concat "home:           " (String.concat e.home.path
         (String.concat "  (" (String.concat e.home.source ")"))));

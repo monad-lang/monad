@@ -43,34 +43,44 @@ pub def Text.split_on (sep : String) (s : String) : List String :=
             List.cons head (Text.split_on sep tail),
     }
 
-/// Whitespace-separated words, empty ones dropped. Used for `uname -sm`
+/// Space- or tab-separated words, empty ones dropped. Used for `uname -sm`
 /// and `$PATH`.
 #[partial]
 pub def Text.words (s : String) : List String :=
     Text.words_from (Text.trim s)
 
 #[partial]
+def Text.first_separator (s : String) : Option I64 :=
+    match Text.find_byte " " s 0 {
+        Option.none => Text.find_byte "\t" s 0,
+        Option.some i =>
+            match Text.find_byte "\t" s 0 {
+                Option.none => Option.some i,
+                Option.some j => Option.some (if I64.lt i j then i else j),
+            },
+    }
+
+/// The first space- or tab-separated word (`sha256sum` prints
+/// `<hash>  <file>`).
+#[partial]
+pub def Text.first_word (s : String) : String :=
+    match Text.first_separator s {
+        Option.none => s,
+        Option.some i => String.slice s 0 i,
+    }
+
+#[partial]
 def Text.words_from (s : String) : List String :=
     if String.is_empty s then List.empty
     else
-        match Text.find_byte " " s 0 {
+        match Text.first_separator s {
             Option.none => [s],
             Option.some i =>
-                match Text.find_byte "\t" s 0 {
-                    Option.none =>
-                        let head : String := String.slice s 0 i in
-                        let tail : String := Text.trim (String.drop (I64.add i 1) s) in
-                        if String.is_empty head
-                        then Text.words_from tail
-                        else List.cons head (Text.words_from tail),
-                    Option.some j =>
-                        let k : I64 := if I64.lt i j then i else j in
-                        let head : String := String.slice s 0 k in
-                        let tail : String := Text.trim (String.drop (I64.add k 1) s) in
-                        if String.is_empty head
-                        then Text.words_from tail
-                        else List.cons head (Text.words_from tail),
-                },
+                let head : String := String.slice s 0 i in
+                let tail : String := Text.trim (String.drop (I64.add i 1) s) in
+                if String.is_empty head
+                then Text.words_from tail
+                else List.cons head (Text.words_from tail),
         }
 
 #[partial]

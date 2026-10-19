@@ -44,6 +44,8 @@ pub struct Doctor.Tools {
 pub struct Doctor.Env {
     platform : Platform.Resolution,
     home : Layout.Home,
+    home_exists : Bool,
+    home_writable : Bool,
     active : Option String,
     active_dir_exists : Bool,
     binary : Option String,
@@ -54,6 +56,7 @@ pub struct Doctor.Env {
     root_manifest : Bool,
     monad_link : Option String,
     monad_link_ok : Bool,
+    link_is_symlink : Bool,
     path_has_bin : Bool,
     overrides : List (Pair String String),
     monad_root_bad : Bool,
@@ -83,9 +86,6 @@ def Doctor.nightly_entries (entries : List String) : List String :=
             then List.cons e (Doctor.nightly_entries rest)
             else Doctor.nightly_entries rest,
     }
-
-#[partial]
-def Doctor.source_names : List String := ["init", "std", "llvm", "runtime"]
 
 #[partial]
 def Doctor.collect_sources (dir : String) (names : List String) : IO (List String) := do {
@@ -170,15 +170,15 @@ pub def Doctor.gather (no_network : Bool) : IO Doctor.Env := do {
     let binary_version <-
         if binary_exec then Shell.capture_line binary_path ["version"] else return Option.none;
     let sources <-
-        if active_dir_exists then Doctor.collect_sources active_dir Doctor.source_names else return List.empty;
+        if active_dir_exists then Doctor.collect_sources active_dir Layout.source_names else return List.empty;
     let root_manifest <-
         if active_dir_exists then Shell.file_exists (String.concat active_dir "/mote.toml") else return false;
     let link <- Shell.readlink (Layout.monad_link h);
-    let link_ok <-
-        match link {
-            Option.none => return false,
-            Option.some _ => Shell.file_exists (Layout.monad_link h),
-        };
+    let link_is_symlink <- Shell.is_symlink (Layout.monad_link h);
+    let link_ok <- Shell.file_exists (Layout.monad_link h);
+    let home_exists <- Shell.is_dir h.path;
+    let home_writable <-
+        if home_exists then Shell.is_writable h.path else return true;
     let path_has_bin <- Shell.path_has (Layout.bin_dir h);
     let overrides <- Doctor.collect_overrides ["MONAD_HOME", "MONAD_ROOT", "MONADUP_API_URL", "MONADUP_UNAME"];
     let root <- IO.get_env "MONAD_ROOT";
@@ -228,6 +228,8 @@ pub def Doctor.gather (no_network : Bool) : IO Doctor.Env := do {
     let env : Doctor.Env := {
         platform := ctx.platform,
         home := h,
+        home_exists := home_exists,
+        home_writable := home_writable,
         active := active,
         active_dir_exists := active_dir_exists,
         binary := binary,
@@ -238,6 +240,7 @@ pub def Doctor.gather (no_network : Bool) : IO Doctor.Env := do {
         root_manifest := root_manifest,
         monad_link := link,
         monad_link_ok := link_ok,
+        link_is_symlink := link_is_symlink,
         path_has_bin := path_has_bin,
         overrides := overrides,
         monad_root_bad := root_bad,
@@ -251,14 +254,11 @@ pub def Doctor.gather (no_network : Bool) : IO Doctor.Env := do {
 
 // ─── Checks (pure) ─────────────────────────────────────────────────────
 
-def Doctor.ok_detail (s : String) : String := s
-
 pub def Doctor.checks (e : Doctor.Env) : List Doctor.Check := [
     Doctor.tool_check "curl" e.tools.curl "curl is required to download releases",
     Doctor.tool_check "tar" e.tools.tar "tar is required to unpack the sources asset",
     Doctor.platform_check e,
-    Doctor.check "home" Doctor.Status.st_ok
-        (String.concat e.home.path (String.concat " (" (String.concat e.home.source ")"))) "",
+    Doctor.home_check e,
     Doctor.active_check e,
     Doctor.binary_check e,
     Doctor.commit_check e,
@@ -280,8 +280,18 @@ def Doctor.tool_check (name : String) (present : Bool) (hint : String) : Doctor.
     then Doctor.check name Doctor.Status.st_ok (String.concat name " found") ""
     else Doctor.check name Doctor.Status.st_fail (String.concat name " not found") hint
 
+def Doctor.home_check (e : Doctor.Env) : Doctor.Check :=
+    let suffix : String := if e.home_exists then ")" else ", will be created)" in
+    let detail : String := String.concat e.home.path (String.concat " (" (String.concat e.home.source suffix)) in
+    if e.home_exists && Bool.not e.home_writable
+    then Doctor.check "home" Doctor.Status.st_fail (String.concat detail " is not writable")
+        (String.concat "make " (String.concat e.home.path " writable (or point MONAD_HOME elsewhere)"))
+    else Doctor.check "home" Doctor.Status.st_ok detail ""
+
 def Doctor.platform_check (e : Doctor.Env) : Doctor.Check :=
-    if e.platform.used_fallback
+    if String.is_empty e.platform.uname_sm
+    then Doctor.check "platform" Doctor.Status.st_fail e.platform.note "check that `uname` is on PATH and can run"
+    else if e.platform.used_fallback
     then Doctor.check "platform" Doctor.Status.st_warn e.platform.note "install a tag that ships this platform, or use the x86_64 artifacts"
     else Doctor.check "platform" Doctor.Status.st_ok
         (String.concat e.platform.platform (String.concat " (from '" (String.concat e.platform.uname_sm "')"))) ""
@@ -356,7 +366,7 @@ pub def Doctor.join_names (xs : List String) : String :=
     }
 
 def Doctor.sources_check (e : Doctor.Env) : Doctor.Check :=
-    let missing : List String := Doctor.missing_sources Doctor.source_names e.sources in
+    let missing : List String := Doctor.missing_sources Layout.source_names e.sources in
     if List.is_empty missing && e.root_manifest
     then Doctor.check "toolchain-root" Doctor.Status.st_ok "init, std, llvm, runtime and mote.toml are present" ""
     else
@@ -370,19 +380,21 @@ def Doctor.sources_check (e : Doctor.Env) : Doctor.Check :=
             "monadup install <tag> (re-running install repairs a source-less version directory)"
 
 def Doctor.link_check (e : Doctor.Env) : Doctor.Check :=
-    match e.monad_link {
-        Option.none => Doctor.check "monad-symlink" Doctor.Status.st_fail "bin/monad does not exist" "monadup use <tag>",
-        Option.some target =>
-            if e.monad_link_ok
-            then Doctor.check "monad-symlink" Doctor.Status.st_ok (String.concat "bin/monad -> " target) ""
-            else Doctor.check "monad-symlink" Doctor.Status.st_fail "bin/monad is dangling" "monadup use <tag>",
-    }
+    if e.link_is_symlink
+    then
+        if e.monad_link_ok
+        then Doctor.check "monad-symlink" Doctor.Status.st_ok
+            (String.concat "bin/monad -> " (match e.monad_link { Option.some t => t, Option.none => "" })) ""
+        else Doctor.check "monad-symlink" Doctor.Status.st_fail "bin/monad is dangling" "monadup use <tag>"
+    else if e.monad_link_ok
+    then Doctor.check "monad-symlink" Doctor.Status.st_ok "bin/monad is a regular file (not a symlink)" ""
+    else Doctor.check "monad-symlink" Doctor.Status.st_fail "bin/monad does not exist" "monadup use <tag>"
 
 def Doctor.path_check (e : Doctor.Env) : Doctor.Check :=
     if e.path_has_bin
     then Doctor.check "path" Doctor.Status.st_ok "the monad bin directory is on PATH" ""
     else Doctor.check "path" Doctor.Status.st_warn "the monad bin directory is not on PATH"
-        "export PATH=\"$HOME/.monad/bin:$PATH\""
+        (String.concat "export PATH=\"" (String.concat (Layout.bin_dir e.home) ":$PATH\""))
 
 def Doctor.overrides_check (e : Doctor.Env) : Doctor.Check :=
     if e.monad_root_bad

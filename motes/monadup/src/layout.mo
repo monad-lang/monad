@@ -35,16 +35,20 @@ def Layout.default_home (user_home : Option String) : Layout.Home :=
     let h : Layout.Home := { path := p, source := "default" } in h
 
 pub def Layout.downloads (h : Layout.Home) : String :=
-    String.concat h.path "/downloads"
+    String.concat (Layout.drop_trailing_slash h.path) "/downloads"
 
 pub def Layout.version_dir (h : Layout.Home) (tag : String) : String :=
     String.concat (Layout.downloads h) (String.concat "/" tag)
 
 pub def Layout.active_file (h : Layout.Home) : String :=
-    String.concat h.path "/active"
+    String.concat (Layout.drop_trailing_slash h.path) "/active"
 
 pub def Layout.bin_dir (h : Layout.Home) : String :=
-    String.concat h.path "/bin"
+    String.concat (Layout.drop_trailing_slash h.path) "/bin"
+
+/// The directories a nightly's sources asset unpacks into, plus the root
+/// `mote.toml` the compiler's toolchain discovery requires.
+pub def Layout.source_names : List String := ["init", "std", "llvm", "runtime"]
 
 pub def Layout.monad_link (h : Layout.Home) : String :=
     String.concat (Layout.bin_dir h) "/monad"
