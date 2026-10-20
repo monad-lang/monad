@@ -172,16 +172,18 @@ pub def theme_status_code (mode : Mode) : String :=
     match mode {
         Mode.auto => "\u{1b}[31;2;1m",
         Mode.plan => "\u{1b}[32;2m",
+        Mode.manual => "\u{1b}[90;2m",
         _ => "\u{1b}[33;2m",
     }
 
-/// The TUI status bar's style per mode: dim YELLOW for the ordinary
-/// modes (the statusbar's own voice), plan green, and the `auto`
-/// warning red -- the WARNING: prefix the status text already carries
-/// is what turns red.
+/// The TUI status bar's style per mode: dim GRAY for manual (the
+/// statusbar's own voice), dim yellow for `allow_edit` (its edit-enabled
+/// warning tint), plan green, and the `auto` warning red -- the WARNING:
+/// prefix the status text already carries is what turns red.
 pub def theme_status_style (mode : Mode) : TextStyle :=
     match mode {
         Mode.auto => { style_default with dim := true, fg := some Color.red, bold := true },
         Mode.plan => { style_default with dim := true, fg := some Color.green },
+        Mode.manual => { style_default with dim := true, fg := some Color.bright_black },
         _ => { style_default with dim := true, fg := some Color.yellow },
     }

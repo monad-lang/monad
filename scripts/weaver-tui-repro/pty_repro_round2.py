@@ -35,7 +35,7 @@ pump(5)
 t0 = tight(bytes(buf).decode(errors="replace"))
 checks = []
 checks.append(("S2 rounded border glyphs", "╭" in bytes(buf).decode(errors="replace")))
-checks.append(("S2 dim-yellow statusbar", "[33;2m" in bytes(buf).decode(errors="replace")))
+checks.append(("S2 dim-gray statusbar", "[90;2m" in bytes(buf).decode(errors="replace")))
 
 # 3 turns -> transcript with history
 for i in range(8):

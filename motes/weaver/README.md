@@ -204,10 +204,10 @@ prefix -- separated from the reply by a blank line; the reply is plain.
 The remaining lines classify by semantic prefix: `[running]` rows dim
 cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
 `+` rows green, the Ctrl+C hint dim. Old sessions that stored the v1
-`you:`/`assistant:` prefixes migrate on read. The status bar is dim YELLOW --
-the one place that reads as chrome, not content -- GREEN in plan mode
-(the read-only trust state) and red while `auto` mode is on (the trust
-warning). Borders are dim. Both UIs use
+`you:`/`assistant:` prefixes migrate on read. The status bar is dim GRAY in
+manual mode (the one place that reads as chrome, not content), dim YELLOW
+in `allow_edit`, GREEN in plan mode (the read-only trust state) and red
+while `auto` mode is on (the trust warning). Borders are dim. Both UIs use
 the same classification (`theme.mo`: one LineClass enum, rendered by
 `class_style` in the TUI and `class_code` in dumb mode).
 
