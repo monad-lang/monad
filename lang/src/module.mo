@@ -67,6 +67,12 @@ use lib::typecheck::traverse {term_children}
 // exactly how `affine.mo`'s own doc on `check_def` prescribes.
 use lib::typecheck::usage {borrow_of_name_set, ctor_name_set}
 use lib::typecheck::affine {check_def}
+// The self-hosted twin of the Rust host's `use`-completeness gate
+// (`check_use_completeness`, core/src/term/module.rs): every name the
+// main module reaches from another module must be named in its own
+// `use` line. Enforced by `gate_use_completeness` below, at the same
+// load-level chokepoint as its host-side twin.
+use lib::use_completeness {use_completeness_errors}
 // `--verbose` per-module/per-stage trace (see `std/src/log.mo`'s own header
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
@@ -5061,6 +5067,107 @@ def gate_mote_targets (r : Result String LoadedModules) : IO (Result String Load
     }
 }
 
+// ─── `use` completeness (the host gate's self-hosted twin) ───────────
+//
+// Every name the MAIN module reaches from another loaded module must be
+// named in its own `use` line -- unless the owner is ambient (prelude/
+// init/std closure), the consumer itself, an `open`ed namespace, or the
+// selection a `use M {names}` line spells out. This is the same rule
+// core/src/term/module.rs's `check_use_completeness` enforces on every
+// load; the walk itself lives in `lang/use_completeness.mo` (why it is
+// a separate module rather than a `lib::module` import: this file is
+// the one importing it, so the reverse edge would be a cycle).
+
+/// Parse source text WITHOUT the load's macro expansion: the exact
+/// parse `parse_all_decls` runs, minus `expand_decls`. The completeness
+/// walk must see only what THIS file writes -- expansion inlines a
+/// decl-gen template's body into the consumer's own decl list, and
+/// walking those inlined names would report reaches no `use` line could
+/// ever sensibly name. `Option.none` on parse failure: a file that does
+/// not parse fails below with a real diagnostic; the gate has nothing
+/// to add there.
+def pre_expansion_parse (src : String) : Option (List Decl) :=
+    match decls_parser_located src {
+        ParseResult.success _ decls => Option.some decls,
+        ParseResult.fail _ => Option.none,
+    }
+
+/// The pre-expansion decls of the main module: the buffer a language
+/// server handed down when there is one, the file on disk otherwise.
+#[partial]
+def pre_expansion_decls (source : Option String) (file_path : String) : IO (Option (List Decl)) := do {
+    match source {
+        Option.some src => return (pre_expansion_parse src),
+        Option.none => do {
+            let read : Result StreamError String <- IO.read_file (Path.path file_path);
+            match read {
+                Result.err _ => return Option.none,
+                Result.ok src => return (pre_expansion_parse src),
+            }
+        },
+    }
+}
+
+/// The loaded world as the completeness walk wants it: every loaded
+/// module's path paired with its own stored (already load-expanded)
+/// decl list. The main module's stored list is what folds the load-time
+/// expansion's DECLARED names into the consumer's own-name set; the
+/// dependency lists build the declaration index and the ambient closure.
+#[partial]
+def world_of_loaded_go (mods : List ModuleInfo) (acc : List (Pair ModulePath (List Decl))) : List (Pair ModulePath (List Decl)) :=
+    match mods {
+        List.empty => acc,
+        List.cons m rest =>
+            world_of_loaded_go rest
+                (List.cons (Pair.pair m.path m.decl_list) acc),
+    }
+
+#[partial]
+def world_of_loaded (loaded : LoadedModules) : List (Pair ModulePath (List Decl)) :=
+    world_of_loaded_go (get_loaded_all loaded) List.empty
+
+/// The pure half of the gate: the walk's findings turned into the
+/// load's own result, first-error-wins.
+def apply_completeness_errors (loaded : LoadedModules) (main : ModuleInfo) (pre : List Decl) : Result String LoadedModules :=
+    match use_completeness_errors main.file_path main.path pre main.decl_list (world_of_loaded loaded) {
+        List.empty => Result.ok loaded,
+        List.cons e _ => Result.err e,
+    }
+
+/// Turn the first `use`-incompleteness finding, if any, into the load's
+/// own failure. One error, not all of them, matching `gate_declared_deps`
+/// and `gate_mote_targets`: the loader's `Result` carries a single
+/// message, and the first finding names a real missing `use` entry.
+///
+/// Only the MAIN module is judged, exactly like the host gate -- a
+/// dependency's own `use` lines are checked when IT is the target of a
+/// load. The main module's own stored decl list is passed as the
+/// expanded decls so the walk folds every declared name the load-time
+/// expansion produced into the consumer's own-name set.
+#[partial]
+def gate_use_completeness (source : Option String) (r : Result String LoadedModules) : IO (Result String LoadedModules) := do {
+    match r {
+        Result.err e => return (Result.err e),
+        Result.ok loaded => do {
+            let main : ModuleInfo := get_loaded_main loaded;
+            let pre_opt : Option (List Decl) <- pre_expansion_decls source main.file_path;
+            match pre_opt {
+                Option.none => return (Result.ok loaded),
+                Option.some pre => do {
+                    // The same `lib`-alias rewrite the load itself ran
+                    // (`load_module_with_info`): a `use lib::x` in the
+                    // consumer must key the selection map by the RESOLVED
+                    // mote path (`<mote>::x`), which is what the world's
+                    // owner paths are keyed by.
+                    let rewritten : List Decl <-
+                        resolve_lib_alias_decls (extract_directory main.file_path) pre;
+                    return (apply_completeness_errors loaded main rewritten)
+                },
+            }
+        }
+    }
+}
+
 // --- Native link libraries (package-system.md 2a, `[link] libs`) -----
 
 /// The C libraries a whole program links against: the union of every
@@ -5995,7 +6102,12 @@ def elaborate_loaded_modules_cached_go (file_path : String) (check_deps : Bool) 
     // independently revertable, so a bisect separates a bad dependency check
     // from a bad target check.
     let checked_deps <- gate_declared_deps lc.loaded;
-    let loaded_result <- gate_mote_targets checked_deps;
+    let targetted_result <- gate_mote_targets checked_deps;
+    // The completeness gate needs the ORIGINAL source (pre-expansion
+    // decls), so it runs here -- after the manifest gates, before any
+    // elaboration work, and on the main module only, exactly like its
+    // host-side twin.
+    let loaded_result <- gate_use_completeness source targetted_result;
     let out_cache : ModuleInfoCache := lc.cache;
     let _t_load_done : I64 <- bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;
     // Annotated local, never a bare literal in `return` position -- see
