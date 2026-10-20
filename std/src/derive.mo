@@ -8,13 +8,13 @@
 /// the same target is a compile error.
 ///
 /// All four are ported to the reflection-as-data kernel (`init/meta.mo`'s
-/// `TypeInfo`/`Expr`/`Decl` values + `core/src/eval/meta_compile.rs`'s
+/// `TypeInfo`/`Expr`/`MetaDecl` values + `core/src/eval/meta_compile.rs`'s
 /// `MetaEvalContext`, invoked via the `reflect_type_info!` intrinsic) —
 /// see `plans/review-and-reduce-the-greedy-nest.md`: each `derive_*`
 /// stays an ordinary `defmacro`/decl-gen wrapper (so `derive_*!`/
 /// `#[derive ...]` dispatch is completely unchanged), but its BODY is now
 /// just `reflect_type_info! T derive_*_meta`, splicing in the result of
-/// CALLING an ordinary `TypeInfo -> List Decl` function, evaluated for
+/// CALLING an ordinary `TypeInfo -> List MetaDecl` function, evaluated for
 /// real (arbitrary Monad computation — `List.map`/`match`/recursion), not
 /// template-substituted — rather than composing built-in per-constructor/
 /// per-field dispatch intrinsics. The OLDER 5-intrinsic kernel these
@@ -23,15 +23,15 @@
 /// since been deleted outright — see `core/src/eval/macro_expand.rs`'s
 /// `BUILTIN_INTRINSICS` doc comment for the current (`reflect_type_info!`-
 /// only) design.
-use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MatchArm, Decl}
+use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaDecl}
 
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}
 open FieldInfo {field_info}
 open Expr {e_var, e_str, e_bool, e_app, e_lam, e_if, e_match, e_ctor}
-open MatchArm {match_arm}
-open Param {meta_param}
-open Decl {d_def, d_instance}
+open MetaMatchArm {match_arm}
+open MetaParam {meta_param}
+open MetaDecl {d_def, d_instance}
 
 def field_name_of (field : FieldInfo) : String :=
     match field { field_info name typ attrs default => name }
@@ -63,7 +63,7 @@ def rebuild_field (target : String) (field_name : String) : Expr :=
     if field_name == target then e_var "v" else e_var field_name
 
 /// One field -> its `Lens`-typed `def`, named `<Type>.<field>`.
-def lens_field_decl (type_name : String) (ctor_name : String) (field_names : List String) (field : FieldInfo) : Decl :=
+def lens_field_decl (type_name : String) (ctor_name : String) (field_names : List String) (field : FieldInfo) : MetaDecl :=
     match field {
         field_info fname ftyp fattrs fdefault =>
             d_def
@@ -75,8 +75,8 @@ def lens_field_decl (type_name : String) (ctor_name : String) (field_names : Lis
     }
 
 /// `derive_lens_meta`'s work for one already-known-single constructor:
-/// one `Decl` per field.
-def lens_decls_for_ctor (type_name : String) (ctor : CtorInfo) : List Decl :=
+/// one `MetaDecl` per field.
+def lens_decls_for_ctor (type_name : String) (ctor : CtorInfo) : List MetaDecl :=
     match ctor {
         ctor_info ctor_name fields =>
             let field_names := List.map field_name_of fields in
@@ -90,7 +90,7 @@ def lens_decls_for_ctor (type_name : String) (ctor : CtorInfo) : List Decl :=
 /// exactly one shape; a multi-constructor type generates nothing (silent,
 /// matching this port's scope — see `init.optics`'s `Prism` for sum-type
 /// variant access instead).
-pub def derive_lens_meta (info : TypeInfo) : List Decl :=
+pub def derive_lens_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             match ctors {
@@ -158,7 +158,7 @@ def debug_arm_body (type_name : String) (ctor_name : String) (is_single : Bool) 
     }
 
 /// One constructor -> its whole `debug` match arm.
-def debug_ctor_arm (type_name : String) (is_single : Bool) (ctor : CtorInfo) : MatchArm :=
+def debug_ctor_arm (type_name : String) (is_single : Bool) (ctor : CtorInfo) : MetaMatchArm :=
     match ctor {
         ctor_info ctor_name fields =>
             let field_names := List.map field_name_of fields in
@@ -182,7 +182,7 @@ def is_single_ctor_list (ctors : List CtorInfo) : Bool :=
 /// Every field's own type must have a `Debug` instance in scope (`Debug`
 /// is applied recursively, field by field) — `std/debug.mo` ships base
 /// instances for `String`/`I64`/`Bool`.
-pub def derive_debug_meta (info : TypeInfo) : List Decl :=
+pub def derive_debug_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             let is_single := is_single_ctor_list ctors in
@@ -206,7 +206,7 @@ defmacro derive_debug T := decls {
 /// just threads a running `I64` index through an `List.map`-like walk, so
 /// each per-pair handler decides its own behaviour from `i`/`j` directly
 /// (no separate "diff" callback needed).
-def map_indexed_ctor_arms (i_start : I64) (f : I64 -> CtorInfo -> MatchArm) (ctors : List CtorInfo) : List MatchArm :=
+def map_indexed_ctor_arms (i_start : I64) (f : I64 -> CtorInfo -> MetaMatchArm) (ctors : List CtorInfo) : List MetaMatchArm :=
     match ctors {
         empty => List.empty,
         cons c tail => List.cons (f i_start c) (map_indexed_ctor_arms (i_start + 1) f tail),
@@ -231,7 +231,7 @@ def and_fold (pieces : List Expr) : Expr :=
 /// `derive_beq`'s `beq`: same constructor (`i == j`) folds field-wise
 /// equality; different constructors are never equal, regardless of
 /// declaration order.
-def beq_inner_arm (i : I64) (field_names_a : List String) (j : I64) (ctor_b : CtorInfo) : MatchArm :=
+def beq_inner_arm (i : I64) (field_names_a : List String) (j : I64) (ctor_b : CtorInfo) : MetaMatchArm :=
     match ctor_b {
         ctor_info ctor_b_name fields_b =>
             let b_binders := List.map (prefixed "b_") (List.map field_name_of fields_b) in
@@ -243,7 +243,7 @@ def beq_inner_arm (i : I64) (field_names_a : List String) (j : I64) (ctor_b : Ct
 /// binds `a`'s fields (`a_`-prefixed, to stay distinct from `b`'s own
 /// binders when the same constructor is matched on both sides), then
 /// matches `b` against every constructor in turn.
-def beq_outer_arm (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : MatchArm :=
+def beq_outer_arm (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : MetaMatchArm :=
     match ctor_a {
         ctor_info ctor_a_name fields_a =>
             let field_names_a := List.map field_name_of fields_a in
@@ -261,7 +261,7 @@ def beq_outer_arm (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : Ma
 /// applied recursively, field by field) — `init/prelude.mo` and
 /// `init/number.mo`/`init/string.mo` ship base instances for the numeric
 /// types, `Bool`, `String`, and `Nat`.
-pub def derive_beq_meta (info : TypeInfo) : List Decl :=
+pub def derive_beq_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             let arms := map_indexed_ctor_arms 0 (beq_outer_arm ctors) ctors in
@@ -311,7 +311,7 @@ def gt_chain (field_names : List String) : Expr :=
 /// walk when `i == j`; otherwise declaration order alone decides —
 /// `diff_lt_is_true` is `true` for `lt` (an earlier-declared constructor
 /// sorts lower) and `false` for `gt` (its mirror).
-def bord_inner_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (i : I64) (field_names_a : List String) (j : I64) (ctor_b : CtorInfo) : MatchArm :=
+def bord_inner_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (i : I64) (field_names_a : List String) (j : I64) (ctor_b : CtorInfo) : MetaMatchArm :=
     match ctor_b {
         ctor_info ctor_b_name fields_b =>
             let b_binders := List.map (prefixed "b_") (List.map field_name_of fields_b) in
@@ -324,7 +324,7 @@ def bord_inner_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (i 
 
 /// The outer (`a`) match arm for one constructor of one of `derive_bord`'s
 /// `lt`/`gt` methods — same binding shape as `beq_outer_arm`.
-def bord_outer_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : MatchArm :=
+def bord_outer_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : MetaMatchArm :=
     match ctor_a {
         ctor_info ctor_a_name fields_a =>
             let field_names_a := List.map field_name_of fields_a in
@@ -335,7 +335,7 @@ def bord_outer_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (al
 
 /// One of `derive_bord`'s two methods (`lt`/`gt`), built from its own
 /// field-priority chain function and declaration-order tiebreak sense.
-def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (type_name : String) (ctors : List CtorInfo) : Decl :=
+def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (type_name : String) (ctors : List CtorInfo) : MetaDecl :=
     let arms := map_indexed_ctor_arms 0 (bord_outer_arm chain_fn diff_lt_is_true ctors) ctors in
     d_def name [meta_param "a" (e_var type_name), meta_param "b" (e_var type_name)] (e_var "Bool")
         (e_match (e_var "a") arms)
@@ -348,7 +348,7 @@ def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_tru
 ///
 /// Every field's own type must have a `BOrd` instance in scope, same
 /// requirement as `derive_beq`'s `BEq` above.
-pub def derive_bord_meta (info : TypeInfo) : List Decl :=
+pub def derive_bord_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             [d_instance "BOrd" (e_var type_name)

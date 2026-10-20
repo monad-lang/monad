@@ -1,6 +1,6 @@
 //! Conversions between the compiler's own `Inductive`/`Term` and the
 //! Monad-level reflection/mini-AST values `init/meta.mo` defines
-//! (`TypeInfo`/`CtorInfo`/`FieldInfo`/`Expr`/`MatchArm`/`Param`/`Decl`) —
+//! (`TypeInfo`/`CtorInfo`/`FieldInfo`/`Expr`/`MetaMatchArm`/`MetaParam`/`MetaDecl`) —
 //! see `plans/review-and-reduce-the-greedy-nest.md`.
 //!
 //! Two directions:
@@ -520,13 +520,13 @@ fn reify_match_arm(
   v: Value,
   inductives: &Map<NamePath, Inductive>,
 ) -> Result<crate::term::MatchCase, MacroError> {
-  let induct = find_inductive(inductives, "MatchArm")?;
+  let induct = find_inductive(inductives, "MetaMatchArm")?;
   match v {
     Value::Con { tag, mut args } => {
       let ctor_name = ctor_name_for_tag(induct, tag)?;
       if ctor_name != "match_arm" {
         return Err(MacroError::Generic(format!(
-          "meta: expected a MatchArm value, got constructor `{ctor_name}`"
+          "meta: expected a MetaMatchArm value, got constructor `{ctor_name}`"
         )));
       }
       let arm_ctor_name = expect_str(pop_front(&mut args)?)?;
@@ -539,23 +539,23 @@ fn reify_match_arm(
       Ok(case(id(&arm_ctor_name), binders, body))
     }
     other => Err(MacroError::Generic(format!(
-      "meta: expected a MatchArm value, got: {other:?}"
+      "meta: expected a MetaMatchArm value, got: {other:?}"
     ))),
   }
 }
 
-/// One `Param` value -> `(name, type Term)`.
+/// One `MetaParam` value -> `(name, type Term)`.
 fn reify_param_value(
   v: Value,
   inductives: &Map<NamePath, Inductive>,
 ) -> Result<(Identifier, Term), MacroError> {
-  let induct = find_inductive(inductives, "Param")?;
+  let induct = find_inductive(inductives, "MetaParam")?;
   match v {
     Value::Con { tag, mut args } => {
       let ctor_name = ctor_name_for_tag(induct, tag)?;
       if ctor_name != "meta_param" {
         return Err(MacroError::Generic(format!(
-          "meta: expected a Param value, got constructor `{ctor_name}`"
+          "meta: expected a MetaParam value, got constructor `{ctor_name}`"
         )));
       }
       let name = expect_str(pop_front(&mut args)?)?;
@@ -563,7 +563,7 @@ fn reify_param_value(
       Ok((id(&name), typ))
     }
     other => Err(MacroError::Generic(format!(
-      "meta: expected a Param value, got: {other:?}"
+      "meta: expected a MetaParam value, got: {other:?}"
     ))),
   }
 }
@@ -574,13 +574,13 @@ fn reify_def_value(
   v: Value,
   inductives: &Map<NamePath, Inductive>,
 ) -> Result<crate::term::Def, MacroError> {
-  let induct = find_inductive(inductives, "Decl")?;
+  let induct = find_inductive(inductives, "MetaDecl")?;
   match v {
     Value::Con { tag, mut args } => {
       let ctor_name = ctor_name_for_tag(induct, tag)?;
       if ctor_name != "d_def" {
         return Err(MacroError::Generic(format!(
-          "meta: expected a Decl.d_def value, got constructor `{ctor_name}`"
+          "meta: expected a MetaDecl.d_def value, got constructor `{ctor_name}`"
         )));
       }
       let name = expect_str(pop_front(&mut args)?)?;
@@ -611,14 +611,14 @@ fn reify_def_value(
       ))
     }
     other => Err(MacroError::Generic(format!(
-      "meta: expected a Decl.d_def value, got: {other:?}"
+      "meta: expected a MetaDecl.d_def value, got: {other:?}"
     ))),
   }
 }
 
-/// One `Decl` value -> a real `core::term::Decl`.
+/// One `MetaDecl` value -> a real `core::term::Decl`.
 fn reify_decl_value(v: Value, inductives: &Map<NamePath, Inductive>) -> Result<Decl, MacroError> {
-  let induct = find_inductive(inductives, "Decl")?;
+  let induct = find_inductive(inductives, "MetaDecl")?;
   match &v {
     Value::Con { tag, .. } => {
       let ctor_name = ctor_name_for_tag(induct, *tag)?;
@@ -656,17 +656,17 @@ fn reify_decl_value(v: Value, inductives: &Map<NamePath, Inductive>) -> Result<D
           Err(MacroError::Generic(message))
         }
         other => Err(MacroError::Generic(format!(
-          "meta: unknown Decl constructor `{other}`"
+          "meta: unknown MetaDecl constructor `{other}`"
         ))),
       }
     }
     other => Err(MacroError::Generic(format!(
-      "meta: expected a Decl value, got: {other:?}"
+      "meta: expected a MetaDecl value, got: {other:?}"
     ))),
   }
 }
 
-/// A `List Decl` value -> real `Vec<Decl>` — the top-level reify entry
+/// A `List MetaDecl` value -> real `Vec<Decl>` — the top-level reify entry
 /// point for a decl-position "meta" invocation (e.g. `derive_lens`'s
 /// result).
 pub fn reify_decls_value_to_decls(

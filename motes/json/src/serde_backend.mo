@@ -22,7 +22,7 @@ use json::json {
     Json.get_num_i64, Json.get_str, Json.get_array, Json.get_object,
     Json.object_get,
 }
-use init::meta {TypeInfo, Decl, Expr}
+use init::meta {TypeInfo, MetaDecl, Expr}
 
 def json_pairs_to_object (fields : List (Pair String Json)) (acc : BTreeMap String Json) : BTreeMap String Json :=
     match fields {
@@ -85,14 +85,14 @@ pub def json_de_get_field (d : Json) (name : String) : Result String (Option Jso
 // mode is a wildly misleading unrelated panic (`uses unloaded module:
 // init.copy`), not a clean "duplicate name" error. One definition here,
 // `pub`, is the fix.
-pub def derive_json_serialize_meta (info : TypeInfo) : List Decl :=
+pub def derive_json_serialize_meta (info : TypeInfo) : List MetaDecl :=
     derive_serialize_meta "json" (Expr.e_var "Json") info
 
 defmacro derive_json_serialize T := decls {
     reflect_type_info! T derive_json_serialize_meta
 }
 
-pub def derive_json_deserialize_meta (info : TypeInfo) : List Decl :=
+pub def derive_json_deserialize_meta (info : TypeInfo) : List MetaDecl :=
     derive_deserialize_meta "json" (Expr.e_var "Json") info
 
 defmacro derive_json_deserialize T := decls {

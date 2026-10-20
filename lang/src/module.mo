@@ -46,6 +46,7 @@ use lib::typecheck::meta_reflect {
 use lib::scope {
   OpenAlias,
   add_constraint_dict_params_decl_groups, add_constraint_dict_params_decls,
+  bare_aliases_merge,
   build_scope_from_decls, build_scope_from_groups, decl_groups_flatten,
   collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   dict_param_name,
@@ -1615,6 +1616,11 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // `Option.none` fallback for anything not declared in the file
         // being checked.
         def_sigs := HashMap.merge_buckets sd1.def_sigs sd2.def_sigs,
+        // A UNION of owner lists (`bare_aliases_merge`), not
+        // `merge_buckets`: the values are lists, and a key noted by
+        // both inputs would phantom-ambiguate the miss fallbacks that
+        // read the map.
+        bare_aliases := bare_aliases_merge sd1.bare_aliases sd2.bare_aliases,
     }
 
 /// Merge lists of ScopeData

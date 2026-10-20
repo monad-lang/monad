@@ -94,13 +94,19 @@ def main (args : List String) : IO I64 := do {
 /// only exercises whether `make_pair` compiles+links+runs without
 /// crashing (this fix's actual scope) -- the struct's own field
 /// correctness is the SEPARATE, still-open bug tracked in that doc.
+///
+/// The fixture's type is `PhiPair`, not `Pair`: `init/copy.mo` already
+/// owns a `Pair` whole-program, and the whole-program collision gate
+/// refuses a bare reference with two owners rather than pick by load
+/// order. The other fixtures below avoid prelude names for the same
+/// reason.
 #[test]
 def test_let_body_void_struct_literal : IO Bool :=
-    let source := r#"struct Pair {
+    let source := r#"struct PhiPair {
     a : I64,
     b : I64,
 }
-def make_pair (n : I64) : Pair :=
+def make_pair (n : I64) : PhiPair :=
     let x := if I64.gt n 0 then 1 else 2 in
     { a := x, b := n }
 def main (args : List String) : IO I64 := do {

@@ -17,13 +17,13 @@ use lang::types {
 }
 use lang::scope {
   ClassMethodRef, DictBinding, bind_term_vars, build_dict_field_projection_checked,
-  build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
+  build_scope_def, bare_map_lookup, carrier_bindings, class_method_declared_type, class_method_ref,
   class_default_carrier, class_name_eq,
   class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
   method_carrier_hint, method_sig_carrier,
   dict_hint_marker_terms, dict_hint_name, dict_param_name, emitted_dict_constraints,
   find_constructor_in_inductive, find_matching_instance,
-  flatten_call_spine, inductive_has_constructor, instance_module_prefix,
+  flatten_call_spine, identifier_tail, inductive_has_constructor, instance_module_prefix,
   instance_wildcard_names, list_append, mangle_instance_dict_name,
   mangle_instance_method_name, mangled_to_identifier, param_names, rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
@@ -274,11 +274,30 @@ def is_uninformative_carrier (t : Term) : Bool :=
 /// (Phase 3's own `__dict_ClassName` naming, `lang.scope`'s
 /// `dict_param_name`)? D5 forwarding -- inside a still-generic
 /// constrained def's own body, the concrete instance isn't known yet,
-/// only a dict VALUE already bound as a parameter.
+/// only a dict VALUE already bound as a parameter. The exact-name lookup
+/// keys off `cls_name`'s OWN spelling, which is the class's qualified
+/// registration name since item 5.1 -- while the param itself was NAMED
+/// from the constraint's bare source spelling (constraints are never
+/// rewritten), so retry by comparing each `__dict_*` local's own
+/// recovered class via `class_name_eq` -- the same tolerance every other
+/// D5 site (`lookup_dict_binding`, the syntactic pass's own tier) already
+/// uses; without the retry, D5 silently misses and D4 emits a direct
+/// call to the generic instance's method def with no dict argument.
 def local_dict_for_class (cls_name : NamePath) (locals : LocalScope) : Option Identifier :=
     match scope_find_local (Identifier.id (dict_param_name cls_name)) locals {
         Option.some lv => Option.some lv.name,
-        Option.none => Option.none,
+        Option.none => local_dict_by_class_eq cls_name (local_vars_flat locals),
+    }
+
+#[partial]
+def local_dict_by_class_eq (cls_name : NamePath) (vars : List LocalVar) : Option Identifier :=
+    match vars {
+        List.empty => Option.none,
+        List.cons lv rest =>
+            match dict_binding_class_of lv.name {
+                Option.some bcls => if class_name_eq bcls cls_name then Option.some lv.name else local_dict_by_class_eq cls_name rest,
+                Option.none => local_dict_by_class_eq cls_name rest,
+            },
     }
 
 #[partial]
@@ -2190,32 +2209,6 @@ def dotted_head_names_inductive (head : String) (scope : Scope) : Bool :=
         err _ => false,
     }
 
-/// `s` ends with `suffix`? Hand-rolled on `String.slice` rather than
-/// `String.ends_with` (`init/string.mo`), which reverses BOTH strings
-/// (`String.from_list (List.reverse (String.to_list s))`) -- this runs once
-/// per `def_refs` key in the scan below, and the scan is the only place a
-/// suffix test is needed.
-def str_ends_with (s : String) (suffix : String) : Bool :=
-    let slen : I64 := String.length s in
-    let plen : I64 := String.length suffix in
-    if I64.lt slen plen then false
-    else String.beq (String.slice s (slen - plen) plen) suffix
-
-/// Every `def_refs` KEY whose rendering ends in `suffix`, unordered (the
-/// caller only asks whether there is exactly one).
-#[partial]
-def def_keys_ending_with (pairs : List (Pair String ScopeDef)) (suffix : String) (acc : List String) : List String :=
-    match pairs {
-        List.empty => acc,
-        List.cons p rest =>
-            match p {
-                Pair.pair k _sd =>
-                    if str_ends_with k suffix
-                    then def_keys_ending_with rest suffix (List.cons k acc)
-                    else def_keys_ending_with rest suffix acc,
-            },
-    }
-
 /// The name `try_global_field_access` rebuilds a dotted access's subject
 /// under -- `head` as written when it resolves, else the ONE `def_refs` key
 /// that ends in `::head`.
@@ -2245,20 +2238,27 @@ def def_keys_ending_with (pairs : List (Pair String ScopeDef)) (suffix : String)
 /// name is precisely what qualification exists to keep apart, and the
 /// rewriter above (which resolves that case by the importing module's own
 /// `use`/`open`) is the only place with the information to choose.
+///
+/// The miss half consults `ScopeData.bare_aliases` (noted at
+/// registration) rather than scanning every `def_refs` key per miss --
+/// same unique-owner rule, one O(1) lookup.
 #[partial]
 def resolve_dotted_head (head : String) (scope : Scope) (locals : LocalScope) : Option String :=
     match scope_resolve_name (NameRef.nid (Identifier.id head)) scope locals {
         ok _ => Option.some head,
         err _ =>
             let g : ScopeData := scope_globals scope in
-            let suffix : String := String.concat "::" head in
-            match def_keys_ending_with (HashMap.to_list g.def_refs) suffix List.empty {
-                List.empty => Option.none,
-                List.cons k rest =>
-                    match rest {
-                        List.empty => Option.some k,
-                        List.cons _ _ => Option.none,
+            match bare_map_lookup head g.bare_aliases {
+                Option.some keys =>
+                    match keys {
+                        List.cons k rest =>
+                            match rest {
+                                List.empty => Option.some k,
+                                List.cons _ _ => Option.none,
+                            },
+                        List.empty => Option.none,
                     },
+                Option.none => Option.none,
             },
     }
 
@@ -2682,11 +2682,49 @@ def free_var_declared_typ (resolved_name : NamePath) (sig : Term) (dbg : DebugNa
         Option.none => qualified_con_ref_typ dbg sig scope,
     }
 
+/// A free variable's def lookup with item-5.1's bare-vs-qualified
+/// tolerance: the exact name first, then -- only on a miss, and only
+/// when the bare-name side table (`ScopeData.bare_aliases`, noted at
+/// registration) holds exactly one qualified owner -- the qualified
+/// spelling under which the whole-program scope actually registered
+/// it. Type/struct/class declarations are renamed by qualification
+/// (`qualify_one_decl_name`) while the rewriter deliberately leaves
+/// type annotations source-spelled, so a bare annotation head
+/// (`fn (p : Pair String Toml.Value) => ...`, checked as a term by
+/// `type_check_lam_inferring`) reaches here bare after the exact-only
+/// lookup misses. The unique-owner rule is the same ambiguity policy
+/// `resolve_dotted_head` and `scope_find_inductive`'s fallback already
+/// apply: two owners means a genuine miss, not a guess. The consult is
+/// a map lookup, not the per-miss `def_refs` key scan this originally
+/// was -- `def_refs` holds thousands of keys and a bare miss is the
+/// common case post-qualification, so the scan was a measured ~20x
+/// blowup of `elaborate_module_decls`.
+def resolve_free_var_def (id : Identifier) (scope : Scope) (locals : LocalScope) : Result ScopeError ScopeDef :=
+    let exact : Result ScopeError ScopeDef := scope_resolve_name (NameRef.nid id) scope locals in
+    match exact {
+        ok sd => ok sd,
+        err _ =>
+            let g : ScopeData := scope_globals scope in
+            let bare : String := match id { Identifier.id s => s } in
+            match bare_map_lookup bare g.bare_aliases {
+                Option.some keys =>
+                    match keys {
+                        List.cons k rest =>
+                            match rest {
+                                List.empty => scope_resolve_name (NameRef.nid (Identifier.id k)) scope locals,
+                                List.cons _ _ => exact,
+                            },
+                        List.empty => exact,
+                    },
+                Option.none => exact,
+            },
+    }
+
 def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match dbg {
         DebugName.named id =>
             let nref : NameRef := NameRef.nid id in
-            let result : Result ScopeError ScopeDef := scope_resolve_name nref scope locals in
+            let result : Result ScopeError ScopeDef := resolve_free_var_def id scope locals in
             match result {
                 ok sd => match sd {
                     mk resolved_name _ sig _ _ =>
@@ -4002,10 +4040,25 @@ def con_args_solve_typevars (scope : Scope) (p_args : List (Option Term)) (a_arg
 /// concrete types (registered by `build_scope_*`), and both look like
 /// `Term.var sentinel (DebugName.named ...)` -- so `solve_typevars`
 /// uses this as its "is this really a type variable?" gate.
+///
+/// Item 5.1: a def-body annotation's bare type spelling (`Counter` in
+/// `(c : Counter)`) is never alias-rewritten to its qualified form
+/// (`resolve_open_alias_def`'s `typ` policy, mirrored for body lam
+/// annotations), so in a qualified whole-program scope the def-table
+/// lookup below misses for a name that IS a registered concrete type
+/// -- its registration is `module::Name`. Retry the inductive table,
+/// whose unique-suffix fallback (`scope_data_find_inductive`) accepts
+/// the bare spelling when exactly one owner holds it. Ambiguous or
+/// unknown names still classify as type variables, so the gate stays
+/// conservative in the direction that only costs an ascription.
 #[partial]
 def is_scope_type_name (vid : Identifier) (scope : Scope) : Bool :=
     match scope_resolve_name (NameRef.nid vid) scope empty_locals {
-        err _ => false,
+        err _ =>
+            match scope_find_inductive (NamePath.mk (List.cons vid List.empty)) scope {
+                ok _ => true,
+                err _ => false,
+            },
         ok _ => true,
     }
 
@@ -6062,13 +6115,22 @@ def named_call_fields_of (a : Term) : Option (List StructLitField) :=
 /// build a resolved named call's own result type (`Term.var sentinel
 /// (DebugName.named ...)`), the same shape `type_check_struct_lit`
 /// returns for an explicitly-annotated literal.
+///
+/// The `identifier_tail` strip is load-bearing post-qualification: a
+/// qualified decl name reaches here as ONE segment (`prelude::Bool`),
+/// so without it every type head the checker synthesizes from a
+/// registered inductive carries the qualified spelling while source
+/// annotations keep the bare one (`: Bool`) -- and `unify`'s exact
+/// comparison then rejects the same type as a mismatch, swallowing
+/// whole defs (a match arm returning a bare `false` vs the def's own
+/// declared `Bool` was the live repro).
 def inductive_bare_name (ind : Inductive) : Identifier :=
     match ind {
         Inductive.mk name _ _ _ _ _ =>
             match name {
                 NamePath.mk ids =>
                     match list_last ids {
-                        Option.some id => id,
+                        Option.some id => Identifier.id (identifier_tail id),
                         Option.none => Identifier.id "?",
                     }
             }

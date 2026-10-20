@@ -3102,6 +3102,19 @@ pub struct ScopeData {
     // constraints, so the checker needs them by name. Side-table pattern
     // of `def_params`/`def_sigs` above; keyed by the resolved name.
     def_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
+    // Every registered name's BARE spelling (`prelude::Monad` ->
+    // `Monad`) -> the qualified keys that own it. The read side of
+    // item 5.1's bare-vs-qualified tolerance: `scope_data_find_
+    // inductive`'s and `resolve_free_var_def`'s miss fallbacks consult
+    // this map (one O(1) lookup) instead of scanning every
+    // inductive/def key per miss -- post-qualification a bare miss is
+    // the COMMON case, and the scans were a measured ~20x blowup of
+    // `elaborate_module_decls`. One owner key resolves the miss; an
+    // empty or 2+-owner list is a genuine miss/ambiguity (never a
+    // guess), the same policy the per-miss scans already used.
+    // Populated by `scope_data_note_bare` at every registration site
+    // (`scope_data_add_def`/`_inductive`/`_class`/`_class_def`).
+    bare_aliases : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

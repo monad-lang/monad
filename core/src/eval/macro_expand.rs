@@ -556,7 +556,10 @@ pub fn expand_macros(
   // `init.meta`'s `d_def`, failing `check lang` even after the eval-side
   // capture was scoped. Scoping here too makes the reify see exactly
   // `init.meta`'s `Decl`/`Param`/`MatchArm`/`Expr`. The current module's
-  // own types (above) still take priority via `or_insert`.
+  // own types (above) still take priority via `or_insert`. (The
+  // meta-language types are `MetaDecl`/`MetaParam`/`MetaMatchArm` since
+  // the whole-program-qualification rename, so the `lang`-side collision
+  // is gone; the closure scoping stays as the general guard.)
   let closure_loaded = super::meta_compile::dep_closure_loaded(loaded, &current_decls)?;
   for (path, induct) in collect_loaded_inductives(&closure_loaded) {
     inductives.entry(path).or_insert(induct);

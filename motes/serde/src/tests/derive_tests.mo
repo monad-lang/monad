@@ -1,5 +1,5 @@
 use serde::derive {derive_serialize_meta, derive_deserialize_meta}
-use init::meta {TypeInfo, Decl, Expr}
+use init::meta {TypeInfo, MetaDecl, Expr}
 use serde::tests::toy_format {Toy}
 use std::list {List.length}
 
@@ -18,14 +18,14 @@ struct Point {
     y : I64,
 }
 
-def derive_toy_serialize_meta (info : TypeInfo) : List Decl :=
+def derive_toy_serialize_meta (info : TypeInfo) : List MetaDecl :=
     derive_serialize_meta "toy" (Expr.e_var "Toy") info
 
 defmacro derive_toy_serialize T := decls {
     reflect_type_info! T derive_toy_serialize_meta
 }
 
-def derive_toy_deserialize_meta (info : TypeInfo) : List Decl :=
+def derive_toy_deserialize_meta (info : TypeInfo) : List MetaDecl :=
     derive_deserialize_meta "toy" (Expr.e_var "Toy") info
 
 defmacro derive_toy_deserialize T := decls {

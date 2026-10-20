@@ -102,8 +102,11 @@ impl MetaEvalContext {
     // and `derive_cli_meta`'s `open`-aliased `match_arm`/`d_def`/
     // `meta_param` references lowered to `GlobalDef::Unresolved`, failing
     // `check lang` (the self-hosted `test` path resolves the same names
-    // through its own scope mechanism and was unaffected). `derive_cli`
-    // is the only macro actually invoked in `lang/`, and its
+    // through its own scope mechanism and was unaffected). (The
+    // meta-language types are `MetaMatchArm`/`MetaDecl`/`MetaParam` since
+    // the whole-program-qualification rename, so that exact collision is
+    // gone; the closure scoping stays as the general guard.)
+    // `derive_cli`
     // `derive_cli_meta` only depends on `clap.args` (→ `std.list`,
     // `init.meta`), so the closure excludes the colliding compiler
     // modules and the meta-eval ends up seeing exactly the `loaded` set

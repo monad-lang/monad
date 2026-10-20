@@ -15,14 +15,14 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::bench {Bench.now}
 use lang::types {
-  Attribute, Decl, Def, Identifier, ModulePath, NamePath, StructField,
-  TypeConstraint, hole, many, named, package_private, sentinel,
+  Attribute, Decl, Def, Identifier, LocalScope, ModulePath, NamePath, Scope, StructField,
+  TypeConstraint, binder_named, hole, lam, many, named, package_private, sentinel,
   module_path_to_string_colon, show_identifier, show_module_path, show_name_path, use_items, use_name, var,
 }
-use lib::module {ModuleInfo, bench_step}
+use lib::module {ModuleInfo, bench_step, best_effort_failed, elaborate_module_decls_reporting}
 use lib::scope {
   OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
-  collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
+  build_scope_from_decls, collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
 }
 use lang::codegen::free_names {collect_referenced_names, free_names_of_term}
 use lib::codegen::symbols {bare_modpath, bare_npath, symbol_identifier, unqualify_def_name}
@@ -32,18 +32,44 @@ use lib::codegen::util {
 use std::map {HashMap}
 use std::list {List.intercalate, List.length}
 
-/// A decl's own declared def name, if it is a `Decl.def_d`. The name may
-/// itself contain dots (`def String.beq` parses as a SINGLE-segment
-/// `NamePath` whose Identifier is the literal text `"String.beq"` --
-/// see `dotted_def_name` in `lang/parser.mo`), so this deliberately does
-/// not care how many dots are in it: what matters is that the name is
-/// the whole of what the source declared, and qualification prepends the
+/// A decl's own declared name, for every top-level decl kind item 5.1
+/// qualifies: `def_d`, `inductive_d`, `struct_d`, `class_d`. (`instance_d`
+/// is deliberately excluded here -- it already qualifies unconditionally
+/// in `qualify_one_decl_name` without consulting the owners/ambiguity
+/// machinery this feeds, matching how an instance is never referenced by
+/// its own name, only dispatched structurally.) The name may itself
+/// contain dots (`def String.beq` parses as a SINGLE-segment `NamePath`
+/// whose Identifier is the literal text `"String.beq"` -- see
+/// `dotted_def_name` in `lang/parser.mo`), so this deliberately does not
+/// care how many dots are in it: what matters is that the name is the
+/// whole of what the source declared, and qualification prepends the
 /// module path to it wholesale.
+///
+/// There is exactly ONE bare-name namespace in this language, not one
+/// per decl kind -- types are terms, so a `def`, a `type`, a `struct`,
+/// and a `class` are all just names a bare `Term.var`/`NameRef` can
+/// reference, resolved identically by the checker. A def and a type
+/// sharing a bare name across two modules is therefore genuinely
+/// ambiguous, the same as two defs would be -- this folds all four
+/// kinds into the one owners/ambiguity/rename pipeline `decl_def_name`
+/// already fed, rather than building a parallel, kind-specific one.
 #[partial]
 def decl_def_name (d : Decl) : Option NamePath := match d {
     Decl.def_d dd =>
         match dd {
             Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => Option.some name,
+        },
+    Decl.inductive_d ind =>
+        match ind {
+            Inductive.mk name _params _typ _constructors _attrs _vis => Option.some name,
+        },
+    Decl.struct_d st =>
+        match st {
+            Struct.mk name _fields _attrs _vis => Option.some (bare_npath (show_identifier name)),
+        },
+    Decl.class_d cls =>
+        match cls {
+            Class.mk name _params _constraints _methods _vis => Option.some (bare_npath (show_identifier name)),
         },
     _ => Option.none,
 }
@@ -378,9 +404,10 @@ def ambiguous_declared_names_go (names : List String) (owners_map : HashMap Stri
             },
     }
 
-/// Rename every `Decl.def_d` in `decls` to its module-qualified name.
-/// Definitions only -- references are rewritten separately, through the
-/// existing alias rewriter.
+/// Rename every qualifiable top-level decl in `decls` to its
+/// module-qualified name (defs, instances, infix targets, and -- since
+/// item 5.1 -- inductives/structs/classes). References are rewritten
+/// separately, through the existing alias rewriter.
 #[partial]
 def qualify_decl_names (mpath : ModulePath) (renames : HashMap String String) (decls : List Decl) : List Decl := match decls {
     List.empty => List.empty,
@@ -394,6 +421,28 @@ def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String)
             Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
                 Decl.def_d (Def.mk (qualified_def_name mpath name) typ term_ constraints attrs vis params),
         },
+    // Item 5.1: type-level decls get the same unconditional
+    // own-module-qualifies-its-own-name treatment `def_d` already has --
+    // every reference to them, bare or otherwise, is rewritten
+    // separately by `resolve_open_alias_decls` against the SAME owners
+    // map this feeds (`decl_def_name`, above).
+    Decl.inductive_d ind =>
+        match ind {
+            Inductive.mk name params typ constructors attrs vis =>
+                Decl.inductive_d (Inductive.mk (qualified_def_name mpath name) params typ constructors attrs vis),
+        },
+    Decl.struct_d st =>
+        match st {
+            Struct.mk name fields attrs vis =>
+                Decl.struct_d (Struct.mk (Identifier.id (qualified_def_name_str mpath (bare_npath (show_identifier name))))
+                    fields attrs vis),
+        },
+    Decl.class_d cls =>
+        match cls {
+            Class.mk name params constraints methods vis =>
+                Decl.class_d (Class.mk (Identifier.id (qualified_def_name_str mpath (bare_npath (show_identifier name))))
+                    params constraints methods vis),
+        },
     // An instance carries the module it was declared in via its own
     // name, so `promote_instance_defs` (Stage 3, on the already-flat
     // decl list, where module identity is gone) can still qualify the
@@ -402,8 +451,21 @@ def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String)
     Decl.instance_d ins =>
         match ins {
             Instance.mk insname cls constraints args vis implicit_params defs =>
+                // `cls` names the class this instance implements -- a
+                // REFERENCE, not a declaration, so it sits in exactly the
+                // position `resolve_open_alias_decl` never rewrites (same
+                // reason `Def.typ` stays untouched -- see
+                // `scope_data_find_inductive`'s doc comment, lang/scope.mo).
+                // Item 5.1 qualifies the CLASS's own declaration, so
+                // without this `Instance.cls` would go on naming the
+                // class's bare pre-qualification spelling while every
+                // lookup of the class by name now answers with its
+                // qualified one -- rewrite it here, the same way
+                // `infix_d`'s target is rewritten just below, rather than
+                // relying solely on the lookup-side fallbacks that cover
+                // the general case.
                 Decl.instance_d (Instance.mk (Identifier.id (qualified_def_name_str mpath (bare_npath (show_identifier insname))))
-                    cls constraints args vis implicit_params defs),
+                    (rename_npath renames cls) constraints args vis implicit_params defs),
         },
     // An `infix (+) := I64.add` names its target by the SOURCE name, and
     // `resolve_infix_decls` (Stage 2) splices that name into every
@@ -918,6 +980,291 @@ def test_qualify_dotted_and_underscored_names_stay_distinct : IO Bool := do {
                 then list_contains_str names "m::String_a"
                 else false)
         },
+    }
+}
+
+// --- Collision matrix, item 5.0: type-level decls (inductive/struct/
+// class) are NOT qualified by `qualify_one_decl_name` today -- its match
+// has explicit arms only for `def_d`/`instance_d`/`infix_d`, falling
+// through `_ => d` unchanged for everything else (see that function's
+// own body, above). Two modules declaring the same-named type/struct/
+// class collide exactly the way def names used to before this file
+// existed (see this file's header comment, and the historical
+// `inductive_bare_name` crash it cites) -- these probes are RED until
+// item 5.1 extends `qualify_one_decl_name` to those variants.
+//
+// NOT covered here, deliberately: same-named CONSTRUCTOR in two
+// different types. That class of ambiguity is a DIFFERENT mechanism --
+// `Con`/`MatchCase` dispatch already keys by the owning inductive's
+// `NamePath` (stage 11.4, `unify-check-compile-test-elaboration.md`),
+// so a bare ctor-name collision across unrelated types is already
+// disambiguated downstream regardless of whether the INDUCTIVE's own
+// name is qualified here. Re-verify this still holds once 5.1 actually
+// renames inductives (a ctor's `typ_name` must track the rename).
+// Same-named CLASS + INSTANCE is also not a separate cell: `instance_d`
+// is already qualified (see the explicit arm above) -- only the class
+// itself is the gap, covered by the class probe below.
+
+#[partial]
+def qtest_type (name : String) : Decl :=
+    Decl.inductive_d (Inductive.mk (bare_npath name) List.empty Term.hole List.empty List.empty Visibility.package_private)
+
+#[partial]
+def qtest_struct (name : String) (fields : List StructField) : Decl :=
+    Decl.struct_d (Struct.mk (Identifier.id name) fields List.empty Visibility.package_private)
+
+#[partial]
+def qtest_class (name : String) : Decl :=
+    Decl.class_d (Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private)
+
+#[partial]
+def qtest_field (name : String) : StructField :=
+    StructField.mk (Identifier.id name) Term.hole Option.none Multiplicity.many
+
+#[partial]
+def qtest_type_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_type_names_of_decls (m.decl_list)) (qtest_type_names rest),
+    }
+
+#[partial]
+def qtest_type_names_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.inductive_d ind =>
+                match ind {
+                    Inductive.mk name _ _ _ _ _ => List.cons (show_name_path name) (qtest_type_names_of_decls rest),
+                },
+            _ => qtest_type_names_of_decls rest,
+        },
+}
+
+#[partial]
+def qtest_struct_entries (modules : List ModuleInfo) : List (Pair String (List String)) :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_struct_entries_of_decls (m.decl_list)) (qtest_struct_entries rest),
+    }
+
+#[partial]
+def qtest_struct_entries_of_decls (decls : List Decl) : List (Pair String (List String)) := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.struct_d st =>
+                match st {
+                    Struct.mk name fields _attrs _vis =>
+                        List.cons (Pair.pair (show_identifier name) (qtest_field_names fields)) (qtest_struct_entries_of_decls rest),
+                },
+            _ => qtest_struct_entries_of_decls rest,
+        },
+}
+
+#[partial]
+def qtest_field_names (fields : List StructField) : List String := match fields {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            StructField.mk name _typ _default _mult => List.cons (show_identifier name) (qtest_field_names rest),
+        },
+}
+
+#[partial]
+def qtest_struct_has_entry (entries : List (Pair String (List String))) (name : String) (field : String) : Bool :=
+    match entries {
+        List.empty => false,
+        List.cons e rest =>
+            match e {
+                Pair.pair n fs => if String.beq n name
+                    then list_contains_str fs field
+                    else qtest_struct_has_entry rest name field,
+            },
+    }
+
+#[partial]
+def qtest_class_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_class_names_of_decls (m.decl_list)) (qtest_class_names rest),
+    }
+
+#[partial]
+def qtest_class_names_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.class_d cls =>
+                match cls {
+                    Class.mk name _params _constraints _methods _vis => List.cons (show_identifier name) (qtest_class_names_of_decls rest),
+                },
+            _ => qtest_class_names_of_decls rest,
+        },
+}
+
+/// RED: both modules' `Foo` stay bare "Foo" after `qualify_modules` --
+/// the second silently collides with the first instead of becoming
+/// `a::Foo`/`b::Foo`.
+#[test]
+def test_qualify_same_named_type_in_two_modules_stays_distinct : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_type "Foo") List.empty);
+    let b := qtest_module "b" (List.cons (qtest_type "Foo") List.empty);
+    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => do {
+            let names := qtest_type_names ms;
+            return (if list_contains_str names "a::Foo"
+                then list_contains_str names "b::Foo"
+                else false)
+        },
+    }
+}
+
+/// Same probe, module list reversed -- the collision (or its fix) must
+/// not depend on load order.
+#[test]
+def test_qualify_same_named_type_module_order_swapped_stays_distinct : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_type "Foo") List.empty);
+    let b := qtest_module "b" (List.cons (qtest_type "Foo") List.empty);
+    let r <- qualify_modules false (List.cons b (List.cons a List.empty));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => do {
+            let names := qtest_type_names ms;
+            return (if list_contains_str names "a::Foo"
+                then list_contains_str names "b::Foo"
+                else false)
+        },
+    }
+}
+
+/// RED: two same-named structs with genuinely DIFFERENT fields must both
+/// survive, under their own qualified name, with their own field list
+/// intact (not merged, not overwritten by the other's).
+#[test]
+def test_qualify_same_named_struct_with_different_fields_stays_distinct : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_struct "Holder" (List.cons (qtest_field "x") List.empty)) List.empty);
+    let b := qtest_module "b" (List.cons (qtest_struct "Holder" (List.cons (qtest_field "y") List.empty)) List.empty);
+    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => do {
+            let entries := qtest_struct_entries ms;
+            return (if qtest_struct_has_entry entries "a::Holder" "x"
+                then qtest_struct_has_entry entries "b::Holder" "y"
+                else false)
+        },
+    }
+}
+
+/// RED: same shape as the type/struct probes, for `class_d`.
+#[test]
+def test_qualify_same_named_class_in_two_modules_stays_distinct : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_class "Foo") List.empty);
+    let b := qtest_module "b" (List.cons (qtest_class "Foo") List.empty);
+    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => do {
+            let names := qtest_class_names ms;
+            return (if list_contains_str names "a::Foo"
+                then list_contains_str names "b::Foo"
+                else false)
+        },
+    }
+}
+
+/// Item 5.1 regression: a lam's own ANNOTATION inside a def body names a
+/// type decl that qualification renamed -- but the annotation is the
+/// body-side twin of `Def.typ`'s pi-chain, which `resolve_open_alias_def`
+/// deliberately never rewrites. Rewriting only the annotation minted a
+/// qualified-vs-bare type mismatch that failed elaboration for every
+/// match arm comparing a param against a constructor or a call (prelude's
+/// own `Nat.add` was the live canary). The annotation stays source-spelled;
+/// the read side tolerates the bare spelling (`scope_find_inductive`'s
+/// unique-suffix fallback).
+#[test]
+def test_qualify_lam_annotation_stays_source_spelled : IO Bool := do {
+    let body := Term.lam (binder_named (Identifier.id "x"))
+        (Term.var sentinel (DebugName.named (Identifier.id "Foo"))) Term.hole;
+    let df := Def.mk (bare_npath "f") Term.hole body
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
+    let a := qtest_module "a" (List.cons (qtest_type "Foo") (List.cons (Decl.def_d df) List.empty));
+    let r <- qualify_modules false (List.cons a List.empty);
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => do {
+            let anns := qtest_lam_annotations ms;
+            return (if list_contains_str anns "Foo"
+                then Bool.not (list_contains_str anns "a::Foo")
+                else false)
+        },
+    }
+}
+
+#[partial]
+def qtest_lam_annotations (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_lam_annotations_of_decls (m.decl_list)) (qtest_lam_annotations rest),
+    }
+
+#[partial]
+def qtest_lam_annotations_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.def_d df =>
+                match df {
+                    Def.mk _n _typ term _c _a _v _p =>
+                        match term {
+                            Term.lam _b ann _body => List.append (identifier_names (free_names_of_term List.empty ann)) (qtest_lam_annotations_of_decls rest),
+                            _ => qtest_lam_annotations_of_decls rest,
+                        },
+                },
+            _ => qtest_lam_annotations_of_decls rest,
+        },
+}
+
+/// The decls that fail to elaborate once the whole-program scope is
+/// built from the QUALIFIED modules -- the pipeline shape
+/// `compile_input_of_modules` runs after this pass.
+#[partial]
+def qtest_elab_failures_of_modules (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest =>
+            let sd := build_scope_from_decls m.path m.decl_list in
+            let scope : Scope := { module_id := m.path, scope := sd, parent := Option.none, incomplete_match_ok := false } in
+            let locals : LocalScope := { vars := List.empty, parent := Option.none } in
+            List.append (best_effort_failed (elaborate_module_decls_reporting scope m.decl_list locals))
+                (qtest_elab_failures_of_modules rest),
+    }
+
+/// Item 5.1 regression (#15): post-qualify, a def whose whole body is a
+/// bare-annotated lam still ELABORATES. The body is checked against a
+/// hole, so the lam takes the inferring arm and the annotation is
+/// type-checked AS A TERM -- its bare head (`Pair`, renamed to `a::Pair`
+/// by the same qualification pass that leaves annotations source-spelled)
+/// must resolve through the checker's free-var path, whose `def_refs`
+/// lookup is exact-only. `resolve_free_var_def` retries the miss by
+/// unique qualified suffix; pre-#15 every def of this shape failed with
+/// `unknown variable 'Pair'` (`lang.mote::Mote.table_keys` was the
+/// corpus canary).
+#[test]
+def test_qualify_bare_annotation_head_elaborates : IO Bool := do {
+    let body := Term.lam (binder_named (Identifier.id "p"))
+        (Term.var sentinel (DebugName.named (Identifier.id "Pair")))
+        (Term.var 0 (DebugName.named (Identifier.id "p")));
+    let df := Def.mk (bare_npath "g") Term.hole body
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private List.empty;
+    let a := qtest_module "a" (List.cons (qtest_type "Pair") (List.cons (Decl.def_d df) List.empty));
+    let r <- qualify_modules false (List.cons a List.empty);
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => return (match qtest_elab_failures_of_modules ms { List.empty => true, List.cons _ _ => false }),
     }
 }
 

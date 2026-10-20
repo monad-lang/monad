@@ -37,15 +37,15 @@ use std::list {List.length}
 // `cli/src/main.mo` and four test files down with it. `motes/json`
 // imports from `init.string` the same way.
 use init::string {}
-use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, Decl}
+use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaDecl}
 open List {length}
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}
 open FieldInfo {field_info}
 open Expr {e_var, e_str, e_int, e_bool, e_app, e_if, e_match, e_ctor}
-open MatchArm {match_arm}
-open Param {meta_param}
-open Decl {d_def, d_error}
+open MetaMatchArm {match_arm}
+open MetaParam {meta_param}
+open MetaDecl {d_def, d_error}
 
 pub type Cli.FlagResult {
     flag_result (found : Bool) (rest : List String),
@@ -113,7 +113,7 @@ pub def Cli.take_opt (long : String) (short : String) (default : String) (args :
 
 // --- #[derive Cli]: reflection-as-data metaprogramming ---
 //
-// `derive_cli_meta` is an ordinary `TypeInfo -> List Decl` function (see
+// `derive_cli_meta` is an ordinary `TypeInfo -> List MetaDecl` function (see
 // `init/meta.mo`/`plans/review-and-reduce-the-greedy-nest.md`), invoked via
 // `reflect_type_info!` through the `derive_cli` decl-gen macro below —
 // the same mechanism `std/derive.mo`'s four derives use (`derive_lens`/
@@ -735,10 +735,10 @@ def cli_parse_expr (type_name : String) : Expr :=
 ///   - `decode_<lower> : Cli.Parsed -> Result String T`
 ///   - `parse_<lower> : List String -> Result String T`
 ///
-/// Every shape the mapping cannot express is a `Decl.d_error` naming the
+/// Every shape the mapping cannot express is a `MetaDecl.d_error` naming the
 /// constructor/field, so a mistake is a derive-time error rather than
 /// generated code that fails with an unrelated type error.
-pub def derive_cli_meta (info : TypeInfo) : List Decl :=
+pub def derive_cli_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             match ctors {

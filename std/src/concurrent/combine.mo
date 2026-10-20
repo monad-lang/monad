@@ -7,7 +7,9 @@ struct Duration {
     millis : I64,
 }
 
-type Scope {
+// `FiberScope`, not `FiberScope`: lang/types.mo also declares a `FiberScope`, and
+// whole-program qualification (plan item 5.1) makes that bare name ambiguous.
+type FiberScope {
     scope
 }
 
@@ -15,13 +17,13 @@ type Scope {
 def sleepIO (ms : I64) : IO Unit
 
 #[native scope_new]
-def scope_new : IO Scope
+def scope_new : IO FiberScope
 
 #[native scope_fork]
-def scope_fork (s : Scope) (action : Unit -> IO A) : IO (Fiber A)
+def scope_fork (s : FiberScope) (action : Unit -> IO A) : IO (Fiber A)
 
 #[native scope_drop]
-def scope_drop (s : Scope) : IO Unit
+def scope_drop (s : FiberScope) : IO Unit
 
 // Await all fibers in order, collecting results.
 def all_aux (fibers : List (Fiber A)) (acc : List A) : IO (List A) :=
@@ -57,7 +59,7 @@ pub def race (fibers : List (Fiber A)) : IO A :=
 
 // Scoped: run f with a scope; all fibers forked via scope_fork
 // are cancelled when the scope exits.
-def scoped (f : Scope -> IO A) : IO A := do {
+def scoped (f : FiberScope -> IO A) : IO A := do {
   let scope <- scope_new;
   let result <- f scope;
   scope_drop scope;

@@ -1,7 +1,7 @@
 /// Data-shape conversions between self-hosted `Term`/`Decl`/`Inductive`/
 /// `Struct` (`lang/types.mo`) and the reflection-as-data `Value`
 /// (`lang/core_value.mo`) shape of `init/meta.mo`'s `TypeInfo`/`CtorInfo`/
-/// `FieldInfo`/`Expr`/`MatchArm`/`Param`/`Decl` types -- mirrors
+/// `FieldInfo`/`Expr`/`MetaMatchArm`/`MetaParam`/`MetaDecl` types -- mirrors
 /// `core/src/eval/meta_reflect.rs` (Rust). Pure: no evaluation, no IO.
 /// `lang/typecheck/meta_eval.mo` is the sibling module that actually
 /// EVALUATES a meta-`def` against the `Value` this module builds; this
@@ -10,7 +10,7 @@
 /// **Constructor tags are hardcoded, not looked up.** `TypeInfo`/
 /// `CtorInfo`/`FieldInfo` are single-constructor types (`init/meta.mo`),
 /// so their own constructor's tag is always 0 -- no lookup needed.
-/// `Expr`/`Decl`/`MatchArm`/`Param` are also types THIS design fully
+/// `Expr`/`MetaDecl`/`MetaMatchArm`/`MetaParam` are also types THIS design fully
 /// owns (`init/meta.mo`), so their tags are hardcoded directly from that
 /// file's own literal declaration order below, matching this whole
 /// codebase's own established precedent for this exact situation
@@ -22,7 +22,7 @@
 /// exercise real round-trips) will catch it.
 ///
 /// **De-Bruijn locals convention.** Reifying `Expr.e_lam`/`e_match`/a
-/// `Decl.d_def`'s own `params` into real `Term.lam`/`Literal.match_`
+/// `MetaDecl.d_def`'s own `params` into real `Term.lam`/`Literal.match_`
 /// nodes needs to assign correct de-Bruijn indices to any nested
 /// `e_var` reference that names a LOCALLY bound name (a lambda param, a
 /// match-arm-bound field, an outer `d_def` param) -- confirmed directly
@@ -33,6 +33,7 @@
 /// index 0 (innermost), matching `lang/core_eval.mo`'s own
 /// `extend_env_with_fields`/`dispatch_arm` runtime behavior exactly.
 /// `push_locals` below is the one place that convention is applied.
+use lib::codegen::symbols {unqualify_def_name}
 use lib::core_eval {value_as_i64, value_as_str}
 use lang::core_ir {IrLit, match_}
 use lib::core_value {Value}
@@ -107,8 +108,12 @@ def struct_to_inductive (s : Struct) : Inductive :=
             Inductive.mk type_np List.empty Term.hole (List.cons mk_con List.empty) List.empty vis,
     }
 
+// The `unqualify_def_name` strip mirrors `lang.typecheck.infer`'s
+// `inductive_bare_name`: post-qualification a registered name is one
+// `mod::Name` segment, and the query side (`term_free_var_name`) reads
+// a source-spelled bare name.
 def inductive_bare_name (ind : Inductive) : String :=
-    match ind { Inductive.mk name _ _ _ _ _ => show_name_path name } // single-segment -- no dots
+    match ind { Inductive.mk name _ _ _ _ _ => unqualify_def_name (show_name_path name) }
 
 #[partial]
 def find_inductive_by_bare_name (inds : List Inductive) (name : String) : Option Inductive :=
@@ -669,7 +674,7 @@ def reify_match_arms (locals : List String) (arm_vals : List Value) : Result Str
             },
     }
 
-/// A `MatchArm` Value (`init/meta.mo`'s single-ctor `match_arm ctor_name
+/// A `MetaMatchArm` Value (`init/meta.mo`'s single-ctor `match_arm ctor_name
 /// binders body`, tag 0) -> a real `MatchCase`. The field binders (in
 /// DECLARATION order, matching `case_.args`'s own expected shape) get
 /// pushed onto `locals` per `push_locals`'s convention before reifying
@@ -684,7 +689,7 @@ def reify_match_arm (locals : List String) (v : Value) : Result String MatchCase
                             match rest2 {
                                 List.cons body_val _ =>
                                     match value_as_str ctor_name_val {
-                                        Option.none => Result.err "MatchArm: expected a String ctor_name",
+                                        Option.none => Result.err "MetaMatchArm: expected a String ctor_name",
                                         Option.some ctor_name =>
                                             match value_string_list binders_val {
                                                 Result.err e => Result.err e,
@@ -696,13 +701,13 @@ def reify_match_arm (locals : List String) (v : Value) : Result String MatchCase
                                                     },
                                             },
                                     },
-                                List.empty => Result.err "MatchArm: missing body",
+                                List.empty => Result.err "MetaMatchArm: missing body",
                             },
-                        List.empty => Result.err "MatchArm: missing binders",
+                        List.empty => Result.err "MetaMatchArm: missing binders",
                     },
-                List.empty => Result.err "MatchArm: missing ctor_name",
+                List.empty => Result.err "MetaMatchArm: missing ctor_name",
             },
-        _ => Result.err "reify_match_arm: expected a MatchArm value (v_con)",
+        _ => Result.err "reify_match_arm: expected a MetaMatchArm value (v_con)",
     }
 
 #[partial]
@@ -714,7 +719,7 @@ def identifiers_of (names : List String) : List Identifier :=
 
 // ─── Reifying a generated `Decl`'s own Param/type/body shape ───────────
 
-/// `init/meta.mo`'s `Param` (single-ctor `meta_param name typ`, tag 0)
+/// `init/meta.mo`'s `MetaParam` (single-ctor `meta_param name typ`, tag 0)
 /// -> the reified name plus its reified type `Term`.
 def reify_meta_param (v : Value) : Result String (Pair String Term) :=
     match v {
@@ -724,18 +729,18 @@ def reify_meta_param (v : Value) : Result String (Pair String Term) :=
                     match rest {
                         List.cons typ_val _ =>
                             match value_as_str name_val {
-                                Option.none => Result.err "Param: expected a String name",
+                                Option.none => Result.err "MetaParam: expected a String name",
                                 Option.some name =>
                                     match reify_expr_value List.empty typ_val {
                                         Result.err e => Result.err e,
                                         Result.ok typ_term => Result.ok (Pair.pair name typ_term),
                                     },
                             },
-                        List.empty => Result.err "Param: missing typ",
+                        List.empty => Result.err "MetaParam: missing typ",
                     },
-                List.empty => Result.err "Param: missing name",
+                List.empty => Result.err "MetaParam: missing name",
             },
-        _ => Result.err "reify_meta_param: expected a Param value (v_con)",
+        _ => Result.err "reify_meta_param: expected a MetaParam value (v_con)",
     }
 
 #[partial]
@@ -785,7 +790,7 @@ def build_lam_chain (ps : List (Pair String Term)) (body : Term) : Term :=
 
 def no_constraints : List TypeConstraint := List.empty
 
-/// `Decl.d_def name params ret_typ body` (tag 0) -> a real `Def`. Body
+/// `MetaDecl.d_def name params ret_typ body` (tag 0) -> a real `Def`. Body
 /// is reified with `params`'s own names already pushed onto `locals`
 /// (last-declared param innermost, per this file's own convention) so
 /// the body may reference them by name.
@@ -832,7 +837,7 @@ def reify_d_def (args : List Value) : Result String Def :=
         List.empty => Result.err "d_def: missing name",
     }
 
-/// `Decl.d_instance class_name target_typ methods` (tag 1) -> a real
+/// `MetaDecl.d_instance class_name target_typ methods` (tag 1) -> a real
 /// `Instance`. `name` uses the same `Identifier.id "_"` placeholder
 /// `lang/parser.mo`'s own `instance_close` always uses (never load-
 /// bearing content, confirmed directly).
@@ -874,7 +879,7 @@ def reify_d_instance (args : List Value) : Result String Decl :=
         List.empty => Result.err "d_instance: missing class_name",
     }
 
-/// A meta `Decl` value that isn't `d_error` reifies into ordinary
+/// A meta `MetaDecl` value that isn't `d_error` reifies into ordinary
 /// `def`s at the TOP level (`d_def`) or into an instance's own METHODS
 /// (`reify_defs` below, `Instance.defs : List Def`) -- both cases need
 /// the bare `Def`, not a wrapping `Decl.def_d`, hence this separate
@@ -885,7 +890,7 @@ def reify_meta_decl_as_def (v : Value) : Result String Def :=
             if I64.beq tag 0 then reify_d_def args
             else if I64.beq tag 2 then reify_d_error args
             else Result.err "reify_meta_decl_as_def: expected d_def (d_instance cannot nest inside another instance's methods)",
-        _ => Result.err "reify_meta_decl_as_def: expected a Decl value (v_con)",
+        _ => Result.err "reify_meta_decl_as_def: expected a MetaDecl value (v_con)",
     }
 
 /// `d_error` never actually returns a `Def` -- always short-circuits
@@ -917,7 +922,7 @@ def reify_defs (vs : List Value) : Result String (List Def) :=
             },
     }
 
-/// One top-level `Decl` Value (`init/meta.mo`'s `Decl`, tag 0=d_def
+/// One top-level `MetaDecl` Value (`init/meta.mo`'s `MetaDecl`, tag 0=d_def
 /// 1=d_instance 2=d_error) -> a real `lang.types.Decl`.
 def reify_decl_value (v : Value) : Result String Decl :=
     match v {
@@ -933,8 +938,8 @@ def reify_decl_value (v : Value) : Result String Decl :=
                     Result.err e => Result.err e,
                     Result.ok _ => Result.err "unreachable: d_error always errs",
                 }
-            else Result.err "reify_decl_value: unrecognized Decl constructor tag",
-        _ => Result.err "reify_decl_value: expected a Decl value (v_con)",
+            else Result.err "reify_decl_value: unrecognized MetaDecl constructor tag",
+        _ => Result.err "reify_decl_value: expected a MetaDecl value (v_con)",
     }
 
 #[partial]
@@ -953,7 +958,7 @@ def reify_decls_go (vs : List Value) : Result String (List Decl) :=
     }
 
 /// The one real OUTPUT-side entry point: a `Value` shaped as `List
-/// Decl` (`init/meta.mo`'s `Decl`) -- the reified result of calling a
+/// MetaDecl` (`init/meta.mo`'s `MetaDecl`) -- the reified result of calling a
 /// meta-def -- -> real `lang.types.Decl`s ready to splice into the
 /// program. A `d_error` anywhere short-circuits the whole call, per
 /// `init/meta.mo`'s own doc comment.

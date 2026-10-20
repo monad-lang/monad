@@ -9,15 +9,15 @@
 /// own meta-def argument to be a bare top-level name, not a partially
 /// applied expression (`lang/src/module.mo`'s own
 /// `"reflect_type_info!: meta-def argument must be a plain name"`).
-use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MatchArm, Param, Decl}
+use init::meta {TypeInfo, CtorInfo, FieldInfo, Expr, MetaMatchArm, MetaParam, MetaDecl}
 
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}
 open FieldInfo {field_info}
 open Expr {e_var, e_str, e_app, e_lam, e_if, e_match, e_ctor}
-open MatchArm {match_arm}
-open Param {meta_param}
-open Decl {d_def, d_error}
+open MetaMatchArm {match_arm}
+open MetaParam {meta_param}
+open MetaDecl {d_def, d_error}
 
 /// `List Expr` as an `Expr` -- `Expr` has no list-literal node, so a list
 /// value is built the same way any other value is: nested constructor
@@ -168,7 +168,7 @@ def serialize_field_pair (format_tag : String) (fmt_typ_name : String) (f : Fiel
 /// `def <Type>.serialize_<format> (v : <Type>) : <FormatType> := match v
 /// { ctor f1 f2 ... => <format>_ser_object [(f1, ser f1), ...] }` -- the
 /// fields are bound by the match, then re-read via `serialize_field_pair`.
-def serialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_name : String) (ctor : CtorInfo) : Decl :=
+def serialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_name : String) (ctor : CtorInfo) : MetaDecl :=
     match ctor {
         ctor_info ctor_name fields =>
             let fmt_typ_name := format_typ_name format_typ in
@@ -187,7 +187,7 @@ def serialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_name
 /// arm per constructor, which this generation pass does not build; such
 /// a type's codec stays hand-written, as `agent-skills.md`'s `Role`/
 /// `Content`/`StopReason` already plan to be.
-pub def derive_serialize_meta (format_tag : String) (format_typ : Expr) (info : TypeInfo) : List Decl :=
+pub def derive_serialize_meta (format_tag : String) (format_typ : Expr) (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             match ctors {
@@ -340,7 +340,7 @@ def build_decode_chain_from (format_tag : String) (fmt_typ_name : String) (field
             decode_one_field format_tag fmt_typ_name f (build_decode_chain_from format_tag fmt_typ_name rest type_name ctor_name (List.append seen (List.cons f List.empty))),
     }
 
-def deserialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_name : String) (ctor : CtorInfo) : Decl :=
+def deserialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_name : String) (ctor : CtorInfo) : MetaDecl :=
     match ctor {
         ctor_info ctor_name fields =>
             d_def
@@ -350,7 +350,7 @@ def deserialize_decl_for_ctor (format_tag : String) (format_typ : Expr) (type_na
                 (build_decode_chain format_tag (format_typ_name format_typ) type_name ctor_name fields)
     }
 
-pub def derive_deserialize_meta (format_tag : String) (format_typ : Expr) (info : TypeInfo) : List Decl :=
+pub def derive_deserialize_meta (format_tag : String) (format_typ : Expr) (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             match ctors {

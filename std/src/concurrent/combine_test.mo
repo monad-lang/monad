@@ -7,7 +7,7 @@
 // host's. See that test's own comment for the numbers and the reason.
 
 use lib::concurrent::fiber {Fiber, await_fiber, cancel_fiber, forkIO}
-use lib::concurrent::combine {Scope, scope_fork, scoped, sleepIO}
+use lib::concurrent::combine {FiberScope, scope_fork, scoped, sleepIO}
 use lib::io {}
 open IO {current_time_nano}
 
@@ -122,9 +122,9 @@ def test_cancel_all_smoke : IO Bool {
 
 // scoped: creates scope, runs action, auto-cancels on exit
 
-def fork_io_42_scoped (s : Scope) : IO (Fiber I64) := scope_fork s io_42_action
+def fork_io_42_scoped (s : FiberScope) : IO (Fiber I64) := scope_fork s io_42_action
 
-def scoped_fork_await_42 (s : Scope) : IO I64 := do {
+def scoped_fork_await_42 (s : FiberScope) : IO I64 := do {
   let f <- fork_io_42_scoped s;
   await_fiber f
 }
@@ -136,7 +136,7 @@ def test_scoped_runs_action : IO Bool {
 }
 
 // scoped: auto-cancels on exit (callback returns without awaiting)
-def scoped_forget (s : Scope) : IO I64 := do {
+def scoped_forget (s : FiberScope) : IO I64 := do {
   scope_fork s io_42_action;
   return 0
 }

@@ -10,6 +10,7 @@ use lang::types {
 // `HashMap` is what this file reaches from `std.map`, named like any
 // other import — see scope.mo's comment on the same line for the history.
 use std::map {HashMap}
+use lib::codegen::symbols {unqualify_def_name}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 
@@ -361,6 +362,29 @@ def np_to_maybe_id (np : NamePath) : Option Identifier :=
         },
     }
 
+/// An `Identifier` possibly carrying item 5.1's `module::Name`
+/// qualification (`inductive_d`/`struct_d`/`class_d`/`instance_d`
+/// declarations, since `qualify_one_decl_name` — `lang/src/codegen/
+/// qualify.mo`), unwrapped back to its bare source spelling.
+///
+/// `known_names` (`names_of_decls`, below) feeds `elaborate_type`'s
+/// `free_vars`/`wrap_forall` (this file): a name present in
+/// `known_names` is a REAL global, one absent is generalized into a
+/// fresh `forall` binder. `Def.typ`/`StructField.typ`/class method
+/// `typ` are never rewritten by qualification (`resolve_open_alias_decl`,
+/// `lang/src/scope.mo` — deliberately, for `emit_type_head_is_io`'s own
+/// literal-spelling need), so a concrete type's OWN declared signature
+/// still spells it bare (`IO Bool`, not `init::io::IO Bool`). Without
+/// this unwrap, `known_names` held the qualified spelling only, every
+/// bare-spelled concrete carrier looked like a free variable, and
+/// `elaborate_type` silently generalized it into an abstract,
+/// uninstantiable one — confirmed via `instance Monad IO` becoming
+/// permanently unmatchable ("no instance found for `prelude::Monad.
+/// pure`") the moment a type/struct/class's OWN name started getting
+/// qualified.
+def unqualified_decl_id (id : Identifier) : Identifier :=
+    Identifier.id (unqualify_def_name (show_identifier id))
+
 /// Collect all names introduced by a declaration.
 def names_of_decl (decl : Decl) : List Identifier :=
     match decl {
@@ -370,7 +394,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
                     match np_to_maybe_id name {
                         Option.some id =>
                             let empty : List Identifier := List.empty in
-                            List.cons id empty,
+                            List.cons (unqualified_decl_id id) empty,
                         Option.none => List.empty,
                     },
             },
@@ -380,7 +404,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
                     match np_to_maybe_id name {
                         Option.some id =>
                             let empty : List Identifier := List.empty in
-                            List.cons id empty,
+                            List.cons (unqualified_decl_id id) empty,
                         Option.none => List.empty,
                     },
             },
@@ -388,19 +412,19 @@ def names_of_decl (decl : Decl) : List Identifier :=
             match c {
                 Class.mk name _ _ _ _ =>
                     let empty : List Identifier := List.empty in
-                    List.cons name empty,
+                    List.cons (unqualified_decl_id name) empty,
             },
         Decl.struct_d s =>
             match s {
                 Struct.mk name _ _ _ =>
                     let empty : List Identifier := List.empty in
-                    List.cons name empty,
+                    List.cons (unqualified_decl_id name) empty,
             },
         Decl.instance_d i =>
             match i {
                 Instance.mk name _ _ _ _ _ _ =>
                     let empty : List Identifier := List.empty in
-                    List.cons name empty,
+                    List.cons (unqualified_decl_id name) empty,
             },
         // A scoped-open'd decl's own name is intentionally NOT collected
         // here yet (deliberate gap — full scoped-open semantics are out of

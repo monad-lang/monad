@@ -2,7 +2,7 @@
 //! (`plans/review-and-reduce-the-greedy-nest.md`): a hand-written trivial
 //! "meta" def (an ordinary `def`, not a `defmacro` template — no
 //! `std/derive.mo` involvement) round-trips through `reflect_type_info!`
-//! -> a real `TypeInfo` value -> a hand-written `Expr`/`Decl` computation
+//! -> a real `TypeInfo` value -> a hand-written `Expr`/`MetaDecl` computation
 //! -> reify, and a disallowed native inside that computation fails with a
 //! clear purity error, not a panic.
 
@@ -83,14 +83,14 @@ fn test_reflect_type_info_round_trips_through_a_hand_written_meta_def() {
   let loaded = loaded_with_init_meta();
   let parsed = parse_file(
     r#"
-    use init::meta {TypeInfo, Decl, Expr}
+    use init::meta {TypeInfo, MetaDecl, Expr}
 
     struct Point { x : I64, y : I64 }
 
-    def my_meta (info : TypeInfo) : List Decl :=
+    def my_meta (info : TypeInfo) : List MetaDecl :=
         match info {
             type_info name ctors =>
-                [Decl.d_def (String.concat name "_marker") [] (Expr.e_var "String") (Expr.e_str name)]
+                [MetaDecl.d_def (String.concat name "_marker") [] (Expr.e_var "String") (Expr.e_str name)]
         }
 
     reflect_type_info! Point my_meta
@@ -112,7 +112,7 @@ fn test_reflect_type_info_round_trips_through_a_hand_written_meta_def() {
   assert!(
     found,
     "reflect_type_info! should build a TypeInfo value, invoke the named meta def, and reify \
-     its List Decl result into a real `Point_marker` declaration — got: {expanded:#?}"
+     its List MetaDecl result into a real `Point_marker` declaration — got: {expanded:#?}"
   );
 }
 
@@ -121,14 +121,14 @@ fn test_reflect_type_info_blocks_impure_natives_with_a_clear_error() {
   let loaded = loaded_with_init_meta();
   let r = expand_and_type_check_with(
     r#"
-    use init::meta {TypeInfo, Decl}
+    use init::meta {TypeInfo, MetaDecl}
 
     #[native "get_env"]
     def my_print (s : String) : I64
 
     struct Point { x : I64, y : I64 }
 
-    def bad_meta (info : TypeInfo) : List Decl :=
+    def bad_meta (info : TypeInfo) : List MetaDecl :=
         match info {
             type_info name ctors =>
                 let ignored : I64 := my_print name in

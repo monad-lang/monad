@@ -23,6 +23,7 @@ use lib::typecheck::traverse {con_map_children, native_map_children, term_map_ch
 // same whole-graph known-name set the `check` path's `elaborate_def_typs`
 // uses -- see `registered_def_type`'s own doc comment for why.
 use lib::elaborate {elaborate_def, names_of_decls}
+use lib::codegen::symbols {string_matches_bare, unqualify_def_name}
 use init::borrow {Borrow}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo` — so this module names what it reaches from
@@ -160,6 +161,70 @@ def alias_map_lookup (key : String) (m : HashMap String String) : Option String 
             HashMap.bucket_lookup_str key bucket
     }
 
+/// `ScopeData.bare_aliases`'s map family -- same direct-bucket shape as
+/// `alias_map_*` just above, for the `String -> List String` value the
+/// bare-suffix side table carries (every owner key, so a 2+-owner bare
+/// name can be told apart from a miss).
+def bare_map_empty : HashMap String (List String) :=
+    HashMap.map HashMap.empty_buckets
+
+def bare_map_insert (key : String) (val : List String) (m : HashMap String (List String)) : HashMap String (List String) :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (String.hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            let new_bucket := HashMap.bucket_insert_str key val bucket in
+            HashMap.map (HashMap.set_bucket buckets idx new_bucket)
+    }
+
+def bare_map_lookup (key : String) (m : HashMap String (List String)) : Option (List String) :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (String.hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            HashMap.bucket_lookup_str key bucket
+    }
+
+#[partial]
+def string_list_has (xs : List String) (s : String) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons h rest => if String.beq h s then true else string_list_has rest s,
+    }
+
+/// `bare_aliases`'s `merge_scope_data` half: a UNION of owner lists, not
+/// `HashMap.merge_buckets` -- the values are LISTS, the same qualified
+/// key can be noted by both inputs, and a duplicate would make the type
+/// look self-ambiguous to the miss fallbacks that read the map.
+#[partial]
+def bare_aliases_merge (m1 : HashMap String (List String)) (m2 : HashMap String (List String)) : HashMap String (List String) :=
+    bare_aliases_merge_pairs (HashMap.to_list m2) m1
+
+#[partial]
+def bare_aliases_merge_pairs (pairs : List (Pair String (List String))) (acc : HashMap String (List String)) : HashMap String (List String) :=
+    match pairs {
+        List.empty => acc,
+        List.cons p rest =>
+            match p {
+                Pair.pair bare owners =>
+                    let merged : List String := match bare_map_lookup bare acc {
+                        Option.some ks => bare_aliases_merge_lists ks owners,
+                        Option.none => owners,
+                    } in
+                    bare_aliases_merge_pairs rest (bare_map_insert bare merged acc)
+            },
+    }
+
+#[partial]
+def bare_aliases_merge_lists (a : List String) (b : List String) : List String :=
+    match b {
+        List.empty => a,
+        List.cons h rest =>
+            if string_list_has a h
+            then bare_aliases_merge_lists a rest
+            else bare_aliases_merge_lists (List.cons h a) rest,
+    }
+
 #[partial]
 def build_alias_map (aliases : List OpenAlias) (acc : HashMap String String) : HashMap String String :=
     match aliases {
@@ -195,6 +260,7 @@ pub def scope_data_empty : ScopeData := {
     classes := List.empty,
     infixes := List.empty,
     conflicts := List.empty,
+    bare_aliases := bare_map_empty,
 }
 
 // --- Helpers: name path / module path equality ---
@@ -218,16 +284,41 @@ def modpath_str_eq (a : ModulePath) (b : ModulePath) : Bool :=
 
 // --- Helper: add a ScopeDef to ScopeData ---
 
+/// Notes a QUALIFIED registration key under its bare spelling in
+/// `bare_aliases` -- the side table both bare-vs-qualified miss
+/// fallbacks (`scope_data_find_inductive`, `resolve_free_var_def`)
+/// consult instead of scanning every key per miss. Bare keys (no `::`)
+/// are skipped: they are reachable by the exact lookup that always
+/// runs first, and pass-2's alias entries under them would otherwise
+/// phantom-ambiguate a qualified owner of the same name. A key already
+/// noted is not added twice -- `build_scope_inductive` registers a
+/// type's name in BOTH `def_refs` and `inductives`, and a duplicate
+/// would make every type name look self-ambiguous.
+def scope_data_note_bare (sd : ScopeData) (key : String) : ScopeData :=
+    let bare : String := unqualify_def_name key in
+    if String.beq bare key
+    then sd
+    else
+        let owners : List String := match bare_map_lookup bare sd.bare_aliases {
+            Option.some ks => if string_list_has ks key then ks else List.cons key ks,
+            Option.none => List.cons key List.empty,
+        } in
+        { sd with bare_aliases := bare_map_insert bare owners sd.bare_aliases }
+
 def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
     match d {
-        mk dname _ _ _ _ => { sd with def_refs := npath_map_insert dname d sd.def_refs }
+        mk dname _ _ _ _ =>
+            let noted : ScopeData := scope_data_note_bare sd (show_name_path dname) in
+            { noted with def_refs := npath_map_insert dname d noted.def_refs }
     }
 
 // --- Helper: add an Inductive to ScopeData ---
 
 def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
     match ind {
-        mk indname _ _ _ _ _ => { sd with inductives := npath_map_insert indname ind sd.inductives }
+        mk indname _ _ _ _ _ =>
+            let noted : ScopeData := scope_data_note_bare sd (show_name_path indname) in
+            { noted with inductives := npath_map_insert indname ind noted.inductives }
     }
 
 // --- build_scope_from_groups/build_scope_from_decls: build ScopeData
@@ -1427,8 +1518,54 @@ pub def scope_find_def_constraints (name : NamePath) (s : Scope) : Option (List 
 
 // --- ScopeData: find an Inductive by ModulePath ---
 
+/// Item 5.1: a bare reference to a type sitting in a `typ` position
+/// (a param/return-type annotation, e.g. `OpenAlias` in
+/// `mk_open_alias`'s own declared return type) is NEVER rewritten to
+/// its qualified form by `resolve_open_alias_decl` -- that function
+/// deliberately never touches `typ` fields (see its own doc comment,
+/// `emit_type_head_is_io`'s literal-spelling need). Qualifying
+/// `Inductive`/`Struct`/`Class` declarations (item 5.1's own change)
+/// means the exact-match lookup below now misses for exactly this
+/// shape, so a bare miss consults `bare_aliases` (noted at
+/// registration, `scope_data_note_bare`) for the one qualified key
+/// whose bare spelling is this name -- a unique owner resolves; zero
+/// or 2+ owners is a genuine miss/ambiguity, same "never guess" policy
+/// `qualify.mo`'s own def-collision handling already uses
+/// (`test_qualify_ambiguous_reference_is_an_error`). The fallback only
+/// runs on a miss, so an already-exact or already-qualified lookup
+/// (everything that worked before item 5.1) stays the O(1) hashmap hit
+/// it always was -- and so is the fallback itself, which is why it is
+/// a map consult and not the per-miss key scan this originally was
+/// (a scan over every inductive per miss was a measured ~20x blowup of
+/// `elaborate_module_decls`, misses being the common case
+/// post-qualification).
 def scope_data_find_inductive (sd : ScopeData) (name : NamePath) : Option Inductive :=
-    npath_map_lookup name sd.inductives
+    match npath_map_lookup name sd.inductives {
+        Option.some ind => Option.some ind,
+        Option.none =>
+            match bare_map_lookup (show_name_path name) sd.bare_aliases {
+                Option.some keys =>
+                    match keys {
+                        List.cons only rest =>
+                            match rest {
+                                List.empty => scope_data_find_inductive_by_key sd only,
+                                List.cons _ _ => Option.none,
+                            },
+                        List.empty => Option.none,
+                    },
+                Option.none => Option.none,
+            },
+    }
+
+/// The exact half of `scope_data_find_inductive`'s map pair, keyed by
+/// the rendered string `npath_map_lookup` hashes on.
+def scope_data_find_inductive_by_key (sd : ScopeData) (key : String) : Option Inductive :=
+    match sd.inductives {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (String.hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            HashMap.bucket_lookup_str key bucket
+    }
 
 // --- Instance handling helpers ---
 
@@ -2183,8 +2320,14 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
                     },
                 DebugName.unnamed => t,
             },
+        // The lam's annotation is the body-side twin of `Def.typ`'s
+        // pi-chain (which `resolve_open_alias_def` deliberately never
+        // rewrites), and item 5.1 renamed the types annotations name --
+        // rewriting it here while `Def.typ` stays bare mints the
+        // qualified-vs-bare mismatch that failed every match arm comparing
+        // a param against a constructor or call.
         Term.lam dbg typ body =>
-            Term.lam dbg (resolve_open_alias_term_scoped names bound typ) (resolve_open_alias_term_scoped names (push_bound_dbg bound (binder_name dbg)) body),
+            Term.lam dbg typ (resolve_open_alias_term_scoped names (push_bound_dbg bound (binder_name dbg)) body),
         // The quantifier's own name enters scope only inside its BODY --
         // which is what the old `Term.forall` arm did and the old `Term.pi`
         // arm deliberately did not, since an arrow's binder name is
@@ -2466,16 +2609,46 @@ def class_defs_names (cds : List ClassDef) : List Identifier :=
 /// spelling (`json::Json.Deserializer`) still renders differently and
 /// stays distinct, where a last-segment comparison would coarsen the two
 /// apart.
+/// Item 5.1 addendum: also tolerant of ONE side being module-qualified
+/// (`prelude::Monad`) while the other is the bare source spelling
+/// (`Monad`) -- `qualify_one_decl_name` renames a `class_d`'s own
+/// declaration, but `Instance.cls`/`TypeConstraint.class` (REFERENCES
+/// to that class, sitting in a position `resolve_open_alias_decl`
+/// deliberately never rewrites -- see `scope_data_find_inductive`'s own
+/// doc comment for the full story) stay bare. Comparing via
+/// `unqualify_def_name` on whichever side has a qualifier is exactly
+/// the same "strip one qualifier prefix, compare the WHOLE remainder"
+/// `unqualify_def_name` already does elsewhere -- not the "last segment
+/// only" coarsening the comment above warns against; `json::Json.
+/// Deserializer` still only matches `Json.Deserializer`, never bare
+/// `Deserializer`. Safe to leave this loose (no separate ambiguity
+/// check here, unlike `scope_data_find_inductive`'s own fallback):
+/// `qualify.mo`'s own ambiguity detection already covers class/struct/
+/// inductive declarations (since item 5.0/5.1) and hard-errors the
+/// whole build BEFORE `build_scope_from_decls` ever runs, so a
+/// genuinely ambiguous bare class name never reaches this comparison.
+/// Comparing via `string_matches_bare` (the no-allocation twin of
+/// `unqualify_def_name` + `String.beq`, `lang/codegen/symbols.mo`) --
+/// this runs per instance/class comparison in
+/// `resolve_class_calls_decls`, and a slice per compared byte per
+/// comparison was a measured ~10x blowup of that stage.
 #[partial]
 pub def class_name_eq (a : NamePath) (b : NamePath) : Bool :=
-    String.beq (show_name_path a) (show_name_path b)
+    let ra := show_name_path a in
+    let rb := show_name_path b in
+    if String.beq ra rb
+    then true
+    else if string_matches_bare ra rb
+    then true
+    else string_matches_bare rb ra
 
 /// Finds the `Class` an instance's own `cls : NamePath` field names,
 /// among a flat `List Class` (`collect_classes`'s output). Every single-
 /// segment class in the corpus (`BEq`, `Append`, ...) matches under
 /// either spelling, which is why `npath_eq` served here for so long;
-/// `class_name_eq` is what the dotted ones (`Json.Deserializer`) need --
-/// see its own comment.
+/// `class_name_eq` is what the dotted ones (`Json.Deserializer`) need,
+/// and (since item 5.1) what a module-qualified-vs-bare mismatch needs
+/// too -- see its own comment for both.
 #[partial]
 def find_class_by_name (classes : List Class) (cls_name : NamePath) : Option Class :=
     match classes {
@@ -3560,10 +3733,24 @@ def lookup_ctor_field_types_owned (entries : List CtorFieldTypes) (ctor_name : I
 /// annotation (`Person`): equal full renderings first, else equal last
 /// segments. `bare_ctor_name` on the head mirrors what `last_segment`
 /// does to the owner for a joined `Module.Type` identifier.
+///
+/// A module-qualified owner (whole-program qualification stores the
+/// owner as ONE identifier, `loom.warp::Warp`) defeats both of those
+/// comparisons when the head is anything but the identical full
+/// rendering: `last_segment` dot-splits INSIDE the module half
+/// (`warp::Warp`), which is neither the full rendering nor the bare
+/// name -- so `Warp.warp [...] 41`'s carrier fell back to the bare
+/// owner head and a class-method call against it bound none of the
+/// signature's variables (`warp_tests.mo`'s `Comonad.extend`). The
+/// third comparison strips the `::` qualifier on BOTH sides -- the same
+/// tolerance `class_name_eq` gives class names, safe for the same
+/// reason: qualify's ambiguity gate errors a bare reference with two
+/// whole-program owners before this table is ever consulted.
 #[partial]
 def owner_head_match (owner : NamePath) (head : Identifier) : Bool :=
     String.beq (show_name_path owner) (show_identifier head)
         || String.beq (show_identifier (last_segment owner)) (show_identifier (bare_ctor_name head))
+        || String.beq (unqualify_def_name (show_name_path owner)) (unqualify_def_name (show_identifier head))
 
 /// The entry to use for an arm: the owner-scoped one when the
 /// scrutinee's own type is recoverable, else the old name-only first
@@ -4763,12 +4950,38 @@ def tail_member (id : Identifier) (known : List Identifier) : Bool :=
             else tail_member id rest,
     }
 
+/// Index AFTER the last `::` in `s`, or -1 when none -- a qualified
+/// name reaches this file as ONE segment (`method_suffix_of` splits
+/// on `.` only).
+#[partial]
+def last_colon_colon_index (s : String) (i : I64) (found : I64) : I64 :=
+    if i + 1 < String.length s then
+        match String.get s i {
+            Option.some b =>
+                if U8.beq b 58u8 then
+                    match String.get s (i + 1) {
+                        Option.some b2 => if U8.beq b2 58u8 then last_colon_colon_index s (i + 1) (i + 1) else last_colon_colon_index s (i + 1) found,
+                        Option.none => last_colon_colon_index s (i + 1) found,
+                    }
+                else last_colon_colon_index s (i + 1) found,
+            Option.none => found,
+        }
+    else found
+
 /// A name's last dotted/colon-separated component (`Json.Number` ->
 /// `Number`, `json::Number` -> `Number`), through the same splitting
-/// `last_segment_of` already does for a decl's own name-path.
+/// `last_segment_of` already does for a decl's own name-path, plus a
+/// `::` strip -- without it, `refine_instance_wildcards` compares a
+/// bare instance arg (`I64`) against qualified declared types
+/// (`prelude::I64`) and classes every concrete arg as a wildcard.
+/// Also read by `lang.typecheck.infer`'s `inductive_bare_name`, which
+/// faces the same bare-vs-qualified split for type heads it
+/// synthesizes.
 #[partial]
-def identifier_tail (id : Identifier) : String :=
-    show_identifier (last_segment_of (List.cons id List.empty))
+pub def identifier_tail (id : Identifier) : String :=
+    let seg : String := show_identifier (last_segment_of (List.cons id List.empty)) in
+    let idx : I64 := last_colon_colon_index seg 0 (0 - 1) in
+    if idx < 0 then seg else String.drop (idx + 1) seg
 
 /// One `implicit_params` entry per recovered name -- `{A : Type}`'s own
 /// shape (`params_for_names`, `lang/parser.mo`), so everything that reads
@@ -4842,6 +5055,23 @@ def term_is_wildcard (wildcard_names : List Identifier) (t : Term) : Bool :=
         _ => false,
     }
 
+/// Qualifier-tolerant identifier equality for instance-carrier
+/// matching: the instance's declared arg gets rewritten to its
+/// module-qualified spelling (`I64` -> `prelude::I64`) while a carrier
+/// taken from a def `typ` stays bare (`typ`s are deliberately never
+/// rewritten -- `resolve_open_alias_decl`'s policy), so a strict
+/// compare fails on every cross-module instance. Same shape as
+/// `class_name_eq`: exact first, then tolerate a qualifier on either
+/// side (via the no-allocation `string_matches_bare` -- this runs per
+/// instance-carrier comparison); two DIFFERENT qualified spellings
+/// stay unequal.
+def carrier_id_eq (a : Identifier) (b : Identifier) : Bool :=
+    let ra := show_identifier a in
+    let rb := show_identifier b in
+    if String.beq ra rb then true
+    else if string_matches_bare ra rb then true
+    else string_matches_bare rb ra
+
 /// Structural match between one instance-declared type arg and a
 /// concrete carrier, treating any leaf `Var` in `wildcard_names` as a
 /// match-anything hole. Handles nested shapes (`Append (List A)`'s own
@@ -4874,7 +5104,7 @@ def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (c
                     else match term_peel carrier {
                         Term.var _ cdbg =>
                             match cdbg {
-                                DebugName.named cid => Similar.similar id cid,
+                                DebugName.named cid => carrier_id_eq id cid,
                                 DebugName.unnamed => false,
                             },
                         // An APPLIED carrier against a BARE instance arg
@@ -6391,9 +6621,15 @@ def resolve_dict_arg_plain (instances : List Instance) (cls_name : NamePath) (ca
         Option.none => Option.none,
         Option.some ins =>
             match ins {
-                Instance.mk found_insname _ ins_constraints ins_args _ _ _ =>
+                // The matched instance's OWN `cls` (not the caller's
+                // spelling) names the dict value def -- `promote_instance`
+                // mangles that def with the same field, so the two sides
+                // stay identical even when one spelling is qualified
+                // (item 5.1) and the other (a constraint's class ref)
+                // stays bare.
+                Instance.mk found_insname found_cls ins_constraints ins_args _ _ _ =>
                     if constraints_resolve_without_cycle instances ins_constraints (List.cons cls_name List.empty)
-                    then Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname cls_name ins_args))))
+                    then Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname found_cls ins_args))))
                     else Option.none,
             },
     }
@@ -6539,8 +6775,11 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
             match dict_hinted_instance instances cls_name hints {
                 Option.some ins =>
                     match ins {
-                        Instance.mk found_insname _ _ ins_args _ _ _ =>
-                            Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname cls_name ins_args)))),
+                        // Same as `resolve_dict_arg_plain`: the matched
+                        // instance's own `cls` is what `promote_instance`
+                        // named the dict value def with.
+                        Instance.mk found_insname found_cls _ ins_args _ _ _ =>
+                            Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name found_insname found_cls ins_args)))),
                     },
                 Option.none =>
             match lookup_dict_binding dict_env cls_name {
@@ -7605,7 +7844,7 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
 /// `bind`.
 #[partial]
 def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
-    if npath_eq cls_name monad_class_name && String.beq (show_identifier method_name) "pure" then
+    if class_name_eq cls_name monad_class_name && String.beq (show_identifier method_name) "pure" then
         // `def_carrier` first (the order this case has always used), then
         // the call's own evidence -- but only a SPECIFIC match is taken
         // from the list; see `find_specific_matching_carrier` for why
@@ -7685,7 +7924,7 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
                 Pair.pair carrier ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
             },
         Option.none =>
-            if npath_eq cls_name monad_class_name then
+            if class_name_eq cls_name monad_class_name then
                 match def_carrier {
                     Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
                     Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args extra_carriers,
@@ -8447,7 +8686,7 @@ def instance_key_matches (ins : Instance) (key : InstanceKey) : Bool :=
         mk _ cls_name constraints ins_args _ _ _ =>
             match key {
                 mk key_cls _ key_args =>
-                    if Similar.similar cls_name key_cls
+                    if class_name_eq cls_name key_cls
                     then term_args_match ins_args key_args
                     else false
             }

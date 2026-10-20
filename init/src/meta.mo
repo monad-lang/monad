@@ -2,9 +2,9 @@
 /// `plans/review-and-reduce-the-greedy-nest.md` for the full design.
 /// `TypeInfo`/`CtorInfo`/`FieldInfo` expose a type's structure
 /// (constructors, fields, field names/types) as ordinary Monad values;
-/// `Expr`/`MatchArm`/`Param`/`Decl` are a small, deliberately minimal
-/// mirror of the compiler's own `Term`/`Decl` surface, letting a "meta"
-/// function — an ordinary `def` invoked via
+/// `Expr`/`MetaMatchArm`/`MetaParam`/`MetaDecl` are a small, deliberately
+/// minimal mirror of the compiler's own `Term`/`Decl` surface, letting a
+/// "meta" function — an ordinary `def` invoked via
 /// `core/src/eval/meta_compile.rs`, NOT a `defmacro` template — build new
 /// code with ordinary function calls (`List.map`/`Foldable.foldl`/
 /// `match`/recursion) and hand the result back to be spliced into the
@@ -71,18 +71,22 @@ pub type Expr {
     e_app (func : Expr) (arg : Expr),
     e_lam (param_name : String) (param_typ : Expr) (body : Expr),
     e_if (cond : Expr) (then_ : Expr) (else_ : Expr),
-    e_match (scrutinee : Expr) (arms : List MatchArm),
+    e_match (scrutinee : Expr) (arms : List MetaMatchArm),
     e_ctor (ctor_name : String) (args : List Expr),
 }
 
 /// One arm of an `e_match` — the constructor it matches, its bound field
 /// names (in declared order), and the arm's body.
-pub type MatchArm {
+///
+/// `Meta`-prefixed (like `MetaParam`/`MetaDecl` below): whole-program
+/// qualification (item 5.1) resolves a bare type name with TWO owners as a
+/// loud ambiguity, and `lang/core_ir.mo`'s `MatchArm` is the other owner.
+pub type MetaMatchArm {
     match_arm (ctor_name : String) (binders : List String) (body : Expr)
 }
 
-/// One parameter of a generated `def` (`Decl.d_def`).
-type Param {
+/// One parameter of a generated `def` (`MetaDecl.d_def`).
+type MetaParam {
     meta_param (name : String) (typ : Expr)
 }
 
@@ -91,15 +95,15 @@ type Param {
 /// return type, body), an `instance` (class name, target type, methods —
 /// each itself a `d_def`), and `d_error`, the one deliberate non-mirror
 /// addition: a meta function has no other way to REJECT malformed input
-/// (`TypeInfo -> List Decl` has no error channel of its own) — a
+/// (`TypeInfo -> List MetaDecl` has no error channel of its own) — a
 /// `d_error` anywhere in the returned list makes the whole
 /// `reflect_type_info!` invocation fail with `message` as a normal
 /// macro-expansion-time error (see `meta_reflect.rs::reify_decl_value`),
 /// short-circuiting before anything is spliced in. `derive_cli_meta`
 /// (`cli/src/args.mo`) uses this for both of its hard failure cases (zero
 /// constructors; `#[arg]` on a non-`Bool` field).
-pub type Decl {
-    d_def (name : String) (params : List Param) (ret_typ : Expr) (body : Expr),
-    d_instance (class_name : String) (target_typ : Expr) (methods : List Decl),
+pub type MetaDecl {
+    d_def (name : String) (params : List MetaParam) (ret_typ : Expr) (body : Expr),
+    d_instance (class_name : String) (target_typ : Expr) (methods : List MetaDecl),
     d_error (message : String),
 }
