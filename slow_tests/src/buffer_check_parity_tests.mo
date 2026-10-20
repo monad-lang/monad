@@ -17,6 +17,7 @@
 use std::test {Test.write_fixture}
 open IO {println}
 use std::process {exec_cmd, process_id}
+use std::list {List.length}
 use lang::module {
   FileCheckAndCache, FileCheckResult, check_file_cached, check_file_cached_from_source,
   module_info_cache_empty,
