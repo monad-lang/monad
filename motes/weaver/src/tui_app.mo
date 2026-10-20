@@ -16,12 +16,12 @@
 /// `Cmd.perform`-fires-a-forced-repaint rule is what cleans the real
 /// screen up again on the next ordinary frame.
 use shuttle::agent {RunState}
-use shuttle::gate {Pick, Approval, Gate}
+use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
-use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch}
+use weaver::commands {WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch}
 use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
-use weaver::gate {pick_header, capped_diff, gate_answer_prompt, gate_answer_feedback}
+use weaver::gate {pick_header, cap_name, capped_diff}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
@@ -29,7 +29,7 @@ use weaver::model {
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
     DisplayRow, Model.display_line, Model.take_last_rows, Model.display_row_widget,
-    Model.refresh_rows,
+    Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
     list_length, panel_height, input_placeholder,
 }
 use weaver::store {
@@ -37,17 +37,26 @@ use weaver::store {
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append,
     Store.read_page, Store.append_transcript, Store.record_turn, Store.record_output,
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
+    Store.append_history_note,
 }
 use weaver::commands {TranscriptChange}
 use shuttle::session {Session}
 use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_with}
+use weaver::store {TLine, TLine.plain, TLine.user_line}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
-use tui::types {Event, Key, MouseEvent, LayoutSize}
+use tui::types {Event, Key, MouseEvent, MouseButton, LayoutSize, TextStyle, Rect}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_multiline_key, insert_text}
 use tui::widgets::input {handle_input_key}
 use tui::core {empty_screen, mk_rect}
 use tui::render {render, diff, apply_deltas}
+use tui::text {Text.take_width}
+use tui::clipboard {Clipboard.copy}
+use tui::layout {center_rect_in}
+use weaver::dialog {
+    Dialog, DialogOption, DialogStep, Dialog.make, Dialog.step, Dialog.paste,
+    Dialog.with_default, Dialog.note_text, Dialog.option_count,
+}
 use tui::terminal {
     Terminal.clear_screen, Terminal.cursor_move, Terminal.enter_raw_mode, Terminal.poll, Terminal.size,
 }
@@ -90,7 +99,7 @@ def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64)
             // stays untouched.
             let app : App TuiModel WeaverMsg :=
                 App.app_ticked (init_tui_model_with st rows cols tr) on_event TuiApp.update Model.view 100
-                    (fn (m : TuiModel) => m.turn_pending);
+                    (fn (m : TuiModel) => Bool.or m.turn_pending (Bool.and m.banner (m.banner_frame < 12)));
             let _ <- run_app app;
             return true
         }
@@ -118,12 +127,18 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.page_failed e => page_failed_step m e,
         WeaverMsg.transcript_reset tr => transcript_reset_step m tr,
         WeaverMsg.store_result e => store_result_step m e,
+        WeaverMsg.input_set text =>
+            Pair.pair { m with input := input_state text input_placeholder, banner := false } Cmd.none,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
 
-def append_block_at (m : TuiModel) (lines : List String) : Pair TuiModel (Pair I64 (List String)) :=
-    let block : List String := Transcript.next_block m.transcript lines in
+#[partial]
+def plain_lines (ss : List String) : List TLine :=
+    List.map TLine.plain ss
+
+def append_block_at (m : TuiModel) (lines : List TLine) : Pair TuiModel (Pair I64 (List TLine)) :=
+    let block : List TLine := Transcript.next_block m.transcript lines in
     let start : I64 := m.transcript.total in
     let m2 : TuiModel := Model.append_block m lines in
     Pair.pair m2 (Pair.pair start block)
@@ -134,7 +149,7 @@ def warning_of (r : Result String Unit) : Option String :=
         Result.ok _ => Option.none,
     }
 
-def persist_block_cmd (store : Option StoreState) (start : I64) (block : List String) : Cmd WeaverMsg :=
+def persist_block_cmd (store : Option StoreState) (start : I64) (block : List TLine) : Cmd WeaverMsg :=
     match store {
         Option.none => Cmd.none,
         Option.some s => Cmd.perform (fn (_ : Unit) => do {
@@ -150,7 +165,24 @@ def discard_live_msg (s : StoreState) : IO WeaverMsg := do {
     IO.pure (WeaverMsg.store_result Option.none)
 }
 
-def persist_turn_action (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List String) : IO WeaverMsg := do {
+/// Clear the real screen after an action that wrote outside the frame
+/// pipeline (the live progress row). The following forced repaint then
+/// starts from a blank terminal instead of inheriting the fragment.
+def clear_terminal : IO Unit := do {
+    Terminal.clear_screen;
+    Terminal.cursor_move 0 0
+}
+
+def after_clear (action : IO WeaverMsg) : IO WeaverMsg := do {
+    let msg <- action;
+    clear_terminal;
+    IO.pure msg
+}
+
+def persist_turn_action (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : IO WeaverMsg :=
+    after_clear (record_turn_action s run delta start block)
+
+def record_turn_action (s : StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : IO WeaverMsg := do {
     let r <- Store.record_turn s run.session delta start block;
     match r {
         Result.err e => IO.pure (WeaverMsg.store_result (Option.some e)),
@@ -158,13 +190,16 @@ def persist_turn_action (s : StoreState) (run : RunState) (delta : List Message)
     }
 }
 
-def persist_turn_cmd (store : Option StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List String) : Cmd WeaverMsg :=
+def persist_turn_cmd (store : Option StoreState) (run : RunState) (delta : List Message) (start : I64) (block : List TLine) : Cmd WeaverMsg :=
     match store {
         Option.none => repaint_cmd,
         Option.some s => Cmd.perform (fn (_ : Unit) => persist_turn_action s run delta start block),
     }
 
-def persist_output_action (s : StoreState) (sess : Session) (start : I64) (block : List String) : IO WeaverMsg := do {
+def persist_output_action (s : StoreState) (sess : Session) (start : I64) (block : List TLine) : IO WeaverMsg :=
+    after_clear (record_output_action s sess start block)
+
+def record_output_action (s : StoreState) (sess : Session) (start : I64) (block : List TLine) : IO WeaverMsg := do {
     let r <- Store.record_output s sess block start;
     match r {
         Result.err e => IO.pure (WeaverMsg.store_result (Option.some e)),
@@ -172,13 +207,13 @@ def persist_output_action (s : StoreState) (sess : Session) (start : I64) (block
     }
 }
 
-def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (start : I64) (block : List String) (sess : Session) : Cmd WeaverMsg :=
+def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (start : I64) (block : List TLine) (sess : Session) : Cmd WeaverMsg :=
     match store {
         Option.none => fallback,
         Option.some s => Cmd.perform (fn (_ : Unit) => persist_output_action s sess start block),
     }
 
-def turn_result_step (m : TuiModel) (run : RunState) (lines : List String) (delta : List Message) : Pair TuiModel (Cmd WeaverMsg) :=
+def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta : List Message) : Pair TuiModel (Cmd WeaverMsg) :=
     let with_run : TuiModel := set_run m run in
     let pair := append_block_at with_run lines in
     match pair {
@@ -261,10 +296,17 @@ def page_loaded_step (m : TuiModel) (p : TranscriptPage) : Pair TuiModel (Cmd We
 /// The same page served twice means the store cannot cover the window
 /// (a short block file, or a window taller than one page): stop rather
 /// than re-requesting it inline forever.
+#[partial]
+def tline_count (ls : List TLine) : I64 :=
+    match ls {
+        List.empty => 0,
+        List.cons _ rest => 1 + tline_count rest,
+    }
+
 def same_page (old : Option TranscriptPage) (p : TranscriptPage) : Bool :=
     match old {
         Option.none => false,
-        Option.some q => Bool.and (q.start == p.start) (list_length q.lines == list_length p.lines),
+        Option.some q => Bool.and (q.start == p.start) (tline_count q.lines == tline_count p.lines),
     }
 
 def with_page_error (m : TuiModel) (e : String) : TuiModel :=
@@ -279,7 +321,7 @@ def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg)
     Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m3) Cmd.none
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none } in
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := true, banner_frame := 0 } in
     maybe_page_cmd m2
 
 /// A store write failure disables persistence for the rest of the run;
@@ -291,7 +333,7 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
             let st0 : WeaverState := m.state in
             let st : WeaverState := { st0 with store := Option.none } in
             let line : String := String.concat "warning: transcript persistence disabled: " msg in
-            Pair.pair (Model.append_lines { m with state := st } [line]) Cmd.none,
+            Pair.pair (Model.append_lines { m with state := st } [TLine.plain line]) Cmd.none,
     }
 
 /// A turn's or command's completion: the fold `f` runs, the streak
@@ -307,7 +349,10 @@ def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
 /// folds is a harmless no-op (`update_event` leaves an idle tick's
 /// model untouched).
 def repaint_cmd : Cmd WeaverMsg :=
-    Cmd.perform (fn (_ : Unit) => IO.pure (WeaverMsg.key_event Event.tick))
+    Cmd.perform (fn (_ : Unit) => do {
+        clear_terminal;
+        IO.pure (WeaverMsg.key_event Event.tick)
+    })
 
 def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
     match effect.transcript {
@@ -317,7 +362,7 @@ def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd We
 
 def command_keep (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
     let with_state : TuiModel := set_state m effect.state in
-    let pair := append_block_at with_state (Diff.lines effect.output) in
+    let pair := append_block_at with_state (plain_lines (Diff.lines effect.output)) in
     match pair {
         Pair.pair m2 at => match at {
             Pair.pair start block =>
@@ -340,14 +385,14 @@ def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMs
     }
 
 def reset_in_memory (m : TuiModel) (output : String) : Pair TuiModel (Cmd WeaverMsg) :=
-    let tr : Transcript := Transcript.append Transcript.empty (theme_split_lines output) in
+    let tr : Transcript := Transcript.append Transcript.empty (plain_lines (theme_split_lines output)) in
     let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false } in
     Pair.pair m2 Cmd.none
 
 def reset_action (st : StoreState) (output : String) : IO WeaverMsg := do {
     let tr0 <- Store.startup_transcript st.dir;
     let total : I64 := tr0.total;
-    let block : List String := Transcript.next_block tr0 (theme_split_lines output);
+    let block : List TLine := Transcript.next_block tr0 (plain_lines (theme_split_lines output));
     let _ <- Store.append_transcript st.dir total block;
     IO.pure (WeaverMsg.transcript_reset (Transcript.append tr0 block))
 }
@@ -366,20 +411,57 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         // every 100 ms and would make the double-Ctrl-C gesture
         // impossible.
         Event.tick =>
-            if m.turn_pending
-            then Pair.pair { m with spinner_frame := m.spinner_frame + 1 } Cmd.none
-            else Pair.pair m Cmd.none,
+            let m1 : TuiModel := if m.turn_pending
+                then { m with spinner_frame := m.spinner_frame + 1 }
+                else m in
+            if Bool.and m1.banner (m1.banner_frame < 12)
+            then Pair.pair { m1 with banner_frame := m1.banner_frame + 1 } Cmd.none
+            else Pair.pair m1 Cmd.none,
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
-/// The mouse's one owned gesture -- the wheel, the scroll gesture a
-/// transcript UI is expected to honor (the SGR wheel reports decode
-/// even though nothing else is selected by it). Three lines a notch.
+/// The mouse's gestures: the wheel scrolls (three rows a notch), and a
+/// left drag selects transcript text (the selection is highlighted while
+/// dragging and copied through OSC 52 on release). Other buttons are
+/// ignored.
+def is_left (b : MouseButton) : Bool :=
+    match b {
+        MouseButton.left => true,
+        _ => false,
+    }
+
 def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg) :=
     match me {
         MouseEvent.scroll_up _ _ => scroll_with_pages m wheel_step,
         MouseEvent.scroll_down _ _ => scroll_with_pages m (0 - wheel_step),
-        _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+        MouseEvent.press btn r c =>
+            if is_left btn
+            then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.begin_selection mm r c) m) Cmd.none
+            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+        MouseEvent.drag btn r c =>
+            if is_left btn
+            then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.drag_selection mm r c) m) Cmd.none
+            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+        MouseEvent.release btn r c =>
+            if is_left btn
+            then finish_selection_step m r c
+            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+    }
+
+/// End a drag: the release point is folded in one last time, the model
+/// drops the highlight, and a non-empty selection is copied (a perform,
+/// so the forced repaint also repaints the de-highlighted row).
+def finish_selection_step (m : TuiModel) (r : I64) (c : I64) : Pair TuiModel (Cmd WeaverMsg) :=
+    let dragged : TuiModel := Model.drag_selection m r c in
+    match Model.finish_selection dragged {
+        Pair.pair m2 text => match text {
+            Option.none => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) Cmd.none,
+            Option.some t => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2)
+                (Cmd.perform (fn (_ : Unit) => do {
+                    Clipboard.copy t;
+                    IO.pure (WeaverMsg.key_event Event.tick)
+                })),
+        },
     }
 
 def wheel_step : I64 := 3
@@ -390,8 +472,8 @@ def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
         Key.enter => enter_key m,
         Key.up => hist_key m,
         Key.down => hist_down_key m,
-        Key.page_up => scroll_with_pages m (panel_height m),
-        Key.page_down => scroll_with_pages m (0 - panel_height m),
+        Key.page_up => scroll_with_pages m (page_step m),
+        Key.page_down => scroll_with_pages m (0 - page_step m),
         Key.ctrl c =>
             if c == "c" then ctrl_c_step m
             else if c == "u" then scroll_with_pages m (half_page m)
@@ -402,10 +484,16 @@ def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
         _ => Pair.pair (streak_reset_input m k) Cmd.none,
     }
 
-/// The half-page scroll: half the panel, at least one row (Claude
+/// A screenful of CONTENT rows: the panel minus the indicator row it
+/// spends while scrolled.
+def page_step (m : TuiModel) : I64 :=
+    let h : I64 := panel_height m in
+    if h < 2 then 1 else h - 1
+
+/// The half-page scroll: half a screen, at least one row (Claude
 /// Code's Ctrl+U/Ctrl+D binding).
 def half_page (m : TuiModel) : I64 :=
-    let h : I64 := panel_height m in
+    let h : I64 := page_step m in
     if h < 2 then 1 else h / 2
 
 def streak_reset_input (m : TuiModel) (k : Key) : TuiModel :=
@@ -481,12 +569,12 @@ def ctrl_c_step (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     else
         let m1 : TuiModel := { m with ctrl_c_streak := 1 } in
         let start : I64 := m1.transcript.total in
-        let m2 : TuiModel := Model.append_lines m1 [ctrl_c_hint_line] in
+        let m2 : TuiModel := Model.append_lines m1 [TLine.plain ctrl_c_hint_line] in
         // While a turn runs its fiber owns the store: an inline append
         // would race the echoed prompt (and the shared index temp file),
         // so the hint stays in memory -- it is a UI line, not content.
         let cmd : Cmd WeaverMsg :=
-            if m.turn_pending then Cmd.none else persist_block_cmd m2.state.store start [ctrl_c_hint_line] in
+            if m.turn_pending then Cmd.none else persist_block_cmd m2.state.store start [TLine.plain ctrl_c_hint_line] in
         Pair.pair m2 cmd
 
 def ctrl_c_hint_line : String := "press Ctrl+C again to exit (or /quit)"
@@ -512,14 +600,14 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     then Pair.pair m Cmd.none
     else
         let st : WeaverState := m.state in
-        let echo : List String := echo_lines text in
-        let block : List String := Transcript.next_block m.transcript echo in
+        let echo : List TLine := echo_lines text in
+        let block : List TLine := Transcript.next_block m.transcript echo in
         let start : I64 := m.transcript.total in
         let store : Option StoreState := m.state.store in
         let m2 : TuiModel :=
             { (with_streak_reset
                 (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
-                with turn_pending := true } in
+                with turn_pending := true, banner := false } in
         Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => do {
             let _ <- write_echo store start block;
             run_submitted_line st text
@@ -527,7 +615,7 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
 
 /// The submitted line's echo block is durable before the turn starts (it
 /// rides the async action -- a pure update cannot write).
-def write_echo (store : Option StoreState) (start : I64) (block : List String) : IO (Result String Unit) :=
+def write_echo (store : Option StoreState) (start : I64) (block : List TLine) : IO (Result String Unit) :=
     match store {
         Option.none => IO.pure (Result.ok unit),
         Option.some s => do {
@@ -551,16 +639,13 @@ def hist_push (m : TuiModel) (text : String) : TuiModel :=
 def hist_cons_empty (text : String) : List String :=
     List.cons text List.empty
 
-/// A submitted line is echoed as its OWN lines: the first carries the
-/// `you:` voice (the theme's user class), the rest -- a multiline
-/// submit -- plain below it.
+/// A submitted line is echoed as its OWN lines, all tagged as the user's
+/// role -- a multiline submit is one undivided block, styled cyan with no
+/// prefix. The blank separator before the block (and the next one) is the
+/// spacing that distinguishes turns.
 #[partial]
-def echo_lines (text : String) : List String :=
-    let lines : List String := theme_split_lines text in
-    match lines {
-        List.empty => List.empty,
-        List.cons first rest => List.cons (String.concat "you: " first) rest,
-    }
+def echo_lines (text : String) : List TLine :=
+    List.map TLine.user_line (theme_split_lines text)
 
 def clear_input (m : TuiModel) : TuiModel :=
     { m with input := weaver_input_state }
@@ -585,9 +670,20 @@ def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
 /// but folding a `WeaverMsg` back instead of writing through line
 /// seams.
 pub def run_submitted_line (st : WeaverState) (text : String) : IO WeaverMsg :=
-    if String.starts_with "/" text
+    if plan_dialog_wanted st text
+    then plan_dialog_step st text
+    else if String.starts_with "/" text
     then command_step_tui st text
     else model_step_tui st text
+
+def mode_is_plan (m : Mode) : Bool :=
+    match m { Mode.plan => true, _ => false }
+
+/// In plan mode `/plan` (and `/plan approve …`) opens the review dialog
+/// instead of printing the status line.
+def plan_dialog_wanted (st : WeaverState) (text : String) : Bool :=
+    Bool.and (mode_is_plan st.mode)
+        (Bool.or (text == "/plan") (String.starts_with "/plan approve" text))
 
 def command_step_tui (st : WeaverState) (line : String) : IO WeaverMsg := do {
     let r <- Commands.dispatch line st;
@@ -606,7 +702,7 @@ def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :
 
 def model_step_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
     if st.run.turns_left < 1
-    then IO.pure (WeaverMsg.turn_result st.run ["turn budget spent -- /clear or restart with --max-turns"] List.empty)
+    then IO.pure (WeaverMsg.turn_result st.run [TLine.plain "turn budget spent -- /clear or restart with --max-turns"] List.empty)
     else drive_turn_tui st text
 
 def drive_turn_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
@@ -627,8 +723,8 @@ def turn_result_of (st : WeaverState) (before : I64) (r : Result WeaverError Run
 
 /// The transcript's error entry: the one render point does the prose,
 /// the entry is a transcript line Phase 11's palette will color.
-def error_line (e : WeaverError) : String :=
-    String.concat "error: " (WeaverError.show e)
+def error_line (e : WeaverError) : TLine :=
+    TLine.plain (String.concat "error: " (WeaverError.show e))
 
 /// Rebuild the turn's `Gate` from `Gate.weaver_tui` (instead of
 /// `Gate.weaver`) and swap the emit seam to `TuiApp.progress` (NOT
@@ -701,7 +797,8 @@ def blank_of_go (n : I64) : String :=
 /// The preview is ONE row, so only the fragment's last line is shown
 /// (a streamed newline would otherwise move the cursor onto the border).
 def progress_text (frag : String) (cols : I64) : String :=
-    String.slice (String.concat "[thinking] " (last_fragment_line frag)) 0 (cols - 1)
+    let budget : I64 := if cols - 1 < 1 then 1 else cols - 1 in
+    Text.take_width (String.concat "[thinking] " (last_fragment_line frag)) budget
 
 def last_fragment_line (frag : String) : String :=
     match List.reverse (theme_split_lines frag) {
@@ -711,18 +808,19 @@ def last_fragment_line (frag : String) : String :=
 
 // ── transcript rendering ─────────────────────────────────────────────────
 
-def transcript_lines_of_messages (ms : List Message) : List String :=
+def transcript_lines_of_messages (ms : List Message) : List TLine :=
     List.map render_message ms
 
-def render_message (m : Message) : String :=
-    String.concat (role_label m.role) (String.concat ": " (List.intercalate " " (List.map render_content m.content)))
-
-def role_label (r : Role) : String :=
-    match r {
-        Role.system_ => "system",
-        Role.user => "user",
-        Role.assistant => "assistant",
-        Role.tool => "tool",
+/// Assistant text is raw (no `assistant:` label); a user message is the
+/// echoed prompt's role; tool/system output keeps its one-word label so
+/// the theme can still classify it.
+def render_message (m : Message) : TLine :=
+    let text : String := List.intercalate " " (List.map render_content m.content) in
+    match m.role {
+        Role.user => TLine.user_line text,
+        Role.assistant => TLine.plain text,
+        Role.system_ => TLine.plain (String.concat "system: " text),
+        Role.tool => TLine.plain (String.concat "tool: " text),
     }
 
 def render_content (c : Content) : String :=
@@ -755,7 +853,13 @@ def list_msg_length (xs : List Message) : I64 :=
 /// `Gate.weaver`, minus the read/write seams dumb mode needs and this
 /// does not (it owns its own screen and its own stdin read).
 pub def Gate.weaver_tui (mode : Mode) (colors : Bool) : Gate :=
-    { ask := weaver_tui_ask mode colors }
+    { ask := weaver_tui_ask mode colors, precheck := weaver_tui_precheck mode }
+
+def weaver_tui_precheck (mode : Mode) (p : Pick) : IO (Option Approval) :=
+    match Policy.decide p.cap mode {
+        Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
+        _ => IO.pure Option.none,
+    }
 
 def weaver_tui_ask (mode : Mode) (colors : Bool) (p : Pick) : IO Approval :=
     match Policy.decide p.cap mode {
@@ -763,124 +867,6 @@ def weaver_tui_ask (mode : Mode) (colors : Bool) (p : Pick) : IO Approval :=
         Decision.ask => prompt_overlay colors p,
         Decision.refuse reason => IO.pure (Approval.deny reason),
     }
-
-def prompt_overlay (colors : Bool) (p : Pick) : IO Approval := do {
-    let diff_pair <- Diff.for_input p.name p.input;
-    let _ <- render_overlay colors p diff_pair;
-    // Keys typed while the model call blocked sit in the tty buffer --
-    // without this drain the overlay's one-shot read would consume the
-    // STALE keystroke and phantom-answer the prompt.
-    let _ <- drain_stale_keys 64;
-    let key_opt <- read_one_key;
-    let ap : Approval := approval_of_key key_opt;
-    let _ <- echo_answer colors p diff_pair ap;
-    return ap
-}
-
-/// Drop the buffered keystrokes the drain would otherwise feed the
-/// answer read: `poll 0 -> read 1 -> drop` until the tap runs dry.
-/// EOF stops the drain but leaves the reader to the read itself.
-#[terminating]
-def drain_stale_keys (budget : I64) : IO Unit :=
-    if Bool.not (budget > 0)
-    then IO.pure unit
-    else do {
-        let readable <- Terminal.poll 0;
-        if Bool.not readable
-        then IO.pure unit
-        else do {
-            let chunk <- IO.read_stdin_exact 1;
-            if String.length chunk == 0
-            then IO.pure unit
-            else drain_stale_keys (budget - 1)
-        }
-    }
-
-/// One immediate piece of feedback on the overlay's answer row (the
-/// last line of the overlay): the answer's echo, written before the
-/// gate returns -- an approval used to show nothing until the whole
-/// turn's next render, so under a slow provider the prompt looked dead.
-def echo_answer (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (ap : Approval) : IO Unit := do {
-    let size <- Terminal.size;
-    match size {
-        Pair.pair rows cols => echo_answer_at colors p diff_pair ap rows cols,
-    }
-}
-
-def echo_answer_at (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (ap : Approval) (rows : I64) (cols : I64) : IO Unit := do {
-    let lines : List DisplayRow := overlay_rows_at colors p diff_pair rows cols;
-    // The answer row sits inside overlay_widget's border + padding:
-    // one border line, one padding row down (row), and one border + two
-    // padding columns across (col). Keep these in step with
-    // `overlay_widget`'s `border`/`padding 1 1 1 2`.
-    let row : I64 := 1 + 1 + (list_length_rows lines - 1);
-    let col : I64 := 1 + 2 + String.length (gate_answer_prompt p.cap);
-    let _ <- Terminal.cursor_move row col;
-    IO.write_stdout (gate_answer_feedback p.cap ap);
-    IO.flush_stdout
-}
-
-def list_length_rows (rs : List DisplayRow) : I64 :=
-    match rs {
-        List.empty => 0,
-        List.cons _ rest => 1 + list_length_rows rest,
-    }
-
-def approval_of_key (k : Option Key) : Approval :=
-    match k {
-        Option.none => Approval.deny "declined by user (eof)",
-        Option.some key => match key {
-            Key.char c =>
-                if c == "y" then Approval.once
-                else if c == "a" then Approval.always
-                else Approval.deny "declined by user",
-            _ => Approval.deny "declined by user",
-        }
-    }
-
-def render_overlay (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) : IO Unit := do {
-    let size <- Terminal.size;
-    render_overlay_at colors p diff_pair size
-}
-
-def render_overlay_at (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (size : Pair I64 I64) : IO Unit :=
-    match size {
-        Pair.pair rows cols => do {
-            // A real clear, not a diff: an overlay fires mid-batch, so
-            // `prev` (the main loop's back buffer) is irrelevant here --
-            // only `Terminal.clear_screen` guarantees no transcript text
-            // shows through around the prompt.
-            Terminal.clear_screen;
-            Terminal.cursor_move 0 0;
-            let screen := render (overlay_widget colors p diff_pair rows cols) (mk_rect 0 0 cols rows) (empty_screen rows cols);
-            let deltas := diff (empty_screen rows cols) screen;
-            IO.write_stdout (apply_deltas deltas);
-            IO.flush_stdout
-        }
-    }
-
-def overlay_widget (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (rows : I64) (cols : I64) : Widget :=
-    Widget.column [
-        sized (LayoutSize.fill 1) (with_style (theme_border_style_with colors) (border BorderStyle.rounded
-            (padding 1 1 1 2 (Widget.column (List.map Model.display_row_widget (overlay_rows_at colors p diff_pair rows cols)))))),
-    ]
-
-/// The overlay's wrapped rows, capped at its content height (`rows - 5`:
-/// the border's two lines and the top/bottom padding) with the answer
-/// prompt last, so `echo_answer`'s row arithmetic can index it.
-def overlay_rows_at (colors : Bool) (p : Pick) (diff_pair : Option (Pair String String)) (rows : I64) (cols : I64) : List DisplayRow :=
-    let width : I64 := if cols - 4 < 1 then 1 else cols - 4 in
-    Model.take_last_rows (if rows - 5 < 0 then 0 else rows - 5) (overlay_wrap_lines colors width (overlay_lines p diff_pair))
-
-#[partial]
-def overlay_wrap_lines (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
-    match lines {
-        List.empty => List.empty,
-        List.cons l rest => List.append (Model.display_line colors width l) (overlay_wrap_lines colors width rest),
-    }
-
-def overlay_lines (p : Pick) (diff_pair : Option (Pair String String)) : List String :=
-    List.append [pick_header p] (List.append (diff_lines_of diff_pair) ["", gate_answer_prompt p.cap])
 
 def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
     match diff_pair {
@@ -890,36 +876,300 @@ def diff_lines_of (diff_pair : Option (Pair String String)) : List String :=
         }
     }
 
-// ── a private, one-shot key read ────────────────────────────────────────
-//
-// Does not touch the main loop's `InputReader` -- see the header comment.
-// Blocks (negative timeout) until one decoded `Key` arrives, or returns
-// `none` at EOF (never silently approves).
+#[partial]
+def list_length_rows (rs : List DisplayRow) : I64 :=
+    match rs {
+        List.empty => 0,
+        List.cons _ rest => 1 + list_length_rows rest,
+    }
 
-def read_one_key : IO (Option Key) := do {
-    let _ <- Terminal.poll (0 - 1);
-    read_key_loop ""
+def prompt_overlay (colors : Bool) (p : Pick) : IO Approval := do {
+    let diff_pair <- Diff.for_input p.name p.input;
+    let body : List String := List.append [pick_header p] (diff_lines_of diff_pair);
+    let o0 : DialogOption := { label := "Approve once", hint := "y", key := "y" };
+    let o1 : DialogOption := { label := String.concat "Always allow all " (String.concat (cap_name p.cap) "s this session"), hint := "a", key := "a" };
+    let o2 : DialogOption := { label := "Deny", hint := "n", key := "n" };
+    let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
+    let d : Dialog := Dialog.make "Permission required" subtitle body [o0, o1, o2];
+    let default_idx : I64 := if cap_is_read p.cap then 0 else 2;
+    let pr <- dialog_loop colors (Dialog.with_default d default_idx);
+    match pr {
+        Pair.pair final step => match step {
+            DialogStep.choose i => IO.pure (approval_with_note i (Dialog.note_text final)),
+            _ => IO.pure (Approval.deny "declined by user"),
+        },
+    }
+}
+
+def cap_is_read (c : Capability) : Bool :=
+    match c { Capability.read => true, _ => false }
+
+/// The first option approves once, the second approves for the whole
+/// session, the third denies; a non-empty note rides the answer (on an
+/// approval the model sees it on the tool result, on a denial it is the
+/// reason).
+def approval_with_note (i : I64) (note : String) : Approval :=
+    let has : Bool := Bool.not (String.is_empty note) in
+    if i == 1
+    then (if has then Approval.always_note note else Approval.always)
+    else if i == 2
+    then Approval.deny (if has then note else "declined by user")
+    else (if has then Approval.once_note note else Approval.once)
+
+// ── the plan dialog ────────────────────────────────────────────────────
+
+#[partial]
+def content_text (c : Content) : String :=
+    match c {
+        Content.text s => s,
+        _ => "",
+    }
+
+def message_text (m : Message) : String :=
+    List.intercalate "\n" (List.map content_text m.content)
+
+#[partial]
+def last_assistant_go (ms : List Message) : Option String :=
+    match ms {
+        List.empty => Option.none,
+        List.cons m rest =>
+            match m.role {
+                Role.assistant => Option.some (message_text m),
+                _ => last_assistant_go rest,
+            },
+    }
+
+def plan_body (st : WeaverState) : List String :=
+    match last_assistant_go (List.reverse st.run.session.history) {
+        Option.none => ["(no plan message found -- keep planning, then /plan again)"],
+        Option.some content => theme_split_lines content,
+    }
+
+def plan_effect (st : WeaverState) (output : String) : Effect := Effect.ok st output
+
+def note_into_state (st : WeaverState) (note : String) : WeaverState :=
+    let msg : Message := { role := Role.user, content := [Content.text note] } in
+    let base : Session := st.run.session in
+    let hist : List Message := base.history in
+    let sess : Session := { base with history := List.append hist [msg] } in
+    let run0 : RunState := st.run in
+    let run2 : RunState := { run0 with session := sess } in
+    { st with run := run2 }
+
+def persist_note (st : WeaverState) (note : String) : IO Unit :=
+    match st.store {
+        Option.none => IO.pure unit,
+        Option.some s => do {
+            let _ <- Store.append_history_note s st.run.session note;
+            IO.pure unit
+        },
+    }
+
+def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg := do {
+    let o0 : DialogOption := { label := "Approve and execute (allow_edit)", hint := "a", key := "a" };
+    let o1 : DialogOption := { label := "Approve to manual", hint := "m", key := "m" };
+    let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
+    let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
+    let d : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
+    let pr <- dialog_loop st.colors d;
+    match pr {
+        Pair.pair final step => match step {
+            DialogStep.choose i =>
+                if i == 2
+                then do {
+                    let note : String := Dialog.note_text final;
+                    if String.is_empty note
+                    then IO.pure (WeaverMsg.command_result (plan_effect st "plan not approved -- type your revision in the input box"))
+                    else IO.pure (WeaverMsg.input_set note)
+                } else if i == 3
+                then IO.pure (WeaverMsg.command_result (plan_effect st "plan not approved"))
+                else do {
+                    let target : String := if i == 1 then "manual" else "allow_edit";
+                    let line : String := String.concat "/plan approve " target;
+                    let r <- Commands.dispatch line st;
+                    match r {
+                        Result.err e => IO.pure (WeaverMsg.command_failed e),
+                        Result.ok e => do {
+                            let note : String := Dialog.note_text final;
+                            if String.is_empty note
+                            then IO.pure (WeaverMsg.command_result e)
+                            else do {
+                                persist_note e.state note;
+                                let st2 : WeaverState := note_into_state e.state note;
+                                let out : String := String.concat e.output (String.concat "\nnote: " note);
+                                let e2 : Effect := { e with state := st2, output := out };
+                                IO.pure (WeaverMsg.command_result e2)
+                            }
+                        },
+                    }
+                },
+            _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan not approved")),
+        },
+    }
+}
+
+// ── dialog rendering and input ─────────────────────────────────────────
+
+#[partial]
+def take_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
+    if n < 1 then List.empty
+    else match rs {
+        List.empty => List.empty,
+        List.cons r rest => List.cons r (take_rows (n - 1) rest),
+    }
+
+#[partial]
+def drop_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
+    if n < 1 then rs
+    else match rs {
+        List.empty => rs,
+        List.cons _ rest => drop_rows (n - 1) rest,
+    }
+
+#[partial]
+def dialog_body_rows (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
+    match lines {
+        List.empty => List.empty,
+        List.cons l rest => List.append (Model.display_line colors width (TLine.plain l)) (dialog_body_rows colors width rest),
+    }
+
+def dim_row (r : DisplayRow) : DisplayRow :=
+    let base : TextStyle := r.style in
+    let st : TextStyle := { base with dim := true } in
+    { r with style := st }
+
+def bold_row (r : DisplayRow) : DisplayRow :=
+    let base : TextStyle := r.style in
+    let st : TextStyle := { base with bold := true } in
+    { r with style := st }
+
+def reverse_row (r : DisplayRow) : DisplayRow :=
+    let base : TextStyle := r.style in
+    let st : TextStyle := { base with reverse := true } in
+    { r with style := st }
+
+#[partial]
+def dialog_option_rows (colors : Bool) (d : Dialog) (i : I64) (width : I64) : List DisplayRow :=
+    match Dialog.option_at d i {
+        Option.none => List.empty,
+        Option.some o =>
+            let marker : String := if i == d.selected then "> " else "  " in
+            let suffix : String := if String.is_empty o.hint then "" else String.concat "  (" (String.concat o.hint ")") in
+            let line : String := String.concat marker (String.concat o.label suffix) in
+            let rows : List DisplayRow := Model.display_line colors width (TLine.plain line) in
+            let styled : List DisplayRow := if i == d.selected then List.map reverse_row rows else rows in
+            List.append styled (dialog_option_rows colors d (i + 1) width),
+    }
+
+def dialog_note_row (colors : Bool) (d : Dialog) (width : I64) : List DisplayRow :=
+    let text : String :=
+        if d.editing
+        then String.concat "note: " (String.concat d.note.value "_")
+        else if String.is_empty d.note.value
+        then "note: (press e to add one)"
+        else String.concat "note: " d.note.value in
+    List.map dim_row (Model.display_line colors width (TLine.plain text))
+
+/// The dialog's visible rows. The body yields to the fixed rows on a
+/// short terminal, so the options, note and footer stay visible.
+def dialog_rows (colors : Bool) (d : Dialog) (width : I64) (height : I64) : List DisplayRow :=
+    let budget : I64 := if height - 4 < 1 then 1 else height - 4 in
+    let nopts : I64 := Dialog.option_count d in
+    let fixed : I64 := 2 + 1 + 1 + nopts + 1 + 1 + 1 in
+    let body_budget : I64 := if budget - fixed < 1 then 0 else budget - fixed in
+    let body_all : List DisplayRow := dialog_body_rows colors width d.body in
+    let body : List DisplayRow := take_rows body_budget (drop_rows d.scroll body_all) in
+    let title_rows : List DisplayRow := List.map bold_row (Model.display_line colors width (TLine.plain d.title)) in
+    let subtitle_rows : List DisplayRow := List.map dim_row (Model.display_line colors width (TLine.plain d.subtitle)) in
+    let blank : List DisplayRow := Model.display_line colors width (TLine.plain "") in
+    let foot : List DisplayRow := List.map dim_row (Model.display_line colors width (TLine.plain d.footer)) in
+    let a : List DisplayRow := List.append title_rows subtitle_rows in
+    let b : List DisplayRow := List.append a blank in
+    let c : List DisplayRow := List.append b body in
+    let e : List DisplayRow := List.append c blank in
+    let f : List DisplayRow := List.append e (dialog_option_rows colors d 0 width) in
+    let g : List DisplayRow := List.append f blank in
+    let h : List DisplayRow := List.append g (dialog_note_row colors d width) in
+    let all : List DisplayRow := List.append h foot in
+    take_rows budget all
+
+def dialog_total_rows (colors : Bool) (d : Dialog) (width : I64) : I64 :=
+    let nopts : I64 := Dialog.option_count d in
+    let body : I64 := list_length_rows (dialog_body_rows colors width d.body) in
+    body + nopts + 7
+
+def dialog_widget (colors : Bool) (rows : List DisplayRow) : Widget :=
+    Widget.column [
+        sized (LayoutSize.fill 1) (with_style (theme_border_style_with colors) (border BorderStyle.rounded
+            (padding 1 1 1 2 (Widget.column (List.map Model.display_row_widget rows))))),
+    ]
+
+def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {
+    let size <- Terminal.size;
+    match size {
+        Pair.pair rows cols => do {
+            let raw_w : I64 := cols - 4;
+            let width : I64 := if raw_w < 20 then (if raw_w < 1 then 1 else raw_w) else (if raw_w < 88 then raw_w else 88);
+            let content_w : I64 := if width - 4 < 1 then 1 else width - 4;
+            let total : I64 := dialog_total_rows colors d content_w;
+            let max_h : I64 := if rows - 2 < 6 then 6 else rows - 2;
+            let wanted : I64 := total + 4;
+            let height : I64 := if wanted < max_h then wanted else max_h;
+            let body : List DisplayRow := dialog_rows colors d content_w height;
+            let rect : Rect := center_rect_in (mk_rect 0 0 cols rows) width height;
+            Terminal.clear_screen;
+            Terminal.cursor_move 0 0;
+            let screen := render (dialog_widget colors body) rect (empty_screen rows cols);
+            let deltas := diff (empty_screen rows cols) screen;
+            IO.write_stdout (apply_deltas deltas);
+            IO.flush_stdout
+        }
+    }
+}
+
+/// The modal loop: repaint, then poll for a key with a timeout (a resize
+/// while the dialog blocks is noticed on the next timeout). The final
+/// dialog rides along so the caller can read the note.
+#[partial]
+def dialog_loop (colors : Bool) (d : Dialog) : IO (Pair Dialog DialogStep) := do {
+    let _ <- render_dialog colors d;
+    let ready <- Terminal.poll 100;
+    if Bool.not ready
+    then dialog_loop colors d
+    else do {
+        let eopt <- dialog_event_loop "";
+        match eopt {
+            Option.none => IO.pure (Pair.pair d DialogStep.cancel),
+            Option.some e => match e {
+                Event.key k => match Dialog.step d k {
+                    Pair.pair d2 step => match step {
+                        DialogStep.continue => dialog_loop colors d2,
+                        _ => IO.pure (Pair.pair d2 step),
+                    },
+                },
+                Event.paste text => dialog_loop colors (Dialog.paste d text),
+                _ => dialog_loop colors d,
+            },
+        }
+    }
 }
 
 #[terminating]
-def read_key_loop (pending : String) : IO (Option Key) := do {
+def dialog_event_loop (pending : String) : IO (Option Event) := do {
     let chunk <- IO.read_stdin_exact 1;
     if String.length chunk == 0
     then IO.pure Option.none
-    else key_from_decoded (Input.decode (pending ++ chunk))
+    else match Input.decode (pending ++ chunk) {
+        Pair.pair evs leftover => match evs {
+            List.empty =>
+                if leftover == "\u{1b}"
+                then do {
+                    // A lone ESC: give a split sequence 50 ms to finish,
+                    // otherwise it is the Escape key.
+                    let more <- Terminal.poll 50;
+                    if more then dialog_event_loop leftover else IO.pure (Option.some (Event.key Key.escape))
+                } else dialog_event_loop leftover,
+            List.cons e _ => IO.pure (Option.some e),
+        },
+    }
 }
-
-def key_from_decoded (decoded : Pair (List Event) String) : IO (Option Key) :=
-    match decoded {
-        Pair.pair evs leftover => key_from_list evs leftover
-    }
-
-#[terminating]
-def key_from_list (evs : List Event) (leftover : String) : IO (Option Key) :=
-    match evs {
-        List.empty => read_key_loop leftover,
-        List.cons e rest => match e {
-            Event.key k => IO.pure (Option.some k),
-            _ => key_from_list rest leftover,
-        }
-    }

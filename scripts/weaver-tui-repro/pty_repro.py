@@ -50,12 +50,13 @@ pump(2)
 t1 = txt()
 s1 = striptight(t1) + striptight(t0); print("PASS2 overlay up after go:", "once" in s1 or "oncedeny" in s1)
 
-# 3. answer feedback appears immediately
+# 3. one letter answers the dialog (the new dialog has no raw echo row;
+# the turn continuing is the observable)
 os.write(master, b"y")
 time.sleep(0.6)
-pump(1)
+pump(2)
 t2 = txt()
-print("PASS3 answer echo:", "y--approved" in striptight(t2))
+print("PASS3 answer accepted, turn continues:", "done" in striptight(t2))
 
 # 4. turn finished with transcript rendered
 pump(2)

@@ -87,6 +87,7 @@ def cap_cached (cap : Capability) (cached : List Capability) : Bool :=
 def cache_answer (ap : Approval) (cap : Capability) (cached : List Capability) : List Capability :=
     match ap {
         Approval.always => List.cons cap cached,
+        Approval.always_note _ => List.cons cap cached,
         _ => cached,
     }
 
@@ -101,9 +102,17 @@ def consult_ask (gate : Gate) (impl : ToolImpl) (input : Json) (cached : List Ca
 }
 
 /// One gate consultation with the cache threaded: `Pair.pair` the
-/// answer and the updated cache.
-def consult_gate (gate : Gate) (impl : ToolImpl) (input : Json) (cached : List Capability) : IO (Pair Approval (List Capability)) :=
-    if cap_cached impl.cap cached then consult_cached cached else consult_ask gate impl input cached
+/// answer and the updated cache. The PRECHECK runs FIRST, even when the
+/// capability is cached: approving `write` in manual mode must not let a
+/// later switch to plan mode run writes without asking.
+def consult_gate (gate : Gate) (impl : ToolImpl) (input : Json) (cached : List Capability) : IO (Pair Approval (List Capability)) := do {
+    let pre <- gate.precheck (gate_pick impl input);
+    match pre {
+        Option.some ap => IO.pure (Pair.pair ap cached),
+        Option.none =>
+            if cap_cached impl.cap cached then consult_cached cached else consult_ask gate impl input cached,
+    }
+}
 
 /// One gated dispatch. `run_tool`'s error contract is unchanged; the
 /// gate only decides whether it is reached.
@@ -124,7 +133,36 @@ def apply_approval (id : String) (impl : ToolImpl) (input : Json) (ap : Approval
     match ap {
         Approval.deny reason =>
             ResultT.mk (return (Result.ok (Pair.pair (Content.tool_result id (String.concat "denied: " reason) true) cached))),
+        Approval.once_note note => ResultT.mk (do {
+            let r <- ResultT.run (run_with_cache id impl input cached);
+            match r {
+                Result.err e => IO.pure (Result.err e),
+                Result.ok pr => match pr {
+                    Pair.pair content cached2 =>
+                        IO.pure (Result.ok (Pair.pair (with_note content note) cached2)),
+                },
+            }
+        }),
+        Approval.always_note note => ResultT.mk (do {
+            let r <- ResultT.run (run_with_cache id impl input cached);
+            match r {
+                Result.err e => IO.pure (Result.err e),
+                Result.ok pr => match pr {
+                    Pair.pair content cached2 =>
+                        IO.pure (Result.ok (Pair.pair (with_note content note) cached2)),
+                },
+            }
+        }),
         _ => run_with_cache id impl input cached,
+    }
+
+/// Attach a human note to a tool result: the model and the transcript
+/// both see it, without inventing a second message.
+def with_note (c : Content) (note : String) : Content :=
+    match c {
+        Content.tool_result id output is_error =>
+            Content.tool_result id (String.concat output (String.concat "\nnote: " note)) is_error,
+        _ => c,
     }
 
 def run_with_cache (id : String) (impl : ToolImpl) (input : Json) (cached : List Capability) : ResultT String IO (Pair Content (List Capability)) := do {

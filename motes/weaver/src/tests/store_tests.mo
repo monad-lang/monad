@@ -1,6 +1,8 @@
 /// Pure tests for the session store: absolute transcript coordinates,
-/// paging slices, JSON codecs and path resolution. No IO.
+/// paging slices, JSON codecs (including the v1 -> v2 line migration) and
+/// path resolution. No IO.
 use weaver::store {
+    TLine, TLine.plain, TLine.user_line,
     Transcript, TranscriptPage, StoreIndex, StoreIndexBlock, StoreMeta,
     Transcript.empty, Transcript.append, Transcript.next_block, Transcript.slice,
     Transcript.with_page,
@@ -16,74 +18,119 @@ use std::path {Path.to_string}
 use std::list {List.length}
 
 #[partial]
-def lines_go (i : I64) (n : I64) : List String :=
+def plain_go (i : I64) (n : I64) : List TLine :=
     if n < i then List.empty
-    else List.cons (String.concat "l" (I64.to_string i)) (lines_go (i + 1) n)
+    else List.cons (TLine.plain (String.concat "l" (I64.to_string i))) (plain_go (i + 1) n)
 
-def lines_from (n : I64) : List String := lines_go 1 n
+def plain_from (n : I64) : List TLine := plain_go 1 n
 
-def pair_of (pr : Pair StoreIndexBlock (List String)) : StoreIndexBlock :=
+def plain_lines (ss : List String) : List TLine :=
+    match ss {
+        List.empty => List.empty,
+        List.cons s rest => List.cons (TLine.plain s) (plain_lines rest),
+    }
+
+#[partial]
+def texts (ls : List TLine) : List String :=
+    match ls {
+        List.empty => List.empty,
+        List.cons l rest => List.cons l.text (texts rest),
+    }
+
+def pair_of (pr : Pair StoreIndexBlock (List TLine)) : StoreIndexBlock :=
     match pr { Pair.pair b _ => b }
 
-def lines_of (pr : Pair StoreIndexBlock (List String)) : List String :=
+def lines_of (pr : Pair StoreIndexBlock (List TLine)) : List TLine :=
     match pr { Pair.pair _ ls => ls }
+
+#[partial]
+def nth_line (ls : List TLine) (i : I64) : TLine :=
+    match ls {
+        List.empty => TLine.plain "",
+        List.cons l rest => if i < 1 then l else nth_line rest (i - 1),
+    }
 
 // ── coordinates ───────────────────────────────────────────────────────
 
 #[test]
 def test_append_tracks_total_and_tail : Bool :=
-    let t : Transcript := Transcript.append Transcript.empty ["a", "b"] in
+    let t : Transcript := Transcript.append Transcript.empty (plain_lines ["a", "b"]) in
     t.total == 2 && t.tail_start == 0 && List.length t.tail == 2
 
 #[test]
 def test_next_block_inserts_a_separator_after_the_first : Bool :=
-    let t : Transcript := Transcript.append Transcript.empty ["a"] in
-    let blk : List String := Transcript.next_block t ["b"] in
-    List.length blk == 2 && (match blk { List.cons x _ => x == "", _ => false })
+    let t : Transcript := Transcript.append Transcript.empty (plain_lines ["a"]) in
+    let blk : List TLine := Transcript.next_block t (plain_lines ["b"]) in
+    List.length blk == 2 && (match blk { List.cons x _ => x.text == "", _ => false })
 
 #[test]
 def test_empty_transcript_has_no_separator : Bool :=
-    Transcript.next_block Transcript.empty ["a"] == ["a"]
+    texts (Transcript.next_block Transcript.empty (plain_lines ["a"])) == ["a"]
 
 #[test]
 def test_tail_trims_at_tail_lines : Bool :=
     let n : I64 := Store.tail_lines + 100 in
-    let t : Transcript := Transcript.append Transcript.empty (lines_from n) in
+    let t : Transcript := Transcript.append Transcript.empty (plain_from n) in
     List.length t.tail == Store.tail_lines && t.tail_start == 100 && t.total == n
 
 #[test]
 def test_slice_reads_the_tail : Bool :=
-    let t : Transcript := Transcript.append Transcript.empty ["a", "b", "c"] in
-    Transcript.slice t 0 3 == ["a", "b", "c"] && Transcript.slice t 1 1 == ["b"]
+    let t : Transcript := Transcript.append Transcript.empty (plain_lines ["a", "b", "c"]) in
+    texts (Transcript.slice t 0 3) == ["a", "b", "c"] && texts (Transcript.slice t 1 1) == ["b"]
 
 #[test]
 def test_page_covers_lines_above_the_tail : Bool :=
-    let t0 : Transcript := Transcript.append Transcript.empty (lines_from 600) in
-    let p : TranscriptPage := { start := 0, lines := lines_from 88 } in
+    let t0 : Transcript := Transcript.append Transcript.empty (plain_from 600) in
+    let p : TranscriptPage := { start := 0, lines := plain_from 88 } in
     let t : Transcript := Transcript.with_page t0 p in
-    Transcript.slice t 0 2 == ["l1", "l2"] && Transcript.slice t 86 3 == ["l87", "l88", "l89"]
+    texts (Transcript.slice t 0 2) == ["l1", "l2"] && texts (Transcript.slice t 86 3) == ["l87", "l88", "l89"]
 
 #[test]
 def test_uncovered_indices_are_placeholders : Bool :=
-    let t : Transcript := Transcript.append Transcript.empty (lines_from 600) in
-    Transcript.slice t 0 2 == ["", ""] && Transcript.slice t 86 4 == ["", "", "l89", "l90"]
+    let t : Transcript := Transcript.append Transcript.empty (plain_from 600) in
+    texts (Transcript.slice t 0 2) == ["", ""] && texts (Transcript.slice t 86 4) == ["", "", "l89", "l90"]
 
 #[test]
 def test_slice_clamps_outside_the_transcript : Bool :=
-    let t : Transcript := Transcript.append Transcript.empty ["a"] in
-    Transcript.slice t 0 50 == ["a"] && Transcript.slice t 5 2 == List.empty
+    let t : Transcript := Transcript.append Transcript.empty (plain_lines ["a"]) in
+    texts (Transcript.slice t 0 50) == ["a"] && List.length (Transcript.slice t 5 2) == 0
 
 // ── codecs ────────────────────────────────────────────────────────────
 
 #[test]
 def test_block_json_roundtrip : Bool :=
-    match Json.parse (Json.to_string (Store.encode_block 3 120 ["x", "y"])) {
+    let ls : List TLine := [TLine.user_line "x", TLine.plain "y"] in
+    match Json.parse (Json.to_string (Store.encode_block 3 120 ls)) {
         Result.err _ => false,
         Result.ok j => match Store.decode_block j {
             Result.err _ => false,
             Result.ok pr =>
                 let b : StoreIndexBlock := pair_of pr in
-                b.seq == 3 && b.start == 120 && b.count == 2 && lines_of pr == ["x", "y"],
+                let decoded : List TLine := lines_of pr in
+                let first : TLine := nth_line decoded 0 in
+                let second : TLine := nth_line decoded 1 in
+                b.seq == 3 && b.start == 120 && b.count == 2
+                    && texts decoded == ["x", "y"]
+                    && first.user == true
+                    && second.user == false,
+        },
+    }
+
+/// Version-1 blocks stored plain strings; the prefixes migrate on read.
+#[test]
+def test_v1_block_lines_migrate : Bool :=
+    let text : String := "{\"version\":1,\"seq\":1,\"start\":0,\"count\":2,\"lines\":[\"you: hi\",\"assistant: there\"]}" in
+    match Json.parse text {
+        Result.err _ => false,
+        Result.ok j => match Store.decode_block j {
+            Result.err _ => false,
+            Result.ok pr =>
+                let decoded : List TLine := lines_of pr in
+                let first : TLine := nth_line decoded 0 in
+                let second : TLine := nth_line decoded 1 in
+                texts decoded == ["hi", "there"]
+                    && first.user == true
+                    && second.user == false,
         },
     }
 
@@ -127,7 +174,7 @@ def test_pad12 : Bool :=
 
 #[test]
 def test_chunks_split_at_block_lines : Bool :=
-    let cs : List (List String) := Store.chunks (lines_from 300) in
+    let cs : List (List TLine) := Store.chunks (plain_from 300) in
     List.length cs == 2 && List.length (match cs { List.cons a _ => a, _ => List.empty }) == 256
 
 #[test]

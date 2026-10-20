@@ -146,6 +146,43 @@ def test_from_args_build_target_flag : Bool :=
         _ => false,
     }
 
+// ── install ────────────────────────────────────────────────────────────
+
+#[test]
+def test_from_args_install_mote : Bool :=
+    match Command.from_args ["install", "motes/weaver"] {
+        Command.install path out_name bin verbose no_cache target =>
+            Path.to_string path == "motes/weaver" && Path.to_string out_name == "source"
+                && bin == "" && verbose == false && no_cache == false && target == "",
+        _ => false,
+    }
+
+#[test]
+def test_from_args_install_default_path_is_cwd : Bool :=
+    match Command.from_args ["install"] {
+        Command.install path out_name _bin _verbose _no_cache _target =>
+            Path.to_string path == "." && Path.to_string out_name == "source",
+        _ => false,
+    }
+
+#[test]
+def test_from_args_install_output_and_flags : Bool :=
+    match Command.from_args ["install", "a.mo", "-o", "tool", "--bin", "cli", "-v", "--no-cache", "--target", "aarch64-unknown-linux-gnu"] {
+        Command.install path out_name bin verbose no_cache target =>
+            Path.to_string path == "a.mo" && Path.to_string out_name == "tool"
+                && bin == "cli" && verbose == true && no_cache == true
+                && target == "aarch64-unknown-linux-gnu",
+        _ => false,
+    }
+
+#[test]
+def test_from_args_install_explicit_name_without_path : Bool :=
+    match Command.from_args ["install", "-o", "tool"] {
+        Command.install path out_name _bin _verbose _no_cache _target =>
+            Path.to_string path == "." && Path.to_string out_name == "tool",
+        _ => false,
+    }
+
 /// And with no `--target` at all it is empty, which `TargetSpec.resolve`
 /// reads as "this machine" rather than as a target named "".
 #[test]

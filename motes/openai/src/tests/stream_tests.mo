@@ -7,7 +7,7 @@
 /// `delta.content` fragments, `finish_reason` on the last chunk,
 /// `data: [DONE]` sentinel, `usage` usually absent or null).
 use std::test {Test.write_fixture, Test.append_fixture, Test.read_fixture_or}
-use openai::client {OpenaiAcc, openai_apply_event, openai_assemble, openai_stream_bytes}
+use openai::client {OpenaiAcc, openai_apply_event, openai_assemble, openai_finish, openai_stream_bytes}
 use openai::types {ChatRequest, ChatResponse, ChatMessage, Choice, ApiUsage}
 use openai::tool {ToolCall}
 use json::json {Json.to_string, Json.parse}
@@ -18,7 +18,7 @@ use std::process {process_id}
 /// The accumulator every fold starts from -- the same zero state
 /// `OpenAI.complete_stream` hands moose.
 def stream_acc0 : OpenaiAcc :=
-    { sse := Sse.init, text := "", tools := [], finish := "", usage := ApiUsage.mk 0 0 }
+    { sse := Sse.init, text := "", tools := [], finish := "", usage := ApiUsage.mk 0 0, error := Option.none }
 
 /// Fold one event payload, keeping the accumulator (the delta it
 /// reported is asserted separately where it matters).
@@ -272,3 +272,37 @@ def test_stream_bytes_emits_deltas_in_wire_order : IO Bool := do {
             }
     }
 }
+
+/// Mistral (and OpenAI-compatible servers) can deliver an error INSIDE a
+/// 200 SSE stream. It must surface as a failure, never as an empty
+/// successful completion -- the silent mode `openai_http_error` closed
+/// for status errors.
+#[test]
+def test_in_stream_error_is_a_failure : Bool :=
+    let acc : OpenaiAcc := fold_event stream_acc0 "{\"error\":{\"message\":\"Invalid model: x\"}}" in
+    match openai_finish acc {
+        Result.err e => String.contains e "Invalid model",
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_in_stream_error_as_a_bare_string_is_a_failure : Bool :=
+    let acc : OpenaiAcc := fold_event stream_acc0 "{\"error\":\"rate limited\"}" in
+    match openai_finish acc {
+        Result.err e => e == "rate limited",
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_a_normal_stream_still_finishes_ok : Bool :=
+    let acc : OpenaiAcc := fold_event stream_acc0 "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}" in
+    match openai_finish acc {
+        Result.err _ => false,
+        Result.ok resp => match resp.choices {
+            List.cons choice _ => match choice.message.content {
+                Option.some c => c == "hi",
+                Option.none => false,
+            },
+            List.empty => false,
+        },
+    }

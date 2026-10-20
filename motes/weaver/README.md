@@ -67,34 +67,55 @@ Alt+Enter folds a newline into it (Enter submits the whole value, a
 multiline submission echoed on its own lines), and the arrow keys pull
 prompt history -- ArrowUp recalls from an empty input, repeats walk
 backward, ArrowDown steps forward back to the live edit. The mouse
-wheel scrolls the transcript (3 lines a notch). Tab cycles the
+wheel scrolls the transcript (3 rows a notch); a left DRAG selects
+transcript text (reverse-video while dragging) and releasing copies it
+through OSC 52 -- the terminal's own clipboard, also over SSH (tmux
+needs `set-clipboard on`; Shift+drag usually keeps the terminal's
+native selection). A fresh session opens with a colorful launch banner
+(the shuttle sweeps once) that yields to the conversation on the first
+submit. Tab cycles the
 approval mode
 (`manual -> plan -> allow_edit -> auto -> manual`), PageUp/PageDown
-scroll a page and Ctrl+U/Ctrl+D half a page (End re-pins, Home jumps to
-the top; new output auto-pins only when the window is already pinned
+scroll a screen and Ctrl+U/Ctrl+D half a screen (End re-pins, Home jumps
+to the top; new output auto-pins only when the window is already pinned
 and the scrolled-up window shows a `N lines above -- PgDn for latest`
-row instead). Enter submits a line and blocks the UI for that one turn
+row instead). Scrolling is by wrapped DISPLAY ROW, so even a single
+message taller than the panel is fully reachable. Enter submits a line
+and blocks the UI for that one turn
 or slash command -- there is no non-blocking fiber-poll primitive in
 `std/concurrent` to animate a spinner meanwhile, so the wait is what a
 turn costs; what the model streams meanwhile shows on the status row
 (`[thinking] ...`, overwritten in place, wiped when the turn's
 transcript lands). An approval prompt (`manual`/`allow_edit`'s `ask`
-cells) takes over the whole screen for one `y`/`n`/`a` keypress, diff
-included for a `write`/`edit` pick; the answer echoes back immediately
-and keystrokes typed while the model call was blocking are drained,
-not fed to the answer read. `a` approves every pick of that capability
-for the WHOLE session -- one `a` on a read is repo-wide read access
-until `/clear` or exit. Two Ctrl+C presses in a row (no other key
+cells) opens a centered dialog: the diff for a `write`/`edit` pick,
+then `Approve once` / `Always allow all <cap>s this session` / `Deny`
+with the safe option highlighted. Arrows (or j/k) select, Enter
+confirms, `y`/`a`/`n` are shortcuts, `e` opens an optional note, Esc
+cancels, and a bracketed paste edits only the note -- it can never
+answer the prompt. A note on `Deny` becomes the denial reason the model
+reads; a note on an approval is appended to the tool result. `a`
+approves every pick of that capability for the rest of the SESSION --
+one `a` on a read is repo-wide read access until `/clear`, `/resume`, or
+exit (the cache resets there), and plan mode's refusal is re-checked
+even for a cached capability. In plan mode `/plan` opens a `Plan ready`
+dialog over the last assistant message: approve to `allow_edit` or to
+`manual`, revise with a note (the note lands in the input box), or
+cancel. Two Ctrl+C presses in a row (no other key
 between) exit cleanly through the restore path -- cbreak now has ISIG
 off, so Ctrl+C arrives as a key rather than SIGINT; a single press just
 prints a hint, and DURING a turn Ctrl+C is only queued (a truly hung
 tool still needs `/quit` once the turn ends). A piped or scripted run
 (stdin not a tty) falls back to the line-based UI above automatically.
 
-Long transcript lines wrap (word-wrap at the last fitting space) and a
-bracketed paste lands as literal text in the input box, newlines
-included -- Enter submits it, so a pasted multi-line snippet is one
-prompt. `--no-color` (or `NO_COLOR`) turns the palette off in both UIs.
+Long transcript lines wrap (word-wrap at the last fitting space) by
+terminal CELLS, not bytes: UTF-8 text (`æøå`, CJK, emoji, combining
+marks) is measured and painted at its real width. Scrolling moves by
+wrapped ROW, so every row of a message taller than the panel is
+reachable. A resize clears and repaints at the new geometry instead of
+leaving old borders behind. A bracketed paste lands as literal text in
+the input box, newlines included -- Enter submits it, so a pasted
+multi-line snippet is one prompt. `--no-color` (or `NO_COLOR`) turns the
+palette off in both UIs.
 
 The `mock` provider is shuttle's scripted wire: a JSON array of turns at
 `/tmp/shuttle_mock_turns_<pid>.json` (or `SHUTTLE_MOCK_TURNS`), indexed
@@ -111,9 +132,10 @@ offline.
 | `allow_edit` | allow | allow | ask |
 | `auto` | allow | allow | allow |
 
-`plan` mode is read-only: the model inspects and proposes, then
-`/plan approve manual|allow_edit` is the ONE constrained way out (a
-one-word escalation to `auto` is refused by design). `auto` is a trust
+`plan` mode is read-only: the model inspects and proposes, then `/plan`
+opens the review dialog (or, in the line-based UI, `/plan approve
+manual|allow_edit` is the ONE constrained way out; a one-word escalation
+to `auto` is refused by design). `auto` is a trust
 setting, not a sandbox -- the gate is advisory; it also flips the
 warning flag shuttle's loop prints.
 
@@ -122,16 +144,24 @@ warning flag shuttle's loop prints.
 ```
 /mode [manual|plan|allow_edit|auto]  show or set the approval mode
 /model [name]                        show or set the model
-/provider [ollama|mistral|openrouter|anthropic|mock]  show or set the provider
+/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider
 /plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode
 /tools                               list tools with their capability tags
 /mcp                                 list mounted MCP servers
 /save <file>                         checkpoint the session
 /resume <file>                       continue a saved session (budget spans both halves)
 /clear                               drop the transcript and reset the budget
-/help                                this table
-/quit                                exit (MCP servers are disposed)
+/help (or /h)                        this table
+/quit (or /q)                        exit (MCP servers are disposed)
 ```
+
+A model is validated against the selected provider: `/provider mistral`
+always starts from `mistral-large-latest` (the old provider's model is
+never carried over), `/provider mistral <model>` and `/model <model>`
+refuse a name the provider does not serve, and a settings file whose
+provider/model pair disagrees (say `provider = "mistral"` with an ollama
+tag) falls back to the provider's default with one startup warning
+instead of a server-side `Invalid model`.
 
 MCP servers mount with `--mcp <executable>`; their proxy tools default
 to `exec` capability (a server's catalogue is arbitrary code) and are
@@ -168,10 +198,13 @@ ollama / the provider's default model / 40 turns / manual mode.
 
 The dumb UI follows the informal standard: colors are ON unless
 `NO_COLOR` is set (the TUI honors the same rules: `NO_COLOR` or
-`--no-color` turns its palette off too). Transcript
-lines classify by prefix -- user lines cyan, `[running]` rows dim
+`--no-color` turns its palette off too). A submitted prompt is one
+cyan block carrying its role as data -- no `you:`/`assistant:` text
+prefix -- separated from the reply by a blank line; the reply is plain.
+The remaining lines classify by semantic prefix: `[running]` rows dim
 cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
-`+` rows green, the Ctrl+C hint dim. The status bar is dim YELLOW --
+`+` rows green, the Ctrl+C hint dim. Old sessions that stored the v1
+`you:`/`assistant:` prefixes migrate on read. The status bar is dim YELLOW --
 the one place that reads as chrome, not content -- GREEN in plan mode
 (the read-only trust state) and red while `auto` mode is on (the trust
 warning). Borders are dim. Both UIs use

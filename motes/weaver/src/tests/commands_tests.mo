@@ -18,7 +18,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use weaver::commands {WeaverState, Effect, Commands.dispatch}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
-use weaver::store {StoreState, Store.new_session, Store.append_transcript}
+use weaver::store {StoreState, TLine, TLine.user_line, Store.new_session, Store.append_transcript}
 use std::path {Path, Path.of, Path.to_string}
 use std::process {exec_cmd}
 use json::json {Json}
@@ -295,6 +295,94 @@ def state_with_keys : WeaverState := {
     (state_of Mode.manual []) with keys := Map.insert "mistral" "sk-file-mistral" BTreeMap.empty,
 }
 
+def prov_is (e : Effect) (p : String) : Bool :=
+    let got : String := e.state.provider in
+    got == p
+
+def model_is (e : Effect) (m : String) : Bool :=
+    let got : String := e.state.run.session.config.model in
+    got == m
+
+def quit_of (e : Effect) : Bool :=
+    let q : Bool := e.state.quit in
+    q
+
+/// A state whose provider/model pair is caller-chosen (the old provider's
+/// model is exactly what must NOT survive a `/provider` switch).
+def state_provider (provider : String) (model : String) : WeaverState :=
+    let cfg : ProviderConfig := { mock_config with model := model } in
+    let sess : Session := { session_of with config := cfg } in
+    let run2 : RunState := { run_of with session := sess } in
+    { (state_of Mode.manual []) with run := run2, provider := provider }
+
+/// `/provider mistral` after an ollama model: the new provider's DEFAULT
+/// model, never the old one (`Invalid model` was the live failure).
+#[test]
+def test_provider_switch_resets_to_the_new_default_model : IO Bool := do {
+    let r <- Commands.dispatch "/provider mistral" (state_provider "ollama" "qwen2.5-coder");
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => prov_is e "mistral" && model_is e "mistral-large-latest",
+    })
+}
+
+#[test]
+def test_provider_switch_accepts_an_explicit_model : IO Bool := do {
+    let r <- Commands.dispatch "/provider mistral mistral-small-latest" (state_provider "ollama" "qwen2.5-coder");
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => prov_is e "mistral" && model_is e "mistral-small-latest",
+    })
+}
+
+/// A model the new provider does not serve is refused before the config
+/// changes, so a typo cannot leave an invalid pair in the session.
+#[test]
+def test_provider_switch_refuses_a_foreign_model : IO Bool := do {
+    let r <- Commands.dispatch "/provider mistral zai-glm-5-3" (state_provider "ollama" "qwen2.5-coder");
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => prov_is e "ollama"
+            && model_is e "qwen2.5-coder"
+            && String.contains e.output "does not accept model",
+    })
+}
+
+#[test]
+def test_model_change_is_validated_per_provider : IO Bool := do {
+    let st : WeaverState := state_provider "mistral" "mistral-large-latest";
+    let bad <- Commands.dispatch "/model qwen2.5-coder" st;
+    let good <- Commands.dispatch "/model mistral-small-latest" st;
+    return (match bad {
+        Result.err _ => false,
+        Result.ok e => model_is e "mistral-large-latest"
+            && String.contains e.output "model unchanged",
+    }) && (match good {
+        Result.err _ => false,
+        Result.ok e => model_is e "mistral-small-latest",
+    })
+}
+
+// ── aliases ────────────────────────────────────────────────────────────
+
+#[test]
+def test_h_is_help : IO Bool := do {
+    let r <- Commands.dispatch "/h" (state_of Mode.manual []);
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => String.contains e.output "/provider" && Bool.not (quit_of e),
+    })
+}
+
+#[test]
+def test_q_is_quit : IO Bool := do {
+    let r <- Commands.dispatch "/q" (state_of Mode.manual []);
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => quit_of e,
+    })
+}
+
 // ── session directories: /clear and /resume (Phase 4) ──────────────────
 
 def test_root (name : String) : Path :=
@@ -370,7 +458,7 @@ def test_resume_by_directory_loads_history : IO Bool := do {
 }
 
 def check_resume_dir (base : WeaverState) (s0 : StoreState) (root : Path) : IO Bool := do {
-    let _ <- Store.append_transcript s0.dir 0 ["you: x"] ;
+    let _ <- Store.append_transcript s0.dir 0 [TLine.user_line "x"] ;
     let r <- Commands.dispatch (String.concat "/resume " (Path.to_string s0.dir)) (with_store base s0);
     match effect_state r {
         Option.none => IO.pure false,

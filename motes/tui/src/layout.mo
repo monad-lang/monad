@@ -104,7 +104,11 @@ pub def layout_column (area : Rect) (sizes : List LayoutSize) : List Rect :=
     let weight := layout_fill_weight sizes in
     let remaining := clamp (area.height - reserved) 0 area.height in
     let heights := layout_walk sizes remaining weight 0 0 in
-    layout_rects_y heights area.x area.y area.width
+    // `layout_rects_y` takes (offset, x, width): the vertical offset is
+    // area.y and the strip's x is area.x. (Passing them the other way
+    // transposes every nested column -- the transcript panel's rows landed
+    // one cell left and one row down.)
+    layout_rects_y heights area.y area.x area.width
 
 /// Shrink `rect` by the given insets on each side. The result is always
 /// inside `rect`: dimensions clamp at 0 so heavy padding cannot go negative,
@@ -197,3 +201,10 @@ def test_center_rect_in_centers : Bool :=
 #[test]
 def test_center_rect_in_origin_offset : Bool :=
     center_rect_in (mk_rect 100 200 10 10) 4 2 == mk_rect 103 204 4 2
+
+/// A column not anchored at the origin keeps its x while stacking in y.
+#[test]
+def test_layout_column_keeps_a_nested_origin : Bool :=
+    let rects := layout_column (mk_rect 5 7 10 4) [LayoutSize.fixed 2, LayoutSize.fill 1] in
+    (match List.get 0 rects { some r => r == mk_rect 5 7 10 2, none => false })
+        && (match List.get 1 rects { some r => r == mk_rect 5 9 10 2, none => false })

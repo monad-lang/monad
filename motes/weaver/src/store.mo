@@ -7,8 +7,9 @@
 /// the block files are the source of truth and a stale index rebuilds.
 use json::json {
     Json, Json.parse, Json.to_string, Json.make_object, Json.make_array,
-    Json.make_str, Json.make_num_int, Json.get_object, Json.get_array,
-    Json.get_str, Json.get_num, Json.get_num_i64, Json.object_get,
+    Json.make_str, Json.make_num_int, Json.make_bool, Json.get_bool,
+    Json.get_object, Json.get_array, Json.get_str, Json.get_num, Json.get_num_i64,
+    Json.object_get,
 }
 use std::io {IO.read_file, IO.write_file, IO.is_dir, IO.list_dir, IO.get_env}
 use std::path {Path, Path.of, Path.to_string, Path.join, Path.with_suffix, Path.file_name}
@@ -20,20 +21,33 @@ use std::map {BTreeMap}
 use std::list {List.length}
 use shuttle::session {Session, Session.messages_to_json, Session.messages_of_json}
 use shuttle::message {Message}
+use shuttle::message_types {Role, Content}
 
 // ── the in-memory view ────────────────────────────────────────────────
 // Absolute line coordinates: `total` counts every line ever appended;
 // `tail` is the last `tail_lines`; `page` is at most one older page.
 
+/// One rendered transcript line and its role. `user` is true only for the
+/// echoed prompt: user styling rides on this flag, not on a `you:` text
+/// prefix. Tool/error/diff/hint lines keep their semantic prefixes and are
+/// classified by `theme.line_class`.
+pub struct TLine {
+    text : String,
+    user : Bool
+}
+
+pub def TLine.plain (s : String) : TLine := { text := s, user := false }
+pub def TLine.user_line (s : String) : TLine := { text := s, user := true }
+
 pub struct TranscriptPage {
     start : I64,
-    lines : List String,
+    lines : List TLine,
 }
 
 pub struct Transcript {
     total : I64,
     tail_start : I64,
-    tail : List String,
+    tail : List TLine,
     page : Option TranscriptPage,
     page_error : Option String,
 }
@@ -72,14 +86,14 @@ pub def Store.block_lines : I64 := 256
 // ── small list helpers (model.mo has its own; store sits below it) ─────
 
 #[partial]
-def list_len (xs : List String) : I64 :=
+def list_len (xs : List TLine) : I64 :=
     match xs {
         List.empty => 0,
         List.cons _ rest => 1 + list_len rest,
     }
 
 #[partial]
-def take_n (n : I64) (xs : List String) : List String :=
+def take_n (n : I64) (xs : List TLine) : List TLine :=
     if n < 1 then List.empty
     else match xs {
         List.empty => List.empty,
@@ -87,7 +101,7 @@ def take_n (n : I64) (xs : List String) : List String :=
     }
 
 #[partial]
-def drop_n (n : I64) (xs : List String) : List String :=
+def drop_n (n : I64) (xs : List TLine) : List TLine :=
     if n < 1 then xs
     else match xs {
         List.empty => xs,
@@ -95,12 +109,12 @@ def drop_n (n : I64) (xs : List String) : List String :=
     }
 
 #[partial]
-def take_last (n : I64) (xs : List String) : List String :=
+def take_last (n : I64) (xs : List TLine) : List TLine :=
     drop_n (list_len xs - n) xs
 
 #[terminating]
-def blanks (n : I64) : List String :=
-    if n < 1 then List.empty else List.cons "" (blanks (n - 1))
+def blanks (n : I64) : List TLine :=
+    if n < 1 then List.empty else List.cons (TLine.plain "") (blanks (n - 1))
 
 #[terminating]
 def pad_left (s : String) (width : I64) : String :=
@@ -121,12 +135,12 @@ pub def Transcript.empty : Transcript :=
     t
 
 /// The separator row a new block opens with after the first one.
-pub def Transcript.next_block (t : Transcript) (lines : List String) : List String :=
-    if t.total > 0 then List.cons "" lines else lines
+pub def Transcript.next_block (t : Transcript) (lines : List TLine) : List TLine :=
+    if t.total > 0 then List.cons (TLine.plain "") lines else lines
 
-pub def Transcript.append (t : Transcript) (lines : List String) : Transcript :=
+pub def Transcript.append (t : Transcript) (lines : List TLine) : Transcript :=
     let total2 : I64 := t.total + list_len lines in
-    let tail2 : List String := take_last Store.tail_lines (List.append t.tail lines) in
+    let tail2 : List TLine := take_last Store.tail_lines (List.append t.tail lines) in
     let t2 : Transcript := { t with total := total2, tail_start := total2 - list_len tail2, tail := tail2 } in
     t2
 
@@ -146,27 +160,27 @@ def page_end (t : Transcript) : I64 :=
         Option.none => t.tail_start,
     }
 
-def placeholders (a : I64) (b : I64) : List String :=
+def placeholders (a : I64) (b : I64) : List TLine :=
     if Bool.not (a < b) then List.empty else blanks (b - a)
 
 /// The requested absolute range, assembled from the loaded page and tail;
 /// indices neither covers become `""` placeholders. O(tail + count).
-pub def Transcript.slice (t : Transcript) (start : I64) (count : I64) : List String :=
+pub def Transcript.slice (t : Transcript) (start : I64) (count : I64) : List TLine :=
     let s : I64 := Store.clamp start 0 t.total in
     let e : I64 := Store.clamp (start + count) 0 t.total in
     if Bool.not (s < e) then List.empty
     else slice_parts t s e
 
-def slice_parts (t : Transcript) (s : I64) (e : I64) : List String :=
+def slice_parts (t : Transcript) (s : I64) (e : I64) : List TLine :=
     let ps : I64 := page_start t in
     let pe : I64 := page_end t in
-    let head : List String := placeholders s (min_i e ps) in
-    let body : List String := page_slice t (max_i s ps) (min_i e pe) in
-    let mid : List String := placeholders (max_i s pe) (min_i e t.tail_start) in
-    let tail : List String := tail_slice t (max_i s t.tail_start) e in
+    let head : List TLine := placeholders s (min_i e ps) in
+    let body : List TLine := page_slice t (max_i s ps) (min_i e pe) in
+    let mid : List TLine := placeholders (max_i s pe) (min_i e t.tail_start) in
+    let tail : List TLine := tail_slice t (max_i s t.tail_start) e in
     List.append head (List.append body (List.append mid tail))
 
-def page_slice (t : Transcript) (a : I64) (b : I64) : List String :=
+def page_slice (t : Transcript) (a : I64) (b : I64) : List TLine :=
     match t.page {
         Option.none => List.empty,
         Option.some p =>
@@ -174,7 +188,7 @@ def page_slice (t : Transcript) (a : I64) (b : I64) : List String :=
             else take_n (b - a) (drop_n (a - p.start) p.lines),
     }
 
-def tail_slice (t : Transcript) (a : I64) (b : I64) : List String :=
+def tail_slice (t : Transcript) (a : I64) (b : I64) : List TLine :=
     if Bool.not (a < b) then List.empty
     else take_n (b - a) (drop_n (a - t.tail_start) t.tail)
 
@@ -198,67 +212,118 @@ def field_i64 (obj : BTreeMap String Json) (name : String) : Result String I64 :
 pub def Store.pad12 (n : I64) : String :=
     pad_left (I64.to_string n) 12
 
-pub def Store.encode_block (seq : I64) (start : I64) (lines : List String) : Json :=
+/// A block line: `{"text": "...", "user": true|false}`. The `user` flag
+/// is what keeps the echoed prompt styled without a visible prefix.
+def encode_line (l : TLine) : Json :=
     let body : BTreeMap String Json :=
-        Map.insert "version" (Json.make_num_int 1)
+        Map.insert "text" (Json.make_str l.text)
+        (Map.insert "user" (Json.make_bool l.user) BTreeMap.empty) in
+    Json.make_object body
+
+pub def Store.encode_block (seq : I64) (start : I64) (lines : List TLine) : Json :=
+    let body : BTreeMap String Json :=
+        Map.insert "version" (Json.make_num_int 2)
         (Map.insert "seq" (Json.make_num_int seq)
         (Map.insert "start" (Json.make_num_int start)
         (Map.insert "count" (Json.make_num_int (list_len lines))
-        (Map.insert "lines" (Json.make_array (List.map Json.make_str lines)) BTreeMap.empty)))) in
+        (Map.insert "lines" (Json.make_array (List.map encode_line lines)) BTreeMap.empty)))) in
     Json.make_object body
 
+/// Version-1 blocks stored plain strings with role prefixes; migrating
+/// them on read means an old session resumes with the new colors and no
+/// prefixes. (Only the FIRST line of an old multiline prompt carried
+/// `you:`; the rest become plain, which is all the old format recorded.)
+def legacy_line (s : String) : TLine :=
+    if String.starts_with "you: " s
+    then TLine.user_line (String.drop 5 s)
+    else if String.starts_with "user: " s
+    then TLine.user_line (String.drop 6 s)
+    else if String.starts_with "assistant: " s
+    then TLine.plain (String.drop 11 s)
+    else TLine.plain s
+
+def decode_line_user (obj : BTreeMap String Json) (text : String) : Result String TLine :=
+    match Json.object_get "user" obj {
+        Option.none => Result.ok (TLine.plain text),
+        Option.some uj => match Json.get_bool uj {
+            Result.err _ => Result.ok (TLine.plain text),
+            Result.ok b =>
+                let l : TLine := { text := text, user := b } in
+                Result.ok l,
+        },
+    }
+
+def decode_line_obj (obj : BTreeMap String Json) : Result String TLine :=
+    match obj_field obj "text" {
+        Result.err e => Result.err e,
+        Result.ok tj => match Json.get_str tj {
+            Result.err e => Result.err e,
+            Result.ok text => decode_line_user obj text,
+        },
+    }
+
+/// One block line: a v2 object, or a v1 string migrated by prefix.
+def decode_line (j : Json) : Result String TLine :=
+    match Json.get_str j {
+        Result.ok s => Result.ok (legacy_line s),
+        Result.err _ => match Json.get_object j {
+            Result.err e => Result.err e,
+            Result.ok obj => decode_line_obj obj,
+        },
+    }
+
 #[partial]
-def decode_lines (js : List Json) : Result String (List String) :=
+def decode_lines (js : List Json) : Result String (List TLine) :=
     match js {
         List.empty => Result.ok List.empty,
         List.cons j rest => decode_lines_head j rest,
     }
 
 #[terminating]
-def decode_lines_head (j : Json) (rest : List Json) : Result String (List String) :=
-    match Json.get_str j {
+def decode_lines_head (j : Json) (rest : List Json) : Result String (List TLine) :=
+    match decode_line j {
         Result.err e => Result.err e,
-        Result.ok s => decode_lines_tail s rest,
+        Result.ok l => decode_lines_tail l rest,
     }
 
 #[terminating]
-def decode_lines_tail (s : String) (rest : List Json) : Result String (List String) :=
+def decode_lines_tail (l : TLine) (rest : List Json) : Result String (List TLine) :=
     match decode_lines rest {
         Result.err e => Result.err e,
-        Result.ok ss => Result.ok (List.cons s ss),
+        Result.ok ss => Result.ok (List.cons l ss),
     }
 
-pub def Store.decode_block (j : Json) : Result String (Pair StoreIndexBlock (List String)) :=
+pub def Store.decode_block (j : Json) : Result String (Pair StoreIndexBlock (List TLine)) :=
     match Json.get_object j {
         Result.err e => Result.err e,
         Result.ok obj => decode_block_seq obj,
     }
 
-def decode_block_seq (obj : BTreeMap String Json) : Result String (Pair StoreIndexBlock (List String)) :=
+def decode_block_seq (obj : BTreeMap String Json) : Result String (Pair StoreIndexBlock (List TLine)) :=
     match field_i64 obj "seq" {
         Result.err e => Result.err e,
         Result.ok seq => decode_block_start obj seq,
     }
 
-def decode_block_start (obj : BTreeMap String Json) (seq : I64) : Result String (Pair StoreIndexBlock (List String)) :=
+def decode_block_start (obj : BTreeMap String Json) (seq : I64) : Result String (Pair StoreIndexBlock (List TLine)) :=
     match field_i64 obj "start" {
         Result.err e => Result.err e,
         Result.ok start => decode_block_lines obj seq start,
     }
 
-def decode_block_lines (obj : BTreeMap String Json) (seq : I64) (start : I64) : Result String (Pair StoreIndexBlock (List String)) :=
+def decode_block_lines (obj : BTreeMap String Json) (seq : I64) (start : I64) : Result String (Pair StoreIndexBlock (List TLine)) :=
     match obj_field obj "lines" {
         Result.err e => Result.err e,
         Result.ok lj => decode_block_array seq start lj,
     }
 
-def decode_block_array (seq : I64) (start : I64) (lj : Json) : Result String (Pair StoreIndexBlock (List String)) :=
+def decode_block_array (seq : I64) (start : I64) (lj : Json) : Result String (Pair StoreIndexBlock (List TLine)) :=
     match Json.get_array lj {
         Result.err e => Result.err e,
         Result.ok js => decode_block_finish seq start js,
     }
 
-def decode_block_finish (seq : I64) (start : I64) (js : List Json) : Result String (Pair StoreIndexBlock (List String)) :=
+def decode_block_finish (seq : I64) (start : I64) (js : List Json) : Result String (Pair StoreIndexBlock (List TLine)) :=
     match decode_lines js {
         Result.err e => Result.err e,
         Result.ok ls => Result.ok (Pair.pair (mk_index_block seq start (list_len ls)) ls),
@@ -468,14 +533,14 @@ pub def Store.base_name (p : Path) : String :=
 
 /// Split a line block into `block_lines` chunks (none for empty input).
 #[partial]
-pub def Store.chunks (lines : List String) : List (List String) :=
+pub def Store.chunks (lines : List TLine) : List (List TLine) :=
     match lines {
         List.empty => List.empty,
         List.cons _ _ => List.cons (take_n Store.block_lines lines) (chunks_rest (drop_n Store.block_lines lines)),
     }
 
 #[partial]
-def chunks_rest (lines : List String) : List (List String) :=
+def chunks_rest (lines : List TLine) : List (List TLine) :=
     Store.chunks lines
 
 // ── IO: root and sessions ─────────────────────────────────────────────
@@ -794,7 +859,7 @@ def check_index (dir : Path) (idx : StoreIndex) : IO (Result String StoreIndex) 
 // ── IO: appending and reading ─────────────────────────────────────────
 
 #[partial]
-def write_chunks (dir : Path) (seq : I64) (at : I64) (chunks : List (List String)) : IO (Result String (List StoreIndexBlock)) :=
+def write_chunks (dir : Path) (seq : I64) (at : I64) (chunks : List (List TLine)) : IO (Result String (List StoreIndexBlock)) :=
     match chunks {
         List.empty => IO.pure (Result.ok List.empty),
         List.cons c rest => do {
@@ -811,7 +876,7 @@ def write_chunks (dir : Path) (seq : I64) (at : I64) (chunks : List (List String
         },
     }
 
-pub def Store.append_transcript (dir : Path) (start : I64) (lines : List String) : IO (Result String Unit) := do {
+pub def Store.append_transcript (dir : Path) (start : I64) (lines : List TLine) : IO (Result String Unit) := do {
     let idx_r <- Store.read_index dir;
     match idx_r {
         Result.err e => IO.pure (Result.err e),
@@ -828,11 +893,11 @@ pub def Store.append_transcript (dir : Path) (start : I64) (lines : List String)
     }
 }
 
-def next_index (idx : StoreIndex) (added : List StoreIndexBlock) (lines : List String) : StoreIndex :=
+def next_index (idx : StoreIndex) (added : List StoreIndexBlock) (lines : List TLine) : StoreIndex :=
     let idx2 : StoreIndex := { idx with total := idx.total + list_len lines, next_seq := idx.next_seq + List.length added, blocks := List.append idx.blocks added } in
     idx2
 
-def finish_append (dir : Path) (idx : StoreIndex) (added : List StoreIndexBlock) (lines : List String) : IO (Result String Unit) := do {
+def finish_append (dir : Path) (idx : StoreIndex) (added : List StoreIndexBlock) (lines : List TLine) : IO (Result String Unit) := do {
     let idx2 : StoreIndex := next_index idx added lines;
     let ok <- write_atomic (index_path dir) (Json.to_string (Store.encode_index idx2));
     if ok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the transcript index")
@@ -849,7 +914,7 @@ def wanted_blocks (bs : List StoreIndexBlock) (s : I64) (e : I64) : List StoreIn
     }
 
 #[partial]
-def read_wanted (dir : Path) (bs : List StoreIndexBlock) (s : I64) (e : I64) (acc : List String) : IO (Result String (List String)) :=
+def read_wanted (dir : Path) (bs : List StoreIndexBlock) (s : I64) (e : I64) (acc : List TLine) : IO (Result String (List TLine)) :=
     match bs {
         List.empty => IO.pure (Result.ok acc),
         List.cons b rest => do {
@@ -862,7 +927,7 @@ def read_wanted (dir : Path) (bs : List StoreIndexBlock) (s : I64) (e : I64) (ac
                         Pair.pair meta lines =>
                             let bs0 : I64 := max_i s meta.start in
                             let be0 : I64 := min_i e (meta.start + meta.count) in
-                            let part : List String :=
+                            let part : List TLine :=
                                 if be0 - bs0 > 0 then take_n (be0 - bs0) (drop_n (bs0 - meta.start) lines) else List.empty in
                             read_wanted dir rest s e (List.append acc part),
                     },
@@ -894,11 +959,11 @@ def read_page_idx (dir : Path) (idx : StoreIndex) (start : I64) (count : I64) : 
     }
 }
 
-def mk_page (start : I64) (lines : List String) : TranscriptPage :=
+def mk_page (start : I64) (lines : List TLine) : TranscriptPage :=
     let p : TranscriptPage := { start := start, lines := lines } in
     p
 
-def transcript_of (total : I64) (start : I64) (lines : List String) : Transcript :=
+def transcript_of (total : I64) (start : I64) (lines : List TLine) : Transcript :=
     let t : Transcript := { total := total, tail_start := start, tail := lines, page := Option.none, page_error := Option.none } in
     t
 
@@ -996,7 +1061,7 @@ def update_meta_of (dir : Path) (m : StoreMeta) (s : Session) : IO (Result Strin
 
 /// One successful turn: transcript blocks, then the history delta, then
 /// the meta cache (the block files are the truth).
-pub def Store.record_turn (st : StoreState) (s : Session) (delta : List Message) (tstart : I64) (tlines : List String) : IO (Result String Unit) := do {
+pub def Store.record_turn (st : StoreState) (s : Session) (delta : List Message) (tstart : I64) (tlines : List TLine) : IO (Result String Unit) := do {
     let ar <- Store.append_transcript st.dir tstart tlines;
     match ar {
         Result.err e => IO.pure (Result.err e),
@@ -1032,7 +1097,28 @@ def record_turn_meta (st : StoreState) (s : Session) (delta : List Message) (m :
     }
 }
 
-pub def Store.record_output (st : StoreState) (s : Session) (lines : List String) (tstart : I64) : IO (Result String Unit) := do {
+/// A standalone user note committed to history (a plan approval's note):
+/// one block at `history_next`, which advances in the same meta write.
+pub def Store.append_history_note (st : StoreState) (s : Session) (text : String) : IO (Result String Unit) := do {
+    let meta_r <- Store.read_meta st.dir;
+    match meta_r {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok m => do {
+            let msg : Message := { role := Role.user, content := [Content.text text] };
+            let p : Path := history_path st.dir m.history_next;
+            let ok <- write_verified p (Json.to_string (Session.messages_to_json [msg]));
+            if Bool.not ok then IO.pure (Result.err "could not write the history note")
+            else do {
+                let now <- Bench.now;
+                let m2 : StoreMeta := { m with session := s, updated := now, history_next := m.history_next + 1 };
+                let wok <- write_meta_at st.dir m2;
+                if wok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the session meta")
+            }
+        },
+    }
+}
+
+pub def Store.record_output (st : StoreState) (s : Session) (lines : List TLine) (tstart : I64) : IO (Result String Unit) := do {
     let ar <- Store.append_transcript st.dir tstart lines;
     match ar {
         Result.err e => IO.pure (Result.err e),
@@ -1078,7 +1164,7 @@ pub def Store.latest_session (root : Path) : IO (Option String) := do {
 }
 
 /// Decode a block straight from its file text (used by page reads).
-pub def Store.decode_block_of_text (text : String) : Result String (Pair StoreIndexBlock (List String)) :=
+pub def Store.decode_block_of_text (text : String) : Result String (Pair StoreIndexBlock (List TLine)) :=
     match Json.parse text {
         Result.err _ => Result.err "transcript block is not valid JSON",
         Result.ok j => Store.decode_block j,

@@ -612,6 +612,127 @@ def build_target (path : String) (out_name : String) (bin : String) (verbose : B
     }
 }
 
+/// `install`: build the release artifact through the normal cached path,
+/// then copy it into `$MONAD_HOME/bin`. The build is the same one `build`
+/// would do (`release` profile, DWARF off); the only new work is choosing
+/// the destination and replacing it atomically.
+def install_target (path : String) (out_name : String) (bin : String) (verbose : Bool) (no_cache : Bool) (spec : TargetSpec) : IO I64 := do {
+    // Resolve the destination BEFORE compiling: no home is a usage error,
+    // not something to discover after a full build.
+    let home_opt <- install_home;
+    match home_opt {
+        Option.none => do {
+            println "error: MONAD_HOME and HOME are unset; cannot choose an install directory";
+            return 1
+        },
+        Option.some home => install_resolved home path out_name bin verbose no_cache spec,
+    }
+}
+
+def install_resolved (home : String) (path : String) (out_name : String) (bin : String) (verbose : Bool) (no_cache : Bool) (spec : TargetSpec) : IO I64 := do {
+    let resolved <- resolve_build_input path bin out_name;
+    match resolved {
+        Result.err msg => do {
+            println msg;
+            return 1
+        },
+        Result.ok input => do {
+            // A single source file has no name of its own; installing the
+            // `build` sentinel would create a binary called `source`.
+            if input.name == "source" then do {
+                println "error: install needs a name for a source file (use -o <name>)";
+                return 1
+            } else do {
+                let plan_result <- TargetPlan.resolve spec;
+                match plan_result {
+                    Result.err msg => do { println msg; return 1 },
+                    Result.ok plan => do {
+                        let final_name : String := TargetPlan.output_name plan input.name;
+                        if String.ends_with final_name ".wasm" then do {
+                            println "error: install only supports native binaries";
+                            return 1
+                        } else do {
+                            if Bool.not (String.is_empty input.label) then println input.label else IO.pure Unit.unit;
+                            let rc <- build_cached { src := input.src, dest_name := (Path.path final_name),
+                                verbose := verbose, debug := false, no_cache := no_cache, target := spec };
+                            if not (rc == 0) then do {
+                                println "install: compilation failed";
+                                return 1
+                            } else install_binary home input.src final_name
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A non-blank environment value; blank counts as unset (the same rule
+/// `Mote.toolchain_home_of` applies to `MONAD_HOME`).
+#[partial]
+def non_blank_env (v : Option String) : Option String :=
+    match v {
+        Option.none => Option.none,
+        Option.some s =>
+            let t : String := String.trim s in
+            if String.is_empty t then Option.none else Option.some t,
+    }
+
+/// `$MONAD_HOME` when set, else `$HOME/.monad` -- monadup's own layout, so
+/// an installed binary lands on the same `bin/` directory as the compiler.
+/// `none` when neither is set: a process with no home has nowhere to look.
+def install_home : IO (Option String) := do {
+    let monad_home <- IO.get_env "MONAD_HOME";
+    match non_blank_env monad_home {
+        Option.some h => IO.pure (Option.some h),
+        Option.none => do {
+            let home <- IO.get_env "HOME";
+            match non_blank_env home {
+                Option.none => IO.pure Option.none,
+                Option.some h => IO.pure (Option.some (raw_path_join h ".monad")),
+            }
+        }
+    }
+}
+
+/// Copy the built artifact to `<home>/bin/<name>` as a regular executable.
+/// `mv -f` replaces a destination SYMLINK itself (monadup points
+/// `bin/monad` at a nightly) instead of writing through it, which `cp -f`
+/// would do.
+def install_binary (home : String) (src : String) (name : String) : IO I64 := do {
+    let target_dir <- Build.target_dir_for src;
+    let dest_dir : String := build_dest_dir target_dir false;
+    let built : String := Path.to_string (Path.join (Path.path dest_dir) (Path.path name));
+    let bin_dir : String := raw_path_join home "bin";
+            let dest : String := raw_path_join bin_dir name;
+            let tmp : String := dest ++ ".tmp";
+            let _ <- exec_cmd "mkdir" ["-p", bin_dir];
+            let link_status <- exec_cmd "test" ["-L", dest];
+            let cp_status <- exec_cmd "cp" ["-f", built, tmp];
+            if not (cp_status == 0) then do {
+                let _ <- exec_cmd "rm" ["-f", tmp];
+                println ("error: could not copy " ++ built ++ " to " ++ tmp);
+                return 1
+            } else do {
+                let mv_status <- exec_cmd "mv" ["-f", tmp, dest];
+                if not (mv_status == 0) then do {
+                    let _ <- exec_cmd "rm" ["-f", tmp];
+                    println ("error: could not install " ++ dest);
+                    return 1
+                } else do {
+                    let chmod_status <- exec_cmd "chmod" ["755", dest];
+                    if not (chmod_status == 0) then do {
+                        println ("error: could not make " ++ dest ++ " executable");
+                        return 1
+                    } else do {
+                        let _ <- if link_status == 0 then println ("note: replaced the existing symlink at " ++ dest) else IO.pure Unit.unit;
+                        println ("installed " ++ name ++ " to " ++ dest);
+                        return 0
+                    }
+                }
+            }
+    }
+
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
 /// target file itself actually type-checking cleanly (via
@@ -1956,6 +2077,12 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
 // though — same argv-munging primitives either way.
 type Command {
     build (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (debug: Bool) (no_cache: Bool) (target: String),
+    /// `monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>]
+    /// [-v] [--no-cache]`: build a RELEASE binary (the `release` profile, no
+    /// DWARF) and install it atomically to `$MONAD_HOME/bin/<name>` (default
+    /// `$HOME/.monad/bin`). The output name is the mote's `[[bin]]` name, or
+    /// `-o` for a single source file (a file has no useful default name).
+    install (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (no_cache: Bool) (target: String),
     run (file: Path) (verbose: Bool) (debug: Bool) (args: List String),
     eval (file: Path) (verbose: Bool),
     pretty (file: String),
@@ -2100,6 +2227,41 @@ def Command.from_args (args : List String) : Command :=
                                             },
                         },
                 },
+                }
+            else if cmd == "install" then
+                match Cli.take_flag "verbose" "v" rest {
+                    Cli.FlagResult.flag_result verbose rest1 =>
+                        match Cli.take_flag "no-cache" "" rest1 {
+                            Cli.FlagResult.flag_result no_cache rest1a =>
+                                match Cli.take_opt "bin" "" "" rest1a {
+                                    Cli.OptResult.opt_result bin_name rest1b =>
+                                        match Cli.take_opt "target" "" "" rest1b {
+                                            Cli.OptResult.opt_result target_name rest1c =>
+                                                match Cli.take_opt "output" "o" "" rest1c {
+                                                    Cli.OptResult.opt_result opt_out_name rest2 =>
+                                                        match Cli.take_positional rest2 {
+                                                            Cli.PosResult.pos_result path_opt _ =>
+                                                                let path : String := match path_opt {
+                                                                    Option.some p => p,
+                                                                    Option.none => ".",
+                                                                } in
+                                                                // `"source"` is the sentinel `build` uses
+                                                                // for "no name"; install rejects it below
+                                                                // instead of installing a binary called
+                                                                // `source`.
+                                                                let out_name : String := if String.is_empty opt_out_name then "source" else opt_out_name in
+                                                                match Path.of path {
+                                                                    err _ => Command.help,
+                                                                    ok p => match Path.of out_name {
+                                                                        err _ => Command.help,
+                                                                        ok o => Command.install p o bin_name verbose no_cache target_name,
+                                                                    },
+                                                                },
+                                                        },
+                                                },
+                                        },
+                                },
+                        },
                 }
             else if cmd == "run" then
                 match Cli.take_flag "verbose" "v" rest {
@@ -2298,6 +2460,20 @@ def main (args : List String) : IO I64 {
                 },
             }
         },
+        install file_path out_name bin verbose no_cache target_name => do {
+            let resolved <- TargetSpec.resolve target_name;
+            match resolved {
+                Result.err m => do {
+                    println m;
+                    return 1
+                },
+                Result.ok target => do {
+                    install_target { path := Path.to_string file_path,
+                        out_name := Path.to_string out_name, bin := bin,
+                        verbose := verbose, no_cache := no_cache, spec := target }
+                },
+            }
+        },
         run file_path verbose debug program_args => do {
             run_file (Path.to_string file_path) verbose debug program_args
         },
@@ -2394,6 +2570,10 @@ def print_help : IO I64 {
     println "         --target <triple> builds for another target (space-separated: --target=x does not parse)";
     println "           `monad print-targets` lists the spellings this compiler has measured";
     println "         --no-cache (or MONAD_NO_CACHE) compiles for real, reading and writing no store entry";
+    println "       monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>] [--verbose/-v] [--no-cache]";
+    println "         Build a RELEASE binary (no debug info) and install it to $MONAD_HOME/bin/<name>";
+    println "         <path> is build's: a mote directory (its [[bin]] name) or a .mo file (then -o names it)";
+    println "         MONAD_HOME defaults to $HOME/.monad; the destination is replaced atomically, symlinks included";
     println "       monad run <path> [--verbose/-v] [--debug/-g] [--release] [--] [args...]  Compile and execute a .mo source file";
     println "         <path> may be a mote DIRECTORY (its [[bin]] target is built and run), like build's;";
     println "         the binary lands where build would put it and the second identical run prints `cached:`";

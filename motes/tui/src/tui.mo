@@ -55,8 +55,11 @@
 // terminal, and could leave stray pixels behind. `step_batch`/`step_cmd`
 // thread a `forced : Bool` alongside the model and the queued messages, set
 // whenever ANY `perform` fired during that batch's fold, and `draw_frame`
-// treats `forced` exactly like a resize: repaint from a blank screen
-// instead of diffing against `prev`.
+// repaints from a blank SCREEN MODEL for it. That is not enough to erase
+// whatever the action wrote: blank cells emit no delta. The contract is
+// therefore that a perform which writes the terminal clears it (ESC[2J)
+// before returning its message; a resize is cleared by `draw_frame` itself,
+// because the old geometry cannot be mapped onto the new one.
 //
 // v1 shape deviations, still true in v2:
 //   * `update` is PURE (`S -> M -> Pair S (Cmd M)`), not
@@ -441,13 +444,30 @@ def force_repaint {S : Type} {M : Type} (stepped : Pair (Pair S (Cmd M)) (Pair (
         }
     }
 
+/// One frame's plan: whether the terminal must be cleared first, and the
+/// deltas to write after that. A size change cannot be diffed cell-by-cell
+/// (the terminal may have reflowed the old content), so it always clears;
+/// a forced repaint of an unchanged size paints from a blank screen model
+/// without clearing (the perform that forced it was responsible for its
+/// own writes).
+pub def frame_plan (prev : Screen) (screen : Screen) (forced : Bool) : Pair Bool (List CellDelta) :=
+    let same : Bool := Bool.and (prev.rows == screen.rows) (prev.cols == screen.cols) in
+    let clear : Bool := Bool.not same in
+    let deltas : List CellDelta :=
+        if Bool.or clear forced
+        then diff (empty_screen screen.rows screen.cols) screen
+        else diff prev screen in
+    Pair.pair clear deltas
+
+/// ESC[2J + home: a real erase before repainting at a new geometry.
+def clear_before_paint : IO Unit := do {
+    Terminal.clear_screen;
+    Terminal.cursor_move 0 0
+}
+
 /// Render the model into a fresh screen and write the diff against
 /// `prev` -- unless the batch was empty AND no `perform` forced a
-/// repaint (nothing moved, no write). `diff` refuses different-sized
-/// screens, so a RESIZE frame (or a forced one) repaints instead: every
-/// non-blank cell against a fresh blank screen of the new size (the alt
-/// screen is already blank, so blank cells emit nothing and the repaint
-/// is as cheap as a diff).
+/// repaint (nothing moved, no write). See `frame_plan` for the clear rule.
 def draw_frame {S : Type} (vw : S -> Widget) (model : S) (reader : InputReader) (prev : Screen) (dirty : Bool) (forced : Bool) : IO Screen :=
     if Bool.not dirty && Bool.not forced
     then return prev
@@ -455,13 +475,14 @@ def draw_frame {S : Type} (vw : S -> Widget) (model : S) (reader : InputReader) 
         let screen : Screen :=
             render (vw model) (mk_rect 0 0 reader.last_cols reader.last_rows)
                 (empty_screen reader.last_rows reader.last_cols);
-        let deltas : List CellDelta :=
-            if Bool.not forced && prev.rows == screen.rows && prev.cols == screen.cols
-            then diff prev screen
-            else diff (empty_screen screen.rows screen.cols) screen;
-        IO.write_stdout (apply_deltas deltas);
-        IO.flush_stdout;
-        return screen
+        match frame_plan prev screen forced {
+            Pair.pair clear deltas => do {
+                let _ <- if clear then clear_before_paint else IO.pure Unit.unit;
+                IO.write_stdout (apply_deltas deltas);
+                IO.flush_stdout;
+                return screen
+            }
+        }
     }
 
 /// The exit handshake: alternate screen off, cursor back, cooked

@@ -39,8 +39,21 @@ pub def cap_name (c : Capability) : String :=
 /// box), so every approval would read the SAME line. The function form
 /// re-reads per ask.
 pub def Gate.weaver (mode : Mode) (read : Unit -> IO (Option String)) (write : String -> IO Unit) : Gate :=
-    let g : Gate := { ask := weaver_ask mode read write } in
+    let g : Gate := { ask := weaver_ask mode read write, precheck := weaver_precheck mode write } in
     g
+
+/// The policy half runs on EVERY pick, cached capability or not: an `a`
+/// in manual mode must not let a later plan mode run writes. A refusal
+/// is also visible to the human (the line-based UI would otherwise stay
+/// silent about why nothing ran).
+def weaver_precheck (mode : Mode) (write : String -> IO Unit) (p : Pick) : IO (Option Approval) :=
+    match Policy.decide p.cap mode {
+        Decision.refuse reason => do {
+            let _ <- write (String.concat "refused: " (String.concat reason "\n"));
+            IO.pure (Option.some (Approval.deny reason))
+        },
+        _ => IO.pure Option.none,
+    }
 
 def weaver_ask (mode : Mode) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) : IO Approval :=
     match Policy.decide p.cap mode {
@@ -66,12 +79,55 @@ def prompt_pick (read : Unit -> IO (Option String)) (write : String -> IO Unit) 
     let _ <- write (pick_header p);
     let r <- Diff.for_input p.name p.input;
     let _ <- write_diff write r;
+    ask_again read write p 1
+}
+
+/// Ask once; an unrecognized answer re-prompts once (a typo must not
+/// silently deny). A trailing text after `y`/`a`/`n` is the note: the
+/// model sees it on the tool result, or as the denial's reason.
+#[partial]
+def ask_again (read : Unit -> IO (Option String)) (write : String -> IO Unit) (p : Pick) (tries : I64) : IO Approval := do {
     let _ <- write (gate_answer_prompt p.cap);
     let line <- read unit;
-    let ap <- answer_of line;
-    let _ <- write (String.concat (gate_answer_feedback p.cap ap) "\n");
-    return ap
+    match line {
+        Option.none => do {
+            let ap : Approval := Approval.deny "declined by user (eof)";
+            let _ <- write (String.concat (gate_answer_feedback p.cap ap) "\n");
+            return ap
+        },
+        Option.some s => match answer_line (String.trim s) {
+            Option.none =>
+                if tries < 2 then do {
+                    let _ <- write "answer y, a or n (an optional note follows the letter)\n";
+                    ask_again read write p (tries + 1)
+                } else do {
+                    let ap : Approval := Approval.deny "declined by user";
+                    let _ <- write (String.concat (gate_answer_feedback p.cap ap) "\n");
+                    return ap
+                },
+            Option.some ap => do {
+                let _ <- write (String.concat (gate_answer_feedback p.cap ap) "\n");
+                return ap
+            },
+        },
+    }
 }
+
+#[terminating]
+def answer_split (s : String) (i : I64) : Option I64 :=
+    if Bool.not (i < String.length s) then Option.none
+    else if String.slice s i 1 == " " then Option.some i
+    else answer_split s (i + 1)
+
+/// The answer's word and its optional note.
+def answer_line (s : String) : Option Approval :=
+    match answer_split s 0 {
+        Option.none => answer_word_note s "",
+        Option.some sp =>
+            let word : String := String.slice s 0 sp in
+            let note : String := String.trim (String.drop (sp + 1) s) in
+            answer_word_note word note,
+    }
 
 /// The answer line, both UIs' shared prompt. The `a` semantics used to
 /// be undocumented -- "grant read access to a whole repo" is exactly
@@ -88,8 +144,11 @@ pub def gate_answer_prompt (cap : Capability) : String :=
 pub def gate_answer_feedback (cap : Capability) (ap : Approval) : String :=
     match ap {
         Approval.once => "y -- approved",
+        Approval.once_note _ => "y -- approved (note added to the tool result)",
         Approval.always => String.concat "a -- all "
             (String.concat (cap_name cap) "s approved for this session"),
+        Approval.always_note _ => String.concat "a -- all "
+            (String.concat (cap_name cap) "s approved for this session (note added)"),
         Approval.deny reason =>
             String.concat "n -- denied (" (String.concat reason ")"),
     }
@@ -136,13 +195,11 @@ def summarize (input : Json) : String :=
     then String.concat (String.slice s 0 200) "..."
     else s
 
-def answer_of (line : Option String) : IO Approval :=
-    match line {
-        Option.none => IO.pure (Approval.deny "declined by user (eof)"),
-        Option.some s => answer_word (String.trim s),
-    }
-
-def answer_word (s : String) : IO Approval :=
-    if s == "y" then IO.pure Approval.once
-    else if s == "a" then IO.pure Approval.always
-    else IO.pure (Approval.deny "declined by user")
+def answer_word_note (s : String) (note : String) : Option Approval :=
+    if s == "y"
+    then (if String.is_empty note then Option.some Approval.once else Option.some (Approval.once_note note))
+    else if s == "a"
+    then (if String.is_empty note then Option.some Approval.always else Option.some (Approval.always_note note))
+    else if Bool.or (s == "n") (String.is_empty s)
+    then Option.some (Approval.deny (if String.is_empty note then "declined by user" else note))
+    else Option.none

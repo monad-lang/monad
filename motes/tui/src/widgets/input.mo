@@ -14,15 +14,14 @@
 
 use lib::types { Key }
 use lib::core { clamp }
+use lib::text {Text.col_of_byte, Text.byte_at_col, Text.prev_boundary, Text.next_boundary}
 
 /// A single-line text field's state. `cursor` is a BYTE offset into
-/// `value`: `String.slice`/`String.drop` -- the only string primitives --
-/// are byte-oriented, so a multi-byte code point moves the cursor by its
-/// byte length and may slice mid-code-point at the field's edge. v1
-/// assumes single-byte input, the normal case for a terminal sending
-/// keypresses one at a time. No default fields: a struct literal that
-/// omits one panics the checker today, so every literal names all three
-/// (`SizedWidget`'s convention).
+/// `value` (`String.slice`/`String.drop` are byte-oriented), but every
+/// movement and deletion snaps to a code-point boundary, so a multi-byte
+/// character moves and deletes as one unit. No default fields: a struct
+/// literal that omits one panics the checker today, so every literal names
+/// all three (`SizedWidget`'s convention).
 pub struct InputState {
     value : String,
     cursor : I64,
@@ -47,7 +46,7 @@ def input_insert (c : String) (st : InputState) : InputState :=
     let cur := clamp st.cursor 0 len in
     let before := String.slice st.value 0 cur in
     let after := String.drop cur st.value in
-    { st with value := before ++ c ++ after, cursor := cur + 1 }
+    { st with value := before ++ c ++ after, cursor := cur + String.length c }
 
 /// Insert a whole string (a paste) at the cursor, advancing by its
 /// length; CRLF/CR become `\n`, the input state's own newline spelling.
@@ -93,22 +92,25 @@ def normalize_newlines (s : String) : String :=
     if Bool.not (String.contains s "\r") then s
     else String.from_list (norm_bytes (String.to_list s) List.empty)
 
-/// Delete the byte before the cursor. No-op at the start of the value.
+/// Delete the code point before the cursor. No-op at the start.
 def input_backspace (st : InputState) : InputState :=
     let len := String.length st.value in
     let cur := clamp st.cursor 0 len in
     if cur < 1
     then st
     else
-        let before := String.slice st.value 0 (cur - 1) in
+        let start : I64 := Text.prev_boundary st.value cur in
+        let before := String.slice st.value 0 start in
         let after := String.drop cur st.value in
-        { st with value := before ++ after, cursor := cur - 1 }
+        { st with value := before ++ after, cursor := start }
 
-/// Move the cursor `delta` bytes, clamped to `[0, length value]`.
+/// Move the cursor one code point left (negative) or right.
 def input_move (delta : I64) (st : InputState) : InputState :=
     let len := String.length st.value in
     let cur := clamp st.cursor 0 len in
-    { st with cursor := clamp (cur + delta) 0 len }
+    if delta < 0
+    then { st with cursor := Text.prev_boundary st.value cur }
+    else { st with cursor := Text.next_boundary st.value cur }
 
 /// One keypress's worth of state transition. `char` inserts at the
 /// cursor; `backspace` deletes before it; `left`/`right` move by one;
@@ -204,8 +206,10 @@ pub def input_line_move (delta : I64) (st : InputState) : InputState :=
                     else match nth_lines lines target {
                         List.empty => st,
                         List.cons t _ =>
-                            let col : I64 := clamp (st.cursor - l.start) 0 t.len in
-                            { st with cursor := t.start + col },
+                            let here : String := String.slice st.value l.start l.len in
+                            let there : String := String.slice st.value t.start t.len in
+                            let col : I64 := Text.col_of_byte here (clamp (st.cursor - l.start) 0 l.len) in
+                            { st with cursor := t.start + Text.byte_at_col there col },
                     },
             },
     }

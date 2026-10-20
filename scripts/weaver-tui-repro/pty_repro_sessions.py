@@ -135,7 +135,7 @@ def synth_session(sid, lines):
     write_meta(d, int(time.time() * 1000))
     return d
 
-def transcript_lines(d):
+def transcript_entries(d):
     out, tdir = [], os.path.join(d, "transcript")
     if os.path.isdir(tdir):
         for n in sorted(os.listdir(tdir)):
@@ -146,6 +146,15 @@ def transcript_lines(d):
                 except (OSError, ValueError):
                     pass
     return out
+
+def entry_text(e):
+    return e.get("text", "") if isinstance(e, dict) else e
+
+def entry_user(e):
+    return bool(e.get("user", False)) if isinstance(e, dict) else False
+
+def transcript_lines(d):
+    return [entry_text(e) for e in transcript_entries(d)]
 
 def history_messages(d):
     out, hdir = [], os.path.join(d, "history")
@@ -204,7 +213,7 @@ def main():
         hist = history_messages(d)
         ok = (idx["total"] >= 3
               and any("persisted-reply" in l for l in lines)
-              and "you: hi" in lines
+              and any(entry_text(e) == "hi" and entry_user(e) for e in transcript_entries(d))
               and any(message_text(m) == "hi" for m in hist)
               and os.path.isfile(os.path.join(d, "history", "000000000001.json")))
     results.append(check(ok and "persisted-reply" in frames1, "S1 turn persisted to a session directory"))
@@ -222,8 +231,8 @@ def main():
     finish(master, pid)
     results.append(check("EARLIEST-LINE-0000" in frames3, "S3 Home pages older lines from disk"))
 
-    # S4: a bracketed paste stays literal: one submit, one two-line prompt
-    # (a second "you: " prefix would mean the newline submitted).
+    # S4: a bracketed paste stays literal: one submit, one two-line user
+    # block (a second block would mean the newline submitted).
     before4 = set(session_ids())
     master, pid = spawn(common, env)
     buf = bytearray(); pump(master, 1.0, buf)
@@ -234,9 +243,13 @@ def main():
     sid4 = new_session_since(before4)
     hist4 = history_messages(os.path.join(SESSIONS, sid4)) if sid4 else []
     users4 = [message_text(m) for m in hist4 if m.get("role") == "user"]
-    results.append(check("you: alpha" in frames4 and "you: beta" not in frames4
-                         and users4 == ["alpha\nbeta"],
-                         "S4 bracketed paste lands verbatim"))
+    sid4_entries = transcript_entries(os.path.join(SESSIONS, sid4)) if sid4 else []
+    user4 = [entry_text(e) for e in sid4_entries if entry_user(e)]
+    results.append(check("alpha" in frames4 and "beta" in frames4
+                         and "you:" not in frames4 and "assistant:" not in frames4
+                         and users4 == ["alpha\nbeta"]
+                         and user4 == ["alpha", "beta"],
+                         "S4 bracketed paste lands verbatim, one user block"))
 
     # S5: the palette is on by default and --no-color silences it.
     colored_env = TMP + "/turns_color.json"

@@ -312,6 +312,7 @@ def test_dumb_e2e_manual_approval_and_plan_refusal : IO Bool := do {
     return (final_state_ok st cursor tap)
 }
 
+
 // ── The Phase 5 e2e: a real `edit`, diff in the approval ───────────────
 
 def edit_target_path : String :=

@@ -137,7 +137,7 @@ snap(master, 3.8, buf)
 os.write(master, b"y")
 snap(master, 3.4, buf)
 after = tight(bytes(buf).decode(errors="replace"))
-checks.append(("S5 the overlay consumed the y (approved echo)", "approved" in after))
+checks.append(("S5 the overlay consumed the y (the second prompt appears)", after.count("Permissionrequired") >= 2))
 os.write(master, b"y")            # the second read's prompt
 snap(master, 4.5, buf)
 checks.append(("S5 clean exit after both prompts", finish(master, pid, buf)))

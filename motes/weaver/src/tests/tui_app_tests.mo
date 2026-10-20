@@ -14,7 +14,7 @@ use weaver::commands {WeaverState, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::model {TuiModel, WeaverMsg, DisplayRow, init_tui_model, Model.append_block, Model.scroll_step, Model.display_rows}
-use weaver::store {StoreState, TranscriptPage}
+use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage}
 use std::path {Path, Path.of}
 use std::map {BTreeMap}
 use weaver::tui_app {TuiApp.update}
@@ -37,7 +37,8 @@ def state_of (mode : Mode) : WeaverState :=
     { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
-    init_tui_model (state_of mode) 24 80
+    let m : TuiModel := init_tui_model (state_of mode) 24 80 in
+    { m with banner := false }
 
 def mode_eq (a : Mode) (b : Mode) : Bool :=
     match a {
@@ -56,10 +57,17 @@ def cmd_is_none (c : Cmd WeaverMsg) : Bool :=
 def key_msg (k : Key) : WeaverMsg :=
     WeaverMsg.key_event (Event.key k)
 
-def transcript_contains (needle : String) (lines : List String) : Bool :=
+def transcript_contains (needle : String) (lines : List TLine) : Bool :=
     match lines {
         List.empty => false,
-        List.cons l rest => (l == needle) || transcript_contains needle rest,
+        List.cons l rest => (l.text == needle) || transcript_contains needle rest,
+    }
+
+def transcript_user_contains (needle : String) (lines : List TLine) : Bool :=
+    match lines {
+        List.empty => false,
+        List.cons l rest =>
+            (Bool.and (l.text == needle) l.user) || transcript_user_contains needle rest,
     }
 
 // ── typing ───────────────────────────────────────────────────────────────
@@ -113,7 +121,7 @@ def test_enter_with_text_echoes_clears_and_performs : Bool :=
                 Pair.pair m2 cmd =>
                     cmd_is_perform cmd
                         && String.is_empty m2.input.value
-                        && transcript_contains "you: h" m2.transcript.tail
+                        && transcript_user_contains "h" m2.transcript.tail
             }
     }
 
@@ -225,7 +233,7 @@ def test_multiline_value_routs_single_line_handler : Bool :=
                         Pair.pair m3 cmd =>
                             cmd_is_perform cmd
                                 && Bool.not (String.contains (String.trim m3.input.value) "a")
-                                && transcript_contains "you: a" m3.transcript.tail
+                                && transcript_user_contains "a" m3.transcript.tail
                     }
             }
     }
@@ -341,11 +349,11 @@ def enter_pending (m : TuiModel) : TuiModel :=
 // (the progress fragment's cleanup); a run rides back into the state.
 #[test]
 def test_turn_result_ends_the_turn : Bool :=
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.turn_result run_of ["assistant: done"] List.empty) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.turn_result run_of [TLine.plain "done"] List.empty) {
         Pair.pair m2 cmd =>
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending
-                && transcript_contains "assistant: done" m2.transcript.tail
+                && transcript_contains "done" m2.transcript.tail
     }
 
 // The repaint cmd IS a plain perform (the forced blank repaint).
@@ -368,13 +376,14 @@ def state_with_store (mode : Mode) : WeaverState :=
     { (state_of mode) with store := store_st }
 
 #[partial]
-def lines_go (i : I64) (n : I64) : List String :=
+def lines_go (i : I64) (n : I64) : List TLine :=
     if n < i then List.empty
-    else List.cons (String.concat "l" (I64.to_string i)) (lines_go (i + 1) n)
+    else List.cons (TLine.plain (String.concat "l" (I64.to_string i))) (lines_go (i + 1) n)
 
 def big_model (stored : Bool) : TuiModel :=
     let st : WeaverState := if stored then state_with_store Mode.manual else state_of Mode.manual in
-    Model.append_block (init_tui_model st 24 80) (lines_go 1 600)
+    let m : TuiModel := init_tui_model st 24 80 in
+    Model.append_block { m with banner := false } (lines_go 1 600)
 
 #[test]
 def test_home_with_a_store_requests_a_page : Bool :=
@@ -462,4 +471,24 @@ def test_big_model_state_store : Bool :=
 def test_paste_fills_the_box_without_submitting : Bool :=
     match TuiApp.update (model_of Mode.manual) (WeaverMsg.key_event (Event.paste "one\ntwo")) {
         Pair.pair m2 cmd => cmd_is_none cmd && m2.input.value == "one\ntwo" && Bool.not m2.turn_pending
+    }
+
+// ── the launch banner ───────────────────────────────────────────────────
+
+#[test]
+def test_enter_hides_the_banner : Bool :=
+    let base : TuiModel := model_of Mode.manual in
+    let shown : TuiModel := { base with banner := true } in
+    match TuiApp.update shown (key_msg (Key.char "h")) {
+        Pair.pair m1 _ => match TuiApp.update m1 (key_msg Key.enter) {
+            Pair.pair m2 _ => Bool.not m2.banner,
+        },
+    }
+
+#[test]
+def test_tick_advances_the_banner_sweep : Bool :=
+    let base : TuiModel := model_of Mode.manual in
+    let shown : TuiModel := { base with banner := true } in
+    match TuiApp.update shown (WeaverMsg.key_event Event.tick) {
+        Pair.pair m2 _ => m2.banner && m2.banner_frame == 1,
     }

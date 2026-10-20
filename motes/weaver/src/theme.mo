@@ -26,8 +26,8 @@ pub type LineClass {
 }
 
 /// The role of a line, by prefix: diff marks, error/denial entries,
-/// running rows, the you: prefix, the Ctrl+C hint -- everything else is
-/// the assistant's voice.
+/// running rows, the Ctrl+C hint -- everything else is the assistant's
+/// voice. The user's own role is data (`TLine.user`), not a prefix.
 #[terminating]
 pub def line_class (line : String) : LineClass :=
     if String.starts_with "+ " line then LineClass.diff_plus
@@ -38,7 +38,6 @@ pub def line_class (line : String) : LineClass :=
     else if String.starts_with "[approve] " line then LineClass.running
     else if String.starts_with "[running " line then LineClass.running
     else if String.starts_with "press Ctrl+C" line then LineClass.hint
-    else if String.starts_with "you: " line then LineClass.user
     else LineClass.assistant
 
 /// The TUI side: a class's `TextStyle`.
@@ -62,11 +61,44 @@ pub def theme_line_style (line : String) : TextStyle :=
 pub def theme_line_style_with (colors : Bool) (line : String) : TextStyle :=
     if colors then theme_line_style line else style_default
 
+/// A transcript line's style: the role flag wins (a user line stays cyan
+/// even when its text starts with `error:`), everything else keeps the
+/// semantic prefix classification.
+pub def theme_tline_style_with (colors : Bool) (user : Bool) (line : String) : TextStyle :=
+    if user
+    then (if colors then class_style LineClass.user else style_default)
+    else theme_line_style_with colors line
+
 pub def theme_status_style_with (colors : Bool) (mode : Mode) : TextStyle :=
     if colors then theme_status_style mode else style_default
 
 pub def theme_border_style_with (colors : Bool) : TextStyle :=
     if colors then theme_border_style else style_default
+
+/// The startup banner's parts (theme.mo owns the palette, so the banner's
+/// colors live beside every other one).
+pub type BannerPart {
+    frame,
+    warp,
+    shuttle,
+    word_cyan,
+    word_blue,
+    word_magenta,
+    tagline,
+}
+
+pub def theme_banner_style_with (colors : Bool) (part : BannerPart) : TextStyle :=
+    if colors
+    then match part {
+        BannerPart.frame => { style_default with fg := some Color.blue },
+        BannerPart.warp => { style_default with fg := some Color.blue, dim := true },
+        BannerPart.shuttle => { style_default with fg := some Color.cyan, bold := true },
+        BannerPart.word_cyan => { style_default with fg := some Color.cyan, bold := true },
+        BannerPart.word_blue => { style_default with fg := some Color.blue, bold := true },
+        BannerPart.word_magenta => { style_default with fg := some Color.magenta, bold := true },
+        BannerPart.tagline => { style_default with fg := some Color.yellow, dim := true },
+    }
+    else style_default
 
 /// The transcript/overlay border's style: dim -- structure should read
 /// quieter than any live text (the border chars inherit the ambient

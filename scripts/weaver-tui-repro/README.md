@@ -69,6 +69,30 @@ at completion, the completion repaints from blank without re-emitting,
 a Ctrl+C queued mid-turn exits cleanly after the turn, and the approval
 overlay still owns stdin (a paste cannot answer it).
 
+## Resize (`pty_repro_resize.py`)
+
+Spawns at 30x80, runs one mock turn with a 240-character reply, then
+shrinks to 24x40 and grows to 32x100. A small ANSI grid emulator
+reconstructs the screen and asserts that each geometry change emits a
+real `ESC[2J` clear (blank cells emit no diff delta, so a clear is what
+removes the old borders), that the bottom border lands on the new last
+transcript row, and that the reply re-wraps to the new content width.
+
+## Selection (`pty_repro_selection.py`)
+
+Runs one mock turn with `hello 日本`, then sends SGR press/drag/release
+reports over the text. Asserts the drag emits reverse-video SGR, and the
+release writes an OSC 52 clipboard sequence carrying the base64 of
+`hello` and (a second drag) `日本` -- wide glyphs selected whole.
+
+## Dialogs (`pty_repro_dialogs.py`)
+
+Drives the permission dialog with arrows + Enter (approving an `edit`
+runs it), a note on a denial (`e`, text, Enter, `n`) reaching the model
+as `denied: <note>`, and the plan-review dialog in plan mode (`/plan`),
+including a revise note landing in the input box. The mock fixture's
+edit path is generated under the repro's temp root, not `/tmp/wv_repro`.
+
 ## Sessions (`pty_repro_sessions.py`)
 
 Spawns with `WEAVER_SESSION_ROOT` and `HOME` pointed at a temp root, so

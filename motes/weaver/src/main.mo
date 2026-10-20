@@ -28,7 +28,7 @@ use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
 use weaver::store {
-    StoreState, Transcript,
+    StoreState, TLine, TLine.plain, TLine.user_line, Transcript,
     Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
     Store.base_name, Store.append_transcript, Store.read_live, Store.discard_live,
@@ -37,7 +37,7 @@ use weaver::store {
 use weaver::theme {theme_split_lines}
 use weaver::dumb {Dumb.run, Dumb.poll_sleep}
 use weaver::policy {Mode}
-use weaver::providers {Weaver.preset}
+use weaver::providers {Weaver.preset, Weaver.model_error, Weaver.default_model, Weaver.repair_session_model}
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
@@ -104,6 +104,9 @@ struct Plan {
     mcps : List String,
     resume : String,
     cont : Bool,
+    /// A startup warning the run should show (a configured model that did
+    /// not belong to the configured provider, so the default replaced it).
+    model_note : Option String,
 }
 
 /// `take_opt` returns its default for BOTH "absent" and "present with no
@@ -204,9 +207,22 @@ def plan_of (s : Settings) (c : CliArgs) : Result WeaverError Plan :=
     else
         let provider : String := resolve_provider s c.provider in
         let model : String := resolve_model s c.model in
-        match Weaver.preset provider model s.api_keys {
-            Result.err e => Result.err (WeaverError.config e),
-            Result.ok cfg => plan_turns s c provider cfg,
+        // A model that plainly belongs to another provider (a settings file
+        // with `provider = "mistral"` and an ollama tag) is replaced by the
+        // provider's default with one visible warning, instead of a server
+        // round trip that answers `Invalid model`.
+        match Weaver.model_error provider model {
+            Option.none => match Weaver.preset provider model s.api_keys {
+                Result.err e => Result.err (WeaverError.config e),
+                Result.ok cfg => plan_turns s c provider cfg Option.none,
+            },
+            Option.some e => match Weaver.default_model provider {
+                Result.err _ => Result.err (WeaverError.config e),
+                Result.ok d => match Weaver.preset provider d s.api_keys {
+                    Result.err e2 => Result.err (WeaverError.config e2),
+                    Result.ok cfg => plan_turns s c provider cfg (Option.some (String.concat "warning: " e)),
+                },
+            },
         }
 
 def resolve_provider (s : Settings) (flag : String) : String :=
@@ -221,10 +237,10 @@ def resolve_model (s : Settings) (flag : String) : String :=
     then match s.model { Option.some m => m, Option.none => "" }
     else flag
 
-def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) : Result WeaverError Plan :=
+def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) (note : Option String) : Result WeaverError Plan :=
     match resolve_max_turns s c.max_turns_str {
         Result.err e => Result.err (WeaverError.config e),
-        Result.ok n => plan_done provider cfg n c,
+        Result.ok n => plan_done provider cfg n c note,
     }
 
 def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
@@ -238,8 +254,8 @@ def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
 def turn_cap (n : I64) : Result String I64 :=
     if n < 1 then Result.err "--max-turns must be at least 1" else Result.ok n
 
-def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : CliArgs) : Result WeaverError Plan :=
-    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := c.mcps, resume := c.resume, cont := c.cont } in
+def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : CliArgs) (note : Option String) : Result WeaverError Plan :=
+    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := c.mcps, resume := c.resume, cont := c.cont, model_note := note } in
     Result.ok p
 
 // ── MCP mounting (shuttle main.mo's machinery, ported) ─────────────────
@@ -374,13 +390,18 @@ def fresh_session (p : Plan) (reg : ToolRegistry) : Session :=
     let s : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
     s
 
-/// The loaded session with its key re-resolved from this run's settings
-/// (a checkpoint never carries one).
-def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Session :=
-    let cfg0 : ProviderConfig := sess.config in
-    let cfg2 : ProviderConfig := { cfg0 with api_key := Map.lookup p.provider s.api_keys } in
-    let sess2 : Session := { sess with config := cfg2 } in
-    sess2
+/// The loaded session with its model repaired to the current provider
+/// (a saved config may carry the model of the provider it was saved
+/// under) and its key re-resolved from this run's settings (a checkpoint
+/// never carries one). The note is the repair's reason, when it fired.
+def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Option String) :=
+    match Weaver.repair_session_model p.provider sess {
+        Pair.pair fixed note =>
+            let cfg0 : ProviderConfig := fixed.config in
+            let cfg2 : ProviderConfig := { cfg0 with api_key := Map.lookup p.provider s.api_keys } in
+            let sess2 : Session := { fixed with config := cfg2 } in
+            Pair.pair sess2 note,
+    }
 
 /// The initial interactive state: the opened session, the remaining
 /// budget, the settings' mode (manual is the safe default; `/mode`
@@ -482,9 +503,22 @@ def start_loop (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (s
     let opened <- open_session root_opt p s reg;
     match opened {
         Result.err e => fail_started servers e,
-        Result.ok o => run_opened colors p s reg servers o,
+        Result.ok o => run_opened colors p s reg servers (with_model_note p.model_note o),
     }
 }
+
+/// The provider-model warning rides the session note: one line in the TUI's
+/// first transcript block, and stderr for the line-based fallback.
+def with_model_note (note : Option String) (o : OpenedSession) : OpenedSession :=
+    match note {
+        Option.none => o,
+        Option.some n =>
+            let combined : Option String := match o.note {
+                Option.none => Option.some n,
+                Option.some old => Option.some (String.concat n (String.concat "\n" old)),
+            } in
+            { o with note := combined },
+    }
 
 def fail_started (servers : List McpServer) (e : WeaverError) : IO I64 := do {
     write_errln (String.concat "error: " (WeaverError.show e));
@@ -527,7 +561,7 @@ def absorb_live (s : StoreState) (tr : Transcript) (live : Option String) : IO T
     match live {
         Option.none => IO.pure tr,
         Option.some text => do {
-            let block : List String := Transcript.next_block tr (List.cons "[interrupted turn output]" (theme_split_lines text));
+            let block : List TLine := Transcript.next_block tr (List.cons (TLine.plain "[interrupted turn output]") (List.map TLine.plain (theme_split_lines text)));
             let total : I64 := tr.total;
             let r <- Store.append_transcript s.dir total block;
             let tr2 : Transcript := Transcript.append tr block;
@@ -549,7 +583,7 @@ def note_block (tr : Transcript) (note : Option String) : Transcript :=
     match note {
         Option.none => tr,
         Option.some n =>
-            let block : List String := Transcript.next_block tr (theme_split_lines n) in
+            let block : List TLine := Transcript.next_block tr (List.map TLine.plain (theme_split_lines n)) in
             Transcript.append tr block,
     }
 
@@ -585,6 +619,10 @@ def degraded (note : String) (p : Plan) (reg : ToolRegistry) : OpenedSession :=
 
 def opened (store : Option StoreState) (s : Session) : OpenedSession :=
     let o : OpenedSession := { store := store, session := s, note := Option.none } in
+    o
+
+def opened_note (store : Option StoreState) (s : Session) (note : Option String) : OpenedSession :=
+    let o : OpenedSession := { store := store, session := s, note := note } in
     o
 
 def fresh_open (root : Path) (p : Plan) (reg : ToolRegistry) : IO (Result WeaverError OpenedSession) := do {
@@ -633,7 +671,9 @@ def resume_dir (root : Path) (dir : Path) (p : Plan) (s : Settings) : IO (Result
     let r <- Store.load_session dir;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok sess => IO.pure (Result.ok (opened (Option.some (store_at root dir)) (rekey_loaded p s sess))),
+        Result.ok sess => match rekey_loaded p s sess {
+            Pair.pair sess2 note => IO.pure (Result.ok (opened_note (Option.some (store_at root dir)) sess2 note)),
+        },
     }
 }
 
@@ -646,10 +686,15 @@ def resume_file (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError
 }
 
 def resume_import_file (root : Path) (p : Plan) (s : Settings) (sess : Session) : IO (Result WeaverError OpenedSession) := do {
-    let imp <- Store.import_session root sess;
+    let fixed : Session := match Weaver.repair_session_model p.provider sess {
+        Pair.pair f _ => f,
+    };
+    let imp <- Store.import_session root fixed;
     match imp {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok st => IO.pure (Result.ok (opened (Option.some st) (rekey_loaded p s sess))),
+        Result.ok st => match rekey_loaded p s sess {
+            Pair.pair sess2 note => IO.pure (Result.ok (opened_note (Option.some st) sess2 note)),
+        },
     }
 }
 

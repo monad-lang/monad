@@ -148,6 +148,20 @@ monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target <tripl
         alias: two verbs that both produce a binary differ only in which one
         you remember.
 
+monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>] [--verbose/-v] [--no-cache]
+        Build a RELEASE binary (the release profile, no DWARF debug info) by
+        the same cached path as `build`, then install it to
+        `$MONAD_HOME/bin/<name>`. `MONAD_HOME` defaults to `$HOME/.monad`, so
+        the binary lands beside the compiler in the layout `monadup` uses.
+        <path> has build's meaning: a mote directory installs its [[bin]]
+        target under its own name, while a single .mo file has no name of its
+        own and therefore needs `-o <name>`.
+        The destination is written as `<dest>.tmp` and moved into place, so an
+        existing file OR SYMLINK at the destination is replaced atomically --
+        `cp` alone would write through a monadup-managed `bin/monad` symlink.
+        Installing the compiler binary itself does not stage a toolchain root;
+        `monadup` owns the `active`/`downloads/<tag>` layout.
+
 monad run <path> [--verbose/-v] [--debug/-g] [--release]
         Compile and then execute. The binary is always called `run_out`, so
         there is no -o; the program's exit code becomes monad's.

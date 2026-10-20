@@ -7,7 +7,8 @@
 // examples/tui_counter.mo.
 
 use lib::types { Event, Key }
-use lib::tui { App, Cmd, poll_turns, step_batch }
+use lib::core { mk_screen }
+use lib::tui { App, Cmd, poll_turns, step_batch, frame_plan }
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, forkIO}
 use std::list { List.length }
@@ -258,3 +259,29 @@ def test_a_real_event_always_draws : Bool :=
 #[test]
 def test_a_queued_message_always_draws : Bool :=
     App.should_draw (fn (_ : I64) => false) 0 [1] List.empty
+
+// ── frame_plan: clear on geometry change ──────────────────────────────
+
+#[test]
+def test_frame_plan_same_size_diffs_without_clearing : Bool :=
+    match frame_plan (mk_screen 1 2) (mk_screen 1 2) false {
+        Pair.pair clear deltas => clear == false && List.is_empty deltas,
+    }
+
+#[test]
+def test_frame_plan_growing_width_clears : Bool :=
+    match frame_plan (mk_screen 1 2) (mk_screen 1 3) false {
+        Pair.pair clear _ => clear == true,
+    }
+
+#[test]
+def test_frame_plan_shrinking_height_clears : Bool :=
+    match frame_plan (mk_screen 3 2) (mk_screen 2 2) false {
+        Pair.pair clear _ => clear == true,
+    }
+
+#[test]
+def test_frame_plan_forced_same_size_does_not_clear : Bool :=
+    match frame_plan (mk_screen 1 2) (mk_screen 1 2) true {
+        Pair.pair clear _ => clear == false,
+    }

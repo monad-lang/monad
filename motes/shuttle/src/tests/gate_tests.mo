@@ -115,7 +115,7 @@ def read_tap : IO String :=
 def deny_ask (p : Pick) : IO Approval :=
     return (Approval.deny "not allowed in this test")
 
-def deny_gate : Gate := { ask := deny_ask }
+def deny_gate : Gate := { ask := deny_ask, precheck := fn (_ : Pick) => IO.pure Option.none }
 
 /// Answers `once` for every pick and records each ask in the tap.
 def once_ask (p : Pick) : IO Approval := do {
@@ -123,7 +123,7 @@ def once_ask (p : Pick) : IO Approval := do {
     return Approval.once
 }
 
-def once_gate : Gate := { ask := once_ask }
+def once_gate : Gate := { ask := once_ask, precheck := fn (_ : Pick) => IO.pure Option.none }
 
 /// Answers `always` for every pick and records each ask in the tap --
 /// the loop's per-capability cache is what must keep the tap at one "x".
@@ -132,7 +132,7 @@ def always_ask (p : Pick) : IO Approval := do {
     return Approval.always
 }
 
-def always_gate : Gate := { ask := always_ask }
+def always_gate : Gate := { ask := always_ask, precheck := fn (_ : Pick) => IO.pure Option.none }
 
 // ── Assertions ─────────────────────────────────────────────────────────
 

@@ -22,6 +22,7 @@ use lib::core {
     style_default, style_merge, style_to_ansi, mk_rect, clamp
 }
 use lib::layout { layout_row, layout_column, pad_rect }
+use lib::text {Glyph, Text.col_of_byte, Text.drop_cols, Text.glyphs, Text.take_width, Text.wrap}
 // The Phase 5 stateful widgets' states -- matched on in the new
 // `LeafWidget` arms below.
 use lib::widgets::input { InputState, input_lines, cursor_line, nth_lines, InputLine }
@@ -52,37 +53,55 @@ def write_char (screen : Screen) (row : I64) (col : I64) (ch : String) (active :
 // ==================== Label ====================
 
 /// Paint `text` left-to-right into row `area.y` starting at `area.x`, up to
-/// `area.width` chars. No-op when `area.height < 1`.
+/// `area.width` CELLS. No-op when `area.height < 1`.
 def render_label (text : String) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
     if area.height < 1 then screen
-    else
-        // `String.length` is a strlen over a raw char*, so it is measured once
-        // here and carried, never re-measured per character.
-        let stop := clamp (String.length text) 0 area.width in
-        screen_write_text screen area.y area.x text stop active
+    else screen_write_text screen area.y area.x text area.width active
 
-/// Write `stop` chars of `text` at `(row, col)`, copying the row list and
-/// the row's cell list each ONCE. The per-cell `screen_set_cell` this
-/// replaces copied O(cols + rows) cells per character, which made a full
-/// screen of text the renderer's dominant allocation.
+/// Copy the remaining cells unchanged (they were not painted by the glyph
+/// run). `acc` is the reverse-ordered prefix already built.
 #[partial]
-def write_cells (cells : List Cell) (i : I64) (col : I64) (text : String) (stop : I64) (style : TextStyle) (acc : List Cell) : List Cell :=
+def copy_cells (cells : List Cell) (acc : List Cell) : List Cell :=
+    match cells {
+        List.empty => List.reverse acc,
+        List.cons c rest => copy_cells rest (List.cons c acc),
+    }
+
+/// Paint whole glyphs into the row starting at cell `col`, stopping before a
+/// glyph that would not fit the cell budget. A width-2 glyph writes its text
+/// into cell `i` and a `""` continuation into cell `i+1`; the emitter knows
+/// the continuation is covered by the glyph.
+#[partial]
+def write_cells (cells : List Cell) (i : I64) (col : I64) (glyphs : List Glyph) (budget : I64) (style : TextStyle) (used : I64) (acc : List Cell) : List Cell :=
     match cells {
         List.empty => List.reverse acc,
         List.cons c rest =>
-            if Bool.and (Bool.not (i < col)) (i - col < stop)
-            then write_cells rest (i + 1) col text stop style (List.cons (mk_styled_cell (String.slice text (i - col) 1) style) acc)
-            else write_cells rest (i + 1) col text stop style (List.cons c acc),
+            if i < col
+            then write_cells rest (i + 1) col glyphs budget style used (List.cons c acc)
+            else match glyphs {
+                List.empty => copy_cells (List.cons c rest) acc,
+                List.cons g grest =>
+                    if budget < used + g.width
+                    then copy_cells (List.cons c rest) acc
+                    else if g.width == 2
+                    then match rest {
+                        List.empty => copy_cells (List.cons c rest) acc,
+                        List.cons c2 rest2 =>
+                            write_cells rest2 (i + 2) col grest budget style (used + 2)
+                                (List.cons (mk_styled_cell "" style) (List.cons (mk_styled_cell g.text style) acc)),
+                    }
+                    else write_cells rest (i + 1) col grest budget style (used + 1) (List.cons (mk_styled_cell g.text style) acc),
+            },
     }
 
 #[partial]
-def write_rows (rows : List (List Cell)) (i : I64) (row : I64) (col : I64) (text : String) (stop : I64) (style : TextStyle) (acc : List (List Cell)) : List (List Cell) :=
+def write_rows (rows : List (List Cell)) (i : I64) (row : I64) (col : I64) (glyphs : List Glyph) (budget : I64) (style : TextStyle) (acc : List (List Cell)) : List (List Cell) :=
     match rows {
         List.empty => List.reverse acc,
         List.cons r rest =>
             if i == row
-            then write_rows rest (i + 1) row col text stop style (List.cons (write_cells r 0 col text stop style List.empty) acc)
-            else write_rows rest (i + 1) row col text stop style (List.cons r acc),
+            then write_rows rest (i + 1) row col glyphs budget style (List.cons (write_cells r 0 col glyphs budget style 0 List.empty) acc)
+            else write_rows rest (i + 1) row col glyphs budget style (List.cons r acc),
     }
 
 pub def screen_write_text (screen : Screen) (row : I64) (col : I64) (text : String) (stop : I64) (style : TextStyle) : Screen :=
@@ -90,52 +109,20 @@ pub def screen_write_text (screen : Screen) (row : I64) (col : I64) (text : Stri
     let ncols : I64 := screen.cols in
     if Bool.or (row < 0) (Bool.or (Bool.not (row < nrows)) (Bool.or (col < 0) (Bool.not (col < ncols)))) then screen
     else
+        let glyphs : List Glyph := Text.glyphs text in
         let cells : List (List Cell) := screen.row_cells in
-        let cells2 : List (List Cell) := write_rows cells 0 row col text stop style List.empty in
+        let cells2 : List (List Cell) := write_rows cells 0 row col glyphs stop style List.empty in
         let s : Screen := { screen with row_cells := cells2 } in
         s
 
 // ==================== Wrapping ====================
 
-/// Split `line` into rows of at most `width` chars: word-wrap at the
-/// last space that fits, hard-break a word longer than the width.
-/// Widths below 1 clamp to 1 (a zero width would never advance).
+/// Split `line` into rows of at most `width` CELLS: word-wrap at the last
+/// space that fits, hard-break a word longer than the width. Widths below 1
+/// clamp to 1 (a zero width would never advance). The cell-aware
+/// implementation lives in `text.mo`; this name stays for callers.
 pub def wrap_text (width : I64) (line : String) : List String :=
-    let w : I64 := if width < 1 then 1 else width in
-    if String.is_empty line then [""] else wrap_go w line
-
-#[terminating]
-def wrap_go (w : I64) (s : String) : List String :=
-    if Bool.not (w < String.length s)
-    then [s]
-    else
-        let sp : I64 := last_space_at_or_before s w in
-        if sp > 0
-        then
-            let rest : String := String.drop (sp + 1) s in
-            if String.is_empty rest
-            then [String.slice s 0 sp]
-            else List.cons (String.slice s 0 sp) (wrap_go w rest)
-        else
-            let valid : I64 := valid_prefix s w in
-            let cut : I64 := if valid < 1 then w else valid in
-            List.cons (String.slice s 0 cut) (wrap_go w (String.drop cut s))
-
-/// The last space byte at index <= `i`, or -1.
-#[terminating]
-def last_space_at_or_before (s : String) (i : I64) : I64 :=
-    if i < 1 then 0 - 1
-    else if String.slice s i 1 == " " then i
-    else last_space_at_or_before s (i - 1)
-
-/// The largest n <= w whose prefix ends on a character boundary (the
-/// renderer is ASCII-only; this only avoids splitting a UTF-8 code
-/// point where the width allows).
-#[terminating]
-def valid_prefix (s : String) (n : I64) : I64 :=
-    if n < 1 then 0
-    else if Bool.not (String.slice s 0 n == "") then n
-    else valid_prefix s (n - 1)
+    Text.wrap width line
 
 #[test]
 def test_wrap_exact_fit : Bool := wrap_text 5 "abcde" == ["abcde"]
@@ -225,7 +212,16 @@ def underline_at (screen : Screen) (row : I64) (col : I64) : Screen :=
     match screen_get_cell screen row col {
         some c =>
             let u : TextStyle := { style_default with underline := true, reverse := true } in
-            screen_set_cell screen row col { c with style := style_merge c.style u },
+            let s1 : Screen := screen_set_cell screen row col { c with style := style_merge c.style u } in
+            // A width-2 glyph occupies the next cell too (`""`): style it so
+            // the cursor block covers the whole glyph.
+            match screen_get_cell s1 row (col + 1) {
+                some c2 =>
+                    if String.is_empty c2.char
+                    then screen_set_cell s1 row (col + 1) { c2 with style := style_merge c2.style u }
+                    else s1,
+                none => s1,
+            },
         none => screen
     }
 
@@ -273,13 +269,15 @@ def contains_newline (s : String) (i : I64) : Bool :=
 /// byte `cur`, rendered on row `row`.
 #[partial]
 def render_text_input_row (text : String) (cur : I64) (row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
-    let len := String.length text in
-    let win := if cur < area.width then 0 else cur - area.width + 1 in
-    let vis := clamp (len - win) 0 area.width in
-    let slice : String := String.slice text win (win + vis) in
-    let row_area : Rect := { area with y := row, height := 1 } in
-    let drawn := render_label slice row_area screen active in
-    underline_at drawn row (area.x + (cur - win))
+    let cur_col : I64 := Text.col_of_byte text cur in
+    let win_col : I64 := if cur_col < area.width then 0 else cur_col - area.width + 1 in
+    match Text.drop_cols text win_col {
+        Pair.pair rest start =>
+            let visible : String := Text.take_width rest area.width in
+            let row_area : Rect := { area with y := row, height := 1 } in
+            let drawn := render_label visible row_area screen active in
+            underline_at drawn row (area.x + (cur_col - start)),
+    }
 
 /// The multiline body: the value's lines, the CURSOR-anchored window
 /// (down-shifted so the cursor's line is the last visible row), each
@@ -317,9 +315,10 @@ def render_input_lines (lines : List InputLine) (line_idx : I64) (value : String
             List.cons l rest =>
                 let text : String := String.slice value l.start l.len in
                 let screen2 : Screen := render_label text ({ area with y := area.y + display_row, height := 1 }) screen active in
+                let line_col : I64 := Text.col_of_byte (String.slice value l.start l.len) (clamp (cur - l.start) 0 l.len) in
                 let screen3 : Screen :=
                     if display_row == cursor_row
-                    then underline_at screen2 (area.y + display_row) (area.x + clamp (cur - l.start) 0 area.width)
+                    then underline_at screen2 (area.y + display_row) (area.x + line_col)
                     else screen2 in
                 render_input_lines rest (line_idx + 1) value cur cursor_row (display_row + 1) area screen3 active,
         }
@@ -497,7 +496,11 @@ def cursor_code (r : I64) (c : I64) : String :=
 def apply_one (d : CellDelta) : String :=
     match d {
         CellDelta.set r c cell =>
-            cursor_code r c ++ "\u{1b}[0m" ++ style_to_ansi cell.style ++ cell.char,
+            // `""` is a wide glyph's continuation cell: its left neighbour's
+            // delta already paints both terminal columns.
+            if String.is_empty cell.char
+            then ""
+            else cursor_code r c ++ "\u{1b}[0m" ++ style_to_ansi cell.style ++ cell.char,
         CellDelta.clear r c =>
             cursor_code r c ++ "\u{1b}[0m" ++ " "
     }
@@ -545,6 +548,27 @@ def test_render_label_no_height_is_noop : Bool :=
     let empty := mk_screen 1 5 in
     let s := render (label "Hi") (mk_rect 0 0 5 0) empty in
     cell_is s 0 0 " " && cell_is s 0 1 " "
+
+#[test]
+def test_render_label_utf8_chars : Bool :=
+    let s := render (label "æøå") (mk_rect 0 0 5 1) (mk_screen 1 5) in
+    cell_is s 0 0 "æ" && cell_is s 0 1 "ø" && cell_is s 0 2 "å" && cell_is s 0 3 " "
+
+#[test]
+def test_render_label_wide_uses_two_cells : Bool :=
+    let s := render (label "日本") (mk_rect 0 0 5 1) (mk_screen 1 5) in
+    cell_is s 0 0 "日" && cell_is s 0 1 "" && cell_is s 0 2 "本" && cell_is s 0 3 ""
+
+#[test]
+def test_render_label_wide_clipped_at_the_edge : Bool :=
+    let s := render (label "日") (mk_rect 0 0 1 1) (mk_screen 1 1) in
+    cell_is s 0 0 " "
+
+#[test]
+def test_apply_deltas_skips_a_wide_continuation : Bool :=
+    let d1 := CellDelta.set 0 0 (mk_styled_cell "日" style_default) in
+    let d2 := CellDelta.set 0 1 (mk_styled_cell "" style_default) in
+    apply_deltas [d1, d2] == "\u{1b}[1;1H\u{1b}[0m日"
 
 #[test]
 def test_render_border_plain : Bool :=
@@ -621,6 +645,12 @@ def test_render_text_input_writes_value_and_underlines_cursor : Bool :=
     && cell_underline_is s 0 0 false
     && cell_underline_is s 0 1 true
     && cell_underline_is s 0 2 false
+
+#[test]
+def test_render_text_input_cursor_after_multibyte : Bool :=
+    let st : InputState := { value := "æø", cursor := 2, placeholder := "" } in
+    let s := render (text_input st) (mk_rect 0 0 4 1) (mk_screen 1 4) in
+    cell_is s 0 0 "æ" && cell_is s 0 1 "ø" && cell_underline_is s 0 1 true
 
 #[test]
 def test_render_text_input_cursor_at_end_underlines_trailing_space : Bool :=

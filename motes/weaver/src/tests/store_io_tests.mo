@@ -1,11 +1,11 @@
 /// IO tests for the session store. Every root is a fresh, pid-qualified
 /// /tmp directory -- never $HOME, and safe under the concurrent sweep.
 use weaver::store {
-    StoreState, TranscriptPage,
+    StoreState, TranscriptPage, TLine, TLine.plain, TLine.user_line,
     Store.new_session, Store.import_session, Store.append_transcript,
     Store.read_page, Store.record_turn, Store.load_session, Store.latest_session,
     Store.ensure_root, Store.startup_transcript, Store.tail_lines, Store.child,
-    Store.append_chunk, Store.read_live, Store.discard_live, Store.update_meta,
+    Store.append_chunk, Store.read_live, Store.discard_live, Store.append_history_note, Store.update_meta,
 }
 use shuttle::session {Session, Session.messages_to_json}
 use shuttle::provider {ProviderConfig, mock}
@@ -19,11 +19,18 @@ use std::concurrent::combine {sleepIO}
 use json::json {Json}
 
 #[partial]
-def lines_go (i : I64) (n : I64) : List String :=
+def lines_go (i : I64) (n : I64) : List TLine :=
     if n < i then List.empty
-    else List.cons (String.concat "l" (I64.to_string i)) (lines_go (i + 1) n)
+    else List.cons (TLine.plain (String.concat "l" (I64.to_string i))) (lines_go (i + 1) n)
 
-def lines_from (n : I64) : List String := lines_go 1 n
+def lines_from (n : I64) : List TLine := lines_go 1 n
+
+#[partial]
+def texts (ls : List TLine) : List String :=
+    match ls {
+        List.empty => List.empty,
+        List.cons l rest => List.cons l.text (texts rest),
+    }
 
 def test_cfg : ProviderConfig :=
     { base_url := "http://localhost:11434", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.mock }
@@ -79,7 +86,7 @@ def check_append (st : StoreState) : IO Bool := do {
 def check_page (p : Result String TranscriptPage) : IO Bool :=
     match p {
         Result.err _ => IO.pure false,
-        Result.ok pg => IO.pure (pg.start == 254 && pg.lines == ["l255", "l256", "l257", "l258", "l259", "l260"]),
+        Result.ok pg => IO.pure (pg.start == 254 && texts pg.lines == ["l255", "l256", "l257", "l258", "l259", "l260"]),
     }
 
 #[test]
@@ -114,7 +121,7 @@ def test_out_of_sync_append_is_an_error : IO Bool := do {
 }
 
 def check_sync (st : StoreState) : IO Bool := do {
-    let a <- Store.append_transcript st.dir 5 ["x"];
+    let a <- Store.append_transcript st.dir 5 [TLine.plain "x"];
     match a {
         Result.err e => IO.pure (String.contains e "out of sync"),
         Result.ok _ => IO.pure false,
@@ -139,7 +146,7 @@ def check_rebuild (st : StoreState) : IO Bool := do {
     let p <- Store.read_page st.dir 0 3;
     match p {
         Result.err _ => IO.pure false,
-        Result.ok pg => IO.pure (pg.start == 0 && pg.lines == ["l1", "l2", "l3"]),
+        Result.ok pg => IO.pure (pg.start == 0 && texts pg.lines == ["l1", "l2", "l3"]),
     }
 }
 
@@ -158,9 +165,9 @@ def test_history_roundtrip_across_turns : IO Bool := do {
 
 def check_history (st : StoreState) : IO Bool := do {
     let d1 : List Message := [user_msg "hi", assistant_msg "hello"];
-    let r1 <- Store.record_turn st test_session d1 0 ["you: hi", "hello"];
+    let r1 <- Store.record_turn st test_session d1 0 [TLine.user_line "hi", TLine.plain "hello"];
     let d2 : List Message := [user_msg "again", assistant_msg "yes"];
-    let r2 <- Store.record_turn st test_session d2 2 ["you: again", "yes"];
+    let r2 <- Store.record_turn st test_session d2 2 [TLine.user_line "again", TLine.plain "yes"];
     let loaded <- Store.load_session st.dir;
     match r1 {
         Result.err _ => IO.pure false,
@@ -197,7 +204,7 @@ def orphan_finish (st : StoreState) : IO Bool := do {
 }
 
 def orphan_step (st : StoreState) : IO Bool := do {
-    let r <- Store.record_turn st test_session [user_msg "hi", assistant_msg "hello"] 0 ["you: hi", "hello"];
+    let r <- Store.record_turn st test_session [user_msg "hi", assistant_msg "hello"] 0 [TLine.user_line "hi", TLine.plain "hello"];
     match r {
         Result.err _ => IO.pure false,
         Result.ok _ => orphan_finish st,
@@ -229,7 +236,7 @@ def gap_finish (st : StoreState) : IO Bool := do {
 }
 
 def gap_second (st : StoreState) : IO Bool := do {
-    let r <- Store.record_turn st test_session [user_msg "c", assistant_msg "d"] 2 ["c", "d"];
+    let r <- Store.record_turn st test_session [user_msg "c", assistant_msg "d"] 2 [TLine.plain "c", TLine.plain "d"];
     match r {
         Result.err _ => IO.pure false,
         Result.ok _ => gap_finish st,
@@ -237,7 +244,7 @@ def gap_second (st : StoreState) : IO Bool := do {
 }
 
 def gap_first (st : StoreState) : IO Bool := do {
-    let r <- Store.record_turn st test_session [user_msg "a", assistant_msg "b"] 0 ["a", "b"];
+    let r <- Store.record_turn st test_session [user_msg "a", assistant_msg "b"] 0 [TLine.plain "a", TLine.plain "b"];
     match r {
         Result.err _ => IO.pure false,
         Result.ok _ => gap_second st,
@@ -368,4 +375,31 @@ def check_chunks (st : StoreState) : IO Bool := do {
     let text_ok : Bool := match first { Option.some t => t == "hello", Option.none => false };
     let gone_ok : Bool := match after { Option.none => true, Option.some _ => false };
     return (text_ok && gone_ok)
+}
+
+/// A standalone note (a plan approval's revision note) is committed as a
+/// history block and advances `history_next`, so `/resume` keeps it.
+#[test]
+def test_history_note_is_committed : IO Bool := do {
+    let root : Path := root_for "note";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => check_note st,
+    }
+}
+
+def check_note (st : StoreState) : IO Bool := do {
+    let w <- Store.append_history_note st test_session "look at the plan";
+    match w {
+        Result.err _ => IO.pure false,
+        Result.ok _ => do {
+            let loaded <- Store.load_session st.dir;
+            match loaded {
+                Result.err _ => IO.pure false,
+                Result.ok s => IO.pure (List.length s.history == 1),
+            }
+        }
+    }
 }

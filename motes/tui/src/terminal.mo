@@ -120,10 +120,14 @@ pub def Terminal.leave_alt_screen_code : String := "\u{1b}[?1049l"
 pub def Terminal.enable_bracketed_paste_code : String := "\u{1b}[?2004h"
 pub def Terminal.disable_bracketed_paste_code : String := "\u{1b}[?2004l"
 
-pub def Terminal.enable_mouse_code : String := "\u{1b}[?1000h\u{1b}[?1006h"
+/// `1002` = button-event tracking (press, release, and motion while a
+/// button is held -- what drag-selection needs; `1000` reports no motion),
+/// `1006` = SGR coordinates. Mouse reporting takes the terminal's own
+/// selection away; most terminals restore it with Shift+drag.
+pub def Terminal.enable_mouse_code : String := "\u{1b}[?1002h\u{1b}[?1006h"
 
 /// Disable mouse reporting.
-pub def Terminal.disable_mouse_code : String := "\u{1b}[?1000l\u{1b}[?1006l"
+pub def Terminal.disable_mouse_code : String := "\u{1b}[?1002l\u{1b}[?1006l"
 
 // ==================== IO wrappers ====================
 
@@ -200,8 +204,8 @@ def test_alt_screen_codes : Bool :=
 
 #[test]
 def test_mouse_mode_codes : Bool :=
-    Terminal.enable_mouse_code == "\u{1b}[?1000h\u{1b}[?1006h"
-    && Terminal.disable_mouse_code == "\u{1b}[?1000l\u{1b}[?1006l"
+    Terminal.enable_mouse_code == "\u{1b}[?1002h\u{1b}[?1006h"
+    && Terminal.disable_mouse_code == "\u{1b}[?1002l\u{1b}[?1006l"
 
 #[test]
 def test_unpack_size_roundtrip : Bool :=

@@ -168,28 +168,44 @@ def Input.mouse_button (b : I64) : Option MouseButton :=
     else if b == 2 then Option.some MouseButton.right
     else Option.none
 
+/// The button/motion code with the modifier bits (shift 4, alt 8,
+/// ctrl 16) stripped: those are all multiples of four.
+def Input.sgr_base (b : I64) : I64 :=
+    let q : I64 := b / 4 in
+    b - q * 4
+
 /// The `Event` for an SGR mouse report: `ESC [ < b ; col+1 ; row+1 M`
-/// (press, drag or wheel) or `... m` (release). Button codes 0/1/2 are
-/// presses, 32-34 are drags of the same buttons, 64/65 are the wheel,
-/// and release keeps the press's button code with the `m` final.
-/// Coordinates arrive 1-based; the mote's convention is 0-based.
+/// (press, drag or wheel) or `... m` (release). The base button is
+/// `b mod 4`; the 32 bit is motion (while held) and the 64 bit is the
+/// wheel. Modifier bits are accepted and ignored. Coordinates arrive
+/// 1-based; the mote's convention is 0-based.
 def Input.mouse_event (b : I64) (col : I64) (row : I64) (release : Bool) : Option Event :=
     if release
-    then match Input.mouse_button b {
+    then match Input.mouse_button (Input.sgr_base b) {
         Option.some btn => Option.some (Event.mouse (MouseEvent.release btn row col)),
-        Option.none => Input.mouse_press_event b col row
+        Option.none => Option.none
     }
     else Input.mouse_press_event b col row
 
 def Input.mouse_press_event (b : I64) (col : I64) (row : I64) : Option Event :=
-    if b == 64 then Option.some (Event.mouse (MouseEvent.scroll_up row col))
-    else if b == 65 then Option.some (Event.mouse (MouseEvent.scroll_down row col))
-    else if b == 32 || b == 33 || b == 34
-    then match Input.mouse_button (b - 32) {
-        Option.some btn => Option.some (Event.mouse (MouseEvent.drag btn row col)),
-        Option.none => Option.none
-    }
-    else match Input.mouse_button b {
+    if Bool.not (b < 64)
+    then
+        // Wheel: 64 up, 65 down; 66/67 are horizontal wheels (ignored).
+        let k : I64 := Input.sgr_base (b - 64) in
+        if k == 0 then Option.some (Event.mouse (MouseEvent.scroll_up row col))
+        else if k == 1 then Option.some (Event.mouse (MouseEvent.scroll_down row col))
+        else Option.none
+    else if Bool.not (b < 32)
+    then
+        // Motion while held. Base 3 is no-button motion (a hover); the
+        // app has no hover gesture, so it is dropped.
+        let k : I64 := Input.sgr_base (b - 32) in
+        if k == 3 then Option.none
+        else match Input.mouse_button k {
+            Option.some btn => Option.some (Event.mouse (MouseEvent.drag btn row col)),
+            Option.none => Option.none
+        }
+    else match Input.mouse_button (Input.sgr_base b) {
         Option.some btn => Option.some (Event.mouse (MouseEvent.press btn row col)),
         Option.none => Option.none
     }

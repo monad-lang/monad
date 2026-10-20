@@ -26,7 +26,7 @@ use shuttle::context {usage_zero}
 use shuttle::tool {ToolSpec}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
-use weaver::providers {Weaver.preset}
+use weaver::providers {Weaver.preset, Weaver.model_error, Weaver.repair_session_model}
 use weaver::error {WeaverError}
 use weaver::store {
     StoreState, Store.new_session, Store.latest_session, Store.load_session,
@@ -109,17 +109,19 @@ def respond (st : WeaverState) (output : String) : IO (Result WeaverError Effect
 /// final shape.
 pub def command_table : BTreeMap String SlashCommand :=
     Map.insert "/clear" (SlashCommand.mk cmd_clear)
+        (Map.insert "/h" (SlashCommand.mk cmd_help)
         (Map.insert "/help" (SlashCommand.mk cmd_help)
         (Map.insert "/mcp" (SlashCommand.mk cmd_mcp)
         (Map.insert "/mode" (SlashCommand.mk cmd_mode)
         (Map.insert "/model" (SlashCommand.mk cmd_model)
         (Map.insert "/plan" (SlashCommand.mk cmd_plan)
         (Map.insert "/provider" (SlashCommand.mk cmd_provider)
+        (Map.insert "/q" (SlashCommand.mk cmd_quit)
         (Map.insert "/quit" (SlashCommand.mk cmd_quit)
         (Map.insert "/resume" (SlashCommand.mk cmd_resume)
         (Map.insert "/save" (SlashCommand.mk cmd_save)
         (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty))))))))))
+            BTreeMap.empty))))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -183,14 +185,18 @@ def mode_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :
 def cmd_model (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
     then respond st (String.concat "model: " st.run.session.config.model)
-    else
-        let st2 : WeaverState := set_model st arg in
-        respond st2 (String.concat "model: " arg)
+    else match Weaver.model_error st.provider arg {
+        Option.some e => respond st (String.concat "model unchanged: " e),
+        Option.none =>
+            let st2 : WeaverState := set_model st arg in
+            respond st2 (String.concat "model: " arg),
+    }
 
-/// `/provider` with no argument shows the preset name; with one of the
-/// five names, it swaps the whole config (wire, key and host with it)
-/// and keeps the model name. Phase 10: the NEW provider's direct key
-/// re-resolves from the merged `[api_keys]` table the state carries.
+/// `/provider [name] [model]`: with no argument shows the preset name;
+/// with a name it swaps the whole config (wire, key and host with it) and
+/// uses that provider's DEFAULT model unless the second word names one --
+/// the old provider's model is never carried across. Phase 10: the NEW
+/// provider's direct key re-resolves from the merged `[api_keys]` table.
 def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
     then respond st (String.concat "provider: " st.provider)
@@ -200,13 +206,20 @@ def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effe
 /// output, state untouched): an argument typo must not kill an
 /// otherwise healthy interactive session -- that is what a config
 /// error's fatal classification would do. The STARTUP path keeps its
-/// own fatal shape for the same misspelling.
+/// own fatal shape for the same misspelling. A model that the new
+/// provider does not serve is refused the same way.
 def provider_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
-    match Weaver.preset arg st.run.session.config.model st.keys {
-        Result.err e => respond st e,
-        Result.ok cfg =>
-            let st2 : WeaverState := set_config st cfg arg in
-            respond st2 (String.concat "provider: " arg),
+    match split_command arg {
+        Pair.pair name model =>
+            match Weaver.preset name model st.keys {
+                Result.err e => respond st e,
+                Result.ok cfg => match Weaver.model_error name cfg.model {
+                    Option.some e => respond st (String.concat "provider unchanged: " e),
+                    Option.none =>
+                        let st2 : WeaverState := set_config st cfg name in
+                        respond st2 (String.concat "provider: " (String.concat name (String.concat " (model " (String.concat cfg.model ")")))),
+                },
+            },
     }
 
 /// `/tools`: every registered tool with its capability tag -- what the
@@ -383,12 +396,20 @@ def resume_import_into (st : WeaverState) (s : Session) (old : StoreState) (labe
 /// The budget spans halves and the resumed config re-resolves the
 /// CURRENT provider's direct key (a checkpoint never carries one).
 def resume_effect (st : WeaverState) (s : Session) (store : Option StoreState) (label : String) : Effect :=
-    let keyed : Session := rekey_session st s in
-    let st2 : WeaverState := set_session st keyed st.budget in
-    let st3 : WeaverState := set_store st2 store in
-    if st.budget - s.turns < 1
-    then Effect.reset st3 (String.concat "resumed " (String.concat label " -- the whole turn budget is already spent"))
-    else Effect.reset st3 (String.concat "resumed " label)
+    match Weaver.repair_session_model st.provider s {
+        Pair.pair fixed note =>
+            let keyed : Session := rekey_session st fixed in
+            let st2 : WeaverState := set_session st keyed st.budget in
+            let st3 : WeaverState := set_store st2 store in
+            let base : String := String.concat "resumed " label in
+            let out : String := match note {
+                Option.none => base,
+                Option.some n => String.concat base (String.concat " -- warning: " n),
+            } in
+            if st.budget - s.turns < 1
+            then Effect.reset st3 (String.concat out " -- the whole turn budget is already spent")
+            else Effect.reset st3 out,
+    }
 
 def rekey_session (st : WeaverState) (s : Session) : Session :=
     let s2 : Session := { s with config := rekey_config st s.config } in
@@ -460,15 +481,15 @@ def help_text : String :=
     List.intercalate "\n" [
         "/mode [manual|plan|allow_edit|auto]  show or set the approval mode",
         "/model [name]                        show or set the model",
-        "/provider [ollama|mistral|openrouter|anthropic|mock]  show or set the provider",
+        "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
         "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
         "/tools                               list tools with their capability tags",
         "/mcp                                 list mounted MCP servers",
         "/save <file>                         checkpoint the session as a JSON file",
         "/resume [<id|file>]                  continue a session (newest by default)",
         "/clear                               start a new session and reset the budget",
-        "/help                                this table",
-        "/quit                                exit (MCP servers are disposed)",
+        "/help (or /h)                        this table",
+        "/quit (or /q)                        exit (MCP servers are disposed)",
     ]
 
 def unknown_effect (cmd : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
@@ -514,6 +535,8 @@ def set_store (st : WeaverState) (s : Option StoreState) : WeaverState :=
 
 def set_session (st : WeaverState) (s : Session) (budget : I64) : WeaverState :=
     let remaining : I64 := if budget - s.turns < 0 then 0 else budget - s.turns in
-    let run2 : RunState := { (st.run) with session := s, turns_left := remaining } in
+    // A session switch clears the `always` cache: the approval is
+    // per-session by definition, and `/clear`/`/resume` start a new one.
+    let run2 : RunState := { (st.run) with session := s, turns_left := remaining, always := List.empty } in
     let st2 : WeaverState := { st with run := run2 } in
     st2

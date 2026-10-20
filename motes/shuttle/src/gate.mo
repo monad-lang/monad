@@ -50,22 +50,27 @@ pub struct Pick {
 
 /// The gate's answer: `once` runs this pick, `always` runs this pick
 /// and every later pick of the same capability, `deny` runs nothing
-/// and tells the model why.
+/// and tells the model why. The `*_note` variants also carry a human
+/// note into the tool result, so the model sees the context.
 pub type Approval {
     once,
     always,
     deny (reason : String),
+    once_note (note : String),
+    always_note (note : String),
 }
 
-/// The gate: one approval decision per tool pick. `IO` because the
-/// interactive implementation prints and reads; the loop consults it
-/// before `impl.run` and never after.
+/// The gate: one approval decision per tool pick, plus a policy PRECHECK
+/// that runs even for a cached capability (a cached `write` must not
+/// bypass plan mode's refusal). `IO` because the interactive
+/// implementation prints and reads.
 pub struct Gate {
     ask : Pick -> IO Approval,
+    precheck : Pick -> IO (Option Approval),
 }
 
-/// The headless default: every pick proceeds, nothing is cached.
-/// shuttle's own CLI and tests pass this, so their behavior is
-/// byte-identical to the pre-gate loop.
+/// The headless default: every pick proceeds, nothing is cached, no
+/// precheck refuses.
 pub def Gate.auto : Gate :=
-    { ask := fn (_ : Pick) => IO.pure Approval.once }
+    { ask := fn (_ : Pick) => IO.pure Approval.once,
+      precheck := fn (_ : Pick) => IO.pure Option.none }

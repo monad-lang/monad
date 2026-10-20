@@ -22,7 +22,7 @@ use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 use weaver::store {StoreState, Store.record_history}
-use weaver::theme {Theme.tint, theme_status_code}
+use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use init::transformers {ResultT}
 use tui::terminal {Terminal.poll}
 
@@ -60,11 +60,23 @@ struct Step {
 #[terminating]
 pub def Dumb.run (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) : IO WeaverState := do {
     let w : String -> IO Unit := theme_write write st.colors;
+    let _ <- write (dumb_banner st);
     let _ <- write (prompt_line st);
     let line <- read unit;
     let step <- step_of read w st line;
     if step.again then Dumb.run read write step.state else IO.pure step.state
 }
+
+/// The line-based UI's one-line launch banner (the TUI renders the full
+/// colorful mark): `weaver · coding agent · provider/model`, dim.
+def dumb_banner (st : WeaverState) : String :=
+    let provider : String := st.provider in
+    let model : String := st.run.session.config.model in
+    let text : String := String.concat "weaver · coding agent · "
+        (String.concat provider (String.concat "/" model)) in
+    if st.colors
+    then String.concat (class_code LineClass.hint) (String.concat text "\u{1b}[0m")
+    else text
 
 /// The dumb write, tinted through the theme by line class -- plain
 /// when the session's colors are off (`NO_COLOR`).

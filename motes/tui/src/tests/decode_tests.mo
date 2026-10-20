@@ -352,3 +352,35 @@ def test_reader_cap_flushes_an_unterminated_paste : Bool :=
         Pair.pair evs r2 =>
             Bool.and (List.length evs == 1) (Bool.and (Input.pasting r2) (only_paste_len evs == 11)),
     }
+
+#[test]
+def test_mouse_shift_drag_is_a_left_drag : Bool :=
+    // 32 (motion) + 4 (shift) = 36: the modifier is stripped.
+    events_be (decoded_events "\u{1b}[<36;8;2M") [
+        Event.mouse (MouseEvent.drag MouseButton.left 1 7)
+    ]
+
+#[test]
+def test_mouse_shift_wheel_still_scrolls : Bool :=
+    // 64 (wheel) + 4 (shift) = 68.
+    events_be (decoded_events "\u{1b}[<68;10;5M") [
+        Event.mouse (MouseEvent.scroll_up 4 9)
+    ]
+
+#[test]
+def test_mouse_ctrl_press_is_still_a_press : Bool :=
+    // 16 (ctrl) + 0 (left) = 16.
+    events_be (decoded_events "\u{1b}[<16;10;5M") [
+        Event.mouse (MouseEvent.press MouseButton.left 4 9)
+    ]
+
+#[test]
+def test_mouse_no_button_motion_is_dropped : Bool :=
+    events_be (decoded_events "\u{1b}[<35;10;5M") []
+
+#[test]
+def test_mouse_modified_release_masks_the_button : Bool :=
+    // 4 (shift) + 0 (left), `m` final.
+    events_be (decoded_events "\u{1b}[<4;3;4m") [
+        Event.mouse (MouseEvent.release MouseButton.left 3 2)
+    ]

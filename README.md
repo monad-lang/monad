@@ -99,6 +99,10 @@ monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--verbose/-v] [
         Parse, type-check and compile a source file, or a mote's [[bin]] target,
         to a native binary. --bin picks one of several.
 
+monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>] [--verbose/-v] [--no-cache]
+        Build a RELEASE binary and install it to $MONAD_HOME/bin (default
+        $HOME/.monad/bin), replacing the destination atomically.
+
 monad run <path> [--verbose/-v] [--debug/-g] [--release]
         Compile and execute. The program's exit code becomes monad's.
 

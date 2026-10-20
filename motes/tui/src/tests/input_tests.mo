@@ -36,7 +36,22 @@ def test_input_insert_at_end : Bool :=
 
 #[test]
 def test_input_insert_in_middle : Bool :=
-    state_is "abcd" 2 "" (handle_input_key (Key.char "bc") (at_cursor "ad" 1 ""))
+    state_is "abcd" 3 "" (handle_input_key (Key.char "bc") (at_cursor "ad" 1 ""))
+
+#[test]
+def test_input_insert_multibyte_advances_by_bytes : Bool :=
+    state_is "aæd" 3 "" (handle_input_key (Key.char "æ") (at_cursor "ad" 1 ""))
+
+#[test]
+def test_backspace_deletes_a_whole_multibyte_char : Bool :=
+    state_is "a" 1 "" (handle_input_key Key.backspace (at_cursor "aæ" 3 ""))
+
+#[test]
+def test_left_right_cross_a_multibyte_char_in_one_step : Bool :=
+    let st : InputState := at_cursor "aæ" 3 "" in
+    let left : InputState := handle_input_key Key.left st in
+    let right : InputState := handle_input_key Key.right left in
+    state_is "aæ" 1 "" left && state_is "aæ" 3 "" right
 
 // ── multiline (Phase 11b, the input pass) ────────────────────────────────
 

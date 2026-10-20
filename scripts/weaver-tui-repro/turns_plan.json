@@ -1,0 +1,4 @@
+[
+ {"message":{"role":"assistant","content":[{"type":"text","text":"PLAN: do the thing"}]},
+  "usage":{"input_tokens":1,"output_tokens":10,"cached_tokens":0},"stop":"end_turn"}
+]

@@ -181,6 +181,9 @@ struct OpenaiAcc {
     tools : List (Pair I64 ToolCall),
     finish : String,
     usage : ApiUsage,
+    /// An error payload delivered INSIDE a 200 stream (`data: {"error":…}`).
+    /// It must not fold into an empty successful completion.
+    error : Option String,
 }
 
 /// A usage object read leniently: missing or non-numeric fields are 0,
@@ -367,9 +370,30 @@ def openai_apply_choice (acc : OpenaiAcc) (cobj : BTreeMap String Json) : Pair O
             }
     }
 
+/// A stream event's error payload: a bare string, or an object's
+/// `message` (Mistral/OpenAI both use `{"error":{"message":...}}`).
+def openai_error_of (obj : BTreeMap String Json) : Option String :=
+    match Json.object_get "error" obj {
+        Option.none => Option.none,
+        Option.some ej => match Json.get_str ej {
+            Result.ok s => Option.some s,
+            Result.err _ => match Json.get_object ej {
+                Result.err _ => Option.some "provider stream error",
+                Result.ok eobj => match Json.object_get "message" eobj {
+                    Option.none => Option.some "provider stream error",
+                    Option.some mj => match Json.get_str mj {
+                        Result.ok m => Option.some m,
+                        Result.err _ => Option.some "provider stream error",
+                    },
+                },
+            },
+        },
+    }
+
 /// One complete SSE event payload. `[DONE]` and unparseable payloads
 /// are skipped -- the stream's terminator is the CHUNKED body's last
-/// chunk (see `http::wire`), not a sentinel event.
+/// chunk (see `http::wire`), not a sentinel event. An in-stream `error`
+/// payload is captured for `openai_finish`, never dropped.
 def openai_apply_event (acc : OpenaiAcc) (data : String) : Pair OpenaiAcc String :=
     if data == "[DONE]"
     then Pair.pair acc ""
@@ -380,6 +404,14 @@ def openai_apply_event (acc : OpenaiAcc) (data : String) : Pair OpenaiAcc String
                 match Json.get_object j {
                     Result.err _ => Pair.pair acc "",
                     Result.ok obj =>
+                        match openai_error_of obj {
+                            Option.some e => Pair.pair { acc with error := Option.some e } "",
+                            Option.none => openai_apply_choices acc obj,
+                        }
+                }
+        }
+
+def openai_apply_choices (acc : OpenaiAcc) (obj : BTreeMap String Json) : Pair OpenaiAcc String :=
                         match Json.object_get "choices" obj {
                             Option.none => Pair.pair (openai_apply_usage acc obj) "",
                             Option.some cj =>
@@ -396,8 +428,6 @@ def openai_apply_event (acc : OpenaiAcc) (data : String) : Pair OpenaiAcc String
                                         }
                                 }
                         }
-                }
-        }
 
 /// Fold every event a byte push completed, reporting each non-empty
 /// text delta in wire order -- the pure half of `openai_stream_bytes`.
@@ -472,8 +502,16 @@ def openai_assemble (acc : OpenaiAcc) : ChatResponse :=
     let resp : ChatResponse := { choices := List.singleton choice, usage := acc.usage } in
     resp
 
+/// The stream's final result: an in-stream error payload is a failure,
+/// not an empty successful completion.
+def openai_finish (acc : OpenaiAcc) : Result String ChatResponse :=
+    match acc.error {
+        Option.some e => Result.err e,
+        Option.none => Result.ok (openai_assemble acc),
+    }
+
 def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text : String -> IO Unit) : IO (Result String ChatResponse) := do {
-    let init : OpenaiAcc := { sse := Sse.init, text := "", tools := List.empty, finish := "", usage := ApiUsage.mk 0 0 };
+    let init : OpenaiAcc := { sse := Sse.init, text := "", tools := List.empty, finish := "", usage := ApiUsage.mk 0 0, error := Option.none };
     let res <- Client.post_stream u headers (Body.from_text body_str) init (fn st bytes => openai_stream_bytes on_text st bytes);
     return (match res {
         Result.err e => Result.err e,
@@ -481,7 +519,7 @@ def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text 
             match pr {
                 Pair.pair acc resp => match openai_http_error resp {
                     Option.some e => Result.err e,
-                    Option.none => Result.ok (openai_assemble acc),
+                    Option.none => openai_finish acc,
                 }
             }
     })
