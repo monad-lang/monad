@@ -1572,32 +1572,9 @@ def scope_data_find_inductive_by_key (sd : ScopeData) (key : String) : Option In
 def scope_data_add_instance (sd : ScopeData) (ins : Instance) : ScopeData :=
     match ins {
         mk _ cname _ _ _ _ _ =>
-            { sd with instances := scope_add_to_instances sd.instances cname ins }
-    }
-
-def scope_add_to_instances (insts : List ScopeInstance) (cls_name : NamePath) (ins : Instance) : List ScopeInstance :=
-    match insts {
-        List.empty =>
-            let ins_list : List Instance := List.cons ins List.empty in
-            let si : ScopeInstance := {
-                class_name := cls_name,
-                instances := ins_list,
-            } in
-            let empty_rest : List ScopeInstance := List.empty in
-            List.cons si empty_rest,
-        List.cons si rest =>
-            match si {
-                mk cn ins_list =>
-                    if class_name_eq cn cls_name
-                    then
-                        let new_ins_list : List Instance := List.cons ins ins_list in
-                        let new_si : ScopeInstance := {
-                            class_name := cn,
-                            instances := new_ins_list,
-                        } in
-                        List.cons new_si rest
-                    else List.cons si (scope_add_to_instances rest cls_name ins)
-            }
+            // One registration path (`scope_add_instances_to_group`),
+            // so candidate order is decided in exactly one place.
+            { sd with instances := scope_add_instances_to_group sd.instances cname [ins] }
     }
 
 def scope_data_add_infix (sd : ScopeData) (op : Operator) (name : NamePath) : ScopeData :=
@@ -1779,6 +1756,9 @@ def scope_add_instance_group (insts : List ScopeInstance) (si : ScopeInstance) :
             scope_add_instances_to_group insts cn ins_list
     }
 
+/// APPEND, never cons: a class group's list IS the matching candidate
+/// order, and every matcher over it is first-match-wins -- declaration
+/// order is the language's documented policy.
 def scope_add_instances_to_group (insts : List ScopeInstance) (cls_name : NamePath) (ins_list : List Instance) : List ScopeInstance :=
     match insts {
         List.empty =>

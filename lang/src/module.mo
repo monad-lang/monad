@@ -7719,17 +7719,17 @@ def decl_list_has_use_it_calling_makeempty_mybox_empty (ds : List Decl) : Bool :
     }
 
 /// `f #Named.Instance args`: the hint picks WHICH same-class same-carrier
-/// instance a class-method call dispatches through. Two named `Show I64`
-/// instances; auto-resolution would pick the first (`Show_I64_show_ShowA`),
-/// the hint pins the second. Also proves the named-instance mangling keeps
-/// the two instances' promoted methods distinct at all (without it both
-/// mint `Show_I64_show` and silently collide).
-/// Dotted calls, not bare `show` -- `resolve_class_calls_decls` is the
-/// SYNTACTIC Phase 4 pass (`class_method_ref` only recognizes a dotted
-/// `Class.method` reference; bare-name resolution lives in `infer.mo`'s
-/// type-checker path, exercised by `test_dict_hint_valid_call_checks_clean`
-/// below instead). Mirrors `test_resolve_class_calls_decls_uses_class_
-/// declared_default_carrier`'s own dotted `MakeEmpty.empty` convention.
+/// instance a class-method call dispatches through. Asserted against the
+/// checker alone, then through the syntactic pass over its output (the
+/// real codegen composition): the unhinted call takes the FIRST-declared
+/// instance, the hinted one the pinned second. (The Rust host still
+/// resolves duplicates last-declared; aligning it is a follow-up.)
+/// Also proves the named-instance mangling keeps the two instances'
+/// promoted methods distinct at all (without it both mint `Show_I64_show`
+/// and silently collide). Dotted calls, not bare `show` -- `show #ShowB x`
+/// would take `type_check_app`'s hint arm while the unhinted `Show.show x`
+/// goes through the free-var path's `resolve_class_method`, and the point
+/// here is that the two paths stay independent.
 #[test]
 def test_dict_hint_selects_named_instance : IO Bool := do {
     let src : String :=
@@ -7745,10 +7745,20 @@ def test_dict_hint_selects_named_instance : IO Bool := do {
             let resolved := resolve_infix_decls infixes decl_list;
             let promoted := promote_instance_defs resolved;
             let dict_paramed := add_constraint_dict_params_decls promoted;
-            let dispatched := resolve_class_calls_decls dict_paramed;
-            let auto_ok := decl_list_def_term_contains dispatched "auto_pick" "Show_I64_show_ShowA";
-            let hinted_ok := decl_list_def_term_contains dispatched "hinted_pick" "Show_I64_show_ShowB";
-            Bool.and auto_ok hinted_ok
+            let path : ModulePath := { segments := List.empty };
+            let sd : ScopeData := build_scope_from_decls path dict_paramed;
+            let scope : Scope := {
+                module_id := path,
+                scope := sd,
+                parent := Option.none,
+                incomplete_match_ok := false,
+            };
+            let elaborated := elaborate_module_decls_best_effort scope dict_paramed empty_locals;
+            let dispatched := resolve_class_calls_decls elaborated;
+            let auto_ok : Bool := decl_list_def_term_contains elaborated "auto_pick" "Show_I64_show_ShowA";
+            let hinted_ok : Bool := decl_list_def_term_contains elaborated "hinted_pick" "Show_I64_show_ShowB";
+            let dispatched_ok : Bool := decl_list_def_term_contains dispatched "hinted_pick" "Show_I64_show_ShowB";
+            Bool.and (Bool.and auto_ok hinted_ok) dispatched_ok
         },
         ParseResult.fail _ => false,
     })

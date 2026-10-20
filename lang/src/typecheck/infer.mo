@@ -6574,10 +6574,11 @@ def struct_update_arm_args (overrides : List (Option Term)) (binders : List Iden
 /// field 0 of the wrong object no matter which field was actually named
 /// -- confirmed live via a real self-compiled binary's own SIGSEGV
 /// (`lang/scope.mo`'s `scope_data_add_instance`, `{ sd with instances :=
-/// scope_add_to_instances sd.instances cname ins }`: `sd.instances`
-/// -- field index 2 of `ScopeData` -- compiled to read field 0 instead,
-/// handing `scope_add_to_instances` an unrelated `HashMap` to recurse
-/// into as if it were a `List ScopeInstance`) and independently via a
+/// scope_add_instances_to_group sd.instances cname [ins] }`:
+/// `sd.instances` -- field index 2 of `ScopeData` -- compiled to read
+/// field 0 instead, handing the registration helper an unrelated
+/// `HashMap` to recurse into as if it were a `List ScopeInstance`) and
+/// independently via a
 /// minimal repro (`{ sd with f0 := sd.f1 }` on a 2-field struct reading
 /// back the WRONG, pre-update value). Invisible for the overwhelming
 /// majority of arguments (plain literals, calls, bare var refs) since
