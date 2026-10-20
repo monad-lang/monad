@@ -193,8 +193,8 @@
     # hooks. Both are whole-corpus and take minutes, and this config is
     # generated per checkout but SHARED by every worktree on the machine, so
     # every commit in every worktree paid them. They run in CI instead
-    # (ci.yml's `pre-commit-checks`: the Rust suite, and the same `check` one
-    # severity stricter under MONAD_USE_COMPLETENESS=error).
+    # (ci.yml's `pre-commit-checks`: the Rust suite, and the same `check`,
+    # whose `use`-completeness rule the loader enforces by default).
     shellcheck = {
       enable = true;
       entry = "shellcheck";

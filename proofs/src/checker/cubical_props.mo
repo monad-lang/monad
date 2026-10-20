@@ -33,7 +33,7 @@ use lang::types {
   CubicalPrim, ModulePath, Scope, ScopeData, SortLevel, Similar, Term, binder_named,
   cub, cub_face_eq0, cub_face_eq1, cub_hcomp, cub_i0, cub_i1, cub_imeet,
   cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_pathp, cub_transp,
-  cubical_prim_eq, sentinel, sort_n,
+  cubical_prim_eq, id, named, sentinel, sort_n,
 }
 use init::borrow {Borrow}
 

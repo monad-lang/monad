@@ -29,7 +29,8 @@ use lib::widgets::list { ListState }
 // `LeafWidget`/`DecoratorKind` are matched on, never named in a term, so the
 // unused-import analysis reports them as unused -- the same blind spot
 // `docs/src/macros.md` records for macro-name dispatch. Removing them makes
-// `MONAD_USE_COMPLETENESS=error` fail on the bare `spacer`/`styled` patterns.
+// the `use`-completeness rule fail the load on the bare `spacer`/`styled`
+// patterns.
 use lib::widget {
     Widget, BorderStyle, SizedWidget, LeafWidget, DecoratorKind,
     label, sized, border, padding, with_style, blank, text_input, list

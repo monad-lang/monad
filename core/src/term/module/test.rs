@@ -1390,16 +1390,18 @@ fn test_selective_use_only_filter() {
   assert!(global.find_any_ref(&npt("bar"), &sort1()).is_err());
 }
 
-/// The completeness rule as `check` reports it: a bare name reached from a
-/// module the file did not select it from is a WARNING, and putting the
-/// name in a brace list clears it. Resolution itself is untouched — the
-/// scope is still flat, which is exactly why the check has to exist: the
-/// load succeeds either way.
+/// The completeness rule as the loader enforces it: a bare name reached
+/// from a module the file did not select it from FAILS THE LOAD — which
+/// is what makes the rule hold for every entry point (`run`, `test`,
+/// `compile`, the LSP), not only for `check` — and putting the name in
+/// a brace list clears it. Resolution itself is untouched — the scope
+/// is still flat, which is exactly why the check has to exist: the load
+/// is what distinguishes the two.
 #[test]
-fn test_unimported_name_is_reported_and_importing_it_clears_it() {
+fn test_unimported_name_fails_the_load_and_importing_it_clears_it() {
   let loaded = default_modules().unwrap();
 
-  let path_a = ModulePath::top("test_cmp_a");
+  let path_a = ModulePath::new(vec![id("test_cmp"), id("a")]);
   let parsed_a = parse_file(
     r#"
     def widget : I64 := 1
@@ -1420,56 +1422,29 @@ fn test_unimported_name_is_reported_and_importing_it_clears_it() {
   ));
 
   let path_b = ModulePath::top("test_cmp_b");
-  let a = path_a.as_str().unwrap().to_string();
+  // Two segments: a single-segment `use X` is (correctly) rejected by
+  // `validate_use_qualification` before the completeness gate ever runs.
+  let a = module_path_spelling(&path_a);
 
   // `use A {}` is the qualified-only form: it names the module, not the
-  // name, so reaching `widget` bare is the finding.
+  // name, so reaching `widget` bare is the finding. The load itself still
+  // type-checks (the flat scope resolves `widget` — that is the point);
+  // only the completeness gate refuses it.
   let source = format!("use {a} {{}}\ndef use_it : I64 := widget\n");
-  let parsed_b = parse_file(source.as_str().into()).unwrap();
-  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
-    .inspect_err(|e| eprintln!("{e}"))
-    .expect("the flat scope still resolves `widget`, which is the point");
   let mut loaded_b = loaded.clone();
-  loaded_b.add_module(module(
-    path_b.clone(),
-    ParsedModule {
-      decls: decls_b,
-      module_doc: None,
-    },
-  ));
-
-  let diagnostics = unimported_name_diagnostics(&path_b, &source, &loaded_b, None);
-  assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-  assert_eq!(diagnostics[0].severity, Severity::Warning);
+  let err = load_module_from_text_at(&source, &path_b, None, &mut loaded_b)
+    .expect_err("the load must fail on the unimported name");
+  let message = err.to_string();
+  assert!(message.contains("`widget` is not imported"), "{message}");
   assert!(
-    diagnostics[0].message.contains("`widget` is not imported"),
-    "{}",
-    diagnostics[0].message
-  );
-  assert!(
-    diagnostics[0].message.contains(&a),
-    "the message must name the module that declares it: {}",
-    diagnostics[0].message
+    message.contains(&a),
+    "the message must name the module that declares it: {message}"
   );
 
-  // The same reference, now selected by name: nothing to report.
+  // The same reference, now selected by name: the load goes through.
   let selected = format!("use {a} {{widget}}\ndef use_it : I64 := widget\n");
-  let parsed_b = parse_file(selected.as_str().into()).unwrap();
-  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
-    .inspect_err(|e| eprintln!("{e}"))
-    .unwrap();
-  let mut loaded_b = loaded;
-  loaded_b.add_module(module(
-    path_b.clone(),
-    ParsedModule {
-      decls: decls_b,
-      module_doc: None,
-    },
-  ));
-  assert!(
-    unimported_name_diagnostics(&path_b, &selected, &loaded_b, None).is_empty(),
-    "`{{widget}}` names it, so there is nothing to report"
-  );
+  load_module_from_text_at(&selected, &path_b, None, &mut loaded)
+    .expect("`{widget}` names it, so the load is complete");
 }
 
 /// A bare name the consumer binds from its OWN declaration is never a
@@ -1484,8 +1459,8 @@ fn test_unimported_name_is_reported_and_importing_it_clears_it() {
 /// looks like the owner of a name the file declares itself, and the fix
 /// the report suggests is an import of a module the file has no business
 /// naming. The companion assertion is the discriminating half: the
-/// genuinely-foreign `widget` must STILL be reported, so the test cannot
-/// pass by the check having gone silent.
+/// genuinely-foreign `widget` must STILL fail the load, so the test
+/// cannot pass by the check having gone silent.
 #[test]
 fn test_own_struct_constructor_is_not_an_unimported_name() {
   let loaded = default_modules().unwrap();
@@ -1518,30 +1493,26 @@ fn test_own_struct_constructor_is_not_an_unimported_name() {
      def get_x (s : S) : I64 := match s {{ mk x => x }}\n\
      def use_widget : I64 := widget\n"
   );
-  let parsed_b = parse_file(source.as_str().into()).unwrap();
-  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
-    .inspect_err(|e| eprintln!("{e}"))
-    .expect("the flat scope resolves both `mk` and `widget`");
-  let mut loaded_b = loaded;
-  loaded_b.add_module(module(
-    path_b.clone(),
-    ParsedModule {
-      decls: decls_b,
-      module_doc: None,
-    },
-  ));
-
-  let diagnostics = unimported_name_diagnostics(&path_b, &source, &loaded_b, None);
-  assert_eq!(
-    diagnostics.len(),
-    1,
-    "`mk` is this file's own struct constructor, not `{a}`'s: {diagnostics:#?}"
-  );
+  // The load FAILS on the genuinely-foreign `widget` — and its message
+  // must not name `mk`: this file's own struct constructor is never a
+  // name it "reaches from another module", however many loaded modules
+  // happen to spell one the same way.
+  let mut loaded_b = loaded.clone();
+  let err = load_module_from_text_at(&source, &path_b, None, &mut loaded_b)
+    .expect_err("`widget` must fail the completeness gate");
+  let message = err.to_string();
+  assert!(message.contains("`widget` is not imported"), "{message}");
   assert!(
-    diagnostics[0].message.contains("`widget` is not imported"),
-    "{}",
-    diagnostics[0].message
+    !message.contains("`mk` is not imported"),
+    "`mk` is this file's own struct constructor, not `{a}`'s: {message}"
   );
+
+  // The same file without the foreign reference loads clean — the
+  // own-decl exemption is the only thing standing between the bare `mk`
+  // pattern the corpus matches on and a false-positive gate failure.
+  let clean = "struct S {\n  x: I64,\n}\n\ndef get_x (s : S) : I64 := match s { mk x => x }\n";
+  load_module_from_text_at(&clean, &path_b, None, &mut loaded)
+    .expect("an own `mk` never blocks the load");
 }
 
 #[test]

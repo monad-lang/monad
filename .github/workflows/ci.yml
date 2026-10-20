@@ -199,21 +199,24 @@ jobs:
           # `check <file>` it appends.
           MONAD_BIN: cargo run --release --quiet --
 
-      # The `use`-completeness rule, ENFORCED. Every name a module reaches
-      # from another module has to be named in its own `use` line (unless
-      # ambient). This began as the flip of a warning the `monad-check`
-      # pre-commit hook emitted, and was a step of its own rather than an edit
-      # to that hook because .pre-commit-config.yaml is generated per checkout
-      # but SHARED by every worktree on the machine: a hook that failed on an
-      # unimported name would break commits in a sibling worktree still on a
-      # branch whose corpus predates the migration. The hook itself is gone now
-      # -- it ran this same whole-corpus `check` on every commit in every
-      # worktree -- so this is the pipeline's ONLY whole-corpus check, and it
-      # is the strictest form of it.
+      # The `use`-completeness rule, enforced BY DEFAULT in the loader:
+      # every name a module reaches from another module has to be named in
+      # its own `use` line (unless ambient), or the file fails to LOAD.
+      # This began as the `MONAD_USE_COMPLETENESS=error` flip of a warning
+      # the `monad-check` pre-commit hook emitted, and was a step of its
+      # own rather than an edit to that hook because .pre-commit-config.yaml
+      # is generated per checkout but SHARED by every worktree on the
+      # machine: a hook that failed on an unimported name would break
+      # commits in a sibling worktree still on a branch whose corpus
+      # predates the migration. The hook itself is gone now -- it ran this
+      # same whole-corpus `check` on every commit in every worktree -- so
+      # this is the pipeline's ONLY whole-corpus check, and the env-var
+      # opt-in has been deleted: no caller can weaken the rule by
+      # forgetting to set it.
       - name: "`use` completeness (enforced)"
         run: |
           nix develop --no-pure-eval --accept-flake-config -c \
-            env MONAD_USE_COMPLETENESS=error cargo run --release -- \
+            cargo run --release -- \
               check init std examples lang cli llvm runtime build motes
 
       # This step is why `nix/host.nix` may set `doCheck = false`: the flake's

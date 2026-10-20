@@ -1551,7 +1551,22 @@ pub fn organize_imports_for_files(
       Some(file.clone()),
       &mut master_loaded,
     ) {
-      Ok(()) => {
+      // The completeness gate is the only load failure that leaves the
+      // module IN `master_loaded` (it runs after `add_module`, on text
+      // that already parsed and type-checked) — and an incomplete file is
+      // exactly what the completeness edits below repair, so a gate
+      // failure falls through to the repair rather than reporting itself
+      // as an error. Every other load failure leaves no module behind and
+      // takes the error path.
+      Err(e) if master_loaded.get_module(&path).is_none() => {
+        results.push(OrganizeImportsResult {
+          path: file.clone(),
+          new_source: None,
+          error: Some(format!("{e}")),
+        });
+        continue;
+      }
+      _ => {
         // Two passes, in this order and not interleaved. The completeness
         // pass ADDS names (a reached-but-unimported name goes into the
         // brace list that should have held it); the organizer pass
@@ -1632,13 +1647,6 @@ pub fn organize_imports_for_files(
             &completed, edits,
           )),
           error: None,
-        });
-      }
-      Err(e) => {
-        results.push(OrganizeImportsResult {
-          path: file.clone(),
-          new_source: None,
-          error: Some(format!("{e}")),
         });
       }
     }
@@ -1779,20 +1787,10 @@ fn check_one_source(
     &mut loaded,
   ) {
     Ok(()) => {
-      let mut warnings = loaded
+      let warnings = loaded
         .get_module(module_path)
         .map(|module| module_warnings_with_loaded(module, &loaded, Some(path)))
         .unwrap_or_default();
-      // Needs the SOURCE, not the built `Module`: elaboration rewrites a
-      // bare reference into its defining module's own spelling, which is
-      // exactly the evidence the completeness rule is stated over. See
-      // `unimported_name_diagnostics`.
-      warnings.extend(crate::term::module::unimported_name_diagnostics(
-        module_path,
-        source,
-        &loaded,
-        Some(path),
-      ));
       (warnings, loaded)
     }
     Err(crate::term::module::LoadingError::Type(type_error)) => (

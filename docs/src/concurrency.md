@@ -117,7 +117,7 @@ who won.
 ```monad
 use std::concurrent::fiber {Fiber, forkIO}
 use std::concurrent::combine {all}
-use std::list {}
+use std::list {List.length}
 
 def answer (_ : Unit) : IO I64 := IO.pure 42
 

@@ -1400,8 +1400,8 @@ def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inducti
 /// `Option.none` when it is covered, unresolved, or exempted. One place, so
 /// the check that warns and a future check that errors cannot disagree about
 /// what "uncovered" means -- the same single-source-of-truth reason the host
-/// keeps `use_completeness_is_strict` in one function
-/// (`core/src/term/module.rs`).
+/// computes its `use`-completeness findings in one function
+/// (`unimported_names`, `core/src/term/module.rs`).
 pub def match_coverage_gap (cases : List MatchCase) (maybe_ind : Option Inductive) (scope : Scope) : Option (Pair Inductive (List NamePath)) :=
     if scope.incomplete_match_ok then Option.none
     else match maybe_ind {

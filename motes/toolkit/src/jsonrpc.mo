@@ -28,9 +28,9 @@ use json::json {Json}
 // correct, and `lang/src/json.mo:7` carries the same warning for the same reason.
 // What changed is the other side: an EMPTY filter is now a hard ERROR, because a
 // `use` line is the complete dependency declaration and a brace item names a
-// top-level declaration exactly (`MONAD_USE_COMPLETENESS=error`, the enforced CI
-// step). A warning shared with main's own corpus beats an error that fails the
-// build, and `lang/src/json.mo:7`'s `{BTreeMap, BTreeMap.to_list, empty}` is the
+// top-level declaration exactly (the `use`-completeness rule, enforced by
+// default in the loader). A warning shared with main's own corpus beats an
+// error that fails the build, and `lang/src/json.mo:7`'s `{BTreeMap, BTreeMap.to_list, empty}` is the
 // spelling to match. The 21 such warnings in this corpus all predate these motes.
 use std::map {BTreeMap}
 

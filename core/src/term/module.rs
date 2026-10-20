@@ -2000,27 +2000,19 @@ fn load_decl_uses_modules(
   Ok(loaded)
 }
 
-/// The loader's half of the completeness rule: under
-/// `MONAD_USE_COMPLETENESS=error`, a file that reaches a non-ambient name
-/// without importing it fails to LOAD — which is what makes the rule hold
-/// for every entry point at once (`run`, `test`, `compile`, the LSP),
-/// not only for `check`.
-///
-/// In the default (warn) mode this reports nothing at all, on purpose.
-/// The diagnostic half of the rule belongs where the SOURCE text is still
-/// in hand — [`unimported_name_diagnostics`], called by `check_source` —
-/// so that one finding is reported once, in the shape the rest of the
-/// compiler's diagnostics take, rather than once as a diagnostic and
-/// again on stderr.
+/// The loader's half of the completeness rule: a file that reaches a
+/// non-ambient name without importing it fails to LOAD — which is what
+/// makes the rule hold for every entry point at once (`run`, `test`,
+/// `compile`, the LSP), not only for `check`. Enforced unconditionally:
+/// the `MONAD_USE_COMPLETENESS` opt-in it grew up under is gone, so no
+/// caller can weaken the rule by forgetting to set (or inheriting a
+/// missing) environment variable.
 fn check_use_completeness(
   consumer: ModulePath,
   decls: &[SourceContext<Decl>],
   loaded: &LoadedModules,
   file: Option<&std::path::Path>,
 ) -> Result<(), LoadingError> {
-  if !use_completeness_is_strict() {
-    return Ok(());
-  }
   let unimported = unimported_names(&consumer, decls, loaded);
   if unimported.is_empty() {
     return Ok(());
@@ -2034,59 +2026,6 @@ fn check_use_completeness(
     Some(f) => format!("{}: {body}", f.display()).into(),
     None => body.into(),
   })
-}
-
-/// Whether the completeness rule is being ENFORCED (a failed load) rather
-/// than reported (a warning). One place, so the loader's check and the
-/// diagnostic reporter cannot disagree about which mode they are in.
-fn use_completeness_is_strict() -> bool {
-  std::env::var("MONAD_USE_COMPLETENESS").as_deref() == Ok("error")
-}
-
-/// [`unimported_names`] as ordinary diagnostics — the warning-shaped half
-/// of the completeness rule, for the paths that hold the module's SOURCE
-/// text (`check`/`check_source`, the LSP) and so can run a walk
-/// `module_warnings_with_loaded` cannot: it is handed a built `Module`,
-/// whose decls elaboration has already rewritten a bare reference out of.
-///
-/// Only the warning half: under `MONAD_USE_COMPLETENESS=error` the loader
-/// has already refused the file (`check_use_completeness`), so no module
-/// reachable from here can have an unimported name to report.
-///
-/// No `location`: the reference walk that finds these names tracks
-/// provenance, not positions, and a diagnostic pointing at the wrong line
-/// is worse than one pointing at the file. The message names the
-/// declaration and the `use` line that would select it.
-pub fn unimported_name_diagnostics(
-  consumer: &ModulePath,
-  source: &str,
-  loaded: &LoadedModules,
-  path: Option<&std::path::PathBuf>,
-) -> Vec<Diagnostic> {
-  if use_completeness_is_strict() {
-    return Vec::new();
-  }
-  let context = ModuleContext::new(consumer.clone(), path.cloned());
-  let Ok(decls) = load_decls_from_text_with_path(source, &context) else {
-    // Unparseable source already has a parse error of its own to report.
-    return Vec::new();
-  };
-  unimported_names(consumer, &decls, loaded)
-    .into_iter()
-    .map(|u| {
-      let owner = module_path_spelling(&u.owner);
-      let spelling = u.spelling.to_string();
-      Diagnostic {
-        severity: Severity::Warning,
-        message: u.to_string(),
-        suggestions: vec![Suggestion {
-          message: format!("add `{spelling}` to this file's `use {owner} {{...}}` line"),
-        }],
-        path: path.cloned(),
-        ..Default::default()
-      }
-    })
-    .collect()
 }
 
 pub fn load_module_files(
@@ -2606,10 +2545,11 @@ pub struct UnimportedName {
   pub is_constructor: bool,
 }
 
-/// The finding itself, WITHOUT a severity word: this is both a warning
-/// (`unimported_name_diagnostics`) and, under `MONAD_USE_COMPLETENESS=
-/// error`, a failed load, so the prefix has to come from the site that
-/// knows which it is — otherwise a warning reads `warning: error: ...`.
+/// The finding itself, WITHOUT a severity word: it is the load failure's
+/// message body (`check_use_completeness` renders it straight into the
+/// `LoadingError`), and the `error:` prefix the caller prints is the only
+/// severity the rule has had since the warning channel was deleted along
+/// with the env-var opt-in.
 impl Display for UnimportedName {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let module = module_path_spelling(&self.owner);

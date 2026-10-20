@@ -17,7 +17,7 @@
 // "is this sort a valid inhabitant of that sort", a strictly lower
 // relation.
 
-use lang::src::types {concrete, hole, id, named, pi, sort, succ}
+use lang::src::types {Term, concrete, hole, i0, id, named, pi, sort, succ, var}
 use lib::checker::harness {accepted, rejected, infers_sort_at}
 use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
