@@ -165,9 +165,9 @@ def theme_wrap (line : String) : String :=
     if code == "" then line else String.concat code (String.concat line "\u{1b}[0m")
 
 /// The status bar's code, by mode (the same color the TUI chip
-/// carries): dim yellow -- the Claude-Code-like statusbar -- plan GREEN
-/// (read-only is the one mode that is always safe), and the `auto`
-/// trust warning red.
+/// carries): dim GRAY in manual (chrome, not content), dim yellow in
+/// `allow_edit`, plan GREEN (read-only is the one mode that is always
+/// safe), and the `auto` trust warning red.
 pub def theme_status_code (mode : Mode) : String :=
     match mode {
         Mode.auto => "\u{1b}[31;2;1m",

@@ -55,7 +55,7 @@ UI-repair changelog; `monad check <probe>` shows each:
 ## Round 2 (`pty_repro_round2.py`)
 
 With `turns_long.json` (8 reply turns), on a 20-row pty: rounded border
-glyphs render, the statusbar carries the dim-yellow SGR, PageUp shows
+glyphs render, the statusbar carries the dim-gray manual-mode SGR, PageUp shows
 the `N lines above` indicator, an SGR mouse wheel report scrolls,
 Alt+Enter folds a newline and the multiline submit echoes on its own
 lines (the pump after the submit must EXCEED the retry sleeps when the
