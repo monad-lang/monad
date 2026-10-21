@@ -22,28 +22,28 @@ use lib::ffi {sqlite3_prepare_v2, sqlite3_finalize, sqlite3_step,
     Sqlite.ok, Sqlite.row, Sqlite.done, Sqlite.type_null, Sqlite.type_integer,
     Sqlite.type_real, Sqlite.type_text, Sqlite.type_blob,
     Sqlite.transient_destructor}
-use lib::cstring {CString.read, CString.read_n, CString.bytes}
+use std::cstring {CString.read, CString.read_n, CString.bytes}
 use lib::conn {SqliteConn, Sqlite.close, Sqlite.error_at}
 
 // ─── Statement lifecycle ─────────────────────────────────────────────────
 
 def Sqlite.finalize_with {A : Type} (stmt : Ptr) (r : Result SqlError A) :
         IO (Result SqlError A) := do {
-    let _ := sqlite3_finalize stmt;
+    let _ <- IO.mk (sqlite3_finalize stmt);
     return r
 }
 
 def Sqlite.finalize_error {A : Type} (db : Ptr) (stmt : Ptr) (rc : I32) :
         IO (Result SqlError A) := do {
-    let _ := sqlite3_finalize stmt;
+    let _ <- IO.mk (sqlite3_finalize stmt);
     Sqlite.error_at db rc
 }
 
 def Sqlite.prepare (conn : SqliteConn) (sql : String) :
         IO (Result SqlError Ptr) := do {
     let slot <- ByteBuf.alloc 8;
-    let rc := sqlite3_prepare_v2 conn.db sql (I64.to_i32 (0 - 1))
-        (ByteBuf.ptr slot) Ptr.null;
+    let rc <- IO.mk (sqlite3_prepare_v2 conn.db sql (I64.to_i32 (0 - 1))
+        (ByteBuf.ptr slot) Ptr.null);
     let stmt : Ptr := ByteBuf.take_ptr slot;
     let _ <- ByteBuf.free slot;
     if I32.beq rc Sqlite.ok
@@ -61,26 +61,35 @@ def Sqlite.bind_rc (db : Ptr) (rc : I32) : IO (Result SqlError Unit) :=
 def Sqlite.bind_blob (db : Ptr) (stmt : Ptr) (idx : I32) (bytes : List U8) :
         IO (Result SqlError Unit) := do {
     let buf <- ByteBuf.of_list bytes;
-    let rc := sqlite3_bind_blob stmt idx (ByteBuf.ptr buf)
-        (I64.to_i32 (ByteBuf.length buf)) Sqlite.transient_destructor;
+    let rc <- IO.mk (sqlite3_bind_blob stmt idx (ByteBuf.ptr buf)
+        (I64.to_i32 (ByteBuf.length buf)) Sqlite.transient_destructor);
     let out <- Sqlite.bind_rc db rc;
     let _ <- ByteBuf.free buf;
     return out
+}
+
+/// Sequence a side-effecting bind call (`RawIO I32`) and turn its result
+/// code into the driver's `Result`. Kept as a separate def because a
+/// `let .. <- ..` directly in a `match` arm of `Sqlite.bind_one` is a
+/// shape the self-hosted parser rejects.
+def Sqlite.bind_call (db : Ptr) (raw : RawIO I32) : IO (Result SqlError Unit) := do {
+    let rc <- IO.mk raw;
+    Sqlite.bind_rc db rc
 }
 
 def Sqlite.bind_one (db : Ptr) (stmt : Ptr) (idx : I32) (v : Value) :
         IO (Result SqlError Unit) :=
     match v {
         Value.null =>
-            Sqlite.bind_rc db (sqlite3_bind_null stmt idx),
+            Sqlite.bind_call db (sqlite3_bind_null stmt idx),
         Value.integer n =>
-            Sqlite.bind_rc db (sqlite3_bind_int64 stmt idx n),
+            Sqlite.bind_call db (sqlite3_bind_int64 stmt idx n),
         Value.real x =>
-            Sqlite.bind_rc db (sqlite3_bind_double stmt idx x),
+            Sqlite.bind_call db (sqlite3_bind_double stmt idx x),
         Value.boolean b =>
-            Sqlite.bind_rc db (sqlite3_bind_int64 stmt idx (if b then 1 else 0)),
+            Sqlite.bind_call db (sqlite3_bind_int64 stmt idx (if b then 1 else 0)),
         Value.text s =>
-            Sqlite.bind_rc db (sqlite3_bind_text stmt idx s
+            Sqlite.bind_call db (sqlite3_bind_text stmt idx s
                 (I64.to_i32 (String.length s)) Sqlite.transient_destructor),
         Value.blob bytes => Sqlite.bind_blob db stmt idx bytes
     }
@@ -167,21 +176,6 @@ def Sqlite.column_names (stmt : Ptr) (i : I32) (acc : List String) :
         Sqlite.column_names stmt (I64.to_i32 (I32.to_i64 i - 1)) (List.cons name acc)
     }
 
-#[terminating]
-def Sqlite.reverse_cells (acc : List (Pair String Value))
-        (rest : List (Pair String Value)) : List (Pair String Value) :=
-    match rest {
-        List.empty => acc,
-        List.cons c cs => Sqlite.reverse_cells (List.cons c acc) cs
-    }
-
-#[terminating]
-def Sqlite.reverse_rows (acc : List Row) (rest : List Row) : List Row :=
-    match rest {
-        List.empty => acc,
-        List.cons r rs => Sqlite.reverse_rows (List.cons r acc) rs
-    }
-
 def Sqlite.make_row (cells : List (Pair String Value)) : Row :=
     let r : Row := { cells := cells } in r
 
@@ -192,7 +186,7 @@ def Sqlite.decode_row (stmt : Ptr) (names : List String) (index : I64)
         (acc : List (Pair String Value)) : IO (Result SqlError Row) :=
     match names {
         List.empty =>
-            IO.pure (Result.ok (Sqlite.make_row (Sqlite.reverse_cells List.empty acc))),
+            IO.pure (Result.ok (Sqlite.make_row (List.reverse acc))),
         List.cons name rest => do {
             let value <- Sqlite.decode_column stmt (I64.to_i32 index);
             Sqlite.decode_row stmt rest (index + 1) (List.cons (Pair.pair name value) acc)
@@ -204,7 +198,7 @@ def Sqlite.decode_row (stmt : Ptr) (names : List String) (index : I64)
 #[terminating]
 def Sqlite.step_rows (db : Ptr) (stmt : Ptr) (names : List String)
         (acc : List Row) : IO (Result SqlError (List Row)) := do {
-    let rc := sqlite3_step stmt;
+    let rc <- IO.mk (sqlite3_step stmt);
     if I32.beq rc Sqlite.row
     then do {
         let row <- Sqlite.decode_row stmt names 0 List.empty;
@@ -214,13 +208,13 @@ def Sqlite.step_rows (db : Ptr) (stmt : Ptr) (names : List String)
         }
     }
     else if I32.beq rc Sqlite.done
-    then return (Result.ok (Sqlite.reverse_rows List.empty acc))
+    then return (Result.ok (List.reverse acc))
     else Sqlite.error_at db rc
 }
 
 #[terminating]
 def Sqlite.step_discard (db : Ptr) (stmt : Ptr) : IO (Result SqlError I64) := do {
-    let rc := sqlite3_step stmt;
+    let rc <- IO.mk (sqlite3_step stmt);
     if I32.beq rc Sqlite.done
     then Sqlite.exec_done db stmt
     else if I32.beq rc Sqlite.row
@@ -230,7 +224,7 @@ def Sqlite.step_discard (db : Ptr) (stmt : Ptr) : IO (Result SqlError I64) := do
 
 def Sqlite.exec_done (db : Ptr) (stmt : Ptr) : IO (Result SqlError I64) := do {
     let n := I32.to_i64 (sqlite3_changes db);
-    let _ := sqlite3_finalize stmt;
+    let _ <- IO.mk (sqlite3_finalize stmt);
     return (Result.ok n)
 }
 
@@ -286,7 +280,7 @@ pub def Sqlite.exec_io (conn : SqliteConn) (sql : String) (params : List Value) 
 
 pub def Sqlite.exec_script_io (conn : SqliteConn) (sql : String) :
         IO (Result SqlError Unit) := do {
-    let rc := sqlite3_exec conn.db sql Ptr.null Ptr.null Ptr.null;
+    let rc <- IO.mk (sqlite3_exec conn.db sql Ptr.null Ptr.null Ptr.null);
     if I32.beq rc Sqlite.ok
     then return (Result.ok Unit.unit)
     else Sqlite.error_at conn.db rc

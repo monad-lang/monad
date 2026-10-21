@@ -7,6 +7,7 @@
 use std::test {}
 use std::list {List.length}
 use std::process {exec_cmd, process_id}
+use std::path {Path}
 use sql::value {Row, Row.get, Row.get_i64, Row.get_text, Row.get_bool,
     Row.get_f64, Row.get_blob, ResultSet, SqlError, SqlError.message, Value}
 use lib::conn {SqliteConn, Sqlite.connect, Sqlite.close}
@@ -55,7 +56,7 @@ def is_null_value (v : Value) : Bool :=
 /// Open an in-memory connection, run `f`, and close it. A failure to open
 /// (or any false result) is a test failure.
 def with_memory (f : SqliteConn -> IO Bool) : IO Bool := do {
-    let opened <- Sqlite.connect ":memory:";
+    let opened <- Sqlite.connect (Path.path ":memory:");
     match opened {
         Result.err _ => return false,
         Result.ok conn => do {
@@ -148,7 +149,7 @@ def test_empty_result_set : IO Bool :=
 
 #[test]
 def test_open_invalid_path_errors : IO Bool := do {
-    let r <- Sqlite.connect "/no/such/dir/monad_sqlite_test.db";
+    let r <- Sqlite.connect (Path.path "/no/such/dir/monad_sqlite_test.db");
     match r {
         Result.ok conn => do {
             let _ <- Sqlite.close conn;
@@ -308,7 +309,7 @@ def n_is_seven (r : Result SqlError ResultSet) : Bool :=
     }
 
 def reopen_and_check (wal_ok : Bool) : IO Bool := do {
-    let opened <- Sqlite.connect file_path;
+    let opened <- Sqlite.connect (Path.path file_path);
     match opened {
         Result.err _ => return false,
         Result.ok conn => do {
@@ -334,7 +335,7 @@ def file_roundtrip (conn : SqliteConn) : IO Bool := do {
 #[test]
 def test_file_database_and_wal : IO Bool := do {
     let _ <- exec_cmd "rm" ["-f", file_path];
-    let opened <- Sqlite.connect file_path;
+    let opened <- Sqlite.connect (Path.path file_path);
     match opened {
         Result.err _ => return false,
         Result.ok conn => file_roundtrip conn

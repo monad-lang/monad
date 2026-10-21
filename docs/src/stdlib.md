@@ -241,6 +241,26 @@ generalises (element kind, recorded length, 64-byte-aligned atomic
 payload), interpreted a registry id (the `Fiber`/`Scope` convention) whose
 length is its `Vec`'s.
 
+### `std.cstring` — **not ambient**
+
+`CString`, the copy-out helper for text and byte runs a C library owns. A
+foreign function returns a `char*`/`void*` into memory it owns
+(`sqlite3_errmsg`, `sqlite3_column_text`, an OpenSSL name); declaring that
+as a Monad `String` would alias the foreign memory, so `CString` copies
+through a `ByteBuf` first.
+
+| Function | Notes |
+|----------|-------|
+| `CString.read p` | copy a NUL-terminated string (`strlen` + copy) |
+| `CString.read_n p n` | copy exactly `n` bytes, NULs included |
+| `CString.bytes p n` | the same bytes as a `List U8` |
+
+`p` must be a pointer the foreign API returned, and `n` must be the byte
+count that same API reported. The destination is always a fresh
+`ByteBuf`, so no Monad value aliases foreign memory, and the module's
+`memcpy` extern stays package-private. Compiled backend only, like
+`ByteBuf.ptr`: the Rust host ignores `#[extern "c"]`.
+
 ### `std.ansi` — **not ambient**
 
 Terminal colours: the `Color`, `Style`, and `Modifier` types, with `red`,

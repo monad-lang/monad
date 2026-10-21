@@ -7,6 +7,7 @@
 
 open IO {println}
 use std::process {exec_cmd}
+use std::path {Path}
 use sql::value {Row, Row.get_i64, Row.get_text, ResultSet, SqlError, SqlError.message, Value}
 use sql::migrations {Migration, Migrations.migration}
 use sqlite::conn {SqliteConn, Sqlite.connect, Sqlite.close}
@@ -66,7 +67,7 @@ def run_query (conn : SqliteConn) : IO Unit := do {
 
 def main (args : List String) : IO Unit := do {
   let _ <- exec_cmd "rm" ["-f", db_path];
-  let opened <- Sqlite.connect db_path;
+  let opened <- Sqlite.connect (Path.path db_path);
   match opened {
     Result.err e => report_error "open failed: " e,
     Result.ok conn => do {

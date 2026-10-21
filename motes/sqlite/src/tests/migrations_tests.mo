@@ -16,7 +16,7 @@ use lib::migrations {Sqlite.migrate, Sqlite.migrate_dir, Sqlite.rollback_to,
     Sqlite.rollback_last, Sqlite.status}
 
 def with_memory (f : SqliteConn -> IO Bool) : IO Bool := do {
-    let opened <- Sqlite.connect ":memory:";
+    let opened <- Sqlite.connect (Path.path ":memory:");
     match opened {
         Result.err _ => return false,
         Result.ok conn => do {
@@ -89,7 +89,8 @@ def migration_error_is (r : Result SqlError (List I64)) : Bool :=
 def states_all_applied (states : List MigrationState) : Bool :=
     match states {
         List.empty => true,
-        List.cons s rest => s.applied && s.checksum_ok && states_all_applied rest
+        List.cons s rest =>
+            s.applied && s.checksum_ok && s.name_ok && states_all_applied rest
     }
 
 def states_none_applied (states : List MigrationState) : Bool :=
@@ -211,6 +212,41 @@ def failing_migration_check (conn : SqliteConn) : IO Bool := do {
 #[test]
 def test_failing_migration_rolls_back_and_is_not_recorded : IO Bool :=
     with_memory failing_migration_check
+
+// ─── Rollback on a database with no history ─────────────────────────────
+
+def fresh_rollback_check (conn : SqliteConn) : IO Bool := do {
+    let a <- Sqlite.rollback_to conn [create_users] 0;
+    let b <- Sqlite.rollback_last conn [create_users];
+    return (applied_count_is a 0 && applied_count_is b 0)
+}
+
+#[test]
+def test_rollback_on_fresh_database_is_empty : IO Bool :=
+    with_memory fresh_rollback_check
+
+// ─── A blank down script is not a usable rollback ────────────────────────
+
+def blank_down : Migration :=
+    Migrations.migration 1 "blank_down"
+        "CREATE TABLE blank_down (n INTEGER);"
+        (Option.some "   ")
+
+def blank_down_check (conn : SqliteConn) : IO Bool := do {
+    let first <- Sqlite.migrate conn [blank_down];
+    match first {
+        Result.err _ => return false,
+        Result.ok _ => do {
+            let rb <- Sqlite.rollback_last conn [blank_down];
+            let st <- Sqlite.status conn [blank_down];
+            return (migration_error_is rb && status_is st states_all_applied)
+        }
+    }
+}
+
+#[test]
+def test_rollback_rejects_blank_down : IO Bool :=
+    with_memory blank_down_check
 
 // ─── Directory loader end-to-end ─────────────────────────────────────────
 

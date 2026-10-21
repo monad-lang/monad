@@ -36,14 +36,6 @@ def Sqlite.decode_applied_row (row : Row) : Result SqlError AppliedMigration :=
                 Result.ok a)))
 
 #[terminating]
-def Sqlite.reverse_applied (acc : List AppliedMigration)
-        (rest : List AppliedMigration) : List AppliedMigration :=
-    match rest {
-        List.empty => acc,
-        List.cons a xs => Sqlite.reverse_applied (List.cons a acc) xs
-    }
-
-#[terminating]
 def Sqlite.decode_applied_step (rest : List Row) (acc : List AppliedMigration)
         (r : Result SqlError AppliedMigration) :
         Result SqlError (List AppliedMigration) :=
@@ -55,7 +47,7 @@ def Sqlite.decode_applied_step (rest : List Row) (acc : List AppliedMigration)
 def Sqlite.decode_applied_rows (rows : List Row) (acc : List AppliedMigration) :
         Result SqlError (List AppliedMigration) :=
     match rows {
-        List.empty => Result.ok (Sqlite.reverse_applied List.empty acc),
+        List.empty => Result.ok (List.reverse acc),
         List.cons row rest =>
             Sqlite.decode_applied_step rest acc (Sqlite.decode_applied_row row)
     }
@@ -73,13 +65,6 @@ pub def Sqlite.read_applied (conn : SqliteConn) :
 }
 
 // ─── Applying migrations ─────────────────────────────────────────────────
-
-#[terminating]
-def Sqlite.reverse_i64 (acc : List I64) (rest : List I64) : List I64 :=
-    match rest {
-        List.empty => acc,
-        List.cons v vs => Sqlite.reverse_i64 (List.cons v acc) vs
-    }
 
 def Sqlite.abort_tx {A : Type} (conn : SqliteConn) (e : SqlError) :
         IO (Result SqlError A) := do {
@@ -129,7 +114,7 @@ def Sqlite.apply_one (conn : SqliteConn) (m : Migration) :
 def Sqlite.apply_pending (conn : SqliteConn) (ms : List Migration) (acc : List I64) :
         IO (Result SqlError (List I64)) :=
     match ms {
-        List.empty => IO.pure (Result.ok (Sqlite.reverse_i64 List.empty acc)),
+        List.empty => IO.pure (Result.ok (List.reverse acc)),
         List.cons m rest => do {
             let r <- Sqlite.apply_one conn m;
             match r {
@@ -244,9 +229,9 @@ def Sqlite.filter_above (target : I64) (history : List AppliedMigration)
             else Sqlite.filter_above target rest acc
     }
 
-def Sqlite.has_down (m : Migration) : Bool :=
+def Sqlite.has_usable_down (m : Migration) : Bool :=
     match m.down {
-        Option.some _ => true,
+        Option.some d => Bool.not (String.is_empty (String.trim d)),
         Option.none => false
     }
 
@@ -255,7 +240,7 @@ def Sqlite.preflight_one (a : AppliedMigration) (available : List Migration) :
     match Sqlite.find_migration a.version available {
         Option.none => Result.err (MigrationError.missing_migration a.version),
         Option.some m =>
-            if Sqlite.has_down m
+            if Sqlite.has_usable_down m
             then Result.ok Unit.unit
             else Result.err (MigrationError.missing_down a.version)
     }
@@ -325,13 +310,17 @@ def Sqlite.rollback_candidate (conn : SqliteConn) (candidate : AppliedMigration)
             match m.down {
                 Option.none => IO.pure (Result.err (Sqlite.migration_error_to_sql
                     (MigrationError.missing_down candidate.version))),
-                Option.some down => do {
-                    let b <- Sqlite.exec_script_io conn "BEGIN IMMEDIATE";
-                    match b {
-                        Result.err e => return (Result.err e),
-                        Result.ok _ => Sqlite.rollback_script conn down candidate.version
+                Option.some down =>
+                    if String.is_empty (String.trim down)
+                    then IO.pure (Result.err (Sqlite.migration_error_to_sql
+                        (MigrationError.missing_down candidate.version)))
+                    else do {
+                        let b <- Sqlite.exec_script_io conn "BEGIN IMMEDIATE";
+                        match b {
+                            Result.err e => return (Result.err e),
+                            Result.ok _ => Sqlite.rollback_script conn down candidate.version
+                        }
                     }
-                }
             }
     }
 
@@ -340,7 +329,7 @@ def Sqlite.rollback_candidates (conn : SqliteConn) (candidates : List AppliedMig
         (available : List Migration) (acc : List I64) :
         IO (Result SqlError (List I64)) :=
     match candidates {
-        List.empty => IO.pure (Result.ok (Sqlite.reverse_i64 List.empty acc)),
+        List.empty => IO.pure (Result.ok (List.reverse acc)),
         List.cons c rest => do {
             let r <- Sqlite.rollback_candidate conn c available;
             match r {
@@ -389,9 +378,17 @@ def Sqlite.rollback_source (conn : SqliteConn) (ms : List Migration) (target : I
 
 /// Roll back every applied migration newer than `target` (0 = all), newest
 /// first, each in its own transaction. Returns the versions rolled back.
+///
+/// Ensures the tracking table first, so rolling back a database that was
+/// never migrated is `ok []`, not "no such table".
 pub def Sqlite.rollback_to (conn : SqliteConn) (ms : List Migration) (target : I64) :
-        IO (Result SqlError (List I64)) :=
-    Sqlite.rollback_source conn ms target
+        IO (Result SqlError (List I64)) := do {
+    let t <- Sqlite.ensure_table conn;
+    match t {
+        Result.err e => return (Result.err e),
+        Result.ok _ => Sqlite.rollback_source conn ms target
+    }
+}
 
 #[terminating]
 def Sqlite.previous_version (previous : I64) (rest : List AppliedMigration) : I64 :=
@@ -423,9 +420,18 @@ def Sqlite.second_newest (history : List AppliedMigration) : I64 :=
 /// Roll back the newest applied migration only.
 pub def Sqlite.rollback_last (conn : SqliteConn) (ms : List Migration) :
         IO (Result SqlError (List I64)) := do {
+    let t <- Sqlite.ensure_table conn;
+    match t {
+        Result.err e => return (Result.err e),
+        Result.ok _ => Sqlite.rollback_last_ready conn ms
+    }
+}
+
+def Sqlite.rollback_last_ready (conn : SqliteConn) (ms : List Migration) :
+        IO (Result SqlError (List I64)) := do {
     let history <- Sqlite.read_applied conn;
     match history {
         Result.err e => return (Result.err e),
-        Result.ok h => Sqlite.rollback_to conn ms (Sqlite.second_newest h)
+        Result.ok h => Sqlite.rollback_source conn ms (Sqlite.second_newest h)
     }
 }

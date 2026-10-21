@@ -7,7 +7,6 @@
 // in `ffi.mo`.
 
 pub use lib::ffi {*}
-pub use lib::cstring {*}
 pub use lib::conn {*}
 pub use lib::backend {*}
 pub use lib::monad {*}

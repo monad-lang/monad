@@ -68,9 +68,6 @@ pub def Sqlite.query_one (sql : String) (params : List Value) :
     }
 }
 
-pub def Sqlite.lift_io {A : Type} (m : IO A) : SqliteM A :=
-    SqliteM.lift_io m
-
 /// `sqlite3_last_insert_rowid` for the connection in the environment.
 pub def Sqlite.last_insert_rowid_m : SqliteM I64 :=
     SqliteM.sqlite_m (DbM.mk (ReaderT.mk (fn (conn : SqliteConn) =>
