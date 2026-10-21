@@ -44,11 +44,11 @@ use shuttle::session {Session}
 use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_with}
 use weaver::store {TLine, TLine.plain, TLine.user_line}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
-use tui::types {Event, Key, MouseEvent, MouseButton, LayoutSize, TextStyle, Rect}
+use tui::types {Event, Key, MouseEvent, MouseButton, LayoutSize, TextStyle, Rect, Cell, Screen}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_multiline_key, insert_text}
 use tui::widgets::input {handle_input_key}
-use tui::core {empty_screen, mk_rect}
+use tui::core {empty_screen, mk_rect, style_to_ansi}
 use tui::render {render, diff, apply_deltas}
 use tui::text {Text.take_width}
 use tui::clipboard {Clipboard.copy}
@@ -106,7 +106,8 @@ def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64)
             // stays untouched.
             let app : App TuiModel WeaverMsg :=
                 App.app_ticked (init_tui_model_with st rows cols tr) on_event TuiApp.update Model.view 100
-                    (fn (m : TuiModel) => Bool.or m.turn_pending (Bool.and m.banner (m.banner_frame < 12)));
+                    (fn (m : TuiModel) => Bool.or (Bool.and m.turn_pending (Bool.not m.modal))
+                        (Bool.and m.banner (m.banner_frame < 12)));
             let _ <- run_app app;
             return true
         }
@@ -351,7 +352,7 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
 /// A turn's or command's completion: the fold `f` runs, the streak
 /// resets, and `turn_pending` clears -- the spinner stops.
 def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
-    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none }
+    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none, modal := false }
 
 // ── live usage (the thinking row's tokens) ─────────────────────────────
 // The UI's session is the PRE-turn snapshot; shuttle's `on_usage` hook
@@ -718,7 +719,9 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
             { (with_streak_reset
                 (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
                 with turn_pending := true, banner := false, spinner_frame := 0,
-                     live_spent := Option.some m.state.run.session.spent, scroll := 0 } in
+                     live_spent := Option.some m.state.run.session.spent, scroll := 0,
+                     modal := Bool.or (plan_dialog_wanted st text)
+                         (Bool.or (text == "/processes") (text == "/procs")) } in
         Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => do {
             let _ <- write_echo store start block;
             run_submitted_line st text

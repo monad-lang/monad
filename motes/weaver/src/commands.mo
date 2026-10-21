@@ -33,9 +33,10 @@ use weaver::store {
     Store.import_session, Store.session_dir, Store.base_name,
 }
 use std::path {Path, Path.of, Path.parent}
-use std::io {IO.is_dir}
+use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {BTreeMap}
 use std::list {List.intercalate}
+use weaver::procs {ProcEntry, ProcEntry.line, Procs.list, Procs.kill}
 
 /// Everything the interactive session carries between inputs.
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
@@ -120,8 +121,10 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/quit" (SlashCommand.mk cmd_quit)
         (Map.insert "/resume" (SlashCommand.mk cmd_resume)
         (Map.insert "/save" (SlashCommand.mk cmd_save)
+        (Map.insert "/processes" (SlashCommand.mk cmd_processes)
+        (Map.insert "/procs" (SlashCommand.mk cmd_processes)
         (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty))))))))))))
+            BTreeMap.empty))))))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -233,6 +236,49 @@ def tool_line (reg : ToolRegistry) (spec : ToolSpec) : String :=
         Option.some impl => String.concat spec.name (String.concat " (" (String.concat (cap_name impl.cap) ")")),
         Option.none => spec.name,
     }
+
+
+// ── /processes (dumb mode's snapshot; the TUI opens the monitor) ───────
+
+#[partial]
+def find_proc (id : String) (xs : List ProcEntry) : Option ProcEntry :=
+    match xs {
+        List.empty => Option.none,
+        List.cons e rest => if e.id == id then Option.some e else find_proc id rest,
+    }
+
+def kill_proc_one (e : ProcEntry) : IO String := do {
+    let r <- Procs.kill e;
+    match r {
+        Result.ok msg => IO.pure msg,
+        Result.err msg => IO.pure (String.concat "kill: " msg),
+    }
+}
+
+def kill_proc (id : String) (xs : List ProcEntry) : IO String :=
+    match find_proc id xs {
+        Option.none => IO.pure (String.concat "unknown process: " id),
+        Option.some e => kill_proc_one e,
+    }
+
+def cmd_processes (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let entries <- Procs.list;
+    let now <- IO.current_time_nano;
+    let trimmed : String := String.trim arg;
+    if String.is_empty trimmed
+    then
+        let text : String := if List.is_empty entries
+            then "processes: none"
+            else String.concat_list (List.map (fn (e : ProcEntry) => ProcEntry.line e now) entries) in
+        respond st text
+    else if String.starts_with "kill " trimmed
+    then do {
+        let id : String := String.trim (String.drop 5 trimmed);
+        let msg <- kill_proc id entries;
+        respond st msg
+    }
+    else respond st "usage: /processes [kill <id>]"
+}
 
 /// `/mcp`: the mounted `--mcp` servers, or the hint for mounting one.
 def cmd_mcp (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
@@ -484,6 +530,7 @@ def help_text : String :=
         "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
         "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
         "/tools                               list tools with their capability tags",
+        "/processes [kill <id>]               list background tasks (TUI: live monitor)",
         "/mcp                                 list mounted MCP servers",
         "/save <file>                         checkpoint the session as a JSON file",
         "/resume [<id|file>]                  continue a session (newest by default)",

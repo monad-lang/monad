@@ -41,6 +41,10 @@ use weaver::providers {Weaver.preset, Weaver.model_error, Weaver.default_model, 
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
+use weaver::process_tools {
+    StartProcessTool.impl, ReadProcessTool.impl, KillProcessTool.impl, ListProcessesTool.impl,
+}
+use weaver::procs {Procs.shutdown}
 use init::transformers {ResultT}
 use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env, IO.is_dir}
@@ -52,12 +56,16 @@ use std::list {List.intercalate}
 /// whole point is the write/edit pair; shuttle's own CLI ships only
 /// the read-side four) plus every `--mcp` mount's proxies.
 def weaver_registry : ToolRegistry :=
-    ToolRegistry.register ShellTool.impl
-        (ToolRegistry.register EditTool.impl
-            (ToolRegistry.register WriteTool.impl
-                (ToolRegistry.register GlobTool.impl
-                    (ToolRegistry.register GrepTool.impl
-                        (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))))
+    ToolRegistry.register StartProcessTool.impl
+        (ToolRegistry.register ReadProcessTool.impl
+            (ToolRegistry.register KillProcessTool.impl
+                (ToolRegistry.register ListProcessesTool.impl
+                    (ToolRegistry.register ShellTool.impl
+                        (ToolRegistry.register EditTool.impl
+                            (ToolRegistry.register WriteTool.impl
+                                (ToolRegistry.register GlobTool.impl
+                                    (ToolRegistry.register GrepTool.impl
+                                        (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))))))))
 
 def system_prompt : String :=
     "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it."
@@ -532,6 +540,7 @@ def run_opened (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (s
     let ran_tui <- Tui.run_resumed st tr0;
     let _ <- if Bool.not ran_tui then announce_note o else IO.pure unit;
     let final <- run_fallback ran_tui st;
+    let _ <- Procs.shutdown;
     let _ <- dispose_all servers;
     exit_of final
 }

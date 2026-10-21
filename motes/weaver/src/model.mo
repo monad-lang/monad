@@ -141,6 +141,10 @@ pub struct TuiModel {
     /// session in `state.run` is the PRE-turn snapshot, so this is the
     /// live token count the thinking row shows.
     live_spent : Option Usage := Option.none,
+    /// The submitted line opened a full-screen modal that owns the
+    /// terminal: the main loop must not tick-redraw over it (interleaved
+    /// writes corrupt the modal's paint).
+    modal : Bool := false,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -153,7 +157,7 @@ pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, modal := false } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
