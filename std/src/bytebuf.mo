@@ -38,6 +38,18 @@ pub def ByteBuf.alloc (n : I64) : IO ByteBuf
 #[native "bytebuf_ptr"]
 pub def ByteBuf.ptr (b : ByteBuf) : Ptr
 
+/// Read the pointer-sized word at the start of the buffer, for a C
+/// function that returns a handle through an out-parameter. The buffer
+/// must hold at least 8 bytes; a shorter one yields the NULL word instead
+/// of reading past its payload. Compiled backend only, like `ptr`: the
+/// interpreter has no raw addresses.
+///
+/// This is the typed alternative to a general `load(ptr)` helper. The
+/// argument is a `ByteBuf`, so no arbitrary address can be supplied, and
+/// the runtime checks the buffer's kind and length.
+#[native "bytebuf_take_ptr"]
+pub def ByteBuf.take_ptr (b : ByteBuf) : Ptr
+
 /// How many bytes the buffer holds: its creation size, or what
 /// `truncate` cut it to.
 #[native "bytebuf_len"]

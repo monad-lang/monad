@@ -589,6 +589,9 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // FFI's callback arguments. `passthrough` with zero params:
             // the call's result IS the def's value, the raw word 0.
             else if String.beq target "ptr_null" then Option.some (NativeWrapKind.passthrough "monad_ptr_null")
+            // `Ptr.minus_one` (init/prelude.mo) -- the fixed (void*)-1
+            // sentinel. Zero params; the call's result is the def's value.
+            else if String.beq target "ptr_minus_one" then Option.some (NativeWrapKind.passthrough "monad_ptr_minus_one")
             // `std/bytebuf.mo`'s eight `#[native "bytebuf_*"]` defs -- a
             // flat byte buffer the FFI can address (motes/tls's
             // `SSL_read`/`SSL_write`). Compiled, a `ByteBuf` is a pointer
@@ -602,6 +605,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "bytebuf_to_list" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_to_list")
             else if String.beq target "bytebuf_free" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_free")
             else if String.beq target "bytebuf_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_ptr")
+            else if String.beq target "bytebuf_take_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_take_ptr")
             else if String.beq target "bytebuf_len" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_len")
             // The text bridge (`ByteBuf.to_string`/`of_string`): `RawIO`
             // natives behind `.mo` wrappers, so `raw_io_passthrough` --
@@ -860,6 +864,9 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // `monad_ptr_null` (runtime.c) -- `Ptr.null`'s backing function. No
     // parameters; the i64 result is the NULL word itself.
     let d80 := mk_decl "monad_ptr_null" List.empty "i64" in
+    // `monad_ptr_minus_one` (runtime.c) -- `Ptr.minus_one`'s backing
+    // function: no parameters, the fixed (void*)-1 word as i64.
+    let d104 := mk_decl "monad_ptr_minus_one" List.empty "i64" in
     // `std/bytebuf.mo`'s first six (runtime.c) -- every arg and result i64
     // under the head-of-list convention: a `ByteBuf` is a pointer to its
     // `BufObj`, and `of_list`/`to_list`'s `List U8` is one i64 pointer to
@@ -872,6 +879,10 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // `monad_bytebuf_len` (runtime.c) -- `ByteBuf.length`'s backing
     // function: the element count recorded in the `BufObj`.
     let d87 := mk_decl "monad_bytebuf_len" (List.cons "i64" List.empty) "i64" in
+    // `monad_bytebuf_take_ptr` (runtime.c) -- `ByteBuf.take_ptr`'s backing
+    // function: the `BufObj` word in, the pointer-sized word at the start
+    // of its payload out (0 if the buffer is shorter than a pointer).
+    let d105 := mk_decl "monad_bytebuf_take_ptr" (List.cons "i64" List.empty) "i64" in
     // The piped-subprocess family (runtime.c) -- every handle, string
     // and `List String` is one i64 word under the uniform boxed
     // convention (`Child` is an opaque registry index, `FdStream`'s own
@@ -920,7 +931,8 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d57, d58, d59, d60, d61, d62, d63, d64,
      d65, d66, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
-     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101, d102, d103]
+     d88, d89, d90, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101, d102, d103,
+     d104, d105]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.

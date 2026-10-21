@@ -934,6 +934,15 @@ int64_t monad_ptr_null(void) {
     return 0;
 }
 
+/* `monad_ptr_minus_one` returns SQLite's fixed `SQLITE_TRANSIENT`
+   sentinel, `(sqlite3_destructor_type)-1`. It takes NO argument and can
+   return only that constant, so it cannot turn caller-supplied data into
+   an arbitrary address. This is the IR-facing native convention: the
+   uniform word is `i64` (`Ptr.minus_one` is a `#[native]`, not an extern). */
+int64_t monad_ptr_minus_one(void) {
+    return -1;
+}
+
 /* ─── ByteBuf (`std/bytebuf.mo`) ─────────────────────────────────────
    A flat byte buffer the C FFI can address: `SSL_read`/`SSL_write`
    (motes/tls) take a `void*` plus a length, and no other `std/` type
@@ -1114,6 +1123,17 @@ static int64_t monad_bytebuf_ptr_impl(int64_t b) {
 /* `ByteBuf.length (b : ByteBuf) : I64` -- the recorded element count. */
 static int64_t monad_bytebuf_len_impl(int64_t b) {
     return b ? ((BufObj*)RT_PTR(b))->len : 0;
+}
+
+/* Read a pointer-sized out-parameter value from the START of a ByteBuf.
+   This is `ByteBuf.take_ptr`'s backing native: the argument is the
+   `BufObj` word, so the tag and recorded length are checkable, and a
+   wrong-kind or too-short buffer returns 0 rather than reading past it.
+   The Monad-level signature takes a `ByteBuf`, not an arbitrary `Ptr`. */
+int64_t monad_bytebuf_take_ptr(int64_t buf) {
+    BufObj* b = (BufObj*)RT_PTR(buf);
+    if (!b || b->header.tag != MONAD_BUF_TAG || b->len < 8) return 0;
+    return (int64_t)(intptr_t)(*(void**)b->payload);
 }
 
 rt_word monad_build_args(int argc, char** argv) {

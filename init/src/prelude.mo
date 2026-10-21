@@ -150,6 +150,12 @@ type Ptr {}
 #[native "ptr_null"]
 def Ptr.null : Ptr
 
+/// The fixed `(void*)-1` sentinel (SQLite's `SQLITE_TRANSIENT` is one
+/// user). It takes no input, so unlike a general I64-to-Ptr conversion it
+/// cannot produce an arbitrary address.
+#[native "ptr_minus_one"]
+def Ptr.minus_one : Ptr
+
 type Unit {
 	unit
 }

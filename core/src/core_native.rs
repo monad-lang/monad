@@ -158,6 +158,8 @@ const PURE_NATIVES: &[&str] = &[
   "array_with",
   // `Ptr.null` (init/prelude.mo): the NULL word, a constant.
   "ptr_null",
+  // `Ptr.minus_one` (init/prelude.mo): the fixed (void*)-1 sentinel.
+  "ptr_minus_one",
   // `ByteBuf.length` (std/bytebuf.mo): a registry lookup, no effect.
   "bytebuf_len",
   // `std_fd` (std/stream.mo): names one of the preassigned stdio slots.
@@ -352,6 +354,10 @@ pub fn exec_native(
     // motes/tls is the first caller). A `Ptr` value is its raw machine
     // word under every backend, so 0 is the whole implementation.
     "ptr_null" => Ok(Value::Lit(IrLit::Num(0, NumSuffix::I64))),
+    // `Ptr.minus_one : Ptr` (init/prelude.mo) -- the fixed (void*)-1
+    // sentinel (SQLite's SQLITE_TRANSIENT). It takes no input, so it
+    // cannot turn caller data into an address.
+    "ptr_minus_one" => Ok(Value::Lit(IrLit::Num(-1, NumSuffix::I64))),
     // `std/bytebuf.mo`. Registry-id handles — see `bytebuf_alloc`'s own
     // doc comment. No `bytebuf_ptr` arm (this evaluator has no raw
     // address to hand out); the four `IO`-typed ones are not in
