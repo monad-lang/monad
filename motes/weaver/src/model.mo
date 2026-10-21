@@ -26,7 +26,10 @@ use weaver::store {
 }
 use tui::types {Event, LayoutSize, TextStyle}
 use tui::core {clamp}
-use tui::widgets::input {InputState, input_state}
+use tui::widgets::input {
+    InputState, input_state, InputState.press, InputState.drag,
+    InputState.finish_selection, InputState.clear_selection,
+}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, sized, with_style, padding}
 use tui::render {wrap_text}
 use tui::text {Text.width, Text.slice_cols, Text.padded_slice_cols, Text.snap_span}
@@ -257,9 +260,62 @@ def mk_row (style : TextStyle) (text : String) : DisplayRow :=
 // CELL columns inside the transcript content. Screen -> display mapping is
 // the panel's border (1) plus its left padding (1).
 
-/// The transcript content's first screen row/column.
+/// The transcript content's first screen row/column. The row depends on
+/// the launch banner: while it shows, the panel starts four rows lower.
 pub def Model.panel_top : I64 := 1
+pub def Model.panel_top_of (m : TuiModel) : I64 :=
+    let banner : I64 := if m.banner then Model.banner_height else 0 in
+    banner + Model.panel_top
 pub def Model.panel_left : I64 := 2
+
+// ── input-box geometry and mouse selection ──────────────────────────────
+// The input is `sized (fixed 3) (padding 1 0 1 0 …)`: content starts at
+// column 1 and row rows-3, three rows tall (single-line text on the first,
+// multiline down to the third). Banner-independent.
+
+pub def Model.input_top (m : TuiModel) : I64 :=
+    let y : I64 := m.rows - 3 in
+    if y < 0 then 0 else y
+pub def Model.input_left : I64 := 1
+pub def Model.input_width (m : TuiModel) : I64 :=
+    let w : I64 := m.cols - 2 in
+    if w < 1 then 1 else w
+pub def Model.input_height : I64 := 3
+
+pub def Model.in_input (m : TuiModel) (row : I64) (col : I64) : Bool :=
+    let top : I64 := Model.input_top m in
+    let right : I64 := Model.input_left + Model.input_width m in
+    Bool.and (Bool.not (row < top))
+        (Bool.and (row < top + Model.input_height)
+            (Bool.and (Bool.not (col < Model.input_left)) (col < right)))
+
+pub def Model.input_press (m : TuiModel) (row : I64) (col : I64) : TuiModel :=
+    let rel_row : I64 := row - Model.input_top m in
+    let rel_col : I64 := col - Model.input_left in
+    let st : InputState := InputState.press m.input (Model.input_width m) Model.input_height rel_row rel_col in
+    { m with input := st, sel := Option.none }
+
+pub def Model.input_drag (m : TuiModel) (row : I64) (col : I64) : TuiModel :=
+    let rel_row : I64 := row - Model.input_top m in
+    let rel_col : I64 := col - Model.input_left in
+    { m with input := InputState.drag m.input (Model.input_width m) Model.input_height rel_row rel_col }
+
+pub def Model.clear_input_selection (m : TuiModel) : TuiModel :=
+    { m with input := InputState.clear_selection m.input }
+
+/// Whether a drag in the input box is in progress.
+pub def Model.input_sel_active (m : TuiModel) : Bool :=
+    match m.input.sel {
+        Option.none => false,
+        Option.some _ => true,
+    }
+
+/// Finish a drag in the input: drop the highlight and return its text.
+pub def Model.input_release (m : TuiModel) (row : I64) (col : I64) : Pair TuiModel (Option String) :=
+    let dragged : TuiModel := Model.input_drag m row col in
+    match InputState.finish_selection dragged.input {
+        Pair.pair input2 text => Pair.pair { dragged with input := input2 } text,
+    }
 
 pub struct Selection {
     anchor_row : I64,
@@ -283,7 +339,7 @@ def row_at (rows : List DisplayRow) (i : I64) : Option DisplayRow :=
 def selection_point_in (m : TuiModel) (row : I64) (col : I64) (clamp_it : Bool) : Option (Pair I64 I64) :=
     let n : I64 := rows_len m.rows_cache in
     let w : I64 := Model.content_width m in
-    let r0 : I64 := row - Model.panel_top in
+    let r0 : I64 := row - Model.panel_top_of m in
     let c0 : I64 := col - Model.panel_left in
     if Bool.or (n < 1) (w < 1)
     then Option.none

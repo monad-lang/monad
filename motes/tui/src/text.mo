@@ -360,7 +360,13 @@ def snap_span_go (gs : List Glyph) (c0 c1 : I64) (col : I64) (a b : I64) : Pair 
             let start : I64 := col in
             let end : I64 := col + g.width in
             let a2 : I64 := if Bool.and (a < 0) (Bool.not (end < c0 + 1)) then start else a in
-            let b2 : I64 := if Bool.and (b < 0) (c1 < end) then end else b in
+            // The exclusive end is the FIRST glyph boundary at or past c1:
+            // a c1 landing exactly on a glyph's start must NOT expand to
+            // that glyph's end (the old `c1 < end` test did).
+            let b2 : I64 :=
+                if Bool.and (b < 0) (Bool.not (start < c1)) then start
+                else if Bool.and (b < 0) (c1 < end) then end
+                else b in
             snap_span_go rest c0 c1 end a2 b2,
     }
 

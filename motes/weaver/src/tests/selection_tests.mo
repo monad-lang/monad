@@ -13,8 +13,10 @@ use weaver::model {
     TuiModel, init_tui_model, Model.append_block, Model.begin_selection,
     Model.drag_selection, Model.finish_selection, Model.selection_text,
     Model.selection_cols, Model.scroll_step, Model.display_rows, DisplayRow,
+    Model.input_press, Model.input_drag, Model.input_release, Model.in_input,
 }
 use weaver::store {TLine, TLine.plain}
+use tui::widgets::input {input_state}
 
 def mock_config : ProviderConfig :=
     { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
@@ -114,6 +116,55 @@ def test_press_outside_the_panel_clears : Bool :=
 
 /// Scrolling rebuilds the rows cache and must drop the selection (its row
 /// indices no longer name the same text).
+// ── input-box selection ─────────────────────────────────────────────────
+
+def with_input (m : TuiModel) (value : String) : TuiModel :=
+    { m with input := input_state value "" }
+
+def input_drag_text (m : TuiModel) (r0 : I64) (c0 : I64) (r1 : I64) (c1 : I64) : Option String :=
+    let m1 : TuiModel := Model.input_press m r0 c0 in
+    let m2 : TuiModel := Model.input_drag m1 r1 c1 in
+    match Model.input_release m2 r1 c1 {
+        Pair.pair _ text => text,
+    }
+
+#[test]
+def test_input_geometry_is_the_bottom_three_rows : Bool :=
+    let m : TuiModel := model_of in
+    Model.in_input m 21 1 && Model.in_input m 23 78
+        && Bool.not (Model.in_input m 20 1)
+        && Bool.not (Model.in_input m 21 0)
+        && Bool.not (Model.in_input m 21 79)
+
+#[test]
+def test_input_drag_copies_the_selection : Bool :=
+    match input_drag_text (with_input model_of "hello") 21 1 21 4 {
+        Option.some t => t == "hell",
+        Option.none => false,
+    }
+
+#[test]
+def test_input_click_moves_the_caret_without_copying : Bool :=
+    let m1 : TuiModel := Model.input_press (with_input model_of "hello") 21 2 in
+    match Model.input_release m1 21 2 {
+        Pair.pair m2 text => m2.input.cursor == 1
+            && (match text { Option.some _ => false, Option.none => true }),
+    }
+
+#[test]
+def test_input_multiline_drag_joins_with_a_newline : Bool :=
+    match input_drag_text (with_input model_of "ab\ncd") 21 2 22 2 {
+        Option.some t => t == "b\ncd",
+        Option.none => false,
+    }
+
+#[test]
+def test_input_drag_keeps_a_wide_glyph_whole : Bool :=
+    match input_drag_text (with_input model_of "日本") 21 1 21 2 {
+        Option.some t => t == "日",
+        Option.none => false,
+    }
+
 #[test]
 def test_scrolling_invalidates_the_selection : Bool :=
     let m0 : TuiModel := Model.append_block model_of (plain_lines (lines_up_to 25 1)) in

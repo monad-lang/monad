@@ -25,7 +25,10 @@ use lib::layout { layout_row, layout_column, pad_rect }
 use lib::text {Glyph, Text.col_of_byte, Text.drop_cols, Text.glyphs, Text.take_width, Text.wrap}
 // The Phase 5 stateful widgets' states -- matched on in the new
 // `LeafWidget` arms below.
-use lib::widgets::input { InputState, input_lines, cursor_line, nth_lines, InputLine }
+use lib::widgets::input {
+    InputState, input_lines, input_line_window, cursor_line, nth_lines, InputLine,
+    InputState.selection_cols, InputState.press, InputState.drag,
+}
 use lib::widgets::list { ListState }
 // `LeafWidget`/`DecoratorKind` are matched on, never named in a term, so the
 // unused-import analysis reports them as unused -- the same blind spot
@@ -225,11 +228,31 @@ def underline_at (screen : Screen) (row : I64) (col : I64) : Screen :=
         none => screen
     }
 
+/// Merge `reverse := true` into cells `[c0, c1)` on `row` -- the mouse
+/// selection's highlight. Continuation cells of wide glyphs are included;
+/// `apply_one` skips their empty char.
+#[terminating]
+def reverse_span_go (screen : Screen) (row : I64) (col : I64) (stop : I64) : Screen :=
+    if Bool.not (col < stop)
+    then screen
+    else match screen_get_cell screen row col {
+        none => screen,
+        some c =>
+            let u : TextStyle := { style_default with reverse := true } in
+            let s1 : Screen := screen_set_cell screen row col { c with style := style_merge c.style u } in
+            reverse_span_go s1 row (col + 1) stop,
+    }
+
+def reverse_span (screen : Screen) (row : I64) (c0 : I64) (c1 : I64) : Screen :=
+    if Bool.not (c0 < c1) then screen else reverse_span_go screen row c0 c1
+
 /// One text field. The value scrolls horizontally to keep the cursor
 /// inside the field (the visible window starts at the cursor minus the
 /// last column), the cursor cell is a reverse block (see `underline_at`;
 /// a space reversed when the cursor sits past the value's end), and an
-/// empty value shows the placeholder dimmed, with no cursor.
+/// empty value shows the placeholder dimmed UNDER the cursor block: the
+/// field is focused from the first frame, so the caret is visible before
+/// the user types anything.
 ///
 /// MULTILINE (Phase 11b, the input pass): a value containing newlines
 /// renders one row per line, the window showing the
@@ -249,11 +272,12 @@ def render_text_input (st : InputState) (area : Rect) (screen : Screen) (active 
             // literals flowing into style_merge (see the note on
             // test_style_to_ansi_bold_red_combines_one_sequence in core.mo).
             let dim : TextStyle := { style_default with dim := true } in
-            render_label st.placeholder area screen (style_merge active dim)
+            let drawn : Screen := render_label st.placeholder area screen (style_merge active dim) in
+            underline_at drawn area.y (area.x + Text.col_of_byte st.value (clamp st.cursor 0 len))
         else
             let multi : Bool := contains_newline st.value 0 in
             if Bool.not multi
-            then render_text_input_row st.value cur area.y area screen active
+            then render_text_input_row st st.value cur area.y 0 area screen active
             else render_text_input_multi st cur area screen active
 
 #[terminating]
@@ -264,20 +288,43 @@ def contains_newline (s : String) (i : I64) : Bool :=
     then true
     else contains_newline s (i + 1)
 
+/// The dropped display columns for a line's window (the same rule the
+/// hit-test uses).
+def window_dropped (text : String) (caret_byte : I64) (width : I64) : I64 :=
+    match input_line_window text caret_byte width {
+        Pair.pair _ d => d,
+    }
+
+/// One input line: its horizontal window, the selection's reverse span
+/// mapped into the window, no caret. Both the single-line and multiline
+/// renderers use it.
+#[partial]
+def render_input_line (st : InputState) (line_idx : I64) (text : String) (caret_byte : I64)
+        (row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    match input_line_window text caret_byte area.width {
+        Pair.pair visible dropped =>
+            let row_area : Rect := { area with y := row, height := 1 } in
+            let drawn : Screen := render_label visible row_area screen active in
+            match InputState.selection_cols st line_idx text {
+                Option.none => drawn,
+                Option.some pr => match pr {
+                    Pair.pair a b =>
+                        let c0 : I64 := clamp (a - dropped) 0 area.width in
+                        let c1 : I64 := clamp (b - dropped) 0 area.width in
+                        reverse_span drawn row (area.x + c0) (area.x + c1),
+                },
+            },
+    }
+
 /// The single-line body of `render_text_input`, factored for both the
 /// one-row and the multiline path: value `text` with the cursor at
 /// byte `cur`, rendered on row `row`.
 #[partial]
-def render_text_input_row (text : String) (cur : I64) (row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
-    let cur_col : I64 := Text.col_of_byte text cur in
-    let win_col : I64 := if cur_col < area.width then 0 else cur_col - area.width + 1 in
-    match Text.drop_cols text win_col {
-        Pair.pair rest start =>
-            let visible : String := Text.take_width rest area.width in
-            let row_area : Rect := { area with y := row, height := 1 } in
-            let drawn := render_label visible row_area screen active in
-            underline_at drawn row (area.x + (cur_col - start)),
-    }
+def render_text_input_row (st : InputState) (text : String) (cur : I64) (row : I64) (line_idx : I64)
+        (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    let drawn : Screen := render_input_line st line_idx text cur row area screen active in
+    let dropped : I64 := window_dropped text cur area.width in
+    underline_at drawn row (area.x + (Text.col_of_byte text cur - dropped))
 
 /// The multiline body: the value's lines, the CURSOR-anchored window
 /// (down-shifted so the cursor's line is the last visible row), each
@@ -295,7 +342,7 @@ def render_text_input_multi (st : InputState) (cur : I64) (area : Rect) (screen 
                     // LAST row: the first visible line's index.
                     let first : I64 := row_idx - (area.height - 1) in
                     let shifted : List InputLine := nth_lines (input_lines st.value 0) (if first < 0 then 0 else first) in
-                    render_input_lines shifted
+                    render_input_lines st shifted
                         (if first < 0 then 0 else first)
                         (st.value) (cur) (row_idx - (if first < 0 then 0 else first))
                         0 area screen active,
@@ -303,24 +350,28 @@ def render_text_input_multi (st : InputState) (cur : I64) (area : Rect) (screen 
     }
 
 /// Walk the shifted line window painting its rows; `display_row` is the
-/// first row's screen row, `row_cursor` tracks the cursor's row's
-/// display offset.
+/// first row's display offset, `cursor_row` tracks the cursor's line.
+/// The cursor line is horizontally windowed to the caret; other lines
+/// render from column 0 (and the hit-test maps them with dropped=0).
 #[terminating]
-def render_input_lines (lines : List InputLine) (line_idx : I64) (value : String) (cur : I64) (cursor_row : I64) (display_row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
-    if Bool.not (display_row < area.y + area.height)
+def render_input_lines (st : InputState) (lines : List InputLine) (line_idx : I64) (value : String) (cur : I64) (cursor_row : I64) (display_row : I64) (area : Rect) (screen : Screen) (active : TextStyle) : Screen :=
+    if Bool.not (display_row < area.height)
     then screen
     else
         match lines {
             List.empty => screen,
             List.cons l rest =>
                 let text : String := String.slice value l.start l.len in
-                let screen2 : Screen := render_label text ({ area with y := area.y + display_row, height := 1 }) screen active in
-                let line_col : I64 := Text.col_of_byte (String.slice value l.start l.len) (clamp (cur - l.start) 0 l.len) in
-                let screen3 : Screen :=
+                let caret : I64 := clamp (cur - l.start) 0 l.len in
+                let caret_byte : I64 := if display_row == cursor_row then caret else 0 in
+                let drawn : Screen := render_input_line st line_idx text caret_byte (area.y + display_row) area screen active in
+                let screen2 : Screen :=
                     if display_row == cursor_row
-                    then underline_at screen2 (area.y + display_row) (area.x + line_col)
-                    else screen2 in
-                render_input_lines rest (line_idx + 1) value cur cursor_row (display_row + 1) area screen3 active,
+                    then
+                        let dropped : I64 := window_dropped text caret area.width in
+                        underline_at drawn (area.y + display_row) (area.x + (Text.col_of_byte text caret - dropped))
+                    else drawn in
+                render_input_lines st rest (line_idx + 1) value cur cursor_row (display_row + 1) area screen2 active,
         }
 
 /// One list row per line of `area`, starting at `st.offset`: the selected
@@ -637,9 +688,15 @@ def cell_underline_is (screen : Screen) (row : I64) (col : I64) (want : Bool) : 
         none => false
     }
 
+def cell_reverse_is (screen : Screen) (row : I64) (col : I64) (want : Bool) : Bool :=
+    match screen_get_cell screen row col {
+        some c => c.style.reverse == want,
+        none => false
+    }
+
 #[test]
 def test_render_text_input_writes_value_and_underlines_cursor : Bool :=
-    let st : InputState := { value := "ab", cursor := 1, placeholder := "" } in
+    let st : InputState := { value := "ab", cursor := 1, placeholder := "", sel := Option.none } in
     let s := render (text_input st) (mk_rect 0 0 3 1) (mk_screen 1 3) in
     cell_is s 0 0 "a" && cell_is s 0 1 "b"
     && cell_underline_is s 0 0 false
@@ -648,13 +705,13 @@ def test_render_text_input_writes_value_and_underlines_cursor : Bool :=
 
 #[test]
 def test_render_text_input_cursor_after_multibyte : Bool :=
-    let st : InputState := { value := "æø", cursor := 2, placeholder := "" } in
+    let st : InputState := { value := "æø", cursor := 2, placeholder := "", sel := Option.none } in
     let s := render (text_input st) (mk_rect 0 0 4 1) (mk_screen 1 4) in
     cell_is s 0 0 "æ" && cell_is s 0 1 "ø" && cell_underline_is s 0 1 true
 
 #[test]
 def test_render_text_input_cursor_at_end_underlines_trailing_space : Bool :=
-    let st : InputState := { value := "ab", cursor := 2, placeholder := "" } in
+    let st : InputState := { value := "ab", cursor := 2, placeholder := "", sel := Option.none } in
     let s := render (text_input st) (mk_rect 0 0 3 1) (mk_screen 1 3) in
     cell_is s 0 2 " " && cell_underline_is s 0 2 true
 
@@ -662,17 +719,57 @@ def test_render_text_input_cursor_at_end_underlines_trailing_space : Bool :=
 def test_render_text_input_scrolls_long_value_to_cursor : Bool :=
     // 10 chars, cursor at 9, width 3: window starts at 7, showing "hij"
     // with the cursor on the last column.
-    let st : InputState := { value := "abcdefghij", cursor := 9, placeholder := "" } in
+    let st : InputState := { value := "abcdefghij", cursor := 9, placeholder := "", sel := Option.none } in
     let s := render (text_input st) (mk_rect 0 0 3 1) (mk_screen 1 3) in
     cell_is s 0 0 "h" && cell_is s 0 1 "i" && cell_is s 0 2 "j"
     && cell_underline_is s 0 2 true
 
 #[test]
 def test_render_text_input_empty_shows_dim_placeholder : Bool :=
-    let st : InputState := { value := "", cursor := 0, placeholder := "Search" } in
+    let st : InputState := { value := "", cursor := 0, placeholder := "Search", sel := Option.none } in
     let s := render (text_input st) (mk_rect 0 0 6 1) (mk_screen 1 6) in
     cell_is s 0 0 "S"
     && (match screen_get_cell s 0 0 { some c => c.style.dim, none => false })
+
+/// The field is focused from the first frame: the empty placeholder carries
+/// the reverse-block caret on its first cell.
+#[test]
+def test_render_text_input_empty_placeholder_shows_caret : Bool :=
+    let st : InputState := { value := "", cursor := 0, placeholder := "Search", sel := Option.none } in
+    let s := render (text_input st) (mk_rect 0 0 6 1) (mk_screen 1 6) in
+    cell_is s 0 0 "S"
+    && cell_underline_is s 0 0 true
+    && cell_reverse_is s 0 0 true
+    && Bool.not (cell_reverse_is s 0 1 true)
+
+#[test]
+def test_render_text_input_selection_is_reverse : Bool :=
+    let st0 : InputState := { value := "hello", cursor := 5, placeholder := "", sel := Option.none } in
+    let st1 : InputState := InputState.press st0 10 1 0 1 in
+    let st2 : InputState := InputState.drag st1 10 1 0 2 in
+    let s := render (text_input st2) (mk_rect 0 0 10 1) (mk_screen 1 10) in
+    cell_is s 0 1 "e" && cell_is s 0 2 "l"
+    && cell_reverse_is s 0 1 true && cell_reverse_is s 0 2 true
+    && Bool.not (cell_reverse_is s 0 0 true)
+    && Bool.not (cell_reverse_is s 0 3 true)
+
+#[test]
+def test_render_text_input_selection_covers_a_wide_glyph : Bool :=
+    let st0 : InputState := { value := "日本", cursor := 6, placeholder := "", sel := Option.none } in
+    let st1 : InputState := InputState.press st0 4 1 0 0 in
+    let st2 : InputState := InputState.drag st1 4 1 0 1 in
+    let s := render (text_input st2) (mk_rect 0 0 4 1) (mk_screen 1 4) in
+    cell_reverse_is s 0 0 true && cell_reverse_is s 0 1 true
+
+#[test]
+def test_render_text_input_multiline_selection : Bool :=
+    let st0 : InputState := { value := "ab\ncd", cursor := 5, placeholder := "", sel := Option.none } in
+    let st1 : InputState := InputState.press st0 6 2 0 1 in
+    let st2 : InputState := InputState.drag st1 6 2 1 2 in
+    let s := render (text_input st2) (mk_rect 0 0 6 2) (mk_screen 2 6) in
+    cell_reverse_is s 0 1 true
+    && cell_reverse_is s 1 0 true
+    && cell_reverse_is s 1 1 true
 
 #[test]
 def test_render_list_marks_and_bolds_selected_row : Bool :=

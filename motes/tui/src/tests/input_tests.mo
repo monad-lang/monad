@@ -10,7 +10,12 @@
 /// comparing with `==`: generic `BEq (Pair A B)` dispatch is the
 /// unreliable path this mote avoids throughout.
 
-use lib::widgets::input {InputState, InputLine, input_state, handle_input_key, handle_input_multiline_key, input_line_move, input_lines, cursor_line, insert_text}
+use lib::widgets::input {
+    InputState, InputLine, input_state, handle_input_key, handle_input_multiline_key,
+    input_line_move, input_lines, cursor_line, insert_text,
+    InputState.press, InputState.drag, InputState.selection_text,
+    InputState.selection_active, InputState.hit,
+}
 use lib::types {Key}
 
 /// All three fields of `st` at once, compared directly.
@@ -160,3 +165,75 @@ def test_insert_text_normalizes_newlines : Bool :=
 def test_insert_text_at_the_cursor : Bool :=
     let st1 := insert_text "bc" (at_cursor "ad" 1 "p") in
     state_is "abcd" 3 "p" st1
+
+// ==================== mouse selection ====================
+
+#[test]
+def test_input_press_places_the_caret : Bool :=
+    let st := InputState.press (input_state "hello" "") 10 1 0 3 in
+    st.cursor == 3 && Bool.not (InputState.selection_active st)
+
+#[test]
+def test_input_drag_selects_text : Bool :=
+    let st0 := InputState.press (input_state "hello" "") 10 1 0 1 in
+    let st1 := InputState.drag st0 10 1 0 3 in
+    match InputState.selection_text st1 {
+        Option.some t => t == "ell",
+        Option.none => false,
+    }
+
+#[test]
+def test_input_click_copies_nothing : Bool :=
+    let st := InputState.press (input_state "hello" "") 10 1 0 2 in
+    match InputState.selection_text st {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_input_type_replaces_the_selection : Bool :=
+    let st0 := InputState.press (input_state "hello" "") 10 1 0 1 in
+    let st1 := InputState.drag st0 10 1 0 3 in
+    state_is "hXo" 2 "" (handle_input_key (Key.char "X") st1)
+
+#[test]
+def test_input_backspace_deletes_the_selection : Bool :=
+    let st0 := InputState.press (input_state "hello" "") 10 1 0 1 in
+    let st1 := InputState.drag st0 10 1 0 3 in
+    state_is "ho" 1 "" (handle_input_key Key.backspace st1)
+
+#[test]
+def test_input_hit_uses_the_scrolled_window : Bool :=
+    // "abcdefghij" with the caret at 10, width 3: the window drops 8
+    // columns, so content column 0 is the 'i'.
+    match InputState.hit (at_cursor "abcdefghij" 10 "") 3 1 0 0 {
+        Pair.pair li c => li == 0 && c == 8,
+    }
+
+#[test]
+def test_input_hit_multiline_window : Bool :=
+    let st := input_state "ab\ncd" "" in
+    match InputState.hit st 10 2 0 1 {
+        Pair.pair l0 c0 =>
+            match InputState.hit st 10 2 1 1 {
+                Pair.pair l1 c1 => l0 == 0 && c0 == 1 && l1 == 1 && c1 == 1,
+            },
+    }
+
+#[test]
+def test_input_selection_keeps_a_wide_glyph_whole : Bool :=
+    let st0 := InputState.press (input_state "日本" "") 4 1 0 0 in
+    let st1 := InputState.drag st0 4 1 0 1 in
+    match InputState.selection_text st1 {
+        Option.some t => t == "日",
+        Option.none => false,
+    }
+
+#[test]
+def test_input_multiline_selection_joins_with_newlines : Bool :=
+    let st0 := InputState.press (input_state "ab\ncd" "") 10 2 0 1 in
+    let st1 := InputState.drag st0 10 2 1 1 in
+    match InputState.selection_text st1 {
+        Option.some t => t == "b\ncd",
+        Option.none => false,
+    }

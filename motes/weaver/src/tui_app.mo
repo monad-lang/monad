@@ -436,17 +436,36 @@ def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg
         MouseEvent.scroll_down _ _ => scroll_with_pages m (0 - wheel_step),
         MouseEvent.press btn r c =>
             if is_left btn
-            then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.begin_selection mm r c) m) Cmd.none
+            then
+                // An input-box press places the caret and starts an input
+                // selection; a transcript press starts a transcript one and
+                // drops any input highlight.
+                if Model.in_input m r c
+                then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.input_press mm r c) m) Cmd.none
+                else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.begin_selection (Model.clear_input_selection mm) r c) m) Cmd.none
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
         MouseEvent.drag btn r c =>
             if is_left btn
-            then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.drag_selection mm r c) m) Cmd.none
+            then
+                if Model.input_sel_active m
+                then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.input_drag mm r c) m) Cmd.none
+                else Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.drag_selection mm r c) m) Cmd.none
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
         MouseEvent.release btn r c =>
             if is_left btn
-            then finish_selection_step m r c
+            then
+                if Model.input_sel_active m
+                then finish_input_selection_step m r c
+                else finish_selection_step m r c
             else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
+
+/// The OSC 52 copy command; the forced repaint also clears the highlight.
+def clipboard_cmd (t : String) : Cmd WeaverMsg :=
+    Cmd.perform (fn (_ : Unit) => do {
+        Clipboard.copy t;
+        IO.pure (WeaverMsg.key_event Event.tick)
+    })
 
 /// End a drag: the release point is folded in one last time, the model
 /// drops the highlight, and a non-empty selection is copied (a perform,
@@ -456,11 +475,17 @@ def finish_selection_step (m : TuiModel) (r : I64) (c : I64) : Pair TuiModel (Cm
     match Model.finish_selection dragged {
         Pair.pair m2 text => match text {
             Option.none => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) Cmd.none,
-            Option.some t => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2)
-                (Cmd.perform (fn (_ : Unit) => do {
-                    Clipboard.copy t;
-                    IO.pure (WeaverMsg.key_event Event.tick)
-                })),
+            Option.some t => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) (clipboard_cmd t),
+        },
+    }
+
+/// The input-box twin: the release folds into the input selection, then a
+/// non-empty drag copies through OSC 52.
+def finish_input_selection_step (m : TuiModel) (r : I64) (c : I64) : Pair TuiModel (Cmd WeaverMsg) :=
+    match Model.input_release m r c {
+        Pair.pair m2 text => match text {
+            Option.none => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) Cmd.none,
+            Option.some t => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) (clipboard_cmd t),
         },
     }
 
