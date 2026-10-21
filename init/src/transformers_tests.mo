@@ -1,6 +1,6 @@
 use std::test {}
 use lib::id {Id, Id.run}
-use lib::transformers {StateT, ResultT, OptionT}
+use lib::transformers {StateT, ReaderT, ResultT, OptionT}
 
 // StateT spike: the smallest shape that exercises everything the rest of
 // this module depends on -- a higher-kinded type parameter (`M : Type -> Type`)
@@ -39,6 +39,42 @@ def test_statet_bind : Bool :=
     match Id.run (StateT.run statet_bind_result 100) {
         Pair.pair s a => (s == 100) && (a == 11)
     }
+
+// ReaderT: the same probes as StateT, with the state replaced by a
+// read-only environment. `bind` uses the split-`def` form above for the
+// same `MatchTraversalMismatch` reason.
+#[test]
+def test_readert_pure_run : Bool :=
+    let m : ReaderT I64 Id I64 := Monad.pure 42 in
+    (Id.run (ReaderT.run m 7)) == 42
+
+def readert_bind_result : ReaderT I64 Id I64 :=
+    let m : ReaderT I64 Id I64 := Monad.pure 10 in
+    Monad.bind m (fn a => Monad.pure (a + 1))
+
+#[test]
+def test_readert_bind : Bool :=
+    (Id.run (ReaderT.run readert_bind_result 100)) == 11
+
+#[test]
+def test_readert_ask : Bool :=
+    let m : ReaderT I64 Id I64 := ReaderT.ask in
+    (Id.run (ReaderT.run m 7)) == 7
+
+#[test]
+def test_readert_asks : Bool :=
+    let m : ReaderT I64 Id I64 := ReaderT.asks (fn (x : I64) => x + 1) in
+    (Id.run (ReaderT.run m 7)) == 8
+
+#[test]
+def test_readert_local : Bool :=
+    let m : ReaderT I64 Id I64 := ReaderT.ask in
+    (Id.run (ReaderT.run (ReaderT.local (fn (x : I64) => x + 1) m) 7)) == 8
+
+#[test]
+def test_readert_lift : Bool :=
+    let m : ReaderT I64 Id I64 := ReaderT.lift (Id.id 5) in
+    (Id.run (ReaderT.run m 0)) == 5
 
 // ResultT/OptionT `bind`: a throwaway single-file probe (outside this mote,
 // its own tiny `#![mote {...}]`) run BEFORE writing these instances showed
