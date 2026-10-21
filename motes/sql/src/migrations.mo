@@ -30,7 +30,8 @@ pub struct MigrationState {
     version : I64,
     name : String,
     applied : Bool,
-    checksum_ok : Bool
+    checksum_ok : Bool,
+    name_ok : Bool
 }
 
 pub type MigrationError {
@@ -56,7 +57,10 @@ with MigrationError {
             MigrationError.out_of_order version expected =>
                 String.concat "migration order differs at version " (I64.to_string expected),
             MigrationError.name_mismatch version expected actual =>
-                String.concat "migration name changed at version " (I64.to_string version),
+                String.concat "migration name changed at version "
+                    (String.concat (I64.to_string version)
+                        (String.concat ": expected " (String.concat expected
+                            (String.concat ", got " actual)))),
             MigrationError.checksum_mismatch version =>
                 String.concat "migration contents changed at version " (I64.to_string version),
             MigrationError.missing_down version =>
@@ -162,10 +166,15 @@ with Migrations {
     def state_of (m : Migration) (applied : List AppliedMigration) : MigrationState :=
         match Migrations.find_applied m.version applied {
             Option.none =>
-                let s : MigrationState := { version := m.version, name := m.name, applied := false, checksum_ok := true } in s,
+                let s : MigrationState :=
+                    { version := m.version, name := m.name, applied := false,
+                      checksum_ok := true, name_ok := true } in s,
             Option.some a =>
-                let ok := String.beq (Sha256.hash m.up) a.checksum in
-                let s : MigrationState := { version := m.version, name := m.name, applied := true, checksum_ok := ok } in s
+                let checksum_ok := String.beq (Sha256.hash m.up) a.checksum in
+                let name_ok := String.beq m.name a.name in
+                let s : MigrationState :=
+                    { version := m.version, name := m.name, applied := true,
+                      checksum_ok := checksum_ok, name_ok := name_ok } in s
         }
 
     /// Applied/pending state for every supplied migration. Checksums are

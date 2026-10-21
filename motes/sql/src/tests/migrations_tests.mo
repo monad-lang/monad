@@ -142,7 +142,8 @@ def test_status_marks_applied_and_pending : Bool :=
     match states {
         List.cons first rest => match rest {
             List.cons second _ =>
-                first.applied && first.checksum_ok && Bool.not second.applied,
+                first.applied && first.checksum_ok && first.name_ok
+                && Bool.not second.applied && second.name_ok,
             List.empty => false
         },
         List.empty => false
@@ -154,6 +155,17 @@ def test_status_reports_bad_checksum : Bool :=
     let states := Migrations.status [bad] [mig 1 "a" "u1"] in
     match states {
         List.cons first _ => first.applied && Bool.not first.checksum_ok,
+        List.empty => false
+    }
+
+#[test]
+def test_status_reports_name_drift : Bool :=
+    let renamed : AppliedMigration :=
+        { version := 1, name := "old_name", checksum := Sha256.hash "u1" } in
+    let states := Migrations.status [renamed] [mig 1 "a" "u1"] in
+    match states {
+        List.cons first _ =>
+            first.applied && first.checksum_ok && Bool.not first.name_ok,
         List.empty => false
     }
 

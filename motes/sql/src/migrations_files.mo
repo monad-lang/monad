@@ -34,7 +34,8 @@ struct ParsedFile {
     version : I64,
     name : String,
     kind : ParsedKind,
-    text : String
+    text : String,
+    file_name : String
 }
 
 // ─── Filename parsing ───────────────────────────────────────────────────
@@ -79,11 +80,16 @@ def digit_value (b : U8) : Option I64 :=
     then digit_string_value (U8.to_string (U8.sub b 48u8))
     else Option.none
 
+/// Cap the version at nine digits (999,999,999) before multiplying, so an
+/// over-long numeric field is a `bad_filename` rather than a wrapped I64.
 #[terminating]
 def parse_version_step (rest : List U8) (acc : I64) (d : Option I64) :
         Option I64 :=
     match d {
-        Option.some n => parse_version_list rest (acc * 10 + n),
+        Option.some n =>
+            if acc > 100000000
+            then Option.none
+            else parse_version_list rest (acc * 10 + n),
         Option.none => Option.none
     }
 
@@ -142,7 +148,8 @@ def read_meta (path : Path) (meta : ParsedMeta) :
     match contents {
         Result.ok text =>
             let f : ParsedFile :=
-                { version := meta.version, name := meta.name, kind := meta.kind, text := text } in
+                { version := meta.version, name := meta.name, kind := meta.kind,
+                  text := text, file_name := Path.file_name path } in
             return (Result.ok (Option.some f)),
         Result.err e =>
             return (Result.err (MigrationError.io_error e.message))
@@ -225,14 +232,21 @@ def sort_parsed (files : List ParsedFile) : List ParsedFile :=
         List.cons f rest => insert_parsed f (sort_parsed rest)
     }
 
+/// Pair the `up` with the `.down.sql` of the SAME version and name. A
+/// same-version down with a different name is a filename error, not a
+/// silent pairing: otherwise a typo would make a rollback execute the
+/// wrong script.
 def take_down (f : ParsedFile) (rest : List ParsedFile) :
-        Pair (Option ParsedFile) (List ParsedFile) :=
+        Result MigrationError (Pair (Option ParsedFile) (List ParsedFile)) :=
     match rest {
-        List.empty => Pair.pair Option.none rest,
+        List.empty => Result.ok (Pair.pair Option.none rest),
         List.cons d rest2 =>
             if d.version == f.version && kind_is_down d.kind
-            then Pair.pair (Option.some d) rest2
-            else Pair.pair Option.none rest
+            then
+                if String.beq d.name f.name
+                then Result.ok (Pair.pair (Option.some d) rest2)
+                else Result.err (MigrationError.bad_filename d.file_name)
+            else Result.ok (Pair.pair Option.none rest)
     }
 
 def make_migration (f : ParsedFile) (down : Option ParsedFile) : Migration :=
@@ -260,11 +274,19 @@ def assemble_rest (f : ParsedFile) (down : Option ParsedFile) (rest : List Parse
             Result.err e => Result.err e
         }
 
+def assemble_down (f : ParsedFile)
+        (picked : Pair (Option ParsedFile) (List ParsedFile)) :
+        Result MigrationError (List Migration) :=
+    match picked {
+        Pair.pair down rest2 => assemble_rest f down rest2
+    }
+
 #[terminating]
 def assemble_up (f : ParsedFile) (rest : List ParsedFile) :
         Result MigrationError (List Migration) :=
     match take_down f rest {
-        Pair.pair down rest2 => assemble_rest f down rest2
+        Result.err e => Result.err e,
+        Result.ok picked => assemble_down f picked
     }
 
 #[terminating]
@@ -273,7 +295,7 @@ def assemble (files : List ParsedFile) : Result MigrationError (List Migration) 
         List.empty => Result.ok List.empty,
         List.cons f rest =>
             if kind_is_down f.kind
-            then Result.err (MigrationError.bad_filename f.name)
+            then Result.err (MigrationError.bad_filename f.file_name)
             else assemble_up f rest
     }
 

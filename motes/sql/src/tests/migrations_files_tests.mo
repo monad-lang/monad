@@ -10,7 +10,7 @@ use std::list {List.length}
 use std::process {exec_cmd}
 use std::path {Path}
 use std::io {IO.write_file}
-use lib::migrations {Migration, MigrationError}
+use lib::migrations {Migration, MigrationError, MigrationError.message}
 use lib::migrations_files {load_dir}
 
 def test_dir (name : String) : Path :=
@@ -85,6 +85,14 @@ def dir_error_is (p : Path) (pred : MigrationError -> Bool) : IO Bool := do {
     }
 }
 
+def dir_error_message_is (p : Path) (expected : String) : IO Bool := do {
+    let r <- load_dir p;
+    match r {
+        Result.ok _ => return false,
+        Result.err e => return (String.beq (MigrationError.message e) expected)
+    }
+}
+
 #[test]
 def test_load_dir_pairs_up_and_down : IO Bool := do {
     let p := test_dir "pairs";
@@ -119,6 +127,25 @@ def test_load_orphan_down_is_error : IO Bool := do {
     let p := test_dir "orphan";
     let _ <- setup_at p;
     let a <- write_at p "0001_a.down.sql" "SELECT 1;";
+    let bad <- dir_error_message_is p "bad migration filename: 0001_a.down.sql";
+    return (a && bad)
+}
+
+#[test]
+def test_load_down_name_must_match_up : IO Bool := do {
+    let p := test_dir "downname";
+    let _ <- setup_at p;
+    let a <- write_at p "0001_create_users.up.sql" "CREATE TABLE users (id INTEGER);";
+    let b <- write_at p "0001_create_user.down.sql" "DROP TABLE users;";
+    let bad <- dir_error_message_is p "bad migration filename: 0001_create_user.down.sql";
+    return (a && b && bad)
+}
+
+#[test]
+def test_load_overlong_version_is_error : IO Bool := do {
+    let p := test_dir "overflow";
+    let _ <- setup_at p;
+    let a <- write_at p "18446744073709551617_a.up.sql" "SELECT 1;";
     let bad <- dir_error_is p is_bad_filename;
     return (a && bad)
 }
