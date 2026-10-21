@@ -335,6 +335,16 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c "$PWD/target-monad/ci-self-compile/monad" test motes/clap motes/monadup
 
+      # monad-sql + monad-sqlite. The common mote's tests are pure and run
+      # under either host; the driver's are compiled-only (`#[extern "c"]`,
+      # `ByteBuf.ptr`, the runtime pointer helper). The devshell supplies
+      # libsqlite3 and sqlite3.pc, which the mote's `[link]` needs.
+      - name: Self-hosted SQL tests
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c "$PWD/target-monad/ci-self-compile/monad" test motes/sql motes/sqlite
+
       # Phase 0-2 of plans/bootstrapping/wasm-target.md: the wasi fib
       # differential, the web loader smoke test, and clean target-gating
       # errors. Reuses the binary the step above just self-compiled, so it
