@@ -1,0 +1,27 @@
+# monad-sqlite: the SQLite driver for monad-sql.
+#
+# Declarative `#[extern "c"]` bindings (the `ffi_example`/`tls` convention),
+# not a `#[native]` family: only programs that depend on this mote link
+# `-lsqlite3`, and no compiler table needs a new entry. The Rust host warns
+# that it ignores externs, so every execution path here is
+# self-hosted/LLVM-only.
+#
+# `pkg-config` narrows the link to the store path of the library in the
+# devshell; `libs` alone is enough when the cc-wrapper already exposes it.
+[mote]
+name = "sqlite"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.sql]
+path = "../sql"
+
+[link]
+libs = ["sqlite3"]
+pkg-config = ["sqlite3"]

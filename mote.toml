@@ -52,6 +52,7 @@ members = [
   "motes/tls",
   "motes/serde",
   "motes/sql",
+  "motes/sqlite",
   "motes/openai",
   "motes/anthropic",
   "motes/shuttle",
