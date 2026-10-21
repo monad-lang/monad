@@ -3102,6 +3102,12 @@ pub struct ScopeData {
     // constraints, so the checker needs them by name. Side-table pattern
     // of `def_params`/`def_sigs` above; keyed by the resolved name.
     def_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
+    // The subset of `def_constraints` that became dictionary PARAMETERS
+    // (`qualifying_dict_constraints`, computed once at registration from
+    // the same body and constraint list Phase 3 read). The checker's
+    // ordinary-call reification reads this instead of re-walking the
+    // callee's body at every call site.
+    def_dict_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
     // Every registered name's BARE spelling (`prelude::Monad` ->
     // `Monad`) -> the qualified keys that own it. The read side of
     // item 5.1's bare-vs-qualified tolerance: `scope_data_find_

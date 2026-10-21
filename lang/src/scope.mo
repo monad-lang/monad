@@ -705,8 +705,13 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // ... and the def's declared `[Class V]` constraints: the
             // `#Named.Instance` hint checker validates a hint against the
             // callee's constraints, which `scope_find_def_constraints`
-            // reads back from this table.
-            scope_data_add_def_constraints with_body defname def_constraints
+            // reads back from this table. The QUALIFYING subset -- the
+            // ones Phase 3 turned into dict parameters -- is computed
+            // here, once, from the same body and list Phase 3 reads
+            // (`add_constraint_dict_params`), so the checker's call
+            // reification never re-walks a callee body per call site.
+            let with_constraints : ScopeData := scope_data_add_def_constraints with_body defname def_constraints in
+            scope_data_add_def_dict_constraints with_constraints defname (qualifying_dict_constraints def_constraints term_)
     }
 
 /// Does a def body carry a real body, or is it a body-less declaration?
@@ -824,6 +829,13 @@ def scope_data_add_cubical_prim (sd : ScopeData) (name : NamePath) (prim : Cubic
 /// `scope_find_def_constraints`.
 def scope_data_add_def_constraints (sd : ScopeData) (name : NamePath) (constraints : List TypeConstraint) : ScopeData :=
     { sd with def_constraints := npath_map_insert name constraints sd.def_constraints }
+
+/// Register `name -> qualifying constraints` into
+/// `sd.def_dict_constraints` -- the checker's call reification reads
+/// them back via `scope_find_def_dict_constraints`, so each call site
+/// does not re-walk the callee's body.
+def scope_data_add_def_dict_constraints (sd : ScopeData) (name : NamePath) (constraints : List TypeConstraint) : ScopeData :=
+    { sd with def_dict_constraints := npath_map_insert name constraints sd.def_dict_constraints }
 
 /// Registers `ind` two ways: into `.inductives` (constructor/arity
 /// lookups — `scope_find_inductive` and friends) *and*, like
@@ -1515,6 +1527,16 @@ def scope_data_find_def_constraints (sd : ScopeData) (name : NamePath) : Option 
 pub def scope_find_def_constraints (name : NamePath) (s : Scope) : Option (List TypeConstraint) :=
     let g : ScopeData := scope_globals s in
     scope_data_find_def_constraints g name
+
+// --- ScopeData: the subset that became dictionary parameters ---
+
+def scope_data_find_def_dict_constraints (sd : ScopeData) (name : NamePath) : Option (List TypeConstraint) :=
+    npath_map_lookup name sd.def_dict_constraints
+
+/// Globals only, same shape as `scope_find_def_constraints`.
+pub def scope_find_def_dict_constraints (name : NamePath) (s : Scope) : Option (List TypeConstraint) :=
+    let g : ScopeData := scope_globals s in
+    scope_data_find_def_dict_constraints g name
 
 // --- ScopeData: find an Inductive by ModulePath ---
 
@@ -3126,7 +3148,7 @@ def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List 
 /// skips a phantom/unused constraint rather than adding a dead
 /// parameter every caller would still need to supply.
 #[partial]
-def qualifying_dict_constraints (constraints : List TypeConstraint) (body : Term) : List TypeConstraint :=
+pub def qualifying_dict_constraints (constraints : List TypeConstraint) (body : Term) : List TypeConstraint :=
     match constraints {
         List.empty => List.empty,
         List.cons c rest =>

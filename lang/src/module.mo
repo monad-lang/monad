@@ -7518,6 +7518,25 @@ def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool
     })
 }
 
+/// The checker-alone pipeline this section's synthetic tests run:
+/// infix -> promote -> dict-param -> scope -> best-effort elaborate (the
+/// caller does the parse). Shared so a change to the pass order is made
+/// once.
+def elaborate_parsed_decls (decl_list : List Decl) : List Decl :=
+    let infixes := collect_infixes decl_list in
+    let resolved := resolve_infix_decls infixes decl_list in
+    let promoted := promote_instance_defs resolved in
+    let dict_paramed := add_constraint_dict_params_decls promoted in
+    let path : ModulePath := ModulePath.mk List.empty in
+    let sd : ScopeData := build_scope_from_decls path dict_paramed in
+    let scope : Scope := {
+        module_id := path,
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    } in
+    elaborate_module_decls_best_effort scope dict_paramed empty_locals
+
 /// One dict ARGUMENT per dict PARAMETER: `resolve_ordinary_constrained_
 /// call` prepends a leading dict argument for every entry
 /// `collect_def_constraints`'s table holds, so that table must record
@@ -7539,6 +7558,10 @@ def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool
 /// prepend the `Wrap Id` dictionary); `norefs_step` is the bind_step
 /// shape (constrained, but its body never mentions the class -- no
 /// parameter, and the call site must pass it through UNTOUCHED).
+/// Asserted against the REAL checker alone (`elaborate_module_decls_
+/// best_effort`), then through the syntactic pass over that output --
+/// the real codegen composition -- so the checker reifies the call-site
+/// dictionary from the argument-solved substitution and the pass agrees.
 #[test]
 def test_resolve_class_calls_skips_unreferenced_constrained_callee : IO Bool := do {
     let src : String :=
@@ -7552,14 +7575,19 @@ def test_resolve_class_calls_skips_unreferenced_constrained_callee : IO Bool := 
     let result : ParseResult (List Decl) := parse_all_decls src;
     return (match result {
         ParseResult.success _ decl_list => do {
-            let infixes := collect_infixes decl_list;
-            let resolved := resolve_infix_decls infixes decl_list;
-            let promoted := promote_instance_defs resolved;
-            let dict_paramed := add_constraint_dict_params_decls promoted;
-            let dispatched := resolve_class_calls_decls dict_paramed;
-            let refs_ok := decl_list_def_term_contains dispatched "use_refs" "__Dict_Wrap_Id";
-            let norefs_ok := Bool.not (decl_list_def_term_contains dispatched "use_norefs" "__Dict_Wrap");
-            Bool.and refs_ok norefs_ok
+            let elaborated := elaborate_parsed_decls decl_list;
+            let dispatched := resolve_class_calls_decls elaborated;
+            let refs_ok := decl_list_def_term_contains elaborated "use_refs" "__Dict_Wrap_Id";
+            let norefs_ok := Bool.not (decl_list_def_term_contains elaborated "use_norefs" "__Dict_Wrap");
+            // Non-vacuity: a failed elaboration would re-emit the
+            // original body, making the negative assertion trivially true.
+            let calls_norefs := decl_list_def_term_contains elaborated "use_norefs" "norefs_step";
+            // ... and the real codegen composition (checker, then the
+            // syntactic pass) must agree with the checker alone.
+            let refs_composition := decl_list_def_term_contains dispatched "use_refs" "__Dict_Wrap_Id";
+            let norefs_composition := Bool.not (decl_list_def_term_contains dispatched "use_norefs" "__Dict_Wrap");
+            Bool.and (Bool.and refs_ok norefs_ok)
+                (Bool.and calls_norefs (Bool.and refs_composition norefs_composition))
         },
         ParseResult.fail _ => false,
     })
@@ -7581,6 +7609,11 @@ def test_resolve_class_calls_skips_unreferenced_constrained_callee : IO Bool := 
 /// compiled callee received its first value argument in the dict slot,
 /// and the driver died on entry -- the `TuiT.enter_raw_mode` shape of
 /// `motes/tui/src/tests/tuit_tests.mo`'s lifecycle programs.
+/// Asserted against the REAL checker alone (and then through the
+/// syntactic pass over that output): the checker reifies the expectation
+/// channel, binding `M` from the annotated binding's type (`Id I64`
+/// against the callee's codomain `M I64`) and inserting the dictionary
+/// at the BARE reference.
 #[test]
 def test_resolve_class_calls_expect_resolves_zero_arg_constrained_op : IO Bool := do {
     let src : String :=
@@ -7592,12 +7625,13 @@ def test_resolve_class_calls_expect_resolves_zero_arg_constrained_op : IO Bool :
     let result : ParseResult (List Decl) := parse_all_decls src;
     return (match result {
         ParseResult.success _ decl_list => do {
-            let infixes := collect_infixes decl_list;
-            let resolved := resolve_infix_decls infixes decl_list;
-            let promoted := promote_instance_defs resolved;
-            let dict_paramed := add_constraint_dict_params_decls promoted;
-            let dispatched := resolve_class_calls_decls dict_paramed;
-            decl_list_def_term_contains dispatched "use_op" "__Dict_Wrappable_Id"
+            let elaborated := elaborate_parsed_decls decl_list;
+            let checker_ok := decl_list_def_term_contains elaborated "use_op" "__Dict_Wrappable_Id";
+            // The real codegen composition (checker, then the syntactic
+            // pass) must insert the same dictionary -- not a second one.
+            let composition_ok :=
+                decl_list_def_term_contains (resolve_class_calls_decls elaborated) "use_op" "__Dict_Wrappable_Id";
+            Bool.and checker_ok composition_ok
         },
         ParseResult.fail _ => false,
     })

@@ -25,14 +25,17 @@ use lang::scope {
   find_constructor_in_inductive, find_matching_instance,
   flatten_call_spine, identifier_tail, inductive_has_constructor, instance_module_prefix,
   instance_wildcard_names, list_append, mangle_instance_dict_name,
-  mangle_instance_method_name, mangled_to_identifier, param_names, rebuild_call,
+  mangle_instance_method_name, mangled_to_identifier, param_names,
+  rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
-  scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_params, scope_find_def_return_type,
+  scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_dict_constraints,
+  scope_find_def_params, scope_find_def_return_type,
   scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_instance_by_name, scope_find_local, scope_globals,
   scope_all_instances, scope_instance_candidates, scope_push_local,
-  scope_find_cubical_prim, scope_resolve_name, strip_dict_hint_args,
+  scope_find_cubical_prim, scope_resolve_name, strip_all_leading_binders,
+  strip_dict_hint_args,
   type_mentions_any, validate_dict_hints,
 }
 use lib::typecheck::name_subst {name_subst_term}
@@ -379,6 +382,196 @@ def strip_dict_pis (typ : Term) (n : I64) : Term :=
                     _ => typ,
                 },
             _ => typ,
+        }
+
+/// How many leading dict Pis Phase 3 prepended
+/// (`add_constraint_dict_params`, `lang.scope`): one per qualifying
+/// constraint, in constraint-list order. Phase 3 builds them with
+/// `binder_anon`, so the binder must be UNNAMED too -- a real parameter
+/// annotated `_` is also a hole-domain Pi, and stripping it would shift
+/// every remaining argument.
+#[partial]
+def count_dict_pis (typ : Term) : I64 :=
+    match typ {
+        Term.pi b dom ret =>
+            match dom {
+                Term.hole =>
+                    match binder_name b {
+                        DebugName.unnamed => 1 + count_dict_pis ret,
+                        DebugName.named _ => 0,
+                    },
+                _ => 0,
+            },
+        _ => 0,
+    }
+
+/// The constraints that became dictionary PARAMETERS. Registered at
+/// scope-build time with the shared predicate over the same body and
+/// list Phase 3 read, so this list and the signature's leading hole Pis
+/// agree by construction (the Layer-1 ABI rule) -- and no call site
+/// re-walks the callee's body.
+def qualifying_def_constraints (name : NamePath) (scope : Scope) : List TypeConstraint :=
+    match scope_find_def_dict_constraints name scope {
+        Option.some cs => cs,
+        Option.none => List.empty,
+    }
+
+#[partial]
+def constraint_var_list (cs : List TypeConstraint) : List Identifier :=
+    match cs {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk _ vars => List.append vars (constraint_var_list rest),
+            },
+    }
+
+#[partial]
+def binding_of (bindings : List (Pair Identifier Term)) (v : Identifier) : Option Term :=
+    match bindings {
+        List.empty => Option.none,
+        List.cons b rest =>
+            match b {
+                Pair.pair id t => if id_eq id v then Option.some t else binding_of rest v,
+            },
+    }
+
+/// Is this binding value usable as evidence? A placeholder is not, and
+/// neither is a bare variable that does not name a type in scope -- the
+/// constraint's own `M` solved to itself (`M := M` from an abstract
+/// argument) is the question, not an answer, and a wildcard-headed
+/// bridge instance matches it anyway.
+#[partial]
+def informative_value (t : Term) (scope : Scope) : Bool :=
+    if is_uninformative_carrier t then false
+    else
+        match term_peel t {
+            Term.var _ dbg =>
+                match dbg {
+                    DebugName.named id => is_scope_type_name id scope,
+                    DebugName.unnamed => false,
+                },
+            _ => true,
+        }
+
+/// Every constraint variable bound to something informative. Until this
+/// holds, no carrier is offered at all, so a hole can never be matched
+/// by a wildcard-headed bridge instance.
+def constraint_vars_informative (cs : List TypeConstraint) (bindings : List (Pair Identifier Term)) (scope : Scope) : Bool :=
+    match cs {
+        List.empty => true,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk _ vars => vars_informative_go vars bindings scope && constraint_vars_informative rest bindings scope,
+            },
+    }
+
+#[partial]
+def vars_informative_go (vars : List Identifier) (bindings : List (Pair Identifier Term)) (scope : Scope) : Bool :=
+    match vars {
+        List.empty => true,
+        List.cons v rest =>
+            (match binding_of bindings v {
+                Option.some t => informative_value t scope,
+                Option.none => false,
+            }) && vars_informative_go rest bindings scope,
+    }
+
+#[partial]
+def first_bound_value_go (vars : List Identifier) (bindings : List (Pair Identifier Term)) : Option Term :=
+    match vars {
+        List.empty => Option.none,
+        List.cons v rest =>
+            match binding_of bindings v {
+                Option.some t => Option.some t,
+                Option.none => first_bound_value_go rest bindings,
+            },
+    }
+
+/// The first bound constraint value, as the fallback carrier when the
+/// expectation yielded none: `constraint_vars_informative` already
+/// proved every variable bound, so this never has to invent one.
+#[partial]
+def first_bound_constraint_value (constraints : List TypeConstraint) (bindings : List (Pair Identifier Term)) : Option Term :=
+    first_bound_value_go (constraint_var_list constraints) bindings
+
+#[partial]
+def informative_carrier_of (t : Term) : Option Term :=
+    match carrier_from_expected_type t {
+        Option.some c => if is_uninformative_carrier c then Option.none else Option.some c,
+        Option.none => Option.none,
+    }
+
+/// The dictionary arguments a constrained call resolves to, or
+/// `Option.none` when this checker has no sound answer: no bindings, no
+/// informative carrier, or any dictionary unresolved. Shared by the
+/// applied-call and bare-reference paths so they cannot diverge about
+/// when a dictionary is inserted.
+def dict_args_for_constraints (constraints : List TypeConstraint) (bindings : List (Pair Identifier Term)) (carrier : Option Term) (scope : Scope) (locals : LocalScope) : Option (List Term) :=
+    if Bool.not (constraint_vars_informative constraints bindings scope) then Option.none
+    else
+        let fallback : Option Term :=
+            match carrier {
+                Option.some c => Option.some c,
+                Option.none => first_bound_constraint_value constraints bindings,
+            } in
+        match fallback {
+            Option.some c =>
+                resolve_dict_args (scope_data_classes (scope_globals scope)) (scope_all_instances (scope_globals scope)) (dict_env_from_locals locals) List.empty bindings c List.empty constraints,
+            Option.none => Option.none,
+        }
+
+/// Insert the dict argument(s) an ordinary constrained def CALL needs
+/// into its elaborated spine -- the checker-side counterpart of
+/// `resolve_ordinary_constrained_call`. Bindings are what
+/// `try_type_check_def_call` already solved (arguments, then the
+/// expected-type return direction); the expected type is also the
+/// fallback carrier, reifying the syntactic pass's annotated-binding
+/// expectation channel at every call site. Returned unchanged on any
+/// miss -- the syntactic pass still runs afterwards. Hints are skipped
+/// here (the syntactic pass owns hint resolution; a marker-first spine
+/// would defeat its `arg_is_dict` guard).
+def reify_ordinary_dict_args (name : NamePath) (k : I64) (hints : List String) (markers : List Term) (arg_bindings : List (Pair Identifier Term)) (ret_bindings : List (Pair Identifier Term)) (expected_type : Term) (scope : Scope) (locals : LocalScope) (head : Term) (elab_args : List Term) : Term :=
+    let plain : Term := rebuild_call head (List.append markers elab_args) in
+    if Bool.or (I64.lt k 1) (I64.gt (List.length hints) 0) then plain
+    else
+        let constraints : List TypeConstraint := qualifying_def_constraints name scope in
+        if Bool.not (I64.beq (List.length constraints) k) then plain
+        else
+            match dict_args_for_constraints constraints (List.append arg_bindings ret_bindings) (informative_carrier_of expected_type) scope locals {
+                Option.some dict_args =>
+                    if I64.beq (List.length dict_args) k
+                    then rebuild_call head (List.append markers (List.append dict_args elab_args))
+                    else plain,
+                Option.none => plain,
+            }
+
+/// A BARE reference to an ordinary constrained def (`op` in
+/// `let x : Id I64 := op in ...`) needs the same dict argument a call
+/// site gets; with no value arguments, the expected type is the only
+/// evidence. Unchanged wherever it can't resolve.
+def reify_bare_constrained_ref (name : NamePath) (declared : Term) (expected_type : Term) (scope : Scope) (locals : LocalScope) (dbg : DebugName) : Result TypeError TypedTerm :=
+    let plain : Result TypeError TypedTerm := ok (mk_typed (Term.var sentinel dbg) declared) in
+    let k : I64 := count_dict_pis declared in
+    let constraints : List TypeConstraint := qualifying_def_constraints name scope in
+    if Bool.or (I64.lt k 1) (Bool.not (I64.beq (List.length constraints) k)) then plain
+    else
+        let dict_free : Term := strip_dict_pis declared k in
+        let bindings : List (Pair Identifier Term) :=
+            bind_term_vars (constraint_var_list constraints) (strip_all_leading_binders dict_free) (term_peel expected_type) List.empty in
+        // The binding above is the WHOLE expected type; the fallback
+        // carrier must be the same term, not its Pi domain.
+        let carrier : Option Term :=
+            match informative_carrier_of expected_type {
+                Option.some _ => Option.some (term_peel expected_type),
+                Option.none => Option.none,
+            } in
+        match dict_args_for_constraints constraints bindings carrier scope locals {
+            Option.some dict_args =>
+                if I64.beq (List.length dict_args) k
+                then ok (mk_typed (rebuild_call (Term.var sentinel dbg) dict_args) dict_free)
+                else plain,
+            Option.none => plain,
         }
 
 /// Does this call's own nested constraint dictionary reference the
@@ -2754,8 +2947,18 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                                     ok (mk_typed (Term.var sentinel dbg)
                                         (free_var_declared_typ resolved_name sig dbg scope)),
                             Option.none =>
-                                ok (mk_typed (Term.var sentinel dbg)
-                                    (free_var_declared_typ resolved_name sig dbg scope)),
+                                // A LOCAL of this name shadows any
+                                // global: its own type is not a def
+                                // signature, so never reify it from
+                                // one (the same guard the app-spine and
+                                // constructor probes apply).
+                                if is_some_local (scope_find_local id locals)
+                                then ok (mk_typed (Term.var sentinel dbg)
+                                    (free_var_declared_typ resolved_name sig dbg scope))
+                                else
+                                    reify_bare_constrained_ref resolved_name
+                                        (free_var_declared_typ resolved_name sig dbg scope)
+                                        expected_type scope locals dbg,
                         },
                 },
                 err _ =>
@@ -3318,7 +3521,12 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                 match scope_find_def_sig resolved_name scope {
                                                     Option.none => Option.none,
                                                     Option.some sig =>
-                                                        match sig_tvars_params_ret sig {
+                                                        // Phase 3's leading dict Pis are not
+                                                        // arguments of the call being solved;
+                                                        // keeping them here shifted every
+                                                        // parameter left by one.
+                                                        let k : I64 := count_dict_pis sig in
+                                                        match sig_tvars_params_ret (strip_dict_pis sig k) {
                                                             SigInfo.mk params ret =>
                                                                 if I64.gt (List.length real_args) (List.length params)
                                                                 then Option.none
@@ -3378,10 +3586,11 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                             err _ => refined_ret,
                                                                                         } in
                                                                                     // Re-attach the peeled `#` markers ahead of
-                                                                                    // the elaborated arguments: this rebuilt term
-                                                                                    // is what elaboration stores, and the dict
-                                                                                    // pass reads the hint off these markers.
-                                                                                    let rebuilt : Term := rebuild_call head (List.append (dict_hint_marker_terms dict_hints) elab_args) in
+                                                                                    // the elaborated arguments (the dict pass reads
+                                                                                    // the hint off them) and insert the callee's
+                                                                                    // dict argument(s) behind them.
+                                                                                    let rebuilt : Term :=
+                                                                                        reify_ordinary_dict_args resolved_name k dict_hints (dict_hint_marker_terms dict_hints) subst ret_subst expected_type scope locals head elab_args in
                                                                                     Option.some (ok (mk_typed rebuilt result_typ)),
                                                                             },
                                                                     },
