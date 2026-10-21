@@ -307,6 +307,18 @@ signature differs). Wiring only the first two compiles and fails at runtime.
 
 ### The IO wrapping rules
 
+- **Side-effecting declarations return `RawIO A`.** Any `#[native]` or
+  `#[extern "c"]` declaration that mutates state, writes memory or an
+  out-parameter, or does I/O is declared `RawIO A` — never `IO A`, never a
+  bare payload type. The user-facing operation is a thin `.mo` wrapper
+  (`IO.mk raw`). An extern declared `RawIO A` gets exactly one `RawIO.io`
+  box from its generated wrapper (`compile_extern_def_wrapper_ir`), so it
+  composes with `IO.mk` exactly like a `RawIO` native; the wrapper also
+  reads the payload type out of `RawIO A` for the C ABI declaration, so
+  `RawIO I32` still sign-extends and `RawIO Ptr` is still `i8*`. Pure
+  getters (`strlen`, `sqlite3_column_int64`, `SSL_get_error`) keep their
+  raw return type. The older `io_passthrough` natives (`IO A`) are
+  grandfathered, not a pattern to copy.
 - A native declared `IO A` returns its raw payload; the C side returns the
   payload and `NativeWrapKind.io_passthrough` (emit.mo) wraps it as
   `IO.mk (RawIO.io raw)`. On the Rust host, `io_wrap` does the same.
@@ -332,6 +344,56 @@ signature differs). Wiring only the first two compiles and fails at runtime.
   arm, the wrap-kind entry and the `.mo` declaration move together.
 - Share C helpers instead of copying loops (`monad_build_argv` serves both
   `monad_exec_cmd` and `monad_proc_spawn`).
+
+## Memory Safety
+
+Monad is intended to be a memory-safe language. The `#[extern "c"]` /
+`#[native]` boundary is the only place raw memory exists, and it must be
+kept as narrow as possible. **Never introduce a primitive that lets Monad
+code forge or dereference an arbitrary address.** The compiler, `init/`,
+`std/`, `runtime/`, and motes are all in scope: a generic helper in the
+runtime is reachable from every program.
+
+Rules:
+
+- **No `I64 -> Ptr` conversion.** A helper like `Ptr.of_i64` is forbidden,
+  even if the immediate caller is trusted. If a fixed sentinel is needed,
+  add a zero-argument helper that returns only that constant (for example
+  `monad_ptr_minus_one` for SQLite's `SQLITE_TRANSIENT`).
+- **No general pointer load/store.** A C out-parameter must be read through
+  a *typed* wrapper that validates its input — for example, an 8-byte
+  `ByteBuf`, a tag/length check, and a typed return — never through a
+  `load(ptr)` helper that accepts any `Ptr`.
+- **No `Ptr` arithmetic**, and no `memcpy`/`memset` whose length does not
+  come from a typed length (a `ByteBuf` length or the C API's own reported
+  byte count). Copying foreign text or bytes into Monad belongs in
+  `std/src/cstring.mo`: it takes the C-owned `Ptr` plus the count that same
+  API reported, copies into a fresh `ByteBuf`, and keeps its `memcpy`
+  extern package-private — it never exposes a general `memcpy`.
+- **Externs bind only FOREIGN symbols.** An `#[extern "c"]` declaration —
+  including its `link_name` — must never name a Monad-defined native or a
+  runtime symbol (the `monad_*` functions in `runtime/src/`). Those have the
+  uniform i64 native ABI and a safe `#[native]` wrapper, both of which an
+  extern call bypasses. Runtime functionality belongs in `init`/`std` as a
+  `#[native]` with the full wiring; the compiler rejects a `monad_*` extern
+  link (`validate_no_monad_externs`). `Ptr.minus_one` and
+  `ByteBuf.take_ptr` are the migrated examples.
+- **Do not expose raw handles as public API.** Keep `sqlite3*`-style values
+  package-private (the `#[extern "c"]` declarations already are). If a
+  driver must expose one, document it as an unsafe FFI detail and never
+  feed it back to another C function through a generic helper.
+- **Take the least authority needed.** A fixed sentinel takes no arguments;
+  an out-parameter read takes a typed buffer; a string bind takes `String`
+  plus its length, not a `Ptr` plus an unchecked count.
+- **Reviewers must reject** a change that adds a generic address-producing
+  or address-reading primitive, even when the current caller is safe. The
+  next caller is the threat model.
+
+The `monad_ptr_from_i64` / `monad_ptr_load` pair from the first SQLite
+milestone is the worked counterexample: both were removed in favour of
+`monad_ptr_minus_one` (fixed sentinel, no input) and
+`monad_bytebuf_take_ptr` (typed 8-byte buffer, validated). Do not
+reintroduce their shape under another name.
 
 ## Style Conventions
 

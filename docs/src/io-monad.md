@@ -312,7 +312,10 @@ The `#[native name]` attribute marks a definition as implemented outside Monad,
 and such a definition has no body. The name in the attribute is the runtime's
 identifier for the operation, which is not always the Monad-side name — the
 native behind `IO.read_stdin_exact` is a `priv` `read_stdin_exact` returning
-`RawIO String`, which the public def wraps. Not every IO operation is a native:
+`RawIO String`, which the public def wraps. The same split applies to
+`#[extern "c"]`: a declaration with side effects is typed `RawIO A` and
+bound with `IO.mk` (the generated wrapper adds the one `RawIO.io` box),
+while a pure getter keeps its raw return type. Not every IO operation is a native:
 `IO.println`, `IO.write_stdout`, `IO.write_stderr`, `IO.read_line`,
 `IO.read_file` and `IO.write_file` are ordinary Monad over `std/stream.mo`'s
 byte streams.
