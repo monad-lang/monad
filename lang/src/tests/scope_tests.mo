@@ -626,14 +626,13 @@ def test_instance_key_matches_type_args : Bool :=
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
-    // Insertion order reversed vs. the original hand-written list
-    // (`show_bool` first, `show_i64` last) — `scope_data_add_instance`
-    // prepends to its class's instance list, so this preserves the
-    // original `[show_i64, show_bool]` order: `show_i64`/`show_bool`
-    // here deliberately share the same level-1 sort arg (see above),
-    // so `first_matching_instance`'s scan needs this exact order to
-    // still return `show_i64` first, matching this test's intent.
-    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty show_bool) show_i64 in
+    // `scope_data_add_instance` appends to its class's instance list
+    // (declaration order), so adding `show_i64` first keeps the
+    // `[show_i64, show_bool]` order: `show_i64`/`show_bool` here
+    // deliberately share the same level-1 sort arg (see above), so
+    // `first_matching_instance`'s scan needs this exact order to
+    // return `show_i64` first, matching this test's intent.
+    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty show_i64) show_bool in
     let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
