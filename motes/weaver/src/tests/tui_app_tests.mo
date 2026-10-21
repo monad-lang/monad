@@ -4,7 +4,7 @@
 /// IO) is asserted by SHAPE here (it IS a `perform`), never executed --
 /// the turn/command machinery itself is shuttle's and `commands.mo`'s
 /// own, already pinned by their own test files.
-use shuttle::agent {RunState, silent_sleep, silent_usage}
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero}
 use shuttle::message {Usage}
 use shuttle::gate {Gate}
@@ -14,7 +14,8 @@ use shuttle::session {Session}
 use weaver::commands {WeaverState, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
-use weaver::model {TuiModel, WeaverMsg, DisplayRow, init_tui_model, Model.append_block, Model.scroll_step, Model.display_rows}
+use weaver::model {TuiModel, WeaverMsg, DisplayRow, init_tui_model, Model.append_block, Model.scroll_step, Model.display_rows, Model.thinking_text}
+use weaver::overlay {OverlayState}
 use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage}
 use std::path {Path, Path.of}
 use std::map {BTreeMap}
@@ -32,7 +33,7 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false }
 
 def state_of (mode : Mode) : WeaverState :=
     { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
@@ -189,7 +190,7 @@ def test_resize_resets_ctrl_c_streak : Bool :=
 def test_recoverable_turn_fails_keeps_running : Bool :=
     match TuiApp.update (model_of Mode.manual) (WeaverMsg.turn_failed run_of (WeaverError.provider "wire down")) {
         Pair.pair m2 cmd =>
-            cmd_is_none cmd
+            cmd_is_perform_repaint cmd
                 && Bool.not (fatal_is_some2 m2)
                 && transcript_contains "error: provider: wire down" m2.transcript.tail
     }
@@ -335,7 +336,7 @@ def test_tick_spins_only_while_pending : Bool :=
     match TuiApp.update (model_of Mode.manual) (WeaverMsg.key_event Event.tick) {
         Pair.pair idle _ =>
             match TuiApp.update (enter_pending idle) (WeaverMsg.key_event Event.tick) {
-                Pair.pair spun cmd => spun.spinner_frame == 1 && idle.spinner_frame == 0 && idle.ctrl_c_streak == spun.ctrl_c_streak && cmd_is_none cmd
+                Pair.pair spun cmd => spun.spinner_frame == 1 && idle.spinner_frame == 0 && idle.ctrl_c_streak == spun.ctrl_c_streak && cmd_is_inspect cmd
             }
     }
 
@@ -374,13 +375,13 @@ def test_tick_at_ten_polls_usage : Bool :=
         Pair.pair m10 cmd => m10.spinner_frame == 10 && cmd_is_inspect cmd,
     }
 
-// The usage message only lands while a turn is pending.
+// The usage half of a poll only lands while a turn is pending.
 #[test]
 def test_live_usage_updates_only_while_pending : Bool :=
     let u : Usage := { input_tokens := 3, output_tokens := 4, cached_tokens := 0 } in
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.live_usage u) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled (Option.some u) Option.none) {
         Pair.pair m1 _ =>
-            match TuiApp.update (model_of Mode.manual) (WeaverMsg.live_usage u) {
+            match TuiApp.update (model_of Mode.manual) (WeaverMsg.polled (Option.some u) Option.none) {
                 Pair.pair idle _ =>
                     (match m1.live_spent { Option.some x => x.input_tokens == 3 && x.output_tokens == 4, Option.none => false })
                     && (match idle.live_spent { Option.none => true, Option.some _ => false }),
@@ -389,6 +390,70 @@ def test_live_usage_updates_only_while_pending : Bool :=
 
 def cmd_is_inspect (c : Cmd WeaverMsg) : Bool :=
     match c { Cmd.inspect _ => true, _ => false }
+
+// A poll that sees a dialog's `want` marks the overlay open and stops
+// tick draws (modal).
+#[test]
+def test_polled_open_marks_the_overlay : Bool :=
+    let st : OverlayState := { want := true, ack := false, seq := 0 } in
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some st)) {
+        Pair.pair m2 cmd => m2.overlay_open && m2.modal && cmd_is_none cmd,
+    }
+
+// A close poll clears it and forces the clear+repaint that erases the
+// dialog.
+#[test]
+def test_polled_close_repaints : Bool :=
+    let opened : OverlayState := { want := true, ack := true, seq := 0 } in
+    let finished : OverlayState := { want := false, ack := false, seq := 1 } in
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some opened)) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (WeaverMsg.polled Option.none (Option.some finished)) {
+                Pair.pair m2 cmd =>
+                    Bool.not m2.overlay_open && Bool.not m2.modal && m2.dialog_seq == 1 && cmd_is_perform_repaint cmd,
+            },
+    }
+
+// The plan dialog's revise path ends the turn (it used to strand
+// modal/turn_pending) and repaints.
+#[test]
+def test_input_set_ends_the_turn : Bool :=
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.input_set "fix it") {
+        Pair.pair m2 cmd =>
+            Bool.not m2.turn_pending && Bool.not m2.modal && cmd_is_perform_repaint cmd
+                && m2.input.value == "fix it",
+    }
+
+// Esc while a turn runs requests the stop (an inspect that writes the
+// signal) and the live row switches to "stopping…".
+#[test]
+def test_escape_requests_stop_while_pending : Bool :=
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (key_msg Key.escape) {
+        Pair.pair m2 cmd =>
+            m2.stop_requested && cmd_is_inspect cmd
+                && String.contains (Model.thinking_text m2) "stopping",
+    }
+
+// Esc with nothing to cancel is a no-op.
+#[test]
+def test_escape_idle_is_a_no_op : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg Key.escape) {
+        Pair.pair m2 cmd => cmd_is_none cmd && Bool.not m2.stop_requested,
+    }
+
+// A stopped turn keeps its partial block and appends `[stopped]`; the
+// completion clears the request.
+#[test]
+def test_stopped_turn_appends_the_line : Bool :=
+    let base : RunState := run_of in
+    let stopped_run : RunState := { base with stopped := true } in
+    match TuiApp.update (enter_pending (model_of Mode.manual))
+            (WeaverMsg.turn_result stopped_run [TLine.plain "partial answer"] List.empty) {
+        Pair.pair m2 _ =>
+            transcript_contains "[stopped]" m2.transcript.tail
+                && Bool.not m2.turn_pending
+                && Bool.not m2.stop_requested,
+    }
 
 // The repaint cmd IS a plain perform (the forced blank repaint).
 def cmd_is_perform_repaint (c : Cmd WeaverMsg) : Bool :=

@@ -40,6 +40,10 @@ use weaver::store {
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
     Store.append_history_note, Store.child,
 }
+use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
+use weaver::overlay {
+    OverlayState, Overlay.read, Overlay.reset, Overlay.ack, Overlay.begin, Overlay.finish,
+}
 use weaver::commands {TranscriptChange}
 use shuttle::session {Session}
 use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_with}
@@ -100,6 +104,8 @@ pub def Tui.run_resumed (log : Option Logger) (st : WeaverState) (tr : Transcrip
 def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript) (size : Pair I64 I64) : IO Bool :=
     match size {
         Pair.pair rows cols => do {
+            let _ <- Stop.reset st.store;
+            let _ <- Overlay.reset st.store;
             // 100 ms: the tick is the spinner's frame clock AND the
             // async-turn poll cadence (a completed turn's result joins
             // the next batch within one tick); idle ticks with an
@@ -107,12 +113,25 @@ def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript)
             // stays untouched.
             let app : App TuiModel WeaverMsg :=
                 App.app_ticked (init_tui_model_with log st rows cols tr) on_event TuiApp.update Model.view 100
-                    (fn (m : TuiModel) => Bool.or (Bool.and m.turn_pending (Bool.not m.modal))
-                        (Bool.and m.banner (m.banner_frame < 12)));
+                    tick_redraw reads_input;
             let _ <- run_app app;
             return true
         }
     }
+
+/// Draw a tick-only batch only when the spinner/banner moved, and never
+/// while a dialog owns the terminal (`modal`).
+pub def tick_redraw (m : TuiModel) : Bool :=
+    Bool.or (Bool.and m.turn_pending (Bool.not m.modal))
+        (Bool.and m.banner (m.banner_frame < 12))
+
+/// The loop's read gate: while a dialog is open, ack its ownership (only
+/// now -- the poll has already marked the overlay open and this model's
+/// last frame has drawn) and decline the read. Otherwise read normally.
+def reads_input (m : TuiModel) : IO Bool :=
+    if m.overlay_open
+    then do { Overlay.ack m.state.store; IO.pure false }
+    else IO.pure true
 
 // ── update ───────────────────────────────────────────────────────────────
 
@@ -136,13 +155,17 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.page_failed e => page_failed_step m e,
         WeaverMsg.transcript_reset tr => transcript_reset_step m tr,
         WeaverMsg.store_result e => store_result_step m e,
+        // The plan dialog's "revise with a note" is a terminal outcome
+        // too: the dialog closed, so the turn ends and the overlay must
+        // be repainted away (leaving modal/turn_pending set used to
+        // strand the app).
         WeaverMsg.input_set text =>
-            Pair.pair { m with input := input_state text input_placeholder, banner := false } Cmd.none,
-        // A late usage read after the turn ended must not resurrect the row.
-        WeaverMsg.live_usage u =>
-            if m.turn_pending
-            then Pair.pair { m with live_spent := Option.some u } Cmd.none
-            else Pair.pair m Cmd.none,
+            let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) =>
+                { mm with input := input_state text input_placeholder, banner := false }) m in
+            Pair.pair m2 repaint_cmd,
+        // The Esc request reached the signal file.
+        WeaverMsg.stop_sent => Pair.pair m Cmd.none,
+        WeaverMsg.polled u ov => polled_step m u ov,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -228,8 +251,13 @@ def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (s
     }
 
 def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta : List Message) : Pair TuiModel (Cmd WeaverMsg) :=
+    // A stopped turn keeps its partial block and carries one marker line.
+    // It is display output, not history: the session's messages are the
+    // ones the loop kept.
+    let shown : List TLine :=
+        if run.stopped then List.append lines [TLine.plain "[stopped]"] else lines in
     let with_run : TuiModel := set_run m run in
-    let pair := append_block_at with_run lines in
+    let pair := append_block_at with_run shown in
     match pair {
         Pair.pair m2 at => match at {
             Pair.pair start block =>
@@ -252,7 +280,7 @@ def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiMod
                 then
                     let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                     let store : Option StoreState := m3.state.store in
-                    Pair.pair m3 (persist_output_cmd Cmd.none store start block m3.state.run.session)
+                    Pair.pair m3 (persist_output_cmd repaint_cmd store start block m3.state.run.session)
                 else
                     let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                     let st2 : WeaverState := set_fatal m3.state e in
@@ -353,7 +381,8 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
 /// A turn's or command's completion: the fold `f` runs, the streak
 /// resets, and `turn_pending` clears -- the spinner stops.
 def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
-    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none, modal := false }
+    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none,
+        modal := false, stop_requested := false, overlay_open := false }
 
 // ── live usage (the thinking row's tokens) ─────────────────────────────
 // The UI's session is the PRE-turn snapshot; shuttle's `on_usage` hook
@@ -413,14 +442,44 @@ def usage_live (log : Option Logger) (store : Option StoreState) (u : Usage) : I
         (String.concat " cached=" (I64.to_string u.cached_tokens))))))
 }
 
-/// The 1 Hz poll action: a missing/garbled file folds a harmless tick.
-def usage_poll (store : Option StoreState) : Unit -> IO WeaverMsg :=
+/// The usage half of the poll, read every tenth frame (1 Hz).
+def usage_due (store : Option StoreState) (frame : I64) : IO (Option Usage) :=
+    if I64.beq (frame - ((frame / 10) * 10)) 0
+    then read_usage store
+    else IO.pure Option.none
+
+/// A pending tick's poll: the dialog handshake every frame and the live
+/// usage every tenth.
+def poll_action (store : Option StoreState) (frame : I64) : Unit -> IO WeaverMsg :=
     fn (_ : Unit) => do {
-        let u <- read_usage store;
-        match u {
-            Option.some x => IO.pure (WeaverMsg.live_usage x),
-            Option.none => IO.pure (WeaverMsg.key_event Event.tick),
-        }
+        let ov <- Overlay.read store;
+        let u <- usage_due store frame;
+        IO.pure (WeaverMsg.polled u ov)
+    }
+
+/// A tick's poll result: live usage while pending, and the dialog
+/// handshake. Opening suppresses tick draws (modal); a new close
+/// sequence clears it and returns the clear+repaint that erases the
+/// dialog. A missing/garbled state file is a no-op (the startup reset
+/// guarantees a valid one; a torn read must not drop ownership).
+def polled_step (m : TuiModel) (u : Option Usage) (ov : Option OverlayState) : Pair TuiModel (Cmd WeaverMsg) :=
+    let m1 : TuiModel := match u {
+        Option.some x => if m.turn_pending then { m with live_spent := Option.some x } else m,
+        Option.none => m,
+    } in
+    match ov {
+        Option.none => Pair.pair m1 Cmd.none,
+        Option.some s =>
+            if s.want
+            then
+                if m1.overlay_open
+                then Pair.pair m1 Cmd.none
+                else Pair.pair { m1 with overlay_open := true, modal := true } Cmd.none
+            else if Bool.or m1.overlay_open (Bool.not (s.seq == m1.dialog_seq))
+            then
+                let closed : TuiModel := { m1 with overlay_open := false, modal := false, dialog_seq := s.seq } in
+                Pair.pair closed repaint_cmd
+            else Pair.pair m1 Cmd.none,
     }
 
 /// The completion frame's repaint: a trivial `perform` forces the next
@@ -500,13 +559,11 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
                 if Bool.and m1.banner (m1.banner_frame < 12)
                 then { m1 with banner_frame := m1.banner_frame + 1 }
                 else m1 in
-            // Once a second (ten 100 ms frames), poll the live usage file.
-            // `Cmd.inspect` folds the result without forcing a repaint.
-            let poll : Bool := Bool.and m2.turn_pending
-                (Bool.and (Bool.not (m2.spinner_frame < 10))
-                    (I64.beq (m2.spinner_frame - ((m2.spinner_frame / 10) * 10)) 0)) in
-            if poll
-            then Pair.pair m2 (Cmd.inspect (usage_poll m2.state.store))
+            // Every pending tick polls the dialog handshake (and, every
+            // tenth frame, the live usage). `Cmd.inspect` folds the
+            // result without forcing a repaint.
+            if m2.turn_pending
+            then Pair.pair m2 (Cmd.inspect (poll_action m2.state.store m2.spinner_frame))
             else Pair.pair m2 Cmd.none,
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
@@ -597,8 +654,39 @@ def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
             else Pair.pair (streak_reset_input m k) Cmd.none,
         Key.end => Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with scroll := 0 }) m) Cmd.none,
         Key.home => scroll_with_pages m 999999,
+        Key.escape => escape_key m,
         _ => Pair.pair (streak_reset_input m k) Cmd.none,
     }
+
+/// Whether a transcript (mouse) selection is active.
+def transcript_sel_active (m : TuiModel) : Bool :=
+    match m.sel {
+        Option.some _ => true,
+        Option.none => false,
+    }
+
+/// The Esc stop request's IO: write the generation into the signal file
+/// the running turn's `should_stop` seam reads.
+def stop_cmd (store : Option StoreState) (gen : I64) : Unit -> IO WeaverMsg :=
+    fn (_ : Unit) => do {
+        Stop.request store gen;
+        IO.pure WeaverMsg.stop_sent
+    }
+
+/// Esc: clear an active selection first; otherwise, while a turn runs,
+/// ask it to stop -- the fiber ends at its next model/tool boundary and
+/// the live row says `stopping…` meanwhile.
+def escape_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    if Model.input_sel_active m
+    then Pair.pair (with_streak_reset (fn (mm : TuiModel) => Model.clear_input_selection mm) m) Cmd.none
+    else if transcript_sel_active m
+    then Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with sel := Option.none }) m) Cmd.none
+    else if Bool.and m.turn_pending (Bool.not m.stop_requested)
+    then
+        let m2 : TuiModel := { m with stop_requested := true } in
+        Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2)
+            (Cmd.inspect (stop_cmd m.state.store m.turn_gen))
+    else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none
 
 /// A screenful of CONTENT rows: the panel minus the indicator row it
 /// spends while scrolled.
@@ -720,16 +808,18 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
         let block : List TLine := Transcript.next_block m.transcript echo in
         let start : I64 := m.transcript.total in
         let store : Option StoreState := m.state.store in
+        let gen : I64 := m.turn_gen + 1 in
         let m2 : TuiModel :=
             { (with_streak_reset
                 (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
                 with turn_pending := true, banner := false, spinner_frame := 0,
                      live_spent := Option.some m.state.run.session.spent, scroll := 0,
+                     stop_requested := false, turn_gen := gen,
                      modal := Bool.or (plan_dialog_wanted st text)
                          (Bool.or (text == "/processes") (text == "/procs")) } in
         Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => do {
             let _ <- write_echo store start block;
-            run_submitted_line m.log st text
+            run_submitted_line m.log gen st text
         }))
 
 /// The submitted line's echo block is durable before the turn starts (it
@@ -788,12 +878,12 @@ def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
 /// loop -- mirroring `dumb.mo`'s `route`/`command_turn`/`model_turn`,
 /// but folding a `WeaverMsg` back instead of writing through line
 /// seams.
-pub def run_submitted_line (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg := do {
+pub def run_submitted_line (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg := do {
     let t0 <- IO.current_time;
     let kind : String := if String.starts_with "/" text then "command" else "turn";
     Logs.info log (String.concat "ev=submit kind=" (String.concat kind
         (String.concat " bytes=" (I64.to_string (String.length text)))));
-    let msg <- dispatch_submitted log st text;
+    let msg <- dispatch_submitted log gen st text;
     let t1 <- IO.current_time;
     Logs.info log (String.concat "ev=submit_end elapsed_ms=" (I64.to_string (t1 - t0)));
     Logs.info log (outcome_of msg);
@@ -812,12 +902,12 @@ def outcome_of (msg : WeaverMsg) : String :=
         _ => "ev=submit_other",
     }
 
-def dispatch_submitted (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
+def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if plan_dialog_wanted st text
     then plan_dialog_step st text
     else if String.starts_with "/" text
     then command_step_tui st text
-    else model_step_tui log st text
+    else model_step_tui log gen st text
 
 def mode_is_plan (m : Mode) : Bool :=
     match m { Mode.plan => true, _ => false }
@@ -843,15 +933,15 @@ def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :
         Result.ok e => WeaverMsg.command_result e,
     }
 
-def model_step_tui (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
+def model_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if st.run.turns_left < 1
     then IO.pure (WeaverMsg.turn_result st.run [TLine.plain "turn budget spent -- /clear or restart with --max-turns"] List.empty)
-    else drive_turn_tui log st text
+    else drive_turn_tui log gen st text
 
-def drive_turn_tui (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
+def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
     let before : I64 := list_msg_length st.run.session.history in
     do {
-        let r <- ResultT.run (drive_tui log st text);
+        let r <- ResultT.run (drive_tui log gen st text);
         return (turn_result_of st before r)
     }
 
@@ -875,11 +965,13 @@ def error_line (e : WeaverError) : TLine :=
 /// screen mid-frame -- the recorded UI-repair finding). Drive the loop
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
-def drive_tui (log : Option Logger) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
+def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let _ <- write_usage st.store st.run.session.spent;
-    let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store) st.run.reg };
-    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors,
-        emit := progress_live log st.store, on_usage := usage_live log st.store };
+    let stop : Unit -> IO Bool := Stop.predicate st.store gen;
+    let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg };
+    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store,
+        emit := progress_live log st.store, on_usage := usage_live log st.store,
+        should_stop := stop, stopped := false };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
@@ -946,8 +1038,8 @@ def list_msg_length (xs : List Message) : I64 :=
 /// read for `y`/`n`/`a`. `mode` is the only parameter -- same shape as
 /// `Gate.weaver`, minus the read/write seams dumb mode needs and this
 /// does not (it owns its own screen and its own stdin read).
-pub def Gate.weaver_tui (mode : Mode) (colors : Bool) : Gate :=
-    { ask := weaver_tui_ask mode colors, precheck := weaver_tui_precheck mode }
+pub def Gate.weaver_tui (mode : Mode) (colors : Bool) (store : Option StoreState) : Gate :=
+    { ask := weaver_tui_ask mode colors store, precheck := weaver_tui_precheck mode }
 
 def weaver_tui_precheck (mode : Mode) (p : Pick) : IO (Option Approval) :=
     match Policy.decide p.cap mode {
@@ -955,10 +1047,10 @@ def weaver_tui_precheck (mode : Mode) (p : Pick) : IO (Option Approval) :=
         _ => IO.pure Option.none,
     }
 
-def weaver_tui_ask (mode : Mode) (colors : Bool) (p : Pick) : IO Approval :=
+def weaver_tui_ask (mode : Mode) (colors : Bool) (store : Option StoreState) (p : Pick) : IO Approval :=
     match Policy.decide p.cap mode {
         Decision.allow => IO.pure Approval.once,
-        Decision.ask => prompt_overlay colors p,
+        Decision.ask => prompt_overlay colors store p,
         Decision.refuse reason => IO.pure (Approval.deny reason),
     }
 
@@ -977,7 +1069,7 @@ def list_length_rows (rs : List DisplayRow) : I64 :=
         List.cons _ rest => 1 + list_length_rows rest,
     }
 
-def prompt_overlay (colors : Bool) (p : Pick) : IO Approval := do {
+def prompt_overlay (colors : Bool) (store : Option StoreState) (p : Pick) : IO Approval := do {
     let diff_pair <- Diff.for_input p.name p.input;
     let body : List String := List.append [pick_header p] (diff_lines_of diff_pair);
     let o0 : DialogOption := { label := "Approve once", hint := "y", key := "y" };
@@ -986,7 +1078,7 @@ def prompt_overlay (colors : Bool) (p : Pick) : IO Approval := do {
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
     let d : Dialog := Dialog.make "Permission required" subtitle body [o0, o1, o2];
     let default_idx : I64 := if cap_is_read p.cap then 0 else 2;
-    let pr <- dialog_run colors (Dialog.with_default d default_idx);
+    let pr <- dialog_run colors store (Dialog.with_default d default_idx);
     match pr {
         Pair.pair final step => match step {
             DialogStep.choose i => IO.pure (approval_with_note i (Dialog.note_text final)),
@@ -1088,7 +1180,7 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg := do {
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
     let d : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let pr <- dialog_run st.colors d;
+    let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {
             DialogStep.choose i =>
@@ -1324,10 +1416,19 @@ def dialog_loop (colors : Bool) (d : Dialog) (r : InputReader) (queued : List Ev
 }
 
 /// Open a dialog over a fresh input reader sized to the terminal. The
-/// final dialog rides along so the caller can read the note.
-def dialog_run (colors : Bool) (d : Dialog) : IO (Pair Dialog DialogStep) := do {
-    let size <- Terminal.size;
+/// final dialog rides along so the caller can read the note. The
+/// overlay handshake brackets the whole modal -- confirm, cancel or EOF:
+/// `begin` takes stdin from the main loop; `finish` releases it and
+/// bumps the close sequence the loop's poll repaints on.
+def dialog_body (colors : Bool) (d : Dialog) (size : Pair I64 I64) : IO (Pair Dialog DialogStep) :=
     match size {
         Pair.pair rows cols => dialog_loop colors d (input_reader rows cols) List.empty Option.none,
     }
+
+def dialog_run (colors : Bool) (store : Option StoreState) (d : Dialog) : IO (Pair Dialog DialogStep) := do {
+    Overlay.begin store;
+    let size <- Terminal.size;
+    let r <- dialog_body colors d size;
+    Overlay.finish store;
+    IO.pure r
 }

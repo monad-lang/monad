@@ -19,7 +19,8 @@ use shuttle::provider {ProviderConfig, Wire, Provider.silent_emit}
 use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
 use shuttle::tool {ToolSpec, ToolImpl}
-use shuttle::loop {Loop.run}
+use shuttle::loop {Loop.run, Loop.initial_state, Loop.iterate}
+use shuttle::agent {Agent.exec, RunState}
 use shuttle::session {Session}
 use json::json {Json, Json.make_array, Json.make_str, Json.to_string}
 use std::process {process_id}
@@ -230,4 +231,72 @@ def test_mock_loop_streamed_and_silent_sessions_identical : IO Bool := do {
             }
         }
     }
+}
+
+// ── Cooperative stop, offline ──────────────────────────────────────────
+
+def is_user_message (m : Message) : Bool :=
+    match m.role {
+        Role.user => true,
+        _ => false,
+    }
+
+def stop_always (u : Unit) : IO Bool := IO.pure true
+
+/// Stop requested before the first send: no model call, no budget
+/// consumed, and the caller's seeded history is the whole session.
+#[test]
+def test_mock_loop_stop_before_first_send : IO Bool := do {
+    write_script;
+    let st0 : RunState := Loop.initial_state mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto;
+    let st : RunState := { st0 with should_stop := stop_always };
+    let r <- ResultT.run (Agent.exec Loop.iterate st);
+    return (match r {
+        Result.err _ => false,
+        Result.ok p => match p {
+            Pair.pair fin _ =>
+                fin.stopped && fin.session.turns == 0
+                    && (match fin.session.history {
+                        List.cons m rest => is_user_message m && List.length rest == 0,
+                        List.empty => false,
+                    }),
+        },
+    })
+}
+
+def stop_marker : String :=
+    String.concat "/tmp/shuttle_stop_marker_" (String.concat (I64.to_string process_id) ".txt")
+
+def mark_stop (u : Usage) : IO Unit := do {
+    let _ <- Test.write_fixture (Path.path stop_marker) "1";
+    IO.pure unit
+}
+
+def read_stop_marker (u : Unit) : IO Bool := do {
+    let s <- Test.read_fixture_or (Path.path stop_marker) "";
+    IO.pure (s == "1")
+}
+
+/// Stop after the tool_use send: the assistant message is kept, every
+/// preempted tool gets one synthetic `is_error` result (`on_usage` runs
+/// after the send and before this check, so its marker fires it), and
+/// the echo tool never runs -- no "payload" in any result.
+#[test]
+def test_mock_loop_stop_after_tool_send : IO Bool := do {
+    write_script;
+    let _ <- Test.write_fixture (Path.path stop_marker) "";
+    let st0 : RunState := Loop.initial_state mock_config mock_registry "You are a test harness." [user_message] 6 Provider.silent_emit Gate.auto;
+    let st : RunState := { st0 with should_stop := read_stop_marker, on_usage := mark_stop };
+    let r <- ResultT.run (Agent.exec Loop.iterate st);
+    let _ <- Test.write_fixture (Path.path stop_marker) "";
+    return (match r {
+        Result.err _ => false,
+        Result.ok p => match p {
+            Pair.pair fin _ =>
+                fin.stopped && fin.session.turns == 1
+                    && List.length fin.session.history == 3
+                    && Bool.not (history_mentions "payload" fin.session.history)
+                    && history_mentions "stopped by user" fin.session.history,
+        },
+    })
 }

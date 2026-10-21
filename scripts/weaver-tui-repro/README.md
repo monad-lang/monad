@@ -55,7 +55,7 @@ UI-repair changelog; `monad check <probe>` shows each:
 ## Round 2 (`pty_repro_round2.py`)
 
 With `turns_long.json` (8 reply turns), on a 20-row pty: rounded border
-glyphs render, the statusbar carries the dim-gray manual-mode SGR, PageUp shows
+glyphs render, the statusbar carries the dim manual-mode SGR, PageUp shows
 the `N lines above` indicator, an SGR mouse wheel report scrolls,
 Alt+Enter folds a newline and the multiline submit echoes on its own
 lines (the pump after the submit must EXCEED the retry sleeps when the
@@ -64,10 +64,13 @@ mock script is exhausted -- 2s+4s of backoff before the turn fails).
 ## Async turns (`pty_repro_async.py`)
 
 With `turns_slow.json`: the UI redraws while a turn runs, the streamed
-fragment is visible mid-turn, mid-turn keys buffer in the tty and drain
-at completion, the completion repaints from blank without re-emitting,
-a Ctrl+C queued mid-turn exits cleanly after the turn, and the approval
-overlay still owns stdin (a paste cannot answer it).
+fragment is visible mid-turn, mid-turn keys land in the input box, the
+completion repaints from blank without re-emitting, one Ctrl+C mid-turn
+only hints while two consecutive presses exit promptly, Esc shows the
+`stopping…` row and ends the turn with `[stopped]` (the partial reply is
+kept), and the approval overlay still owns stdin (a paste cannot answer
+it) -- a rendered grid pins the stopping row because the cell diff
+rewrites it non-contiguously.
 
 ## Resize (`pty_repro_resize.py`)
 
@@ -90,7 +93,10 @@ release writes an OSC 52 clipboard sequence carrying the base64 of
 Drives the permission dialog with arrows + Enter (approving an `edit`
 runs it), a note on a denial (`e`, text, Enter, `n`) reaching the model
 as `denied: <note>`, and the plan-review dialog in plan mode (`/plan`),
-including a revise note landing in the input box. The mock fixture's
+including a revise note landing in the input box. A rendered grid also
+asserts the dialog is GONE from the screen after confirm/deny, and that
+the revise path leaves the app responsive (the stuck `modal`/
+`turn_pending` bug). The mock fixture's
 edit path is generated under the repro's temp root, not `/tmp/wv_repro`.
 
 ## Sessions (`pty_repro_sessions.py`)

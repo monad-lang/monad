@@ -7,6 +7,7 @@ use shuttle::provider {ProviderConfig, Wire}
 use shuttle::message {Message, Turn}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::context {usage_zero}
+use shuttle::agent {silent_stop}
 use init::transformers {ResultT}
 use json::json {
     Json, Json.to_string, Json.make_object, Json.make_str, Json.make_num_int, Json.make_array,
@@ -76,7 +77,7 @@ def task_input : Json :=
 #[test]
 def test_task_tool_runs_a_child_loop : IO Bool := do {
     let _ <- IO.write_file (Path.path script_path) (Json.to_string (Json.make_array [Turn.serialize_json child_turn]));
-    let tool := Subagent.task_tool mock_cfg Option.none Option.none;
+    let tool := Subagent.task_tool mock_cfg Option.none Option.none silent_stop;
     let r <- ResultT.run (tool.run "c1" task_input);
     let _ <- exec_cmd "rm" ["-f", script_path];
     match r {

@@ -13,6 +13,7 @@
 use shuttle::agent {RunState}
 use shuttle::message {Message, Usage}
 use weaver::commands {WeaverState, Effect}
+use weaver::overlay {OverlayState}
 use weaver::format {format_tokens, format_elapsed}
 use log::logger {Logger}
 use weaver::error {WeaverError}
@@ -63,9 +64,11 @@ pub type WeaverMsg {
     store_result (e : Option String),
     /// Fill the input box (the plan dialog's "revise with a note").
     input_set (text : String),
-    /// The turn's cumulative spend, read from the live usage file while a
-    /// turn is pending.
-    live_usage (u : Usage),
+    /// The Esc stop request's signal write completed; a no-op fold.
+    stop_sent,
+    /// A pending tick's poll: the live usage (only every tenth frame)
+    /// and the dialog-ownership state (every frame).
+    polled (usage : Option Usage) (overlay : Option OverlayState),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a
@@ -117,8 +120,8 @@ pub struct TuiModel {
     hist_idx : I64 := 0 - 1,
     /// A turn is running on its own fiber (`Cmd.perform_async`): the
     /// spinner shows and the status row carries its glyph. Keys typed
-    /// meanwhile buffer in the tty and drain when the turn completes --
-    /// tui.mo's header carries the whole reason.
+    /// meanwhile reach the input box (they are read mid-turn unless a
+    /// dialog owns stdin); Esc asks the turn to stop.
     turn_pending : Bool := false,
     /// The spinner's tick counter (bumped only while `turn_pending`, so
     /// idle ticks are zero-diff draws).
@@ -146,6 +149,18 @@ pub struct TuiModel {
     /// terminal: the main loop must not tick-redraw over it (interleaved
     /// writes corrupt the modal's paint).
     modal : Bool := false,
+    /// Esc asked the running turn to stop; the live row says so and the
+    /// fiber ends at its next model/tool boundary.
+    stop_requested : Bool := false,
+    /// The submitted turn's generation (the stop signal's stale-request
+    /// guard).
+    turn_gen : I64 := 0,
+    /// A dialog on the turn's fiber owns stdin and the terminal: the tick
+    /// poll sets it, `reads_input` acks once after that, and the poll
+    /// that sees the close clears it and forces a repaint.
+    overlay_open : Bool := false,
+    /// The last dialog-close sequence folded into the model.
+    dialog_seq : I64 := 0,
     /// The run's debug logger (none when WEAVER_LOG=off).
     log : Option Logger := Option.none,
 }
@@ -160,7 +175,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, modal := false, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
@@ -724,15 +739,19 @@ pub def Model.thinking_spent (m : TuiModel) : Usage :=
         Option.none => m.state.run.session.spent,
     }
 
-/// `| thinking 3.4s · ↑1.2k ↓345`.
+/// `| thinking 3.4s · ↑1.2k ↓345`, or `| stopping…` once Esc asked the
+/// turn to stop (the fiber ends at its next step boundary).
 pub def Model.thinking_text (m : TuiModel) : String :=
-    let u : Usage := Model.thinking_spent m in
-    String.concat (spinner_glyph m.spinner_frame)
-        (String.concat " thinking "
-            (String.concat (format_elapsed m.spinner_frame)
-                (String.concat " · ↑"
-                    (String.concat (format_tokens u.input_tokens)
-                        (String.concat " ↓" (format_tokens u.output_tokens))))))
+    if m.stop_requested
+    then String.concat (spinner_glyph m.spinner_frame) " stopping…"
+    else
+        let u : Usage := Model.thinking_spent m in
+        String.concat (spinner_glyph m.spinner_frame)
+            (String.concat " thinking "
+                (String.concat (format_elapsed m.spinner_frame)
+                    (String.concat " · ↑"
+                        (String.concat (format_tokens u.input_tokens)
+                            (String.concat " ↓" (format_tokens u.output_tokens))))))
 
 /// The thinking line under the last prompt, clipped to the content width.
 pub def Model.live_row (m : TuiModel) : DisplayRow :=

@@ -5,7 +5,7 @@
 /// `ui_theme_tests.mo`. Two parser corners worth knowing: an `--` comment
 /// line directly after `:=` breaks the parse, and an expression projection
 /// `(f x).field` binds looser than `==` -- bind to a `let` first.
-use shuttle::agent {RunState, silent_sleep, silent_usage}
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero}
 use shuttle::message {Usage}
 use shuttle::gate {Gate}
@@ -34,7 +34,7 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false }
 
 def state_of : WeaverState :=
     { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
@@ -247,6 +247,13 @@ def test_thinking_text_carries_time_and_tokens : Bool :=
     let t : String := Model.thinking_text live_model in
     String.contains t "thinking" && String.contains t "1.2s"
         && String.contains t "↑1.2k" && String.contains t "↓345"
+
+/// Esc asked the turn to stop: the live row says so instead of the
+/// token/time line.
+#[test]
+def test_thinking_text_says_stopping : Bool :=
+    let m : TuiModel := { live_model with stop_requested := true } in
+    String.contains (Model.thinking_text m) "stopping"
 
 /// The status bar is static mid-turn; the spinner lives on the live row.
 #[test]

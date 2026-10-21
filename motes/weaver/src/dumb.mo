@@ -12,7 +12,7 @@
 /// returns the advanced one. The read/write seams are PARAMETERS --
 /// production passes stdin and a flushed stdout, the e2e passes a
 /// scripted pair, and the gate answers through the same seams.
-use shuttle::agent {Agent, Agent.exec, RunState}
+use shuttle::agent {Agent, Agent.exec, RunState, silent_stop}
 use shuttle::loop {Loop.iterate}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
@@ -234,7 +234,7 @@ def advance_run (st : WeaverState) (run2 : RunState) : WeaverState :=
 /// cross the boundary through `WeaverError.of_shuttle` (the one wrap,
 /// provider-tagged: everything this seam produces is a wire failure).
 def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
-    let with_task : RunState := { st.run with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config Option.none Option.none) st.run.reg };
+    let with_task : RunState := { st.run with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config Option.none Option.none silent_stop) st.run.reg };
     let gated : RunState := gate_for st.mode read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;
     drive_loop ready

@@ -1,6 +1,6 @@
 /// Mouse selection, pure: display-row coordinates, wide glyphs, multi-row
 /// spans, no-drag clicks, and invalidation when the rows cache rebuilds.
-use shuttle::agent {RunState, silent_sleep, silent_usage}
+use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero}
 use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
@@ -25,7 +25,7 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false }
 
 def state_of : WeaverState :=
     { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }

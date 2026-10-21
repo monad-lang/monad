@@ -54,6 +54,8 @@ tui_app.mo         the TUI's IO half: TuiApp.update (closes over a
                    Gate.weaver_tui (the approval overlay), Tui.run
 providers.mo       the provider presets (host, key env var, wire)
 format.mo          token/elapsed display formatters (the thinking row)
+overlay.mo         the dialog/stdin-ownership handshake and close sequence
+stop.mo            the generation-guarded Esc stop signal
 logs.mo            the debug log path/level/events and crash detector
 procs.mo           detached background processes (pid/log/meta files)
 process_tools.mo   start_process / read_process / kill_process / list_processes
@@ -88,14 +90,19 @@ scroll a screen and Ctrl+U/Ctrl+D half a screen (End re-pins, Home jumps
 to the top; new output auto-pins only when the window is already pinned
 and the scrolled-up window shows a `N lines above -- PgDn for latest`
 row instead). Scrolling is by wrapped DISPLAY ROW, so even a single
-message taller than the panel is fully reachable. Enter submits a line
-and blocks the UI for that one turn
-or slash command -- there is no non-blocking fiber-poll primitive in
-`std/concurrent` to animate a spinner meanwhile, so the wait is what a
-turn costs; while the turn runs, a dim line under the last prompt shows the
-spinner, elapsed time and the session's token totals
-(`| thinking 3.4s · ↑1.2k ↓345`), refreshed by a 1 Hz read of the
-turn's usage file; it disappears when the result lands. An approval prompt (`manual`/`allow_edit`'s `ask`
+message taller than the panel is fully reachable. Enter submits a line;
+the turn runs on a fiber while the UI keeps folding keys and 100 ms
+ticks. A dim line under the last prompt shows the spinner, elapsed time
+and the session's token totals (`| thinking 3.4s · ↑1.2k ↓345`),
+refreshed by a 1 Hz read of the turn's usage file; it disappears when the
+result lands. Keys typed mid-turn land in the input box. Esc asks the
+turn to stop: the row says `stopping…`, the in-flight model call or
+foreground tool finishes, and the turn ends at the next boundary with a
+`[stopped]` line -- the partial session is kept. Background processes
+keep running, retry backoffs and a stalled provider read (no socket
+timeout) are not interrupted, so stop waits for the current call. While a
+dialog owns stdin the loop stops reading and drawing, and the dialog's
+close forces a clear+repaint, so a confirmed prompt never lingers. An approval prompt (`manual`/`allow_edit`'s `ask`
 cells) opens a centered dialog: the diff for a `write`/`edit` pick,
 then `Approve once` / `Always allow all <cap>s this session` / `Deny`
 with the safe option highlighted. Arrows (or j/k) select, Enter
@@ -112,8 +119,9 @@ dialog over the last assistant message: approve to `allow_edit` or to
 cancel. Two Ctrl+C presses in a row (no other key
 between) exit cleanly through the restore path -- cbreak now has ISIG
 off, so Ctrl+C arrives as a key rather than SIGINT; a single press just
-prints a hint, and DURING a turn Ctrl+C is only queued (a truly hung
-tool still needs `/quit` once the turn ends). A piped or scripted run
+prints a hint. Both presses work while a turn runs (Esc is the stop
+gesture there); while a dialog is open, Ctrl+C cancels that dialog
+instead. A piped or scripted run
 (stdin not a tty) falls back to the line-based UI above automatically.
 
 Long transcript lines wrap (word-wrap at the last fitting space) by
@@ -248,8 +256,9 @@ prefix -- separated from the reply by a blank line; the reply is plain.
 The remaining lines classify by semantic prefix: `[running]` rows dim
 cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
 `+` rows green, the Ctrl+C hint dim. Old sessions that stored the v1
-`you:`/`assistant:` prefixes migrate on read. The status bar is dim GRAY in
-manual mode (the one place that reads as chrome, not content), dim YELLOW
+`you:`/`assistant:` prefixes migrate on read. The status bar is dim
+terminal-default foreground in manual mode (the one place that reads as
+chrome, not content), dim YELLOW
 in `allow_edit`, GREEN in plan mode (the read-only trust state) and red
 while `auto` mode is on (the trust warning). Borders are dim. Both UIs use
 the same classification (`theme.mo`: one LineClass enum, rendered by

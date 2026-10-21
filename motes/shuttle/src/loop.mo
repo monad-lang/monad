@@ -33,7 +33,7 @@ use shuttle::provider {Provider.send}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage}
+use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero, usage_add}
 use shuttle::gate {Capability, Pick, Approval, Gate}
 use json::json {Json}
@@ -395,19 +395,6 @@ def agent_finish_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunS
     ResultT.mk (return (Result.ok (Pair.pair s2 unit)))
 }
 
-/// The value-level branch after one send: a tool turn dispatches,
-/// appends every result in one message, and loops back to Idle; any
-/// other stop reason appends the final assistant message and finishes.
-/// The two arms agree on `Agent Answered Done Unit`, which is what
-/// lets the branch live INSIDE one indexed program -- the tool arm
-/// closes the recursion at the same indices it opened.
-def loop_after_send (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
-    match turn.stop {
-        StopReason.tool_use_stop =>
-            Agent.bind (Loop.dispatch turn) (fn (results : List Content) => Agent.and_then (Loop.append_results turn results) Loop.iterate),
-        _ => Loop.finish turn,
-    }
-
 /// Idle -> Idle: the budget check that starts every iteration.
 /// `Option.some` means the budget is spent and the run must END here,
 /// with the session it has.
@@ -429,19 +416,137 @@ def agent_budget_step (s : RunState) : ResultT String IO (Pair RunState (Option 
 pub def Loop.cap_done : Agent AgentIdle AgentDone Unit :=
     Agent.agent (fn (s : RunState) => ResultT.mk (return (Result.ok (Pair.pair s unit))))
 
+// ── cooperative stop ───────────────────────────────────────────────────
+//
+// The UI can request a stop between steps. It is a NORMAL partial
+// completion (`stopped := true`, Result.ok), never an error: the
+// session built so far is the result. The check runs before every model
+// call and after one, before any tool dispatches -- a stop never runs a
+// tool, and a tool_use turn gets one synthetic error result per call so
+// the appended history stays protocol-valid.
+
+def mark_stopped (s : RunState) : RunState :=
+    let s2 : RunState := { s with stopped := true } in
+    s2
+
+/// One synthetic error result per `tool_use`, in order, skipping
+/// non-tool content.
+#[partial]
+def stop_tool_results (cs : List Content) : List Content :=
+    match cs {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                Content.tool_use id _ _ => List.cons (Content.tool_result id "stopped by user" true) (stop_tool_results rest),
+                _ => stop_tool_results rest,
+            },
+    }
+
+/// The synthetic results a stop needs: only a tool_use turn that asked
+/// for at least one tool gets a results message.
+#[partial]
+def stop_results (turn : Turn) : Option (List Content) :=
+    match turn.stop {
+        StopReason.tool_use_stop =>
+            let rs : List Content := stop_tool_results (turn_content turn.message) in
+            match rs {
+                List.empty => Option.none,
+                List.cons _ _ => Option.some rs,
+            },
+        _ => Option.none,
+    }
+
+/// The partial session a stopped turn keeps: the assistant message, plus
+/// the synthetic results message when tools were preempted.
+def stopped_session (s : RunState) (turn : Turn) (results : Option (List Content)) : Session :=
+    let base : Session := s.session in
+    match results {
+        Option.none =>
+            let history2 : List Message := List.append base.history [turn.message] in
+            let out : Session := { base with history := history2 } in
+            out,
+        Option.some rs =>
+            let tool_message : Message := { role := Role.tool, content := rs } in
+            let history2 : List Message := List.append base.history [turn.message, tool_message] in
+            let out : Session := { base with history := history2 } in
+            out,
+    }
+
+def agent_stop_step (s : RunState) : ResultT String IO (Pair RunState (Option Unit)) :=
+    ResultT.mk (do {
+        let stop <- s.should_stop unit;
+        let out : Pair RunState (Option Unit) :=
+            if stop then Pair.pair (mark_stopped s) (Option.some unit) else Pair.pair s Option.none;
+        return (Result.ok out);
+    })
+
+def agent_stop_after_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunState Unit) :=
+    let session2 : Session := stopped_session s turn (stop_results turn) in
+    let s1 : RunState := mark_stopped s in
+    let s2 : RunState := { s1 with session := session2 } in
+    ResultT.mk (return (Result.ok (Pair.pair s2 unit)))
+
+/// Idle -> Idle: the stop check that precedes every model call. It
+/// consumes no budget.
+pub def Loop.check_stop : Agent AgentIdle AgentIdle (Option Unit) :=
+    Agent.agent agent_stop_step
+
+/// Idle -> Done without a model call: stop was requested before the send.
+pub def Loop.stop_done : Agent AgentIdle AgentDone Unit :=
+    Agent.agent (fn (s : RunState) => ResultT.mk (return (Result.ok (Pair.pair (mark_stopped s) unit))))
+
+/// Answered -> Answered: the stop check after a send, before dispatch.
+pub def Loop.check_stop_answered : Agent AgentAnswered AgentAnswered (Option Unit) :=
+    Agent.agent agent_stop_step
+
+/// Answered -> Done: keep the assistant message, synthesize an error
+/// result for every preempted tool, and end normally with `stopped`.
+pub def Loop.stop_after_send (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
+    Agent.agent (fn (s : RunState) => agent_stop_after_run turn s)
+
+/// The existing dispatch-or-finish branch, extracted so the stop match
+/// stays one level deep (the self-hosted parser's nested-match rule).
+#[terminating]
+def loop_dispatch_or_finish (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
+    match turn.stop {
+        StopReason.tool_use_stop =>
+            Agent.bind (Loop.dispatch turn) (fn (results : List Content) => Agent.and_then (Loop.append_results turn results) Loop.iterate),
+        _ => Loop.finish turn,
+    }
+
+/// The value-level branch after one send: the stop check first, then the
+/// usual dispatch-or-finish.
+#[terminating]
+def loop_after_send (turn : Turn) : Agent AgentAnswered AgentDone Unit :=
+    Agent.bind Loop.check_stop_answered (fn (stopping : Option Unit) =>
+        match stopping {
+            Option.some _ => Loop.stop_after_send turn,
+            Option.none => loop_dispatch_or_finish turn,
+        })
+
+/// The budget's clear path: the stop check, then the send.
+#[terminating]
+def loop_uncapped : Agent AgentIdle AgentDone Unit :=
+    Agent.bind Loop.check_stop (fn (stopping : Option Unit) =>
+        match stopping {
+            Option.some _ => Loop.stop_done,
+            Option.none => Agent.bind Loop.send (fn (turn : Turn) => loop_after_send turn),
+        })
+
 /// One full iteration: the budget first, then ask, then either
 /// dispatch-and-loop or finish. A spent budget ends the run through
 /// `cap_done` instead of erroring; the two ask-arms agree on
 /// `Agent Answered Done Unit`, which is what lets the value-level
 /// branch on the stop reason live INSIDE one indexed program -- the
 /// tool arm loops back to Idle via `append_results`, so the recursion
-/// closes at the same indices.
+/// closes at the same indices. The stop checks sit at the same
+/// boundaries; both end normally with the partial session.
 #[terminating]
 pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
     Agent.bind Loop.check_budget (fn (capped : Option Unit) =>
         match capped {
             Option.some _ => Loop.cap_done,
-            Option.none => Agent.bind Loop.send (fn (turn : Turn) => loop_after_send turn),
+            Option.none => loop_uncapped,
         })
 
 // ── Entry points ───────────────────────────────────────────────────────
@@ -454,7 +559,7 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 /// that wants no gate -- shuttle's own CLI and tests).
 pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=

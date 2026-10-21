@@ -50,8 +50,8 @@ def test_class_style_and_code_agree_on_the_enum : Bool :=
         && class_code LineClass.plain == ""
 
 #[test]
-def test_theme_status_style_manual_gray : Bool :=
-    theme_status_style Mode.manual == ({ style_default with dim := true, fg := some Color.bright_black } : TextStyle)
+def test_theme_status_style_manual_dim : Bool :=
+    theme_status_style Mode.manual == ({ style_default with dim := true } : TextStyle)
         && theme_status_style Mode.allow_edit == ({ style_default with dim := true, fg := some Color.yellow } : TextStyle)
         && theme_status_style Mode.auto == ({ style_default with dim := true, fg := some Color.red, bold := true } : TextStyle)
 
@@ -60,8 +60,8 @@ def test_theme_status_style_plan_green : Bool :=
     theme_status_style Mode.plan == ({ style_default with dim := true, fg := some Color.green } : TextStyle)
 
 #[test]
-def test_theme_status_code_manual_gray : Bool :=
-    theme_status_code Mode.manual == "\u{1b}[90;2m"
+def test_theme_status_code_manual_dim : Bool :=
+    theme_status_code Mode.manual == "\u{1b}[2m"
         && theme_status_code Mode.allow_edit == "\u{1b}[33;2m"
         && theme_status_code Mode.plan == "\u{1b}[32;2m"
         && theme_status_code Mode.auto == "\u{1b}[31;2;1m"

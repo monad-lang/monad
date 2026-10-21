@@ -40,13 +40,14 @@
 // spinner animates while it does). The loop owns every pending handle:
 // fork/poll happen only there, and each handle has exactly one consumer
 // (poll), which is what keeps the host's "already consumed / cancelled" eval
-// errors structurally unreachable. The input consequence is deliberately
-// the synchronous loop's: while a turn is pending the loop polls WITHOUT
-// reading (produce_poll_only) -- a second stdin reader would both race the
-// turn's modal overlay for every byte and, on a lost poll wake, block the
-// whole UI in `read_stdin_exact` (a blocking read). Keys typed mid-turn
-// buffer in the tty and drain the first normal read after the turn,
-// exactly as they did when `perform` blocked the frame.
+// errors structurally unreachable. While a turn is pending the loop
+// still reads stdin UNLESS the app's `reads_input` says a modal dialog on
+// the fiber owns it (produce_poll_only) -- a second stdin reader would
+// race that dialog for every byte and, on a lost poll wake, block the
+// whole UI in `read_stdin_exact` (a blocking read). Weaver's dialogs use
+// a small file handshake (`overlay.mo`): the dialog asks for stdin, the
+// app acks from `reads_input` only once it has stopped drawing, and the
+// loop clears + repaints when the dialog releases it.
 //
 // A `perform` that renders to the real terminal outside this loop's own
 // `view`/`render`/`diff` pipeline (an approval overlay is exactly this use
@@ -118,9 +119,9 @@ pub type Cmd (M : Type) {
     /// it every iteration and folds its result message in the moment the
     /// fiber completes. The loop owns the pending handle: fork and poll
     /// happen only there, so the fiber is consumed exactly once. While a
-    /// turn this command started is pending, the loop polls stdin
-    /// WITHOUT reading (see the header) -- mid-turn keys buffer until
-    /// the turn completes, exactly as in the synchronous `perform`.
+    /// turn this command started is pending, the loop keeps reading
+    /// stdin unless the app's `reads_input` yields it to a modal dialog
+    /// (see the header).
     perform_async (action : Unit -> IO M)
 }
 
@@ -144,12 +145,18 @@ pub type App (S : Type) (M : Type) {
     /// copies are the renderer's largest cost. The predicate sees the
     /// state BEFORE the batch folds: a tick whose effect only becomes
     /// visible after folding draws on the following tick.
+    ///
+    /// `reads_input` decides, once per iteration and only while a fiber
+    /// is pending, whether THIS loop may read stdin. Weaver returns false
+    /// while a modal dialog on the fiber owns stdin; the app must ack
+    /// only after it has stopped drawing (see `produce_for`).
     app_ticked (init : S)
         (on_event : Event -> M)
         (update : S -> M -> Pair S (Cmd M))
         (view : S -> Widget)
         (tick_ms : I64)
         (tick_redraw : S -> Bool)
+        (reads_input : S -> IO Bool)
 }
 
 /// The app loop. Enters the alternate screen and cbreak, then folds
@@ -178,7 +185,7 @@ def run_with_size {S : Type} {M : Type} (a : App S M) (size : Pair I64 I64) : IO
         Pair.pair rows cols =>
             match a {
                 App.app init _ _ vw _ => run_loop a (fn (_ : S) => true) init vw rows cols,
-                App.app_ticked init _ _ vw _ redraw => run_loop a redraw init vw rows cols,
+                App.app_ticked init _ _ vw _ redraw _ => run_loop a redraw init vw rows cols,
             }
     }
 
@@ -236,13 +243,13 @@ def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : 
         // polymorphic-`.mo`-def result is exactly where its inference
         // goes wrong -- `poll_turns`'s own comment).
         App.app _ on_ev upd vw tick_ms =>
-            loop_body a redraw on_ev upd vw tick_ms reader model prev pending turns,
-        App.app_ticked _ on_ev upd vw tick_ms _ =>
-            loop_body a redraw on_ev upd vw tick_ms reader model prev pending turns,
+            loop_body a redraw on_ev upd vw tick_ms (fn (_ : S) => IO.pure true) reader model prev pending turns,
+        App.app_ticked _ on_ev upd vw tick_ms _ reads =>
+            loop_body a redraw on_ev upd vw tick_ms reads reader model prev pending turns,
     }
 
 #[terminating]
-def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
+def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reads : S -> IO Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
     Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (Fiber M))) => do {
         match polled {
             Pair.pair tmsgs turns2 => do {
@@ -251,20 +258,27 @@ def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : 
                 // (which RUNS the deferred action) would then hang behind
                 // it.
                 let batched : List M := List.append pending tmsgs;
-                let out <- produce_for turns2 reader tick_ms;
+                let out <- produce_for turns2 reader tick_ms model reads;
                 after_produce a redraw upd vw on_ev model prev batched turns2 out
             }
         }
     })
 
-/// The cycle's read half, decided by the turn state: `produce` normally,
-/// `produce_poll_only` while a turn is pending (tui.mo's header carries
-/// the whole reason -- a second stdin reader would race the turn's modal
-/// overlay and block the UI on a lost wake).
-def produce_for {M : Type} (turns : List (Fiber M)) (reader : InputReader) (timeout_ms : I64) : IO (Pair (List Event) InputReader) :=
+/// The cycle's read half. With no pending fiber the loop always reads.
+/// While one runs, the app's `reads_input` decides: weaver returns true
+/// unless a modal dialog on the fiber owns stdin (it acks from inside
+/// that predicate only after its poll marked the overlay open, so its
+/// last draw is behind the ack). Declining the read uses
+/// `produce_poll_only` -- the frame clock and resizes keep flowing, and
+/// the fiber's dialog is the only stdin reader (a second reader would
+/// race it and, on a lost wake, block the UI in a blocking read).
+def produce_for {S : Type} {M : Type} (turns : List (Fiber M)) (reader : InputReader) (timeout_ms : I64) (model : S) (reads : S -> IO Bool) : IO (Pair (List Event) InputReader) :=
     match turns {
         List.empty => Input.produce reader timeout_ms,
-        List.cons _ _ => Input.produce_poll_only reader timeout_ms
+        List.cons _ _ => do {
+            let may <- reads model;
+            if may then Input.produce reader timeout_ms else Input.produce_poll_only reader timeout_ms
+        }
     }
 
 /// Every pending turn fiber, polled once. A fiber that has completed

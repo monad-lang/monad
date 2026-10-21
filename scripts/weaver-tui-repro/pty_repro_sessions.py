@@ -277,7 +277,10 @@ def main():
     master, pid = spawn(common + ["--resume", d], env)
     buf = bytearray(); pump(master, 1.8, buf)
     r1 = rss_kb(pid)
-    pump(master, 3.0, buf)
+    # Wrapping the 512-line tail (900-char lines) is the first frame's
+    # cost on the compiled backend (~5 s); the probe is about RSS, so
+    # allow it to finish before requiring the painted text.
+    pump(master, 8.0, buf)
     r2 = rss_kb(pid)
     frames6 = strip(buf.decode("utf-8", "replace"))
     finish(master, pid)

@@ -147,7 +147,7 @@ def task_result (id : String) (log : Option Logger) (store : Option StoreState) 
     }
 
 def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreState)
-        (id : String) (j : Json) : ResultT String IO Content :=
+        (stop : Unit -> IO Bool) (id : String) (j : Json) : ResultT String IO Content :=
     match TaskArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (Content.tool_result id e true))),
         Result.ok args =>
@@ -156,7 +156,8 @@ def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreS
                 let sess : Session := child_session cfg args.prompt;
                 let st : RunState := { session := sess, reg := Subagent.read_registry, turns_left := n,
                     emit := child_emit log, gate := Gate.read_only, always := List.empty,
-                    retries := 1, sleep_ms := silent_sleep, on_usage := child_usage log };
+                    retries := 1, sleep_ms := silent_sleep, on_usage := child_usage log,
+                    should_stop := stop, stopped := false };
                 let _ <- Logs.info log (String.concat "ev=subagent_start turns=" (I64.to_string n));
                 let r <- ResultT.run (Loop.run_state st);
                 let c <- task_result id log store r;
@@ -165,7 +166,8 @@ def run_task (cfg : ProviderConfig) (log : Option Logger) (store : Option StoreS
     }
 
 /// The per-turn `task` tool. The registry is built each turn so the child
-/// uses the CURRENT provider/model and the run's store/log.
+/// uses the CURRENT provider/model and the run's store/log; `stop` is the
+/// parent's stop predicate, so Esc also ends a child at its boundaries.
 pub def Subagent.task_tool (cfg : ProviderConfig) (log : Option Logger)
-        (store : Option StoreState) : ToolImpl :=
-    { spec := Subagent.spec, cap := Capability.exec, run := run_task cfg log store }
+        (store : Option StoreState) (stop : Unit -> IO Bool) : ToolImpl :=
+    { spec := Subagent.spec, cap := Capability.exec, run := run_task cfg log store stop }

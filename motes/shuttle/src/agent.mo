@@ -56,10 +56,20 @@ pub struct RunState {
     /// copy of the session is the pre-turn snapshot, so this seam is how
     /// a live token count reaches it mid-turn.
     on_usage : Usage -> IO Unit,
+    /// The cooperative stop seam, checked before a model call and after
+    /// one (before tools dispatch). It runs on the loop's own thread and
+    /// never serializes; an interactive caller backs it with a signal.
+    should_stop : Unit -> IO Bool,
+    /// Set when the loop ended because `should_stop` fired. The session
+    /// is a normal partial result, never an error.
+    stopped : Bool,
 }
 
 /// The usage hook's default: do nothing.
 pub def silent_usage (u : Usage) : IO Unit := IO.pure unit
+
+/// The stop seam's default: never stop.
+pub def silent_stop (u : Unit) : IO Bool := IO.pure false
 
 /// The sleep seam's default: no timed-wait native exists (no new
 /// natives -- the recorded owner decision) and the headless default
