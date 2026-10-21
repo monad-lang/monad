@@ -105,3 +105,30 @@ requires an 18 MB session to raise startup RSS no more than 10 MB over a
 tiny-session baseline, flat while idle. The temp root is pid-qualified
 and removed at exit unless `WV_SESSION_KEEP` is set; `WV_SESSION_TMP`
 chooses its parent.
+
+## Input (`pty_repro_input.py`)
+
+Asserts the input caret is visible on the initial frame and after a
+submit, a click before a character places the caret (typing `X` gives
+`hXello`), and a drag across the input copies its text through OSC 52.
+
+## Large plans (`pty_repro_bigplan.py`)
+
+A generated 100 KB / 2000-line plan: the tail paints promptly, Home
+reaches the first line, `/plan` opens promptly, an 8 KB bracketed paste
+into the note completes, and Esc still closes the dialog. This is the
+compiled-backend gate for the linear text pipeline (interpreted tests
+cannot see the quadratic).
+
+## Processes (`pty_repro_processes.py`)
+
+A scripted turn calls `start_process` (an `exec sleep 30`), the approval
+dialog is answered, `/processes` shows the task as running, and
+`/processes kill <id>` reports killed; the pid is gone afterwards.
+
+## Crash log (`pty_repro_crash.py`)
+
+Spawns weaver with `WEAVER_LOG_DIR`/`WEAVER_DEBUG_LOG`, SIGKILLs the
+first run, restarts, and asserts the restart prints the previous-session
+warning and logs `ev=crash_detected`; a clean `/quit` writes
+`ev=process_exit`.

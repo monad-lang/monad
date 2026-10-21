@@ -53,6 +53,11 @@ tui_app.mo         the TUI's IO half: TuiApp.update (closes over a
                    model turn or a slash command via Cmd.perform),
                    Gate.weaver_tui (the approval overlay), Tui.run
 providers.mo       the provider presets (host, key env var, wire)
+format.mo          token/elapsed display formatters (the thinking row)
+logs.mo            the debug log path/level/events and crash detector
+procs.mo           detached background processes (pid/log/meta files)
+process_tools.mo   start_process / read_process / kill_process / list_processes
+subagent.mo        the read-only `task` subagent (child Loop.run_state)
 main.mo            the entry: settings load, flag resolution, MCP
                    mount (proxy tools default exec-cap), Tui.run with
                    Dumb.run as its non-tty fallback
@@ -62,10 +67,13 @@ main.mo            the entry: settings load, flag resolution, MCP
 
 `monad run motes/weaver/src/main.mo` starts the TUI whenever stdin is a
 tty (the same `Terminal.enter_raw_mode` degrade check `terminal.mo`
-already uses for a non-tty stdin). The input box is 3 padded rows;
-Alt+Enter folds a newline into it (Enter submits the whole value, a
-multiline submission echoed on its own lines), and the arrow keys pull
-prompt history -- ArrowUp recalls from an empty input, repeats walk
+already uses for a non-tty stdin). The input box is 3 padded rows
+with a visible reverse-block caret from the first frame (over the
+placeholder, after every submit, and wherever a click lands); a left drag
+selects input text and copies it through OSC 52, and typing or Backspace
+replaces the selection. Alt+Enter folds a newline into it (Enter submits
+the whole value, a multiline submission echoed on its own lines), and the
+arrow keys pull prompt history -- ArrowUp recalls from an empty input, repeats walk
 backward, ArrowDown steps forward back to the live edit. The mouse
 wheel scrolls the transcript (3 rows a notch); a left DRAG selects
 transcript text (reverse-video while dragging) and releasing copies it
@@ -84,9 +92,10 @@ message taller than the panel is fully reachable. Enter submits a line
 and blocks the UI for that one turn
 or slash command -- there is no non-blocking fiber-poll primitive in
 `std/concurrent` to animate a spinner meanwhile, so the wait is what a
-turn costs; what the model streams meanwhile shows on the status row
-(`[thinking] ...`, overwritten in place, wiped when the turn's
-transcript lands). An approval prompt (`manual`/`allow_edit`'s `ask`
+turn costs; while the turn runs, a dim line under the last prompt shows the
+spinner, elapsed time and the session's token totals
+(`| thinking 3.4s · ↑1.2k ↓345`), refreshed by a 1 Hz read of the
+turn's usage file; it disappears when the result lands. An approval prompt (`manual`/`allow_edit`'s `ask`
 cells) opens a centered dialog: the diff for a `write`/`edit` pick,
 then `Approve once` / `Always allow all <cap>s this session` / `Deny`
 with the safe option highlighted. Arrows (or j/k) select, Enter
@@ -147,6 +156,8 @@ warning flag shuttle's loop prints.
 /provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider
 /plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode
 /tools                               list tools with their capability tags
+/processes [kill <id>]               list background tasks (a snapshot)
+/log                                 the debug log path, tail and crash note
 /mcp                                 list mounted MCP servers
 /save <file>                         checkpoint the session
 /resume <file>                       continue a saved session (budget spans both halves)
@@ -166,6 +177,39 @@ instead of a server-side `Invalid model`.
 MCP servers mount with `--mcp <executable>`; their proxy tools default
 to `exec` capability (a server's catalogue is arbitrary code) and are
 listed by `/mcp`.
+
+## Background processes
+
+`start_process {command, cwd}` launches a detached `sh -c` with merged
+stdout/stderr under `<sessions root>/procs/p-<pid>/` (`WEAVER_PROC_ROOT`
+overrides); `read_process {id}` returns status, elapsed time and the last
+40 output lines, `list_processes` lists them, and `kill_process {id}`
+sends TERM then KILL. `/processes` prints the same snapshot and accepts
+`kill <id>`. Tasks are killed when weaver exits (`WEAVER_PROC_KEEP` opts
+out). Limitations: no process group (a detached grandchild can survive a
+kill), the log file is not size-capped, and a task can outlive a weaver
+crash (its files remain under the proc root).
+
+## Logging and crash reports
+
+Each run appends an `ev=` event log under `<sessions root>/debug/`:
+startup/session, submits, turn outcomes and usage, settings warnings,
+retries, subagent events and `process_exit`. `WEAVER_LOG` sets the level
+(`trace|debug|info|warn|error|off`, default info), `WEAVER_LOG_DIR`
+the directory, `WEAVER_DEBUG_LOG` one exact file. API keys, prompts and
+file contents are never logged. A run that dies without `process_exit`
+is reported by the next launch (`warning: previous session ended
+unexpectedly (log: …)`) and logged as `crash_detected`; `/log` prints the
+newest log's path, last 20 lines and any crash note. The runtime has no
+signal handler/backtrace, so the last logged event is the crash-location
+evidence.
+
+## Subagents (design)
+
+`task {prompt, max_turns}` runs one read-only child loop (read/grep/glob,
+`Gate.read_only`, depth 1) and returns its plan plus a usage footer. The
+fuller roadmap (execute phase, `/agents`, background/parallel children,
+approval forwarding) is in [SUBAGENTS.md](SUBAGENTS.md).
 
 ## Settings
 

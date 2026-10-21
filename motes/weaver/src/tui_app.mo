@@ -16,6 +16,7 @@
 /// `Cmd.perform`-fires-a-forced-repaint rule is what cleans the real
 /// screen up again on the next ordinary frame.
 use shuttle::agent {RunState}
+use shuttle::registry {ToolRegistry}
 use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
@@ -876,7 +877,8 @@ def error_line (e : WeaverError) : TLine :=
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (log : Option Logger) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let _ <- write_usage st.store st.run.session.spent;
-    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode st.colors,
+    let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store) st.run.reg };
+    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors,
         emit := progress_live log st.store, on_usage := usage_live log st.store };
     let ready : RunState := append_user gated text;
     drive_loop ready
