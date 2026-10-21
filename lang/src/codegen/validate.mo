@@ -19,7 +19,8 @@
 /// block a build that never touches it.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::types {
-  Con, Decl, Def, Literal, MatchCase, Native, Term, binder_is_explicit, term_peel,
+  AttrArg, Attribute, Con, Decl, Def, Identifier, Literal, MatchCase, NamePath, Native,
+  Term, binder_is_explicit, id_eq, show_identifier, term_peel,
 }
 use lib::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::codegen::ctors {CtorClaim, collect_ctor_claims_inds}
@@ -41,6 +42,135 @@ use lib::codegen::util {
   dedup_strs, join_semicolon_msgs
 }
 use std::map {HashMap}
+
+/// An `#[extern "c"]` declaration names a symbol in a FOREIGN library. It
+/// must not bind a Monad runtime symbol (the `monad_*` functions in
+/// runtime/src/): those have the uniform i64 native ABI and a safe
+/// `#[native]` wrapper, which an extern call bypasses. If a mote needs
+/// runtime functionality, add a `#[native]` in init/std with the full
+/// wiring instead. This is checked over the reachable decls, like the
+/// other gates.
+#[partial]
+pub def validate_no_monad_externs (decl_list : List Decl) : Result String (List Decl) :=
+    let msgs := find_monad_externs (extract_defs decl_list) List.empty in
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (List.intercalate "; " msgs),
+    }
+
+#[partial]
+def find_monad_externs (defs : List Def) (acc : List String) : List String :=
+    match defs {
+        List.empty => acc,
+        List.cons d rest =>
+            match monad_extern_message d {
+                Option.none => find_monad_externs rest acc,
+                Option.some m => find_monad_externs rest (List.cons m acc),
+            }
+    }
+
+def monad_extern_message (d : Def) : Option String :=
+    match d {
+        Def.mk {name, attrs, ..} =>
+            match has_extern_attr attrs {
+                false => Option.none,
+                true =>
+                    match extern_link_name attrs {
+                        Option.some link => monad_extern_check name link,
+                        Option.none =>
+                            // No explicit link_name: the C symbol defaults
+                            // to the def's last name segment. After
+                            // qualification that segment may carry a
+                            // `modpath::` or `modpath.` prefix, so check
+                            // all three spellings.
+                            match name_path_last name {
+                                Option.none => Option.none,
+                                Option.some segment =>
+                                    if String.starts_with "monad_" segment
+                                       || String.contains segment "::monad_"
+                                       || String.contains segment ".monad_"
+                                    then Option.some (extern_message name segment)
+                                    else Option.none,
+                            },
+                    },
+            }
+    }
+
+/// Whether the def carries any `#[extern ...]` attribute. Without this,
+/// an ordinary def whose name happens to start with `monad_` would be
+/// treated as an extern and rejected.
+def has_extern_attr (attrs : List Attribute) : Bool :=
+    match attrs {
+        List.empty => false,
+        List.cons a rest =>
+            match a {
+                Attribute.mk aname _ =>
+                    if id_eq aname (Identifier.id "extern") then true else has_extern_attr rest,
+            }
+    }
+
+def extern_message (name : NamePath) (link : String) : String :=
+    String.concat_list
+        ["extern `", link, "` on `", name_path_to_str name,
+         "` binds a Monad runtime symbol; declare it as a #[native] in init/std instead"]
+
+def monad_extern_check (name : NamePath) (link : String) : Option String :=
+    if String.starts_with "monad_" link
+    then Option.some (extern_message name link)
+    else Option.none
+
+/// The last identifier of a name path, as written. Qualification may pack
+/// `modpath::name` into a single segment, which is why the caller also
+/// checks for a `::monad_` substring.
+def last_identifier_name (ids : List Identifier) : Option String :=
+    match ids {
+        List.empty => Option.none,
+        List.cons id rest =>
+            match rest {
+                List.empty => Option.some (show_identifier id),
+                List.cons _ _ => last_identifier_name rest,
+            }
+    }
+
+def name_path_last (name : NamePath) : Option String :=
+    match name {
+        NamePath.mk ids => last_identifier_name ids
+    }
+
+/// The explicit `link_name := "..."` of an `#[extern ...]` attribute, if
+/// any. The fallback symbol (the def's own last name segment) is checked
+/// in `monad_extern_message`.
+def extern_link_name (attrs : List Attribute) : Option String :=
+    match attrs {
+        List.empty => Option.none,
+        List.cons a rest =>
+            match a {
+                Attribute.mk aname aargs =>
+                    if id_eq aname (Identifier.id "extern")
+                    then find_link_name_arg aargs
+                    else extern_link_name rest,
+            }
+    }
+
+def link_name_value (v : AttrArg) : Option String :=
+    match v {
+        AttrArg.str s => Option.some s,
+        _ => Option.none,
+    }
+
+def find_link_name_arg (args : List AttrArg) : Option String :=
+    match args {
+        List.empty => Option.none,
+        List.cons a rest =>
+            match a {
+                AttrArg.named n v =>
+                    if id_eq n (Identifier.id "link_name")
+                    then link_name_value v
+                    else find_link_name_arg rest,
+                AttrArg.group group_args => find_link_name_arg group_args,
+                _ => find_link_name_arg rest,
+            }
+    }
 
 /// A bodyless `#[native X]` def compiles to a "return Unit" stub unless
 /// X is wired into the native backend somewhere -- a

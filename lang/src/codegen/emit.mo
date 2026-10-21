@@ -29,7 +29,8 @@ use lang::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   strip_db_lams, validate_no_colliding_def_symbols,
   report_elab_stats, strict_elab_enabled, validate_no_undesugared_struct_lits,
-  validate_no_unwired_natives, validate_native_target_availability,
+  validate_no_monad_externs, validate_no_unwired_natives,
+  validate_native_target_availability,
 }
 use lang::codegen::ctors {
   bare_ctor_tag, build_constructor_arity_map,
@@ -6207,9 +6208,10 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
             // otherwise compile to a stub only discovered as a runtime
             // SIGSEGV in the resulting binary (`String_to_list`'s v25
             // crash; see `validate_no_unwired_natives`'s own doc comment).
-            match validate_no_unwired_natives reachable_decls {
+            match gate_then (validate_no_unwired_natives reachable_decls)
+                            (validate_no_monad_externs reachable_decls) {
                 Result.err e => do {
-                    if verbose then do { fail_line ("FAILED at stage: validate_no_unwired_natives (" ++ e ++ ")"); return unit } else return unit;
+                    if verbose then do { fail_line ("FAILED at stage: validate_no_unwired_natives/validate_no_monad_externs (" ++ e ++ ")"); return unit } else return unit;
                     return (Result.err e)
                 },
                 Result.ok _ =>
