@@ -439,14 +439,27 @@ def take_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
         List.cons r rest => List.cons r (take_rows (n - 1) rest),
     }
 
+/// The display bound for one logical line. The stored transcript keeps the
+/// full text; only rendering truncates, so one enormous assistant message
+/// cannot make every repaint (and every row-count walk) arbitrarily large.
+/// The dialog preview has its own, stricter cap.
+pub def Model.display_cap_bytes : I64 := 262144
+
 /// One logical line, split on its own newlines and wrapped. The role flag
 /// styles every wrapped row, so a user line cannot be reclassified by a
 /// prefix it happens to start with.
 pub def Model.display_line (colors : Bool) (width : I64) (line : TLine) : List DisplayRow :=
     let style : TextStyle := theme_tline_style_with colors line.user line.text in
-    if String.is_empty line.text
-    then List.singleton (mk_row style "")
-    else List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines line.text))
+    let n : I64 := String.length line.text in
+    let truncated : Bool := I64.lt Model.display_cap_bytes n in
+    let text : String := if truncated then String.slice line.text 0 Model.display_cap_bytes else line.text in
+    let rows : List DisplayRow :=
+        if String.is_empty text
+        then List.singleton (mk_row style "")
+        else List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines text)) in
+    if truncated
+    then List.append rows [mk_row style "[truncated for display -- full text is in the session history]"]
+    else rows
 
 #[partial]
 pub def Model.rows_of_line (colors : Bool) (width : I64) (line : TLine) : I64 :=
@@ -732,9 +745,15 @@ pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
 pub def Model.append_block (m : TuiModel) (lines : List TLine) : TuiModel :=
     let block : List TLine := Transcript.next_block m.transcript lines in
     let tr2 : Transcript := Transcript.append m.transcript block in
-    let added : I64 := rows_of_lines m.state.colors (Model.content_width m) block in
-    let m2 : TuiModel := { m with transcript := tr2,
-        scroll := if m.scroll > 0 then m.scroll + added else 0 } in
+    // The row count is only needed to hold a SCROLLED view in place. A
+    // pinned view stays at 0, so the extra wrap of the whole block would
+    // be pure waste -- and for one huge message it was a visible freeze.
+    let m2 : TuiModel :=
+        if m.scroll > 0
+        then
+            let added : I64 := rows_of_lines m.state.colors (Model.content_width m) block in
+            { m with transcript := tr2, scroll := m.scroll + added }
+        else { m with transcript := tr2, scroll := 0 } in
     Model.refresh_rows m2
 
 /// A gapless append (the Ctrl+C hint): no separator row, and no scroll

@@ -555,12 +555,17 @@ def Json.escape_string (input : String) : String :=
 
 #[partial]
 def escape_string_pieces (input : String) (acc : List String) : List String :=
-  if is_empty input
-  then List.reverse acc
-  else
-    let width : I64 := utf8_char_width input in
-    let ch : String := String.slice input 0 width in
-    escape_string_pieces (String.drop width input) (List.cons (Json.escape_char ch) acc)
+  // `String.get s 0` is an O(1) byte read; `is_empty` is
+  // `String.length == 0`, a `strlen` of the whole REMAINING string on the
+  // compiled backend -- once per character, i.e. quadratic over a large
+  // message.
+  match String.get input 0 {
+    Option.none => List.reverse acc,
+    Option.some _ =>
+      let width : I64 := utf8_char_width input in
+      let ch : String := String.slice input 0 width in
+      escape_string_pieces (String.drop width input) (List.cons (Json.escape_char ch) acc),
+  }
 
 // ─── Serializer: numbers ───
 

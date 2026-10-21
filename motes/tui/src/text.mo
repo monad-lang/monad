@@ -161,18 +161,56 @@ def push_glyph (acc : List Glyph) (g : Glyph) : List Glyph :=
             else List.cons g acc,
     }
 
+/// The UTF-8 continuation length a lead byte announces: 1 for ASCII (and
+/// malformed leads), 2-4 for a multi-byte sequence. Pure byte math, no
+/// string walk.
+def utf8_need (b : U8) : I64 :=
+    let v : U32 := U8.to_u32 b in
+    if Bool.not (U32.lt 0x7Fu32 v) then 1
+    else if U32.beq (U32.and v 0xE0u32) 0xC0u32 then 2
+    else if U32.beq (U32.and v 0xF0u32) 0xE0u32 then 3
+    else if U32.beq (U32.and v 0xF8u32) 0xF0u32 then 4
+    else 1
+
+/// Take `n` bytes off the front: `(taken, rest)`.
 #[terminating]
-def glyphs_go (s : String) (off : I64) (acc : List Glyph) : List Glyph :=
-    if Bool.not (off < String.length s)
-    then List.reverse acc
-    else
-        let g : Glyph := Text.glyph_at s off in
-        glyphs_go s (off + g.bytes) (push_glyph acc g)
+def take_bytes (n : I64) (bs : List U8) (acc : List U8) : Pair (List U8) (List U8) :=
+    if n < 1
+    then Pair.pair (List.reverse acc) bs
+    else match bs {
+        List.empty => Pair.pair (List.reverse acc) List.empty,
+        List.cons b rest => take_bytes (n - 1) rest (List.cons b acc),
+    }
+
+/// One glyph from the front of the byte list. Decoding from bytes makes
+/// `Text.glyphs` a single linear pass: no per-glyph `String.length` (a
+/// `strlen` on the compiled backend) and no offset `String.slice` (which
+/// walks to the offset and allocates).
+#[terminating]
+def decode_glyph (bs : List U8) : Pair Glyph (List U8) :=
+    match bs {
+        List.empty => Pair.pair (mk_glyph " " 1 0) List.empty,
+        List.cons b0 rest =>
+            match take_bytes (utf8_need b0) bs List.empty {
+                Pair.pair got after =>
+                    let text : String := String.from_list got in
+                    Pair.pair (text_glyph text (List.length got)) after,
+            },
+    }
+
+#[terminating]
+def glyphs_go (bs : List U8) (acc : List Glyph) : List Glyph :=
+    match bs {
+        List.empty => List.reverse acc,
+        _ => match decode_glyph bs {
+            Pair.pair g rest => glyphs_go rest (push_glyph acc g),
+        },
+    }
 
 /// The string's glyphs, in order. Poison bytes are consumed one at a time as
 /// one-cell spaces.
 pub def Text.glyphs (s : String) : List Glyph :=
-    glyphs_go s 0 List.empty
+    glyphs_go (String.to_list s) List.empty
 
 #[terminating]
 def width_go (gs : List Glyph) (acc : I64) : I64 :=
@@ -185,20 +223,20 @@ def width_go (gs : List Glyph) (acc : I64) : I64 :=
 pub def Text.width (s : String) : I64 := width_go (Text.glyphs s) 0
 
 #[terminating]
-def take_width_go (gs : List Glyph) (budget : I64) (used : I64) (acc : String) : String :=
+def take_width_go (gs : List Glyph) (budget : I64) (used : I64) (acc : List String) : List String :=
     match gs {
-        List.empty => acc,
+        List.empty => List.reverse acc,
         List.cons g rest =>
             if budget < used + g.width
-            then acc
-            else take_width_go rest budget (used + g.width) (String.concat acc g.text),
+            then List.reverse acc
+            else take_width_go rest budget (used + g.width) (List.cons g.text acc),
     }
 
 /// The longest prefix of `s` that fits in `w` cells; never splits a glyph.
 /// A first glyph wider than `w` yields `""` (the caller decides whether to
 /// paint it alone).
 pub def Text.take_width (s : String) (w : I64) : String :=
-    take_width_go (Text.glyphs s) w 0 ""
+    String.concat_list (take_width_go (Text.glyphs s) w 0 List.empty)
 
 #[terminating]
 def drop_cols_go (gs : List Glyph) (n : I64) (used : I64) : Pair String I64 :=
@@ -211,11 +249,16 @@ def drop_cols_go (gs : List Glyph) (n : I64) (used : I64) : Pair String I64 :=
     }
 
 #[terminating]
-def join_glyphs (gs : List Glyph) : String :=
+def glyph_texts (gs : List Glyph) (acc : List String) : List String :=
     match gs {
-        List.empty => "",
-        List.cons g rest => String.concat g.text (join_glyphs rest),
+        List.empty => List.reverse acc,
+        List.cons g rest => glyph_texts rest (List.cons g.text acc),
     }
+
+/// One allocation's join: a right-nested `String.concat` re-copies the
+/// accumulated prefix on every glyph (quadratic on the compiled backend).
+def join_glyphs (gs : List Glyph) : String :=
+    String.concat_list (glyph_texts gs List.empty)
 
 /// Drop `n` complete display columns from the front: `(rest, dropped)`.
 /// A wide glyph straddling the boundary is kept (the window starts a column
@@ -281,21 +324,21 @@ pub def Text.byte_at_col (s : String) (c : I64) : I64 :=
     byte_at_col_go (Text.glyphs s) c 0 0
 
 #[terminating]
-def slice_cols_go (gs : List Glyph) (c0 c1 : I64) (col : I64) (acc : String) : String :=
+def slice_cols_go (gs : List Glyph) (c0 c1 : I64) (col : I64) (acc : List String) : List String :=
     match gs {
-        List.empty => acc,
+        List.empty => List.reverse acc,
         List.cons g rest =>
             let start : I64 := col in
             let end : I64 := col + g.width in
             let hit : Bool := Bool.and (Bool.not (end < c0 + 1)) (Bool.not (c1 < start + 1)) in
-            let acc2 : String := if hit then String.concat acc g.text else acc in
+            let acc2 : List String := if hit then List.cons g.text acc else acc in
             slice_cols_go rest c0 c1 end acc2,
     }
 
 /// The text covering display columns `[c0, c1)`. A wide glyph that the
 /// range intersects is included whole; zero-width marks ride with it.
 pub def Text.slice_cols (s : String) (c0 : I64) (c1 : I64) : String :=
-    if Bool.not (c0 < c1) then "" else slice_cols_go (Text.glyphs s) c0 c1 0 ""
+    if Bool.not (c0 < c1) then "" else String.concat_list (slice_cols_go (Text.glyphs s) c0 c1 0 List.empty)
 
 #[terminating]
 def pad_go (n : I64) (acc : String) : String :=
@@ -365,19 +408,23 @@ def wrap_split_go (gs : List Glyph) (w : I64) (used : I64) (line_rev : List Glyp
 def wrap_split (w : I64) (gs : List Glyph) : WrapSplit :=
     wrap_split_go gs w 0 List.empty List.empty List.empty
 
+/// Drop the glyphs after the last non-space, from a reversed list. One
+/// reverse in, at most one out -- the old trailing-space test re-scanned
+/// the whole remainder for every row (quadratic on long lines).
 #[terminating]
-def all_spaces (gs : List Glyph) : Bool :=
-    match gs {
-        List.empty => true,
-        List.cons g rest => Bool.and (g.text == " ") (all_spaces rest),
+def drop_trailing_go (rev : List Glyph) : List Glyph :=
+    match rev {
+        List.empty => List.empty,
+        List.cons g rest => if g.text == " " then drop_trailing_go rest else List.reverse rev,
     }
+
+def drop_trailing_spaces (gs : List Glyph) : List Glyph :=
+    drop_trailing_go (List.reverse gs)
 
 #[terminating]
 def wrap_go (w : I64) (gs : List Glyph) : List String :=
     let split : WrapSplit := wrap_split w gs in
     if Bool.not split.broke
-    then List.cons (join_glyphs split.line) List.empty
-    else if all_spaces split.rest
     then List.cons (join_glyphs split.line) List.empty
     else List.cons (join_glyphs split.line) (wrap_go w split.rest)
 
@@ -389,7 +436,12 @@ pub def Text.wrap (width : I64) (line : String) : List String :=
     let w : I64 := if width < 1 then 1 else width in
     if String.is_empty line
     then [""]
-    else wrap_go w (Text.glyphs line)
+    else
+        let gs : List Glyph := Text.glyphs line in
+        let trimmed : List Glyph := drop_trailing_spaces gs in
+        // A line of only spaces keeps its old single row; an ordinary
+        // line is wrapped from the trimmed glyph list.
+        if List.is_empty trimmed then [join_glyphs gs] else wrap_go w trimmed
 
 // ==================== tests ====================
 
@@ -437,6 +489,9 @@ def test_width_combining : Bool := Text.width "e\u{301}" == 1
 
 #[test]
 def test_wrap_trailing_space_drops_the_empty_row : Bool := Text.wrap 3 "abc " == ["abc"]
+
+#[test]
+def test_wrap_all_spaces_keeps_one_row : Bool := Text.wrap 3 "   " == ["   "]
 
 #[test]
 def test_wrap_leading_space_is_not_a_break : Bool := Text.wrap 3 " abc" == [" ab", "c"]

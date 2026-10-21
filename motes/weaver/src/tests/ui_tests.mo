@@ -21,6 +21,7 @@ use weaver::model {
     Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
     Model.page_request, Model.visible_rows, scroll_indicator, panel_height,
     Model.display_rows, Model.content_width, DisplayRow,
+    Model.display_line, Model.display_cap_bytes,
 }
 use weaver::store {TLine, TLine.plain, TranscriptPage, Transcript.with_page}
 
@@ -224,6 +225,17 @@ def test_scrolled_window_keeps_the_indicator : Bool :=
 /// One 2000-character line wraps to 27 rows (76 + 26*76 + 24). Pinned,
 /// the panel shows the LAST 18; at max scroll it shows the FIRST 17.
 /// Every row of the message is reachable -- the bug this unit fixes.
+/// The display cap keeps one enormous logical line from making every
+/// repaint and row-count walk unbounded; the marker says where the rest is.
+#[test]
+def test_display_line_caps_an_enormous_line : Bool :=
+    let long : String := String.repeat "x" (Model.display_cap_bytes + 1) in
+    let rows : List DisplayRow := Model.display_line false 80 (TLine.plain long) in
+    match List.reverse rows {
+        List.cons last _ => String.contains last.text "truncated for display",
+        List.empty => false,
+    }
+
 #[test]
 def test_a_message_taller_than_the_panel_is_fully_reachable : Bool :=
     let m := Model.append_block model_of [TLine.plain (String.repeat "z" 2000)] in

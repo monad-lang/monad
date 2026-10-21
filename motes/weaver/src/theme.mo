@@ -133,29 +133,39 @@ pub def Theme.tint (colors : Bool) (text : String) : String :=
 
 /// One line per `\n`; a trailing newline keeps its empty last line so
 /// the join reproduces the text's own shape.
-#[partial]
+///
+/// ONE pass over the byte list. The old per-byte `String.length` and
+/// one-byte `String.slice` are `strlen` and an O(offset) copy on the
+/// compiled backend, i.e. quadratic in the message -- a long plan froze
+/// the TUI before it could paint.
 pub def theme_split_lines (s : String) : List String :=
-    if String.is_empty s then List.empty else split_go s 0 0
+    if String.is_empty s then List.empty else split_bytes (String.to_list s) List.empty List.empty
 
 #[terminating]
-def split_go (s : String) (i : I64) (line_start : I64) : List String :=
-    if Bool.not (i < String.length s)
-    then List.cons (String.drop line_start s) List.empty
-    else if String.slice s i 1 == "\n"
-    then List.cons (String.slice s line_start (i - line_start)) (split_go s (i + 1) (i + 1))
-    else split_go s (i + 1) line_start
-
-/// Join the per-line tints back, `"\n"`-separated, in order.
-#[terminating]
-def theme_tint_text (lines : List String) : String :=
-    match lines {
-        List.empty => "",
-        List.cons l rest =>
-            match rest {
-                List.empty => theme_wrap l,
-                _ => String.concat (theme_wrap l) (String.concat "\n" (theme_tint_text rest)),
-            },
+def split_bytes (bs : List U8) (cur : List U8) (acc : List String) : List String :=
+    match bs {
+        List.empty => List.reverse (List.cons (String.from_list (List.reverse cur)) acc),
+        List.cons b rest =>
+            if U8.beq b 10u8
+            then split_bytes rest List.empty (List.cons (String.from_list (List.reverse cur)) acc)
+            else split_bytes rest (List.cons b cur) acc,
     }
+
+/// Join the per-line tints back, `"\n"`-separated, in order. Pieces + one
+/// `String.concat_list`; the old right-nested concat re-copied the tail for
+/// every line.
+#[terminating]
+def tint_pieces (lines : List String) (first : Bool) (acc : List String) : List String :=
+    match lines {
+        List.empty => List.reverse acc,
+        List.cons l rest =>
+            let acc1 : List String :=
+                if first then acc else List.cons "\n" acc in
+            tint_pieces rest false (List.cons (theme_wrap l) acc1),
+    }
+
+def theme_tint_text (lines : List String) : String :=
+    String.concat_list (tint_pieces lines true List.empty)
 
 /// A single line's wrap: class -> SGR code around it; a blank line and
 /// an unclassified line pass through bare.

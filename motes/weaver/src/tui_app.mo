@@ -60,11 +60,11 @@ use weaver::dialog {
 use tui::terminal {
     Terminal.clear_screen, Terminal.cursor_move, Terminal.enter_raw_mode, Terminal.poll, Terminal.size,
 }
-use tui::input {Input.decode}
+use tui::input {Input.step, InputReader, input_reader}
 use tui::tui {App, Cmd, run_app}
 use init::transformers {ResultT}
 use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout}
-use std::list {List.intercalate}
+use std::list {List.intercalate, List.length}
 
 // ── Tui.run: the tty probe and the App wiring ───────────────────────────
 
@@ -892,7 +892,7 @@ def prompt_overlay (colors : Bool) (p : Pick) : IO Approval := do {
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
     let d : Dialog := Dialog.make "Permission required" subtitle body [o0, o1, o2];
     let default_idx : I64 := if cap_is_read p.cap then 0 else 2;
-    let pr <- dialog_loop colors (Dialog.with_default d default_idx);
+    let pr <- dialog_run colors (Dialog.with_default d default_idx);
     match pr {
         Pair.pair final step => match step {
             DialogStep.choose i => IO.pure (approval_with_note i (Dialog.note_text final)),
@@ -939,10 +939,33 @@ def last_assistant_go (ms : List Message) : Option String :=
             },
     }
 
+/// Display bounds for a plan preview. The full text stays in the session
+/// transcript/history; the dialog only ever wraps this prefix, so a huge
+/// plan cannot stall the UI.
+def plan_preview_bytes : I64 := 65536
+def plan_preview_lines : I64 := 400
+
+#[partial]
+def take_lines (n : I64) (ls : List String) : List String :=
+    if n < 1 then List.empty
+    else match ls {
+        List.empty => List.empty,
+        List.cons l rest => List.cons l (take_lines (n - 1) rest),
+    }
+
+def plan_body_of (content : String) : List String :=
+    let n : I64 := String.length content in
+    let capped : String := if plan_preview_bytes < n then String.slice content 0 plan_preview_bytes else content in
+    let all : List String := theme_split_lines capped in
+    let lines : List String := take_lines plan_preview_lines all in
+    if Bool.or (plan_preview_bytes < n) (plan_preview_lines < List.length all)
+    then List.append lines ["[plan preview truncated -- full plan is in the transcript/history]"]
+    else lines
+
 def plan_body (st : WeaverState) : List String :=
     match last_assistant_go (List.reverse st.run.session.history) {
         Option.none => ["(no plan message found -- keep planning, then /plan again)"],
-        Option.some content => theme_split_lines content,
+        Option.some content => plan_body_of content,
     }
 
 def plan_effect (st : WeaverState) (output : String) : Effect := Effect.ok st output
@@ -971,7 +994,7 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg := do {
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
     let d : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let pr <- dialog_loop st.colors d;
+    let pr <- dialog_run st.colors d;
     match pr {
         Pair.pair final step => match step {
             DialogStep.choose i =>
@@ -1072,12 +1095,15 @@ def dialog_note_row (colors : Bool) (d : Dialog) (width : I64) : List DisplayRow
 
 /// The dialog's visible rows. The body yields to the fixed rows on a
 /// short terminal, so the options, note and footer stay visible.
-def dialog_rows (colors : Bool) (d : Dialog) (width : I64) (height : I64) : List DisplayRow :=
+/// The dialog's visible rows. The wrapped body is computed ONCE by the
+/// caller (`render_dialog`) and reused for the height and the visible
+/// slice: wrapping a large plan twice per render, every 100 ms, was the
+/// dialog's own freeze.
+def dialog_rows (colors : Bool) (d : Dialog) (width : I64) (height : I64) (body_all : List DisplayRow) : List DisplayRow :=
     let budget : I64 := if height - 4 < 1 then 1 else height - 4 in
     let nopts : I64 := Dialog.option_count d in
     let fixed : I64 := 2 + 1 + 1 + nopts + 1 + 1 + 1 in
     let body_budget : I64 := if budget - fixed < 1 then 0 else budget - fixed in
-    let body_all : List DisplayRow := dialog_body_rows colors width d.body in
     let body : List DisplayRow := take_rows body_budget (drop_rows d.scroll body_all) in
     let title_rows : List DisplayRow := List.map bold_row (Model.display_line colors width (TLine.plain d.title)) in
     let subtitle_rows : List DisplayRow := List.map dim_row (Model.display_line colors width (TLine.plain d.subtitle)) in
@@ -1093,10 +1119,9 @@ def dialog_rows (colors : Bool) (d : Dialog) (width : I64) (height : I64) : List
     let all : List DisplayRow := List.append h foot in
     take_rows budget all
 
-def dialog_total_rows (colors : Bool) (d : Dialog) (width : I64) : I64 :=
+def dialog_total_rows (d : Dialog) (body_all : List DisplayRow) : I64 :=
     let nopts : I64 := Dialog.option_count d in
-    let body : I64 := list_length_rows (dialog_body_rows colors width d.body) in
-    body + nopts + 7
+    list_length_rows body_all + nopts + 7
 
 def dialog_widget (colors : Bool) (rows : List DisplayRow) : Widget :=
     Widget.column [
@@ -1111,11 +1136,12 @@ def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {
             let raw_w : I64 := cols - 4;
             let width : I64 := if raw_w < 20 then (if raw_w < 1 then 1 else raw_w) else (if raw_w < 88 then raw_w else 88);
             let content_w : I64 := if width - 4 < 1 then 1 else width - 4;
-            let total : I64 := dialog_total_rows colors d content_w;
+            let body_all : List DisplayRow := dialog_body_rows colors content_w d.body;
+            let total : I64 := dialog_total_rows d body_all;
             let max_h : I64 := if rows - 2 < 6 then 6 else rows - 2;
             let wanted : I64 := total + 4;
             let height : I64 := if wanted < max_h then wanted else max_h;
-            let body : List DisplayRow := dialog_rows colors d content_w height;
+            let body : List DisplayRow := dialog_rows colors d content_w height body_all;
             let rect : Rect := center_rect_in (mk_rect 0 0 cols rows) width height;
             Terminal.clear_screen;
             Terminal.cursor_move 0 0;
@@ -1127,49 +1153,87 @@ def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {
     }
 }
 
-/// The modal loop: repaint, then poll for a key with a timeout (a resize
-/// while the dialog blocks is noticed on the next timeout). The final
-/// dialog rides along so the caller can read the note.
-#[partial]
-def dialog_loop (colors : Bool) (d : Dialog) : IO (Pair Dialog DialogStep) := do {
-    let _ <- render_dialog colors d;
-    let ready <- Terminal.poll 100;
-    if Bool.not ready
-    then dialog_loop colors d
-    else do {
-        let eopt <- dialog_event_loop "";
-        match eopt {
-            Option.none => IO.pure (Pair.pair d DialogStep.cancel),
-            Option.some e => match e {
-                Event.key k => match Dialog.step d k {
-                    Pair.pair d2 step => match step {
-                        DialogStep.continue => dialog_loop colors d2,
-                        _ => IO.pure (Pair.pair d2 step),
-                    },
-                },
-                Event.paste text => dialog_loop colors (Dialog.paste d text),
-                _ => dialog_loop colors d,
+/// Two terminal sizes are the same.
+def same_size (a : Pair I64 I64) (b : Pair I64 I64) : Bool :=
+    match a {
+        Pair.pair ar ac => match b {
+            Pair.pair br bc => Bool.and (ar == br) (ac == bc),
+        },
+    }
+
+/// Fold one decoded event into the dialog; `some` ends the modal.
+def dialog_apply (d : Dialog) (e : Event) : Pair Dialog (Option DialogStep) :=
+    match e {
+        Event.key k => match Dialog.step d k {
+            Pair.pair d2 step => match step {
+                DialogStep.continue => Pair.pair d2 Option.none,
+                _ => Pair.pair d2 (Option.some step),
             },
-        }
+        },
+        Event.paste text => Pair.pair (Dialog.paste d text) Option.none,
+        _ => Pair.pair d Option.none,
+    }
+
+/// One byte through `Input.step` -- the same decoder the main loop uses,
+/// including its linear bracketed-paste accumulator. EOF closes the reader.
+def dialog_read (r : InputReader) : IO (Pair (List Event) InputReader) := do {
+    let chunk <- IO.read_stdin_exact 1;
+    if String.length chunk == 0
+    then
+        let closed_reader : InputReader := { r with closed := true } in
+        IO.pure (Pair.pair List.empty closed_reader)
+    else IO.pure (Input.step r List.empty chunk)
+}
+
+/// The modal loop: repaint when the dialog or the terminal size changed,
+/// then poll for input. Events a read decodes are queued and folded in
+/// order. A lone ESC cancels; any other incomplete prefix stays pending in
+/// the reader -- the loop is never blocked on it (the old code re-entered
+/// a blocking read for an `ESC[` prefix). Re-rendering only on change also
+/// stops re-wrapping a large body every 100 ms.
+#[partial]
+def dialog_loop (colors : Bool) (d : Dialog) (r : InputReader) (queued : List Event) (last : Option (Pair I64 I64)) : IO (Pair Dialog DialogStep) := do {
+    let size <- Terminal.size;
+    let need : Bool := match last {
+        Option.none => true,
+        Option.some p => Bool.not (same_size p size),
+    };
+    let _ <- if need then render_dialog colors d else IO.pure unit;
+    match queued {
+        List.cons e rest =>
+            match dialog_apply d e {
+                Pair.pair d2 step => match step {
+                    Option.some s => IO.pure (Pair.pair d2 s),
+                    Option.none => dialog_loop colors d2 r rest Option.none,
+                },
+            },
+        List.empty => do {
+            let ready <- Terminal.poll 100;
+            if Bool.not ready
+            then
+                if r.closed
+                then IO.pure (Pair.pair d DialogStep.cancel)
+                else if r.pending == "\u{1b}"
+                then IO.pure (Pair.pair d DialogStep.cancel)
+                else dialog_loop colors d r List.empty (Option.some size)
+            else do {
+                let got <- dialog_read r;
+                match got {
+                    Pair.pair evs r2 =>
+                        if Bool.and r2.closed (List.is_empty evs)
+                        then IO.pure (Pair.pair d DialogStep.cancel)
+                        else dialog_loop colors d r2 evs (Option.some size),
+                }
+            }
+        },
     }
 }
 
-#[terminating]
-def dialog_event_loop (pending : String) : IO (Option Event) := do {
-    let chunk <- IO.read_stdin_exact 1;
-    if String.length chunk == 0
-    then IO.pure Option.none
-    else match Input.decode (pending ++ chunk) {
-        Pair.pair evs leftover => match evs {
-            List.empty =>
-                if leftover == "\u{1b}"
-                then do {
-                    // A lone ESC: give a split sequence 50 ms to finish,
-                    // otherwise it is the Escape key.
-                    let more <- Terminal.poll 50;
-                    if more then dialog_event_loop leftover else IO.pure (Option.some (Event.key Key.escape))
-                } else dialog_event_loop leftover,
-            List.cons e _ => IO.pure (Option.some e),
-        },
+/// Open a dialog over a fresh input reader sized to the terminal. The
+/// final dialog rides along so the caller can read the note.
+def dialog_run (colors : Bool) (d : Dialog) : IO (Pair Dialog DialogStep) := do {
+    let size <- Terminal.size;
+    match size {
+        Pair.pair rows cols => dialog_loop colors d (input_reader rows cols) List.empty Option.none,
     }
 }
