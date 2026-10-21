@@ -1,0 +1,18 @@
+# monad-sql: the backend-agnostic database layer.
+#
+# Types, the `Backend` class, the `DbM` transformer stack, and the pure
+# migration planner. No `[link]`: this mote has no C dependency; a driver
+# declares the library it binds (motes/sqlite's `[link] libs = ["sqlite3"]`).
+#
+# `init` and `std` are ambient; declared anyway, as every manifest here
+# does. Sub-table headers, not inline tables, for the self-hosted reader.
+[mote]
+name = "sql"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
