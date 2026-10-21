@@ -393,3 +393,22 @@ before proceeding; ask for direction rather than silently picking a fix.
   (`.github/workflows/ci.yml`); do not pay them per commit locally, but run
   them before pushing anything that touches the compiler.
 - When an agent: the user saying "don't run tests" includes not committing.
+
+### Finishing a plan
+
+When a plan item or plan is done and its checks pass, finish it through a PR:
+
+1. **Open the PR**: push the branch, then open a PR against `main` whose
+   description headlines what changed and why, taken from `<base>...HEAD`
+   (`git log <base>..HEAD`, `git diff <base>...HEAD`); list the checks run.
+2. **Review it**: read the full `gh pr diff <n>`, then post the review to the
+   PR itself — `gh pr review <n> --comment --body-file -`, or
+   `gh pr comment <n> --body-file -` if GitHub rejects a self-review — with
+   findings anchored to file:line.
+3. **Fix by fixup**: one `git commit --fixup=<target-sha>` per finding, hooks
+   enabled (fixup subjects are exempt from the `scope:` rule). Never edit a
+   `fixup!` subject: autosquash matches it verbatim.
+4. **Squash and push**: `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash
+   <base>`, rerun the checks the findings move, then
+   `git push --force-with-lease private HEAD:<branch>`. The PR head is the
+   squashed result; no fixup commit is left on the branch.
