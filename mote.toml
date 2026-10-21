@@ -40,6 +40,7 @@ members = [
   "motes/ffi_example",
   "motes/http",
   "motes/json",
+  "motes/log",
   "motes/lsp",
   "motes/mcp_client",
   "motes/monadup",

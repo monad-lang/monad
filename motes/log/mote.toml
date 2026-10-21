@@ -1,0 +1,17 @@
+# The leveled logging mote (plans/library-ideas/logging.md): levels,
+# per-logger filtering, structured key/value fields, and stdout/stderr/
+# file/custom sinks over primitives that already exist.
+#
+# Sub-table headers, not inline tables: the self-hosted TOML reader only
+# parses headers, and an unreadable manifest silently disables the
+# declared-dependency check.
+[mote]
+name = "log"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
