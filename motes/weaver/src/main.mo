@@ -17,7 +17,7 @@ use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
 use shuttle::gate {Capability, Gate, Gate.auto}
 use shuttle::registry {ToolRegistry}
-use shuttle::agent {RunState, silent_sleep}
+use shuttle::agent {RunState, silent_sleep, silent_usage}
 use shuttle::session {Session, Session.load}
 use shuttle::context {usage_zero}
 use shuttle::provider {ProviderConfig}
@@ -409,7 +409,7 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
 /// `Gate.auto` here is never consulted.
 def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) : WeaverState :=
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
-    let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep } in
+    let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage } in
     let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false, colors := colors, fatal := Option.none, store := store } in
     st
 

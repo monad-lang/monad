@@ -19,6 +19,7 @@ def cmds_be {M : Type} (a : Cmd M) (b : Cmd M) : Bool :=
         Cmd.quit => match b { Cmd.quit => true, _ => false },
         Cmd.dispatch _ => match b { Cmd.dispatch _ => true, _ => false },
         Cmd.perform _ => match b { Cmd.perform _ => true, _ => false },
+        Cmd.inspect _ => match b { Cmd.inspect _ => true, _ => false },
         // NOTE: every future Cmd variant needs an arm here -- this match
         // is exhaustive on purpose, so a new variant cannot slip through
         // the table tests silently.

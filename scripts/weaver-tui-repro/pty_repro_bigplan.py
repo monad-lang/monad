@@ -15,6 +15,73 @@ PLAN_LINES = 2000
 LINE = "PLAN-LINE-%04d inspect the module and propose the next step in detail"
 
 
+class Grid:
+    """Cursor moves, ESC[2J, printable UTF-8; SGR ignored."""
+    def __init__(self, rows, cols):
+        self.rows, self.cols = rows, cols
+        self.cells = [[" "] * cols for _ in range(rows)]
+        self.row = self.col = 0
+        self.state, self.seq, self.utf8 = "text", "", b""
+
+    def put(self, ch):
+        if 0 <= self.row < self.rows and 0 <= self.col < self.cols:
+            self.cells[self.row][self.col] = ch
+        self.col += 1
+
+    def feed(self, data):
+        for b in data:
+            if self.state == "csi":
+                ch = bytes([b]).decode("latin-1")
+                if "@" <= ch <= "~":
+                    if ch == "H":
+                        p = self.seq.split(";") if self.seq else []
+                        self.row = int(p[0]) - 1 if p and p[0] else 0
+                        self.col = int(p[1]) - 1 if len(p) > 1 and p[1] else 0
+                    elif ch == "J" and self.seq in ("", "2"):
+                        self.cells = [[" "] * self.cols for _ in range(self.rows)]
+                    self.state, self.seq = "text", ""
+                else:
+                    self.seq += ch
+                continue
+            if self.state == "esc":
+                ch = bytes([b]).decode("latin-1")
+                self.state = "csi" if ch == "[" else ("osc" if ch == "]" else "text")
+                self.seq = ""
+                continue
+            if self.state == "osc":
+                if b == 7:
+                    self.state = "text"
+                continue
+            if b == 0x1b:
+                self.state = "esc"
+            elif b == 10:
+                self.row += 1; self.col = 0
+            elif b == 13:
+                self.col = 0
+            elif b < 0x20:
+                pass
+            elif b < 0x80:
+                self.utf8 = b""
+                self.put(chr(b))
+            else:
+                self.utf8 += bytes([b])
+                try:
+                    ch = self.utf8.decode("utf-8")
+                except UnicodeDecodeError:
+                    if len(self.utf8) >= 4:
+                        self.utf8 = b""
+                    continue
+                self.utf8 = b""
+                self.put(ch)
+
+    def find(self, needle):
+        for r in range(self.rows):
+            c = "".join(self.cells[r]).find(needle)
+            if c >= 0:
+                return r, c
+        return None
+
+
 def strip(s):
     return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", s)
 
@@ -41,6 +108,8 @@ def spawn():
     return master, pid
 
 
+grid = Grid(24, 80)
+
 def pump(master, sec):
     buf = bytearray()
     end = time.time() + sec
@@ -54,6 +123,7 @@ def pump(master, sec):
             if not d:
                 break
             buf.extend(d)
+            grid.feed(d)
     return buf.decode("utf-8", "replace")
 
 
@@ -120,9 +190,13 @@ def main():
     found, secs, out = pump_until(master, "PLAN-LINE-1999", 10.0)
     check("a large plan paints promptly", found, results, "%.2fs" % secs)
     send(master, b"\x1b[H")
-    found_head, secs_head, out2 = pump_until(master, "PLAN-LINE-0000", 8.0)
+    start = time.time()
+    found_head = False
+    while time.time() - start < 8.0 and not found_head:
+        pump(master, 0.1)
+        found_head = grid.find("PLAN-LINE-0000") is not None
+    secs_head = time.time() - start
     check("Home reaches the plan's first line", found_head, results, "%.2fs" % secs_head)
-    out += out2
     send(master, b"\x1b[F")
 
     send(master, b"/plan\r")

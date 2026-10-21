@@ -17,7 +17,7 @@
 /// screen up again on the next ordinary frame.
 use shuttle::agent {RunState}
 use shuttle::gate {Pick, Approval, Gate, Capability}
-use shuttle::message {Message}
+use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use weaver::commands {WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch}
 use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
@@ -37,7 +37,7 @@ use weaver::store {
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append,
     Store.read_page, Store.append_transcript, Store.record_turn, Store.record_output,
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
-    Store.append_history_note,
+    Store.append_history_note, Store.child,
 }
 use weaver::commands {TranscriptChange}
 use shuttle::session {Session}
@@ -63,7 +63,14 @@ use tui::terminal {
 use tui::input {Input.step, InputReader, input_reader}
 use tui::tui {App, Cmd, run_app}
 use init::transformers {ResultT}
-use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout}
+use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout, IO.read_file, IO.write_file}
+use std::path {Path, Path.to_string}
+use std::process {process_id}
+use std::map {BTreeMap}
+use json::json {
+    Json, Json.parse, Json.to_string, Json.make_object, Json.make_num_int,
+    Json.get_object, Json.get_num, Json.get_num_i64, Json.object_get,
+}
 use std::list {List.intercalate, List.length}
 
 // ── Tui.run: the tty probe and the App wiring ───────────────────────────
@@ -129,6 +136,11 @@ def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) 
         WeaverMsg.store_result e => store_result_step m e,
         WeaverMsg.input_set text =>
             Pair.pair { m with input := input_state text input_placeholder, banner := false } Cmd.none,
+        // A late usage read after the turn ended must not resurrect the row.
+        WeaverMsg.live_usage u =>
+            if m.turn_pending
+            then Pair.pair { m with live_spent := Option.some u } Cmd.none
+            else Pair.pair m Cmd.none,
     }
 
 // ── persistence commands ─────────────────────────────────────────────────
@@ -339,7 +351,71 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
 /// A turn's or command's completion: the fold `f` runs, the streak
 /// resets, and `turn_pending` clears -- the spinner stops.
 def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
-    { (with_streak_reset f m) with turn_pending := false }
+    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none }
+
+// ── live usage (the thinking row's tokens) ─────────────────────────────
+// The UI's session is the PRE-turn snapshot; shuttle's `on_usage` hook
+// writes the cumulative spend to a tiny file after every model call, and
+// a 1 Hz `Cmd.inspect` reads it back into `live_spent`.
+
+def usage_path (store : Option StoreState) : String :=
+    match store {
+        Option.some s => Path.to_string (Store.child s.dir "usage.txt"),
+        Option.none => String.concat "/tmp/weaver-usage-" (String.concat (I64.to_string process_id) ".txt"),
+    }
+
+def usage_json (u : Usage) : String :=
+    Json.to_string (Json.make_object
+        (Map.insert "in" (Json.make_num_int u.input_tokens)
+        (Map.insert "out" (Json.make_num_int u.output_tokens)
+        (Map.insert "cached" (Json.make_num_int u.cached_tokens) BTreeMap.empty))))
+
+def usage_field (obj : BTreeMap String Json) (name : String) : I64 :=
+    match Json.object_get name obj {
+        Option.some j => match Json.get_num_i64 (Json.get_num j) {
+            Result.ok n => n,
+            Result.err _ => 0,
+        },
+        Option.none => 0,
+    }
+
+def usage_of_json (s : String) : Option Usage :=
+    match Json.parse s {
+        Result.err _ => Option.none,
+        Result.ok j => match Json.get_object j {
+            Result.err _ => Option.none,
+            Result.ok obj =>
+                let u : Usage := { input_tokens := usage_field obj "in", output_tokens := usage_field obj "out", cached_tokens := usage_field obj "cached" } in
+                Option.some u,
+        },
+    }
+
+def write_usage (store : Option StoreState) (u : Usage) : IO Unit := do {
+    let _ <- IO.write_file (Path.path (usage_path store)) (usage_json u);
+    IO.pure unit
+}
+
+def read_usage (store : Option StoreState) : IO (Option Usage) := do {
+    let r <- IO.read_file (Path.path (usage_path store));
+    match r {
+        Result.err _ => IO.pure Option.none,
+        Result.ok s => IO.pure (usage_of_json s),
+    }
+}
+
+/// `on_usage`: persist the cumulative spend (and the logger, once wired).
+def usage_live (store : Option StoreState) (u : Usage) : IO Unit :=
+    write_usage store u
+
+/// The 1 Hz poll action: a missing/garbled file folds a harmless tick.
+def usage_poll (store : Option StoreState) : Unit -> IO WeaverMsg :=
+    fn (_ : Unit) => do {
+        let u <- read_usage store;
+        match u {
+            Option.some x => IO.pure (WeaverMsg.live_usage x),
+            Option.none => IO.pure (WeaverMsg.key_event Event.tick),
+        }
+    }
 
 /// The completion frame's repaint: a trivial `perform` forces the next
 /// draw to repaint from blank (`step_cmd`'s force_repaint rule), which
@@ -414,9 +490,18 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
             let m1 : TuiModel := if m.turn_pending
                 then { m with spinner_frame := m.spinner_frame + 1 }
                 else m in
-            if Bool.and m1.banner (m1.banner_frame < 12)
-            then Pair.pair { m1 with banner_frame := m1.banner_frame + 1 } Cmd.none
-            else Pair.pair m1 Cmd.none,
+            let m2 : TuiModel :=
+                if Bool.and m1.banner (m1.banner_frame < 12)
+                then { m1 with banner_frame := m1.banner_frame + 1 }
+                else m1 in
+            // Once a second (ten 100 ms frames), poll the live usage file.
+            // `Cmd.inspect` folds the result without forcing a repaint.
+            let poll : Bool := Bool.and m2.turn_pending
+                (Bool.and (Bool.not (m2.spinner_frame < 10))
+                    (I64.beq (m2.spinner_frame - ((m2.spinner_frame / 10) * 10)) 0)) in
+            if poll
+            then Pair.pair m2 (Cmd.inspect (usage_poll m2.state.store))
+            else Pair.pair m2 Cmd.none,
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
@@ -632,7 +717,8 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
         let m2 : TuiModel :=
             { (with_streak_reset
                 (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
-                with turn_pending := true, banner := false } in
+                with turn_pending := true, banner := false, spinner_frame := 0,
+                     live_spent := Option.some m.state.run.session.spent, scroll := 0 } in
         Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => do {
             let _ <- write_echo store start block;
             run_submitted_line st text
@@ -758,77 +844,23 @@ def error_line (e : WeaverError) : TLine :=
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
-    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode st.colors, emit := progress_live st.store };
+    let _ <- write_usage st.store st.run.session.spent;
+    let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode st.colors,
+        emit := progress_live st.store, on_usage := usage_live st.store };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
 
-/// The terminal row plus the session's per-chunk log: every streamed
-/// fragment is durable before the turn completes.
-def progress_live (store : Option StoreState) (frag : String) : IO Unit := do {
-    TuiApp.progress frag;
+/// Persist every streamed fragment (live.txt). The terminal no longer
+/// gets a raw preview: the live thinking row under the prompt is the
+/// mid-turn display, and the turn's real block lands at completion.
+def progress_live (store : Option StoreState) (frag : String) : IO Unit :=
     persist_chunk store frag
-}
 
 def persist_chunk (store : Option StoreState) (frag : String) : IO Unit :=
     match store {
         Option.none => IO.pure unit,
         Option.some s => Store.append_chunk s frag,
-    }
-
-/// The TUI turn's live progress sink: the model's streamed text, shown
-/// as ONE transparent-overwrite line on the transcript panel's LAST
-/// content row (`rows - 6`: fill is `rows - 4` after the status and
-/// input's rows, minus the border's two lines; content rows start at
-/// row 1, 0-based). A dedicated row, not the status bar:
-/// the loop now redraws every tick while a turn runs, and the only
-/// mid-turn cell the diff pipeline rewrites is the spinner glyph at
-/// the status row's end -- this row's cells stay untouched by ticks,
-/// so the fragment survives between emits. The `repaint_cmd` every
-/// completion folds repaints from blank, erasing the last fragment
-/// with the turn's real result.
-pub def TuiApp.progress (frag : String) : IO Unit := do {
-    let size <- Terminal.size;
-    match size {
-        Pair.pair rows cols => do {
-            let row : I64 := rows - progress_row_offset;
-            if row < 1 then IO.pure Unit.unit
-            else do {
-                let _ <- Terminal.cursor_move row 0;
-                IO.write_stdout (blank_of cols);
-                let _ <- Terminal.cursor_move row 0;
-                IO.write_stdout (progress_text frag cols);
-                IO.flush_stdout
-            }
-        }
-    }
-}
-
-/// The progress row's distance from the bottom edge (see
-/// `TuiApp.progress`'s comment for the arithmetic).
-def progress_row_offset : I64 := 6
-
-/// `n` spaces: the row wipe (tui has no erase-line builder; spaces are
-/// blank cells and the forced repaint's blank-diff drops them anyway).
-/// Bounded to `cols` -- the caller clips to the same width.
-#[terminating]
-def blank_of (n : I64) : String :=
-    if n < 1 then "" else blank_of_go n
-
-#[terminating]
-def blank_of_go (n : I64) : String :=
-    if n < 1 then "" else String.concat " " (blank_of_go (n - 1))
-
-/// The preview is ONE row, so only the fragment's last line is shown
-/// (a streamed newline would otherwise move the cursor onto the border).
-def progress_text (frag : String) (cols : I64) : String :=
-    let budget : I64 := if cols - 1 < 1 then 1 else cols - 1 in
-    Text.take_width (String.concat "[thinking] " (last_fragment_line frag)) budget
-
-def last_fragment_line (frag : String) : String :=
-    match List.reverse (theme_split_lines frag) {
-        List.cons l _ => l,
-        List.empty => "",
     }
 
 // ── transcript rendering ─────────────────────────────────────────────────

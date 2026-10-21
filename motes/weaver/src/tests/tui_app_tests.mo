@@ -4,8 +4,9 @@
 /// IO) is asserted by SHAPE here (it IS a `perform`), never executed --
 /// the turn/command machinery itself is shuttle's and `commands.mo`'s
 /// own, already pinned by their own test files.
-use shuttle::agent {RunState, silent_sleep}
+use shuttle::agent {RunState, silent_sleep, silent_usage}
 use shuttle::context {usage_zero}
+use shuttle::message {Usage}
 use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
@@ -31,7 +32,7 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage }
 
 def state_of (mode : Mode) : WeaverState :=
     { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
@@ -353,8 +354,41 @@ def test_turn_result_ends_the_turn : Bool :=
         Pair.pair m2 cmd =>
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending
+                && (match m2.live_spent { Option.none => true, Option.some _ => false })
                 && transcript_contains "done" m2.transcript.tail
     }
+
+// A submit starts the live clock at zero and snapshots the spend.
+#[test]
+def test_enter_resets_the_live_clock : Bool :=
+    let m : TuiModel := enter_pending (model_of Mode.manual) in
+    m.spinner_frame == 0 && m.scroll == 0
+        && (match m.live_spent { Option.some _ => true, Option.none => false })
+
+// The tenth frame arms the 1 Hz usage poll (an inspect, not a repaint).
+#[test]
+def test_tick_at_ten_polls_usage : Bool :=
+    let base : TuiModel := enter_pending (model_of Mode.manual) in
+    let m9 : TuiModel := { base with spinner_frame := 9 } in
+    match TuiApp.update m9 (WeaverMsg.key_event Event.tick) {
+        Pair.pair m10 cmd => m10.spinner_frame == 10 && cmd_is_inspect cmd,
+    }
+
+// The usage message only lands while a turn is pending.
+#[test]
+def test_live_usage_updates_only_while_pending : Bool :=
+    let u : Usage := { input_tokens := 3, output_tokens := 4, cached_tokens := 0 } in
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.live_usage u) {
+        Pair.pair m1 _ =>
+            match TuiApp.update (model_of Mode.manual) (WeaverMsg.live_usage u) {
+                Pair.pair idle _ =>
+                    (match m1.live_spent { Option.some x => x.input_tokens == 3 && x.output_tokens == 4, Option.none => false })
+                    && (match idle.live_spent { Option.none => true, Option.some _ => false }),
+            },
+    }
+
+def cmd_is_inspect (c : Cmd WeaverMsg) : Bool :=
+    match c { Cmd.inspect _ => true, _ => false }
 
 // The repaint cmd IS a plain perform (the forced blank repaint).
 def cmd_is_perform_repaint (c : Cmd WeaverMsg) : Bool :=
@@ -492,3 +526,5 @@ def test_tick_advances_the_banner_sweep : Bool :=
     match TuiApp.update shown (WeaverMsg.key_event Event.tick) {
         Pair.pair m2 _ => m2.banner && m2.banner_frame == 1,
     }
+
+

@@ -5,8 +5,9 @@
 /// `ui_theme_tests.mo`. Two parser corners worth knowing: an `--` comment
 /// line directly after `:=` breaks the parse, and an expression projection
 /// `(f x).field` binds looser than `==` -- bind to a `let` first.
-use shuttle::agent {RunState, silent_sleep}
+use shuttle::agent {RunState, silent_sleep, silent_usage}
 use shuttle::context {usage_zero}
+use shuttle::message {Usage}
 use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
@@ -22,6 +23,7 @@ use weaver::model {
     Model.page_request, Model.visible_rows, scroll_indicator, panel_height,
     Model.display_rows, Model.content_width, DisplayRow,
     Model.display_line, Model.display_cap_bytes,
+    Model.body_height, Model.thinking_text, Model.live_row, status_line,
 }
 use weaver::store {TLine, TLine.plain, TranscriptPage, Transcript.with_page}
 
@@ -32,7 +34,7 @@ def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
 
 def run_of : RunState :=
-    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep }
+    { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage }
 
 def state_of : WeaverState :=
     { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
@@ -225,6 +227,40 @@ def test_scrolled_window_keeps_the_indicator : Bool :=
 /// One 2000-character line wraps to 27 rows (76 + 26*76 + 24). Pinned,
 /// the panel shows the LAST 18; at max scroll it shows the FIRST 17.
 /// Every row of the message is reachable -- the bug this unit fixes.
+// ── the live thinking row ───────────────────────────────────────────────
+
+def live_usage : Usage :=
+    { input_tokens := 1234, output_tokens := 345, cached_tokens := 0 }
+
+def live_model : TuiModel :=
+    let base : TuiModel := { model_of with turn_pending := true, spinner_frame := 12 } in
+    let m : TuiModel := { base with live_spent := Option.some live_usage } in
+    m
+
+#[test]
+def test_live_row_reserves_one_panel_row : Bool :=
+    Model.body_height live_model == panel_height live_model - 1
+        && Model.body_height model_of == panel_height model_of
+
+#[test]
+def test_thinking_text_carries_time_and_tokens : Bool :=
+    let t : String := Model.thinking_text live_model in
+    String.contains t "thinking" && String.contains t "1.2s"
+        && String.contains t "↑1.2k" && String.contains t "↓345"
+
+/// The status bar is static mid-turn; the spinner lives on the live row.
+#[test]
+def test_status_line_is_static_mid_turn : Bool :=
+    status_line live_model == status_line model_of
+
+/// The live row is painted after the cache, never inside it: ticks must
+/// not invalidate (and re-wrap) the transcript.
+#[test]
+def test_live_row_is_not_in_the_rows_cache : Bool :=
+    let idle : TuiModel := Model.append_block model_of [TLine.plain "hello"] in
+    let pending : TuiModel := { idle with turn_pending := true, spinner_frame := 1 } in
+    List.length (Model.display_rows pending) == List.length (Model.display_rows idle)
+
 /// The display cap keeps one enormous logical line from making every
 /// repaint and row-count walk unbounded; the marker says where the rest is.
 #[test]

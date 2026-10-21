@@ -11,13 +11,15 @@
 /// `ListState.offset` bookkeeping is the wrong tool here (it drives a
 /// single-selection menu's highlight, not a scrolling transcript).
 use shuttle::agent {RunState}
-use shuttle::message {Message}
+use shuttle::message {Message, Usage}
 use weaver::commands {WeaverState, Effect}
+use weaver::format {format_tokens, format_elapsed}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {
     theme_line_style_with, theme_tline_style_with, theme_status_style_with,
-    theme_border_style_with, theme_banner_style_with, BannerPart, theme_split_lines,
+    theme_border_style_with, theme_banner_style_with, theme_running_style_with,
+    BannerPart, theme_split_lines,
 }
 use weaver::policy {Mode}
 use weaver::store {
@@ -60,6 +62,9 @@ pub type WeaverMsg {
     store_result (e : Option String),
     /// Fill the input box (the plan dialog's "revise with a note").
     input_set (text : String),
+    /// The turn's cumulative spend, read from the live usage file while a
+    /// turn is pending.
+    live_usage (u : Usage),
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a
@@ -80,6 +85,8 @@ pub struct RowsKey {
     page_start : I64,
     /// The startup banner spends four rows of the panel while it shows.
     banner : Bool,
+    /// A pending turn spends one panel row on the live thinking row.
+    pending : Bool,
 }
 
 pub struct TuiModel {
@@ -130,6 +137,10 @@ pub struct TuiModel {
     banner : Bool := true,
     /// The one-time shuttle sweep's tick counter (stops at 12).
     banner_frame : I64 := 0,
+    /// The cumulative spend reported by the turn's `on_usage` hook. The
+    /// session in `state.run` is the PRE-turn snapshot, so this is the
+    /// live token count the thinking row shows.
+    live_spent : Option Usage := Option.none,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -142,7 +153,7 @@ pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0 } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
@@ -616,13 +627,13 @@ pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
     let pstart : I64 := match m.transcript.page { Option.some p => p.start, Option.none => 0 - 1 } in
     let k : RowsKey := { total := m.transcript.total, tail_start := m.transcript.tail_start,
                          cols := m.cols, rows := m.rows, scroll := m.scroll, page_start := pstart,
-                         banner := m.banner } in
+                         banner := m.banner, pending := m.turn_pending } in
     k
 
 def rows_key_eq (a : RowsKey) (b : RowsKey) : Bool :=
     a.total == b.total && a.tail_start == b.tail_start && a.cols == b.cols
         && a.rows == b.rows && a.scroll == b.scroll && a.page_start == b.page_start
-        && a.banner == b.banner
+        && a.banner == b.banner && a.pending == b.pending
 
 /// Recompute the wrapped rows only when the transcript, the viewport or
 /// the scroll position actually moved.
@@ -635,7 +646,7 @@ pub def Model.refresh_rows (m : TuiModel) : TuiModel :=
 
 def rebuild_rows (m : TuiModel) (k : RowsKey) : TuiModel :=
     let rt : I64 := Model.row_total_of m in
-    let scroll2 : I64 := scroll_clamp m.scroll rt (panel_height m) in
+    let scroll2 : I64 := scroll_clamp m.scroll rt (Model.body_height m) in
     let m2 : TuiModel := { m with row_total := rt, scroll := scroll2, sel := Option.none, rows_cache := List.empty, rows_key := Option.some k } in
     let rows : List DisplayRow := Model.visible_rows m2 in
     { m2 with rows_cache := rows }
@@ -691,7 +702,36 @@ def transcript_row_widgets (m : TuiModel) (rows : List DisplayRow) (i : I64) : L
     }
 
 def transcript_column (m : TuiModel) : Widget :=
-    Widget.column (transcript_row_widgets m (Model.display_rows m) 0)
+    let body : List SizedWidget := transcript_row_widgets m (Model.display_rows m) 0 in
+    // The live row is painted AFTER the cached rows (it is not part of
+    // them), so ticks update it without re-wrapping the transcript.
+    if m.turn_pending
+    then Widget.column (List.append body [Model.display_row_widget (Model.live_row m)])
+    else Widget.column body
+
+/// The cumulative spend the live row shows: the on_usage snapshot when the
+/// turn has reported one, else the session's pre-turn total.
+pub def Model.thinking_spent (m : TuiModel) : Usage :=
+    match m.live_spent {
+        Option.some u => u,
+        Option.none => m.state.run.session.spent,
+    }
+
+/// `| thinking 3.4s · ↑1.2k ↓345`.
+pub def Model.thinking_text (m : TuiModel) : String :=
+    let u : Usage := Model.thinking_spent m in
+    String.concat (spinner_glyph m.spinner_frame)
+        (String.concat " thinking "
+            (String.concat (format_elapsed m.spinner_frame)
+                (String.concat " · ↑"
+                    (String.concat (format_tokens u.input_tokens)
+                        (String.concat " ↓" (format_tokens u.output_tokens))))))
+
+/// The thinking line under the last prompt, clipped to the content width.
+pub def Model.live_row (m : TuiModel) : DisplayRow :=
+    let style : TextStyle := theme_running_style_with m.state.colors in
+    let text : String := Text.take_width (Model.thinking_text m) (Model.content_width m) in
+    mk_row style text
 
 /// The absolute ROW window the panel shows. `eff` is the clamped scroll
 /// in rows; the scrolled panel spends ONE row on the indicator, so the
@@ -708,8 +748,8 @@ pub struct Window {
 
 pub def Model.window (m : TuiModel) : Window :=
     let total : I64 := m.row_total in
-    let eff : I64 := scroll_clamp m.scroll total (panel_height m) in
-    let h : I64 := if eff > 0 then panel_height m - 1 else panel_height m in
+    let eff : I64 := scroll_clamp m.scroll total (Model.body_height m) in
+    let h : I64 := if eff > 0 then Model.body_height m - 1 else Model.body_height m in
     let endp : I64 := total - eff in
     let start : I64 := if endp - h < 0 then 0 else endp - h in
     let count : I64 := if endp - start < 0 then 0 else endp - start in
@@ -784,12 +824,19 @@ pub def panel_height (m : TuiModel) : I64 :=
     let h := m.rows - 6 - banner in
     if h < 0 then 0 else h
 
+/// The transcript body's height: while a turn is pending, one panel row is
+/// reserved for the live thinking row appended under the last prompt.
+pub def Model.body_height (m : TuiModel) : I64 :=
+    let live : I64 := if m.turn_pending then 1 else 0 in
+    let h : I64 := panel_height m - live in
+    if h < 0 then 0 else h
+
 /// The scroll state machine: `scroll` counts WRAPPED ROWS above the
 /// pinned bottom. The delta moves the window (PageUp/Ctrl+U positive,
 /// i.e. older; PageDown/Ctrl+D negative), clamped at both ends.
 #[partial]
 pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
-    let m2 : TuiModel := { m with scroll := scroll_clamp (m.scroll + delta) m.row_total (panel_height m) } in
+    let m2 : TuiModel := { m with scroll := scroll_clamp (m.scroll + delta) m.row_total (Model.body_height m) } in
     Model.refresh_rows m2
 
 /// A new block of transcript lines: the blank separator row in front
@@ -839,16 +886,10 @@ pub def list_length (xs : List String) : I64 :=
 // ── status line ─────────────────────────────────────────────────────────
 
 /// The TUI's status bar: the dumb-mode twin minus the trailing `"> "`
-/// prompt (the input box itself is the prompt here), with the
-/// turn-spinner glyph riding at the end while a turn runs. The glyph is
-/// deliberately the ONLY cell of this row that changes mid-turn
-/// (`spinner_frame` bumps per tick, everything else is static), so the
-/// diff pipeline rewrites exactly that one cell each frame and the raw
-/// `TuiApp.progress` fragment on the transcript's last row survives.
+/// prompt (the input box itself is the prompt here). It is STATIC
+/// mid-turn: the spinner now lives on the thinking row under the prompt.
 pub def status_line (m : TuiModel) : String :=
-    if m.turn_pending
-    then String.concat (String.concat (Dumb.status_fields m.state) " ") (spinner_glyph m.spinner_frame)
-    else Dumb.status_fields m.state
+    Dumb.status_fields m.state
 
 /// The spinner's four frames, cycling on the tick count.
 pub def spinner_glyph (frame : I64) : String :=

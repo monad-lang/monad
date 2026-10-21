@@ -89,7 +89,7 @@ checks.append(("S1 UI redraws while a turn runs", b"\x1b[" in w1 and b"\x1b[" in
 
 # The streamed fragment shows on the transcript's last row mid-turn.
 mid = tight((w1 + w2).decode(errors="replace"))
-checks.append(("S1 streamed fragment visible mid-turn", "[thinking]" in mid or "replyslow" in mid))
+checks.append(("S1 live thinking row visible mid-turn", "thinking" in mid and "↑" in mid and "↓" in mid))
 
 # The turn completes ~3.0 s after submit; this window catches the
 # forced blank repaint (its largest single burst) and the transcript
@@ -104,7 +104,7 @@ checks.append(("S3 completion forced a blank repaint", max(len(w2), len(tail)) >
 # app never re-emits the reply, and the fragment never resurfaces (the
 # forced repaint cleaned it).
 post = tight(snap(master, 1.5, buf).decode(errors="replace"))
-checks.append(("S3 no re-emission after the completion", post.count("replyslow") == 0 and post.count("[thinking]") == 0))
+checks.append(("S3 no re-emission after the completion", post.count("replyslow") == 0 and post.count("thinking") == 0 and post.count("[thinking]") == 0))
 
 checks.append(("S3 double Ctrl+C still exits cleanly", finish(master, pid, buf)))
 
@@ -114,11 +114,11 @@ buf = bytearray()
 pump(master, 2.0, buf)
 os.write(master, b"hi\n")
 snap(master, 0.8, buf)            # into the turn
-os.write(master, b"\x03\x03")     # two presses DURING the turn
+os.write(master, b"\x03")        # one press DURING the turn (queued)
 snap(master, 3.8, buf)
 after = tight(bytes(buf).decode(errors="replace"))
-checks.append(("S4 turn completes despite mid-turn Ctrl-C", "replyslow:the" in after))
-checks.append(("S4 queued Ctrl-C exits cleanly after", finish(master, pid, buf)))
+checks.append(("S4 mid-turn Ctrl-C does not interrupt the turn", "replyslow:the" in after))
+checks.append(("S4 clean exit after the turn", finish(master, pid, buf)))
 
 # ── the overlay stays stdin's first reader ──────────────────────────────
 two = os.path.join(TMP, "turns_two_reads.json")

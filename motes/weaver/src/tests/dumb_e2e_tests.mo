@@ -13,7 +13,7 @@
 /// never reached the read seam.
 use std::test {Test.write_fixture, Test.append_fixture, Test.read_fixture_or}
 use init::transformers {ResultT}
-use shuttle::agent {RunState, silent_sleep}
+use shuttle::agent {RunState, silent_sleep, silent_usage}
 use shuttle::context {usage_zero}
 use shuttle::gate {Capability, Gate}
 use shuttle::message {Message, Usage, Turn}
@@ -235,6 +235,7 @@ def run_of (reg : ToolRegistry) : RunState := {
     always := List.empty,
     retries := 1,
     sleep_ms := silent_sleep,
+    on_usage := silent_usage,
 }
 
 def session_of (reg : ToolRegistry) : Session := {

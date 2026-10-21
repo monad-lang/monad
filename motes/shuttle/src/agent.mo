@@ -24,6 +24,7 @@ use init::transformers {ResultT}
 use shuttle::session {Session}
 use shuttle::registry {ToolRegistry}
 use shuttle::gate {Capability, Gate}
+use shuttle::message {Usage}
 
 // The protocol's phantom phase markers.
 type AgentIdle {}
@@ -51,7 +52,14 @@ pub struct RunState {
     always : List Capability,
     retries : I64,
     sleep_ms : I64 -> IO Unit,
+    /// Called with the CUMULATIVE spend after every model call. The UI's
+    /// copy of the session is the pre-turn snapshot, so this seam is how
+    /// a live token count reaches it mid-turn.
+    on_usage : Usage -> IO Unit,
 }
+
+/// The usage hook's default: do nothing.
+pub def silent_usage (u : Usage) : IO Unit := IO.pure unit
 
 /// The sleep seam's default: no timed-wait native exists (no new
 /// natives -- the recorded owner decision) and the headless default

@@ -61,6 +61,10 @@ pub def theme_line_style (line : String) : TextStyle :=
 pub def theme_line_style_with (colors : Bool) (line : String) : TextStyle :=
     if colors then theme_line_style line else style_default
 
+/// The live thinking row's style: the same dim cyan as a `[running]` row.
+pub def theme_running_style_with (colors : Bool) : TextStyle :=
+    if colors then class_style LineClass.running else style_default
+
 /// A transcript line's style: the role flag wins (a user line stays cyan
 /// even when its text starts with `error:`), everything else keeps the
 /// semantic prefix classification.

@@ -33,7 +33,7 @@ use shuttle::provider {Provider.send}
 use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep}
+use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage}
 use shuttle::context {usage_zero, usage_add}
 use shuttle::gate {Capability, Pick, Approval, Gate}
 use json::json {Json}
@@ -284,7 +284,13 @@ def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do
     let spent2 : Usage := usage_add s.session.spent turn.usage;
     let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2 };
     let s2 : RunState := { s with session := session2, turns_left := s.turns_left - 1 };
-    ResultT.mk (return (Result.ok (Pair.pair s2 turn)))
+    // The usage hook is IO, so it runs inside the ResultT wrapper's own
+    // do block (an `IO` bind in the ResultT do would not typecheck, and
+    // `ResultT.lift` in a do block is the recorded compiled-backend trap).
+    ResultT.mk (do {
+        let _ <- s.on_usage spent2;
+        return (Result.ok (Pair.pair s2 turn))
+    })
 }
 
 /// The retry loop. `send` is a `Unit ->` SEAM (the eagerness lesson:
@@ -448,7 +454,7 @@ pub def Loop.iterate : Agent AgentIdle AgentDone Unit :=
 /// that wants no gate -- shuttle's own CLI and tests).
 pub def Loop.initial_state (cfg : ProviderConfig) (reg : ToolRegistry) (system : String) (history : List Message) (turns_left : I64) (emit : String -> IO Unit) (gate : Gate) : RunState :=
     let session : Session := { config := cfg, system_prompt := system, tools := ToolRegistry.specs reg, history := history, turns := 0, spent := usage_zero } in
-    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep } in
+    let st : RunState := { session := session, reg := reg, turns_left := turns_left, emit := emit, gate := gate, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage } in
     st
 
 def runstate_of_pair (p : Pair RunState Unit) : RunState :=

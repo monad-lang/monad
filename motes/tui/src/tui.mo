@@ -110,6 +110,10 @@ pub type Cmd (M : Type) {
     /// Run `action` now (blocking this frame) and fold its result message
     /// in immediately, the same way a `dispatch`ed message is folded.
     perform (action : Unit -> IO M),
+    /// Like `perform`, but WITHOUT forcing a repaint. For a cheap poll
+    /// whose result touches only a small part of the frame (a live usage
+    /// read): a `perform` would repaint the whole screen every second.
+    inspect (action : Unit -> IO M),
     /// Fork `action` as a fiber (never blocks the frame); the loop polls
     /// it every iteration and folds its result message in the moment the
     /// fiber completes. The loop owns the pending handle: fork and poll
@@ -412,6 +416,10 @@ def step_cmd {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (model : S) 
             let m2 <- action unit;
             let stepped <- step_batch upd model (List.cons m2 rest);
             return (force_repaint stepped)
+        },
+        Cmd.inspect action => do {
+            let m2 <- action unit;
+            step_batch upd model (List.cons m2 rest)
         },
         // Pass-through, not a fork: `step_cmd`'s shape has no room for a
         // fiber handle, and its `rest` has nowhere to go but the
