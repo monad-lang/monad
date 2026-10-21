@@ -41,6 +41,8 @@ use weaver::providers {Weaver.preset, Weaver.model_error, Weaver.default_model, 
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
+use log::logger {Logger}
+use weaver::logs {LogSetup, Logs.setup, Logs.finish, Logs.info, Logs.error}
 use weaver::process_tools {
     StartProcessTool.impl, ReadProcessTool.impl, KillProcessTool.impl, ListProcessesTool.impl,
 }
@@ -436,11 +438,15 @@ def colors_probe : IO Bool := do {
 }
 
 pub def main (args : List String) : IO I64 := do {
+    let setup <- Logs.setup;
+    let _ <- Logs.info setup.log (String.concat "ev=process_start argv=" (I64.to_string (List.length args)));
     let colors_on_main <- colors_probe;
     let loaded <- Settings.load;
-    let _ <- warn_settings loaded.warnings;
+    let _ <- warn_settings setup.log loaded.warnings;
     let _ <- warn_project_keys loaded.project_keys;
-    main_plan colors_on_main loaded.settings (parse_args args)
+    let code <- main_plan setup colors_on_main loaded.settings (parse_args args);
+    Logs.finish setup.log code;
+    IO.pure code
 }
 
 /// Phase 9's settings visibility: the parse failures `Settings.load`
@@ -448,13 +454,17 @@ pub def main (args : List String) : IO I64 := do {
 /// (rendered through the one render point) -- and the run continues
 /// with whatever the files did contribute.
 #[partial]
-def warn_settings (ws : List WeaverError) : IO Unit :=
+def warn_one (log : Option Logger) (w : WeaverError) (rest : List WeaverError) : IO Unit := do {
+    write_errln (String.concat "warning: " (WeaverError.show w));
+    Logs.info log (String.concat "ev=settings_warning " (WeaverError.show w));
+    warn_settings log rest
+}
+
+#[partial]
+def warn_settings (log : Option Logger) (ws : List WeaverError) : IO Unit :=
     match ws {
         List.empty => IO.pure unit,
-        List.cons w rest => do {
-            write_errln (String.concat "warning: " (WeaverError.show w));
-            warn_settings rest
-        }
+        List.cons w rest => warn_one log w rest,
     }
 
 /// Phase 10's one startup line: api keys that came from the PROJECT
@@ -469,25 +479,33 @@ def warn_project_keys (names : List String) : IO Unit :=
             write_errln (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
     }
 
-def main_plan (colors : Bool) (s : Settings) (c : CliArgs) : IO I64 :=
+def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (c : CliArgs) : IO I64 :=
     let effective : Bool := Bool.and colors (Bool.not c.no_color) in
     match plan_of s c {
-        Result.err e => do { write_errln (String.concat "error: " (WeaverError.show e)); return 1 },
-        Result.ok p => run_plan effective p s,
+        Result.err e => do {
+            write_errln (String.concat "error: " (WeaverError.show e));
+            Logs.error setup.log (String.concat "ev=config_error " (WeaverError.show e));
+            return 1
+        },
+        Result.ok p => run_plan setup effective p s,
     }
 
-def run_plan (colors : Bool) (p : Plan) (s : Settings) : IO I64 := do {
+def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) : IO I64 := do {
     let r <- mount_all client_info p.mcps s weaver_registry [];
-    mounted_plan colors p s r
+    mounted_plan setup colors p s r
 }
 
 /// `mount_all` disposes the mounted servers itself on error, so both
 /// arms here hand back an exit code and nothing else.
-def mounted_plan (colors : Bool) (p : Plan) (s : Settings) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
+def mounted_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (r : Result WeaverError (Pair ToolRegistry (List McpServer))) : IO I64 :=
     match r {
-        Result.err e => do { write_errln (String.concat "error: " (WeaverError.show e)); return 1 },
+        Result.err e => do {
+            write_errln (String.concat "error: " (WeaverError.show e));
+            Logs.error setup.log (String.concat "ev=mount_error " (WeaverError.show e));
+            return 1
+        },
         Result.ok pr => match pr {
-            Pair.pair reg servers => start_loop colors p s reg servers,
+            Pair.pair reg servers => start_loop setup colors p s reg servers,
         },
     }
 
@@ -506,12 +524,12 @@ struct OpenedSession {
 /// falls back to the line-based `Dumb.run` when stdin is not one.
 /// Phase 9: the exit code follows the state -- a fatal error recorded
 /// mid-session exits 1.
-def start_loop (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
+def start_loop (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) : IO I64 := do {
     let root_opt <- Store.sessions_root;
     let opened <- open_session root_opt p s reg;
     match opened {
         Result.err e => fail_started servers e,
-        Result.ok o => run_opened colors p s reg servers (with_model_note p.model_note o),
+        Result.ok o => run_opened setup colors p s reg servers (with_model_note p.model_note o),
     }
 }
 
@@ -534,10 +552,12 @@ def fail_started (servers : List McpServer) (e : WeaverError) : IO I64 := do {
     return 1
 }
 
-def run_opened (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
+def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
+    let _ <- announce_crash setup.crash;
     let st : WeaverState := initial_state p reg s colors o.store o.session;
+    let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
     let tr0 <- startup_transcript o;
-    let ran_tui <- Tui.run_resumed st tr0;
+    let ran_tui <- Tui.run_resumed setup.log st tr0;
     let _ <- if Bool.not ran_tui then announce_note o else IO.pure unit;
     let final <- run_fallback ran_tui st;
     let _ <- Procs.shutdown;
@@ -707,6 +727,32 @@ def resume_import_file (root : Path) (p : Plan) (s : Settings) (sess : Session) 
     }
 }
 
+/// The session's id (its directory's base name), or "-" without a store.
+def session_label (o : OpenedSession) : String :=
+    match o.store {
+        Option.some s => Store.base_name s.dir,
+        Option.none => "-",
+    }
+
+/// One stderr line for a detected crash (the log carries the details).
+def announce_crash (crash : Option String) : IO Unit :=
+    match crash {
+        Option.none => IO.pure unit,
+        Option.some c => IO.write_stderr (String.concat "warning: " (String.concat c "\n")),
+    }
+
+/// The crash warning rides the same startup note as the model warning.
+def with_crash_note (crash : Option String) (o : OpenedSession) : OpenedSession :=
+    match crash {
+        Option.none => o,
+        Option.some c =>
+            let combined : Option String := match o.note {
+                Option.none => Option.some c,
+                Option.some old => Option.some (String.concat c (String.concat "\n" old)),
+            } in
+            { o with note := combined },
+    }
+
 def exit_of (st : WeaverState) : IO I64 :=
     match st.fatal {
         Option.some _ => IO.pure 1,
@@ -716,7 +762,7 @@ def exit_of (st : WeaverState) : IO I64 :=
 def run_fallback (ran_tui : Bool) (st : WeaverState) : IO WeaverState :=
     if ran_tui
     then IO.pure st
-    else Dumb.run (fn (_ : Unit) => read_stdin_line) stdout_write st
+    else Dumb.run Option.none (fn (_ : Unit) => read_stdin_line) stdout_write st
 
 /// The dumb loop's line source. A stdin read error ends the session like
 /// end of input, but is named on stderr first rather than passing for it.

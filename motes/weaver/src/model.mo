@@ -14,6 +14,7 @@ use shuttle::agent {RunState}
 use shuttle::message {Message, Usage}
 use weaver::commands {WeaverState, Effect}
 use weaver::format {format_tokens, format_elapsed}
+use log::logger {Logger}
 use weaver::error {WeaverError}
 use weaver::dumb {Dumb.status_fields}
 use weaver::theme {
@@ -145,6 +146,8 @@ pub struct TuiModel {
     /// terminal: the main loop must not tick-redraw over it (interleaved
     /// writes corrupt the modal's paint).
     modal : Bool := false,
+    /// The run's debug logger (none when WEAVER_LOG=off).
+    log : Option Logger := Option.none,
 }
 
 /// The initial model: an empty input box with a hint placeholder, no
@@ -152,12 +155,12 @@ pub struct TuiModel {
 /// first frame. New fields are spelled even though they default --
 /// a struct literal whose new field is omitted has been seen to check
 /// clean and fill GARBAGE at runtime (the two-host divergence note).
-pub def init_tui_model (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :=
-    init_tui_model_with st rows cols Transcript.empty
+pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) : TuiModel :=
+    init_tui_model_with log st rows cols Transcript.empty
 
 /// The startup tail loaded from the session store.
-pub def init_tui_model_with (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, modal := false } in
+pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, modal := false, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history

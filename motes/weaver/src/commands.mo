@@ -37,6 +37,7 @@ use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {BTreeMap}
 use std::list {List.intercalate}
 use weaver::procs {ProcEntry, ProcEntry.line, Procs.list, Procs.kill}
+use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 
 /// Everything the interactive session carries between inputs.
 /// `run` is shuttle's own state (session, registry, turn budget, gate,
@@ -121,10 +122,11 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/quit" (SlashCommand.mk cmd_quit)
         (Map.insert "/resume" (SlashCommand.mk cmd_resume)
         (Map.insert "/save" (SlashCommand.mk cmd_save)
+        (Map.insert "/log" (SlashCommand.mk cmd_log)
         (Map.insert "/processes" (SlashCommand.mk cmd_processes)
         (Map.insert "/procs" (SlashCommand.mk cmd_processes)
         (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty))))))))))))))
+            BTreeMap.empty)))))))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -278,6 +280,41 @@ def cmd_processes (arg : String) (st : WeaverState) : IO (Result WeaverError Eff
         respond st msg
     }
     else respond st "usage: /processes [kill <id>]"
+}
+
+
+// ── /log (the debug log path + tail + crash note) ──────────────────────
+
+def crash_in_dir (parent : Option Path) (path : String) : IO (Option String) :=
+    match parent {
+        Option.some d => Logs.detect_crash d path,
+        Option.none => IO.pure Option.none,
+    }
+
+def crash_note (crash : Option String) : String :=
+    match crash {
+        Option.some m => String.concat m "\n",
+        Option.none => "",
+    }
+
+def log_summary (path : String) : IO String := do {
+    let tail <- Logs.tail path 20;
+    let parent : Option Path := Path.parent (Path.path path);
+    let crash <- crash_in_dir parent path;
+    let note : String := crash_note crash;
+    let body : String := if String.is_empty (String.trim tail) then "(empty log)" else tail;
+    IO.pure (String.concat "log: " (String.concat path (String.concat "\n" (String.concat note body))))
+}
+
+def cmd_log (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let p <- Logs.latest_path;
+    match p {
+        Option.none => respond st "log: no log file (WEAVER_LOG=off?)",
+        Option.some path => do {
+            let text <- log_summary path;
+            respond st text
+        },
+    }
 }
 
 /// `/mcp`: the mounted `--mcp` servers, or the hint for mounting one.
@@ -530,7 +567,8 @@ def help_text : String :=
         "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
         "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
         "/tools                               list tools with their capability tags",
-        "/processes [kill <id>]               list background tasks (TUI: live monitor)",
+        "/processes [kill <id>]               list background tasks",
+        "/log                                 the debug log path, tail and crash note",
         "/mcp                                 list mounted MCP servers",
         "/save <file>                         checkpoint the session as a JSON file",
         "/resume [<id|file>]                  continue a session (newest by default)",

@@ -23,6 +23,7 @@ use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
 use weaver::store {StoreState, Store.record_history}
 use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
+use log::logger {Logger}
 use init::transformers {ResultT}
 use tui::terminal {Terminal.poll}
 
@@ -58,13 +59,13 @@ struct Step {
 /// `#[terminating]`: the recursion is on the (external) input stream,
 /// which no structural measure sees.
 #[terminating]
-pub def Dumb.run (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) : IO WeaverState := do {
+pub def Dumb.run (log : Option Logger) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) : IO WeaverState := do {
     let w : String -> IO Unit := theme_write write st.colors;
     let _ <- write (dumb_banner st);
     let _ <- write (prompt_line st);
     let line <- read unit;
     let step <- step_of read w st line;
-    if step.again then Dumb.run read write step.state else IO.pure step.state
+    if step.again then Dumb.run log read write step.state else IO.pure step.state
 }
 
 /// The line-based UI's one-line launch banner (the TUI renders the full

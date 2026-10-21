@@ -81,22 +81,22 @@ use std::list {List.intercalate, List.length}
 /// other terminal write happens before this check, so the caller can
 /// fall back to `Dumb.run` cleanly. `true` runs the whole TUI to
 /// completion (quit or EOF) before returning.
-pub def Tui.run (st : WeaverState) : IO Bool :=
-    Tui.run_resumed st Transcript.empty
+pub def Tui.run (log : Option Logger) (st : WeaverState) : IO Bool :=
+    Tui.run_resumed log st Transcript.empty
 
 /// The startup tail is loaded before `run_app` builds the model, so the
 /// first frame already shows the previous session.
-pub def Tui.run_resumed (st : WeaverState) (tr : Transcript) : IO Bool := do {
+pub def Tui.run_resumed (log : Option Logger) (st : WeaverState) (tr : Transcript) : IO Bool := do {
     let is_tty <- Terminal.enter_raw_mode;
     if Bool.not is_tty
     then return false
     else do {
         let size <- Terminal.size;
-        run_tui_with_size st tr size
+        run_tui_with_size log st tr size
     }
 }
 
-def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64) : IO Bool :=
+def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript) (size : Pair I64 I64) : IO Bool :=
     match size {
         Pair.pair rows cols => do {
             // 100 ms: the tick is the spinner's frame clock AND the
@@ -105,7 +105,7 @@ def run_tui_with_size (st : WeaverState) (tr : Transcript) (size : Pair I64 I64)
             // unchanged model are zero-diff draws. The tui default (-1)
             // stays untouched.
             let app : App TuiModel WeaverMsg :=
-                App.app_ticked (init_tui_model_with st rows cols tr) on_event TuiApp.update Model.view 100
+                App.app_ticked (init_tui_model_with log st rows cols tr) on_event TuiApp.update Model.view 100
                     (fn (m : TuiModel) => Bool.or (Bool.and m.turn_pending (Bool.not m.modal))
                         (Bool.and m.banner (m.banner_frame < 12)));
             let _ <- run_app app;
@@ -405,8 +405,12 @@ def read_usage (store : Option StoreState) : IO (Option Usage) := do {
 }
 
 /// `on_usage`: persist the cumulative spend (and the logger, once wired).
-def usage_live (store : Option StoreState) (u : Usage) : IO Unit :=
-    write_usage store u
+def usage_live (log : Option Logger) (store : Option StoreState) (u : Usage) : IO Unit := do {
+    write_usage store u;
+    Logs.debug log (String.concat "ev=model_usage in=" (String.concat (I64.to_string u.input_tokens)
+        (String.concat " out=" (String.concat (I64.to_string u.output_tokens)
+        (String.concat " cached=" (I64.to_string u.cached_tokens))))))
+}
 
 /// The 1 Hz poll action: a missing/garbled file folds a harmless tick.
 def usage_poll (store : Option StoreState) : Unit -> IO WeaverMsg :=
@@ -724,7 +728,7 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
                          (Bool.or (text == "/processes") (text == "/procs")) } in
         Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => do {
             let _ <- write_echo store start block;
-            run_submitted_line st text
+            run_submitted_line m.log st text
         }))
 
 /// The submitted line's echo block is durable before the turn starts (it
@@ -783,12 +787,36 @@ def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
 /// loop -- mirroring `dumb.mo`'s `route`/`command_turn`/`model_turn`,
 /// but folding a `WeaverMsg` back instead of writing through line
 /// seams.
-pub def run_submitted_line (st : WeaverState) (text : String) : IO WeaverMsg :=
+pub def run_submitted_line (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg := do {
+    let t0 <- IO.current_time;
+    let kind : String := if String.starts_with "/" text then "command" else "turn";
+    Logs.info log (String.concat "ev=submit kind=" (String.concat kind
+        (String.concat " bytes=" (I64.to_string (String.length text)))));
+    let msg <- dispatch_submitted log st text;
+    let t1 <- IO.current_time;
+    Logs.info log (String.concat "ev=submit_end elapsed_ms=" (I64.to_string (t1 - t0)));
+    Logs.info log (outcome_of msg);
+    IO.pure msg
+}
+
+def outcome_of (msg : WeaverMsg) : String :=
+    match msg {
+        WeaverMsg.turn_result run _ _ =>
+            String.concat "ev=turn_end turns=" (String.concat (I64.to_string run.session.turns)
+                (String.concat " in=" (String.concat (I64.to_string run.session.spent.input_tokens)
+                (String.concat " out=" (I64.to_string run.session.spent.output_tokens))))) ,
+        WeaverMsg.turn_failed _ e => String.concat "ev=turn_error " (WeaverError.show e),
+        WeaverMsg.command_result _ => "ev=command_end",
+        WeaverMsg.command_failed e => String.concat "ev=command_error " (WeaverError.show e),
+        _ => "ev=submit_other",
+    }
+
+def dispatch_submitted (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if plan_dialog_wanted st text
     then plan_dialog_step st text
     else if String.starts_with "/" text
     then command_step_tui st text
-    else model_step_tui st text
+    else model_step_tui log st text
 
 def mode_is_plan (m : Mode) : Bool :=
     match m { Mode.plan => true, _ => false }
@@ -814,15 +842,15 @@ def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :
         Result.ok e => WeaverMsg.command_result e,
     }
 
-def model_step_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
+def model_step_tui (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if st.run.turns_left < 1
     then IO.pure (WeaverMsg.turn_result st.run [TLine.plain "turn budget spent -- /clear or restart with --max-turns"] List.empty)
-    else drive_turn_tui st text
+    else drive_turn_tui log st text
 
-def drive_turn_tui (st : WeaverState) (text : String) : IO WeaverMsg :=
+def drive_turn_tui (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
     let before : I64 := list_msg_length st.run.session.history in
     do {
-        let r <- ResultT.run (drive_tui st text);
+        let r <- ResultT.run (drive_tui log st text);
         return (turn_result_of st before r)
     }
 
@@ -846,10 +874,10 @@ def error_line (e : WeaverError) : TLine :=
 /// screen mid-frame -- the recorded UI-repair finding). Drive the loop
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
-def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
+def drive_tui (log : Option Logger) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let _ <- write_usage st.store st.run.session.spent;
     let gated : RunState := { (st.run) with gate := Gate.weaver_tui st.mode st.colors,
-        emit := progress_live st.store, on_usage := usage_live st.store };
+        emit := progress_live log st.store, on_usage := usage_live log st.store };
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
@@ -857,8 +885,12 @@ def drive_tui (st : WeaverState) (text : String) : ResultT WeaverError IO RunSta
 /// Persist every streamed fragment (live.txt). The terminal no longer
 /// gets a raw preview: the live thinking row under the prompt is the
 /// mid-turn display, and the turn's real block lands at completion.
-def progress_live (store : Option StoreState) (frag : String) : IO Unit :=
+def progress_live (log : Option Logger) (store : Option StoreState) (frag : String) : IO Unit := do {
+    if String.starts_with "retrying" frag
+    then Logs.warn log (String.concat "ev=provider_retry " frag)
+    else IO.pure unit;
     persist_chunk store frag
+}
 
 def persist_chunk (store : Option StoreState) (frag : String) : IO Unit :=
     match store {

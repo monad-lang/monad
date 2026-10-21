@@ -38,7 +38,7 @@ def state_of (mode : Mode) : WeaverState :=
     { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
-    let m : TuiModel := init_tui_model (state_of mode) 24 80 in
+    let m : TuiModel := init_tui_model Option.none (state_of mode) 24 80 in
     { m with banner := false }
 
 def mode_eq (a : Mode) (b : Mode) : Bool :=
@@ -416,7 +416,7 @@ def lines_go (i : I64) (n : I64) : List TLine :=
 
 def big_model (stored : Bool) : TuiModel :=
     let st : WeaverState := if stored then state_with_store Mode.manual else state_of Mode.manual in
-    let m : TuiModel := init_tui_model st 24 80 in
+    let m : TuiModel := init_tui_model Option.none st 24 80 in
     Model.append_block { m with banner := false } (lines_go 1 600)
 
 #[test]

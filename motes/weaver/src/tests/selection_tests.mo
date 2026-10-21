@@ -31,7 +31,7 @@ def state_of : WeaverState :=
     { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of : TuiModel :=
-    let m : TuiModel := init_tui_model state_of 24 80 in
+    let m : TuiModel := init_tui_model Option.none state_of 24 80 in
     { m with banner := false }
 
 def plain_lines (ss : List String) : List TLine :=

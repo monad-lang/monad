@@ -149,7 +149,7 @@ pub def Procs.read_meta (p : Path) : IO (Option (Pair String (Pair String I64)))
 // ── status ──────────────────────────────────────────────────────────────
 
 def is_running (pid : I64) : IO Bool := do {
-    let code <- exec_cmd "sh" ["-c", String.concat "kill -0 " (I64.to_string pid)];
+    let code <- exec_cmd "sh" ["-c", String.concat "kill -0 " (String.concat (I64.to_string pid) " 2>/dev/null")];
     IO.pure (I64.beq code 0)
 }
 
@@ -373,7 +373,7 @@ def take_last (n : I64) (xs : List String) : List String :=
 
 def kill_running (e : ProcEntry) : IO (Result String String) := do {
     let script : String := String.concat "kill -TERM " (String.concat (I64.to_string e.pid)
-        (String.concat "; sleep 0.2; kill -KILL " (I64.to_string e.pid)));
+        (String.concat " 2>/dev/null; sleep 0.2; kill -KILL " (String.concat (I64.to_string e.pid) " 2>/dev/null")));
     let _ <- exec_cmd "sh" ["-c", script];
     let _ <- write_text (dir_child e "killed") "1";
     IO.pure (Result.ok (String.concat "killed " e.id))

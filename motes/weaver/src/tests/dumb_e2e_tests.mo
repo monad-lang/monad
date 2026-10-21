@@ -307,7 +307,7 @@ def test_dumb_e2e_manual_approval_and_plan_refusal : IO Bool := do {
     let _ <- write_inputs;
     let _ <- write_text cursor_path "0";
     let _ <- write_text tap_path "";
-    let st <- Dumb.run scripted_read tap_write (state_of stamp_registry);
+    let st <- Dumb.run Option.none scripted_read tap_write (state_of stamp_registry);
     let cursor <- read_cursor;
     let tap <- read_tap;
     return (final_state_ok st cursor tap)
@@ -373,7 +373,7 @@ def test_dumb_e2e_edit_approval_shows_diff : IO Bool := do {
     let _ <- write_edit_inputs;
     let _ <- write_text cursor_path "0";
     let _ <- write_text tap_path "";
-    let st <- Dumb.run scripted_read tap_write (state_of edit_registry);
+    let st <- Dumb.run Option.none scripted_read tap_write (state_of edit_registry);
     let cursor <- read_cursor;
     let tap <- read_tap;
     let file <- read_target edit_target_path;
@@ -404,7 +404,7 @@ def test_dumb_e2e_wire_failure_is_recoverable : IO Bool := do {
     ]));
     let _ <- write_text cursor_path "0";
     let _ <- write_text tap_path "";
-    let st <- Dumb.run scripted_read tap_write (state_of stamp_registry);
+    let st <- Dumb.run Option.none scripted_read tap_write (state_of stamp_registry);
     let cursor <- read_cursor;
     let tap <- read_tap;
     return (Bool.not st.quit
@@ -429,7 +429,7 @@ def test_dumb_e2e_provider_typo_refuses_keeps_session : IO Bool := do {
     let _ <- write_wire_script;
     let _ <- write_text cursor_path "0";
     let _ <- write_text tap_path "";
-    let st <- Dumb.run scripted_read tap_write (state_of stamp_registry);
+    let st <- Dumb.run Option.none scripted_read tap_write (state_of stamp_registry);
     let tap <- read_tap;
     return (fatal_is_none st
         && String.contains tap "unknown provider: bogus"

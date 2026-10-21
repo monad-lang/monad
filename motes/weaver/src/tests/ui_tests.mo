@@ -40,7 +40,7 @@ def state_of : WeaverState :=
     { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of : TuiModel :=
-    let m : TuiModel := init_tui_model state_of 24 80 in
+    let m : TuiModel := init_tui_model Option.none state_of 24 80 in
     { m with banner := false }
 
 def nth_line (i : I64) : String := String.concat "l" (I64.to_string i)
@@ -76,7 +76,7 @@ def test_panel_height_is_rows_minus_six : Bool :=
 /// The launch banner spends four panel rows while it shows.
 #[test]
 def test_banner_spends_four_rows : Bool :=
-    let m : TuiModel := init_tui_model state_of 24 80 in
+    let m : TuiModel := init_tui_model Option.none state_of 24 80 in
     m.banner && panel_height m == 14
 
 #[test]
@@ -102,7 +102,7 @@ def test_scroll_clamps_at_zero : Bool :=
 
 #[test]
 def test_tiny_terminal_clamps_to_zero : Bool :=
-    let tiny : TuiModel := init_tui_model state_of 5 80 in
+    let tiny : TuiModel := init_tui_model Option.none state_of 5 80 in
     let stepped := Model.scroll_step tiny 1 in
     panel_height tiny == 0 && stepped.scroll == 0
 
