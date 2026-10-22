@@ -5,7 +5,7 @@ use std::list {}
 // --- Char predicates ---
 
 #[partial]
-def is_digit (c : String) : Bool :=
+pub def is_digit (c : String) : Bool :=
 	if String.beq "0" c then true
 	else if String.beq "1" c then true
 	else if String.beq "2" c then true
@@ -135,21 +135,21 @@ def is_hex_alpha (c : String) : Bool :=
 
 
 #[partial]
-def is_hex_digit (c : String) : Bool :=
+pub def is_hex_digit (c : String) : Bool :=
 	if is_digit c then true
 	else is_hex_alpha c
 
 
 // --- String prefix check ---
 
-def is_prefix (pre : String) (s : String) : Bool :=
+pub def is_prefix (pre : String) (s : String) : Bool :=
 	pre == (String.slice s 0 (String.length pre))
 
 
 // --- Identifier start check ---
 
 #[partial]
-def ident_start (c : String) : Bool :=
+pub def ident_start (c : String) : Bool :=
 	if is_alpha c then true
 	else String.beq "_" c
 
@@ -205,7 +205,7 @@ pub def is_space_byte (c : U8) : Bool :=
 /// `'0'`..`'9'` (48..57) -- byte-wise `is_digit`, a range check instead
 /// of that function's ten-way `String.beq` chain.
 #[partial]
-def is_digit_byte (c : U8) : Bool :=
+pub def is_digit_byte (c : U8) : Bool :=
 	if U8.lt c 48u8 then false
 	else Bool.not (U8.gt c 57u8)
 
@@ -253,6 +253,6 @@ def is_hex_digit_byte (c : U8) : Bool :=
 /// Byte-wise `is_digit_or_underscore` (`lang/parser/number.mo`'s own
 /// predicate, byte form kept here beside its siblings).
 #[partial]
-def is_digit_or_underscore_byte (c : U8) : Bool :=
+pub def is_digit_or_underscore_byte (c : U8) : Bool :=
 	if is_digit_byte c then true
 	else U8.beq c 95u8

@@ -139,16 +139,16 @@ pub def Cli.take_opt (long : String) (short : String) (default : String) (args :
 // hygiene concerns; the fixed `__cli_` prefix just keeps those auxiliary
 // names out of a real field's own namespace.
 
-def cli_field_name (f : FieldInfo) : String :=
+pub def cli_field_name (f : FieldInfo) : String :=
     match f { field_info name typ attrs default => name }
 
-def cli_field_typ (f : FieldInfo) : Expr :=
+pub def cli_field_typ (f : FieldInfo) : Expr :=
     match f { field_info name typ attrs default => typ }
 
-def cli_field_attrs (f : FieldInfo) : List String :=
+pub def cli_field_attrs (f : FieldInfo) : List String :=
     match f { field_info name typ attrs default => attrs }
 
-def cli_field_default (f : FieldInfo) : Option Expr :=
+pub def cli_field_default (f : FieldInfo) : Option Expr :=
     match f { field_info name typ attrs default => default }
 
 // ─── Type classification ──────────────────────────────────────────────
@@ -156,7 +156,7 @@ def cli_field_default (f : FieldInfo) : Option Expr :=
 /// The field shapes `#[derive Cli]` understands. Anything else is a
 /// `Decl.d_error` naming the field, rather than generated code that fails
 /// with a confusing type error.
-type Cli.TypeClass {
+pub type Cli.TypeClass {
     tc_bool,
     tc_string,
     tc_i64,
@@ -165,13 +165,13 @@ type Cli.TypeClass {
     tc_list_string,
 }
 
-def cli_class_of_name (name : String) : Option Cli.TypeClass :=
+pub def cli_class_of_name (name : String) : Option Cli.TypeClass :=
     if String.beq name "Bool" then Option.some Cli.TypeClass.tc_bool
     else if String.beq name "String" then Option.some Cli.TypeClass.tc_string
     else if String.beq name "I64" then Option.some Cli.TypeClass.tc_i64
     else Option.none
 
-def cli_option_class (a : Expr) : Option Cli.TypeClass :=
+pub def cli_option_class (a : Expr) : Option Cli.TypeClass :=
     match a {
         e_var name =>
             if String.beq name "String" then Option.some Cli.TypeClass.tc_option_string
@@ -180,18 +180,18 @@ def cli_option_class (a : Expr) : Option Cli.TypeClass :=
         _ => Option.none,
     }
 
-def cli_list_class (a : Expr) : Option Cli.TypeClass :=
+pub def cli_list_class (a : Expr) : Option Cli.TypeClass :=
     match a {
         e_var name => if String.beq name "String" then Option.some Cli.TypeClass.tc_list_string else Option.none,
         _ => Option.none,
     }
 
-def cli_class_of_app (name : String) (a : Expr) : Option Cli.TypeClass :=
+pub def cli_class_of_app (name : String) (a : Expr) : Option Cli.TypeClass :=
     if String.beq name "Option" then cli_option_class a
     else if String.beq name "List" then cli_list_class a
     else Option.none
 
-def cli_type_class (t : Expr) : Option Cli.TypeClass :=
+pub def cli_type_class (t : Expr) : Option Cli.TypeClass :=
     match t {
         e_var name => cli_class_of_name name,
         e_app f a =>
@@ -202,36 +202,36 @@ def cli_type_class (t : Expr) : Option Cli.TypeClass :=
         _ => Option.none,
     }
 
-def cli_class_is_option (c : Cli.TypeClass) : Bool :=
+pub def cli_class_is_option (c : Cli.TypeClass) : Bool :=
     match c {
         Cli.TypeClass.tc_option_string => true,
         Cli.TypeClass.tc_option_i64 => true,
         _ => false,
     }
 
-def cli_class_is_list (c : Cli.TypeClass) : Bool :=
+pub def cli_class_is_list (c : Cli.TypeClass) : Bool :=
     match c { Cli.TypeClass.tc_list_string => true, _ => false }
 
-def cli_class_is_i64 (c : Cli.TypeClass) : Bool :=
+pub def cli_class_is_i64 (c : Cli.TypeClass) : Bool :=
     match c {
         Cli.TypeClass.tc_i64 => true,
         Cli.TypeClass.tc_option_i64 => true,
         _ => false,
     }
 
-def cli_class_is_bool (c : Cli.TypeClass) : Bool :=
+pub def cli_class_is_bool (c : Cli.TypeClass) : Bool :=
     match c { Cli.TypeClass.tc_bool => true, _ => false }
 
 // ─── Attribute/name mapping ───────────────────────────────────────────
 
-def cli_kind_name (k : Cli.ArgKind) : String :=
+pub def cli_kind_name (k : Cli.ArgKind) : String :=
     match k {
         Cli.ArgKind.arg_flag => "arg",
         Cli.ArgKind.arg_option => "opt",
         Cli.ArgKind.arg_positional => "pos",
     }
 
-def cli_is_positional (k : Cli.ArgKind) : Bool :=
+pub def cli_is_positional (k : Cli.ArgKind) : Bool :=
     match k { Cli.ArgKind.arg_positional => true, _ => false }
 
 /// Which kind a field is:
@@ -239,7 +239,7 @@ def cli_is_positional (k : Cli.ArgKind) : Bool :=
 /// - otherwise, for a `struct` (where field attributes cannot be carried),
 ///   `Bool` -> flag and everything else -> positional;
 /// - otherwise positional (the historical unannotated form).
-def cli_field_kind (struct_form : Bool) (f : FieldInfo) : Cli.ArgKind :=
+pub def cli_field_kind (struct_form : Bool) (f : FieldInfo) : Cli.ArgKind :=
     let attrs : List String := cli_field_attrs f in
     if Cli.attr_has "arg" attrs then Cli.ArgKind.arg_flag
     else if Cli.attr_has "opt" attrs then Cli.ArgKind.arg_option
@@ -251,32 +251,32 @@ def cli_field_kind (struct_form : Bool) (f : FieldInfo) : Cli.ArgKind :=
         }
     else Cli.ArgKind.arg_positional
 
-def cli_attr_value (k : Cli.ArgKind) (key : String) (f : FieldInfo) : Option String :=
+pub def cli_attr_value (k : Cli.ArgKind) (key : String) (f : FieldInfo) : Option String :=
     Cli.attr_arg (cli_kind_name k) key (cli_field_attrs f)
 
-def cli_first_char (s : String) : String :=
+pub def cli_first_char (s : String) : String :=
     if String.is_empty s then "" else String.slice s 0 1
 
-def cli_long (k : Cli.ArgKind) (f : FieldInfo) : String :=
+pub def cli_long (k : Cli.ArgKind) (f : FieldInfo) : String :=
     match cli_attr_value k "long" f {
         Option.some s => s,
         Option.none => Cli.kebab (cli_field_name f),
     }
 
-def cli_short (k : Cli.ArgKind) (f : FieldInfo) : String :=
+pub def cli_short (k : Cli.ArgKind) (f : FieldInfo) : String :=
     if Cli.attr_has "no_short" (cli_field_attrs f) then ""
     else match cli_attr_value k "short" f {
         Option.some s => s,
         Option.none => if cli_is_positional k then "" else cli_first_char (cli_long k f),
     }
 
-def cli_help (k : Cli.ArgKind) (f : FieldInfo) : String :=
+pub def cli_help (k : Cli.ArgKind) (f : FieldInfo) : String :=
     Option.get_or_default "" (cli_attr_value k "help" f)
 
-def cli_value_name (k : Cli.ArgKind) (f : FieldInfo) : String :=
+pub def cli_value_name (k : Cli.ArgKind) (f : FieldInfo) : String :=
     Option.get_or_default "VALUE" (cli_attr_value k "value_name" f)
 
-def cli_has_default (f : FieldInfo) : Bool :=
+pub def cli_has_default (f : FieldInfo) : Bool :=
     match cli_field_default f {
         Option.some _ => true,
         Option.none => false,
@@ -285,7 +285,7 @@ def cli_has_default (f : FieldInfo) : Bool :=
 /// Help can only render a string default (`cli_default_string`); a
 /// numeric/bool default still makes the field optional, but rendering
 /// `(default: )` would be worse than omitting it.
-def cli_default_has_text (f : FieldInfo) : Bool :=
+pub def cli_default_has_text (f : FieldInfo) : Bool :=
     match cli_field_default f {
         Option.some d =>
             match d {
@@ -298,7 +298,7 @@ def cli_default_has_text (f : FieldInfo) : Bool :=
 /// Help-text rendering only; numeric/bool defaults are applied by the
 /// decoder from the original `Expr` and are deliberately not stringified
 /// here (the meta evaluator has no `I64.to_string`).
-def cli_default_string (f : FieldInfo) : String :=
+pub def cli_default_string (f : FieldInfo) : String :=
     match cli_field_default f {
         Option.some d =>
             match d {
@@ -308,7 +308,7 @@ def cli_default_string (f : FieldInfo) : String :=
         Option.none => "",
     }
 
-def cli_required (k : Cli.ArgKind) (f : FieldInfo) : Bool :=
+pub def cli_required (k : Cli.ArgKind) (f : FieldInfo) : Bool :=
     match k {
         Cli.ArgKind.arg_flag => false,
         _ =>
@@ -319,13 +319,13 @@ def cli_required (k : Cli.ArgKind) (f : FieldInfo) : Bool :=
             },
     }
 
-def cli_multiple (f : FieldInfo) : Bool :=
+pub def cli_multiple (f : FieldInfo) : Bool :=
     match cli_type_class (cli_field_typ f) {
         Option.none => false,
         Option.some c => cli_class_is_list c,
     }
 
-def cli_value_type_expr (f : FieldInfo) : Expr :=
+pub def cli_value_type_expr (f : FieldInfo) : Expr :=
     match cli_type_class (cli_field_typ f) {
         Option.none => e_var "Cli.ArgValueType.arg_string",
         Option.some c => if cli_class_is_i64 c then e_var "Cli.ArgValueType.arg_i64" else e_var "Cli.ArgValueType.arg_string",
@@ -333,18 +333,18 @@ def cli_value_type_expr (f : FieldInfo) : Expr :=
 
 // ─── Expr construction helpers ────────────────────────────────────────
 
-def cli_app1 (f : String) (a : Expr) : Expr := e_app (e_var f) a
-def cli_app2 (f : String) (a : Expr) (b : Expr) : Expr := e_app (cli_app1 f a) b
-def cli_app3 (f : String) (a : Expr) (b : Expr) (c : Expr) : Expr := e_app (cli_app2 f a b) c
-def cli_app4 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) : Expr := e_app (cli_app3 f a b c) d
-def cli_app5 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) : Expr := e_app (cli_app4 f a b c d) e
-def cli_app6 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) : Expr := e_app (cli_app5 f a b c d e) g
-def cli_app7 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) (h : Expr) : Expr := e_app (cli_app6 f a b c d e g) h
-def cli_app8 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) (h : Expr) (i : Expr) : Expr := e_app (cli_app7 f a b c d e g h) i
-def cli_app9 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) (h : Expr) (i : Expr) (j : Expr) : Expr := e_app (cli_app8 f a b c d e g h i) j
+pub def cli_app1 (f : String) (a : Expr) : Expr := e_app (e_var f) a
+pub def cli_app2 (f : String) (a : Expr) (b : Expr) : Expr := e_app (cli_app1 f a) b
+pub def cli_app3 (f : String) (a : Expr) (b : Expr) (c : Expr) : Expr := e_app (cli_app2 f a b) c
+pub def cli_app4 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) : Expr := e_app (cli_app3 f a b c) d
+pub def cli_app5 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) : Expr := e_app (cli_app4 f a b c d) e
+pub def cli_app6 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) : Expr := e_app (cli_app5 f a b c d e) g
+pub def cli_app7 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) (h : Expr) : Expr := e_app (cli_app6 f a b c d e g) h
+pub def cli_app8 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) (h : Expr) (i : Expr) : Expr := e_app (cli_app7 f a b c d e g h) i
+pub def cli_app9 (f : String) (a : Expr) (b : Expr) (c : Expr) (d : Expr) (e : Expr) (g : Expr) (h : Expr) (i : Expr) (j : Expr) : Expr := e_app (cli_app8 f a b c d e g h i) j
 
 #[partial]
-def cli_expr_list (xs : List Expr) (nil : Expr) : Expr :=
+pub def cli_expr_list (xs : List Expr) (nil : Expr) : Expr :=
     match xs {
         List.empty => nil,
         List.cons x rest => e_ctor "List.cons" [x, cli_expr_list rest nil],
@@ -352,7 +352,7 @@ def cli_expr_list (xs : List Expr) (nil : Expr) : Expr :=
 
 // ─── Spec construction ────────────────────────────────────────────────
 
-def cli_arg_spec_expr (struct_form : Bool) (f : FieldInfo) : Expr :=
+pub def cli_arg_spec_expr (struct_form : Bool) (f : FieldInfo) : Expr :=
     let k : Cli.ArgKind := cli_field_kind struct_form f in
     let long : String := cli_long k f in
     let short : String := cli_short k f in
@@ -371,17 +371,17 @@ def cli_arg_spec_expr (struct_form : Bool) (f : FieldInfo) : Expr :=
                 (e_str (cli_default_string f)) (e_bool (cli_multiple f)) (e_str help),
     }
 
-def cli_arg_specs (struct_form : Bool) (fields : List FieldInfo) : List Expr :=
+pub def cli_arg_specs (struct_form : Bool) (fields : List FieldInfo) : List Expr :=
     List.map (fn f => cli_arg_spec_expr struct_form f) fields
 
-def cli_command_expr (name : String) : Expr :=
+pub def cli_command_expr (name : String) : Expr :=
     cli_app2 "Cli.command" (e_str name) (e_str "")
 
-def cli_ctor_spec_expr (struct_form : Bool) (command_name : String) (fields : List FieldInfo) : Expr :=
+pub def cli_ctor_spec_expr (struct_form : Bool) (command_name : String) (fields : List FieldInfo) : Expr :=
     let args : Expr := cli_expr_list (cli_arg_specs struct_form fields) (e_var "Cli.no_args") in
     e_app (cli_app1 "Cli.with_args" args) (cli_command_expr command_name)
 
-def cli_sub_specs (ctors : List CtorInfo) : List Expr :=
+pub def cli_sub_specs (ctors : List CtorInfo) : List Expr :=
     match ctors {
         List.empty => List.empty,
         List.cons c rest =>
@@ -391,7 +391,7 @@ def cli_sub_specs (ctors : List CtorInfo) : List Expr :=
             },
     }
 
-def cli_spec_expr (type_name : String) (ctors : List CtorInfo) (struct_form : Bool) (single_command : Bool) : Expr :=
+pub def cli_spec_expr (type_name : String) (ctors : List CtorInfo) (struct_form : Bool) (single_command : Bool) : Expr :=
     if single_command then
         match ctors {
             List.empty => cli_command_expr (Cli.kebab type_name),
@@ -406,21 +406,21 @@ def cli_spec_expr (type_name : String) (ctors : List CtorInfo) (struct_form : Bo
 
 // ─── Decode construction ──────────────────────────────────────────────
 
-def cli_required_option_expr (accessor : String) (long : String) (default : Option Expr) (p : Expr) : Expr :=
+pub def cli_required_option_expr (accessor : String) (long : String) (default : Option Expr) (p : Expr) : Expr :=
     let base : Expr := cli_app2 accessor (e_str long) p in
     match default {
         Option.none => base,
         Option.some d => e_if (cli_app2 "Cli.has_option" (e_str long) p) base d,
     }
 
-def cli_optional_option_expr (accessor : String) (long : String) (default : Option Expr) (p : Expr) : Expr :=
+pub def cli_optional_option_expr (accessor : String) (long : String) (default : Option Expr) (p : Expr) : Expr :=
     let base : Expr := cli_app2 accessor (e_str long) p in
     match default {
         Option.none => base,
         Option.some d => e_if (cli_app2 "Cli.has_option" (e_str long) p) base d,
     }
 
-def cli_option_expr (cls : Option Cli.TypeClass) (long : String) (default : Option Expr) (p : Expr) : Expr :=
+pub def cli_option_expr (cls : Option Cli.TypeClass) (long : String) (default : Option Expr) (p : Expr) : Expr :=
     match cls {
         Option.none => e_str "",
         Option.some c =>
@@ -434,14 +434,14 @@ def cli_option_expr (cls : Option Cli.TypeClass) (long : String) (default : Opti
             },
     }
 
-def cli_required_positional_expr (accessor : String) (idx : I64) (default : Option Expr) (p : Expr) : Expr :=
+pub def cli_required_positional_expr (accessor : String) (idx : I64) (default : Option Expr) (p : Expr) : Expr :=
     let base : Expr := cli_app2 accessor (e_int idx) p in
     match default {
         Option.none => base,
         Option.some d => e_if (cli_app2 "Cli.has_positional" (e_int idx) p) base d,
     }
 
-def cli_positional_expr (cls : Option Cli.TypeClass) (idx : I64) (default : Option Expr) (p : Expr) : Expr :=
+pub def cli_positional_expr (cls : Option Cli.TypeClass) (idx : I64) (default : Option Expr) (p : Expr) : Expr :=
     match cls {
         Option.none => e_str "",
         Option.some c =>
@@ -455,7 +455,7 @@ def cli_positional_expr (cls : Option Cli.TypeClass) (idx : I64) (default : Opti
             },
     }
 
-def cli_field_expr (struct_form : Bool) (f : FieldInfo) (pos_index : I64) : Expr :=
+pub def cli_field_expr (struct_form : Bool) (f : FieldInfo) (pos_index : I64) : Expr :=
     let k : Cli.ArgKind := cli_field_kind struct_form f in
     let long : String := cli_long k f in
     let p : Expr := e_var "p" in
@@ -473,7 +473,7 @@ def cli_field_expr (struct_form : Bool) (f : FieldInfo) (pos_index : I64) : Expr
     }
 
 #[partial]
-def cli_field_exprs (struct_form : Bool) (fields : List FieldInfo) (pos_index : I64) : Pair (List Expr) I64 :=
+pub def cli_field_exprs (struct_form : Bool) (fields : List FieldInfo) (pos_index : I64) : Pair (List Expr) I64 :=
     match fields {
         List.empty => Pair.pair List.empty pos_index,
         List.cons f rest =>
@@ -488,7 +488,7 @@ def cli_field_exprs (struct_form : Bool) (fields : List FieldInfo) (pos_index : 
             },
     }
 
-def cli_ctor_decode_expr (type_name : String) (ctor_name : String) (struct_form : Bool) (fields : List FieldInfo) : Expr :=
+pub def cli_ctor_decode_expr (type_name : String) (ctor_name : String) (struct_form : Bool) (fields : List FieldInfo) : Expr :=
     match cli_field_exprs struct_form fields 0 {
         Pair.pair exprs _ =>
             let applied : Expr := e_ctor (String.concat type_name (String.concat "." ctor_name)) exprs in
@@ -496,7 +496,7 @@ def cli_ctor_decode_expr (type_name : String) (ctor_name : String) (struct_form 
     }
 
 #[partial]
-def cli_decode_chain (type_name : String) (ctors : List CtorInfo) (rest : Expr) : Expr :=
+pub def cli_decode_chain (type_name : String) (ctors : List CtorInfo) (rest : Expr) : Expr :=
     match ctors {
         List.empty => rest,
         List.cons c tail =>
@@ -508,7 +508,7 @@ def cli_decode_chain (type_name : String) (ctors : List CtorInfo) (rest : Expr) 
             },
     }
 
-def cli_decode_expr (type_name : String) (ctors : List CtorInfo) (struct_form : Bool) (single_command : Bool) : Expr :=
+pub def cli_decode_expr (type_name : String) (ctors : List CtorInfo) (struct_form : Bool) (single_command : Bool) : Expr :=
     if single_command then
         match ctors {
             List.empty => e_app (e_var "Result.err") (e_str "missing subcommand"),
@@ -526,7 +526,7 @@ def cli_decode_expr (type_name : String) (ctors : List CtorInfo) (struct_form : 
 // ─── Validation ───────────────────────────────────────────────────────
 
 #[partial]
-def cli_bad_short (k : Cli.ArgKind) (ctor_display : String) (f : FieldInfo) : Option String :=
+pub def cli_bad_short (k : Cli.ArgKind) (ctor_display : String) (f : FieldInfo) : Option String :=
     if cli_is_positional k then Option.none
     else match cli_attr_value k "short" f {
         Option.none => Option.none,
@@ -539,7 +539,7 @@ def cli_bad_short (k : Cli.ArgKind) (ctor_display : String) (f : FieldInfo) : Op
                       else Option.none,
     }
 
-def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInfo) : Option String :=
+pub def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInfo) : Option String :=
     let k : Cli.ArgKind := cli_field_kind struct_form f in
     let name : String := cli_field_name f in
     match cli_bad_short k ctor_display f {
@@ -570,7 +570,7 @@ def cli_bad_field (struct_form : Bool) (ctor_display : String) (f : FieldInfo) :
     }
 
 #[partial]
-def cli_bad_fields (struct_form : Bool) (ctor_display : String) (fields : List FieldInfo) : Option String :=
+pub def cli_bad_fields (struct_form : Bool) (ctor_display : String) (fields : List FieldInfo) : Option String :=
     match fields {
         List.empty => Option.none,
         List.cons f rest =>
@@ -581,7 +581,7 @@ def cli_bad_fields (struct_form : Bool) (ctor_display : String) (fields : List F
     }
 
 #[partial]
-def cli_bad_ctors (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
+pub def cli_bad_ctors (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
     match ctors {
         List.empty => Option.none,
         List.cons c rest =>
@@ -595,7 +595,7 @@ def cli_bad_ctors (struct_form : Bool) (ctors : List CtorInfo) : Option String :
     }
 
 #[partial]
-def cli_short_conflict (short : String) (long : String) (struct_form : Bool) (fields : List FieldInfo) : Option String :=
+pub def cli_short_conflict (short : String) (long : String) (struct_form : Bool) (fields : List FieldInfo) : Option String :=
     match fields {
         List.empty => Option.none,
         List.cons f rest =>
@@ -607,7 +607,7 @@ def cli_short_conflict (short : String) (long : String) (struct_form : Bool) (fi
     }
 
 #[partial]
-def cli_short_conflicts (struct_form : Bool) (fields : List FieldInfo) : Option String :=
+pub def cli_short_conflicts (struct_form : Bool) (fields : List FieldInfo) : Option String :=
     match fields {
         List.empty => Option.none,
         List.cons f rest =>
@@ -622,7 +622,7 @@ def cli_short_conflicts (struct_form : Bool) (fields : List FieldInfo) : Option 
     }
 
 #[partial]
-def cli_short_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
+pub def cli_short_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
     match ctors {
         List.empty => Option.none,
         List.cons c rest =>
@@ -636,7 +636,7 @@ def cli_short_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Optio
     }
 
 #[partial]
-def cli_long_conflict
+pub def cli_long_conflict
         (long : String) (own_name : String) (struct_form : Bool)
         (fields : List FieldInfo) : Option String :=
     match fields {
@@ -652,7 +652,7 @@ def cli_long_conflict
     }
 
 #[partial]
-def cli_long_conflicts (struct_form : Bool) (fields : List FieldInfo) : Option String :=
+pub def cli_long_conflicts (struct_form : Bool) (fields : List FieldInfo) : Option String :=
     match fields {
         List.empty => Option.none,
         List.cons f rest =>
@@ -666,7 +666,7 @@ def cli_long_conflicts (struct_form : Bool) (fields : List FieldInfo) : Option S
     }
 
 #[partial]
-def cli_long_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
+pub def cli_long_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
     match ctors {
         List.empty => Option.none,
         List.cons c rest =>
@@ -680,7 +680,7 @@ def cli_long_conflicts_all (struct_form : Bool) (ctors : List CtorInfo) : Option
     }
 
 #[partial]
-def cli_check_positionals
+pub def cli_check_positionals
         (struct_form : Bool) (ctor_display : String) (fields : List FieldInfo)
         (seen_optional : Bool) (seen_multiple : Bool) : Option String :=
     match fields {
@@ -703,7 +703,7 @@ def cli_check_positionals
     }
 
 #[partial]
-def cli_check_all_positionals (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
+pub def cli_check_all_positionals (struct_form : Bool) (ctors : List CtorInfo) : Option String :=
     match ctors {
         List.empty => Option.none,
         List.cons c rest =>
@@ -718,7 +718,7 @@ def cli_check_all_positionals (struct_form : Bool) (ctors : List CtorInfo) : Opt
 
 // ─── Entry point ──────────────────────────────────────────────────────
 
-def cli_parse_expr (type_name : String) : Expr :=
+pub def cli_parse_expr (type_name : String) : Expr :=
     let lower : String := String.to_lowercase type_name in
     let call : Expr := cli_app2 "Cli.parse" (e_var (String.concat "spec_" lower)) (e_var "args") in
     e_match call [
@@ -808,35 +808,35 @@ defmacro derive_cli T := decls {
 // `List.cons hd List.empty`), which is the other reason for a helper here.
 
 #[partial]
-def Cli.nth (n : I64) (l : List String) : String :=
+pub def Cli.nth (n : I64) (l : List String) : String :=
     match l {
         List.cons hd tl => if n == 0 then hd else Cli.nth (n - 1) tl,
         List.empty => "",
     }
 
 #[test]
-def test_take_flag_found : Bool :=
+pub def test_take_flag_found : Bool :=
     match Cli.take_flag "verbose" "" ["--verbose", "file.mo"] {
         Cli.FlagResult.flag_result found rest =>
             found == true && List.length rest == 1 && Cli.nth 0 rest == "file.mo",
     }
 
 #[test]
-def test_take_flag_not_found : Bool :=
+pub def test_take_flag_not_found : Bool :=
     match Cli.take_flag "verbose" "" ["file.mo"] {
         Cli.FlagResult.flag_result found rest =>
             found == false && List.length rest == 1 && Cli.nth 0 rest == "file.mo",
     }
 
 #[test]
-def test_take_flag_short_form : Bool :=
+pub def test_take_flag_short_form : Bool :=
     match Cli.take_flag "verbose" "v" ["-v", "file.mo"] {
         Cli.FlagResult.flag_result found rest =>
             found == true && List.length rest == 1 && Cli.nth 0 rest == "file.mo",
     }
 
 #[test]
-def test_take_flag_position_independent : Bool :=
+pub def test_take_flag_position_independent : Bool :=
     match Cli.take_flag "v" "" ["a", "--v", "b"] {
         Cli.FlagResult.flag_result found rest =>
             found == true
@@ -846,14 +846,14 @@ def test_take_flag_position_independent : Bool :=
     }
 
 #[test]
-def test_take_flag_empty_args : Bool :=
+pub def test_take_flag_empty_args : Bool :=
     match Cli.take_flag "v" "" [] {
         Cli.FlagResult.flag_result found rest =>
             found == false,
     }
 
 #[test]
-def test_take_positional_some : Bool :=
+pub def test_take_positional_some : Bool :=
     match Cli.take_positional ["a", "b"] {
         Cli.PosResult.pos_result value rest =>
             match value {
@@ -863,7 +863,7 @@ def test_take_positional_some : Bool :=
     }
 
 #[test]
-def test_take_positional_none : Bool :=
+pub def test_take_positional_none : Bool :=
     match Cli.take_positional [] {
         Cli.PosResult.pos_result value rest =>
             match value {
@@ -873,28 +873,28 @@ def test_take_positional_none : Bool :=
     }
 
 #[test]
-def test_take_opt_found : Bool :=
+pub def test_take_opt_found : Bool :=
     match Cli.take_opt "output" "" "source" ["--output", "out", "a.mo"] {
         Cli.OptResult.opt_result value rest =>
             value == "out" && List.length rest == 1 && Cli.nth 0 rest == "a.mo",
     }
 
 #[test]
-def test_take_opt_short_form : Bool :=
+pub def test_take_opt_short_form : Bool :=
     match Cli.take_opt "output" "o" "source" ["-o", "out", "a.mo"] {
         Cli.OptResult.opt_result value rest =>
             value == "out" && List.length rest == 1 && Cli.nth 0 rest == "a.mo",
     }
 
 #[test]
-def test_take_opt_default_when_absent : Bool :=
+pub def test_take_opt_default_when_absent : Bool :=
     match Cli.take_opt "output" "" "source" ["a.mo"] {
         Cli.OptResult.opt_result value rest =>
             value == "source" && List.length rest == 1 && Cli.nth 0 rest == "a.mo",
     }
 
 #[test]
-def test_take_opt_default_when_missing_value : Bool :=
+pub def test_take_opt_default_when_missing_value : Bool :=
     match Cli.take_opt "output" "" "source" ["a.mo", "--output"] {
         Cli.OptResult.opt_result value rest =>
             value == "source",

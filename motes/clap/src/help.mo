@@ -7,7 +7,7 @@ use lib::spec {
 }
 
 #[partial]
-def Cli.has_option_arg (args : List Cli.ArgSpec) : Bool :=
+pub def Cli.has_option_arg (args : List Cli.ArgSpec) : Bool :=
     match args {
         List.empty => false,
         List.cons a rest =>
@@ -17,7 +17,7 @@ def Cli.has_option_arg (args : List Cli.ArgSpec) : Bool :=
     }
 
 #[partial]
-def Cli.has_positional_arg (args : List Cli.ArgSpec) : Bool :=
+pub def Cli.has_positional_arg (args : List Cli.ArgSpec) : Bool :=
     match args {
         List.empty => false,
         List.cons a rest =>
@@ -25,7 +25,7 @@ def Cli.has_positional_arg (args : List Cli.ArgSpec) : Bool :=
     }
 
 #[partial]
-def Cli.has_long_arg (name : String) (args : List Cli.ArgSpec) : Bool :=
+pub def Cli.has_long_arg (name : String) (args : List Cli.ArgSpec) : Bool :=
     match args {
         List.empty => false,
         List.cons a rest =>
@@ -33,7 +33,7 @@ def Cli.has_long_arg (name : String) (args : List Cli.ArgSpec) : Bool :=
     }
 
 #[partial]
-def Cli.has_short_arg (short : String) (args : List Cli.ArgSpec) : Bool :=
+pub def Cli.has_short_arg (short : String) (args : List Cli.ArgSpec) : Bool :=
     match args {
         List.empty => false,
         List.cons a rest =>
@@ -63,11 +63,11 @@ pub def Cli.usage (s : Cli.CommandSpec) : String :=
     String.concat "Usage: " (String.concat s.name tail)
 
 #[partial]
-def Cli.spaces (n : I64) : String :=
+pub def Cli.spaces (n : I64) : String :=
     if I64.lt n 1 then "" else String.concat " " (Cli.spaces (I64.sub n 1))
 
 #[partial]
-def Cli.string_len_max (xs : List String) (acc : I64) : I64 :=
+pub def Cli.string_len_max (xs : List String) (acc : I64) : I64 :=
     match xs {
         List.empty => acc,
         List.cons x rest =>
@@ -76,13 +76,13 @@ def Cli.string_len_max (xs : List String) (acc : I64) : I64 :=
     }
 
 #[partial]
-def Cli.pad_right (n : I64) (s : String) : String :=
+pub def Cli.pad_right (n : I64) (s : String) : String :=
     String.concat s (Cli.spaces (I64.sub n (String.length s)))
 
-def Cli.arg_value_name (a : Cli.ArgSpec) : String :=
+pub def Cli.arg_value_name (a : Cli.ArgSpec) : String :=
     if String.is_empty a.value_name then "VALUE" else a.value_name
 
-def Cli.arg_label (a : Cli.ArgSpec) : String :=
+pub def Cli.arg_label (a : Cli.ArgSpec) : String :=
     match a.kind {
         Cli.ArgKind.arg_flag =>
             if String.is_empty a.short
@@ -100,20 +100,20 @@ def Cli.arg_label (a : Cli.ArgSpec) : String :=
             else String.concat "<" (String.concat a.long ">"),
     }
 
-def Cli.arg_help (a : Cli.ArgSpec) : String :=
+pub def Cli.arg_help (a : Cli.ArgSpec) : String :=
     if a.has_default
     then String.concat a.help (String.concat " (default: " (String.concat a.default ")"))
     else a.help
 
 #[partial]
-def Cli.arg_labels (args : List Cli.ArgSpec) : List String :=
+pub def Cli.arg_labels (args : List Cli.ArgSpec) : List String :=
     match args {
         List.empty => List.empty,
         List.cons a rest => List.cons (Cli.arg_label a) (Cli.arg_labels rest),
     }
 
 #[partial]
-def Cli.render_arg_lines (width : I64) (args : List Cli.ArgSpec) : List String :=
+pub def Cli.render_arg_lines (width : I64) (args : List Cli.ArgSpec) : List String :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
@@ -123,7 +123,7 @@ def Cli.render_arg_lines (width : I64) (args : List Cli.ArgSpec) : List String :
     }
 
 #[partial]
-def Cli.filter_args (kind : Cli.ArgKind) (args : List Cli.ArgSpec) : List Cli.ArgSpec :=
+pub def Cli.filter_args (kind : Cli.ArgKind) (args : List Cli.ArgSpec) : List Cli.ArgSpec :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
@@ -133,14 +133,14 @@ def Cli.filter_args (kind : Cli.ArgKind) (args : List Cli.ArgSpec) : List Cli.Ar
     }
 
 #[partial]
-def Cli.sub_labels (subs : List Cli.CommandSpec) : List String :=
+pub def Cli.sub_labels (subs : List Cli.CommandSpec) : List String :=
     match subs {
         List.empty => List.empty,
         List.cons s rest => List.cons s.name (Cli.sub_labels rest),
     }
 
 #[partial]
-def Cli.render_sub_lines (width : I64) (subs : List Cli.CommandSpec) : List String :=
+pub def Cli.render_sub_lines (width : I64) (subs : List Cli.CommandSpec) : List String :=
     match subs {
         List.empty => List.empty,
         List.cons s rest =>
@@ -150,14 +150,14 @@ def Cli.render_sub_lines (width : I64) (subs : List Cli.CommandSpec) : List Stri
     }
 
 #[partial]
-def Cli.lines_with_newlines (lines : List String) : List String :=
+pub def Cli.lines_with_newlines (lines : List String) : List String :=
     match lines {
         List.empty => List.empty,
         List.cons line rest => List.cons (String.concat line "\n") (Cli.lines_with_newlines rest),
     }
 
 #[partial]
-def Cli.section (title : String) (lines : List String) : String :=
+pub def Cli.section (title : String) (lines : List String) : String :=
     if List.is_empty lines
     then ""
     else String.concat "\n" (String.concat (String.concat title "\n")

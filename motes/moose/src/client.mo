@@ -407,7 +407,7 @@ def Client.get (u : Uri) (hdrs : Headers) : IO (Result String Response) :=
 /// it), but silently retrying a non-idempotent request on ANY redirect
 /// is the wrong default for an API client; following one is the
 /// caller's decision (`Client.request_with`, directly).
-def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Response) :=
+pub def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Response) :=
   let req : Request :=
     { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
   in
@@ -433,7 +433,7 @@ def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Res
 /// One-shot streaming POST: connect, send, stream the decoded body to
 /// `on_bytes` as it arrives, close, and return the caller's final state with
 /// the whole response (the streamed bytes reassembled as its body).
-def Client.post_stream {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+pub def Client.post_stream {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   let req : Request :=
     { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
   in

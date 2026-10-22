@@ -33,7 +33,7 @@ pub type ParseError {
 /// right position to reuse, since it's the same failure being
 /// re-described, not a new one.
 #[partial]
-def parse_error_remaining (e : ParseError) : String :=
+pub def parse_error_remaining (e : ParseError) : String :=
 	match e {
 		tag _ remaining => remaining,
 		custom _ remaining => remaining,
@@ -55,7 +55,7 @@ pub type ParseResult O {
 // and index 0 is in range exactly when the string is non-empty, so
 // this is semantics-preserving (including the NULL case: length is 0,
 // `get` yields none).
-def is_empty (s : String) : Bool :=
+pub def is_empty (s : String) : Bool :=
 	match String.get s 0 {
 		Option.some _ => false,
 		Option.none => true

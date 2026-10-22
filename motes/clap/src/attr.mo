@@ -20,7 +20,7 @@ pub def Cli.attr_name (s : String) : String :=
     Cli.attr_name_at s 0
 
 #[partial]
-def Cli.attr_name_at (s : String) (i : I64) : String :=
+pub def Cli.attr_name_at (s : String) (i : I64) : String :=
     if I64.lt i (String.length s) then
         if String.beq (String.slice s i 1) "("
         then String.slice s 0 i
@@ -36,7 +36,7 @@ pub def Cli.attr_has (name : String) (attrs : List String) : Bool :=
     }
 
 #[partial]
-def Cli.find_char (ch : String) (s : String) (i : I64) : Option I64 :=
+pub def Cli.find_char (ch : String) (s : String) (i : I64) : Option I64 :=
     if I64.lt i (String.length s) then
         if String.beq (String.slice s i 1) ch
         then Option.some i
@@ -44,7 +44,7 @@ def Cli.find_char (ch : String) (s : String) (i : I64) : Option I64 :=
     else Option.none
 
 #[partial]
-def Cli.find_sub (needle : String) (s : String) (i : I64) : Option I64 :=
+pub def Cli.find_sub (needle : String) (s : String) (i : I64) : Option I64 :=
     if I64.lt i (String.length s) then
         if String.starts_with needle (String.drop i s)
         then Option.some i
@@ -69,7 +69,7 @@ pub def Cli.attr_body (s : String) : String :=
 /// self-hosted meta evaluator supports -- `derive_cli_meta` runs at
 /// compile time and cannot use `String.to_list`.
 #[partial]
-def Cli.char_at (s : String) (i : I64) : String :=
+pub def Cli.char_at (s : String) (i : I64) : String :=
     let one : String := String.slice s i 1 in
     if Bool.not (String.is_empty one) then one
     else
@@ -81,14 +81,14 @@ def Cli.char_at (s : String) (i : I64) : String :=
             else String.slice s i 4
 
 #[partial]
-def Cli.char_width (c : String) : I64 :=
+pub def Cli.char_width (c : String) : I64 :=
     if String.is_empty c then 1 else String.length c
 
 /// Drop a backslash and copy the character after it. Copying whole
 /// characters keeps non-ASCII text intact; a one-byte slice per character
 /// silently deletes it.
 #[partial]
-def Cli.unescape_from (s : String) (i : I64) (acc : String) : String :=
+pub def Cli.unescape_from (s : String) (i : I64) (acc : String) : String :=
     if I64.lt i (String.length s) then
         let c : String := Cli.char_at s i in
         let w : I64 := Cli.char_width c in
@@ -102,11 +102,11 @@ def Cli.unescape_from (s : String) (i : I64) (acc : String) : String :=
     else acc
 
 #[partial]
-def Cli.unescape (s : String) : String :=
+pub def Cli.unescape (s : String) : String :=
     Cli.unescape_from s 0 ""
 
 #[partial]
-def Cli.decode_attr_value (v : String) : String :=
+pub def Cli.decode_attr_value (v : String) : String :=
     if I64.lt 1 (String.length v)
        && String.beq (String.slice v 0 1) "\""
        && String.beq (String.slice v (I64.sub (String.length v) 1) 1) "\""
@@ -114,7 +114,7 @@ def Cli.decode_attr_value (v : String) : String :=
     else v
 
 #[partial]
-def Cli.parse_kv (piece : String) : Option (Pair String String) :=
+pub def Cli.parse_kv (piece : String) : Option (Pair String String) :=
     match Cli.find_sub ":=" piece 0 {
         Option.none => Option.none,
         Option.some idx =>
@@ -126,7 +126,7 @@ def Cli.parse_kv (piece : String) : Option (Pair String String) :=
 /// Split at commas outside double quotes; escapes are copied through for
 /// `decode_attr_value` to handle.
 #[partial]
-def Cli.split_kv_loop
+pub def Cli.split_kv_loop
         (body : String) (i : I64) (start : I64) (in_quote : Bool) (escaped : Bool)
         (acc : List String) : List String :=
     if I64.lt i (String.length body) then
@@ -144,7 +144,7 @@ def Cli.split_kv_loop
     else List.append acc [String.slice body start (I64.sub (String.length body) start)]
 
 #[partial]
-def Cli.parse_kv_list (pieces : List String) : List (Pair String String) :=
+pub def Cli.parse_kv_list (pieces : List String) : List (Pair String String) :=
     match pieces {
         List.empty => List.empty,
         List.cons p rest =>
@@ -160,7 +160,7 @@ pub def Cli.attr_args (s : String) : List (Pair String String) :=
     Cli.parse_kv_list (Cli.split_kv_loop (Cli.attr_body s) 0 0 false false List.empty)
 
 #[partial]
-def Cli.attr_value_of (key : String) (args : List (Pair String String)) : Option String :=
+pub def Cli.attr_value_of (key : String) (args : List (Pair String String)) : Option String :=
     match args {
         List.empty => Option.none,
         List.cons pair rest =>
@@ -184,7 +184,7 @@ pub def Cli.attr_arg (name : String) (key : String) (attrs : List String) : Opti
 /// reserved word can be a constructor (`use_` -> `use`). Walks bytes and
 /// slices whole characters, so non-ASCII text is preserved.
 #[partial]
-def Cli.kebab_from (s : String) (i : I64) (acc : String) : String :=
+pub def Cli.kebab_from (s : String) (i : I64) (acc : String) : String :=
     if I64.lt i (String.length s) then
         let c : String := Cli.char_at s i in
         let w : I64 := Cli.char_width c in

@@ -14,7 +14,7 @@
 /// type-check corpus) -- like `cli_derive_tests.mo`.
 use lib::args {*}
 
-type DemoCommand {
+pub type DemoCommand {
     compile (path : String) (#[arg] verbose : Bool),
     pretty (path : String),
     help,
@@ -23,7 +23,7 @@ type DemoCommand {
 derive_cli! DemoCommand
 
 #[test]
-def test_derive_cli_self_hosted_compile_with_flag : Bool :=
+pub def test_derive_cli_self_hosted_compile_with_flag : Bool :=
     match parse_democommand ["compile", "a.mo", "--verbose"] {
         Result.ok cmd =>
             match cmd {
@@ -34,7 +34,7 @@ def test_derive_cli_self_hosted_compile_with_flag : Bool :=
     }
 
 #[test]
-def test_derive_cli_self_hosted_compile_without_flag : Bool :=
+pub def test_derive_cli_self_hosted_compile_without_flag : Bool :=
     match parse_democommand ["compile", "a.mo"] {
         Result.ok cmd =>
             match cmd {
@@ -45,7 +45,7 @@ def test_derive_cli_self_hosted_compile_without_flag : Bool :=
     }
 
 #[test]
-def test_derive_cli_self_hosted_pretty : Bool :=
+pub def test_derive_cli_self_hosted_pretty : Bool :=
     match parse_democommand ["pretty", "b.mo"] {
         Result.ok cmd =>
             match cmd {
@@ -56,7 +56,7 @@ def test_derive_cli_self_hosted_pretty : Bool :=
     }
 
 #[test]
-def test_derive_cli_self_hosted_help : Bool :=
+pub def test_derive_cli_self_hosted_help : Bool :=
     match parse_democommand ["help"] {
         Result.ok cmd =>
             match cmd {
@@ -67,7 +67,7 @@ def test_derive_cli_self_hosted_help : Bool :=
     }
 
 #[test]
-def test_derive_cli_self_hosted_unknown_subcommand : Bool :=
+pub def test_derive_cli_self_hosted_unknown_subcommand : Bool :=
     match parse_democommand ["bogus"] {
         Result.ok _ => false,
         Result.err msg => String.contains msg "bogus",

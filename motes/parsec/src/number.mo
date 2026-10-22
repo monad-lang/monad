@@ -24,7 +24,7 @@ def is_digit_or_underscore (c : String) : Bool :=
 
 
 #[partial]
-def number (input : String) : ParseResult I64 :=
+pub def number (input : String) : ParseResult I64 :=
 	number_body (take_while_byte is_digit_or_underscore_byte input)
 
 
@@ -51,7 +51,7 @@ def number_parse (s : String) (rem : String) : ParseResult I64 :=
 // --- Number parsing helpers ---
 
 #[partial]
-def char_to_digit (c : String) : I64 :=
+pub def char_to_digit (c : String) : I64 :=
 	if String.beq "0" c then 0
 	else if String.beq "1" c then 1
 	else if String.beq "2" c then 2
@@ -65,7 +65,7 @@ def char_to_digit (c : String) : I64 :=
 
 
 #[partial]
-def parse_digits (s : String) : I64 :=
+pub def parse_digits (s : String) : I64 :=
 	parse_digits_loop s 0
 
 
@@ -77,7 +77,7 @@ def parse_digits_loop (s : String) (acc : I64) : I64 :=
 
 
 #[partial]
-def parse_digits_char (ch : String) (rest : String) (acc : I64) : I64 :=
+pub def parse_digits_char (ch : String) (rest : String) (acc : I64) : I64 :=
 	parse_digits_loop rest (I64.add (I64.mul acc 10) (char_to_digit ch))
 
 
@@ -113,7 +113,7 @@ def parse_i64_loop (s : String) (acc : I64) : Option I64 :=
 // no underscore-grouping support for any numeric literal.
 
 #[partial]
-def hex_number (input : String) : ParseResult I64 :=
+pub def hex_number (input : String) : ParseResult I64 :=
 	hex_number_body (take_while_byte is_hex_digit_byte input)
 
 
@@ -131,7 +131,7 @@ def hex_number_body (r : ParseResult String) : ParseResult I64 :=
 // --- Hex number parsing helpers ---
 
 #[partial]
-def char_to_hex_digit (c : String) : I64 :=
+pub def char_to_hex_digit (c : String) : I64 :=
 	if is_digit c then char_to_digit c
 	else char_to_hex_digit_alpha c
 

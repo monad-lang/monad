@@ -15,7 +15,7 @@ use lib::help {Cli.help_text, Cli.usage}
 // ─── Lookups ───────────────────────────────────────────────────────────
 
 #[partial]
-def Cli.find_long_loop (name : String) (args : List Cli.ArgSpec) : Option Cli.ArgSpec :=
+pub def Cli.find_long_loop (name : String) (args : List Cli.ArgSpec) : Option Cli.ArgSpec :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -30,7 +30,7 @@ pub def Cli.find_long (name : String) (spec : Cli.CommandSpec) : Option Cli.ArgS
     Cli.find_long_loop name spec.args
 
 #[partial]
-def Cli.find_short_loop (s : String) (args : List Cli.ArgSpec) : Option Cli.ArgSpec :=
+pub def Cli.find_short_loop (s : String) (args : List Cli.ArgSpec) : Option Cli.ArgSpec :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -45,7 +45,7 @@ pub def Cli.find_short (s : String) (spec : Cli.CommandSpec) : Option Cli.ArgSpe
     if String.is_empty s then Option.none else Cli.find_short_loop s spec.args
 
 #[partial]
-def Cli.find_positional_loop (i : I64) (args : List Cli.ArgSpec) : Option Cli.ArgSpec :=
+pub def Cli.find_positional_loop (i : I64) (args : List Cli.ArgSpec) : Option Cli.ArgSpec :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -58,7 +58,7 @@ pub def Cli.find_positional_at (i : I64) (spec : Cli.CommandSpec) : Option Cli.A
     if I64.lt i 0 then Option.none else Cli.find_positional_loop i spec.args
 
 #[partial]
-def Cli.has_option_in_loop (name : String) (xs : List Cli.ArgValue) : Bool :=
+pub def Cli.has_option_in_loop (name : String) (xs : List Cli.ArgValue) : Bool :=
     match xs {
         List.empty => false,
         List.cons x rest => if String.beq x.name name then true else Cli.has_option_in_loop name rest,
@@ -80,7 +80,7 @@ pub def Cli.looks_like_flag (s : String) : Bool :=
         else false
     else false
 
-def Cli.is_negative_number (s : String) : Bool :=
+pub def Cli.is_negative_number (s : String) : Bool :=
     I64.lt 1 (String.length s) && String.beq (String.slice s 0 1) "-" && match Cli.digit_of (String.slice s 1 1) {
         Option.some _ => true,
         Option.none => false,
@@ -93,7 +93,7 @@ pub def Cli.split_first_eq (s : String) : Option (Pair String String) :=
     Cli.split_first_eq_at s 0
 
 #[partial]
-def Cli.split_first_eq_at (s : String) (i : I64) : Option (Pair String String) :=
+pub def Cli.split_first_eq_at (s : String) (i : I64) : Option (Pair String String) :=
     if I64.lt i (String.length s) then
         if String.beq (String.slice s i 1) "="
         then Option.some (Pair.pair (String.slice s 0 i) (String.drop (I64.add i 1) s))
@@ -103,7 +103,7 @@ def Cli.split_first_eq_at (s : String) (i : I64) : Option (Pair String String) :
 // ─── Scanner ───────────────────────────────────────────────────────────
 
 #[partial]
-def Cli.scan
+pub def Cli.scan
         (spec : Cli.CommandSpec) (args : List String) (fenced : Bool)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
@@ -124,7 +124,7 @@ def Cli.scan
     }
 
 #[partial]
-def Cli.add_positional
+pub def Cli.add_positional
         (spec : Cli.CommandSpec) (value : String) (rest : List String) (fenced : Bool)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
@@ -140,7 +140,7 @@ def Cli.add_positional
 // ─── Long options ─────────────────────────────────────────────────────
 
 #[partial]
-def Cli.scan_long
+pub def Cli.scan_long
         (spec : Cli.CommandSpec) (hd : String) (tl : List String)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
@@ -173,7 +173,7 @@ def Cli.scan_long
         }
 
 #[partial]
-def Cli.apply_long_equals
+pub def Cli.apply_long_equals
         (spec : Cli.CommandSpec) (key : String) (value : String) (tl : List String)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
@@ -191,7 +191,7 @@ def Cli.apply_long_equals
     }
 
 #[partial]
-def Cli.consume_option_value
+pub def Cli.consume_option_value
         (spec : Cli.CommandSpec) (a : Cli.ArgSpec) (tl : List String)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
@@ -207,7 +207,7 @@ def Cli.consume_option_value
 // ─── Short options and clusters ───────────────────────────────────────
 
 #[partial]
-def Cli.scan_short
+pub def Cli.scan_short
         (spec : Cli.CommandSpec) (hd : String) (tl : List String)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
@@ -220,7 +220,7 @@ def Cli.scan_short
     else Cli.scan_short_cluster spec hd tl flags options positionals pos_index 1
 
 #[partial]
-def Cli.scan_short_cluster
+pub def Cli.scan_short_cluster
         (spec : Cli.CommandSpec) (token : String) (rest : List String)
         (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) (i : I64) : Cli.ParseResult :=
@@ -255,20 +255,20 @@ def Cli.scan_short_cluster
 
 // ─── Required/typed validation ─────────────────────────────────────────
 
-def Cli.long_claimed (spec : Cli.CommandSpec) (long : String) : Bool :=
+pub def Cli.long_claimed (spec : Cli.CommandSpec) (long : String) : Bool :=
     match Cli.find_long long spec {
         Option.some _ => true,
         Option.none => false,
     }
 
-def Cli.short_claimed (spec : Cli.CommandSpec) (short : String) : Bool :=
+pub def Cli.short_claimed (spec : Cli.CommandSpec) (short : String) : Bool :=
     match Cli.find_short short spec {
         Option.some _ => true,
         Option.none => false,
     }
 
 #[partial]
-def Cli.check_required_options (args : List Cli.ArgSpec) (options : List Cli.ArgValue) : Option String :=
+pub def Cli.check_required_options (args : List Cli.ArgSpec) (options : List Cli.ArgValue) : Option String :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -278,7 +278,7 @@ def Cli.check_required_options (args : List Cli.ArgSpec) (options : List Cli.Arg
     }
 
 #[partial]
-def Cli.required_positional_after
+pub def Cli.required_positional_after
         (i : I64) (args : List Cli.ArgSpec) (positionals : List Cli.ArgValue) : Option String :=
     match args {
         List.empty => Option.none,
@@ -294,7 +294,7 @@ def Cli.required_positional_after
     }
 
 #[partial]
-def Cli.check_i64_options (args : List Cli.ArgSpec) (options : List Cli.ArgValue) : Option String :=
+pub def Cli.check_i64_options (args : List Cli.ArgSpec) (options : List Cli.ArgValue) : Option String :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -307,7 +307,7 @@ def Cli.check_i64_options (args : List Cli.ArgSpec) (options : List Cli.ArgValue
     }
 
 #[partial]
-def Cli.first_bad_i64 (name : String) (options : List Cli.ArgValue) : Option String :=
+pub def Cli.first_bad_i64 (name : String) (options : List Cli.ArgValue) : Option String :=
     match options {
         List.empty => Option.none,
         List.cons x rest =>
@@ -320,7 +320,7 @@ def Cli.first_bad_i64 (name : String) (options : List Cli.ArgValue) : Option Str
     }
 
 #[partial]
-def Cli.check_i64_range
+pub def Cli.check_i64_range
         (i : I64) (long : String) (positionals : List Cli.ArgValue) : Option String :=
     match Cli.nth_positional i positionals {
         Option.none => Option.none,
@@ -334,7 +334,7 @@ def Cli.check_i64_range
     }
 
 #[partial]
-def Cli.check_i64_positionals_after
+pub def Cli.check_i64_positionals_after
         (i : I64) (args : List Cli.ArgSpec) (positionals : List Cli.ArgValue) : Option String :=
     match args {
         List.empty => Option.none,
@@ -363,7 +363,7 @@ def Cli.check_i64_positionals_after
     }
 
 #[partial]
-def Cli.nth_positional (i : I64) (xs : List Cli.ArgValue) : Option Cli.ArgValue :=
+pub def Cli.nth_positional (i : I64) (xs : List Cli.ArgValue) : Option Cli.ArgValue :=
     match xs {
         List.empty => Option.none,
         List.cons x rest => if I64.beq i 0 then Option.some x else Cli.nth_positional (I64.sub i 1) rest,
@@ -376,7 +376,7 @@ pub def Cli.same_value_type (a : Cli.ArgValueType) (b : Cli.ArgValueType) : Bool
     }
 
 #[partial]
-def Cli.finish
+pub def Cli.finish
         (spec : Cli.CommandSpec) (flags : List String) (options : List Cli.ArgValue)
         (positionals : List Cli.ArgValue) (pos_index : I64) : Cli.ParseResult :=
     match Cli.check_required_options spec.args options {
@@ -399,7 +399,7 @@ def Cli.finish
 // ─── Subcommands ──────────────────────────────────────────────────────
 
 #[partial]
-def Cli.select_subcommand
+pub def Cli.select_subcommand
         (spec : Cli.CommandSpec) (name : String) (tl : List String) : Cli.ParseResult :=
     match Cli.find_subcommand name spec.subcommands {
         Option.none => Cli.ParseResult.parse_err (String.concat "unknown subcommand: " name),
@@ -407,14 +407,14 @@ def Cli.select_subcommand
     }
 
 #[partial]
-def Cli.find_subcommand (name : String) (subs : List Cli.CommandSpec) : Option Cli.CommandSpec :=
+pub def Cli.find_subcommand (name : String) (subs : List Cli.CommandSpec) : Option Cli.CommandSpec :=
     match subs {
         List.empty => Option.none,
         List.cons s rest => if String.beq s.name name then Option.some s else Cli.find_subcommand name rest,
     }
 
 #[terminating]
-def Cli.parse_sub
+pub def Cli.parse_sub
         (spec : Cli.CommandSpec) (args : List String) (fenced : Bool) : Cli.ParseResult :=
     match args {
         List.empty => Cli.ParseResult.parse_err "missing subcommand",
@@ -443,7 +443,7 @@ def Cli.parse_sub
 /// derive never emits them; hand-written users get the common
 /// `--global-flag value` forms.
 #[partial]
-def Cli.parse_sub_flag_long (spec : Cli.CommandSpec) (hd : String) (tl : List String) : Cli.ParseResult :=
+pub def Cli.parse_sub_flag_long (spec : Cli.CommandSpec) (hd : String) (tl : List String) : Cli.ParseResult :=
     if String.beq hd "--help" && Bool.not (Cli.long_claimed spec "help")
     then Cli.ParseResult.parse_help (Cli.help_text spec)
     else if String.beq hd "--version" && Bool.not (Cli.long_claimed spec "version")
@@ -486,7 +486,7 @@ def Cli.parse_sub_flag_long (spec : Cli.CommandSpec) (hd : String) (tl : List St
         }
 
 #[partial]
-def Cli.parse_sub_flag_short (spec : Cli.CommandSpec) (cluster : String) (tl : List String) : Cli.ParseResult :=
+pub def Cli.parse_sub_flag_short (spec : Cli.CommandSpec) (cluster : String) (tl : List String) : Cli.ParseResult :=
     let c : String := String.slice cluster 0 1 in
     match Cli.find_short c spec {
         Option.none => Cli.ParseResult.parse_err (String.concat "unknown flag: -" c),

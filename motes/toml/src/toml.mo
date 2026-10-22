@@ -1202,7 +1202,7 @@ def Toml.is_array (v : Toml.Value) : Bool :=
 
 // ─── Accessors ───
 
-def Toml.get_string (v : Toml.Value) : Result String String :=
+pub def Toml.get_string (v : Toml.Value) : Result String String :=
   match v { string s => ok s, _ => err "expected string" }
 
 pub def Toml.get_integer (v : Toml.Value) : Result String I64 :=

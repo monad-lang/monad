@@ -11,7 +11,7 @@ open ParseResult {fail, success}
 // --- Combinators ---
 
 #[partial]
-def tag (s : String) (input : String) : ParseResult String :=
+pub def tag (s : String) (input : String) : ParseResult String :=
 	if is_prefix s input
 	then success (String.drop (String.length s) input) s
 	else fail (ParseError.tag s input)
@@ -37,7 +37,7 @@ def tag (s : String) (input : String) : ParseResult String :=
 /// inverted (here the keyword is checked FIRST, so the boundary has to be
 /// checked explicitly afterward instead of getting it for free).
 #[partial]
-def tag_keyword (s : String) (input : String) : ParseResult String :=
+pub def tag_keyword (s : String) (input : String) : ParseResult String :=
 	match tag s input {
 		success rem matched =>
 			if keyword_boundary_ok rem
@@ -115,7 +115,7 @@ def furthest_error (e1 : ParseError) (e2 : ParseError) : ParseError :=
 
 
 #[partial]
-def alt (a : String -> ParseResult A) (b : String -> ParseResult A) (input : String) : ParseResult A :=
+pub def alt (a : String -> ParseResult A) (b : String -> ParseResult A) (input : String) : ParseResult A :=
 	alt_body (a input) b input
 
 
@@ -162,7 +162,7 @@ def alt_second (r : ParseResult A) (e1 : ParseError) (input : String) : ParseRes
 /// the call whose `p` failed, not the original, which is why the failing
 /// arm here returns its own `input` rather than an outer one.
 #[partial]
-def many0 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+pub def many0 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
 	many0_go p input List.empty
 
 
@@ -175,7 +175,7 @@ def many0_go (p : String -> ParseResult A) (input : String) (acc : List A) : Par
 
 
 #[partial]
-def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+pub def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
 	match many0 p input {
 		success rem out =>
 			if List.is_empty out
@@ -188,7 +188,7 @@ def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) 
 // --- Extended combinators (Phase 1.1) ---
 
 #[partial]
-def map_parse (f : A -> B) (p : String -> ParseResult A) (input : String) : ParseResult B :=
+pub def map_parse (f : A -> B) (p : String -> ParseResult A) (input : String) : ParseResult B :=
 	map_parse_body (p input) f
 
 
@@ -211,7 +211,7 @@ def map_parse_fail (e : ParseError) : ParseResult B :=
 
 
 #[partial]
-def bind_parse (p : String -> ParseResult A) (f : A -> String -> ParseResult B) (input : String) : ParseResult B :=
+pub def bind_parse (p : String -> ParseResult A) (f : A -> String -> ParseResult B) (input : String) : ParseResult B :=
 	bind_parse_body (p input) f
 
 
@@ -229,7 +229,7 @@ def bind_parse_fail (e : ParseError) : ParseResult B :=
 
 
 #[partial]
-def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
+pub def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
 	match parsers {
 		List.cons p ps => alt_fold_try (p input) ps input Option.none,
 		List.empty => fail (ParseError.custom "alt_fold: empty list" input)
@@ -281,7 +281,7 @@ def alt_fold_ok (rem : String) (out : A) : ParseResult A :=
 // --- Position-based combinators ---
 
 #[partial]
-def preceded_by (before : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult B :=
+pub def preceded_by (before : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult B :=
 	preceded_by_body (before input) p
 
 
@@ -299,7 +299,7 @@ def preceded_by_err (e : ParseError) : ParseResult B :=
 
 
 #[partial]
-def terminated_by (p : String -> ParseResult A) (after : String -> ParseResult B) (input : String) : ParseResult A :=
+pub def terminated_by (p : String -> ParseResult A) (after : String -> ParseResult B) (input : String) : ParseResult A :=
 	terminated_by_body (p input) after
 
 
@@ -330,7 +330,7 @@ def terminated_by_err (e : ParseError) : ParseResult A :=
 
 
 #[partial]
-def delimited_by (before : String -> ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) (input : String) : ParseResult B :=
+pub def delimited_by (before : String -> ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) (input : String) : ParseResult B :=
 	delimited_by_before (before input) p after
 
 
@@ -369,7 +369,7 @@ def delimited_by_err (e : ParseError) : ParseResult B :=
 
 
 #[partial]
-def separated_by (sep : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult (List B) :=
+pub def separated_by (sep : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult (List B) :=
 	separated_by_body (p input) p sep input List.empty
 
 
@@ -416,7 +416,7 @@ def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
 // the right amount instead of always 1.
 
 #[partial]
-def utf8_char_width (s : String) : I64 :=
+pub def utf8_char_width (s : String) : I64 :=
 	match String.get s 0 {
 		Option.some byte => utf8_char_width_of_byte byte,
 		// Empty input — width is moot (take_while_loop already checks
@@ -554,7 +554,7 @@ def take_while_byte_go (pred : U8 -> Bool) (original : String) (cur : String) (n
 // --- Optional parser ---
 
 #[partial]
-def opt (p : String -> ParseResult A) (input : String) : ParseResult (Option A) :=
+pub def opt (p : String -> ParseResult A) (input : String) : ParseResult (Option A) :=
 	opt_body (p input) input
 
 

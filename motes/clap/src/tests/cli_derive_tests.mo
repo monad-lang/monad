@@ -15,14 +15,14 @@
 use lib::args {*}
 
 #[derive Cli]
-type DemoCommand {
+pub type DemoCommand {
     compile (path : String) (#[arg] verbose : Bool),
     pretty (path : String),
     help,
 }
 
 #[test]
-def test_derive_cli_compile_with_flag : Bool :=
+pub def test_derive_cli_compile_with_flag : Bool :=
     match parse_democommand ["compile", "a.mo", "--verbose"] {
         Result.ok cmd =>
             match cmd {
@@ -33,7 +33,7 @@ def test_derive_cli_compile_with_flag : Bool :=
     }
 
 #[test]
-def test_derive_cli_compile_without_flag : Bool :=
+pub def test_derive_cli_compile_without_flag : Bool :=
     match parse_democommand ["compile", "a.mo"] {
         Result.ok cmd =>
             match cmd {
@@ -44,7 +44,7 @@ def test_derive_cli_compile_without_flag : Bool :=
     }
 
 #[test]
-def test_derive_cli_pretty : Bool :=
+pub def test_derive_cli_pretty : Bool :=
     match parse_democommand ["pretty", "b.mo"] {
         Result.ok cmd =>
             match cmd {
@@ -55,7 +55,7 @@ def test_derive_cli_pretty : Bool :=
     }
 
 #[test]
-def test_derive_cli_help : Bool :=
+pub def test_derive_cli_help : Bool :=
     match parse_democommand ["help"] {
         Result.ok cmd =>
             match cmd {
@@ -66,21 +66,21 @@ def test_derive_cli_help : Bool :=
     }
 
 #[test]
-def test_derive_cli_unknown_subcommand : Bool :=
+pub def test_derive_cli_unknown_subcommand : Bool :=
     match parse_democommand ["bogus"] {
         Result.ok _ => false,
         Result.err msg => String.contains msg "bogus",
     }
 
 #[test]
-def test_derive_cli_missing_positional : Bool :=
+pub def test_derive_cli_missing_positional : Bool :=
     match parse_democommand ["compile"] {
         Result.ok _ => false,
         Result.err msg => String.contains msg "path",
     }
 
 #[test]
-def test_derive_cli_empty_argv : Bool :=
+pub def test_derive_cli_empty_argv : Bool :=
     match parse_democommand [] {
         Result.ok _ => false,
         Result.err _ => true,

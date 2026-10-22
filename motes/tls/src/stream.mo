@@ -29,7 +29,7 @@ use lib::ffi {
 /// frees both, and the ctx is unreachable without the stream), and the
 /// socket they ride on (close closes it, and `SSL_set_fd` bound the ssl
 /// to this descriptor specifically).
-struct Tls.Stream {
+pub struct Tls.Stream {
   ssl : Ptr,
   ctx : Ptr,
   sock : FdStream

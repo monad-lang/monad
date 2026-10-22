@@ -215,7 +215,7 @@ pub def Cli.flag_set (name : String) (p : Cli.Parsed) : Bool :=
     List.any (fn n => String.beq n name) p.flags
 
 #[partial]
-def Cli.flag_count_loop (name : String) (xs : List String) (acc : I64) : I64 :=
+pub def Cli.flag_count_loop (name : String) (xs : List String) (acc : I64) : I64 :=
     match xs {
         List.empty => acc,
         List.cons x rest =>
@@ -228,7 +228,7 @@ pub def Cli.flag_count (name : String) (p : Cli.Parsed) : I64 :=
     Cli.flag_count_loop name p.flags 0
 
 #[partial]
-def Cli.option_value_loop (name : String) (xs : List Cli.ArgValue) (acc : Option String) : Option String :=
+pub def Cli.option_value_loop (name : String) (xs : List Cli.ArgValue) (acc : Option String) : Option String :=
     match xs {
         List.empty => acc,
         List.cons x rest =>
@@ -250,7 +250,7 @@ pub def Cli.has_option (name : String) (p : Cli.Parsed) : Bool :=
 /// The selected subcommand's spec, for printing its usage when decoding
 /// its result fails.
 #[partial]
-def Cli.find_subcommand (name : String) (subs : List Cli.CommandSpec) : Option Cli.CommandSpec :=
+pub def Cli.find_subcommand (name : String) (subs : List Cli.CommandSpec) : Option Cli.CommandSpec :=
     match subs {
         List.empty => Option.none,
         List.cons sub rest =>
@@ -261,7 +261,7 @@ pub def Cli.subcommand_named (name : String) (s : Cli.CommandSpec) : Option Cli.
     Cli.find_subcommand name s.subcommands
 
 #[partial]
-def Cli.option_values_loop (name : String) (xs : List Cli.ArgValue) (acc : List String) : List String :=
+pub def Cli.option_values_loop (name : String) (xs : List Cli.ArgValue) (acc : List String) : List String :=
     match xs {
         List.empty => acc,
         List.cons x rest =>
@@ -277,7 +277,7 @@ pub def Cli.required_option (name : String) (p : Cli.Parsed) : String :=
     Option.get_or_default "" (Cli.option_value name p)
 
 #[partial]
-def Cli.positional_at_loop (i : I64) (xs : List Cli.ArgValue) : Option Cli.ArgValue :=
+pub def Cli.positional_at_loop (i : I64) (xs : List Cli.ArgValue) : Option Cli.ArgValue :=
     match xs {
         List.empty => Option.none,
         List.cons x rest =>
@@ -294,7 +294,7 @@ pub def Cli.has_positional (i : I64) (p : Cli.Parsed) : Bool :=
     I64.lt i (List.length p.positionals)
 
 #[partial]
-def Cli.positionals_from_loop (i : I64) (xs : List Cli.ArgValue) : List Cli.ArgValue :=
+pub def Cli.positionals_from_loop (i : I64) (xs : List Cli.ArgValue) : List Cli.ArgValue :=
     match xs {
         List.empty => List.empty,
         List.cons x rest =>
@@ -302,7 +302,7 @@ def Cli.positionals_from_loop (i : I64) (xs : List Cli.ArgValue) : List Cli.ArgV
     }
 
 #[partial]
-def Cli.arg_values_to_strings (xs : List Cli.ArgValue) : List String :=
+pub def Cli.arg_values_to_strings (xs : List Cli.ArgValue) : List String :=
     match xs {
         List.empty => List.empty,
         List.cons x rest => List.cons x.value (Cli.arg_values_to_strings rest),
@@ -332,7 +332,7 @@ pub def Cli.parse_i64 (s : String) : Option I64 :=
     else Cli.parse_i64_unsigned s 0
 
 #[partial]
-def Cli.parse_i64_unsigned (s : String) (acc : I64) : Option I64 :=
+pub def Cli.parse_i64_unsigned (s : String) (acc : I64) : Option I64 :=
     if String.is_empty s then Option.some acc
     else
         let c : String := String.slice s 0 1 in
