@@ -6,7 +6,7 @@ use lang::types {
   package_private, param_many, priv_, pub_, sort_n, unnamed,
 }
 use lang::scope {
-  LocalTypeBinding, add_constraint_dict_params, bind_term_vars, build_scope_from_decls,
+  LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bind_term_vars, build_scope_from_decls,
   build_scope_from_modules, find_constraint_bound_carrier_any, infer_carrier_type,
   list_append, lookup_binding, mk, npath_eq, placeholder_carrier, resolve_def_in_scope_by_name,
   scope_data_add_def, scope_data_add_inductive, scope_data_add_instance,
@@ -770,7 +770,7 @@ def test_dict_param_type_is_hole : Bool :=
     let def_name : NamePath := NamePath.mk (List.cons (Identifier.id "HAdd_A_A_A_add") List.empty) in
     let empty_attrs : List Attribute := List.empty in
     let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private List.empty in
-    match add_constraint_dict_params df {
+    match add_constraint_dict_params bare_map_empty df {
         Def.mk {typ := _new_typ, term := new_term, ..} =>
             match new_term {
                 Term.lam _dbg param_typ _body =>

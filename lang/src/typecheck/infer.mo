@@ -27,7 +27,7 @@ use lang::scope {
   instance_wildcard_names, list_append, mangle_instance_dict_name,
   mangle_instance_method_name, mangled_to_identifier, param_names,
   rebuild_call,
-  resolve_dict_args, scope_data_add_inductive, scope_data_classes,
+  resolve_dict_args, scope_data_add_inductive, scope_data_classes, scope_data_constrained_def_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
   scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_dict_constraints,
   scope_find_def_params, scope_find_def_return_type,
@@ -502,13 +502,42 @@ def informative_carrier_of (t : Term) : Option Term :=
         Option.none => Option.none,
     }
 
+/// Every constraint is either already forwarded from this scope's own
+/// dictionary environment or has every variable bound to an informative
+/// value. The second half is Item 2's invariant: a hole carrier must
+/// never reach `resolve_dict_arg`, where a wildcard-headed bridge
+/// instance matches it and `arg_is_dict` makes the wrong committed
+/// dictionary final. The first half is sound for the SAME reason -- a
+/// constraint answered by a local binding (`local_dict_for_class`, the
+/// D5 tier `resolve_dict_arg` reads before any carrier) does no carrier
+/// matching at all -- and its absence suppressed a forward this checker
+/// can make: a `through [Bind M] := step m` body solves `M` to itself,
+/// so the whole-call guard refused even though `__dict_Bind` is bound
+/// right there.
+def constraints_resolvable (cs : List TypeConstraint) (bindings : List (Pair Identifier Term)) (scope : Scope) (locals : LocalScope) : Bool :=
+    match cs {
+        List.empty => true,
+        List.cons c rest =>
+            constraint_resolvable c bindings scope locals && constraints_resolvable rest bindings scope locals,
+    }
+
+#[partial]
+def constraint_resolvable (c : TypeConstraint) (bindings : List (Pair Identifier Term)) (scope : Scope) (locals : LocalScope) : Bool :=
+    match c {
+        TypeConstraint.mk cls vars =>
+            match local_dict_for_class cls locals {
+                Option.some _ => true,
+                Option.none => vars_informative_go vars bindings scope,
+            },
+    }
+
 /// The dictionary arguments a constrained call resolves to, or
 /// `Option.none` when this checker has no sound answer: no bindings, no
 /// informative carrier, or any dictionary unresolved. Shared by the
 /// applied-call and bare-reference paths so they cannot diverge about
 /// when a dictionary is inserted.
 def dict_args_for_constraints (constraints : List TypeConstraint) (bindings : List (Pair Identifier Term)) (carrier : Option Term) (scope : Scope) (locals : LocalScope) : Option (List Term) :=
-    if Bool.not (constraint_vars_informative constraints bindings scope) then Option.none
+    if Bool.not (constraints_resolvable constraints bindings scope locals) then Option.none
     else
         let fallback : Option Term :=
             match carrier {
@@ -875,7 +904,7 @@ def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifi
         Option.some ins =>
             let bindings : List (Pair Identifier Term) :=
                 carrier_bindings (instance_wildcard_names ins) ins.args carrier in
-            resolve_class_method_d4 ins.name ins.cls method_name (emitted_dict_constraints (scope_data_classes (scope_globals scope)) ins method_name) ins.args carrier bindings expected_type scope locals,
+            resolve_class_method_d4 ins.name ins.cls method_name (emitted_dict_constraints (scope_data_constrained_def_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins.args carrier bindings expected_type scope locals,
     }
 
 /// The carrier a call INSIDE a dictionary-carrying scope must be resolved
@@ -4541,7 +4570,7 @@ def try_type_check_hinted_app (f : Term) (hint : String) (expected_type : Term) 
                                                     } in
                                                 let bindings : List (Pair Identifier Term) :=
                                                     carrier_bindings (instance_wildcard_names ins) ins_args hint_carrier in
-                                                resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_classes (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
+                                                resolve_class_method_d4 insname ins_cls method_name (emitted_dict_constraints (scope_data_constrained_def_classes (scope_globals scope)) (scope_data_classes (scope_globals scope)) ins method_name) ins_args hint_carrier bindings expected_type scope locals,
                                     },
                             },
                             },

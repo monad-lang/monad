@@ -3108,6 +3108,15 @@ pub struct ScopeData {
     // ordinary-call reification reads this instead of re-walking the
     // callee's body at every call site.
     def_dict_constraints : HashMap String (List TypeConstraint) := HashMap.map HashMap.empty_buckets,
+    // Every constrained def's BARE last-segment name -> the classes its
+    // own declared constraints mention (`collect_constrained_def_classes`,
+    // lang/scope.mo). `def_references_class` consults it so a def that
+    // reaches a class only through a call to another constrained def
+    // (`TuiT.enter_raw_mode` -> `tui_discard_bool [Monad M]`) still
+    // qualifies for a dictionary parameter of its own to forward.
+    // Seeded once per whole-graph scope build, from the same decl list
+    // Phase 3 scans, so both halves make the same decision.
+    constrained_def_classes : HashMap String (List String) := HashMap.map HashMap.empty_buckets,
     // Every registered name's BARE spelling (`prelude::Monad` ->
     // `Monad`) -> the qualified keys that own it. The read side of
     // item 5.1's bare-vs-qualified tolerance: `scope_data_find_

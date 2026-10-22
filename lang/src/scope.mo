@@ -378,10 +378,27 @@ pub def build_scope_from_decls (path : ModulePath) (decl_list : List Decl) : Sco
 /// per-module aliasing is a separate behaviour change that no corpus case
 /// asks for.
 pub def build_scope_from_groups (groups : List DeclGroup) : ScopeData :=
-    let empty : ScopeData := scope_data_empty in
+    let all_decls : List Decl := decl_groups_flatten groups in
+    // Seeded BEFORE the fold: `build_scope_def` reads the see-through map
+    // back out of the accumulator while registering each def, and the map
+    // is a property of the whole decl list, not of any one registration
+    // (a def it must see through may be declared after the one being
+    // registered).
+    //
+    // INVARIANT: the map is only as wide as the list THIS build was
+    // handed, and the checker's D4 resolution compares its answer against
+    // Phase 3's decision over the whole program. A scope built from a
+    // NARROWER list (one module) therefore under-reports a qualified
+    // method's constraints and would make D4 supply fewer dict arguments
+    // than the callee's signature demands -- the dict-slot shift this
+    // predicate exists to prevent. Every whole-graph caller
+    // (`compile_input_of_modules`, `elaborate_loaded_modules`,
+    // `rebuild_target_scope`) and `merge_scope_data`'s union keep the two
+    // lists equal; per-module scopes are safe only where nothing resolves
+    // class calls through them.
+    let empty : ScopeData := { scope_data_empty with constrained_def_classes := collect_constrained_def_classes all_decls } in
     let with_decls : ScopeData := build_scope_from_groups_go groups empty in
     let with_builtins : ScopeData := add_builtins with_decls in
-    let all_decls : List Decl := decl_groups_flatten groups in
     // Skip pass 2 entirely when this module has no use_d/open_d/
     // scoped_open_d decls at all (~12% of the current corpus, grep-
     // counted) -- there is nothing for it to alias, so re-walking every
@@ -711,7 +728,7 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // (`add_constraint_dict_params`), so the checker's call
             // reification never re-walks a callee body per call site.
             let with_constraints : ScopeData := scope_data_add_def_constraints with_body defname def_constraints in
-            scope_data_add_def_dict_constraints with_constraints defname (qualifying_dict_constraints def_constraints term_)
+            scope_data_add_def_dict_constraints with_constraints defname (qualifying_dict_constraints acc.constrained_def_classes def_constraints term_)
     }
 
 /// Does a def body carry a real body, or is it a body-less declaration?
@@ -1011,6 +1028,12 @@ def scope_find_inductive (name : NamePath) (s : Scope) : Result ScopeError Induc
 
 def scope_data_classes (sd : ScopeData) : List Class :=
     sd.classes
+
+/// The whole-graph see-through map (`collect_constrained_def_classes`),
+/// read back by the checker's D4 resolution so `emitted_dict_constraints`
+/// answers with the same predicate Phase 3 used.
+def scope_data_constrained_def_classes (sd : ScopeData) : HashMap String (List String) :=
+    sd.constrained_def_classes
 
 def scope_find_class (name : NamePath) (s : Scope) : Option Class :=
     find_class_by_name (scope_data_classes (scope_globals s)) name
@@ -3141,6 +3164,83 @@ def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List 
 // it's a documentation-only placeholder (`dict_param_type_placeholder`),
 // not load-bearing.
 
+/// Every constrained def's BARE last-segment name -> the classes its own
+/// declared constraints mention, over a whole decl list. This is how
+/// `def_references_class` sees THROUGH a call to another constrained def:
+/// the callee needs a dictionary for the class, so a caller reaching the
+/// class only through such a call (`TuiT.enter_raw_mode` ->
+/// `tui_discard_bool [Monad M]`) still needs a dictionary parameter of its
+/// own to forward, and must not read as phantom. Keyed by the name the
+/// body SPELLS the call with (`TuiT.enter_raw_mode` and a bare
+/// `enter_raw_mode` both end in "enter_raw_mode"), the same one-level
+/// approximation the Rust reference uses (`collect_constrained_def_classes`,
+/// core_check_module.rs): a same-last-name false positive costs at worst a
+/// spurious dict `Pi`, which the call-site insertion resolves harmlessly;
+/// the reverse direction is the silent dict-slot shift this prevents.
+def collect_constrained_def_classes (decl_list : List Decl) : HashMap String (List String) :=
+    collect_constrained_def_classes_go decl_list bare_map_empty
+
+#[partial]
+def collect_constrained_def_classes_go (decl_list : List Decl) (acc : HashMap String (List String)) : HashMap String (List String) :=
+    match decl_list {
+        List.empty => acc,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ =>
+                    match def_ {
+                        Def.mk {name := dname, constraints, ..} =>
+                            match constraints {
+                                List.empty => collect_constrained_def_classes_go rest acc,
+                                List.cons _ _ =>
+                                    let key : String := identifier_tail (last_segment dname) in
+                                    let existing : List String := match bare_map_lookup key acc {
+                                        Option.some classes => classes,
+                                        Option.none => List.empty,
+                                    } in
+                                    collect_constrained_def_classes_go rest (bare_map_insert key (constraint_class_names constraints existing) acc),
+                            },
+                    },
+                _ => collect_constrained_def_classes_go rest acc,
+            },
+    }
+
+#[partial]
+def constraint_class_names (constraints : List TypeConstraint) (acc : List String) : List String :=
+    match constraints {
+        List.empty => acc,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk cls _vars => constraint_class_names rest (List.cons (show_name_path cls) acc),
+            },
+    }
+
+/// The see-through half of `def_references_class` (see
+/// `collect_constrained_def_classes`): does the SPELLED name name a
+/// constrained def whose own constraints mention `cls_str`?
+#[partial]
+def calls_constrained_def_for_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (spelled : String) : Bool :=
+    // Empty-map short-circuit before the normalization allocates: a
+    // single-module scope (every synthetic test scope, `build_scope_from_
+    // decls` on one module) has nothing to see through.
+    if HashMap.is_empty constrained_def_classes then false
+    else
+        match bare_map_lookup (bare_name_of_spelling spelled) constrained_def_classes {
+            Option.some classes => string_list_has classes cls_str,
+            Option.none => false,
+        }
+
+/// A spelled name's last component, splitting on `.` (`TuiT.bind`) and
+/// then on `::` (`prelude::Monad.bind`) -- the same normalization
+/// `identifier_tail` applies to an `Identifier`, without a round trip
+/// through one (this runs once per `Term.var` of every constrained def's
+/// body).
+#[partial]
+def bare_name_of_spelling (s : String) : String :=
+    let dot : I64 := last_dot_index s 0 (0 - 1) in
+    let after_dot : String := if dot < 0 then s else String.drop (dot + 1) s in
+    let colons : I64 := last_colon_colon_index after_dot 0 (0 - 1) in
+    if colons < 0 then after_dot else String.drop (colons + 1) after_dot
+
 /// Only constraints with exactly one bound var (`[Show A]`, not
 /// `[Convert A B]`-shaped multi-var constraints, which have no real
 /// corpus need today -- see this plan's own corpus-reality-check) AND
@@ -3148,101 +3248,118 @@ def promote_instance_decl_groups_tail (groups : List DeclGroup) (classes : List 
 /// skips a phantom/unused constraint rather than adding a dead
 /// parameter every caller would still need to supply.
 #[partial]
-pub def qualifying_dict_constraints (constraints : List TypeConstraint) (body : Term) : List TypeConstraint :=
+pub def qualifying_dict_constraints (constrained_def_classes : HashMap String (List String)) (constraints : List TypeConstraint) (body : Term) : List TypeConstraint :=
     match constraints {
         List.empty => List.empty,
         List.cons c rest =>
             match c {
                 TypeConstraint.mk cls vars =>
                     let single_var := match vars { List.cons _ v_rest => match v_rest { List.empty => true, List.cons _ _ => false, }, List.empty => false, } in
-                    if single_var && def_references_class (show_name_path cls) body
-                    then List.cons c (qualifying_dict_constraints rest body)
-                    else qualifying_dict_constraints rest body,
+                    if single_var && def_references_class constrained_def_classes (show_name_path cls) body
+                    then List.cons c (qualifying_dict_constraints constrained_def_classes rest body)
+                    else qualifying_dict_constraints constrained_def_classes rest body,
             },
     }
 
 /// Syntactic scan for any `Term.var` whose own name is a dotted
 /// reference into `cls_str` (e.g. `"Show.show"` for `cls_str = "Show"`)
-/// anywhere inside `t` -- deliberately conservative/best-effort, not a
-/// fully exhaustive walk of every `Term`/`Literal` shape (e.g. a class
-/// reference buried inside a `quote_`'d term's own nested structure
-/// beyond one level, or an exotic native-arg shape, could in principle
-/// be missed) -- matching this codebase's "approximate, don't guess"
-/// fallback style elsewhere: missing a real reference here means a
-/// constrained def doesn't get a dict param it needed, which surfaces
-/// as a clean link-time "undefined symbol" failure later (the class
-/// method reference stays unresolved), not a silent miscompile.
+/// OR names a constrained def whose own constraints mention it (the
+/// see-through half, `calls_constrained_def_for_class`) anywhere inside
+/// `t` -- deliberately conservative/best-effort, not a fully exhaustive
+/// walk of every `Term`/`Literal` shape (e.g. a class reference buried
+/// inside a `quote_`'d term's own nested structure beyond one level, or
+/// an exotic native-arg shape, could in principle be missed) -- matching
+/// this codebase's "approximate, don't guess" fallback style elsewhere:
+/// missing a real reference here means a constrained def doesn't get a
+/// dict param it needed, which surfaces as a clean link-time "undefined
+/// symbol" failure later (the class method reference stays unresolved),
+/// not a silent miscompile.
 #[partial]
-def def_references_class (cls_str : String) (t : Term) : Bool :=
+def def_references_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (t : Term) : Bool :=
     match t {
         Term.var _ dbg =>
             match dbg {
-                DebugName.named id => String.starts_with (cls_str ++ ".") (show_identifier id),
+                DebugName.named id =>
+                    let spelled : String := show_identifier id in
+                    if String.starts_with (cls_str ++ ".") spelled
+                    then true
+                    else if String.beq spelled ("__dict_" ++ cls_str)
+                         // The def's own dictionary PARAMETER for this
+                         // class (`dict_param_name`). Phase 3 added it
+                         // BECAUSE this def qualified, and the checker's
+                         // D5 rewrites the class-method reference that
+                         // justified it into a projection on this binder
+                         // -- so on an ELABORATED body (`collect_def_
+                         // constraints`'s input) this is often the only
+                         // surviving evidence, and reading it keeps the
+                         // call-site table in step with Phase 3.
+                         then true
+                         else calls_constrained_def_for_class constrained_def_classes cls_str spelled,
                 DebugName.unnamed => false,
             },
-        Term.lam _ typ body => def_references_class cls_str typ || def_references_class cls_str body,
+        Term.lam _ typ body => def_references_class constrained_def_classes cls_str typ || def_references_class constrained_def_classes cls_str body,
         // One arm, three flavours. A former `forall`'s kind is its `arg`
         // here; it is always a sort, which references no class, so
         // visiting it changes nothing the old arm could see.
-        Term.pi _b arg ret => def_references_class cls_str arg || def_references_class cls_str ret,
-        Term.app f a => def_references_class cls_str f || def_references_class cls_str a,
-        Term.lit v => literal_references_class cls_str v,
+        Term.pi _b arg ret => def_references_class constrained_def_classes cls_str arg || def_references_class constrained_def_classes cls_str ret,
+        Term.app f a => def_references_class constrained_def_classes cls_str f || def_references_class constrained_def_classes cls_str a,
+        Term.lit v => literal_references_class constrained_def_classes cls_str v,
         Term.con c =>
-            match c { Con.mk _ _ _ args => opt_terms_reference_class cls_str args },
+            match c { Con.mk _ _ _ args => opt_terms_reference_class constrained_def_classes cls_str args },
         Term.ntv n =>
-            match n { Native.mk _ _ args => opt_terms_reference_class cls_str args },
+            match n { Native.mk _ _ args => opt_terms_reference_class constrained_def_classes cls_str args },
         // A sort references no class.
         Term.sort _level => false,
         Term.hole => false,
-        Term.quote_ inner => def_references_class cls_str inner,
-        Term.ctx _loc inner => def_references_class cls_str inner,
-        Term.cubical c => match c { { prim := _, args := args } => terms_reference_class cls_str args },
+        Term.quote_ inner => def_references_class constrained_def_classes cls_str inner,
+        Term.ctx _loc inner => def_references_class constrained_def_classes cls_str inner,
+        Term.cubical c => match c { { prim := _, args := args } => terms_reference_class constrained_def_classes cls_str args },
     }
 
 #[partial]
-def terms_reference_class (cls_str : String) (ts : List Term) : Bool :=
+def terms_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (ts : List Term) : Bool :=
     match ts {
         List.empty => false,
-        List.cons x rest => def_references_class cls_str x || terms_reference_class cls_str rest,
+        List.cons x rest => def_references_class constrained_def_classes cls_str x || terms_reference_class constrained_def_classes cls_str rest,
     }
 
 #[partial]
-def literal_references_class (cls_str : String) (l : Literal) : Bool :=
+def literal_references_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (l : Literal) : Bool :=
     match l {
         Literal.str _ => false,
         Literal.char _ => false,
         Literal.num _ _ => false,
         Literal.flt _ _ => false,
-        Literal.if_ a b c => def_references_class cls_str a || def_references_class cls_str b || def_references_class cls_str c,
-        Literal.match_ scrut cases => def_references_class cls_str scrut || match_cases_reference_class cls_str cases,
-        Literal.struct_lit fields _ => struct_fields_reference_class cls_str fields,
-        Literal.struct_update base fields => def_references_class cls_str base || struct_fields_reference_class cls_str fields,
+        Literal.if_ a b c => def_references_class constrained_def_classes cls_str a || def_references_class constrained_def_classes cls_str b || def_references_class constrained_def_classes cls_str c,
+        Literal.match_ scrut cases => def_references_class constrained_def_classes cls_str scrut || match_cases_reference_class constrained_def_classes cls_str cases,
+        Literal.struct_lit fields _ => struct_fields_reference_class constrained_def_classes cls_str fields,
+        Literal.struct_update base fields => def_references_class constrained_def_classes cls_str base || struct_fields_reference_class constrained_def_classes cls_str fields,
     }
 
 #[partial]
-def match_cases_reference_class (cls_str : String) (cases : List MatchCase) : Bool :=
+def match_cases_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (cases : List MatchCase) : Bool :=
     match cases {
         List.empty => false,
         List.cons c rest =>
-            match c { MatchCase.mk _ _ body _ _ => def_references_class cls_str body || match_cases_reference_class cls_str rest },
+            match c { MatchCase.mk _ _ body _ _ => def_references_class constrained_def_classes cls_str body || match_cases_reference_class constrained_def_classes cls_str rest },
     }
 
 #[partial]
-def struct_fields_reference_class (cls_str : String) (fields : List StructLitField) : Bool :=
+def struct_fields_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (fields : List StructLitField) : Bool :=
     match fields {
         List.empty => false,
         List.cons f rest =>
-            match f { StructLitField.mk _ value => def_references_class cls_str value || struct_fields_reference_class cls_str rest },
+            match f { StructLitField.mk _ value => def_references_class constrained_def_classes cls_str value || struct_fields_reference_class constrained_def_classes cls_str rest },
     }
 
 #[partial]
-def opt_terms_reference_class (cls_str : String) (args : List (Option Term)) : Bool :=
+def opt_terms_reference_class (constrained_def_classes : HashMap String (List String)) (cls_str : String) (args : List (Option Term)) : Bool :=
     match args {
         List.empty => false,
         List.cons a rest =>
             match a {
-                Option.some t => def_references_class cls_str t || opt_terms_reference_class cls_str rest,
-                Option.none => opt_terms_reference_class cls_str rest,
+                Option.some t => def_references_class constrained_def_classes cls_str t || opt_terms_reference_class constrained_def_classes cls_str rest,
+                Option.none => opt_terms_reference_class constrained_def_classes cls_str rest,
             },
     }
 
@@ -3307,10 +3424,10 @@ pub def dict_param_name (cls : NamePath) : String :=
 /// unchanged) when no constraint qualifies -- the overwhelmingly common
 /// case (an ordinary, unconstrained def).
 #[partial]
-def add_constraint_dict_params (d : Def) : Def :=
+def add_constraint_dict_params (constrained_def_classes : HashMap String (List String)) (d : Def) : Def :=
     match d {
         Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
-            let qualifying := qualifying_dict_constraints constraints term_ in
+            let qualifying := qualifying_dict_constraints constrained_def_classes constraints term_ in
             match qualifying {
                 List.empty => d,
                 List.cons _ _ =>
@@ -3331,12 +3448,20 @@ def add_constraint_dict_params (d : Def) : Def :=
 /// same as any other constrained def).
 #[partial]
 def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
+    // The see-through map over the WHOLE list, exactly as
+    // `build_scope_from_groups` seeds it and `collect_def_constraints`
+    // builds its own: every half of the ABI decision must read the same
+    // program-wide facts.
+    add_constraint_dict_params_decls_go (collect_constrained_def_classes decl_list) decl_list
+
+#[partial]
+def add_constraint_dict_params_decls_go (constrained_def_classes : HashMap String (List String)) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
             match d {
-                Decl.def_d def_ => List.cons (Decl.def_d (add_constraint_dict_params def_)) (add_constraint_dict_params_decls rest),
-                _ => List.cons d (add_constraint_dict_params_decls rest),
+                Decl.def_d def_ => List.cons (Decl.def_d (add_constraint_dict_params constrained_def_classes def_)) (add_constraint_dict_params_decls_go constrained_def_classes rest),
+                _ => List.cons d (add_constraint_dict_params_decls_go constrained_def_classes rest),
             },
     }
 
@@ -3346,12 +3471,21 @@ def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
 /// alongside is irrelevant to the result.
 #[partial]
 pub def add_constraint_dict_params_decl_groups (groups : List DeclGroup) : List DeclGroup :=
+    // One map across ALL groups, not one per module: a def in one module
+    // routinely calls a constrained def declared in another, and a
+    // module-local map would silently skip the see-through for exactly
+    // those calls -- the ABI mismatch this whole predicate exists to
+    // keep in step.
+    add_constraint_dict_params_decl_groups_go (collect_constrained_def_classes (decl_groups_flatten groups)) groups
+
+#[partial]
+def add_constraint_dict_params_decl_groups_go (constrained_def_classes : HashMap String (List String)) (groups : List DeclGroup) : List DeclGroup :=
     match groups {
         List.empty => List.empty,
         List.cons g rest =>
             match g {
                 DeclGroup.mk gpath gdecls =>
-                    List.cons (DeclGroup.mk gpath (add_constraint_dict_params_decls gdecls)) (add_constraint_dict_params_decl_groups rest),
+                    List.cons (DeclGroup.mk gpath (add_constraint_dict_params_decls_go constrained_def_classes gdecls)) (add_constraint_dict_params_decl_groups_go constrained_def_classes rest),
             },
     }
 
@@ -6990,7 +7124,7 @@ def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (me
 /// (measured: `def t1 : Bool := Show.show [42]` dispatched to
 /// `Show_Bool_show`).
 #[partial]
-def resolve_class_call_term_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (expect : Option Term) (t : Term) : Term :=
+def resolve_class_call_term_go (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (expect : Option Term) (t : Term) : Term :=
     match t {
         // R3 (`lang/parser/lower_parse.mo`) puts a position wrapper on
         // every call ARGUMENT, and the expected carrier threaded here is
@@ -7006,7 +7140,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
         // `let m : BTreeMap K V := Map.empty`) stayed unresolved while
         // the identical unwrapped shape resolved.
         Term.ctx loc inner =>
-            Term.ctx loc (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier expect inner),
+            Term.ctx loc (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier expect inner),
         Term.lam dbg typ body =>
             match binder_name dbg {
                 DebugName.named id =>
@@ -7017,11 +7151,11 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                         Option.some cls_name => List.cons (DictBinding.mk cls_name id) dict_env,
                         Option.none => dict_env,
                     } in
-                    Term.lam dbg (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none bound_typ)
-                        (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types new_env new_dict_env def_carrier (lam_body_expect expect) body),
+                    Term.lam dbg (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none bound_typ)
+                        (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types new_env new_dict_env def_carrier (lam_body_expect expect) body),
                 DebugName.unnamed =>
-                    Term.lam dbg (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none typ)
-                        (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none body),
+                    Term.lam dbg (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none typ)
+                        (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none body),
             },
         Term.app _ _ =>
             match flatten_call_spine t {
@@ -7035,7 +7169,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                     match strip_dict_hint_args args {
                         Pair.pair dict_hints spine_args =>
                     let hints := call_arg_hints classes def_types env ctor_owners ctor_field_types head spine_args expect in
-                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hints spine_args in
+                    let resolved_args := resolve_class_call_terms constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hints spine_args in
                     // `App(Lam(id, typ, body), value)` -- the parser's
                     // desugaring of EVERY `let`, annotated or not -- gets its
                     // binder's type from the resolved VALUE when the source
@@ -7054,13 +7188,13 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                                         Option.some ref =>
                                             match ref {
                                                 ClassMethodRef.mk cls method_name =>
-                                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name resolved_args head spine_args def_carrier env ctor_owners expect dict_hints,
+                                                    resolve_class_method_call constrained_def_classes classes instances dict_env def_types ctor_field_types cls method_name resolved_args head spine_args def_carrier env ctor_owners expect dict_hints,
                                             },
                                         Option.none => resolve_ordinary_constrained_call classes instances dict_env dict_hints def_constraints def_types ctor_field_types id head resolved_args env ctor_owners expect,
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
-                        _ => rebuild_call (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none dispatch_head) resolved_args,
+                        _ => rebuild_call (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none dispatch_head) resolved_args,
                     },
             },
             },
@@ -7082,7 +7216,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                         Option.some ref =>
                             match ref {
                                 ClassMethodRef.mk cls method_name =>
-                                    resolve_class_method_call classes instances dict_env def_types ctor_field_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect List.empty,
+                                    resolve_class_method_call constrained_def_classes classes instances dict_env def_types ctor_field_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect List.empty,
                             },
                         // A bare reference to an ordinary CONSTRAINED def (a 0-arg
                         // op like `TuiT.enter_raw_mode`, in the value position of the
@@ -7112,11 +7246,11 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
         Term.lit lit_ =>
             match lit_ {
                 Literal.match_ scrutinee cases =>
-                    let resolved_scrutinee := resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none scrutinee in
-                    Term.lit (Literal.match_ resolved_scrutinee (resolve_class_call_cases classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee cases)),
-                _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
+                    let resolved_scrutinee := resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none scrutinee in
+                    Term.lit (Literal.match_ resolved_scrutinee (resolve_class_call_cases constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee cases)),
+                _ => term_map_children (resolve_class_call_term constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
             },
-        _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
+        _ => term_map_children (resolve_class_call_term constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
     }
 
 /// The no-expectation entry point every OTHER caller in this file uses --
@@ -7128,8 +7262,8 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
 /// binding's desugared lambda, and those are reached through `_go`
 /// directly (the app arm's own `lam_param_hints`).
 #[partial]
-def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
-    resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none t
+def resolve_class_call_term (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
+    resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none t
 
 /// Is `t` unusable as an expected carrier? A hole, or a bare sort -- the
 /// same two shapes `is_uninformative_carrier` (`lang/typecheck/infer.mo`)
@@ -7734,7 +7868,7 @@ def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env
     }
 
 #[partial]
-def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (hints : List (Option Term)) (args : List Term) : List Term :=
+def resolve_class_call_terms (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (hints : List (Option Term)) (args : List Term) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
@@ -7744,26 +7878,26 @@ def resolve_class_call_terms (classes : List Class) (instances : List Instance) 
             // they did before this channel existed.
             match hints {
                 List.cons h hs =>
-                    List.cons (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier h a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hs rest),
+                    List.cons (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier h a) (resolve_class_call_terms constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hs rest),
                 List.empty =>
-                    List.cons (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier List.empty rest),
+                    List.cons (resolve_class_call_term_go constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none a) (resolve_class_call_terms constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier List.empty rest),
             },
     }
 
 #[partial]
-def resolve_class_call_cases (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (cases : List MatchCase) : List MatchCase :=
+def resolve_class_call_cases (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (cases : List MatchCase) : List MatchCase :=
     match cases {
         List.empty => List.empty,
         List.cons c rest =>
-            List.cons (resolve_class_call_case classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee c) (resolve_class_call_cases classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee rest),
+            List.cons (resolve_class_call_case constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee c) (resolve_class_call_cases constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee rest),
     }
 
 #[partial]
-def resolve_class_call_case (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
+def resolve_class_call_case (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
     match c {
         MatchCase.mk name args body fp typ_name =>
             let new_env := match_arm_env ctor_field_types env ctor_owners def_types scrutinee c in
-            MatchCase.mk name args (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp typ_name,
+            MatchCase.mk name args (resolve_class_call_term constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp typ_name,
     }
 
 /// D5-first, D4-fallback resolution for one class-method call, given
@@ -7773,7 +7907,7 @@ def resolve_class_call_case (classes : List Class) (instances : List Instance) (
 /// resolved via ordinary recursion, per this pass's own "leave
 /// unresolved rather than guess" style, matching `resolve_infix_term`).
 #[partial]
-def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expected : Option Term) (hints : List String) : Term :=
+def resolve_class_method_call (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expected : Option Term) (hints : List String) : Term :=
     let cls_name := class_own_name cls in
     // Computed once here (the highest point `resolved_args`/`env`/
     // `ctor_owners`/`def_types` are all still together) and threaded
@@ -7805,13 +7939,13 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
                                     List.empty => Term.hole,
                                 },
                         } in
-                    resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head hint_carrier ins extra_carriers,
+                    resolve_class_method_call_with_instance constrained_def_classes classes instances dict_env method_name resolved_args orig_head hint_carrier ins extra_carriers,
             },
         Option.none =>
             match lookup_dict_binding dict_env cls_name {
                 Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
                 Option.none =>
-                    resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
+                    resolve_class_method_call_d4 constrained_def_classes classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
             },
     }
 
@@ -7845,7 +7979,7 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
 /// and the call was left unresolved) even after `def_carrier` landed for
 /// `bind`.
 #[partial]
-def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_d4 (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
     if class_name_eq cls_name monad_class_name && String.beq (show_identifier method_name) "pure" then
         // `def_carrier` first (the order this case has always used), then
         // the call's own evidence -- but only a SPECIFIC match is taken
@@ -7854,15 +7988,15 @@ def resolve_class_method_call_d4 (classes : List Class) (instances : List Instan
         match find_specific_matching_carrier instances cls_name (instance_carrier_candidates def_carrier extra_carriers) {
             Option.some found =>
                 match found {
-                    Pair.pair carrier ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
+                    Pair.pair carrier ins => resolve_class_method_call_with_instance constrained_def_classes classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
                 },
             Option.none =>
                 match def_carrier {
-                    Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
-                    Option.none => resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
+                    Option.some carrier => resolve_class_method_call_with_carrier constrained_def_classes classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
+                    Option.none => resolve_class_method_call_d4_from_args constrained_def_classes classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
                 },
         }
-    else resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers
+    else resolve_class_method_call_d4_from_args constrained_def_classes classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers
 
 /// Every carrier `resolve_class_method_call_d4`'s `pure` case may try, in
 /// order: the enclosing def's declared return type first (its documented
@@ -7886,7 +8020,7 @@ def instance_carrier_candidates (def_carrier : Option Term) (extra_carriers : Li
 /// name, and only the REAL `env` can say what type that name was
 /// declared with.
 #[partial]
-def resolve_class_method_call_d4_from_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_d4_from_args (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
     // Was `infer_carrier_from_args_go` (first arg that reveals ANY
     // carrier) feeding a single candidate into a "try it, else class
     // default" two-step -- sound when an arg's own type IS the class's
@@ -7923,15 +8057,15 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
     match find_concrete_matching_carrier_any instances cls_name extra_carriers {
         Option.some found =>
             match found {
-                Pair.pair carrier ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
+                Pair.pair carrier ins => resolve_class_method_call_with_instance constrained_def_classes classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
             },
         Option.none =>
             if class_name_eq cls_name monad_class_name then
                 match def_carrier {
-                    Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
-                    Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args extra_carriers,
+                    Option.some carrier => resolve_class_method_call_with_carrier constrained_def_classes classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
+                    Option.none => resolve_class_method_call_d4_default_carrier constrained_def_classes classes instances dict_env cls_name method_name resolved_args orig_head orig_args extra_carriers,
                 }
-            else resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args extra_carriers,
+            else resolve_class_method_call_d4_default_carrier constrained_def_classes classes instances dict_env cls_name method_name resolved_args orig_head orig_args extra_carriers,
     }
 
 /// Last-resort fallback once neither the call's own args nor (for
@@ -7954,13 +8088,13 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
 /// unresolved, unlike every list literal that DOES sit in a directly
 /// type-annotated position.
 #[partial]
-def resolve_class_method_call_d4_default_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_d4_default_carrier (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (extra_carriers : List Term) : Term :=
     match find_class_by_name classes cls_name {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some cls =>
             match class_default_carrier cls {
                 Option.none => rebuild_call orig_head resolved_args,
-                Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
+                Option.some carrier => resolve_class_method_call_with_carrier constrained_def_classes classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
             },
     }
 
@@ -7984,14 +8118,14 @@ def monad_class_name : NamePath :=
     NamePath.mk (List.cons (Identifier.id "Monad") List.empty)
 
 #[partial]
-def resolve_class_method_call_with_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_with_carrier (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) (extra_carriers : List Term) : Term :=
     match find_matching_instance instances cls_name carrier {
         Option.none => rebuild_call orig_head resolved_args,
-        Option.some ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
+        Option.some ins => resolve_class_method_call_with_instance constrained_def_classes classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
     }
 
 #[partial]
-def resolve_class_method_call_with_instance (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins : Instance) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_with_instance (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins : Instance) (extra_carriers : List Term) : Term :=
     match ins {
         Instance.mk insname ins_cls_name ins_constraints ins_args _ _ _ =>
             // What the matched instance's own head binds: the carrier the
@@ -8004,7 +8138,7 @@ def resolve_class_method_call_with_instance (classes : List Class) (instances : 
             // instances whose head names no variable at all
             // (`method_sig_bindings`).
             let bindings := List.append (carrier_bindings (instance_wildcard_names ins) ins_args carrier) (method_sig_bindings classes ins_cls_name method_name carrier) in
-            resolve_class_method_call_with_dict_args insname classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier bindings (emitted_dict_constraints classes ins method_name) ins_args extra_carriers,
+            resolve_class_method_call_with_dict_args constrained_def_classes insname classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier bindings (emitted_dict_constraints constrained_def_classes classes ins method_name) ins_args extra_carriers,
     }
 
 /// The instance constraints whose dictionary parameter the EMITTED
@@ -8041,7 +8175,7 @@ def resolve_class_method_call_with_instance (classes : List Class) (instances : 
 /// unfiltered: the mangled name is a dangling global either way -- a
 /// loud link-time undefined symbol, not a silent miscompile.
 #[partial]
-def emitted_dict_constraints (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
+def emitted_dict_constraints (constrained_def_classes : HashMap String (List String)) (classes : List Class) (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
     match ins {
         Instance.mk _ cname ins_constraints _ _ _ defs =>
             match find_instance_method defs method_name {
@@ -8056,7 +8190,7 @@ def emitted_dict_constraints (classes : List Class) (ins : Instance) (method_nam
                                         ClassDef.mk _ _ cdefault =>
                                             match cdefault {
                                                 Option.none => ins_constraints,
-                                                Option.some body => qualifying_dict_constraints ins_constraints body,
+                                                Option.some body => qualifying_dict_constraints constrained_def_classes ins_constraints body,
                                             },
                                     },
                             },
@@ -8064,13 +8198,13 @@ def emitted_dict_constraints (classes : List Class) (ins : Instance) (method_nam
                 Option.some d =>
                     match d {
                         Def.mk {term := body, constraints := own_constraints, ..} =>
-                            qualifying_dict_constraints (List.append ins_constraints own_constraints) body,
+                            qualifying_dict_constraints constrained_def_classes (List.append ins_constraints own_constraints) body,
                     },
             },
     }
 
 #[partial]
-def resolve_class_method_call_with_dict_args (insname : Identifier) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (bindings : List (Pair Identifier Term)) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_with_dict_args (constrained_def_classes : HashMap String (List String)) (insname : Identifier) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (bindings : List (Pair Identifier Term)) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
     // `List.empty` hints: these are the MATCHED INSTANCE'S OWN
     // constraints, not the call's -- a hint naming the instance would
     // here resolve its own element constraint back to itself (the A8
@@ -8173,7 +8307,8 @@ pub def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
     // `free_vars` so a concrete type (`I64`, `List`) is never mistaken for a
     // signature variable.
     let def_types := collect_def_types (names_of_decls decl_list) decl_list in
-    resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types decl_list
+    let constrained_def_classes := collect_constrained_def_classes decl_list in
+    resolve_class_calls_decls_go constrained_def_classes classes instances ctor_owners ctor_field_types def_constraints def_types decl_list
 
 /// `resolve_class_call_term`'s own resolution chain has a SILENT give-up
 /// built in by design (`rebuild_call orig_head resolved_args`, used
@@ -8385,14 +8520,22 @@ pub type DefConstraintEntry {
 /// UNTOUCHED, which is exactly what its no-parameter ABI needs.
 ///
 /// The body read here is the one this pass walks -- elaborated on the
-/// codegen paths, pristine on the check path's own uses. A class-method
-/// reference the real checker could only leave abstract (the abstract
-/// carrier every qualifying reference has) survives elaboration, so the
-/// predicate answers the same on both; only a def referencing the class
-/// SOLELY at elaboration-resolvable concrete carriers could disagree with
-/// Phase 3's earlier decision, and no corpus def has that shape.
+/// codegen paths, pristine on the check path's own uses. The checker can
+/// ERASE the class-method reference that justified a dict parameter: its
+/// D5 rewrites `Bind.bnd m f` inside `step [Bind M]` into a projection
+/// on `step`'s own `__dict_Bind` binder. So `def_references_class` also
+/// counts a reference to the class's own dictionary parameter -- the
+/// parameter exists exactly because Phase 3's identical predicate said
+/// yes, which keeps the two decisions in step whichever body shape
+/// arrives here. MEASURED on a `through [Bind M] := step m` fixture:
+/// without that arm this table lost `step`, and `through`'s call went
+/// out with no dictionary while `step`'s signature demanded one.
 #[partial]
 def collect_def_constraints (decl_list : List Decl) : List DefConstraintEntry :=
+    collect_def_constraints_go (collect_constrained_def_classes decl_list) decl_list
+
+#[partial]
+def collect_def_constraints_go (constrained_def_classes : HashMap String (List String)) (decl_list : List Decl) : List DefConstraintEntry :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -8400,13 +8543,13 @@ def collect_def_constraints (decl_list : List Decl) : List DefConstraintEntry :=
                 Decl.def_d def_ =>
                     match def_ {
                         Def.mk {name := dname, term := body, constraints, ..} =>
-                            let qualifying : List TypeConstraint := qualifying_dict_constraints constraints body in
+                            let qualifying : List TypeConstraint := qualifying_dict_constraints constrained_def_classes constraints body in
                             match qualifying {
-                                List.empty => collect_def_constraints rest,
-                                List.cons _ _ => List.cons (DefConstraintEntry.mk dname qualifying) (collect_def_constraints rest),
+                                List.empty => collect_def_constraints_go constrained_def_classes rest,
+                                List.cons _ _ => List.cons (DefConstraintEntry.mk dname qualifying) (collect_def_constraints_go constrained_def_classes rest),
                             },
                     },
-                _ => collect_def_constraints rest,
+                _ => collect_def_constraints_go constrained_def_classes rest,
             },
     }
 
@@ -8584,7 +8727,7 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
     }
 
 #[partial]
-def resolve_class_calls_decls_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (decl_list : List Decl) : List Decl :=
+def resolve_class_calls_decls_go (constrained_def_classes : HashMap String (List String)) (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -8593,10 +8736,10 @@ def resolve_class_calls_decls_go (classes : List Class) (instances : List Instan
                     match def_ {
                         Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
                             let def_carrier := full_return_carrier typ in
-                            let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types List.empty List.empty def_carrier term_ in
-                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis params)) (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
+                            let new_term := resolve_class_call_term constrained_def_classes classes instances ctor_owners def_constraints def_types ctor_field_types List.empty List.empty def_carrier term_ in
+                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis params)) (resolve_class_calls_decls_go constrained_def_classes classes instances ctor_owners ctor_field_types def_constraints def_types rest),
                     },
-                _ => List.cons d (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
+                _ => List.cons d (resolve_class_calls_decls_go constrained_def_classes classes instances ctor_owners ctor_field_types def_constraints def_types rest),
             },
     }
 
@@ -9190,7 +9333,7 @@ def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
     let constraint := TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
     let d := Def.mk (NamePath.mk (List.cons (Identifier.id "show_twice") List.empty)) orig_typ orig_term
         (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
-    let d2 := add_constraint_dict_params d in
+    let d2 := add_constraint_dict_params bare_map_empty d in
     match d2 {
         Def.mk {typ := new_typ, term := new_term, ..} =>
             match new_typ {
@@ -9211,7 +9354,7 @@ def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
     let constraint := TypeConstraint.mk (NamePath.mk (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
     let d := Def.mk (NamePath.mk [Identifier.id "unrelated"]) (Term.sort (SortLevel.concrete 1)) unrelated_body
         (List.cons constraint List.empty) List.empty Visibility.package_private List.empty in
-    let d2 := add_constraint_dict_params d in
+    let d2 := add_constraint_dict_params bare_map_empty d in
     match d2 {
         Def.mk {typ := new_typ, term := new_term, ..} =>
             Similar.similar new_typ (Term.sort (SortLevel.concrete 1)) && Similar.similar new_term unrelated_body,
@@ -9220,12 +9363,12 @@ def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
 #[test]
 def test_def_references_class_true_for_dotted_var : Bool :=
     let t := Term.app (Term.var 0 (DebugName.named (Identifier.id "Show.show"))) (Term.var 1 (DebugName.named (Identifier.id "x"))) in
-    def_references_class "Show" t
+    def_references_class bare_map_empty "Show" t
 
 #[test]
 def test_def_references_class_false_for_unrelated_var : Bool :=
     let t := Term.var 0 (DebugName.named (Identifier.id "I64.add")) in
-    not (def_references_class "Show" t)
+    not (def_references_class bare_map_empty "Show" t)
 
 // Regression test for `last_segment_of`'s dotted-single-segment gap: a
 // def declared with an already-qualified own name (`def IO.println (...)`)

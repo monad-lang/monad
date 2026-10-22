@@ -1627,6 +1627,10 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // both inputs would phantom-ambiguate the miss fallbacks that
         // read the map.
         bare_aliases := bare_aliases_merge sd1.bare_aliases sd2.bare_aliases,
+        // Same shape and same reason as `bare_aliases` just above: the
+        // values are LISTS of class names, and a key named by both inputs
+        // must keep both spellings, not one module's.
+        constrained_def_classes := bare_aliases_merge sd1.constrained_def_classes sd2.constrained_def_classes,
     }
 
 /// Merge lists of ScopeData
@@ -7637,6 +7641,47 @@ def test_resolve_class_calls_expect_resolves_zero_arg_constrained_op : IO Bool :
     })
 }
 
+/// The see-through gap (`collect_constrained_def_classes`): `through`
+/// reaches `Bind` ONLY through a call to another constrained def, so a
+/// body-local predicate reads `[Bind M]` as phantom, Phase 3 gives it no
+/// dict parameter, and its `step m` call has nothing to forward -- the
+/// compiled callee then receives its first value argument in the dict
+/// slot. MEASURED shape: `motes/tui`'s `TuiT.enter_raw_mode` ->
+/// `tui_discard_bool [Monad M]`, and `StateT`'s instance `bind` ->
+/// `bind_go`, both restructured away at the time because this predicate
+/// could not see the call. The predicate must follow one level --
+/// `step`'s own declared constraints mention `Bind`.
+#[test]
+def test_elaborate_see_through_constrained_callee : IO Bool := do {
+    let src : String :=
+        "class Bind (M : Type -> Type) { def bnd (m : M A) (f : A -> M A) : M A }\n" ++
+        "type Id A { id_mk (a : A) }\n" ++
+        "instance Bind Id { def bnd (m : Id A) (f : A -> Id A) : Id A := m }\n" ++
+        "def step [Bind M] {A : Type} (m : M A) : M A := Bind.bnd m (fn (a : A) => m)\n" ++
+        "def through [Bind M] {A : Type} (m : M A) : M A := step m";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let elaborated := elaborate_parsed_decls decl_list;
+            let dispatched := resolve_class_calls_decls elaborated;
+            // Phase 3 must give `through` the parameter, through the
+            // callee's own constraint.
+            let param_ok := decl_list_def_term_contains elaborated "through" "__dict_Bind";
+            // Non-vacuity: the body still calls `step` (a swallowed def
+            // re-emits its original term, which would pass below anyway).
+            let calls_step := decl_list_def_term_body_uses elaborated "through" "step";
+            // ... and the dict must actually reach the call, not merely be
+            // declared -- on the checker alone (its D5 tier answers from
+            // `through`'s own binding) and through the codegen
+            // composition.
+            let checker_forwards := decl_list_def_term_body_uses elaborated "through" "__dict_Bind";
+            let forwards := decl_list_def_term_body_uses dispatched "through" "__dict_Bind";
+            Bool.and (Bool.and param_ok calls_step) (Bool.and checker_forwards forwards)
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
 /// Do-notation at EQUAL indices, with both the hand-written wrapper
 /// `Monad (TI M I I)` and the prelude-shaped catch-all bridge
 /// `Monad (M I I)` applicable to the carrier `TI MockM Rw Rw`. MEASURED
@@ -7809,6 +7854,32 @@ def decl_list_def_term_contains (ds : List Decl) (nm : String) (frag : String) :
                         String.contains (show_term df.term) frag,
                 _ => false,
             }) || decl_list_def_term_contains rest nm frag,
+    }
+
+/// `frag` appears in the def's term BELOW its leading lambda(s), i.e. in
+/// the body rather than in a dict parameter's own binder name -- the
+/// difference between "declared a dict parameter" and "used it".
+#[partial]
+def decl_list_def_term_body_uses (ds : List Decl) (nm : String) (frag : String) : Bool :=
+    match ds {
+        List.empty => false,
+        List.cons d rest =>
+            (match d {
+                Decl.def_d df =>
+                    String.beq (show_name_path df.name) nm &&
+                        String.contains (show_term (def_body_under_lams df.term)) frag,
+                _ => false,
+            }) || decl_list_def_term_body_uses rest nm frag,
+    }
+
+/// Peel `Term.ctx` wrappers and every leading lambda (Phase 3 may
+/// prepend several dict binders).
+#[partial]
+def def_body_under_lams (t : Term) : Term :=
+    match t {
+        Term.ctx _loc inner => def_body_under_lams inner,
+        Term.lam _dbg _typ body => def_body_under_lams body,
+        _ => t,
     }
 
 /// The checker accepts a valid hinted call: two same-carrier instances,
