@@ -90,7 +90,7 @@ use runtime {Runtime.c_path}
 #[partial]
 def ffi_fixture_source : String := r#"
 #[extern "c"]
-def puts (s : String) : I32
+def puts (s : String) : RawIO I32
 
 #[extern "c" {link_name := "strlen"}]
 def strlen (s : String) : I64
@@ -102,8 +102,9 @@ def sin (x : F64) : F64
 def abs (x : I32) : I32
 
 def main (args : List String) : IO I64 := do {
-    let greeted := puts "llvm ffi works";
-    let cleaned := abs (puts "narrow casts work");
+    let _ <- IO.mk (puts "llvm ffi works");
+    let code <- IO.mk (puts "narrow casts work");
+    let cleaned := abs code;
     let n := strlen "hello";
     let sine := sin 0.0;
     return n

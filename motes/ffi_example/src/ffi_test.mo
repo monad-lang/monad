@@ -21,11 +21,12 @@
 
 use lib::libc {puts, strlen, sin}
 
-def main : I64 :=
-  let ignored := puts "eval works\n" in
-  let n := strlen "hello" in
-  let ignored2 := puts (String.concat "strlen=" (I64.to_string n)) in
-  let sine := sin 0.0 in
-  let ignored3 := puts (String.concat "sin(0.0)=" (F64.to_string sine)) in
-  let ignored4 := puts "done\n" in
-  0
+def main : IO I64 := do {
+  let _ <- IO.mk (puts "eval works\n");
+  let n := strlen "hello";
+  let _ <- IO.mk (puts (String.concat "strlen=" (I64.to_string n)));
+  let sine := sin 0.0;
+  let _ <- IO.mk (puts (String.concat "sin(0.0)=" (F64.to_string sine)));
+  let _ <- IO.mk (puts "done\n");
+  return 0
+}

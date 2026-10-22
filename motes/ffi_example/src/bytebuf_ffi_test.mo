@@ -49,7 +49,7 @@ def bytes_eq (xs ys : List U8) : Bool :=
 #[test]
 def test_memset_writes_through_ptr : IO Bool := do {
     let buf <- ByteBuf.alloc 4;
-    let _ := memset (ByteBuf.ptr buf) (I64.to_i32 65) 4u64;
+    let _ <- IO.mk (memset (ByteBuf.ptr buf) (I64.to_i32 65) 4u64);
     let xs <- ByteBuf.to_list buf 4;
     let n := ByteBuf.length buf;
     ByteBuf.free buf;
@@ -62,7 +62,7 @@ def test_memset_writes_through_ptr : IO Bool := do {
 #[test]
 def test_strlen_reads_through_ptr : IO Bool := do {
     let buf <- ByteBuf.alloc 4;
-    let _ := memset (ByteBuf.ptr buf) (I64.to_i32 66) 3u64;
+    let _ <- IO.mk (memset (ByteBuf.ptr buf) (I64.to_i32 66) 3u64);
     let n := strlen_ptr (ByteBuf.ptr buf);
     ByteBuf.free buf;
     return (I64.beq n 3)
@@ -75,7 +75,7 @@ def test_strlen_reads_through_ptr : IO Bool := do {
 def test_memcpy_interior_zero_between_bufs : IO Bool := do {
     let src <- ByteBuf.of_list interior_zero;
     let dst <- ByteBuf.alloc 5;
-    let _ := memcpy (ByteBuf.ptr dst) (ByteBuf.ptr src) 5u64;
+    let _ <- IO.mk (memcpy (ByteBuf.ptr dst) (ByteBuf.ptr src) 5u64);
     let xs <- ByteBuf.to_list dst 5;
     ByteBuf.free src;
     ByteBuf.free dst;
