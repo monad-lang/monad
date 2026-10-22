@@ -18,3 +18,8 @@ path = "../../std"
 
 [dependencies.xml_html]
 path = "../xml_html"
+
+# `Ssr.to_response` names `http.Response`; the view library itself never
+# depends on the server (`moon` does not depend on Oak).
+[dependencies.http]
+path = "../http"

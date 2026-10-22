@@ -79,6 +79,42 @@ with Html {
     pub def readonly : Html.Attr := Html.Attr.bool_attr "readonly"
     pub def selected : Html.Attr := Html.Attr.bool_attr "selected"
 
+    // Generic and form attributes. The curated list above covers the common
+    // surface; `attr`/`bool_attr` are the escape hatch for `role`, `aria-*`,
+    // `method`, `action`, `enctype`, `target`, `rel`, `charset`, dimensions
+    // and validation attributes. Names that are Monad keywords take `_`.
+
+    pub def attr (name : String) (value : String) : Html.Attr :=
+        Html.Attr.attr name value
+
+    pub def bool_attr (name : String) : Html.Attr :=
+        Html.Attr.bool_attr name
+
+    pub def role (value : String) : Html.Attr := Html.attr "role" value
+    pub def aria (name : String) (value : String) : Html.Attr :=
+        Html.attr (String.concat "aria-" name) value
+    pub def method_ (value : String) : Html.Attr := Html.attr "method" value
+    pub def action (value : String) : Html.Attr := Html.attr "action" value
+    pub def enctype (value : String) : Html.Attr := Html.attr "enctype" value
+    pub def target (value : String) : Html.Attr := Html.attr "target" value
+    pub def rel (value : String) : Html.Attr := Html.attr "rel" value
+    pub def charset (value : String) : Html.Attr := Html.attr "charset" value
+    pub def accept (value : String) : Html.Attr := Html.attr "accept" value
+    pub def width (value : I64) : Html.Attr := Html.attr "width" (I64.to_string value)
+    pub def height (value : I64) : Html.Attr := Html.attr "height" (I64.to_string value)
+    pub def min_ (value : String) : Html.Attr := Html.attr "min" value
+    pub def max_ (value : String) : Html.Attr := Html.attr "max" value
+    pub def step (value : String) : Html.Attr := Html.attr "step" value
+    pub def pattern_ (value : String) : Html.Attr := Html.attr "pattern" value
+    pub def autocomplete (value : String) : Html.Attr := Html.attr "autocomplete" value
+    pub def minlength (value : I64) : Html.Attr := Html.attr "minlength" (I64.to_string value)
+    pub def maxlength (value : I64) : Html.Attr := Html.attr "maxlength" (I64.to_string value)
+    pub def multiple : Html.Attr := Html.bool_attr "multiple"
+    pub def novalidate : Html.Attr := Html.bool_attr "novalidate"
+
+    /// The conventional `enctype` for a file-upload form.
+    pub def enctype_multipart : String := "multipart/form-data"
+
     // ═══ Structural and text-level elements ═══
 
     pub def div (attrs : List Html.Attr) (children : List Html.Node) : Html.Node :=
@@ -234,13 +270,14 @@ with Html {
 
     // ═══ Raw-text elements ═══
     //
-    // `node_raw_text` carries no attributes, so these take only content.
+    // Raw-text nodes carry attributes too, so `<script type="module" src=…>`
+    // is representable.
 
-    pub def script (content : String) : Html.Node :=
-        Html.Node.node_raw_text "script" content
+    pub def script (attrs : List Html.Attr) (content : String) : Html.Node :=
+        Html.Node.node_raw_text "script" attrs content
 
-    pub def style (content : String) : Html.Node :=
-        Html.Node.node_raw_text "style" content
+    pub def style (attrs : List Html.Attr) (content : String) : Html.Node :=
+        Html.Node.node_raw_text "style" attrs content
 
     // ═══ Escape hatches and node constructors ═══
 
@@ -251,7 +288,7 @@ with Html {
         mk_void tag attrs
 
     pub def text (content : String) : Html.Node := Html.Node.node_text content
-    pub def raw (tag : String) (content : String) : Html.Node := Html.Node.node_raw_text tag content
+    pub def raw (tag : String) (attrs : List Html.Attr) (content : String) : Html.Node := Html.Node.node_raw_text tag attrs content
     pub def comment (content : String) : Html.Node := Html.Node.node_comment content
     pub def doctype (declaration : String) : Html.Node := Html.Node.node_doctype declaration
     pub def fragment (children : List Html.Node) : Html.Node := Html.Node.node_fragment children
@@ -267,6 +304,20 @@ with Html {
               Html.Node.node_element "html" List.empty
                   [ Html.Node.node_element "head" List.empty head,
                     Html.Node.node_element "body" List.empty body ] ]
+
+    /// A document with attributes on `<html>`, `<head>` and `<body>`.
+    pub def document_with (html_attrs : List Html.Attr) (head_attrs : List Html.Attr) (body_attrs : List Html.Attr) (head : List Html.Node) (body : List Html.Node) : Html.Node :=
+        Html.Node.node_fragment
+            [ Html.Node.node_doctype "html",
+              Html.Node.node_element "html" html_attrs
+                  [ Html.Node.node_element "head" head_attrs head,
+                    Html.Node.node_element "body" body_attrs body ] ]
+
+    /// The common case: a UTF-8 document with `<meta charset="utf-8">`
+    /// prepended to the head.
+    pub def document_utf8 (head : List Html.Node) (body : List Html.Node) : Html.Node :=
+        let charset_meta := Html.Node.node_void "meta" [Html.charset "utf-8"] in
+        Html.document_with List.empty List.empty List.empty (List.cons charset_meta head) body
 
     /// A navigation bar over `(href, label)` links, in source order.
     pub def navbar (links : List (Pair String String)) : Html.Node :=

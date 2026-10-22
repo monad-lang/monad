@@ -5,7 +5,10 @@
 // oak alone can name `Html.Node`/`Html.Attr` and serialize without adding
 // an `xml_html` dependency.
 
-pub use xml_html::html {Html.Attr, Html.Node, Html.to_string, Html.beq}
+pub use xml_html::html {
+    Html.Attr, Html.Node, Html.RenderOpts, Html.default_opts,
+    Html.to_string, Html.to_string_with, Html.beq,
+}
 
 pub use lib::elements {
     Html.id_, Html.class_, Html.href, Html.src, Html.alt, Html.type_, Html.value_,
@@ -28,6 +31,16 @@ pub use lib::elements {
     Html.fragment, Html.document, Html.navbar, Html.card
 }
 
+pub use lib::elements {
+    Html.attr, Html.bool_attr, Html.role, Html.aria,
+    Html.method_, Html.action, Html.enctype, Html.enctype_multipart,
+    Html.target, Html.rel, Html.charset, Html.accept,
+    Html.width, Html.height, Html.min_, Html.max_, Html.step,
+    Html.pattern_, Html.autocomplete, Html.minlength, Html.maxlength,
+    Html.multiple, Html.novalidate,
+    Html.document_with, Html.document_utf8
+}
+
 pub use lib::html_t {
     Page, Page.empty, Page.append_head, Page.append_heads, Page.append_body,
     Page.append_bodies, Emitted, HtmlT, Open, PageM, PageM.pure, PageM.run,
@@ -40,4 +53,9 @@ pub use lib::html_t {
 pub use lib::app {
     Program, Program.init, Program.run_batch, Program.step, Program.view,
     Command, Host, Host.run_effect
+}
+
+pub use lib::ssr {
+    Ssr.render_page, Ssr.render_body, Ssr.to_response, Ssr.to_response_node,
+    Ssr.fragment_response, Ssr.render_io
 }

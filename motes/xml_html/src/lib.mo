@@ -10,5 +10,8 @@
 // `Html.Node.node_text`); no `{*}` globs, which would drag every helper
 // into an importer's scope.
 
-pub use lib::html {Html.Attr, Html.Node, Html.to_string, Html.beq}
+pub use lib::html {
+    Html.Attr, Html.Node, Html.RenderOpts, Html.default_opts,
+    Html.to_string, Html.to_string_with, Html.beq,
+}
 pub use lib::xml {Xml.Attr, Xml.Node, Xml.to_string, Xml.beq}

@@ -33,7 +33,7 @@ pub type Html.Node {
     node_element (tag : String) (attrs : List Html.Attr) (children : List Html.Node),
     node_void (tag : String) (attrs : List Html.Attr),
     node_text (content : String),
-    node_raw_text (tag : String) (content : String),
+    node_raw_text (tag : String) (attrs : List Html.Attr) (content : String),
     node_comment (content : String),
     node_doctype (declaration : String),
     node_fragment (children : List Html.Node)
@@ -42,8 +42,22 @@ pub type Html.Node {
 with Html {
     pub def to_string (n : Html.Node) : String := html_node_to_string n
 
+    /// Serialize with render options. `annotate` writes `data-oak="<path>"`
+    /// on every element (a stable tree path for client hydration); `charset`
+    /// is consulted by `oak`'s document builder, not here.
+    pub def to_string_with (opts : Html.RenderOpts) (n : Html.Node) : String :=
+        if opts.annotate then html_node_to_string_at opts "0" n else html_node_to_string n
+
     pub def beq (a b : Html.Node) : Bool := html_node_beq a b
 }
+
+pub struct Html.RenderOpts {
+    charset : Bool,
+    annotate : Bool
+}
+
+pub def Html.default_opts : Html.RenderOpts :=
+    { charset := false, annotate := false }
 
 // ─── Escaping ───
 
@@ -112,11 +126,39 @@ def html_node_to_string (n : Html.Node) : String :=
                 (String.concat (html_children_to_string children) (html_close_tag tag)),
         node_void tag attrs => html_open_tag tag attrs,
         node_text content => html_escape_text content,
-        node_raw_text tag content =>
-            String.concat (html_open_tag tag List.empty) (String.concat content (html_close_tag tag)),
+        node_raw_text tag attrs content =>
+            String.concat (html_open_tag tag attrs) (String.concat content (html_close_tag tag)),
         node_comment content => String.concat "<!--" (String.concat content "-->"),
         node_doctype declaration => String.concat "<!DOCTYPE " (String.concat declaration ">"),
         node_fragment children => html_children_to_string children
+    }
+
+// ─── Annotated serializer (hydration paths) ───
+
+def html_annotated_attrs (opts : Html.RenderOpts) (path : String) (attrs : List Html.Attr) : List Html.Attr :=
+    if opts.annotate
+    then List.append attrs (List.cons (Html.Attr.attr "data-oak" path) List.empty)
+    else attrs
+
+#[terminating]
+def html_children_to_string_at (opts : Html.RenderOpts) (path : String) (idx : I64) (children : List Html.Node) : String :=
+    match children {
+        empty => "",
+        cons child rest =>
+            String.concat
+                (html_node_to_string_at opts (String.concat path (String.concat "." (I64.to_string idx))) child)
+                (html_children_to_string_at opts path (I64.add idx 1) rest)
+    }
+
+#[terminating]
+def html_node_to_string_at (opts : Html.RenderOpts) (path : String) (n : Html.Node) : String :=
+    match n {
+        node_element tag attrs children =>
+            String.concat (html_open_tag tag (html_annotated_attrs opts path attrs))
+                (String.concat (html_children_to_string_at opts path 0 children) (html_close_tag tag)),
+        node_void tag attrs => html_open_tag tag (html_annotated_attrs opts path attrs),
+        node_fragment children => html_children_to_string_at opts path 0 children,
+        _ => html_node_to_string n
     }
 
 // ─── Equality ───
@@ -170,8 +212,8 @@ def html_node_beq (a b : Html.Node) : Bool :=
             node_text c2 => String.beq c1 c2,
             _ => false
         },
-        node_raw_text t1 c1 => match b {
-            node_raw_text t2 c2 => String.beq t1 t2 && String.beq c1 c2,
+        node_raw_text t1 a1 c1 => match b {
+            node_raw_text t2 a2 c2 => String.beq t1 t2 && html_attrs_beq a1 a2 && String.beq c1 c2,
             _ => false
         },
         node_comment c1 => match b {

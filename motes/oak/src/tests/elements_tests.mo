@@ -6,6 +6,8 @@ use lib::elements {
     Html.id_, Html.class_, Html.href, Html.src, Html.alt, Html.type_, Html.value_,
     Html.placeholder, Html.name_, Html.for_, Html.open_, Html.data, Html.style_attr,
     Html.disabled, Html.checked, Html.required, Html.readonly, Html.selected,
+    Html.attr, Html.bool_attr, Html.role, Html.aria, Html.method_, Html.action,
+    Html.enctype, Html.enctype_multipart, Html.charset,
     Html.div, Html.span, Html.p, Html.a, Html.ul, Html.li,
     Html.h1, Html.h2, Html.h3, Html.h4, Html.h5, Html.h6,
     Html.header, Html.footer, Html.nav, Html.main_, Html.section, Html.article, Html.aside,
@@ -14,7 +16,8 @@ use lib::elements {
     Html.input, Html.img, Html.br, Html.hr, Html.meta, Html.link,
     Html.script, Html.style, Html.title,
     Html.node, Html.void, Html.text, Html.raw, Html.comment, Html.doctype,
-    Html.fragment, Html.document, Html.navbar, Html.card
+    Html.fragment, Html.document, Html.document_with, Html.document_utf8,
+    Html.navbar, Html.card
 }
 use xml_html::html {Html.Node, Html.to_string}
 
@@ -87,15 +90,44 @@ def test_void_escape_hatch : Bool :=
 
 #[test]
 def test_script_raw : Bool :=
-    element_renders (Html.script "if (a < b) {}") "<script>if (a < b) {}</script>"
+    element_renders (Html.script List.empty "if (a < b) {}") "<script>if (a < b) {}</script>"
 
 #[test]
 def test_style_raw : Bool :=
-    element_renders (Html.style "a > b {}") "<style>a > b {}</style>"
+    element_renders (Html.style List.empty "a > b {}") "<style>a > b {}</style>"
 
 #[test]
 def test_raw_escape_hatch : Bool :=
-    element_renders (Html.raw "script" "x < y") "<script>x < y</script>"
+    element_renders (Html.raw "script" List.empty "x < y") "<script>x < y</script>"
+
+#[test]
+def test_script_module_src : Bool :=
+    element_renders
+        (Html.script [Html.type_ "module", Html.src "/app.js"] "")
+        "<script type=\"module\" src=\"/app.js\"></script>"
+
+#[test]
+def test_generic_and_aria_attrs : Bool :=
+    element_renders
+        (Html.div [Html.attr "data-x" "1", Html.role "main", Html.aria "label" "Main"] List.empty)
+        "<div data-x=\"1\" role=\"main\" aria-label=\"Main\"></div>"
+
+#[test]
+def test_form_attrs : Bool :=
+    element_renders
+        (Html.form [Html.method_ "post", Html.action "/todos", Html.enctype Html.enctype_multipart] List.empty)
+        "<form method=\"post\" action=\"/todos\" enctype=\"multipart/form-data\"></form>"
+
+#[test]
+def test_document_with_attrs : Bool :=
+    element_renders
+        (Html.document_with [Html.attr "lang" "en"] List.empty [Html.class_ ["home"]] List.empty List.empty)
+        "<!DOCTYPE html><html lang=\"en\"><head></head><body class=\"home\"></body></html>"
+
+#[test]
+def test_document_utf8 : Bool :=
+    element_renders (Html.document_utf8 List.empty List.empty)
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body></body></html>"
 
 #[test]
 def test_comment_doctype_fragment : Bool :=
