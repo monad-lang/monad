@@ -1,7 +1,7 @@
 /// SSR adapter tests: response construction and the `PageM` capture sink.
 ///
-/// The `PageM` case is interpreter-only until the compiled dictionary-capture
-/// bug is fixed; run this file with the Rust host.
+/// The `PageM` case now compiles and passes on both backends; it is part of
+/// the self-hosted gate as well as the Rust-host run.
 
 use http::body {Body.to_bytes_pure}
 use http::types {Headers.get, Response, Status.ok}
@@ -12,7 +12,7 @@ use lib::html_t {
   PageM, Sealed,
 }
 use lib::ssr {Ssr.render_body, Ssr.render_io, Ssr.render_page, Ssr.to_response}
-use xml_html::html {Html.default_opts, Html.Node}
+use xml_html::html {Html.default_opts, Html.RenderOpts}
 
 def test_page : Page :=
   let with_head := Page.append_head Page.empty (Html.title List.empty [Html.text "T"]) in
@@ -57,3 +57,10 @@ def test_render_io_captures_document : IO Bool := do {
         "<!DOCTYPE html><html><head><title>T</title></head><body><p>B</p></body></html>")
   }
 }
+
+#[test]
+def test_render_page_charset : Bool :=
+  let base := Html.default_opts in
+  let opts : Html.RenderOpts := { base with charset := true } in
+  String.beq (Ssr.render_page opts test_page)
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>T</title></head><body><p>B</p></body></html>"
