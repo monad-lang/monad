@@ -22,7 +22,8 @@
 ///                terminates if it stops after the one request.
 ///
 /// Static file serving: `Server.static root` returns a handler that reads
-/// files from `root` + request path. No path traversal protection in v1.
+/// files from `root` + request path; `static_files.mo` owns the traversal
+/// guard, MIME type, ETag and range handling.
 ///
 /// The read timeout is a known gap: a peer that opens a connection and then
 /// says nothing holds it until it closes. `Server.max_keep_alive_requests`
@@ -32,17 +33,19 @@
 /// layer does not expose yet.
 
 use std::concurrent::fiber {Fiber, await_fiber, forkIO}
+use std::list {List.length}
 use std::stream {Stream, FdStream}
 use http::types {
   Transport, Transport.read_bytes, Transport.write_bytes,
-  Body, Body.is_stream, Headers, Method, Request, Response, Status.bad_request,
-  Status.internal_server_error, Status.not_found, http1_0, http1_1,
+  Body, Body.is_stream, Headers, Headers.get_all, Method, Request, Response,
+  Status.bad_request, Status.internal_server_error, Status.not_found, http1_0,
+  http1_1,
 }
-use http::strings {Strings.drop_bytes}
+use http::strings {Strings.drop_bytes, Strings.parse_i64}
 use http::wire {
-  Wire.format_response, Wire.format_response_head, Wire.frame_request,
-  Wire.parse_request, Wire.response_has_body, Wire.response_head_chunked,
-  Wire.take_bytes,
+  Wire.find_body_start, Wire.format_response, Wire.format_response_head,
+  Wire.frame_request, Wire.head_headers, Wire.parse_request,
+  Wire.response_has_body, Wire.response_head_chunked, Wire.take_bytes,
 }
 use lib::handler {Handler.try}
 use http::body_io {Body.write_chunked}
@@ -138,8 +141,54 @@ def Server.read_message_step (frame_of : List U8 -> Result String (Option I64)) 
 /// Read one whole request. The framing rule is `Wire.frame_request`, so a
 /// request body ends at its `Content-Length` and whatever follows it is kept
 /// for the next message rather than being read as part of this one.
+///
+/// The caps are enforced before every read: a peer cannot make the server
+/// buffer an unbounded header block or body. `Content-Length` is checked as
+/// soon as the headers are complete, so an oversized declared body is
+/// rejected without waiting for its bytes.
 def Server.read_request (sock : FdStream) (carry : List U8) : IO (Result String (Option (Pair (List U8) (List U8)))) :=
-  Server.read_message (fn bytes => Wire.frame_request bytes) sock carry
+  Server.read_message (fn bytes => Server.frame_request_capped bytes) sock carry
+
+def Server.frame_request_capped (bytes : List U8) : Result String (Option I64) :=
+  if Server.request_exceeds_caps bytes
+  then Result.err "request too large"
+  else Wire.frame_request bytes
+
+/// The most header bytes a request may buffer.
+pub def Server.max_header_bytes : I64 := 32768i64
+
+/// The most body bytes a request may declare or buffer (chunked bodies have
+/// no declared length, so the total cap below bounds them).
+pub def Server.max_body_bytes : I64 := 8388608i64
+
+def Server.max_request_bytes : I64 := I64.add Server.max_header_bytes Server.max_body_bytes
+
+def Server.request_exceeds_caps (bytes : List U8) : Bool :=
+  if I64.gt (List.length bytes) Server.max_request_bytes
+  then true
+  else
+    match Wire.find_body_start bytes {
+      Option.none => I64.gt (List.length bytes) Server.max_header_bytes,
+      Option.some hs =>
+        if I64.gt hs Server.max_header_bytes
+        then true
+        else
+          match Wire.head_headers hs bytes {
+            Result.err _ => false,
+            Result.ok headers => Server.declared_too_large (Headers.get_all "content-length" headers)
+          }
+    }
+
+#[terminating]
+def Server.declared_too_large (values : List String) : Bool :=
+  match values {
+    List.empty => false,
+    List.cons v rest =>
+      match Strings.parse_i64 (String.trim v) {
+        Option.none => Server.declared_too_large rest,
+        Option.some n => if I64.gt n Server.max_body_bytes then true else Server.declared_too_large rest
+      }
+  }
 
 // ── keep-alive ──────────────────────────────────────────────────────────
 
@@ -234,15 +283,20 @@ def Server.write_response (sock : FdStream) (closing : Bool) (res : Response) : 
 /// chunk. A write failure ends the connection (the peer is gone or the body
 /// could not be produced).
 def Server.write_stream_response (sock : FdStream) (closing : Bool) (res : Response) : IO Bool := do {
-  let head_res <- Server.write_bytes sock (Wire.response_head_chunked (Server.with_connection_header closing res));
-  match head_res {
+  match Wire.response_head_chunked (Server.with_connection_header closing res) {
     Result.err _ => return false,
-    Result.ok _ => do {
-      let t : Transport := Transport.plain sock;
-      let body_res <- Body.write_chunked t res.body;
-      match body_res {
+    Result.ok head => do {
+      let head_res <- Server.write_bytes sock head;
+      match head_res {
         Result.err _ => return false,
-        Result.ok _ => return (Bool.not closing)
+        Result.ok _ => do {
+          let t : Transport := Transport.plain sock;
+          let body_res <- Body.write_chunked t res.body;
+          match body_res {
+            Result.err _ => return false,
+            Result.ok _ => return (Bool.not closing)
+          }
+        }
       }
     }
   }
@@ -262,10 +316,14 @@ pub def Server.write_response_for (sock : FdStream) (method : Method) (closing :
 /// representation's `Content-Length`.
 def Server.write_response_head (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
   if Body.is_stream res.body
-  then do {
-    let _ <- Server.write_bytes sock (Wire.response_head_chunked (Server.with_connection_header closing res));
-    return (Bool.not closing)
-  }
+  then
+    match Wire.response_head_chunked (Server.with_connection_header closing res) {
+      Result.err _ => IO.pure false,
+      Result.ok head => do {
+        let _ <- Server.write_bytes sock head;
+        return (Bool.not closing)
+      }
+    }
   else
     match Wire.format_response_head (Server.with_connection_header closing res) {
       Result.err _ => do {
@@ -351,7 +409,10 @@ pub def Server.serve (handler : Request -> IO Response) (port : U16) : IO Unit :
   let listen_res <- IO.tcp_listen port;
   match listen_res {
     Result.err _ => return unit,
-    Result.ok listener => Server.serve_loop handler listener
+    Result.ok listener => do {
+      Server.serve_loop handler listener;
+      Stream.close listener
+    }
   }
 }
 
@@ -365,8 +426,9 @@ pub def Server.serve_result (handler : Request -> IO (Result String Response)) (
 //
 // `run` reports a bind/accept failure instead of the old silent `unit`;
 // `start` hands back a handle whose listener can be closed to stop the
-// accept loop. `host` and `max_keep_alive` are recorded for the
-// `tcp_listen_on`/per-server-cap work; the current listener binds 0.0.0.0.
+// accept loop. `host` is honoured by `tcp_listen_on`; header/body caps are
+// module constants (`max_header_bytes`/`max_body_bytes`) applied by
+// `read_request`.
 
 pub struct ServerConfig {
   host : String,
@@ -396,11 +458,12 @@ pub struct ServerHandle {
 /// at a time); returns only when the listener fails.
 #[terminating]
 pub def Server.run (cfg : ServerConfig) (handler : Request -> IO Response) : IO (Result String Unit) := do {
-  let listen_res <- IO.tcp_listen cfg.port;
+  let listen_res <- IO.tcp_listen_on cfg.host cfg.port;
   match listen_res {
     Result.err e => return (Result.err e.message),
     Result.ok listener => do {
       Server.serve_loop handler listener;
+      Stream.close listener;
       return (Result.ok unit)
     }
   }
@@ -414,7 +477,7 @@ pub def Server.run_response (cfg : ServerConfig) (handler : Request -> IO (Resul
 /// Start the accept loop on a fiber and return a handle. `shutdown` closes
 /// the listener; the loop then exits on the next accept failure.
 pub def Server.start (cfg : ServerConfig) (handler : Request -> IO Response) : IO (Result String ServerHandle) := do {
-  let listen_res <- IO.tcp_listen cfg.port;
+  let listen_res <- IO.tcp_listen_on cfg.host cfg.port;
   match listen_res {
     Result.err e => return (Result.err e.message),
     Result.ok listener => do {
@@ -429,12 +492,15 @@ pub def Server.wait (h : ServerHandle) : IO Unit := await_fiber h.fiber
 
 pub def Server.shutdown (h : ServerHandle) : IO Unit := Stream.close h.listener
 
-/// Accept one connection, serve it to completion, then recurse.
+/// Accept one connection, serve it to completion, then recurse. On an
+/// accept error the loop ends without closing the listener: `shutdown`
+/// (which closed or shut it down) owns that fd, and closing it here would be
+/// a second close of a number that may already have been reused.
 #[terminating]
 def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) : IO Unit := do {
   let accept_res <- IO.tcp_accept listener;
   match accept_res {
-    Result.err _ => Stream.close listener,
+    Result.err _ => return unit,
     Result.ok sock => do {
       Server.serve_connection handler sock List.empty 1;
       Server.serve_loop handler listener
@@ -465,9 +531,17 @@ pub def Server.static (root : String) (req : Request) : IO Response := do {
 // batch rather than waiting for handlers at the end, which is the backpressure
 // bound: at most `max_in_flight` connections are open at once.
 
-/// Fork a fiber to handle one connection.
+/// Fork a fiber to handle exactly one connection: read one request, respond,
+/// close. This is the entry point the connection-level tests use.
 def Server.handle_connection_fiber (handler : Request -> IO Response) (sock : FdStream) : IO (Fiber Unit) :=
   forkIO (fn _ => Server.handle_connection handler sock)
+
+/// Fork a fiber that serves a connection to completion, keeping it alive
+/// across requests. `serve_concurrent` uses this, not the one-request
+/// helper: a response that advertises keep-alive must be followed by the
+/// loop, not by a close.
+def Server.serve_connection_fiber (handler : Request -> IO Response) (sock : FdStream) : IO (Fiber Unit) :=
+  forkIO (fn _ => Server.serve_connection handler sock List.empty 1)
 
 /// Await all pending fibers in order.
 #[terminating]
@@ -502,7 +576,7 @@ def Server.serve_concurrent_loop (handler : Request -> IO Response) (listener : 
       Stream.close listener
     },
     Result.ok sock => do {
-      let fiber <- Server.handle_connection_fiber handler sock;
+      let fiber <- Server.serve_connection_fiber handler sock;
       let new_pending := List.cons fiber pending;
       let new_count := I64.add count 1;
       if Bool.not (I64.lt new_count max_in_flight)

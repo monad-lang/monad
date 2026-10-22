@@ -128,36 +128,46 @@ def Router.is_param (seg : String) : Option String :=
 
 // ── method dispatch ─────────────────────────────────────────────────────
 
-/// The main entry point: try each route in order. The first route whose
-/// method matches and whose pattern matches the request path wins.
-/// On match, the captured params are attached to the request before
-/// calling the handler. On no method match, answer 405; on no path match,
-/// answer 404.
+/// The main entry point: try each route in order. An exact method match wins
+/// first (so an explicit HEAD route is reachable); for HEAD, a GET route is
+/// the fallback. On match, the captured params are attached to the request
+/// before calling the handler. On no method match, answer 405; on no path
+/// match, answer 404.
 pub def Router.route (routes : List Route) (req : Request) : IO Response :=
-  Router.try_routes routes routes req
+  Router.try_routes_exact routes routes req
 
-/// Try routes one by one, keeping the original list so the miss path can
-/// compute `Allow`.
+/// Exact method+path matches, in declaration order.
 #[terminating]
-def Router.try_routes (all : List Route) (rest : List Route) (req : Request) : IO Response :=
+def Router.try_routes_exact (all : List Route) (rest : List Route) (req : Request) : IO Response :=
+  match rest {
+    List.empty =>
+      if BEq.beq req.method Method.HEAD
+      then Router.try_routes_head_fallback all all req
+      else Router.miss all req,
+    List.cons r rs =>
+      if Router.route_matches_exact r req
+      then Router.dispatch_route r req
+      else Router.try_routes_exact all rs req
+  }
+
+/// HEAD served by a GET route, only after the exact pass found no HEAD route.
+#[terminating]
+def Router.try_routes_head_fallback (all : List Route) (rest : List Route) (req : Request) : IO Response :=
   match rest {
     List.empty => Router.miss all req,
     List.cons r rs =>
-      if Router.route_matches r req
+      if Router.route_matches_get_for_head r req
       then Router.dispatch_route r req
-      else Router.try_routes all rs req
+      else Router.try_routes_head_fallback all rs req
   }
 
-/// A route matches if the method matches and the pattern matches the path.
-def Router.route_matches (r : Route) (req : Request) : Bool :=
-  Bool.and (Router.method_matches r.method req.method) (Router.match_path_ok r.pattern req.uri.path)
+/// Exact method and path.
+def Router.route_matches_exact (r : Route) (req : Request) : Bool :=
+  Bool.and (BEq.beq r.method req.method) (Router.match_path_ok r.pattern req.uri.path)
 
-/// `HEAD` is served by a `GET` route when no explicit `HEAD` route matches;
-/// the server suppresses the body for it.
-def Router.method_matches (route_method : Method) (request_method : Method) : Bool :=
-  Bool.or
-    (BEq.beq route_method request_method)
-    (Bool.and (BEq.beq request_method Method.HEAD) (BEq.beq route_method Method.GET))
+/// A `GET` route serving a HEAD request; only consulted after the exact pass.
+def Router.route_matches_get_for_head (r : Route) (req : Request) : Bool :=
+  Bool.and (BEq.beq r.method Method.GET) (Router.match_path_ok r.pattern req.uri.path)
 
 /// Did `match_path` return `some`?
 def Router.match_path_ok (pattern : String) (path : String) : Bool :=

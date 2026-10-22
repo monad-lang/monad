@@ -4,6 +4,7 @@
 use std::concurrent::combine {sleepIO}
 use std::io {IO.write_file}
 use std::path {Path}
+use std::concurrent::fiber {cancel_fiber}
 use std::process {process_id}
 use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new}
 use http::body_io {Body.pull}
@@ -38,10 +39,26 @@ def test_watch_bumps_version : IO Bool := do {
   let path := String.concat "/tmp/" name;
   let _ <- IO.write_file (Path.path path) "one";
   let version <- Ref.new 0i64;
-  let _ <- Live.watch (Path.path path) version;
-  sleepIO 700;
+  let watcher <- Live.watch (Path.path path) version;
+  let first <- wait_version version 1i64 40i64;
+  let _ <- IO.write_file (Path.path path) "two";
+  let second <- wait_version version 2i64 40i64;
+  cancel_fiber watcher;
+  return (Bool.and first second)
+}
+
+/// Poll `version` until it reaches `want`, or `tries` 50 ms sleeps elapse.
+#[partial]
+def wait_version (version : Ref I64) (want : I64) (tries : I64) : IO Bool := do {
   let v <- Ref.get version;
-  return (I64.gt v 0)
+  if I64.gt v (I64.sub want 1i64)
+  then return true
+  else if I64.lt tries 1
+  then return false
+  else do {
+    sleepIO 50;
+    wait_version version want (I64.sub tries 1)
+  }
 }
 
 #[test]

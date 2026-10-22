@@ -9,7 +9,7 @@ use http::types {
   Status.ok, empty, http1_1, uri,
 }
 use moon::router {
-  Router.get, Router.mount, Router.param, Router.post, Router.route,
+  Router.get, Router.head, Router.mount, Router.param, Router.post, Router.route,
 }
 use http::body {Body.to_bytes_pure}
 use http::strings {}
@@ -157,5 +157,24 @@ def test_route_mount_bare_prefix : IO Bool := do {
   let sub_routes := List.cons (Router.get "/" ok_handler) List.empty;
   let routes := List.cons (Router.get "/api/*" (fn req => Router.mount "/api" sub_routes req)) List.empty;
   let res <- Router.route routes (mk_req Method.GET "/api");
+  return (resp_ok res Status.ok "ok")
+}
+
+/// An explicit HEAD route wins even when the GET route is declared first.
+#[test]
+def test_explicit_head_beats_get : IO Bool := do {
+  let routes := [
+    Router.get "/x" ok_handler,
+    Router.head "/x" (fn (_ : Request) => IO.pure (Response.ok_text "head"))
+  ];
+  let res <- Router.route routes (mk_req Method.HEAD "/x");
+  return (resp_ok res Status.ok "head")
+}
+
+/// HEAD still falls back to GET when no explicit HEAD route exists.
+#[test]
+def test_head_falls_back_to_get : IO Bool := do {
+  let routes := List.cons (Router.get "/x" ok_handler) List.empty;
+  let res <- Router.route routes (mk_req Method.HEAD "/x");
   return (resp_ok res Status.ok "ok")
 }

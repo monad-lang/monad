@@ -7,11 +7,13 @@
 /// completes before the next starts.
 
 use std::process {process_id}
+use std::concurrent::combine {sleepIO}
+use std::concurrent::fiber {Fiber, pollFiber}
 use moon::server {
   Server.handle_connection, Server.header_has_token, Server.keep_alive,
   Server.read_message, Server.read_request, Server.run, Server.serve_connection,
   Server.shutdown, Server.start, Server.static, Server.with_connection_header,
-  ServerConfig.on,
+  ServerConfig, ServerConfig.on,
 }
 use std::stream {Stream, FdStream}
 use http::types {
@@ -190,9 +192,7 @@ def test_head_sends_no_body : IO Bool := do {
                 Result.err _ => return false,
                 Result.ok bytes =>
                   let s := String.from_list bytes in
-                  return (Bool.or
-                    (String.beq s "HTTP/1.1 200 \r\ncontent-length: 5\r\n\r\n")
-                    (String.beq s "HTTP/1.1 200 \r\n\r\ncontent-length: 5\r\n"))
+                  return (String.beq s "HTTP/1.1 200 \r\ncontent-length: 5\r\n\r\n")
               }
             }
           }
@@ -632,15 +632,107 @@ def test_run_reports_bind_failure : IO Bool := do {
   }
 }
 
-/// `Server.start` returns a handle and `shutdown` closes its listener.
+/// `Server.start` returns a handle and `shutdown` wakes the accept loop: the
+/// loop fiber must finish (not remain blocked in `accept`) and the port must
+/// be free for another bind.
 #[test]
 def test_start_and_shutdown : IO Bool := do {
   let started <- Server.start (ServerConfig.on 0u16) hello_handler;
   match started {
     Result.err _ => return false,
     Result.ok handle => do {
+      let port <- IO.tcp_local_port handle.listener;
       Server.shutdown handle;
-      return true
+      let stopped <- wait_fiber handle.fiber 200i64;
+      let rebind <- IO.tcp_listen_on "127.0.0.1" port;
+      match rebind {
+        Result.err _ => return false,
+        Result.ok listener => do {
+          Stream.close listener;
+          return (Bool.and stopped (U16.gt port 0u16))
+        }
+      }
+    }
+  }
+}
+
+/// Poll a fiber until it stops or `tries` 10 ms sleeps elapse. `pollFiber`
+/// is the non-blocking sibling of `await_fiber`.
+#[partial]
+def wait_fiber (f : Fiber Unit) (tries : I64) : IO Bool := do {
+  let r <- pollFiber f;
+  match r {
+    Option.some _ => return true,
+    Option.none =>
+      if I64.lt tries 1
+      then return false
+      else do {
+        sleepIO 10;
+        wait_fiber f (I64.sub tries 1)
+      }
+  }
+}
+
+/// `host` is honoured: binding `127.0.0.1` and connecting there works.
+#[test]
+def test_listen_on_localhost : IO Bool := do {
+  let listen_res <- IO.tcp_listen_on "127.0.0.1" 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res <- IO.tcp_connect "127.0.0.1" port;
+      match conn_res {
+        Result.err _ => do { Stream.close listener; return false },
+        Result.ok client_sock => do {
+          let accept_res <- IO.tcp_accept listener;
+          Stream.close listener;
+          match accept_res {
+            Result.err _ => do { Stream.close client_sock; return false },
+            Result.ok server_sock => do {
+              Stream.close server_sock;
+              Stream.close client_sock;
+              return (U16.gt port 0u16)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// A declared body over `Server.max_body_bytes` is a 400 before its bytes
+/// arrive, so a peer cannot make the server buffer an unbounded body.
+#[test]
+def test_oversized_declared_body_is_rejected : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res <- IO.tcp_connect "127.0.0.1" port;
+      match conn_res {
+        Result.err _ => do { Stream.close listener; return false },
+        Result.ok client_sock => do {
+          let accept_res <- IO.tcp_accept listener;
+          Stream.close listener;
+          match accept_res {
+            Result.err _ => do { Stream.close client_sock; return false },
+            Result.ok server_sock => do {
+              let _ <- tcp_write_bytes client_sock
+                (String.to_list "POST / HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n");
+              Server.handle_connection hello_handler server_sock;
+              let read <- tcp_read_bytes client_sock 4096;
+              Stream.close client_sock;
+              match read {
+                Result.err _ => return false,
+                Result.ok bytes =>
+                  return (String.starts_with "HTTP/1.1 400" (String.from_list bytes))
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

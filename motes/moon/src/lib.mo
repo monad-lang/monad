@@ -8,7 +8,7 @@
 pub use lib::server {
     Server.serve, Server.serve_result, Server.serve_concurrent, Server.static,
     Server.handle_connection, Server.serve_connection,
-    Server.max_keep_alive_requests,
+    Server.max_keep_alive_requests, Server.max_header_bytes, Server.max_body_bytes,
     ServerConfig, ServerConfig.default, ServerConfig.on, ServerHandle,
     Server.run, Server.run_response, Server.start, Server.wait, Server.shutdown,
 }
@@ -30,8 +30,9 @@ pub use lib::middleware {
 
 pub use lib::static_files {
     StaticConfig, StaticConfig.default,
-    Static.handler, Static.safe_path, Static.mime_of, Static.etag, Static.range,
-    Static.respond,
+    Static.handler, Static.safe_path, Static.relative_after_slash,
+    Static.mime_of, Static.etag, Static.etag_matches, Static.range,
+    Static.respond, Static.url_path_of,
 }
 
 // Form data is decoded in `http`; re-export the request-level helpers so a
