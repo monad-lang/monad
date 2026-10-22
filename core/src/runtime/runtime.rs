@@ -137,9 +137,20 @@ mod tests {
   #[test]
   fn test_runtime_cancel_fiber() {
     let rt = Runtime::new(1);
+    // Saturate the sole worker so the second fiber stays Pending long
+    // enough to cancel (same technique as scheduler::tests::
+    // test_scheduler_cancel_fiber). Without the blocker, a free worker can
+    // finish `|| 7` before `cancel()` runs, and `cancel()` is a no-op on a
+    // fiber that already left Pending -- a race this test lost in CI.
+    let (tx, rx) = mpsc::channel::<()>();
+    let blocker = rt.spawn(move || {
+      rx.recv().unwrap();
+    });
     let fiber = rt.spawn(|| 7);
     fiber.cancel();
     assert!(fiber.is_cancelled());
+    tx.send(()).unwrap();
+    blocker.wait();
     rt.shutdown();
   }
 
