@@ -3589,6 +3589,12 @@ struct ExternInfo {
     ext_link_name : String,
     ext_param_tys : List LLVMType,
     ext_ret_ty : LLVMType,
+    /// Whether the def's declared return type is `RawIO A`. The C call
+    /// returns A's raw word; the wrapper boxes it as `RawIO.io` (via
+    /// `monad_io_pure`) so the value composes with `IO.mk` exactly like
+    /// a `RawIO`-returning native. False for a pure extern, whose wrapper
+    /// returns the raw word unchanged.
+    ext_wrap_raw_io : Bool,
 }
 
 /// Maps each `#[extern "c" ...]` def's `llvm_name` to its wrapper's
@@ -3687,7 +3693,8 @@ def build_extern_info_some (name : NamePath) (typ : Term) (params : List Param) 
             let link_name := extern_link_name_from_args ext_args name in
             let param_tys := param_llvm_types params in
             let ret_ty := return_llvm_type typ in
-            Option.some (ExternInfo.mk link_name param_tys ret_ty),
+            let wrap_raw_io := return_is_raw_io typ in
+            Option.some (ExternInfo.mk link_name param_tys ret_ty wrap_raw_io),
         false => Option.none,
     }
 
@@ -3792,8 +3799,39 @@ def term_to_llvm_type (t : Term) : LLVMType := match term_peel t {
                 else LLVMType.i64_,
             DebugName.unnamed => LLVMType.i64_,
         },
-    Term.app fun_ _arg => term_to_llvm_type fun_,
+    // `RawIO A` is the type a SIDE-EFFECTING extern is declared with; the
+    // C function still returns A's raw word (the wrapper boxes it, see
+    // `compile_extern_def_wrapper_ir`), so the true ABI type is A's --
+    // without this, `RawIO I32` fell through to `i64` and the wrapper
+    // dropped the `sext i32` that makes a negative C int negative.
+    Term.app fun_ arg =>
+        if term_head_is_raw_io fun_
+        then term_to_llvm_type arg
+        else term_to_llvm_type fun_,
     _ => LLVMType.i64_,
+}
+
+/// Whether `t`'s head is literally named `RawIO` -- reads the payload type
+/// out of a `RawIO A` extern return, and decides whether the generated
+/// wrapper must allocate the `RawIO.io` box.
+#[partial]
+def term_head_is_raw_io (t : Term) : Bool := match term_peel t {
+    Term.app fun_ _arg => term_head_is_raw_io fun_,
+    Term.var _idx dbg =>
+        match dbg {
+            DebugName.named id => String.beq (show_identifier id) "RawIO",
+            DebugName.unnamed => false,
+        },
+    _ => false,
+}
+
+/// Whether a def's declared return type is `RawIO A`. Mirrors
+/// `return_llvm_type`'s binder walk: `typ` is the full pi chain, so an
+/// explicit parameter binder is stepped past to reach the return type.
+#[partial]
+def return_is_raw_io (typ : Term) : Bool := match term_peel typ {
+    Term.pi b _ body => if binder_is_explicit b then return_is_raw_io body else term_head_is_raw_io typ,
+    _ => term_head_is_raw_io typ,
 }
 
 /// Maps the def's own declared return `typ` to its LLVMType at the FFI
@@ -3802,7 +3840,9 @@ def term_to_llvm_type (t : Term) : LLVMType := match term_peel t {
 /// `void` (LLVM's `void` is a real IR type but the backend's `i64`-returning
 /// wrapper convention needs `void` callers explicitly handle the absence
 /// of a return value, which is a separate, larger fix). One in-tree
-/// counterexample is `IO` — but externs are never `IO`-typed at this point.
+/// counterexample is `IO` — and externs are never `IO`-typed: a
+/// side-effecting extern is declared `RawIO A`, whose payload type
+/// `term_to_llvm_type` unwraps (the wrapper adds the `RawIO.io` box).
 ///
 /// The def's `typ` field is the FULL pi type (`Term.pi` per param, e.g.
 /// `(x : F64) -> F64`), not the bare return expression — peel the pi
@@ -4211,7 +4251,10 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
 ///    for same-width floats), and the call's result is cast back to
 ///    `i64` for the wrapper's `ret` (`sext` for C's signed `i32`/`i8`,
 ///    `bitcast` for doubles, `ptrtoint` for pointers). The call uses
-///    LLVM's platform-default C ABI, as every `define` now does.
+///    LLVM's platform-default C ABI, as every `define` now does. When the
+///    def's declared return is `RawIO A` (`ext_wrap_raw_io`), the cast
+///    result is boxed once via `monad_io_pure` before `ret`, so it matches
+///    a `raw_io_passthrough` native and composes with `IO.mk`.
 ///
 /// 2. An `ExternInfo` (returned via `DefResult.externs`) so
 ///    `compile_db_decls_ir`/`compile_db_module`
@@ -4221,7 +4264,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
 #[partial]
 def compile_extern_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_params : List ParamPair) (ext : ExternInfo) : DefResult :=
     match ext {
-        ExternInfo.mk link_name param_tys ret_ty =>
+        ExternInfo.mk link_name param_tys ret_ty wrap_raw_io =>
             // Each true-typed arg: cast the i64 param to the extern's
             // true ABI type in its OWN instruction(s), then call with the
             // cast temps. For the common case where true type IS i64
@@ -4237,23 +4280,48 @@ def compile_extern_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                             let call_instr := LLVMInstruction.assign call_temp call_val in
                             match emit_extern_return_cast ctx2 (LLVMValue.var_ call_temp) ret_ty {
                                 CtxInstrsVal.mk ctx3 ret_cast_instrs ret_val =>
-                                    let ret_instr := LLVMInstruction.ret ret_val in
-                                    let entry_instrs := List.append cast_instrs (List.cons call_instr (List.append ret_cast_instrs (List.cons ret_instr List.empty))) in
-                                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                    // The wrapper MUST NOT be named `fn_name` itself:
-                                    // its inner `call @<link_name>` (which defaults to
-                                    // `fn_name` when no `link_name :=` override is
-                                    // given) would then collide with the wrapper's own
-                                    // definition -- `llc: invalid redefinition of
-                                    // function 'sin'`. `monad_extern_<fn_name>` keeps
-                                    // the wrapper distinct from the C symbol; every
-                                    // Monad call site reaches it via
-                                    // `resolve_call_name`/`CodegenCtx.extern_wrappers`.
-                                    let wrapper_name := String.concat "monad_extern_" fn_name in
-                                    let wrapper := LLVMFunction.mk wrapper_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
-                                    { ctx := ctx3, funcs := (List.cons wrapper List.empty), globals := List.empty, externs := (List.cons ext List.empty) }
+                                    // A `RawIO A` declaration (see
+                                    // `ExternInfo.ext_wrap_raw_io`) gets
+                                    // exactly one `RawIO.io` box here, so it
+                                    // behaves like a `raw_io_passthrough`
+                                    // native; a pure extern passes through.
+                                    match emit_extern_raw_io_box ctx3 ret_val wrap_raw_io {
+                                        CtxInstrsVal.mk ctx4 box_instrs boxed_val =>
+                                            let ret_instr := LLVMInstruction.ret boxed_val in
+                                            let entry_instrs := List.append cast_instrs (List.cons call_instr (List.append ret_cast_instrs (List.append box_instrs (List.cons ret_instr List.empty)))) in
+                                            let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                                            // The wrapper MUST NOT be named `fn_name` itself:
+                                            // its inner `call @<link_name>` (which defaults to
+                                            // `fn_name` when no `link_name :=` override is
+                                            // given) would then collide with the wrapper's own
+                                            // definition -- `llc: invalid redefinition of
+                                            // function 'sin'`. `monad_extern_<fn_name>` keeps
+                                            // the wrapper distinct from the C symbol; every
+                                            // Monad call site reaches it via
+                                            // `resolve_call_name`/`CodegenCtx.extern_wrappers`.
+                                            let wrapper_name := String.concat "monad_extern_" fn_name in
+                                            let wrapper := LLVMFunction.mk wrapper_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
+                                            { ctx := ctx4, funcs := (List.cons wrapper List.empty), globals := List.empty, externs := (List.cons ext List.empty) }
+                                    },
                             },
                     },
+            },
+    }
+
+/// Boxes an extern wrapper's i64 result as `RawIO.io` by calling the
+/// runtime's `monad_io_pure` -- the same one-box shape
+/// `raw_io_passthrough` gives a native. `wrap` is false for a pure
+/// extern, whose wrapper returns the raw word unchanged.
+#[partial]
+def emit_extern_raw_io_box (c : CodegenCtx) (v : LLVMValue) (wrap : Bool) : CtxInstrsVal :=
+    match wrap {
+        false => CtxInstrsVal.mk c List.empty v,
+        true =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 temp =>
+                    let call_val := LLVMValue.call "monad_io_pure" LLVMType.i64_ (List.cons v List.empty) false in
+                    let box_instr := LLVMInstruction.assign temp call_val in
+                    CtxInstrsVal.mk ctx1 (List.cons box_instr List.empty) (LLVMValue.var_ temp),
             },
     }
 
@@ -4853,7 +4921,7 @@ def extern_declarations (exts : List ExternInfo) : List LLVMDeclaration :=
 #[partial]
 def extern_declaration_one (ext : ExternInfo) : LLVMDeclaration :=
     match ext {
-        ExternInfo.mk link_name param_tys ret_ty =>
+        ExternInfo.mk link_name param_tys ret_ty _wrap_raw_io =>
             let ret_str := show_llvm_type ret_ty in
             let param_strs := List.map show_llvm_type param_tys in
             LLVMDeclaration.mk link_name param_strs ret_str,

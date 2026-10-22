@@ -225,3 +225,61 @@ def test_extern_ptr_return_declares_i8ptr : Bool :=
 def test_extern_ptr_return_ptrtoint : Bool :=
     let ir := emit_module (compile_db_decls_ir (List.cons mk_ctx_new_def List.empty)) in
     String.contains ir "ptrtoint i8*"
+
+/// A SIDE-EFFECTING extern is declared `RawIO I32`. The wrapper must box
+/// the raw `i32` result exactly once (`monad_io_pure`), so the value
+/// composes with `IO.mk` like a `raw_io_passthrough` native, while the
+/// inner `declare` keeps the true ABI type (`i32`, not `i64`) and the
+/// result is still sign-extended before boxing.
+#[partial]
+def mk_puts_raw_io_def : Def :=
+    let s_id := id "s" in
+    let raw_io_i32 : Term :=
+        Term.app (Term.var 0 (named (id "RawIO"))) (Term.var 0 (named (id "I32"))) in
+    let c_arg := AttrArg.str "c" in
+    let attrs := List.cons (Attribute.mk (id "extern") (List.cons c_arg List.empty)) List.empty in
+    Def.mk (NamePath.mk (List.cons (id "puts_raw_io") List.empty))
+        raw_io_i32
+        (Term.lam (binder_named s_id) string_term Term.hole)
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+
+#[test]
+def test_extern_raw_io_declares_payload_type : Bool :=
+    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_raw_io_def List.empty)) in
+    String.contains ir "declare i32 @puts_raw_io"
+
+#[test]
+def test_extern_raw_io_return_sext : Bool :=
+    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_raw_io_def List.empty)) in
+    String.contains ir "sext i32"
+
+#[test]
+def test_extern_raw_io_return_boxes_once : Bool :=
+    let ir := emit_module (compile_db_decls_ir (List.cons mk_puts_raw_io_def List.empty)) in
+    String.contains ir "call i64 @monad_io_pure"
+
+/// `RawIO Ptr` — the payload type must still drive the inner ABI
+/// declaration (`i8*`), not the `i64` fallback.
+#[partial]
+def mk_ctx_new_raw_io_def : Def :=
+    let m_id := id "m" in
+    let ptr_term : Term := Term.var 0 (named (id "Ptr")) in
+    let raw_io_ptr : Term := Term.app (Term.var 0 (named (id "RawIO"))) ptr_term in
+    let c_arg := AttrArg.str "c" in
+    let attrs := List.cons (Attribute.mk (id "extern") (List.cons c_arg List.empty)) List.empty in
+    Def.mk (NamePath.mk (List.cons (id "ctx_new_raw_io") List.empty))
+        raw_io_ptr
+        (Term.lam (binder_named m_id) ptr_term Term.hole)
+        ([] : List TypeConstraint) attrs Visibility.package_private List.empty
+
+#[test]
+def test_extern_raw_io_ptr_declares_i8ptr : Bool :=
+    let ir := emit_module (compile_db_decls_ir (List.cons mk_ctx_new_raw_io_def List.empty)) in
+    String.contains ir "declare i8* @ctx_new_raw_io"
+
+/// A pure extern (no `RawIO`) must NOT call `monad_io_pure` — the box is
+/// only for a declared `RawIO A`.
+#[test]
+def test_extern_pure_return_not_boxed : Bool :=
+    let ir := emit_module (compile_db_decls_ir (List.cons mk_strlen_def List.empty)) in
+    not (String.contains ir "call i64 @monad_io_pure")
