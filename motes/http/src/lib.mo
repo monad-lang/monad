@@ -24,6 +24,9 @@ pub use lib::types {
     Headers.is_empty, Headers.get_all,
 
     Uri.host, Body.is_empty, Body.is_text, Request.get, Response.ok_text,
+    Response.text, Response.html, Response.json, Response.json_bytes,
+    Response.bytes, Response.no_content, Response.redirect,
+    Response.with_header, Response.with_status,
 }
 
 pub use lib::uri {

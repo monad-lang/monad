@@ -327,6 +327,43 @@ pub def Request.get (uri : Uri) : Request :=
 pub def Response.ok_text (s : String) : Response :=
   { status := Status.ok, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
 
+/// A response with the given status and a text body.
+pub def Response.text (status : U16) (s : String) : Response :=
+  { status := status, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
+
+/// A response with the given status and an HTML body.
+pub def Response.html (status : U16) (s : String) : Response :=
+  { status := status, headers := Headers.set "Content-Type" "text/html; charset=utf-8" Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
+
+/// A response with the given status and an already-encoded JSON body. The
+/// `http` motes never depend on a serializer: callers encode and pass the
+/// string.
+pub def Response.json (status : U16) (s : String) : Response :=
+  { status := status, headers := Headers.set "Content-Type" "application/json" Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
+
+/// JSON from raw bytes (for an encoder that produces bytes).
+pub def Response.json_bytes (status : U16) (b : List U8) : Response :=
+  { status := status, headers := Headers.set "Content-Type" "application/json" Headers.empty, version := HttpVersion.http1_1, body := Body.bytes b }
+
+/// A response with the given status, raw bytes and content type.
+pub def Response.bytes (status : U16) (b : List U8) (content_type : String) : Response :=
+  { status := status, headers := Headers.set "Content-Type" content_type Headers.empty, version := HttpVersion.http1_1, body := Body.bytes b }
+
+/// 204 No Content: no body, no representation.
+pub def Response.no_content : Response :=
+  { status := Status.no_content, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+
+/// A redirect with a `Location` header. `307`/`308` preserve the method;
+/// `301`/`302`/`303` are the usual choices (`303` after a POST).
+pub def Response.redirect (status : U16) (location : String) : Response :=
+  { status := status, headers := Headers.set "Location" location Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
+
+pub def Response.with_header (key : String) (value : String) (res : Response) : Response :=
+  { res with headers := Headers.set key value res.headers }
+
+pub def Response.with_status (status : U16) (res : Response) : Response :=
+  { res with status := status }
+
 // ── Instances ───────────────────────────────────────────────────────────
 
 def Method.to_i64 (m : Method) : I64 :=
