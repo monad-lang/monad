@@ -28,6 +28,12 @@ pub use lib::middleware {
     Middleware.recover, Middleware.auth_basic, Middleware.auth_bearer,
 }
 
+pub use lib::static_files {
+    StaticConfig, StaticConfig.default,
+    Static.handler, Static.safe_path, Static.mime_of, Static.etag, Static.range,
+    Static.respond,
+}
+
 // Form data is decoded in `http`; re-export the request-level helpers so a
 // `moon` handler can import its whole surface from one place.
 pub use http::request {Request.form_fields, Request.multipart, Request.param}

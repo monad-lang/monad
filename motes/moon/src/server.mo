@@ -32,11 +32,11 @@
 /// layer does not expose yet.
 
 use std::concurrent::fiber {Fiber, await_fiber, forkIO}
-use std::stream {Stream, FdStream, StreamError, StreamError.is_not_found}
+use std::stream {Stream, FdStream}
 use http::types {
   Transport, Transport.read_bytes, Transport.write_bytes,
   Body, Headers, Method, Request, Response, Status.bad_request,
-  Status.internal_server_error, Status.not_found, Status.ok, http1_0, http1_1,
+  Status.internal_server_error, Status.not_found, http1_0, http1_1,
 }
 use http::strings {Strings.drop_bytes}
 use http::wire {
@@ -44,6 +44,7 @@ use http::wire {
   Wire.parse_request, Wire.response_has_body, Wire.take_bytes,
 }
 use lib::handler {Handler.try}
+use lib::static_files {Static.handler, StaticConfig.default}
 
 // ── socket bytes ────────────────────────────────────────────────────────
 
@@ -349,7 +350,8 @@ pub def ServerConfig.default : ServerConfig :=
   cfg
 
 pub def ServerConfig.on (port : U16) : ServerConfig :=
-  let cfg : ServerConfig := { ServerConfig.default with port := port } in
+  let base := ServerConfig.default in
+  let cfg : ServerConfig := { base with port := port } in
   cfg
 
 /// A running server: the listener to close for shutdown and the accept-loop
@@ -411,27 +413,18 @@ def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) :
 
 // ── static file serving ─────────────────────────────────────────────────
 
-/// Build a handler that serves files from `root` + request path.
-/// Returns 200 with the file's content, 404 when it does not exist, and
-/// 500 when it exists but cannot be read.
-/// No path traversal protection in v1 — callers must sanitize paths.
+/// Serve static files from `root`. Byte-exact, with MIME, `ETag`,
+/// `If-None-Match`, a single `Range`, and a traversal guard
+/// (`static_files.mo`). Prefer constructing a `Static.handler` with a
+/// `StaticConfig` when you need an index file, cache policy or an exact
+/// root.
 pub def Server.static (root : String) (req : Request) : IO Response := do {
-  let read <- IO.read_file (Path.path (String.concat root req.uri.path));
-  return (Server.static_respond read)
-}
-
-def Server.static_respond (read : Result StreamError String) : Response :=
-  match read {
-    Result.ok content => Server.static_ok content,
-    Result.err e =>
-      if StreamError.is_not_found e
-      then Server.not_found_response
-      else Server.internal_error_response
+  let r <- Static.handler (StaticConfig.default root) req;
+  match r {
+    Result.ok res => return res,
+    Result.err _ => return Server.internal_error_response
   }
-
-/// Build a 200 response with text content.
-def Server.static_ok (content : String) : Response :=
-  { status := Status.ok, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text content }
+}
 
 // ── concurrent server (Phase 7) ────────────────────────────────────────
 //

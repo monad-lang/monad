@@ -13,7 +13,7 @@
 use lib::path {Path}
 use lib::bytebuf {
   ByteBuf, ByteBuf.alloc, ByteBuf.copy_into, ByteBuf.free, ByteBuf.length,
-  ByteBuf.of_string, ByteBuf.to_string,
+  ByteBuf.of_list, ByteBuf.of_string, ByteBuf.to_list, ByteBuf.to_string,
 }
 use lib::stream {
   Stream, FdStream, FdStream.open_file, FdStream.read_line_bounded,
@@ -37,6 +37,27 @@ def IO.read_chunk_size : I64 := 65536
 pub def IO.write_file (path : Path) (content : String) : IO (Result StreamError Unit) := do {
   let opened <- FdStream.open_file path FdStream.write_mode;
   IO.write_opened opened content
+}
+
+/// Write raw bytes to `path`, truncating it. The byte counterpart of
+/// `IO.write_file`; no decoding is involved.
+pub def IO.write_file_bytes (path : Path) (bytes : List U8) : IO (Result StreamError Unit) := do {
+  let opened <- FdStream.open_file path FdStream.write_mode;
+  IO.write_bytes_opened opened bytes
+}
+
+def IO.write_bytes_opened (opened : Result StreamError FdStream) (bytes : List U8) : IO (Result StreamError Unit) :=
+  match opened {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok s => IO.write_bytes_all s bytes
+  }
+
+def IO.write_bytes_all (s : FdStream) (bytes : List U8) : IO (Result StreamError Unit) := do {
+  let buf <- ByteBuf.of_list bytes;
+  let r <- Stream.write s buf;
+  let _ <- ByteBuf.free buf;
+  let _ <- Stream.close s;
+  return (IO.written r)
 }
 
 def IO.write_opened (opened : Result StreamError FdStream) (content : String) : IO (Result StreamError Unit) :=
@@ -68,6 +89,55 @@ def IO.written (r : Result StreamError I64) : Result StreamError Unit :=
 pub def IO.read_file (path : Path) : IO (Result StreamError String) := do {
   let opened <- FdStream.open_file path FdStream.read_mode;
   IO.read_opened opened
+}
+
+/// The whole file at `path` as raw bytes; a missing file is `not_found`.
+/// Unlike `IO.read_file`, this never decodes, so NUL bytes and arbitrary
+/// binary content survive. One chunk is returned directly; several are
+/// copied into one buffer first.
+pub def IO.read_file_bytes (path : Path) : IO (Result StreamError (List U8)) := do {
+  let opened <- FdStream.open_file path FdStream.read_mode;
+  IO.read_bytes_opened opened
+}
+
+def IO.read_bytes_opened (opened : Result StreamError FdStream) : IO (Result StreamError (List U8)) :=
+  match opened {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok s => IO.read_bytes_all s
+  }
+
+def IO.read_bytes_all (s : FdStream) : IO (Result StreamError (List U8)) := do {
+  let chunks <- IO.read_chunks s List.empty;
+  let _ <- Stream.close s;
+  IO.read_bytes_joined chunks
+}
+
+def IO.read_bytes_joined (chunks : Result StreamError (List ByteBuf)) : IO (Result StreamError (List U8)) :=
+  match chunks {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok bufs => IO.read_bytes_flatten bufs
+  }
+
+def IO.read_bytes_flatten (bufs : List ByteBuf) : IO (Result StreamError (List U8)) :=
+  match bufs {
+    List.empty => IO.pure (Result.ok List.empty),
+    List.cons one rest =>
+      match rest {
+        List.empty => IO.buf_bytes_result one,
+        List.cons _ _ => IO.gather_bytes bufs
+      }
+  }
+
+def IO.buf_bytes_result (b : ByteBuf) : IO (Result StreamError (List U8)) := do {
+  let bytes <- ByteBuf.to_list b (ByteBuf.length b);
+  let _ <- ByteBuf.free b;
+  return (Result.ok bytes)
+}
+
+def IO.gather_bytes (bufs : List ByteBuf) : IO (Result StreamError (List U8)) := do {
+  let dst <- ByteBuf.alloc (IO.total_length bufs);
+  let _ <- IO.copy_chunks dst 0 bufs;
+  IO.buf_bytes_result dst
 }
 
 def IO.read_opened (opened : Result StreamError FdStream) : IO (Result StreamError String) :=

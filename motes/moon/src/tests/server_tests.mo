@@ -11,7 +11,7 @@ use moon::server {
   Server.handle_connection, Server.header_has_token, Server.keep_alive,
   Server.read_message, Server.read_request, Server.run, Server.serve_connection,
   Server.shutdown, Server.start, Server.static, Server.with_connection_header,
-  ServerConfig, ServerConfig.on,
+  ServerConfig.on,
 }
 use std::stream {Stream, FdStream}
 use http::types {
@@ -332,10 +332,11 @@ def test_serve_with_headers : IO Bool := do {
 def test_static_file : IO Bool := do {
   // Process-scoped: `/tmp` is shared with every sibling worktree, so a fixed
   // name lets two concurrent runs write over each other's fixture.
-  let path := String.concat "/tmp/moon_test_static_" (String.concat (I64.to_string process_id) ".txt");
+  let name := String.concat "moon_test_static_" (String.concat (I64.to_string process_id) ".txt");
+  let path := String.concat "/tmp/" name;
   let wrote <- IO.write_file (Path.path path) "static content";
-  let res_ok : Response <- Server.static "" (static_req path);
-  let res_404 : Response <- Server.static "" (static_req (String.concat path "_missing"));
+  let res_ok : Response <- Server.static "/tmp" (static_req (String.concat "/" name));
+  let res_404 : Response <- Server.static "/tmp" (static_req (String.concat "/" (String.concat name "_missing")));
   return (Result.is_ok wrote && Bool.and
     (Bool.and (U16.beq res_ok.status Status.ok) (String.beq (String.from_list (Body.to_bytes_pure res_ok.body)) "static content"))
     (U16.beq res_404.status Status.not_found))

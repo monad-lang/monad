@@ -13,11 +13,12 @@ pub use lib::types {
     Method, HttpVersion, Headers, Uri, Body, Framing, Request, Response, Transport,
 
     Status.ok, Status.created, Status.accepted, Status.no_content,
-    Status.moved_permanently, Status.found, Status.see_other,
+    Status.partial_content, Status.moved_permanently, Status.found, Status.see_other,
     Status.not_modified, Status.temporary_redirect, Status.permanent_redirect,
     Status.bad_request, Status.unauthorized, Status.forbidden, Status.not_found,
-    Status.method_not_allowed, Status.conflict, Status.internal_server_error,
-    Status.bad_gateway, Status.service_unavailable,
+    Status.method_not_allowed, Status.range_not_satisfiable, Status.conflict,
+    Status.internal_server_error, Status.bad_gateway,
+    Status.service_unavailable,
 
     Headers.empty, Headers.get, Headers.set, Headers.add, Headers.remove,
     Headers.is_empty, Headers.get_all,
@@ -31,8 +32,9 @@ pub use lib::uri {
 }
 
 pub use lib::strings {
-    Strings.split_on, Strings.list_starts_with, Strings.list_drop_prefix,
-    Strings.drop_bytes, Strings.base64_decode,
+    Strings.split_on, Strings.split_at_byte, Strings.list_starts_with,
+    Strings.list_drop_prefix, Strings.drop_bytes, Strings.base64_decode,
+    Strings.parse_i64,
 }
 
 pub use lib::wire {

@@ -247,7 +247,7 @@ def Sha256.process_blocks (s : Sha256State) (padded : List U8) : Sha256State :=
         (Sha256.drop_n 64 padded)
   }
 
-def Sha256.hash_bytes (bytes : List U8) : List U8 :=
+pub def Sha256.hash_bytes (bytes : List U8) : List U8 :=
   let padded := Sha256.pad bytes (List.length bytes) in
   let final := Sha256.process_blocks Sha256.initial_state padded in
   match final { mk a b c d e f g h =>

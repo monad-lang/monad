@@ -67,7 +67,7 @@ pub def Strings.drop_bytes (n : I64) (xs : List U8) : List U8 :=
       List.cons _ rest => Strings.drop_bytes (I64.sub n 1) rest
     }
 
-def Strings.split_at_byte (c : U8) (bytes : List U8) : Pair (List U8) (List U8) :=
+pub def Strings.split_at_byte (c : U8) (bytes : List U8) : Pair (List U8) (List U8) :=
   Strings.split_at_byte_go c bytes List.empty
 
 def Strings.split_at_byte_go (c : U8) (bytes : List U8) (acc : List U8) : Pair (List U8) (List U8) :=
@@ -417,7 +417,7 @@ def Strings.i64_overflows (acc : I64) (digit : I64) : Bool :=
 /// empty run, on a non-digit, and on a value that would leave `I64` range --
 /// so an absurd `Content-Length` is rejected rather than wrapping into a
 /// plausible small one.
-def Strings.parse_i64 (s : String) : Option I64 :=
+pub def Strings.parse_i64 (s : String) : Option I64 :=
   let bytes := String.to_list (String.trim s) in
   if List.is_empty bytes
   then Option.none
