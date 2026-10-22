@@ -24,22 +24,54 @@ def Glue.module (abi : WebAbi) : Js.Module :=
     Js.Stmt.expr (Js.Expr.raw "import { host } from \"./web_runtime.js\"")
   ] in
   let body : List Js.Stmt := [
-    Js.Stmt.let_bind "imports" (Js.Expr.object [
-      Pair.pair "monad" (Js.Expr.object (Glue.import_fields abi.imports))
-    ]),
+    Js.Stmt.let_bind "imports"
+      (Js.Expr.object (Glue.module_fields (Glue.module_names abi.imports List.empty) abi.imports)),
     Js.Stmt.expr (Js.Expr.raw "export { imports }"),
-    Js.Stmt.let_bind "start" (Js.Expr.raw "async (url, selector) => { const { instance } = await WebAssembly.instantiateStreaming(fetch(url), { monad: imports.monad }); if (instance.exports.oak_mount) instance.exports.oak_mount(selector); return instance; }"),
+    Js.Stmt.let_bind "start" (Js.Expr.raw "async (url, selector) => { const { instance } = await WebAssembly.instantiateStreaming(fetch(url), imports); if (instance.exports.oak_mount) instance.exports.oak_mount(selector); return instance; }"),
     Js.Stmt.expr (Js.Expr.raw "export { start }")
   ] in
   let m : Js.Module := { header := header, imports := imports, body := body } in
   m
 
+/// Every distinct `module` in the ABI, in first-encounter order.
 #[terminating]
-def Glue.import_fields (imports : List WebImport) : List (Pair String Js.Expr) :=
+def Glue.module_names (imports : List WebImport) (acc : List String) : List String :=
+  match imports {
+    List.empty => List.reverse acc,
+    List.cons imp rest =>
+      if Glue.name_in imp.module acc
+      then Glue.module_names rest acc
+      else Glue.module_names rest (List.cons imp.module acc)
+  }
+
+#[terminating]
+def Glue.name_in (name : String) (names : List String) : Bool :=
+  match names {
+    List.empty => false,
+    List.cons n rest => if String.beq n name then true else Glue.name_in name rest
+  }
+
+/// One `{ "<module>": { <imports> } }` entry per module. The import object
+/// must carry every `WebImport.module`; grouping them all under `"monad"`
+/// would make `instantiateStreaming` fail with a missing-import `LinkError`.
+#[terminating]
+def Glue.module_fields (names : List String) (imports : List WebImport) : List (Pair String Js.Expr) :=
+  match names {
+    List.empty => List.empty,
+    List.cons name rest =>
+      List.cons (Pair.pair name (Js.Expr.object (Glue.import_fields_for name imports)))
+        (Glue.module_fields rest imports)
+  }
+
+#[terminating]
+def Glue.import_fields_for (module : String) (imports : List WebImport) : List (Pair String Js.Expr) :=
   match imports {
     List.empty => List.empty,
     List.cons imp rest =>
-      List.cons (Pair.pair imp.name (Glue.import_expr imp.name)) (Glue.import_fields rest)
+      if String.beq imp.module module
+      then List.cons (Pair.pair imp.name (Glue.import_expr imp.name))
+        (Glue.import_fields_for module rest)
+      else Glue.import_fields_for module rest
   }
 
 def Glue.import_expr (name : String) : Js.Expr :=
