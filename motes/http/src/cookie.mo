@@ -97,9 +97,48 @@ def Cookie.lookup_go (name : String) (cookies : List (Pair String String)) : Opt
 // ── serialization ───────────────────────────────────────────────────────
 
 /// `name=value`, with bytes outside the RFC 6265 cookie-octet set dropped
-/// rather than escaped.
+/// rather than escaped. The name is filtered to token bytes for the same
+/// reason: a `;`, `=` or CR in a name would forge attributes or a header.
 pub def Cookie.render (name : String) (value : String) : String :=
-  String.concat name (String.concat "=" (Cookie.sanitize value))
+  String.concat (Cookie.sanitize_name name)
+    (String.concat "=" (Cookie.sanitize value))
+
+/// A cookie name is an RFC 9110 token (the cookie grammar reuses it).
+#[terminating]
+def Cookie.sanitize_name (name : String) : String :=
+  String.from_list (Cookie.sanitize_name_go (String.to_list name))
+
+#[terminating]
+def Cookie.sanitize_name_go (bytes : List U8) : List U8 :=
+  match bytes {
+    List.empty => List.empty,
+    List.cons b rest =>
+      if Cookie.token_octet b
+      then List.cons b (Cookie.sanitize_name_go rest)
+      else Cookie.sanitize_name_go rest
+  }
+
+def Cookie.token_octet (b : U8) : Bool :=
+  if U8.lt b 33u8 then false
+  else if U8.lt 126u8 b then false
+  else if U8.beq b 34u8 then false
+  else if U8.beq b 40u8 then false
+  else if U8.beq b 41u8 then false
+  else if U8.beq b 44u8 then false
+  else if U8.beq b 47u8 then false
+  else if U8.beq b 58u8 then false
+  else if U8.beq b 59u8 then false
+  else if U8.beq b 60u8 then false
+  else if U8.beq b 61u8 then false
+  else if U8.beq b 62u8 then false
+  else if U8.beq b 63u8 then false
+  else if U8.beq b 64u8 then false
+  else if U8.beq b 91u8 then false
+  else if U8.beq b 92u8 then false
+  else if U8.beq b 93u8 then false
+  else if U8.beq b 123u8 then false
+  else if U8.beq b 125u8 then false
+  else true
 
 #[terminating]
 def Cookie.sanitize (value : String) : String :=
@@ -114,6 +153,12 @@ def Cookie.sanitize_go (bytes : List U8) : List U8 :=
       then List.cons b (Cookie.sanitize_go rest)
       else Cookie.sanitize_go rest
   }
+
+/// Attribute values (`Path`) use the same permissive octet filter; the bytes
+/// that matter (`;` and the CTLs) are not cookie-octets.
+#[terminating]
+def Cookie.sanitize_attr (s : String) : String :=
+  String.from_list (Cookie.sanitize_go (String.to_list s))
 
 def Cookie.cookie_octet (b : U8) : Bool :=
   if U8.lt b 33u8 then false
@@ -138,7 +183,7 @@ def Cookie.render_with_attrs (name : String) (value : String) (attrs : CookieAtt
   let with_path :=
     if String.is_empty attrs.path
     then base
-    else String.concat base (String.concat "; Path=" attrs.path) in
+    else String.concat base (String.concat "; Path=" (Cookie.sanitize_attr attrs.path)) in
   let with_age :=
     match attrs.max_age {
       Option.none => with_path,

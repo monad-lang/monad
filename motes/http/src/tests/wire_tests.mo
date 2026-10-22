@@ -1,14 +1,16 @@
 /// Phase 3 tests — HTTP/1.1 wire format parse/serialize roundtrips.
 
 use http::types {
-  Body, Framing, Headers, Method, Request, Response, Status.created, Status.no_content,
+  Body, Framing, Headers, Method, Request, Response, Response.no_content,
+  Response.text, Response.with_header, Response.with_status, Status.created, Status.no_content,
   Status.not_found, Status.not_modified, Status.ok, Uri, http1_0, http1_1,
 }
 use http::body {Body.length, Body.to_bytes_pure}
 use http::strings {Strings.drop_bytes}
 use http::wire {
   Wire.chunk_step, Wire.body_bytes, Wire.content_length_of,
-  Wire.format_request, Wire.format_response, Wire.frame_request,
+  Wire.format_request, Wire.format_response, Wire.format_response_head,
+  Wire.frame_request,
   Wire.frame_response, Wire.parse_chunk_size, Wire.parse_content_length,
   Wire.parse_method, Wire.parse_request, Wire.parse_response,
   Wire.parse_response_with_method, Wire.parse_u16, Wire.parse_version,
@@ -918,4 +920,46 @@ def test_frame_and_parse_chunked_request : Bool :=
               }
           }
       }
+  }
+
+// ── header validation and bodyless head framing ────────────────────────
+
+#[test]
+def test_format_response_rejects_header_injection : Bool :=
+  let res := Response.with_header "X-Test" "ok\r\nSet-Cookie: a=b" (Response.text 200u16 "hi") in
+  match Wire.format_response res {
+    Result.err _ => true,
+    Result.ok _ => false
+  }
+
+#[test]
+def test_format_response_accepts_normal_header : Bool :=
+  let res := Response.with_header "X-Test" "ok" (Response.text 200u16 "hi") in
+  match Wire.format_response res {
+    Result.ok _ => true,
+    Result.err _ => false
+  }
+
+#[test]
+def test_head_204_has_no_content_length : Bool :=
+  match Wire.format_response_head Response.no_content {
+    Result.err _ => false,
+    Result.ok bytes => String.beq (String.from_list bytes) "HTTP/1.1 204 \r\n\r\n"
+  }
+
+#[test]
+def test_head_304_omits_computed_length : Bool :=
+  let res := Response.with_status 304u16 (Response.text 200u16 "") in
+  match Wire.format_response_head res {
+    Result.err _ => false,
+    Result.ok bytes => String.beq (String.from_list bytes) "HTTP/1.1 304 \r\n\r\n"
+  }
+
+#[test]
+def test_head_200_keeps_representation_length : Bool :=
+  match Wire.format_response_head (Response.text 200u16 "hello") {
+    Result.err _ => false,
+    Result.ok bytes =>
+      String.beq (String.from_list bytes)
+        "HTTP/1.1 200 \r\ncontent-length: 5\r\n\r\n"
   }

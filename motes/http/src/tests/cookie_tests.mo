@@ -58,3 +58,19 @@ def test_ct_eq : Bool :=
   Bool.and (Strings.ct_eq "abc" "abc")
     (Bool.and (Bool.not (Strings.ct_eq "abc" "abd"))
       (Bool.not (Strings.ct_eq "abc" "ab")))
+
+// ── injection-shaped names and attributes are filtered ─────────────────
+
+#[test]
+def test_render_sanitizes_name : Bool :=
+  String.beq (Cookie.render "si;d\r\nX: y" "v") "sidXy=v"
+
+#[test]
+def test_set_cookie_sanitizes_path : Bool :=
+  let base := CookieAttrs.default in
+  let attrs : CookieAttrs := { base with path := "/;\r\nX: y" } in
+  match Cookie.set_cookie "sid" "v" attrs {
+    Pair.pair k v =>
+      Bool.and (String.beq k "Set-Cookie")
+        (String.beq v "sid=v; Path=/X:y; HttpOnly; SameSite=Lax")
+  }

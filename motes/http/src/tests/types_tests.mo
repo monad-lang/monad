@@ -1,9 +1,11 @@
 /// Phase 1 tests for the `http` mote core types.
 
 use http::types {
-  Body.is_empty, Body.is_text, DELETE, GET, Headers, PATCH, POST, Request,
-  Response, Status.internal_server_error, Status.not_found, Status.ok, Uri,
-  http1_0, http1_1,
+  Body.is_empty, Body.is_text, DELETE, GET, Headers, Headers.set_checked,
+  PATCH, POST, Request, Response, Response.bytes, Response.json,
+  Response.json_bytes, Response.no_content, Response.redirect, Response.text,
+  Response.with_header, Status.internal_server_error, Status.not_found,
+  Status.ok, Uri, http1_0, http1_1,
 }
 
 #[test]
@@ -95,3 +97,69 @@ def test_headers_remove_drops_duplicates : Bool :=
   let h0 : Headers := Headers.add "X" "2" (Headers.set "X" "1" Headers.empty) in
   let h1 : Headers := Headers.remove "X" h0 in
   Headers.is_empty h1
+
+// ── response constructors ──────────────────────────────────────────────
+
+#[test]
+def test_response_text : Bool :=
+  let r := Response.text 201u16 "made" in
+  r.status == 201u16 && Body.is_text r.body "made" && Headers.is_empty r.headers
+
+#[test]
+def test_response_html_content_type : Bool :=
+  let r := Response.html 200u16 "<p>x</p>" in
+  expect_some (Headers.get "Content-Type" r.headers) "text/html; charset=utf-8"
+
+#[test]
+def test_response_json_content_type : Bool :=
+  let r := Response.json 200u16 "{}" in
+  expect_some (Headers.get "Content-Type" r.headers) "application/json"
+
+#[test]
+def test_response_json_bytes_content_type : Bool :=
+  let r := Response.json_bytes 200u16 (String.to_list "{}") in
+  expect_some (Headers.get "Content-Type" r.headers) "application/json"
+
+#[test]
+def test_response_bytes_content_type : Bool :=
+  let r := Response.bytes 200u16 (String.to_list "abc") "application/octet-stream" in
+  expect_some (Headers.get "Content-Type" r.headers) "application/octet-stream"
+
+#[test]
+def test_response_no_content : Bool :=
+  let r := Response.no_content in
+  r.status == 204u16 && Body.is_empty r.body
+
+#[test]
+def test_response_redirect_location : Bool :=
+  let r := Response.redirect 302u16 "https://example.com/next" in
+  r.status == 302u16
+    && expect_some (Headers.get "Location" r.headers) "https://example.com/next"
+
+#[test]
+def test_response_with_header : Bool :=
+  let r := Response.with_header "X-Test" "yes" (Response.text 200u16 "ok") in
+  expect_some (Headers.get "X-Test" r.headers) "yes"
+
+// ── checked header insertion ───────────────────────────────────────────
+
+#[test]
+def test_headers_set_checked_accepts : Bool :=
+  match Headers.set_checked "X-Test" "ok" Headers.empty {
+    Result.ok h => expect_some (Headers.get "X-Test" h) "ok",
+    Result.err _ => false
+  }
+
+#[test]
+def test_headers_set_checked_rejects_crlf_value : Bool :=
+  match Headers.set_checked "X-Test" "ok\r\nSet-Cookie: a=b" Headers.empty {
+    Result.err _ => true,
+    Result.ok _ => false
+  }
+
+#[test]
+def test_headers_set_checked_rejects_bad_name : Bool :=
+  match Headers.set_checked "X Test" "ok" Headers.empty {
+    Result.err _ => true,
+    Result.ok _ => false
+  }

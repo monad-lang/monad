@@ -153,3 +153,22 @@ def test_response_is_event_stream : Bool :=
     Option.none => ""
   } in
   Bool.and (Body.is_stream res.body) (String.beq ct "text/event-stream")
+
+// ── encoder line discipline ────────────────────────────────────────────
+
+#[test]
+def test_encode_splits_lf : Bool :=
+  String.beq (Sse.encode "a\nb") "data: a\ndata: b\n"
+
+#[test]
+def test_encode_splits_cr : Bool :=
+  String.beq (Sse.encode "a\rb") "data: a\ndata: b\n"
+
+#[test]
+def test_encode_splits_crlf_once : Bool :=
+  String.beq (Sse.encode "a\r\nb") "data: a\ndata: b\n"
+
+#[test]
+def test_encode_event_drops_name_newlines : Bool :=
+  String.beq (Sse.encode_event "bad\r\nevent: x" "d")
+    "event: badevent: x\ndata: d\n\n"

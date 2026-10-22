@@ -116,6 +116,76 @@ pub def Headers.add (key : String) (val : String) (h : Headers) : Headers :=
     Headers.headers pairs => Headers.headers (List.cons (Pair.pair lk val) pairs)
   }
 
+// ── header validation ───────────────────────────────────────────────────
+//
+// `Headers.set`/`Headers.add` stay total for internal callers that only pass
+// literals; the `*_checked` forms are for anything derived from input, and
+// the wire serializers validate by default so a bad pair can never split a
+// message. A header name is an RFC 9110 token; a value may not contain NUL,
+// CR or LF (that is the response/request-splitting shape).
+
+def Headers.is_token_char (b : U8) : Bool :=
+  if U8.lt b 33u8 then false
+  else if U8.lt 126u8 b then false
+  else if U8.beq b 34u8 then false
+  else if U8.beq b 40u8 then false
+  else if U8.beq b 41u8 then false
+  else if U8.beq b 44u8 then false
+  else if U8.beq b 47u8 then false
+  else if U8.beq b 58u8 then false
+  else if U8.beq b 59u8 then false
+  else if U8.beq b 60u8 then false
+  else if U8.beq b 61u8 then false
+  else if U8.beq b 62u8 then false
+  else if U8.beq b 63u8 then false
+  else if U8.beq b 64u8 then false
+  else if U8.beq b 91u8 then false
+  else if U8.beq b 92u8 then false
+  else if U8.beq b 93u8 then false
+  else if U8.beq b 123u8 then false
+  else if U8.beq b 125u8 then false
+  else true
+
+#[terminating]
+def Headers.token_all (bytes : List U8) : Bool :=
+  match bytes {
+    List.empty => true,
+    List.cons b rest => Bool.and (Headers.is_token_char b) (Headers.token_all rest)
+  }
+
+pub def Headers.valid_name (name : String) : Bool :=
+  Bool.and (Bool.not (String.is_empty name)) (Headers.token_all (String.to_list name))
+
+def Headers.invalid_value_byte (b : U8) : Bool :=
+  Bool.or (U8.beq b 0u8) (Bool.or (U8.beq b 10u8) (U8.beq b 13u8))
+
+#[terminating]
+def Headers.value_all (bytes : List U8) : Bool :=
+  match bytes {
+    List.empty => true,
+    List.cons b rest =>
+      Bool.and (Bool.not (Headers.invalid_value_byte b)) (Headers.value_all rest)
+  }
+
+pub def Headers.valid_value (value : String) : Bool :=
+  Headers.value_all (String.to_list value)
+
+/// `Headers.set`, but reject a non-token name or a value with CR/LF/NUL.
+pub def Headers.set_checked (key : String) (val : String) (h : Headers) : Result String Headers :=
+  if Bool.not (Headers.valid_name key)
+  then Result.err "invalid header name"
+  else if Bool.not (Headers.valid_value val)
+  then Result.err "invalid header value"
+  else Result.ok (Headers.set key val h)
+
+/// `Headers.add`, with the same validation.
+pub def Headers.add_checked (key : String) (val : String) (h : Headers) : Result String Headers :=
+  if Bool.not (Headers.valid_name key)
+  then Result.err "invalid header name"
+  else if Bool.not (Headers.valid_value val)
+  then Result.err "invalid header value"
+  else Result.ok (Headers.add key val h)
+
 /// Drop every value stored under `key`. Absent is not an error.
 pub def Headers.remove (key : String) (h : Headers) : Headers :=
   let lk : String := String.to_lowercase key in

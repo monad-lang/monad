@@ -21,7 +21,8 @@ pub use lib::types {
     Status.service_unavailable,
 
     Headers.empty, Headers.get, Headers.set, Headers.add, Headers.remove,
-    Headers.is_empty, Headers.get_all,
+    Headers.is_empty, Headers.get_all, Headers.set_checked, Headers.add_checked,
+    Headers.valid_name, Headers.valid_value,
 
     Uri.host, Body.is_empty, Body.is_text, Body.is_stream,
     Request.get, Response.ok_text,
@@ -49,6 +50,7 @@ pub use lib::wire {
     Wire.chunk_step, Wire.decode_chunked,
     Wire.hex_i64, Wire.chunk_frame, Wire.terminal_chunk,
     Wire.response_head_chunked, Wire.chunked_request_framing,
+    Wire.headers_valid, Wire.find_body_start, Wire.head_headers,
 }
 
 pub use lib::body {

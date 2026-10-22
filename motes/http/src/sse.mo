@@ -41,9 +41,30 @@ pub def Sse.init : SseState :=
 // ── encoding (server side) ──────────────────────────────────────────────
 
 /// The `data:` lines for one event body; a multi-line value becomes one
-/// `data:` line per line, as the spec requires.
+/// `data:` line per line, as the spec requires. CR, LF and CRLF are all line
+/// endings to an `EventSource`, so all three split here.
 pub def Sse.encode (data : String) : String :=
-  String.concat_list (Sse.data_lines (Strings.split_on "\n" data))
+  String.concat_list (Sse.data_lines (Sse.split_lines (String.to_list data) List.empty List.empty))
+
+/// Split on CR, LF or CRLF without producing an empty segment for the two
+/// bytes of a CRLF pair.
+#[terminating]
+def Sse.split_lines (bytes : List U8) (current : List U8) (acc : List String) : List String :=
+  match bytes {
+    List.empty => List.reverse (List.cons (String.from_list (List.reverse current)) acc),
+    List.cons b rest =>
+      if U8.beq b 10u8
+      then Sse.split_lines rest List.empty (List.cons (String.from_list (List.reverse current)) acc)
+      else if U8.beq b 13u8
+      then Sse.split_lines (Sse.skip_lf rest) List.empty (List.cons (String.from_list (List.reverse current)) acc)
+      else Sse.split_lines rest (List.cons b current) acc
+  }
+
+def Sse.skip_lf (bytes : List U8) : List U8 :=
+  match bytes {
+    List.empty => bytes,
+    List.cons b rest => if U8.beq b 10u8 then rest else bytes
+  }
 
 #[terminating]
 def Sse.data_lines (lines : List String) : List String :=
@@ -54,12 +75,25 @@ def Sse.data_lines (lines : List String) : List String :=
   }
 
 /// A named event followed by its data and the blank line that dispatches it.
+/// `event` is a single line by definition, so CR/LF are dropped from the name
+/// rather than allowed to forge a second field.
 pub def Sse.encode_event (name : String) (data : String) : String :=
+  let safe_name := String.from_list (Sse.event_name_bytes (String.to_list name) List.empty) in
   let event_line :=
-    if String.is_empty name
+    if String.is_empty safe_name
     then ""
-    else String.concat "event: " (String.concat name "\n") in
+    else String.concat "event: " (String.concat safe_name "\n") in
   String.concat event_line (String.concat (Sse.encode data) "\n")
+
+#[terminating]
+def Sse.event_name_bytes (bytes : List U8) (acc : List U8) : List U8 :=
+  match bytes {
+    List.empty => List.reverse acc,
+    List.cons b rest =>
+      if Bool.or (U8.beq b 10u8) (U8.beq b 13u8)
+      then Sse.event_name_bytes rest acc
+      else Sse.event_name_bytes rest (List.cons b acc)
+  }
 
 pub def Sse.encode_comment (text : String) : String :=
   String.concat ": " (String.concat text "\n")

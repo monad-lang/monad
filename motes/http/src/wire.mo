@@ -94,6 +94,30 @@ def Wire.header_lines_go (pairs : List (Pair String String)) : List U8 :=
       }
   }
 
+// ── header validation ───────────────────────────────────────────────────
+//
+// Serialisation validates by default: a header pair is a caller-controlled
+// string, and a CR/LF in a value would split the message (response/request
+// splitting). `Headers.set_checked` is the earlier, friendlier gate; this is
+// the one no serializer can forget.
+
+pub def Wire.headers_valid (h : Headers) : Bool :=
+  match h {
+    Headers.headers pairs => Wire.header_pairs_valid pairs
+  }
+
+#[terminating]
+def Wire.header_pairs_valid (pairs : List (Pair String String)) : Bool :=
+  match pairs {
+    List.empty => true,
+    List.cons head rest =>
+      match head {
+        Pair.pair k v =>
+          Bool.and (Headers.valid_name k)
+            (Bool.and (Headers.valid_value v) (Wire.header_pairs_valid rest))
+      }
+  }
+
 // ── chunked response framing ────────────────────────────────────────────
 //
 // A stream has no length, so a response that carries one is framed with
@@ -133,13 +157,17 @@ pub def Wire.terminal_chunk : List U8 :=
   String.to_list "0\r\n\r\n"
 
 /// A response head for a chunked body: status line + headers with
-/// `Transfer-Encoding: chunked` and no `Content-Length`.
-pub def Wire.response_head_chunked (res : Response) : List U8 :=
-  let status_line := Wire.status_line res.status res.version in
+/// `Transfer-Encoding: chunked` and no `Content-Length`. Answers `Err` on an
+/// invalid header pair, like every other serializer.
+pub def Wire.response_head_chunked (res : Response) : Result String (List U8) :=
   let hs := Headers.remove "Content-Length"
     (Headers.set "Transfer-Encoding" "chunked" res.headers) in
-  let hdrs := Wire.header_lines hs in
-  List.append (List.append status_line hdrs) Wire.crlf
+  if Bool.not (Wire.headers_valid hs)
+  then Result.err "invalid header name or value"
+  else
+    let status_line := Wire.status_line res.status res.version in
+    let hdrs := Wire.header_lines hs in
+    Result.ok (List.append (List.append status_line hdrs) Wire.crlf)
 
 // ── body to bytes ──────────────────────────────────────────────────────
 //
@@ -189,7 +217,11 @@ pub def Wire.format_request (req : Request) : Result String (List U8) :=
 def Wire.format_request_at (req : Request) (len : I64) : Result String (List U8) :=
   match Wire.body_bytes req.body {
     Result.err e => Result.err e,
-    Result.ok body => Result.ok (Wire.render_request req len body)
+    Result.ok body =>
+      let hs := Wire.add_content_length req.headers len in
+      if Bool.not (Wire.headers_valid hs)
+      then Result.err "invalid header name or value"
+      else Result.ok (Wire.render_request req len body)
   }
 
 /// The request head followed by an already-serialised body.
@@ -225,25 +257,41 @@ pub def Wire.format_response (res : Response) : Result String (List U8) :=
     Result.ok len => Wire.format_response_at res len
   }
 
-/// Serialise only the response head, keeping the representation's
-/// `Content-Length` but writing no body. This is what a `HEAD`, 204 or 304
-/// answer needs: the peer is told how large the body would be, and the
-/// connection stays framed.
+/// Serialise only the response head for a HEAD, 204, 304 or 1xx answer.
+///
+/// A 204/1xx must not carry `Content-Length` (RFC 9110 §8.6); a 304 keeps a
+/// caller-supplied length (which must match the 200 representation) or omits
+/// it. Every other status keeps the representation's length, which is what a
+/// HEAD needs.
 pub def Wire.format_response_head (res : Response) : Result String (List U8) :=
   match Wire.content_length_of res.body {
     Result.err e => Result.err e,
     Result.ok len =>
-      let status_line := Wire.status_line res.status res.version in
-      let hs := Wire.add_content_length res.headers len in
-      let hdrs := Wire.header_lines hs in
-      Result.ok (List.append (List.append status_line hdrs) Wire.crlf)
+      let hs : Headers :=
+        if U16.gt 200u16 res.status
+        then Headers.remove "Content-Length" res.headers
+        else if U16.beq res.status 204u16
+        then Headers.remove "Content-Length" res.headers
+        else if U16.beq res.status 304u16
+        then res.headers
+        else Wire.add_content_length res.headers len in
+      if Bool.not (Wire.headers_valid hs)
+      then Result.err "invalid header name or value"
+      else
+        let status_line := Wire.status_line res.status res.version in
+        let hdrs := Wire.header_lines hs in
+        Result.ok (List.append (List.append status_line hdrs) Wire.crlf)
   }
 
 /// Format a response whose body length is already known.
 def Wire.format_response_at (res : Response) (len : I64) : Result String (List U8) :=
   match Wire.body_bytes res.body {
     Result.err e => Result.err e,
-    Result.ok body => Result.ok (Wire.render_response res len body)
+    Result.ok body =>
+      let hs := Wire.add_content_length res.headers len in
+      if Bool.not (Wire.headers_valid hs)
+      then Result.err "invalid header name or value"
+      else Result.ok (Wire.render_response res len body)
   }
 
 /// The response head followed by an already-serialised body.
