@@ -1,25 +1,28 @@
-/// A one-shot Phase 6 probe (Milestone 6's per-mote promotion): print
-/// the actual `--affine`
-/// diagnostics for a named file, the same ones
-/// `monad check --affine <file>` would fail on, with binder names —
-/// the corpus sweep reports per-mote totals, and fixing a mote's
-/// violations needs to know WHICH binders they are.
+/// A one-shot migration probe (Phase A4's per-mote promotion): print the
+/// actual affine diagnostics for a named file, the same ones
+/// `monad check <file>` reports, with binder names — the corpus sweep
+/// reports per-mote totals, and fixing a mote's violations needs to know
+/// WHICH binders they are. A `warn` mote's diagnostics arrive through the
+/// warning channel; a promoted mote's through the error channel; the
+/// probe prints whatever `check_file_cached` returns either way.
 ///
 /// Run it with:
 ///
 /// ```text
-/// MONAD_AFFINE_REPORT=1 monad test bench/src/affine_probe.mo
+/// MONAD_AFFINE_REPORT=1 MONAD_AFFINE_FILE=std/src/io.mo \
+///     monad test bench/src/affine_probe.mo
 /// ```
 ///
-/// Every test below elaborates `runtime/src/natives.mo` with its whole
-/// closure, so each one starts with a gate that early-returns unless
-/// MONAD_AFFINE_REPORT is set (the `std/ansi.mo` NO_COLOR pattern) —
-/// `scripts/check-monad-tests.sh` sweeps this mote, and the probe is
-/// meant to run by hand, not every commit.
+/// `MONAD_AFFINE_FILE` defaults to `runtime/src/natives.mo` (already
+/// clean, so it is the smoke test). Every test below elaborates a file
+/// with its whole closure, so each one starts with a gate that
+/// early-returns unless MONAD_AFFINE_REPORT is set (the `std/ansi.mo`
+/// NO_COLOR pattern) — `scripts/check-monad-tests.sh` sweeps this mote,
+/// and the probe is meant to run by hand, not every commit.
 use std::io {IO.println}
 open IO {get_env, println}
 use lang::module {
-  ElaboratedAndCache, FileCheckAndCache, FileCheckResult, check_file_cached_affine,
+  ElaboratedAndCache, FileCheckAndCache, FileCheckResult, check_file_cached,
   elaborate_loaded_modules_cached, module_info_cache_empty,
 }
 use lang::scope {scope_globals, scope_instance_candidates}
@@ -33,7 +36,12 @@ def print_all (diags : List String) : IO I64 :=
         List.empty => do { return 0 },
         List.cons d rest => do {
             println d;
-            print_all rest
+            // Count as we go. Returning the tail's count alone was a
+            // latent zero: the one caller used `List.length` for its
+            // total, so nothing noticed until the warning channel made
+            // the count load-bearing.
+            let n <- print_all rest;
+            return (n + 1)
         }
     }
 
@@ -48,19 +56,35 @@ def report_enabled : IO Bool := do {
     return (env_flag_set v)
 }
 
+/// The file to probe: `MONAD_AFFINE_FILE`, or a clean smoke-test target.
+def probe_target (v : Option String) : String :=
+    match v {
+        Option.some p => p,
+        Option.none => "runtime/src/natives.mo",
+    }
+
 #[test]
 def report_affine_diagnostics_of_file : IO Bool := do {
     let on <- report_enabled;
     if Bool.not on then return true
     else do {
-        let checked <- check_file_cached_affine module_info_cache_empty "runtime/src/natives.mo" false;
+        let path_env <- get_env "MONAD_AFFINE_FILE";
+        let target : String := probe_target path_env;
+        let checked <- check_file_cached module_info_cache_empty target false;
         match checked {
             FileCheckAndCache.mk result _cache =>
                 match result {
-                    FileCheckResult.mk path diags => do {
+                    // BOTH channels: a `warn` mote's rule diagnostics
+                    // arrive as warnings, and those are exactly the
+                    // motes Phase A4 is migrating. Printing only
+                    // `diagnostics` reported `0 total` for all of them.
+                    FileCheckResult.mk path diags warns => do {
                         println ("affine diagnostics for " ++ path ++ ":");
                         let n <- print_all diags;
-                        println ("(" ++ I64.to_string (List.length diags) ++ " total)");
+                        let w <- print_all warns;
+                        println ("(" ++ I64.to_string (n + w) ++ " total: "
+                            ++ I64.to_string n ++ " error(s), "
+                            ++ I64.to_string w ++ " warning(s))");
                         // A probe reports, never fails: the mote is not
                         // promoted yet, so violations are expected.
                         return true

@@ -23,3 +23,12 @@ def test_copy_bool_duplicates : Bool :=
     match Copy.copy true {
         Pair.pair a b => a && b,
     }
+
+/// A `String`'s `copy` shares the immutable bytes: both halves must
+/// observe the same text. Nothing here can tell whether the pointer is
+/// shared, which is exactly the property that makes the instance sound.
+#[test]
+def test_copy_string_shares_the_pointer : Bool :=
+    match Copy.copy "hello" {
+        Pair.pair a b => String.beq a "hello" && String.beq b "hello",
+    }

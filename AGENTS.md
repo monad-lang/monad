@@ -68,6 +68,22 @@ priv def module_only : I64 := 3 // visible only in this file's module
 does not gate it. The default is package-private and a cross-mote reference
 to an unmarked declaration warns — mark it `pub` or reconsider the import.
 
+The **affine usage rule** (an unannotated binder may be used at most once
+unless `Copy A` resolves) is likewise enforced only by the self-hosted
+compiler, on every check/compile path. `monad-rs check` does not enforce it.
+A mote's `mote.toml` may carry `[affine] mode = "warn"` while it migrates;
+the default (no table) is `error`, and there is no off switch. `String` is
+`Copy` (an immutable pointer); `ByteBuf` is not (it is mutable).
+
+### Affine rule quick reference
+
+```monad,ignore
+def f (x : Thing) : I64 := x.a + x.b      // error: Thing is used twice
+def g [Copy A] (x : A) : A := x           // ok: Copy A licenses sharing
+def h (s : String) : I64 :=               // ok: String is Copy
+    String.length s + String.length s
+```
+
 ## Building and Running
 
 `monad` is the standard binary: `monadup` installs a nightly at

@@ -768,6 +768,22 @@ def visibility_beq (a : Visibility) (b : Visibility) : Bool :=
             match b { Visibility.package_private => true, _ => false }
     }
 
+/// How strictly a mote enforces the affine-by-default usage rule, from
+/// its `[affine] mode` manifest key (`lang/src/mote.mo` reads it,
+/// `lang/src/module.mo` classifies diagnostics by it).
+///
+/// `affine_error` is the default and the intended end state: an
+/// over-used binder fails the build exactly like a type error.
+/// `affine_warn` exists only for a mote that has not reached zero
+/// violations yet -- it reports the same diagnostics through the
+/// warning channel, so the rule is still computed and visible. A mote
+/// deletes the key (returning to `error`) when its count reaches zero.
+/// There is deliberately no `off`: the rule is always computed.
+pub type AffineMode {
+    affine_error,
+    affine_warn,
+}
+
 // --- ParseTerm: the parser's own output, before de Bruijn resolution --
 //
 // The stage this compiler did not have. `Literal.struct_update`'s own doc

@@ -64,3 +64,11 @@ members = [
   "motes/oak",
   "motes/oak_wasm",
 ]
+
+# Affine-by-default migration fallback (measured 2026-10-22). This is a
+# virtual workspace root, so the table covers paths with no manifest of
+# their own (`examples/`); a named mote overrides it in its own mote.toml.
+# Delete it when those paths reach zero; the default is `mode = "error"`.
+# See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

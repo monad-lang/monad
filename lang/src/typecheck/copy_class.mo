@@ -48,7 +48,7 @@
 /// collisions are endemic here — `lang/src/typecheck/usage.mo`'s own
 /// attribution had to fail closed on exactly this — and a wrong pick in
 /// *this* predicate frees memory that is still live.
-use lib::types {DebugName, Identifier, Instance, NamePath, Scope, Term, binder_anon, term_peel}
+use lib::types {DebugName, Identifier, Instance, NamePath, Scope, Term, Visibility, binder_anon, id_member, term_peel}
 use lib::scope {
   instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
   scope_globals, scope_instance_candidates, term_is_wildcard,
@@ -222,23 +222,47 @@ def spine_head (t : Term) : Term :=
         _ => t,
     }
 
-/// How many of `instances` match `carrier`.
+/// How many DISTINCT instances of `instances` match `carrier`.
 ///
 /// Counts rather than short-circuits on the first hit, which is the
 /// whole difference from `find_matching_instance`: one match grants ω,
 /// two must not.
+///
+/// **Duplicates by name count once.** A module that defines an instance
+/// and is also reachable through the ambient hub can register the same
+/// instance twice -- measured on `init/src/copy.mo`, where all ten
+/// builtin instances came back `cv_ambiguous` and the affine rule then
+/// flagged every `copy` method body. Two registrations of one `instance`
+/// declaration share its name; two NAMED instances for one carrier do
+/// not, and still report `cv_ambiguous`.
+///
+/// Known limitation: an unnamed instance carries the `"_"` sentinel
+/// (`lang/parser.mo`), so two distinct ANONYMOUS instances for one
+/// carrier are merged by this key too. That is a permission-level merge,
+/// not a dispatch choice -- both are `Copy` instances, so "may share" is
+/// still the right answer -- but it suppresses the ambiguity report that
+/// dispatch is picking one arbitrarily. A structural fingerprint over
+/// the instance's args and method defs (or an upstream fix to the double
+/// registration) would restore it; recorded in
+/// `plans/type-system/quantitative-types.md`.
 #[partial]
 def count_matching (instances : List Instance) (carrier : Term) : I64 :=
-    count_matching_go instances carrier 0
+    count_matching_go instances carrier List.empty 0
 
 #[partial]
-def count_matching_go (instances : List Instance) (carrier : Term) (acc : I64) : I64 :=
+def count_matching_go (instances : List Instance) (carrier : Term) (seen : List Identifier) (acc : I64) : I64 :=
     match instances {
         List.empty => acc,
         List.cons ins rest =>
-            if instance_args_match_carrier ins carrier
-            then count_matching_go rest carrier (acc + 1)
-            else count_matching_go rest carrier acc,
+            match ins {
+                Instance.mk name _cls _constraints _args _vis _implicit _defs =>
+                    if instance_args_match_carrier ins carrier
+                    then
+                        if id_member name seen
+                        then count_matching_go rest carrier seen acc
+                        else count_matching_go rest carrier (List.cons name seen) (acc + 1)
+                    else count_matching_go rest carrier seen acc,
+            },
     }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -296,3 +320,24 @@ def test_not_copy_denies_omega : Bool :=
 #[test]
 def test_copy_grants_omega : Bool :=
     copy_verdict_grants_omega CopyVerdict.cv_copy
+
+/// A hand-built `instance Copy <carrier>` for the matching tests.
+def a_copy_instance (nm : String) (carrier : Term) : Instance :=
+    Instance.mk (Identifier.id nm) copy_class_name List.empty
+        (List.cons carrier List.empty) Visibility.package_private List.empty List.empty
+
+#[test]
+def test_the_same_instance_registered_twice_counts_once : Bool :=
+    // The ambient hub can make a module's own instance reachable twice.
+    // That is not a collision, and counting it as one denies Copy to the
+    // very module that declares it -- measured on `init/src/copy.mo`.
+    let i : Instance := a_copy_instance "Copy_I64" (named_type "I64") in
+    I64.beq (count_matching [i, i] (named_type "I64")) 1
+
+#[test]
+def test_two_distinct_instances_still_count_twice : Bool :=
+    // The dedupe is by NAME. Two genuinely different instances for one
+    // carrier remain ambiguous, exactly as before.
+    let a : Instance := a_copy_instance "Copy_A" (named_type "I64") in
+    let b : Instance := a_copy_instance "Copy_B" (named_type "I64") in
+    I64.beq (count_matching [a, b] (named_type "I64")) 2

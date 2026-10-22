@@ -66,7 +66,7 @@ use lang::typecheck::usage {
   ctor_name_set,
 }
 use lang::typecheck::copy_class {CopyVerdict, copy_verdict}
-use lang::typecheck::affine {check_def}
+use lang::typecheck::affine {check_def_strict}
 use lang::typecheck::diagnostic {type_error_message}
 use std::map {HashMap}
 use std::list {List.length}
@@ -379,11 +379,10 @@ def tally_decls (ctors : HashMap String Bool) (borrows : HashMap String Bool) (s
                 Decl.def_d def_ =>
                     let raw : List BinderUse := collect_binder_uses ctors borrows (def_term def_) in
                     let counted : Totals := tally_binders s (attribute_binder_types s raw) acc in
-                    // The Milestone 2 rule, run over the same def. Counted
-                    // independently of the buckets above so the two can be
-                    // cross-checked -- if the rule and the tally disagree,
-                    // one of them is wrong, and silence would hide it.
-                    let diags : List TypeError := check_def s ctors borrows def_ in
+                    // The Milestone 2 rule, run over the same def. The
+                    // STRICT variant: the report's numbers must stay a
+                    // fail-closed upper bound, unlike enforcement.
+                    let diags : List TypeError := check_def_strict s ctors borrows def_ in
                     tally_decls ctors borrows s rest (tally_diags diags counted),
                 // A macro body is a template, not code that runs; its
                 // binders are not runtime owners.

@@ -22,3 +22,9 @@ path = "../../std"
 # `lang`/`llvm`/`runtime`/`build`/`lsp` in to get one attribute.
 [dependencies.clap]
 path = "../clap"
+
+# Affine-by-default migration exception (measured 2026-10-22).
+# Delete this table when the mote reaches zero violations; the default
+# (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

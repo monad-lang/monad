@@ -16,3 +16,9 @@ path = "../http"
 # moose link line -- and the only one that does.
 [dependencies.tls]
 path = "../tls"
+
+# Affine-by-default migration exception (measured 2026-10-22).
+# Delete this table when the mote reaches zero violations; the default
+# (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

@@ -53,8 +53,9 @@ def mul (a b : I64) : I64 := a * b
 // Implicit parameters
 def identity {A : Type} (x : A) : A := x
 
-// Class constraints
-def twice [Add A] (x : A) : A := Add.add x x
+// Class constraints. `Copy A` is required because `x` is used twice:
+// sharing a generic parameter is what `[Copy A]` licenses.
+def twice [Add A, Copy A] (x : A) : A := Add.add x x
 
 // Field destructuring in a parameter
 struct Coord { fst : I64, snd : I64 }

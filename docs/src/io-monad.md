@@ -113,7 +113,12 @@ A failure is a `StreamError`: a `kind` you can `match` on (`connection_refused`,
 An `FdStream` is opaque. At runtime it is the bare file descriptor, so never
 pattern-match, compare or print one, and never use it after `Stream.close`.
 
-```monad
+> The two stream snippets below are **not type-checked**. They use one
+> `FdStream` for write, read and close; affine-by-default rejects that until
+> `Stream.*` takes a borrow (`Borrow FdStream`) instead of an owned handle.
+> They are kept as an API illustration, not as compilable examples.
+
+```monad,ignore
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
 use std::stream {Stream, StreamError, FdStream}
 
@@ -158,7 +163,7 @@ def reply_text (got : Result StreamError ByteBuf) : IO (Result String String) :=
 `IO.tcp_listen 0u16` binds `0.0.0.0` on an OS-assigned port; read the port it
 actually settled on back with `IO.tcp_local_port`:
 
-```monad
+```monad,ignore
 use std::bytebuf {ByteBuf, ByteBuf.free}
 use std::stream {Stream, StreamError, FdStream}
 open IO {println}

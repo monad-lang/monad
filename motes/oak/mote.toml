@@ -23,3 +23,9 @@ path = "../xml_html"
 # depends on the server (`moon` does not depend on Oak).
 [dependencies.http]
 path = "../http"
+
+# Affine-by-default migration exception (measured 2026-10-22).
+# Delete this table when the mote reaches zero violations; the default
+# (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

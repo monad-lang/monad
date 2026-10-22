@@ -51,13 +51,29 @@
 ///
 /// ## What is deliberately absent
 ///
-/// `String`, `List`, `Map` and every other heap type. Design B shares
-/// those through a borrow, and deep-copies them through an explicit
-/// `Clone` whose cost stays visible at the call site. M1 measured why
-/// this matters: `String` and `List` are the two largest sources of
-/// over-used binders in the compiler's own corpus, so a `Copy String`
-/// instance would quietly convert the single biggest borrow-shaped
-/// workload into silent deep copies.
+/// `List`, `Map` and every other heap-allocated inductive. Design B
+/// shares those through a borrow, and deep-copies them through an
+/// explicit `Clone` whose cost stays visible at the call site. M1
+/// measured why this matters: `List` is the second largest source of
+/// over-used binders in the compiler's own corpus, so a `Copy (List A)`
+/// instance would quietly convert a borrow-shaped workload into silent
+/// deep copies.
+///
+/// **`String` IS `Copy`, and that is not a contradiction.** A compiled
+/// `String` is a bare `char*` (`runtime/src/runtime_core.c`) pointing at
+/// immutable UTF-8 bytes; no operation mutates a string's bytes, so two
+/// pointers to the same bytes are observationally indistinguishable and
+/// aliasing cannot be observed. `copy` therefore duplicates the POINTER,
+/// never the bytes -- this is the `&str` reading of a string, not a
+/// `Vec<u8>` reading. It is the one heap type where a bitwise duplicate
+/// is the correct duplicate. The bytes themselves are the collector's
+/// (or, once the collector is retired, a refcounted `StringObj`'s) --
+/// that is a separate question from whether the value may be shared.
+/// See `plans/type-system/quantitative-types.md`'s *Strings* section.
+///
+/// **`ByteBuf` is not here, and must not be.** It is a MUTABLE buffer
+/// (`std/src/bytebuf.mo`); aliasing it would let one owner observe
+/// another's writes, so it stays affine despite being collector-managed.
 ///
 /// **`Nat` is absent on purpose, and the design's own table disagrees.**
 /// Design B's *Copy policy for core types* lists `Nat` alongside the
@@ -115,4 +131,12 @@ instance Copy Char {
 
 instance Copy Unit {
     def copy (x : Unit) : Pair Unit Unit := Pair.pair x x
+}
+
+/// A `String` is an immutable shared pointer (see this file's header):
+/// duplicating it copies the pointer, never the bytes. Every operation
+/// on a `String` is read-only, so the alias is unobservable. The bytes
+/// stay collector-owned; that is why this instance needs no free.
+instance Copy String {
+    def copy (x : String) : Pair String String := Pair.pair x x
 }

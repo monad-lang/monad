@@ -15,7 +15,7 @@ use std::list {List.filter_map}
 use toml::toml {
   Toml.Value, Toml.parse, Toml.table_get, Toml.array_at, array, integer, string, table,
 }
-use lang::types {AttrArg, Attribute, id, show_identifier}
+use lang::types {AffineMode, AttrArg, Attribute, id, show_identifier}
 use std::io {}
 use std::map {BTreeMap, BTreeMap.to_list}
 use std::process {exec_cmd, process_id}
@@ -520,6 +520,57 @@ def Mote.parse_manifest (dir : String) (text : String) : Option MoteManifest :=
     match Toml.parse text {
         err _ => Option.none,
         ok root => Mote.manifest_of_table dir root
+    }
+
+// --- Affine enforcement policy -------------------------------------
+
+/// How a mote enforces the affine-by-default usage rule, from
+/// `[affine] mode` in its nearest `mote.toml`.
+///
+/// The default -- no manifest, no key, a parse error, or any value other
+/// than `"warn"` -- is `affine_error`. A typo must never silently
+/// weaken enforcement, so only one spelling opts out.
+///
+/// **This deliberately does not go through `Mote.discover`.** That walk
+/// returns `none` at a virtual workspace root (a `mote.toml` with no
+/// `[mote]`; see `Mote.discover_go`), which is exactly the manifest a
+/// file outside every member resolves to -- this repository's
+/// `examples/`, for one. The policy walk stops at the nearest
+/// `mote.toml` whether or not it declares a `[mote]`, so a workspace
+/// root can carry the fallback and a member can override it.
+pub def Mote.affine_mode_of_path (file : String) : IO AffineMode :=
+    Mote.affine_mode_of_dir (raw_parent_dir file) 32
+
+#[partial]
+def Mote.affine_mode_of_dir (dir : String) (depth : I64) : IO AffineMode := do {
+    if I64.lt depth 1 then return AffineMode.affine_error
+    else do {
+        let found <- read_file_or_none (Path.path (mote_toml_in dir));
+        match found {
+            Option.some text => return (Mote.affine_mode_of_text text),
+            // `config_dir_above`, not `parent_of`: when the walk starts at
+            // `""` (the working directory) `parent_of` answers `""` again,
+            // so a member's own file checked from inside the member would
+            // never reach `../mote.toml`. `config_dir_above` steps to `..`
+            // in that case, the same walk `Mote.discover_config_target_dir_go`
+            // already uses.
+            Option.none => Mote.affine_mode_of_dir (config_dir_above dir) (depth - 1),
+        }
+    }
+}
+
+/// `[affine] mode` in a manifest's text. See `Mote.affine_mode_of_path`
+/// for why every non-`"warn"` answer is the strict default.
+pub def Mote.affine_mode_of_text (text : String) : AffineMode :=
+    match Toml.parse text {
+        err _ => AffineMode.affine_error,
+        ok root =>
+            match Mote.table_string (Toml.table_get "affine" root) "mode" {
+                Option.some m =>
+                    if String.beq m "warn" then AffineMode.affine_warn
+                    else AffineMode.affine_error,
+                Option.none => AffineMode.affine_error,
+            },
     }
 
 def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : Option MoteManifest :=
@@ -2131,4 +2182,30 @@ def test_missing_toolchain_hint_is_silent_for_a_usable_root : Bool :=
     match Mote.toolchain_missing_hint (Option.some "/opt/monad") true {
         Option.none => true,
         Option.some _ => false
+    }
+
+// --- Affine policy tests -------------------------------------------
+
+#[test]
+def test_affine_mode_defaults_to_error_without_a_table : Bool :=
+    match Mote.affine_mode_of_text "[mote]\nname = \"x\"\n" {
+        AffineMode.affine_error => true,
+        AffineMode.affine_warn => false,
+    }
+
+#[test]
+def test_affine_mode_reads_warn : Bool :=
+    match Mote.affine_mode_of_text "[affine]\nmode = \"warn\"\n" {
+        AffineMode.affine_warn => true,
+        AffineMode.affine_error => false,
+    }
+
+/// Only one spelling opts out. A typo must never silently weaken the
+/// rule, so anything else -- including a word that looks like an off
+/// switch -- is the strict default.
+#[test]
+def test_affine_mode_treats_unknown_values_as_error : Bool :=
+    match Mote.affine_mode_of_text "[affine]\nmode = \"off\"\n" {
+        AffineMode.affine_error => true,
+        AffineMode.affine_warn => false,
     }

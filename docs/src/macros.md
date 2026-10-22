@@ -136,6 +136,19 @@ struct Point {
     y : I64
 }
 
+// `Copy` is not derived: sharing is opt-in, and a field-wise instance is
+// how a struct of Copy fields requests it. The match binds `p` once; the
+// two fresh `Point`s duplicate the (Copy) fields.
+instance Copy Point {
+    def copy (p : Point) : Pair Point Point :=
+        match p {
+            { x, y } =>
+                let a : Point := { x := x, y := y } in
+                let b : Point := { x := x, y := y } in
+                Pair.pair a b,
+        }
+}
+
 #[test]
 def test_equality : Bool :=
     let p1 : Point := { x := 1, y := 2 } in

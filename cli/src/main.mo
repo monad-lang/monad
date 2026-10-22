@@ -21,7 +21,7 @@ use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
 use lang::codegen::decls {collect_all_decls_from_modules, export_names}
-use lang::module {ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_file_cached_affine, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::scope {resolve_class_calls_decls}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
@@ -739,7 +739,7 @@ def install_binary (home : String) (src : String) (name : String) : IO I64 := do
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
 /// target file itself actually type-checking cleanly (via
-/// `elaborate_loaded_modules` + `check_module_with_scope`, the same
+/// `elaborate_loaded_modules` + `check_module_with_scope_path`, the same
 /// pipeline `check` uses) BEFORE attempting codegen at all -- previously
 /// `compile` skipped type-checking entirely and went straight to codegen,
 /// so a real type error in the program being compiled either silently
@@ -783,11 +783,15 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                     stage verbose "typecheck target";
                     let t_check : I64 <- Bench.now;
-                    let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
+                    let checked <- check_module_with_scope_path em.scope em.target_decls empty_locs file_path verbose;
                     if verbose then do {
-                        Bench.report_since "check_module_with_scope" t_check;
+                        Bench.report_since "check_module_with_scope_path" t_check;
                         return unit
                     } else return unit;
+                    // Warnings (the affine rule in a `warn` mote) never
+                    // fail the stage; errors do, exactly as before.
+                    let _shown <- print_diagnostics (CheckDiagnostics.warnings checked);
+                    let diags : List String := CheckDiagnostics.errors checked;
                     match diags {
                         List.cons _ _ => do {
                             fail_line "FAILED at stage: typecheck (target file did not typecheck cleanly)";
@@ -878,7 +882,9 @@ def eval_file (file_path : String) (verbose : Bool) : IO I64 {
         Result.ok em => do {
             let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
             stage verbose "typecheck target";
-            let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
+            let checked <- check_module_with_scope_path em.scope em.target_decls empty_locs file_path verbose;
+            let _shown <- print_diagnostics (CheckDiagnostics.warnings checked);
+            let diags : List String := CheckDiagnostics.errors checked;
             match diags {
                 List.cons _ _ => do {
                     fail_line "FAILED at stage: typecheck (target file did not typecheck cleanly)";
@@ -1141,7 +1147,6 @@ struct CheckOptions {
     verbose : Bool,
     workspace : Bool,
     no_cache : Bool,
-    affine : Bool,
 }
 
 /// `checked`/`errors` accumulate across all files — errors are counted
@@ -1227,17 +1232,14 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
 /// storing through one function is what keeps a replayed hit from
 /// drifting out of step with a fresh miss.
 ///
-/// `--affine` swaps in the M2-rule variant of the same file checker
-/// (lang/module.mo's `check_file_cached_affine`): ordinary diagnostics
-/// plus the affine rule's, so an over-use fails `check` exactly the way
-/// a type error already does. The plan an affine run receives is
-/// always inactive (see `run_check`), so nothing affine is recorded and
-/// nothing recorded is replayed here.
+/// `check_file_cached` is the one file checker: ordinary diagnostics plus
+/// the affine rule's, classified by the file's own mote policy (an
+/// `[affine] mode = "warn"` mote reports them without failing; every
+/// other mote fails). See `lang/module.mo`'s
+/// `check_file_cached`/`check_module_with_scope_classified`.
 #[partial]
 def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CheckPlan) (key : Option String) : IO I64 := do {
-    let checked_and_cache <- if opts.affine
-        then check_file_cached_affine cache f opts.verbose
-        else check_file_cached cache f opts.verbose;
+    let checked_and_cache <- check_file_cached cache f opts.verbose;
     match checked_and_cache {
         FileCheckAndCache.mk result updated_cache =>
             match result {
@@ -1259,8 +1261,8 @@ def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (
 
 /// Parse + typecheck each file with `lang.module.check_file_cached` — no
 /// execution, no compilation. See lang/module.mo's `check_file_cached`/
-/// `check_module_with_scope` for what "does this file compile" means
-/// today: real parse diagnostics (strict, not the lenient
+/// `check_module_with_scope_classified` for what "does this file compile"
+/// means today: real parse diagnostics (strict, not the lenient
 /// truncate-and-succeed parser), plus every failing `def`/`type`
 /// declaration's type error — other declaration kinds (use/open/
 /// class/instance/struct) aren't checked yet, matching the self-hosted
@@ -1495,15 +1497,11 @@ def run_check (files : List String) (opts : CheckOptions) : IO I64 := do {
             // that silently suppressed the trace it was asked for would
             // be worse than a slow one.
             //
-            // `--affine` disables the cache outright, for the same
-            // kind of reason: a stored entry records the ORDINARY
-            // check's result, and replaying it under `--affine` would
-            // silently drop the very diagnostics the flag exists to
-            // fail on -- while an affine result recorded under an
-            // ordinary run's key would let the ordinary check pass
-            // files the affine rule rejects. Neither direction is
-            // safe, so neither reads nor writes happen.
-            let plan <- Build.check_plan expanded target_dir (requested && Bool.not opts.verbose && Bool.not opts.affine);
+            // The affine rule is part of the cached result now, so there
+            // is no flag to exclude from the key: the file's own
+            // `[affine] mode` lives in `mote.toml`, which the input hash
+            // already covers.
+            let plan <- Build.check_plan expanded target_dir (requested && Bool.not opts.verbose);
             let _prep <- announce_check_cache plan;
             let cache : ModuleInfoCache := module_info_cache_empty;
             run_check_loop cache expanded 0 0 0 opts plan
@@ -2041,11 +2039,13 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                         do {
                             let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                             let t_check : I64 <- Bench.now;
-                            let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some f) verbose;
+                            let checked <- check_module_with_scope_path em.scope em.target_decls empty_locs f verbose;
                             if verbose then do {
                                 Bench.report_since "test: check" t_check;
                                 return unit
                             } else return unit;
+                            let _shown <- print_diagnostics (CheckDiagnostics.warnings checked);
+                            let diags : List String := CheckDiagnostics.errors checked;
                             match diags {
                                 List.cons _ _ => do {
                                     print_diagnostics diags;
@@ -2342,21 +2342,8 @@ def Command.from_args (args : List String) : Command :=
                                 // a filename.
                                 match Cli.take_flag "no-cache" "" rest2 {
                                     Cli.FlagResult.flag_result no_cache rest3 =>
-                                        // `--affine`: promote the M2 usage
-                                        // rule's advisory diagnostics
-                                        // (copy_required /
-                                        // value_used_after_move /
-                                        // linear_unused,
-                                        // lang/typecheck/affine.mo) to hard
-                                        // failures — the same check, one
-                                        // more rule. No short form: it is
-                                        // a corpus-migration flag, not a
-                                        // daily one.
-                                        match Cli.take_flag "affine" "" rest3 {
-                                            Cli.FlagResult.flag_result affine rest4 =>
-                                                let opts : CheckOptions := { verbose := verbose, workspace := workspace, no_cache := no_cache, affine := affine } in
-                                                Command.check rest4 opts,
-                                        },
+                                        let opts : CheckOptions := { verbose := verbose, workspace := workspace, no_cache := no_cache } in
+                                        Command.check rest3 opts,
                                 },
                         },
                 }
@@ -2594,7 +2581,7 @@ def print_help : IO I64 {
     println "         separates them and is dropped once (a `--` before <path> is peeled too)";
     println "       monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
-    println "       monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache] [--affine]  Parse and typecheck .mo source files (no execution)";
+    println "       monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache]  Parse and typecheck .mo source files (no execution)";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
     println "         With no <path>, checks the mote containing the working directory";
     println "         --workspace/-w checks every mote in the enclosing workspace";
@@ -2603,10 +2590,9 @@ def print_help : IO I64 {
     println "         Results are cached under <target-dir>/check for multi-file runs, keyed on";
     println "           the file, its mote's whole declared closure, and the running compiler";
     println "         --no-cache (or MONAD_NO_CACHE) skips the cache; a single-file run always does";
-    println "         --affine also fails on affine over-uses (used 2+ times without a";
-    println "           Copy instance) — the existing diagnostics, promoted to errors;";
-    println "           it also disables the check cache (a stored entry records the";
-    println "           ordinary check's result, which has no affine verdict in it)";
+    println "         The affine usage rule always runs: a binder used twice without a Copy";
+    println "           instance is an error. A mote can opt into warnings for migration with";
+    println "           `[affine] mode = \"warn\"` in its mote.toml; there is no off switch";
     println "       monad test [<path>...] [--workspace/-w] [--verbose/-v] [--jobs/-j <N>]  Compile and run each file's own #[test] defs as a native binary";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
     println "         With no <path>, tests the mote containing the working directory";

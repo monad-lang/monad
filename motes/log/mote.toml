@@ -18,3 +18,9 @@ path = "../../std"
 
 [dependencies.json]
 path = "../json"
+
+# Affine-by-default migration exception (measured 2026-10-23).
+# Delete this table when the mote reaches zero violations; the default
+# (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"
