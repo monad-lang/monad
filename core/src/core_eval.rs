@@ -359,6 +359,10 @@ fn fire_or_accumulate(
       crate::core_native::poll_fiber(&args, globals, natives, cache)
     } else if name.as_str() == "io_bind" {
       crate::core_native::io_bind(&args, globals, natives, cache)
+    } else if name.as_str() == "cell_update" {
+      // `Ref.update` applies its function under the registry lock: the
+      // full evaluator, exactly like `await_fiber`.
+      crate::core_native::cell_update(&args, globals, natives, cache)
     } else {
       exec_native(name.as_str(), &args, natives)
     }

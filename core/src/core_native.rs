@@ -306,6 +306,13 @@ pub fn exec_native(
     "array_with" => array_with(args, natives),
     "array_set_in_place" => array_set_in_place(args, natives),
     "array_freeze" => array_freeze(args, natives),
+    // `std/src/ref.mo`: registry-backed shared slots. `cell_update` is
+    // dispatched from `core_eval::fire_or_accumulate` instead -- it needs
+    // the full evaluator to apply its function.
+    "cell_new" => cell_new(args, natives),
+    "cell_get" => cell_get(args, natives),
+    "cell_set" => cell_set(args, natives),
+    "cell_add_i64" => cell_add_i64(args, natives),
     "string_get" => string_get(args, natives),
     "string_get_char" => string_get_char(args, natives),
     "string_to_list" => string_to_list(args, natives),
@@ -1773,6 +1780,137 @@ fn fd_streams() -> Result<std::sync::MutexGuard<'static, Vec<Option<FdEntry>>>, 
   FD_STREAMS
     .lock()
     .map_err(|_| CoreEvalError::NativeArgError("stream registry poisoned".into()))
+}
+
+// ── Ref (std/src/ref.mo) ────────────────────────────────────────────────
+//
+// A `Ref` is a slot in `CELLS`, an I64 registry index like `FdStream`'s.
+// Slots are never removed: a `Ref` has no drop operation, and a server's
+// state outlives every request by design.
+//
+// `cell_update` is evaluator-backed (it applies a closure), so it lives
+// beside `await_fiber` and is dispatched from `core_eval::fire_or_accumulate`
+// rather than `exec_native`. The other four are ordinary arms. The lock is
+// held across `apply`, which is what makes the read-modify-write atomic; a
+// function that calls another `Ref` operation therefore deadlocks, and the
+// API documents that.
+
+static CELLS: std::sync::LazyLock<std::sync::Mutex<Vec<Option<Value>>>> =
+  std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+fn cells() -> Result<std::sync::MutexGuard<'static, Vec<Option<Value>>>, CoreEvalError> {
+  CELLS
+    .lock()
+    .map_err(|_| CoreEvalError::NativeArgError("ref registry poisoned".into()))
+}
+
+fn cell_slot(handle: u64, name: &str) -> Result<usize, CoreEvalError> {
+  usize::try_from(handle)
+    .map_err(|_| CoreEvalError::NativeArgError(format!("{name}: no such ref {handle}")))
+}
+
+/// `Ref.new (init : A) : IO (Ref A)`.
+fn cell_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let init = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("cell_new needs 1 arg".into()))?;
+  let mut reg = cells()?;
+  reg.push(Some(init.clone()));
+  let id = (reg.len() - 1) as u64;
+  drop(reg);
+  io_wrap(natives, handle_value(id))
+}
+
+/// `Ref.get (r : Ref A) : IO A`.
+fn cell_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("cell_get needs 1 arg".into()))?,
+  )?;
+  let idx = cell_slot(handle, "cell_get")?;
+  let reg = cells()?;
+  let value = reg
+    .get(idx)
+    .and_then(|slot| slot.as_ref())
+    .cloned()
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("cell_get: no such ref {handle}")))?;
+  drop(reg);
+  io_wrap(natives, value)
+}
+
+/// `Ref.set (r : Ref A) (v : A) : IO Unit`.
+fn cell_set(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "cell_set needs 2 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let idx = cell_slot(handle, "cell_set")?;
+  let mut reg = cells()?;
+  let slot = reg
+    .get_mut(idx)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("cell_set: no such ref {handle}")))?;
+  *slot = Some(args[1].clone());
+  drop(reg);
+  io_wrap(natives, unit_value())
+}
+
+/// `Ref.add_i64 (r : Ref I64) (delta : I64) : IO I64`.
+fn cell_add_i64(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "cell_add_i64 needs 2 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let delta = extract_int(&args[1])?;
+  let idx = cell_slot(handle, "cell_add_i64")?;
+  let mut reg = cells()?;
+  let current = reg
+    .get(idx)
+    .and_then(|slot| slot.as_ref())
+    .cloned()
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("cell_add_i64: no such ref {handle}")))?;
+  let sum = extract_int(&current)?.wrapping_add(delta);
+  if let Some(slot) = reg.get_mut(idx) {
+    *slot = Some(Value::Lit(IrLit::Num(sum, NumSuffix::I64)));
+  }
+  drop(reg);
+  io_wrap(natives, Value::Lit(IrLit::Num(sum, NumSuffix::I64)))
+}
+
+/// `Ref.update (r : Ref A) (f : A -> A) : IO A` — evaluator-backed because
+/// applying `f` needs `globals`/`cache`. Mirrors `await_fiber`'s split.
+pub fn cell_update(
+  args: &[Value],
+  globals: &crate::core_value::GlobalTable,
+  natives: &NativeTable,
+  cache: &mut crate::core_value::GlobalCache,
+) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "cell_update needs 2 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let idx = cell_slot(handle, "cell_update")?;
+  let f = args[1].clone();
+  // The lock is held across `apply`: that is the atomic unit. `f` must not
+  // call a `Ref` operation (the lock is not reentrant).
+  let mut reg = cells()?;
+  let current = reg
+    .get(idx)
+    .and_then(|slot| slot.as_ref())
+    .cloned()
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("cell_update: no such ref {handle}")))?;
+  let next = crate::core_eval::apply(f, current, globals, natives, cache)?;
+  if let Some(slot) = reg.get_mut(idx) {
+    *slot = Some(next.clone());
+  }
+  drop(reg);
+  io_wrap(natives, next)
 }
 
 /// What a stream handle names, without holding the registry lock across

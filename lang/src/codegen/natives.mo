@@ -223,6 +223,15 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // instance destructures.
             else if String.beq target "array_set_in_place" then Option.some (NativeWrapKind.io_passthrough "monad_array_set_in_place")
             else if String.beq target "array_freeze" then Option.some (NativeWrapKind.io_passthrough "monad_array_freeze")
+            // `std/src/ref.mo`: shared mutable slots. All five are
+            // `IO`-typed, and `cell_update` applies a Monad closure under
+            // the runtime lock. Never add these to `native_op_table` -- a
+            // lock acquisition must not be inlined.
+            else if String.beq target "cell_new" then Option.some (NativeWrapKind.io_passthrough "monad_cell_new")
+            else if String.beq target "cell_get" then Option.some (NativeWrapKind.io_passthrough "monad_cell_get")
+            else if String.beq target "cell_set" then Option.some (NativeWrapKind.io_passthrough "monad_cell_set")
+            else if String.beq target "cell_update" then Option.some (NativeWrapKind.io_passthrough "monad_cell_update")
+            else if String.beq target "cell_add_i64" then Option.some (NativeWrapKind.io_passthrough "monad_cell_add_i64")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
             // result, same shape as `string_length`. `IO.file_exists`/
             // `is_dir` (`std/io.mo`, `#[native "X_native"]` on the
@@ -886,6 +895,14 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // function: the `BufObj` word in, the pointer-sized word at the start
     // of its payload out (0 if the buffer is shorter than a pointer).
     let d105 := mk_decl "monad_bytebuf_take_ptr" (List.cons "i64" List.empty) "i64" in
+    // `std/src/ref.mo` (runtime_core.c): a Ref handle, value, function and
+    // delta are each one i64 word under the uniform boxed convention;
+    // `cell_update`'s function is a closure pointer.
+    let d108 := mk_decl "monad_cell_new" ["i64"] "i64" in
+    let d109 := mk_decl "monad_cell_get" ["i64"] "i64" in
+    let d110 := mk_decl "monad_cell_set" ["i64", "i64"] "i64" in
+    let d111 := mk_decl "monad_cell_update" ["i64", "i64"] "i64" in
+    let d112 := mk_decl "monad_cell_add_i64" ["i64", "i64"] "i64" in
     // The piped-subprocess family (runtime.c) -- every handle, string
     // and `List String` is one i64 word under the uniform boxed
     // convention (`Child` is an opaque registry index, `FdStream`'s own
@@ -940,7 +957,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d65, d66, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101, d102, d103,
-     d104, d105, d106, d107]
+     d104, d105, d106, d107, d108, d109, d110, d111, d112]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.

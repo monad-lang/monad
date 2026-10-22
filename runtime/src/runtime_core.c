@@ -33,6 +33,11 @@ typedef struct {
    therefore has to name this kind for the same reason it names 17/18: a
    `BufObj` has no Constructor slot to read. */
 #define MONAD_BUF_TAG 20
+/* A `Ref` slot (`std/src/ref.mo`): a GC-scanned cell holding one Monad word,
+   with a pthread mutex on native targets. 21 is the next free slot after
+   `MONAD_BUF_TAG`; like 17/18/20 nothing ever pattern-matches one, so
+   `monad_get_tag` need not name it. */
+#define MONAD_REF_TAG 21
 
 typedef struct {
     Header header;
@@ -455,6 +460,86 @@ static rt_word monad_io_pure_impl(int64_t a) {
 static int64_t monad_io_bind_impl(int64_t io_val, int64_t f) {
     rt_field inner = monad_get_field_impl(RT_FIELD(io_val), 0);
     return apply_closure1_impl(RT_PTR(f), RT_VALUE(inner));
+}
+
+/* ── Ref (std/src/ref.mo) ──────────────────────────────────────────────
+   A shared mutable slot. Native fibers are OS threads, so the slot carries
+   a real mutex; wasi/web are single-threaded and compile the lock away.
+   `monad_cell_update` holds the lock across `apply_closure1_impl`, which is
+   what makes the read-modify-write atomic. The value word is stored in a
+   GC-scanned block (`monad_alloc`), so the collector traces it. Slots are
+   never freed: a Ref has no drop operation. */
+
+typedef struct {
+    Header header;
+    rt_word value;
+#if defined(MONAD_TARGET_NATIVE)
+    pthread_mutex_t lock;
+#endif
+} RefObj;
+
+#if defined(MONAD_TARGET_NATIVE)
+#define REF_LOCK(r) pthread_mutex_lock(&(r)->lock)
+#define REF_UNLOCK(r) pthread_mutex_unlock(&(r)->lock)
+#else
+#define REF_LOCK(r) ((void)0)
+#define REF_UNLOCK(r) ((void)0)
+#endif
+
+static RefObj* ref_of(rt_word handle) {
+    RefObj* r = (RefObj*)RT_PTR(handle);
+    if (!r || r->header.tag != MONAD_REF_TAG) return NULL;
+    return r;
+}
+
+static rt_word ref_new_impl(rt_word init) {
+    RefObj* r = (RefObj*)RT_PTR(monad_alloc((rt_size)sizeof(RefObj)));
+    if (!r) return 0;
+    r->header.tag = MONAD_REF_TAG;
+    r->value = init;
+#if defined(MONAD_TARGET_NATIVE)
+    pthread_mutex_init(&r->lock, NULL);
+#endif
+    return RT_WORD(r);
+}
+
+static rt_word ref_get_impl(rt_word handle) {
+    RefObj* r = ref_of(handle);
+    if (!r) return 0;
+    REF_LOCK(r);
+    rt_word v = r->value;
+    REF_UNLOCK(r);
+    return v;
+}
+
+static rt_word ref_set_impl(rt_word handle, rt_word v) {
+    RefObj* r = ref_of(handle);
+    if (r) {
+        REF_LOCK(r);
+        r->value = v;
+        REF_UNLOCK(r);
+    }
+    return alloc_constructor_impl(0, 0);
+}
+
+static rt_word ref_update_impl(rt_word handle, rt_word f) {
+    RefObj* r = ref_of(handle);
+    if (!r) return 0;
+    REF_LOCK(r);
+    int64_t next = apply_closure1_impl(RT_PTR(f), (int64_t)(intptr_t)r->value);
+    r->value = (rt_word)(intptr_t)next;
+    REF_UNLOCK(r);
+    return (rt_word)(intptr_t)next;
+}
+
+static int64_t ref_add_i64_impl(rt_word handle, int64_t delta) {
+    RefObj* r = ref_of(handle);
+    if (!r) return 0;
+    REF_LOCK(r);
+    int64_t next = (int64_t)(intptr_t)r->value + delta;
+    r->value = (rt_word)(intptr_t)next;
+    REF_UNLOCK(r);
+    return next;
 }
 
 /* `#[native string_length]` (init/string.mo's `String.length`) dispatches
@@ -1194,6 +1279,12 @@ rt_word monad_array_freeze(rt_word b) { return monad_array_freeze_impl(b); }
 
 rt_word monad_io_pure(int64_t a) { return monad_io_pure_impl(a); }
 int64_t monad_io_bind(int64_t io_val, int64_t f) { return monad_io_bind_impl(io_val, f); }
+
+rt_word monad_cell_new(rt_word init) { return ref_new_impl(init); }
+rt_word monad_cell_get(rt_word handle) { return ref_get_impl(handle); }
+rt_word monad_cell_set(rt_word handle, rt_word v) { return ref_set_impl(handle, v); }
+rt_word monad_cell_update(rt_word handle, rt_word f) { return ref_update_impl(handle, f); }
+int64_t monad_cell_add_i64(rt_word handle, int64_t delta) { return ref_add_i64_impl(handle, delta); }
 
 int64_t monad_string_length(rt_str s) { return monad_string_length_impl(RT_STR(s)); }
 int64_t monad_string_count_newlines(rt_str s, int64_t len) { return monad_string_count_newlines_impl(RT_STR(s), len); }

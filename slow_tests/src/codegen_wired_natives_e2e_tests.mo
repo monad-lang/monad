@@ -539,3 +539,22 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     compile_source_run_expect source "c_tcp_error_kinds" 7
+
+/// `std::ref`'s registry-backed slots, compiled and run: `cell_new`/
+/// `cell_get`/`cell_add_i64` are ordinary native wrappers, while
+/// `cell_update` calls back into a Monad closure under the runtime lock.
+/// This is the only check that catches a missing `monad_cell_*` in
+/// `runtime_core.c` (the compile succeeds without it and the link fails, or
+/// an unwired name silently becomes a Unit stub).
+#[test]
+def test_cell_ref_roundtrip : IO Bool :=
+    let source := r#"use std::ref {Ref, Ref.get, Ref.update, Ref.add_i64}
+def main (args : List String) : IO I64 := do {
+    let r <- Ref.new 1;
+    let _ <- Ref.update r (fn (x : I64) => I64.add x 1);
+    let _ <- Ref.add_i64 r 5;
+    let v <- Ref.get r;
+    if v == 7 then return 7 else return 1
+}
+"# in
+    compile_source_run_expect source "cell_ref_roundtrip" 7
