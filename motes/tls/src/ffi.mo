@@ -20,6 +20,11 @@
 //     send, `SSL_set1_host` tells OpenSSL to CHECK the one that comes
 //     back. Doing only the first yields a connection with no identity
 //     check at all.
+// Every call that MUTATES a handle or does network I/O is declared
+// `RawIO`: `stream.mo` binds it with `let .. <- IO.mk (..)`. The
+// pure reads (`TLS_client_method`, `SSL_get_error`,
+// `SSL_get_verify_result`) keep their raw types.
+//
 //   * The handshake does not fail on a bad certificate by default --
 //     `SSL_connect` returns 1 and `SSL_get_verify_result` is the caller's
 //     job. `stream.mo` sets `SSL_VERIFY_PEER` AND gates on a verify
@@ -34,69 +39,69 @@
 def TLS_client_method : Ptr
 
 #[extern "c"]
-def SSL_CTX_new (method : Ptr) : Ptr
+def SSL_CTX_new (method : Ptr) : RawIO Ptr
 
 /// Returns 1 on success, 0 if the default trusted-cert paths could not
 /// be loaded. Not gated by `stream.mo`: a failure here already turns the
 /// handshake's verify-result gate into an error, which is the same
 /// fail-closed outcome with a more honest step name.
 #[extern "c"]
-def SSL_CTX_set_default_verify_paths (ctx : Ptr) : I32
+def SSL_CTX_set_default_verify_paths (ctx : Ptr) : RawIO I32
 
 #[extern "c"]
-def SSL_new (ctx : Ptr) : Ptr
+def SSL_new (ctx : Ptr) : RawIO Ptr
 
 /// The first int-returning step in the handshake, and therefore the step
 /// that surfaces a NULL `ctx`/`ssl` from the Ptr-returning steps above
 /// (`SSL_set_fd(NULL, fd)` is `-1`).
 #[extern "c"]
-def SSL_set_fd (ssl : Ptr) (fd : I32) : I32
+def SSL_set_fd (ssl : Ptr) (fd : I32) : RawIO I32
 
 /// The callback argument is NULL: `Ptr.null` (init/prelude.mo) exists for
 /// exactly this call.
 #[extern "c"]
-def SSL_set_verify (ssl : Ptr) (mode : I32) (callback : Ptr) : Unit
+def SSL_set_verify (ssl : Ptr) (mode : I32) (callback : Ptr) : RawIO Unit
 
 /// The identity check -- see the module doc's third point.
 #[extern "c"]
-def SSL_set1_host (ssl : Ptr) (host : String) : I32
+def SSL_set1_host (ssl : Ptr) (host : String) : RawIO I32
 
 /// The generic `SSL_ctrl`: `parg` is a pointer payload. Not used by
 /// `stream.mo` directly; `SSL_ctrl_host` below is the spelling whose
 /// `parg` is a `String`.
 #[extern "c"]
-def SSL_ctrl (ssl : Ptr) (cmd : I32) (larg : I64) (parg : Ptr) : I64
+def SSL_ctrl (ssl : Ptr) (cmd : I32) (larg : I64) (parg : Ptr) : RawIO I64
 
 /// The SNI call: `SSL_ctrl` with a `String` payload, so the emitted
 /// String param wrapper hands OpenSSL a `char*` (there is no
 /// String-to-Ptr conversion, and no need for one). Same link target,
 /// different Monad param type.
 #[extern "c" {link_name := "SSL_ctrl"}]
-def SSL_ctrl_host (ssl : Ptr) (cmd : I32) (larg : I64) (parg : String) : I64
+def SSL_ctrl_host (ssl : Ptr) (cmd : I32) (larg : I64) (parg : String) : RawIO I64
 
 #[extern "c"]
-def SSL_connect (ssl : Ptr) : I32
+def SSL_connect (ssl : Ptr) : RawIO I32
 
 #[extern "c"]
 def SSL_get_verify_result (ssl : Ptr) : I64
 
 #[extern "c"]
-def SSL_read (ssl : Ptr) (buf : Ptr) (num : I32) : I32
+def SSL_read (ssl : Ptr) (buf : Ptr) (num : I32) : RawIO I32
 
 #[extern "c"]
-def SSL_write (ssl : Ptr) (buf : Ptr) (num : I32) : I32
+def SSL_write (ssl : Ptr) (buf : Ptr) (num : I32) : RawIO I32
 
 #[extern "c"]
 def SSL_get_error (ssl : Ptr) (ret : I32) : I32
 
 #[extern "c"]
-def SSL_shutdown (ssl : Ptr) : I32
+def SSL_shutdown (ssl : Ptr) : RawIO I32
 
 #[extern "c"]
-def SSL_free (ssl : Ptr) : Unit
+def SSL_free (ssl : Ptr) : RawIO Unit
 
 #[extern "c"]
-def SSL_CTX_free (ctx : Ptr) : Unit
+def SSL_CTX_free (ctx : Ptr) : RawIO Unit
 
 // ─── Named constants ─────────────────────────────────────────────────
 // The numbers are the OpenSSL macros' values, spelled once. No `I32`

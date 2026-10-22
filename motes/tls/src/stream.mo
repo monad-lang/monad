@@ -39,32 +39,32 @@ struct Tls.Stream {
 /// and a hostname check, or explain which step failed and how.
 pub def Tls.connect (host : String) (port : U16) : IO (Result String Tls.Stream) := do {
   let method : Ptr := TLS_client_method;
-  let ctx : Ptr := SSL_CTX_new method;
+  let ctx <- IO.mk (SSL_CTX_new method);
   // Not gated (see ffi.mo): a failure here resurfaces as the verify-result
   // error below, which is the same fail-closed outcome.
-  let paths : I32 := SSL_CTX_set_default_verify_paths ctx;
-  let ssl : Ptr := SSL_new ctx;
+  let _ <- IO.mk (SSL_CTX_set_default_verify_paths ctx);
+  let ssl <- IO.mk (SSL_new ctx);
   let conn_res <- IO.tcp_connect host port;
   match conn_res {
     Result.err e => return (Result.err (String.concat "tls: " e.message)),
     Result.ok sock => do {
       let fd <- FdStream.raw_fd sock;
-      let set_fd : I32 := SSL_set_fd ssl fd;
+      let set_fd <- IO.mk (SSL_set_fd ssl fd);
       // The first int-returning step, and therefore where a NULL ctx or
       // ssl from the Ptr-returning steps above surfaces (ffi.mo).
       if Bool.not (I32.beq set_fd (I64.to_i32 1))
       then return (Result.err "tls: SSL_set_fd failed (SSL_CTX_new or SSL_new returned NULL)")
       else do {
-        let verify_set : Unit := SSL_set_verify ssl Ssl.verify_peer Ptr.null;
-        let sni : I64 := SSL_ctrl_host ssl Ssl.ctrl_set_tlsext_hostname 0 host;
+        let _ <- IO.mk (SSL_set_verify ssl Ssl.verify_peer Ptr.null);
+        let sni <- IO.mk (SSL_ctrl_host ssl Ssl.ctrl_set_tlsext_hostname 0 host);
         if Bool.not (I64.beq sni 1)
         then Tls.abort ssl ctx sock "tls: SNI (SSL_ctrl SSL_CTRL_SET_TLSEXT_HOSTNAME) failed"
         else do {
-          let set_host : I32 := SSL_set1_host ssl host;
+          let set_host <- IO.mk (SSL_set1_host ssl host);
           if Bool.not (I32.beq set_host (I64.to_i32 1))
           then Tls.abort ssl ctx sock "tls: SSL_set1_host failed"
           else do {
-            let handshake : I32 := SSL_connect ssl;
+            let handshake <- IO.mk (SSL_connect ssl);
             if Bool.not (I32.beq handshake (I64.to_i32 1))
             // The verify result rides along: without it every certificate
             // failure reports the same SSL_ERROR_SSL, and the caller cannot
@@ -93,8 +93,8 @@ pub def Tls.connect (host : String) (port : U16) : IO (Result String Tls.Stream)
 /// `SSL_shutdown` is deliberately absent: the connection never completed,
 /// so there is no shutdown to attempt, only three things to release.
 def Tls.abort (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (msg : String) : IO (Result String Tls.Stream) := do {
-  let free_ssl : Unit := SSL_free ssl;
-  let free_ctx : Unit := SSL_CTX_free ctx;
+  let _ <- IO.mk (SSL_free ssl);
+  let _ <- IO.mk (SSL_CTX_free ctx);
   let closed <- Stream.close sock;
   return (Result.err msg)
 }
@@ -120,9 +120,9 @@ pub def Tls.close (s : Tls.Stream) : IO Unit := do {
   let ssl : Ptr := s.ssl;
   let ctx : Ptr := s.ctx;
   let sock : FdStream := s.sock;
-  let shutdown : I32 := SSL_shutdown ssl;
-  let free_ssl : Unit := SSL_free ssl;
-  let free_ctx : Unit := SSL_CTX_free ctx;
+  let _ <- IO.mk (SSL_shutdown ssl);
+  let _ <- IO.mk (SSL_free ssl);
+  let _ <- IO.mk (SSL_CTX_free ctx);
   Stream.close sock
 }
 
@@ -158,7 +158,7 @@ pub def Tls.read (s : Tls.Stream) (max : I64) : IO (Result StreamError ByteBuf) 
 /// truncates the buffer to what `SSL_read` wrote and hands it over.
 #[terminating]
 def Tls.read_attempt (ssl : Ptr) (buf : ByteBuf) (attempts : I64) : IO (Result StreamError ByteBuf) := do {
-  let n : I32 := SSL_read ssl (ByteBuf.ptr buf) (I64.to_i32 4096);
+  let n <- IO.mk (SSL_read ssl (ByteBuf.ptr buf) (I64.to_i32 4096));
   if I32.gt n (I64.to_i32 0)
   then do {
     let _ <- ByteBuf.truncate buf (I32.to_i64 n);
@@ -208,7 +208,7 @@ pub def Tls.write (s : Tls.Stream) (buf : ByteBuf) : IO (Result StreamError I64)
 /// buffer (the data must not move between retries).
 #[terminating]
 def Tls.write_attempt (ssl : Ptr) (buf : ByteBuf) (len : I64) (attempts : I64) : IO (Result StreamError I64) := do {
-  let n : I32 := SSL_write ssl (ByteBuf.ptr buf) (I64.to_i32 len);
+  let n <- IO.mk (SSL_write ssl (ByteBuf.ptr buf) (I64.to_i32 len));
   Tls.write_once ssl buf len attempts n
 }
 
