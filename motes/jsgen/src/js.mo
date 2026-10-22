@@ -5,9 +5,10 @@
 /// from data. `Js.Expr.raw` is the one trusted-literal escape hatch, and it
 /// is named so a reviewer can find every use.
 ///
-/// Identifiers are validated with `Js.valid_ident`; the renderer trusts the
-/// caller to have done that (a generated `let` name is not user input). The
-/// ABI-driven generator in `web_wasm` builds every name from its spec.
+/// Identifiers are validated with `Js.valid_ident`. The renderer trusts
+/// caller-supplied `ident`/`let`/`assign` names (a generated name is not user
+/// input); `member` brackets any field that is not a valid identifier, and
+/// `raw` is the visibly-marked trusted-literal escape hatch.
 
 use std::list {List.intercalate}
 
@@ -46,26 +47,30 @@ pub struct Js.Module {
 /// A double-quoted JS string literal. `\`, `"`, newlines/tabs and `<` are
 /// escaped; `<` becomes `<` so a generated `</script>` cannot close an
 /// inline script tag. All other bytes (including multi-byte UTF-8) pass
-/// through unchanged.
+/// through unchanged: the output is assembled as bytes and converted once,
+/// so a multi-byte character is never split into invalid UTF-8.
 pub def Js.string_literal (s : String) : String :=
-  String.concat_list ["\"", Js.escape_bytes (String.to_list s), "\""]
+  String.from_list
+    (List.append
+      (List.cons 34u8 (Js.escape_bytes (String.to_list s)))
+      (List.cons 34u8 List.empty))
 
 #[terminating]
-def Js.escape_bytes (bytes : List U8) : String :=
+def Js.escape_bytes (bytes : List U8) : List U8 :=
   match bytes {
-    List.empty => "",
+    List.empty => List.empty,
     List.cons b rest =>
-      String.concat (Js.escape_byte b) (Js.escape_bytes rest)
+      List.append (Js.escape_byte b) (Js.escape_bytes rest)
   }
 
-def Js.escape_byte (b : U8) : String :=
-  if U8.beq b 34u8 then "\\\""
-  else if U8.beq b 92u8 then "\\\\"
-  else if U8.beq b 10u8 then "\\n"
-  else if U8.beq b 13u8 then "\\r"
-  else if U8.beq b 9u8 then "\\t"
-  else if U8.beq b 60u8 then "\\u003c"
-  else String.from_list (List.singleton b)
+def Js.escape_byte (b : U8) : List U8 :=
+  if U8.beq b 34u8 then String.to_list "\\\""
+  else if U8.beq b 92u8 then String.to_list "\\\\"
+  else if U8.beq b 10u8 then String.to_list "\\n"
+  else if U8.beq b 13u8 then String.to_list "\\r"
+  else if U8.beq b 9u8 then String.to_list "\\t"
+  else if U8.beq b 60u8 then String.to_list "\\u003c"
+  else List.cons b List.empty
 
 /// ASCII identifier: `[A-Za-z_][A-Za-z0-9_]*`. JS permits `$` and Unicode
 /// identifiers too; the generator does not need them, and rejecting them is
@@ -107,7 +112,10 @@ pub def Js.render_expr (e : Js.Expr) : String :=
     Js.Expr.int value => I64.to_string value,
     Js.Expr.bool value => if value then "true" else "false",
     Js.Expr.ident name => name,
-    Js.Expr.member base field => String.concat_list [Js.render_expr base, ".", field],
+    Js.Expr.member base field =>
+      if Js.valid_ident field
+      then String.concat_list [Js.render_expr base, ".", field]
+      else String.concat_list [Js.render_expr base, "[", Js.string_literal field, "]"],
     Js.Expr.call f args =>
       String.concat_list [Js.render_expr f, "(", Js.render_exprs args, ")"],
     Js.Expr.arrow params body =>
