@@ -7,7 +7,7 @@
 /// paths, commands, usage and decisions only.
 use log::level {LogLevel}
 use log::logger {
-    Logger, Logger.file, Logger.with_field,
+    LogFormat, Logger, Logger.file, Logger.with_field, Logger.with_format,
     Logger.debug, Logger.info, Logger.warn, Logger.error,
 }
 use std::io {IO.get_env, IO.read_file, IO.list_dir, IO.current_time_nano}
@@ -46,6 +46,19 @@ pub def Logs.level : IO (Option LogLevel) := do {
     let s <- env_string "WEAVER_LOG";
     let t : String := String.trim s;
     IO.pure (if String.is_empty t then Option.some LogLevel.info else level_of t)
+}
+
+/// `WEAVER_LOG_FORMAT`: `json` (also `jsonl`/`json_lines`) selects one
+/// JSON object per line; anything else is the human text form.
+pub def format_of (s : String) : LogFormat :=
+    let t : String := String.trim s in
+    if Bool.or (t == "json") (Bool.or (t == "jsonl") (t == "json_lines"))
+    then LogFormat.json_lines
+    else LogFormat.plain_text
+
+pub def Logs.format : IO LogFormat := do {
+    let s <- env_string "WEAVER_LOG_FORMAT";
+    IO.pure (format_of s)
 }
 
 def dir_of (override : String) (sessions : Option Path) : Path :=
@@ -219,7 +232,8 @@ def setup_with (level : LogLevel) : IO LogSetup := do {
     let epoch <- Logs.epoch;
     let path <- Logs.current_path dir epoch;
     let crash <- Logs.detect_crash dir path;
-    let base : Logger := Logger.file level path;
+    let fmt <- Logs.format;
+    let base : Logger := Logger.with_format (Logger.file level path) fmt;
     let log1 : Logger := Logger.with_field base "pid" (I64.to_string process_id);
     let log2 : Logger := Logger.with_field log1 "run" (String.concat epoch (String.concat "-" (I64.to_string process_id)));
     let _ <- log_crash log2 crash;

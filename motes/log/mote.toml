@@ -15,3 +15,6 @@ path = "../../init"
 
 [dependencies.std]
 path = "../../std"
+
+[dependencies.json]
+path = "../json"

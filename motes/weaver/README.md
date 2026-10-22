@@ -204,8 +204,10 @@ Each run appends an `ev=` event log under `<sessions root>/debug/`:
 startup/session, submits, turn outcomes and usage, settings warnings,
 retries, subagent events and `process_exit`. `WEAVER_LOG` sets the level
 (`trace|debug|info|warn|error|off`, default info), `WEAVER_LOG_DIR`
-the directory, `WEAVER_DEBUG_LOG` one exact file. API keys, prompts and
-file contents are never logged. A run that dies without `process_exit`
+the directory, `WEAVER_DEBUG_LOG` one exact file, and
+`WEAVER_LOG_FORMAT=json` switches every line to one JSON object
+(`{"fields":{...},"level":"INFO","msg":"...","ts":...}`) for machine
+consumption. API keys, prompts and file contents are never logged. A run that dies without `process_exit`
 is reported by the next launch (`warning: previous session ended
 unexpectedly (log: …)`) and logged as `crash_detected`; `/log` prints the
 newest log's path, last 20 lines and any crash note. The runtime has no

@@ -11,27 +11,42 @@ use std::io {IO.write_stdout, IO.write_stderr, IO.current_time}
 use std::path {Path}
 use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
 use std::stream {FdStream, FdStream.open_file, FdStream.append_mode, Stream}
+use std::map {BTreeMap}
+use json::json {Json, Json.make_object, Json.make_str, Json.make_num_int, Json.to_string}
 use log::level {LogLevel}
+
+/// How a line is rendered. `plain_text` is the human `<ts> <LEVEL> <msg>
+/// key=value` form; `json_lines` is one JSON object per line for machines
+/// (`{"fields":{...},"level":"INFO","msg":"...","ts":42}`).
+pub type LogFormat {
+    plain_text,
+    json_lines,
+}
 
 pub struct Logger {
     min_level : LogLevel,
     sink : String -> IO Unit,
     fields : List (Pair String String),
+    format : LogFormat,
 }
 
 /// A logger writing to stdout (`write_stdout` does not append a newline;
 /// the formatter supplies it).
 pub def Logger.stdout (min_level : LogLevel) : Logger :=
-    { min_level := min_level, sink := IO.write_stdout, fields := List.empty }
+    { min_level := min_level, sink := IO.write_stdout, fields := List.empty, format := LogFormat.plain_text }
 
 /// A logger writing to stderr; `IO.write_stderr` flushes every write.
 pub def Logger.stderr (min_level : LogLevel) : Logger :=
-    { min_level := min_level, sink := IO.write_stderr, fields := List.empty }
+    { min_level := min_level, sink := IO.write_stderr, fields := List.empty, format := LogFormat.plain_text }
 
 /// A logger writing through any sink -- a file, an in-memory test seam, a
 /// forwarder.
 pub def Logger.with_sink (min_level : LogLevel) (sink : String -> IO Unit) : Logger :=
-    { min_level := min_level, sink := sink, fields := List.empty }
+    { min_level := min_level, sink := sink, fields := List.empty, format := LogFormat.plain_text }
+
+/// The same logger rendered in another format (`plain_text` by default).
+pub def Logger.with_format (logger : Logger) (format : LogFormat) : Logger :=
+    { logger with format := format }
 
 /// Append one already-formatted line to `path`. A failed open or write is
 /// dropped: logging must never take down the program it observes.
@@ -82,6 +97,27 @@ pub def Logger.format_line (level : LogLevel) (msg : String) (fields : List (Pai
     let fs : List String := field_pieces (List.reverse fields) List.empty in
     String.concat (String.concat head (String.concat_list fs)) "\n"
 
+/// The JSON-lines shape: one object per line, keys sorted by the JSON mote
+/// (`ts` number, `level` name, `msg`, and a `fields` object). The text form
+/// keeps the caller's field order; JSON is a map, so its fields are sorted.
+#[partial]
+def json_fields (fs : List (Pair String String)) (acc : BTreeMap String Json) : BTreeMap String Json :=
+    match fs {
+        List.empty => acc,
+        List.cons p rest => match p {
+            Pair.pair k v => json_fields rest (Map.insert k (Json.make_str v) acc),
+        },
+    }
+
+pub def Logger.format_json_line (level : LogLevel) (msg : String) (fields : List (Pair String String)) (ts : I64) : String :=
+    let fields_json : Json := Json.make_object (json_fields fields BTreeMap.empty) in
+    let obj : Json := Json.make_object
+        (Map.insert "ts" (Json.make_num_int ts)
+        (Map.insert "level" (Json.make_str (LogLevel.name level))
+        (Map.insert "msg" (Json.make_str msg)
+        (Map.insert "fields" fields_json BTreeMap.empty)))) in
+    String.concat (Json.to_string obj) "\n"
+
 /// Whether `level` clears the logger's minimum.
 pub def Logger.should_emit (logger : Logger) (level : LogLevel) : Bool :=
     Bool.not (I64.lt (LogLevel.rank level) (LogLevel.rank logger.min_level))
@@ -92,7 +128,10 @@ def Logger.log (logger : Logger) (level : LogLevel) (msg : String) : IO Unit :=
     then IO.pure unit
     else do {
         let ts <- IO.current_time;
-        let line : String := Logger.format_line level msg logger.fields ts;
+        let line : String := match logger.format {
+            LogFormat.plain_text => Logger.format_line level msg logger.fields ts,
+            LogFormat.json_lines => Logger.format_json_line level msg logger.fields ts,
+        };
         logger.sink line
     }
 

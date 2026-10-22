@@ -1,9 +1,9 @@
 /// The debug log's pure pieces and its crash detector.
 use weaver::logs {
-    level_of, Logs.sanitize, Logs.detect_crash, Logs.tail, Logs.take_last, Logs.finish,
+    level_of, format_of, Logs.sanitize, Logs.detect_crash, Logs.tail, Logs.take_last, Logs.finish,
 }
 use log::level {LogLevel}
-use log::logger {Logger}
+use log::logger {LogFormat, Logger}
 use std::path {Path, Path.to_string}
 use std::io {IO.read_file, IO.write_file}
 use std::process {process_id, exec_cmd}
@@ -22,6 +22,16 @@ def read_at (path : String) : IO String := do {
     let r <- IO.read_file (Path.path path);
     match r { Result.ok s => IO.pure s, Result.err _ => IO.pure "" }
 }
+
+/// `WEAVER_LOG_FORMAT` names: json/jsonl/json_lines select JSON lines;
+/// anything else, including unset, is the text form.
+#[test]
+def test_format_of_json_names : Bool :=
+    (match format_of "json" { LogFormat.json_lines => true, _ => false })
+        && (match format_of " jsonl " { LogFormat.json_lines => true, _ => false })
+        && (match format_of "json_lines" { LogFormat.json_lines => true, _ => false })
+        && (match format_of "" { LogFormat.plain_text => true, _ => false })
+        && (match format_of "text" { LogFormat.plain_text => true, _ => false })
 
 #[test]
 def test_level_parsing : Bool :=
