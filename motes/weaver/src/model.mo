@@ -36,7 +36,7 @@ use tui::widgets::input {
 }
 use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, sized, with_style, padding}
 use tui::render {wrap_text}
-use tui::text {Text.width, Text.slice_cols, Text.padded_slice_cols, Text.snap_span}
+use tui::text {Text.width, Text.take_width, Text.slice_cols, Text.padded_slice_cols, Text.snap_span}
 use std::list {List.intercalate}
 
 /// The loop's message type: a raw terminal event not yet interpreted, or

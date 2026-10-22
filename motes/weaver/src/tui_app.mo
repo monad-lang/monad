@@ -21,6 +21,7 @@ use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use weaver::commands {WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch}
+use log::logger {Logger}
 use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
 use weaver::gate {pick_header, cap_name, capped_diff}
 use weaver::diff {Diff.for_input, Diff.lines}
@@ -31,8 +32,12 @@ use weaver::model {
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
     DisplayRow, Model.display_line, Model.take_last_rows, Model.display_row_widget,
     Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
+    Model.clear_input_selection, Model.in_input, Model.input_drag, Model.input_press,
+    Model.input_release, Model.input_sel_active,
     list_length, panel_height, input_placeholder,
 }
+use weaver::logs {Logs.info, Logs.debug, Logs.warn}
+use weaver::subagent {Subagent.task_tool}
 use weaver::store {
     Transcript, TranscriptPage, StoreState,
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append,
@@ -941,6 +946,9 @@ def model_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
 def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
     let before : I64 := list_msg_length st.run.session.history in
     do {
+        // The live-usage baseline is an IO action; write it out here
+        // rather than binding IO inside the ResultT do-block.
+        write_usage st.store st.run.session.spent;
         let r <- ResultT.run (drive_tui log gen st text);
         return (turn_result_of st before r)
     }
@@ -966,7 +974,6 @@ def error_line (e : WeaverError) : TLine :=
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
-    let _ <- write_usage st.store st.run.session.spent;
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg };
     let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store,
