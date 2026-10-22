@@ -1,0 +1,23 @@
+# A small, controlled JavaScript emitter.
+#
+# This mote is deliberately NOT a JavaScript compiler: it has no parser, no
+# type inference and no arbitrary interpolation. It renders a small syntax
+# tree to source text, escaping every string used as data and validating
+# identifiers. The single escape hatch is `Js.Expr.raw`, which is visibly
+# marked at the construction site.
+#
+# Its consumer is the WASM web loader generator: `web_wasm` describes the
+# import/export ABI as data and renders the browser glue through this mote,
+# so the generated JS cannot drift from the C/runtime declarations.
+#
+# `init` and `std` are ambient; declared anyway, as every manifest here does.
+[mote]
+name = "jsgen"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
