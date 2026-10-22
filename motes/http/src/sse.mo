@@ -23,8 +23,11 @@
 /// arrives, so `data: a\n` pushed alone is buffered whole and re-parsed
 /// after the push that completes it.
 
-use http::strings {Strings.drop_bytes, Strings.split_at_byte_opt}
+use http::strings {Strings.drop_bytes, Strings.split_at_byte_opt, Strings.split_on}
 use http::wire {Wire.take_bytes}
+use http::types {
+  Body, Headers, Headers.empty, Headers.set, HttpVersion, Response, Status.ok,
+}
 use std::list {List.intercalate}
 
 pub struct SseState { buf : List U8 }
@@ -34,6 +37,56 @@ pub struct SseEvent { event : String, data : String }
 /// A state with nothing buffered.
 pub def Sse.init : SseState :=
   { buf := List.empty }
+
+// ── encoding (server side) ──────────────────────────────────────────────
+
+/// The `data:` lines for one event body; a multi-line value becomes one
+/// `data:` line per line, as the spec requires.
+pub def Sse.encode (data : String) : String :=
+  String.concat_list (Sse.data_lines (Strings.split_on "\n" data))
+
+#[terminating]
+def Sse.data_lines (lines : List String) : List String :=
+  match lines {
+    List.empty => List.empty,
+    List.cons line rest =>
+      List.cons (String.concat "data: " (String.concat line "\n")) (Sse.data_lines rest)
+  }
+
+/// A named event followed by its data and the blank line that dispatches it.
+pub def Sse.encode_event (name : String) (data : String) : String :=
+  let event_line :=
+    if String.is_empty name
+    then ""
+    else String.concat "event: " (String.concat name "\n") in
+  String.concat event_line (String.concat (Sse.encode data) "\n")
+
+pub def Sse.encode_comment (text : String) : String :=
+  String.concat ": " (String.concat text "\n")
+
+pub def Sse.encode_retry (ms : I64) : String :=
+  String.concat "retry: " (String.concat (I64.to_string ms) "\n")
+
+/// A body that pulls events from `source` and encodes them.
+pub def Sse.body (source : Unit -> IO (Option SseEvent)) : Body :=
+  Body.stream (fn (_ : Unit) => Sse.pull_event source)
+
+def Sse.pull_event (source : Unit -> IO (Option SseEvent)) : IO (Option (List U8)) := do {
+  let ev <- source Unit.unit;
+  match ev {
+    Option.none => IO.pure Option.none,
+    Option.some e => IO.pure (Option.some (String.to_list (Sse.encode_event e.event e.data)))
+  }
+}
+
+/// A 200 `text/event-stream` response whose body is the event source.
+pub def Sse.response (source : Unit -> IO (Option SseEvent)) : Response :=
+  let h1 := Headers.set "Content-Type" "text/event-stream" Headers.empty in
+  let h2 := Headers.set "Cache-Control" "no-cache" h1 in
+  let h3 := Headers.set "X-Accel-Buffering" "no" h2 in
+  let res : Response :=
+    { status := Status.ok, headers := h3, version := HttpVersion.http1_1, body := Sse.body source } in
+  res
 
 /// Feed `bytes` into the state machine: the new state and every event the
 /// push completed, in the order the wire dispatched them.

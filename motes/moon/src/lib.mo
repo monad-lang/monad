@@ -50,3 +50,5 @@ pub use lib::csrf {
     Csrf.token, Csrf.verify, Csrf.hidden_field, Csrf.check,
     Csrf.secret_from_env,
 }
+
+pub use lib::live {Live.events, Live.reload, Live.watch, Live.script}

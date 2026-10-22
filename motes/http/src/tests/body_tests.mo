@@ -90,7 +90,7 @@ def test_to_bytes_pure_empty : Bool :=
 
 #[test]
 def test_to_bytes_pure_stream : Bool :=
-  match Body.to_bytes_pure (Body.stream (return Option.none : IO (Option (List U8)))) {
+  match Body.to_bytes_pure (Body.stream (fn (_ : Unit) => IO.pure Option.none)) {
     List.empty => true,
     List.cons _ _ => false
   }

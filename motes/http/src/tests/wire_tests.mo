@@ -1,7 +1,7 @@
 /// Phase 3 tests — HTTP/1.1 wire format parse/serialize roundtrips.
 
 use http::types {
-  Body, Headers, Method, Request, Response, Status.created, Status.no_content,
+  Body, Framing, Headers, Method, Request, Response, Status.created, Status.no_content,
   Status.not_found, Status.not_modified, Status.ok, Uri, http1_0, http1_1,
 }
 use http::body {Body.length, Body.to_bytes_pure}
@@ -12,8 +12,8 @@ use http::wire {
   Wire.frame_response, Wire.parse_chunk_size, Wire.parse_content_length,
   Wire.parse_method, Wire.parse_request, Wire.parse_response,
   Wire.parse_response_with_method, Wire.parse_u16, Wire.parse_version,
-  Wire.request_target, Wire.response_has_body, Wire.split_lines,
-  Wire.take_bytes,
+  Wire.request_target, Wire.request_framing, Wire.response_has_body,
+  Wire.split_lines, Wire.take_bytes,
 }
 
 def expect_ok_req (got : Result String Request) (want_method : Method) (want_path : String) : Bool :=
@@ -640,8 +640,8 @@ def test_frame_request_conflicting_length_is_error : Bool :=
   w_frame_bad (String.to_list "POST / HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\nhello")
 
 #[test]
-def test_frame_request_transfer_encoding_is_error : Bool :=
-  w_frame_bad (String.to_list "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n")
+def test_frame_request_unsupported_transfer_encoding_is_error : Bool :=
+  w_frame_bad (String.to_list "POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n")
 
 // ── parse strictness ───────────────────────────────────────────────────
 
@@ -741,9 +741,8 @@ def test_parse_response_method_decides_body : Bool :=
 
 /// The read function of a test stream. The serialiser refuses a stream before
 /// reading it, so this is never called.
-def w_no_chunk : IO (Option (List U8)) := do {
-  return Option.none
-}
+def w_no_chunk : Unit -> IO (Option (List U8)) :=
+  fn (_ : Unit) => do { return Option.none }
 
 def w_stream_body : Body :=
   Body.stream w_no_chunk
@@ -872,4 +871,51 @@ def test_chunk_step_bad_size_is_error : Bool :=
   match Wire.chunk_step List.empty (String.to_list "zz\r\nhello") {
     Result.err _ => true,
     Result.ok _ => false
+  }
+
+// ── chunked requests ──
+
+#[test]
+def test_request_framing_chunked : Bool :=
+  let hs := Headers.set "Transfer-Encoding" "chunked" Headers.empty in
+  match Wire.request_framing hs {
+    Result.err _ => false,
+    Result.ok framing =>
+      match framing {
+        Framing.chunked => true,
+        _ => false
+      }
+  }
+
+#[test]
+def test_request_framing_chunked_with_length_rejected : Bool :=
+  let hs := Headers.set "Content-Length" "4"
+    (Headers.set "Transfer-Encoding" "chunked" Headers.empty) in
+  match Wire.request_framing hs {
+    Result.err _ => true,
+    Result.ok _ => false
+  }
+
+#[test]
+def test_frame_and_parse_chunked_request : Bool :=
+  let bytes := String.to_list
+    "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n0\r\n\r\n" in
+  match Wire.frame_request bytes {
+    Result.err _ => false,
+    Result.ok opt =>
+      match opt {
+        Option.none => false,
+        Option.some n =>
+          match Wire.parse_request (Wire.take_bytes n bytes) {
+            Result.err _ => false,
+            Result.ok req =>
+              match req.body {
+                Body.bytes data => String.beq (String.from_list data) "abcd",
+                Body.empty => false,
+                Body.text _ => false,
+                Body.stream _ => false,
+                Body.form _ => false
+              }
+          }
+      }
   }

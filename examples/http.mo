@@ -268,9 +268,8 @@ def test_body_multipart_truncated_fails : Bool :=
 
 /// The read function of a streaming body. The serialiser refuses a stream
 /// before reading it, so this is never called.
-def no_chunk : IO (Option (List U8)) := do {
-  return Option.none
-}
+def no_chunk : Unit -> IO (Option (List U8)) :=
+  fn (_ : Unit) => do { return Option.none }
 
 /// A `Body.stream` has no pure byte form, and serialising one is an error --
 /// rendering it as `Content-Length: 0` would be byte-for-byte what an empty

@@ -23,7 +23,8 @@ pub use lib::types {
     Headers.empty, Headers.get, Headers.set, Headers.add, Headers.remove,
     Headers.is_empty, Headers.get_all,
 
-    Uri.host, Body.is_empty, Body.is_text, Request.get, Response.ok_text,
+    Uri.host, Body.is_empty, Body.is_text, Body.is_stream,
+    Request.get, Response.ok_text,
     Response.text, Response.html, Response.json, Response.json_bytes,
     Response.bytes, Response.no_content, Response.redirect,
     Response.with_header, Response.with_status,
@@ -46,6 +47,8 @@ pub use lib::wire {
     Wire.frame_request, Wire.frame_response,
     Wire.response_framing, Wire.response_has_body,
     Wire.chunk_step, Wire.decode_chunked,
+    Wire.hex_i64, Wire.chunk_frame, Wire.terminal_chunk,
+    Wire.response_head_chunked, Wire.chunked_request_framing,
 }
 
 pub use lib::body {
@@ -58,6 +61,11 @@ pub use lib::body {
     Body.parse_form, Body.parse_multipart_of,
 }
 
+pub use lib::body_io {
+    Body.pull, Body.to_bytes, Body.to_bytes_limited, Body.write_all,
+    Body.write_chunked,
+}
+
 pub use lib::request {Request.form_fields, Request.multipart, Request.param}
 
 pub use lib::cookie {
@@ -66,4 +74,8 @@ pub use lib::cookie {
     Cookie.set_cookie, Cookie.clear,
 }
 
-pub use lib::sse {SseState, SseEvent, Sse.init, Sse.push}
+pub use lib::sse {
+    SseState, SseEvent, Sse.init, Sse.push,
+    Sse.encode, Sse.encode_event, Sse.encode_comment, Sse.encode_retry,
+    Sse.body, Sse.response,
+}

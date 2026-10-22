@@ -35,15 +35,17 @@ use std::concurrent::fiber {Fiber, await_fiber, forkIO}
 use std::stream {Stream, FdStream}
 use http::types {
   Transport, Transport.read_bytes, Transport.write_bytes,
-  Body, Headers, Method, Request, Response, Status.bad_request,
+  Body, Body.is_stream, Headers, Method, Request, Response, Status.bad_request,
   Status.internal_server_error, Status.not_found, http1_0, http1_1,
 }
 use http::strings {Strings.drop_bytes}
 use http::wire {
   Wire.format_response, Wire.format_response_head, Wire.frame_request,
-  Wire.parse_request, Wire.response_has_body, Wire.take_bytes,
+  Wire.parse_request, Wire.response_has_body, Wire.response_head_chunked,
+  Wire.take_bytes,
 }
 use lib::handler {Handler.try}
+use http::body_io {Body.write_chunked}
 use lib::static_files {Static.handler, StaticConfig.default}
 
 // ── socket bytes ────────────────────────────────────────────────────────
@@ -214,16 +216,37 @@ def Server.serve_one (handler : Request -> IO Response) (sock : FdStream) (bytes
 /// the peer was promised a body and there is none, so a response it could read
 /// as complete would be a claim about bytes that do not exist.
 def Server.write_response (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
-  match Wire.format_response (Server.with_connection_header closing res) {
-    Result.err _ => do {
-      Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
-      return false
-    },
-    Result.ok bytes => do {
-      Server.write_bytes sock bytes;
-      return (Bool.not closing)
+  if Body.is_stream res.body
+  then Server.write_stream_response sock closing res
+  else
+    match Wire.format_response (Server.with_connection_header closing res) {
+      Result.err _ => do {
+        Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
+        return false
+      },
+      Result.ok bytes => do {
+        Server.write_bytes sock bytes;
+        return (Bool.not closing)
+      }
+    }
+
+/// A streamed response: a chunked head, then the body's chunks and terminal
+/// chunk. A write failure ends the connection (the peer is gone or the body
+/// could not be produced).
+def Server.write_stream_response (sock : FdStream) (closing : Bool) (res : Response) : IO Bool := do {
+  let head_res <- Server.write_bytes sock (Wire.response_head_chunked (Server.with_connection_header closing res));
+  match head_res {
+    Result.err _ => return false,
+    Result.ok _ => do {
+      let t : Transport := Transport.plain sock;
+      let body_res <- Body.write_chunked t res.body;
+      match body_res {
+        Result.err _ => return false,
+        Result.ok _ => return (Bool.not closing)
+      }
     }
   }
+}
 
 /// Write a response for `method`: `HEAD`, 204 and 304 send the head (with
 /// the representation's `Content-Length`) but no body, so a HEAD fallback to
@@ -234,18 +257,26 @@ pub def Server.write_response_for (sock : FdStream) (method : Method) (closing :
   then Server.write_response_head sock closing res
   else Server.write_response sock closing res
 
-/// The head-only writer used by `write_response_for`.
+/// The head-only writer used by `write_response_for`. A streamed
+/// representation gets the chunked head (no body); everything else gets the
+/// representation's `Content-Length`.
 def Server.write_response_head (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
-  match Wire.format_response_head (Server.with_connection_header closing res) {
-    Result.err _ => do {
-      Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
-      return false
-    },
-    Result.ok bytes => do {
-      Server.write_bytes sock bytes;
-      return (Bool.not closing)
-    }
+  if Body.is_stream res.body
+  then do {
+    let _ <- Server.write_bytes sock (Wire.response_head_chunked (Server.with_connection_header closing res));
+    return (Bool.not closing)
   }
+  else
+    match Wire.format_response_head (Server.with_connection_header closing res) {
+      Result.err _ => do {
+        Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
+        return false
+      },
+      Result.ok bytes => do {
+        Server.write_bytes sock bytes;
+        return (Bool.not closing)
+      }
+    }
 
 /// Serve one socket until it must end, starting from `carry` -- whatever the
 /// previous read left over -- with `served` counting the request about to be

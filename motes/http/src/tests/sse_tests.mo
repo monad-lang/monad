@@ -1,6 +1,10 @@
 /// SSE state machine tests — byte pushes in, events out.
 
-use http::sse {Sse.init, Sse.push, SseEvent}
+use http::sse {
+  Sse.encode, Sse.encode_comment, Sse.encode_event, Sse.encode_retry,
+  Sse.init, Sse.push, Sse.response, SseEvent,
+}
+use http::types {Body.is_stream, Headers.get}
 
 /// Push a whole string's bytes through a fresh state.
 def feed (s : String) : List SseEvent :=
@@ -122,3 +126,30 @@ def test_json_payload_roundtrip : Bool :=
   two_events (feed wire)
     { event := "", data := "{\"delta\":\"hi\"}" }
     { event := "", data := "[DONE]" }
+
+// ── encoding (server side) ──
+
+#[test]
+def test_encode_event : Bool :=
+  String.beq (Sse.encode_event "msg" "hi") "event: msg\ndata: hi\n\n"
+
+#[test]
+def test_encode_multiline : Bool :=
+  String.beq (Sse.encode "a\nb") "data: a\ndata: b\n"
+
+#[test]
+def test_encode_comment : Bool :=
+  String.beq (Sse.encode_comment "ping") ": ping\n"
+
+#[test]
+def test_encode_retry : Bool :=
+  String.beq (Sse.encode_retry 500i64) "retry: 500\n"
+
+#[test]
+def test_response_is_event_stream : Bool :=
+  let res := Sse.response (fn (_ : Unit) => IO.pure Option.none) in
+  let ct := match Headers.get "Content-Type" res.headers {
+    Option.some v => v,
+    Option.none => ""
+  } in
+  Bool.and (Body.is_stream res.body) (String.beq ct "text/event-stream")

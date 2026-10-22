@@ -14,7 +14,7 @@ type FiberScope {
 }
 
 #[native sleep_io]
-def sleepIO (ms : I64) : IO Unit
+pub def sleepIO (ms : I64) : IO Unit
 
 #[native scope_new]
 def scope_new : IO FiberScope

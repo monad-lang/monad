@@ -176,7 +176,7 @@ pub type Body {
   empty,
   bytes (data : List U8),
   text (data : String),
-  stream (read : IO (Option (List U8))),
+  stream (next : Unit -> IO (Option (List U8))),
   form (fields : List (Pair String String))
 }
 open Body { empty, bytes, text, stream, form }
@@ -196,6 +196,15 @@ pub def Body.is_text (b : Body) (s : String) : Bool :=
     Body.empty => false,
     Body.bytes _ => false,
     Body.stream _ => false,
+    Body.form _ => false
+  }
+
+pub def Body.is_stream (b : Body) : Bool :=
+  match b {
+    Body.stream _ => true,
+    Body.empty => false,
+    Body.bytes _ => false,
+    Body.text _ => false,
     Body.form _ => false
   }
 

@@ -94,6 +94,53 @@ def Wire.header_lines_go (pairs : List (Pair String String)) : List U8 :=
       }
   }
 
+// ── chunked response framing ────────────────────────────────────────────
+//
+// A stream has no length, so a response that carries one is framed with
+// `Transfer-Encoding: chunked`: `<hex size> CRLF <bytes> CRLF` per chunk,
+// then a zero-size terminal chunk. These helpers are pure; `Body.write_chunked`
+// drives a body through them.
+
+def Wire.hex_chars : List String :=
+  ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+#[terminating]
+def Wire.nth_string (n : I64) (xs : List String) : String :=
+  match xs {
+    List.empty => "0",
+    List.cons x rest => if I64.lt n 1 then x else Wire.nth_string (I64.sub n 1) rest
+  }
+
+#[terminating]
+def Wire.hex_digits (n : I64) : List String :=
+  if I64.lt n 1
+  then List.empty
+  else
+    let q := I64.div n 16i64 in
+    let r := I64.sub n (I64.mul q 16i64) in
+    List.append (Wire.hex_digits q)
+      (List.cons (Wire.nth_string r Wire.hex_chars) List.empty)
+
+pub def Wire.hex_i64 (n : I64) : String :=
+  if I64.lt n 1 then "0" else String.concat_list (Wire.hex_digits n)
+
+/// One chunk: `<hex length> CRLF <bytes> CRLF`.
+pub def Wire.chunk_frame (bytes : List U8) : List U8 :=
+  let size := String.to_list (Wire.hex_i64 (List.length bytes)) in
+  List.append (List.append (List.append size Wire.crlf) bytes) Wire.crlf
+
+pub def Wire.terminal_chunk : List U8 :=
+  String.to_list "0\r\n\r\n"
+
+/// A response head for a chunked body: status line + headers with
+/// `Transfer-Encoding: chunked` and no `Content-Length`.
+pub def Wire.response_head_chunked (res : Response) : List U8 :=
+  let status_line := Wire.status_line res.status res.version in
+  let hs := Headers.remove "Content-Length"
+    (Headers.set "Transfer-Encoding" "chunked" res.headers) in
+  let hdrs := Wire.header_lines hs in
+  List.append (List.append status_line hdrs) Wire.crlf
+
 // ── body to bytes ──────────────────────────────────────────────────────
 //
 // Serialising a `Body.stream` fails rather than rendering as zero bytes. There
@@ -369,13 +416,32 @@ def Wire.content_lengths_agree (first : String) (rest : List String) : Bool :=
 /// has no body (RFC 9110 §8.6), which is not the response rule: there an
 /// absent length means read-to-close.
 def Wire.request_framing (headers : Headers) : Result String Framing :=
-  match Wire.parse_content_length headers {
-    Result.err e => Result.err e,
-    Result.ok opt =>
-      match opt {
-        Option.none => Result.ok Framing.no_body,
-        Option.some n => Result.ok (Framing.content_length n)
-      }
+  match Headers.get_all "transfer-encoding" headers {
+    List.empty =>
+      match Wire.parse_content_length headers {
+        Result.err e => Result.err e,
+        Result.ok opt =>
+          match opt {
+            Option.none => Result.ok Framing.no_body,
+            Option.some n => Result.ok (Framing.content_length n)
+          }
+      },
+    List.cons _ _ => Wire.chunked_request_framing headers
+  }
+
+/// A request declaring exactly `Transfer-Encoding: chunked`. A request that
+/// also carries `Content-Length` is rejected: that is the request-smuggling
+/// shape, where two hops disagree about where the body ends.
+pub def Wire.chunked_request_framing (headers : Headers) : Result String Framing :=
+  match Wire.chunked_declared headers {
+    Option.none => Result.err "no chunked transfer coding",
+    Option.some declared =>
+      if declared
+      then
+        if List.is_empty (Headers.get_all "content-length" headers)
+        then Result.ok Framing.chunked
+        else Result.err "both Content-Length and Transfer-Encoding"
+      else Result.err "unsupported transfer coding"
   }
 
 // ── chunked decoding ───────────────────────────────────────────────────
