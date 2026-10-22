@@ -97,7 +97,7 @@ def page_bind_run {A : Type} {B : Type}
     (ma : PageM A) (f : A -> PageM B) : IO (Result String B) :=
     Monad.bind (ResultT.run (PageM.run ma)) (page_bind_step f)
 
-instance Monad PageM {
+pub instance Monad PageM {
     def pure (a : A) : PageM A := PageM.pure a
     def bind (ma : PageM A) (f : A -> PageM B) : PageM B :=
         PageM.page_m (ResultT.mk (page_bind_run ma f))

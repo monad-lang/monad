@@ -88,7 +88,7 @@ def stream_error_of_raw (raw : Pair I64 String) : StreamError :=
 /// A byte stream. `read` of a zero-length buffer is END OF STREAM, never
 /// an error; `write` writes ALL of the buffer and reports its full
 /// length; `close` never fails.
-class Stream S {
+pub class Stream S {
   def read (s : S) (max_bytes : I64) : IO (Result StreamError ByteBuf)
   def write (s : S) (buf : ByteBuf) : IO (Result StreamError I64)
   def close (s : S) : IO Unit

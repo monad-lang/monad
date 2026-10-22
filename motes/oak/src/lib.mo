@@ -1,8 +1,11 @@
 // Oak's library root -- bare `use oak` resolves here.
 //
 // The re-exports are explicit (no globs), following xml_html's lib.mo.
-// The types stay in xml_html: consumers import
-// `use xml_html::html {Html.Attr, Html.Node, Html.to_string}` directly.
+// The markup types are re-exported too, so an application that depends on
+// oak alone can name `Html.Node`/`Html.Attr` and serialize without adding
+// an `xml_html` dependency.
+
+pub use xml_html::html {Html.Attr, Html.Node, Html.to_string, Html.beq}
 
 pub use lib::elements {
     Html.id_, Html.class_, Html.href, Html.src, Html.alt, Html.type_, Html.value_,
