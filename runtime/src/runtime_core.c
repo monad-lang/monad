@@ -35,8 +35,9 @@ typedef struct {
 #define MONAD_BUF_TAG 20
 /* A `Ref` slot (`std/src/ref.mo`): a GC-scanned cell holding one Monad word,
    with a pthread mutex on native targets. 21 is the next free slot after
-   `MONAD_BUF_TAG`; like 17/18/20 nothing ever pattern-matches one, so
-   `monad_get_tag` need not name it. */
+   `MONAD_BUF_TAG`. A `Ref` has no Constructor slot, so `monad_get_tag` names
+   its kind too; matching on a `Ref` is documented as unsupported, and the
+   interpreter rejects it with "value is not a constructor". */
 #define MONAD_REF_TAG 21
 
 typedef struct {
@@ -339,7 +340,7 @@ static int64_t monad_get_tag_impl(rt_word ptr) {
     if (!ptr) return -1;
     Header* header = (Header*)RT_PTR(ptr);
     if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG
-        || header->tag == MONAD_BUF_TAG) {
+        || header->tag == MONAD_BUF_TAG || header->tag == MONAD_REF_TAG) {
         return header->tag;
     }
     return ((Constructor*)RT_PTR(ptr))->tag;
@@ -536,7 +537,10 @@ static int64_t ref_add_i64_impl(rt_word handle, int64_t delta) {
     RefObj* r = ref_of(handle);
     if (!r) return 0;
     REF_LOCK(r);
-    int64_t next = (int64_t)(intptr_t)r->value + delta;
+    /* Unsigned addition, then reinterpret: signed `+` here is UB on overflow
+       and clang emits `add nsw`, while the interpreter and I64 arithmetic
+       wrap. */
+    int64_t next = (int64_t)((uint64_t)(intptr_t)r->value + (uint64_t)delta);
     r->value = (rt_word)(intptr_t)next;
     REF_UNLOCK(r);
     return next;

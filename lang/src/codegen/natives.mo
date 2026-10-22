@@ -594,6 +594,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // comments are its specification.
             else if String.beq target "tcp_connect" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_connect")
             else if String.beq target "tcp_listen" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_listen")
+            else if String.beq target "tcp_listen_on" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_listen_on")
             else if String.beq target "tcp_accept" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_accept")
             else if String.beq target "tcp_local_port" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_local_port")
             // `Ptr.null` (init/prelude.mo) -- the NULL pointer for the C
@@ -856,6 +857,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // port are all i64 here.
     let d65 := mk_decl "monad_tcp_connect" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d66 := mk_decl "monad_tcp_listen" (List.cons "i64" List.empty) "i64" in
+    let d66a := mk_decl "monad_tcp_listen_on" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d67 := mk_decl "monad_tcp_accept" (List.cons "i64" List.empty) "i64" in
     let d72 := mk_decl "monad_tcp_local_port" (List.cons "i64" List.empty) "i64" in
     // `std/io.mo`'s two raw-stdio natives (`runtime.c`). Same "no
@@ -954,7 +956,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
-     d65, d66, d67, d72,
+     d65, d66, d66a, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d100, d101, d102, d103,
      d104, d105, d106, d107, d108, d109, d110, d111, d112]
@@ -976,7 +978,7 @@ def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "exec_cmd", "process_id", "proc_spawn",
     "proc_stream_fd", "proc_wait", "tcp_connect", "tcp_listen",
-    "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "list_dir",
+    "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "list_dir",
     "get_env", "stream_open", "term_ctl",
 ]
 

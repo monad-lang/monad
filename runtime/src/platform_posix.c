@@ -1110,6 +1110,44 @@ void* monad_tcp_listen(int64_t port) {
     return tcp_ok((void*)(int64_t)fd);
 }
 
+/* `tcp_listen_on : String -> U16 -> RawIO (Result (Pair I64 String)
+   FdStream)` -- like `tcp_listen`, but binds a specific host address or
+   name. `getaddrinfo` with `AI_PASSIVE` resolves `"127.0.0.1"`,
+   `"localhost"` and an empty host (the wildcard) the same way
+   `tcp_connect` resolves a peer. Each returned address is tried in turn,
+   so a host that resolves to a v6 address first still binds on a v4
+   machine. A resolution failure is kind 8, `host_unresolved`. */
+void* monad_tcp_listen_on(char* host, int64_t port) {
+    struct addrinfo hints;
+    struct addrinfo* res = NULL;
+    char portbuf[16];
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_PASSIVE;
+    snprintf(portbuf, sizeof(portbuf), "%u", (unsigned)(uint16_t)port);
+    const char* node = (host && host[0]) ? host : NULL;
+    int rc = getaddrinfo(node, portbuf, &hints, &res);
+    if (rc != 0) return stream_err(8, "tcp_listen_on", gai_strerror(rc), 0);
+    int fd = -1;
+    int last_errno = 0;
+    for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) { last_errno = errno; continue; }
+        if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0
+            && listen(fd, 128) == 0) {
+            break;
+        }
+        last_errno = errno;
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0) return stream_os_err("tcp_listen_on", last_errno);
+    return tcp_ok((void*)(int64_t)fd);
+}
+
 /* `tcp_accept : FdStream -> RawIO (Result (Pair I64 String) FdStream)`
    -- blocking accept, returning a new stream for the accepted
    connection. `EINTR` retries rather than surfacing: no signal handler
@@ -1512,6 +1550,11 @@ void* monad_stream_write(int64_t fd, void* buf) {
 void* monad_stream_close(int64_t fd) {
     if (fd > 2) {
         stream_carry_clear((int)fd);
+        /* A blocking `accept` does not wake on `close` alone; shutting the
+           socket down first makes it return (and is harmless on a
+           non-socket, where it fails with ENOTSOCK). That is what lets
+           `Server.shutdown` unblock the accept loop. */
+        shutdown((int)fd, SHUT_RDWR);
         close((int)fd);
     }
     return tcp_unit();

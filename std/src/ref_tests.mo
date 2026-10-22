@@ -42,3 +42,12 @@ def test_ref_modify_discards_result : IO Bool := do {
   let v <- Ref.get r;
   return (String.beq v "ab")
 }
+
+/// `add_i64` wraps at the I64 boundary on both backends (signed overflow is
+/// UB in the compiled runtime; the interpreter already wraps).
+#[test]
+def test_ref_add_wraps : IO Bool := do {
+  let r <- Ref.new 9223372036854775807i64;
+  let v <- Ref.add_i64 r 1;
+  return (v == -9223372036854775808i64)
+}

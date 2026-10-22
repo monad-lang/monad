@@ -431,6 +431,9 @@ priv def tcp_connect (host : String) (port : U16) : RawIO (Result (Pair I64 Stri
 #[native "tcp_listen"]
 priv def tcp_listen (port : U16) : RawIO (Result (Pair I64 String) FdStream)
 
+#[native "tcp_listen_on"]
+priv def tcp_listen_on (host : String) (port : U16) : RawIO (Result (Pair I64 String) FdStream)
+
 #[native "tcp_accept"]
 priv def tcp_accept (listener : FdStream) : RawIO (Result (Pair I64 String) FdStream)
 
@@ -444,6 +447,13 @@ pub def IO.tcp_connect (host : String) (port : U16) : IO (Result StreamError FdS
 
 pub def IO.tcp_listen (port : U16) : IO (Result StreamError FdStream) := do {
   let r <- IO.mk (tcp_listen port);
+  return (stream_result r)
+}
+
+/// Listen on a specific host address or name (`"127.0.0.1"`, `"localhost"`,
+/// `""` for the wildcard) instead of always `0.0.0.0`.
+pub def IO.tcp_listen_on (host : String) (port : U16) : IO (Result StreamError FdStream) := do {
+  let r <- IO.mk (tcp_listen_on host port);
   return (stream_result r)
 }
 
