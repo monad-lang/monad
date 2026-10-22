@@ -21,7 +21,7 @@ use http::strings {
 // ── Route type ──────────────────────────────────────────────────────────
 
 /// A route matches a method + path pattern with `:param` captures.
-struct Route {
+pub struct Route {
   method : Method,
   pattern : String,
   handler : Request -> IO Response
@@ -121,7 +121,7 @@ def Router.is_param (seg : String) : Option String :=
 /// method matches and whose pattern matches the request path wins.
 /// On match, the captured params are attached to the request before
 /// calling the handler. On no match, return 404.
-def Router.route (routes : List Route) (req : Request) : IO Response :=
+pub def Router.route (routes : List Route) (req : Request) : IO Response :=
   Router.try_routes routes req
 
 /// Try routes one by one. First match wins.
@@ -162,7 +162,7 @@ def Router.not_found : IO Response :=
 /// Mount a sub-router at a prefix. Strips the prefix from the request path
 /// before dispatching to the sub-routes. If the request path doesn't start
 /// with the prefix, returns 404.
-def Router.mount (prefix : String) (sub_routes : List Route) (req : Request) : IO Response :=
+pub def Router.mount (prefix : String) (sub_routes : List Route) (req : Request) : IO Response :=
   match Router.strip_prefix prefix req.uri.path {
     Option.none => Router.not_found,
     Option.some sub_path => Router.mount_dispatch sub_routes req sub_path
@@ -205,25 +205,25 @@ def Router.ensure_trailing_slash (s : String) : String :=
 
 // ── convenience route constructors ─────────────────────────────────────
 
-def Router.get (pattern : String) (handler : Request -> IO Response) : Route :=
+pub def Router.get (pattern : String) (handler : Request -> IO Response) : Route :=
   { method := Method.GET, pattern := pattern, handler := handler }
 
-def Router.post (pattern : String) (handler : Request -> IO Response) : Route :=
+pub def Router.post (pattern : String) (handler : Request -> IO Response) : Route :=
   { method := Method.POST, pattern := pattern, handler := handler }
 
-def Router.put (pattern : String) (handler : Request -> IO Response) : Route :=
+pub def Router.put (pattern : String) (handler : Request -> IO Response) : Route :=
   { method := Method.PUT, pattern := pattern, handler := handler }
 
-def Router.delete (pattern : String) (handler : Request -> IO Response) : Route :=
+pub def Router.delete (pattern : String) (handler : Request -> IO Response) : Route :=
   { method := Method.DELETE, pattern := pattern, handler := handler }
 
-def Router.patch (pattern : String) (handler : Request -> IO Response) : Route :=
+pub def Router.patch (pattern : String) (handler : Request -> IO Response) : Route :=
   { method := Method.PATCH, pattern := pattern, handler := handler }
 
 // ── param lookup ───────────────────────────────────────────────────────
 
 /// Look up a path parameter by name from a request's `params` list.
-def Router.param (name : String) (req : Request) : Option String :=
+pub def Router.param (name : String) (req : Request) : Option String :=
   Router.param_lookup name req.params
 
 #[terminating]

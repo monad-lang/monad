@@ -23,7 +23,7 @@ use http::strings {
 }
 
 /// Log the request method and path to stdout before calling the handler.
-def Middleware.logging (handler : Request -> IO Response) (req : Request) : IO Response := do {
+pub def Middleware.logging (handler : Request -> IO Response) (req : Request) : IO Response := do {
   IO.println req.uri.path;
   handler req
 }
@@ -32,7 +32,7 @@ def Middleware.logging (handler : Request -> IO Response) (req : Request) : IO R
 
 /// Add permissive CORS headers to the response. Allows all origins, common
 /// methods, and common headers.
-def Middleware.cors (handler : Request -> IO Response) (req : Request) : IO Response :=
+pub def Middleware.cors (handler : Request -> IO Response) (req : Request) : IO Response :=
   Monad.bind (handler req) (fn res =>
     return (Middleware.cors_response res))
 
@@ -47,7 +47,7 @@ def Middleware.cors_response (res : Response) : Response :=
 
 /// If the response has a body but no Content-Type header, infer one from
 /// the body variant (text → text/plain, bytes → application/octet-stream, etc.).
-def Middleware.content_type (handler : Request -> IO Response) (req : Request) : IO Response :=
+pub def Middleware.content_type (handler : Request -> IO Response) (req : Request) : IO Response :=
   Monad.bind (handler req) (fn res =>
     return (Middleware.ensure_content_type res))
 
@@ -68,7 +68,7 @@ def Middleware.ensure_content_type (res : Response) : Response :=
 /// built-in exception catching (no try/catch), this is a no-op wrapper in v1.
 /// It exists as a placeholder for when error handling lands; the handler
 /// runs directly.
-def Middleware.recover (handler : Request -> IO Response) (req : Request) : IO Response :=
+pub def Middleware.recover (handler : Request -> IO Response) (req : Request) : IO Response :=
   handler req
 
 // ── auth_basic ──────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ def Middleware.recover (handler : Request -> IO Response) (req : Request) : IO R
 /// header carries it base64-encoded (RFC 7617), so `check` sees plain
 /// `user:pass` and a credential that is not valid base64 is rejected as
 /// unauthorized rather than handed to `check` as encoded text.
-def Middleware.auth_basic (check : String -> Bool) (handler : Request -> IO Response) (req : Request) : IO Response :=
+pub def Middleware.auth_basic (check : String -> Bool) (handler : Request -> IO Response) (req : Request) : IO Response :=
   match Headers.get "Authorization" req.headers {
     Option.none => Middleware.unauthorized,
     Option.some cred =>
@@ -107,7 +107,7 @@ def Middleware.forbidden : IO Response :=
 
 /// Check for a Bearer token in the Authorization header. If missing or the
 /// token doesn't pass the predicate, return 401.
-def Middleware.auth_bearer (check : String -> Bool) (handler : Request -> IO Response) (req : Request) : IO Response :=
+pub def Middleware.auth_bearer (check : String -> Bool) (handler : Request -> IO Response) (req : Request) : IO Response :=
   match Headers.get "Authorization" req.headers {
     Option.none => Middleware.unauthorized,
     Option.some cred =>

@@ -141,7 +141,7 @@ def Server.read_request (sock : FdStream) (carry : List U8) : IO (Result String 
 
 /// The most requests one connection will serve before the server closes it.
 /// A bound on a chatty client, not a read timeout -- see the module note.
-def Server.max_keep_alive_requests : I64 := 100
+pub def Server.max_keep_alive_requests : I64 := 100
 
 /// True when a header carries `token` as a value, compared case-insensitively.
 /// A comma-separated list is not split, so `Connection: close, Foo` is not
@@ -231,7 +231,7 @@ def Server.write_response (sock : FdStream) (closing : Bool) (res : Response) : 
 /// the wire, so re-reading would block waiting for something already delivered,
 /// and discarding them would silently drop it.
 #[terminating]
-def Server.serve_connection (handler : Request -> IO Response) (sock : FdStream) (carry : List U8) (served : I64) : IO Unit := do {
+pub def Server.serve_connection (handler : Request -> IO Response) (sock : FdStream) (carry : List U8) (served : I64) : IO Unit := do {
   let msg_res <- Server.read_request sock carry;
   match msg_res {
     Result.err _ => do {
@@ -259,7 +259,7 @@ def Server.serve_connection (handler : Request -> IO Response) (sock : FdStream)
 /// reads around it in the same thread, which terminates only because it stops
 /// after the one request. Anything pipelined after it is dropped with the
 /// socket; `Server.serve_connection` is the loop that keeps it.
-def Server.handle_connection (handler : Request -> IO Response) (sock : FdStream) : IO Unit := do {
+pub def Server.handle_connection (handler : Request -> IO Response) (sock : FdStream) : IO Unit := do {
   let msg_res <- Server.read_request sock List.empty;
   match msg_res {
     Result.err _ => do {
@@ -292,7 +292,7 @@ def Server.send_error (sock : FdStream) : IO Unit := do {
 /// Listen on `port` and serve connections forever. One connection at a
 /// time, kept alive across requests. Never returns.
 #[terminating]
-def Server.serve (handler : Request -> IO Response) (port : U16) : IO Unit := do {
+pub def Server.serve (handler : Request -> IO Response) (port : U16) : IO Unit := do {
   let listen_res <- IO.tcp_listen port;
   match listen_res {
     Result.err _ => return unit,
@@ -319,7 +319,7 @@ def Server.serve_loop (handler : Request -> IO Response) (listener : FdStream) :
 /// Returns 200 with the file's content, 404 when it does not exist, and
 /// 500 when it exists but cannot be read.
 /// No path traversal protection in v1 — callers must sanitize paths.
-def Server.static (root : String) (req : Request) : IO Response := do {
+pub def Server.static (root : String) (req : Request) : IO Response := do {
   let read <- IO.read_file (Path.path (String.concat root req.uri.path));
   return (Server.static_respond read)
 }
@@ -364,7 +364,7 @@ def Server.drain_fibers (fibers : List (Fiber Unit)) : IO Unit :=
 /// Accepts up to `max_in_flight` connections, forking a handler fiber for
 /// each, then drains all fibers before accepting more. Never returns.
 #[terminating]
-def Server.serve_concurrent (handler : Request -> IO Response) (port : U16) (max_in_flight : I64) : IO Unit := do {
+pub def Server.serve_concurrent (handler : Request -> IO Response) (port : U16) (max_in_flight : I64) : IO Unit := do {
   let listen_res <- IO.tcp_listen port;
   match listen_res {
     Result.err _ => return unit,
