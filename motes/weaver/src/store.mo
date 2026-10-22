@@ -903,6 +903,23 @@ def finish_append (dir : Path) (idx : StoreIndex) (added : List StoreIndexBlock)
     if ok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the transcript index")
 }
 
+/// Append a startup note (a model/crash warning) to BOTH the store and
+/// the in-memory transcript. An in-memory-only note left the model's
+/// total ahead of the index, so every later append failed with
+/// "transcript log out of sync" and persistence stayed off for the
+/// session. On a store failure the note is dropped rather than
+/// desynchronizing the transcript; the next append surfaces the
+/// degradation.
+pub def Store.append_note (s : StoreState) (tr : Transcript) (lines : List TLine) : IO Transcript := do {
+    let block : List TLine := Transcript.next_block tr lines;
+    let total : I64 := tr.total;
+    let r <- Store.append_transcript s.dir total block;
+    return (match r {
+        Result.err _ => tr,
+        Result.ok _ => Transcript.append tr block,
+    })
+}
+
 #[partial]
 def wanted_blocks (bs : List StoreIndexBlock) (s : I64) (e : I64) : List StoreIndexBlock :=
     match bs {

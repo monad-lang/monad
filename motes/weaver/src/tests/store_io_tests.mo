@@ -6,6 +6,7 @@ use weaver::store {
     Store.read_page, Store.record_turn, Store.load_session, Store.latest_session,
     Store.ensure_root, Store.startup_transcript, Store.tail_lines, Store.child,
     Store.append_chunk, Store.read_live, Store.discard_live, Store.append_history_note, Store.update_meta,
+    Store.append_note,
 }
 use shuttle::session {Session, Session.messages_to_json}
 use shuttle::provider {ProviderConfig, mock}
@@ -126,6 +127,30 @@ def check_sync (st : StoreState) : IO Bool := do {
         Result.err e => IO.pure (String.contains e "out of sync"),
         Result.ok _ => IO.pure false,
     }
+}
+
+/// A startup note lands on BOTH sides, so the following real append (at
+/// the model's new total) does not hit "out of sync". The old
+/// in-memory-only note disabled persistence for the whole session.
+#[test]
+def test_append_note_keeps_the_index_in_sync : IO Bool := do {
+    let root : Path := root_for "note";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => check_note_sync st,
+    }
+}
+
+def check_note_sync (st : StoreState) : IO Bool := do {
+    let tr <- Store.startup_transcript st.dir;
+    let tr2 <- Store.append_note st tr [TLine.plain "warning: test"];
+    let total : I64 := tr2.total;
+    let a <- Store.append_transcript st.dir total [TLine.plain "hi"];
+    let ok : Bool := match a { Result.err _ => false, Result.ok _ => true };
+    let t2 <- Store.startup_transcript st.dir;
+    return (total == 1 && ok && t2.total == 2)
 }
 
 #[test]

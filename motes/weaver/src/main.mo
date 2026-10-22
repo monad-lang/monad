@@ -31,7 +31,7 @@ use weaver::store {
     StoreState, TLine, TLine.plain, TLine.user_line, Transcript,
     Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
-    Store.base_name, Store.append_transcript, Store.read_live, Store.discard_live,
+    Store.base_name, Store.append_transcript, Store.append_note, Store.read_live, Store.discard_live,
     Transcript.empty, Transcript.append, Transcript.next_block,
 }
 use weaver::theme {theme_split_lines}
@@ -573,6 +573,15 @@ def announce_note (o : OpenedSession) : IO Unit :=
         Option.some n => IO.write_stderr (String.concat "warning: " (String.concat n "\n")),
     }
 
+/// The startup note with a store: persisted, so the in-memory transcript
+/// and the store index stay in step (an in-memory-only note disabled
+/// persistence for the whole session with "transcript log out of sync").
+def stored_startup (s : StoreState) (tr : Transcript) (note : Option String) : IO Transcript :=
+    match note {
+        Option.none => IO.pure tr,
+        Option.some n => Store.append_note s tr (List.map TLine.plain (theme_split_lines n)),
+    }
+
 def startup_transcript (o : OpenedSession) : IO Transcript :=
     match o.store {
         Option.none => IO.pure (note_block Transcript.empty o.note),
@@ -580,7 +589,7 @@ def startup_transcript (o : OpenedSession) : IO Transcript :=
             let tr <- Store.startup_transcript s.dir;
             let live <- Store.read_live s;
             let tr2 <- absorb_live s tr live;
-            return (note_block tr2 o.note)
+            stored_startup s tr2 o.note
         },
     }
 
