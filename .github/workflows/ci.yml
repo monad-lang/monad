@@ -345,6 +345,24 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c "$PWD/target-monad/ci-self-compile/monad" test motes/sql motes/sqlite
 
+      # The web stack's own suites: http/moon (the server and wire), jsgen,
+      # web_wasm, xml_html, the Oak suites that compile self-hosted today,
+      # and std's Ref primitive. They are not in `motes/clap`/`motes/sql`, so
+      # without this step a regression in any of them ships on a green CI.
+      # `motes/oak` as a directory is 42/44: `app_tests.mo` and
+      # `html_t_tests.mo` still hit the known mock-stack dictionary bug, so
+      # the three green files are listed explicitly.
+      - name: Self-hosted web stack tests
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c "$PWD/target-monad/ci-self-compile/monad" test \
+                 motes/http motes/moon motes/jsgen motes/web_wasm motes/xml_html \
+                 motes/oak/src/tests/elements_tests.mo \
+                 motes/oak/src/tests/ssr_tests.mo \
+                 motes/oak/src/tests/stack_tests.mo \
+                 std/src/ref_tests.mo
+
       # Phase 0-2 of plans/bootstrapping/wasm-target.md: the wasi fib
       # differential, the web loader smoke test, and clean target-gating
       # errors. Reuses the binary the step above just self-compiled, so it
