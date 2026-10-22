@@ -14,8 +14,8 @@ use http::types {
   Status.partial_content, Status.range_not_satisfiable, Uri, http1_1,
 }
 use moon::static_files {
-  Static.handler, Static.mime_of, Static.respond, Static.safe_path,
-  StaticConfig.default,
+  Static.etag_matches, Static.handler, Static.mime_of, Static.range,
+  Static.respond, Static.safe_path, StaticConfig, StaticConfig.default,
 }
 
 def get_path (path : String) : Request :=
@@ -120,3 +120,67 @@ def test_missing_file_is_404 : IO Bool := do {
     Result.ok res => return (U16.beq res.status Status.not_found)
   }
 }
+
+// ── path guard: an encoded/doubled leading slash ───────────────────────
+//
+// Decoding `/%2F...` used to yield `//...`, whose one-slash strip produced an
+// absolute path that `Path.join` then honoured, escaping the root.
+
+#[test]
+def test_traversal_encoded_leading_slash_rejected : Bool :=
+  match Static.safe_path "/tmp" "/%2Fetc/passwd" {
+    Result.err _ => true,
+    Result.ok _ => false
+  }
+
+#[test]
+def test_traversal_doubled_leading_slash_rejected : Bool :=
+  match Static.safe_path "/tmp" "//etc/passwd" {
+    Result.err _ => true,
+    Result.ok _ => false
+  }
+
+#[test]
+def test_safe_path_normal_still_joins : Bool :=
+  match Static.safe_path "/tmp" "/app.js" {
+    Result.ok p => String.beq p "/tmp/app.js",
+    Result.err _ => false
+  }
+
+// ── If-None-Match forms ────────────────────────────────────────────────
+
+#[test]
+def test_etag_star_matches : Bool :=
+  Bool.and (Static.etag_matches "*" "\"abc\"")
+    (Bool.and (Static.etag_matches "W/\"abc\"" "\"abc\"")
+      (Bool.and (Static.etag_matches "\"x\", \"abc\"" "\"abc\"")
+        (Bool.not (Static.etag_matches "\"other\"" "\"abc\""))))
+
+#[test]
+def test_etag_star_gives_304 : Bool :=
+  let req := get_with "/app.js" (Headers.set "If-None-Match" "*" Headers.empty) in
+  let res := Static.respond (StaticConfig.default "/tmp") "/app.js" req (String.to_list "hello") in
+  U16.beq res.status Status.not_modified
+
+// ── immutable cache policy uses the URL path, not the file path ────────
+
+#[test]
+def test_immutable_prefix_cache_control : Bool :=
+  let base := StaticConfig.default "/tmp" in
+  let cfg : StaticConfig := { base with immutable_prefix := "/assets/" } in
+  let req := get_path "/assets/app.js" in
+  let res := Static.respond cfg "/tmp/assets/app.js" req (String.to_list "hello") in
+  String.beq (header res "Cache-Control") "max-age=31536000, immutable"
+
+// ── multipart ranges are ignored, not 416 ──────────────────────────────
+
+#[test]
+def test_multi_range_is_ignored : Bool :=
+  match Static.range (Option.some "bytes=0-1,4-5") 11i64 {
+    Result.ok r =>
+      match r {
+        Option.none => true,
+        Option.some _ => false
+      },
+    Result.err _ => false
+  }

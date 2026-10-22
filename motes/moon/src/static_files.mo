@@ -12,7 +12,7 @@
 
 use std::io {IO.is_dir, IO.read_file_bytes}
 use std::list {List.length}
-use std::path {Path, Path.join, Path.of, Path.to_string}
+use std::path {Path, Path.is_absolute, Path.join, Path.of, Path.to_string}
 use std::sha256 {Sha256.hash_bytes}
 use std::stream {StreamError.is_not_found}
 use http::types {
@@ -43,8 +43,10 @@ pub def StaticConfig.default (root : String) : StaticConfig :=
 // ── path safety ─────────────────────────────────────────────────────────
 
 /// Decode the URL path and map it under `root`. Rejects parent segments,
-/// control bytes, backslashes, and an encoded absolute path. A bare `/`
-/// maps to the root itself (then the index fallback applies).
+/// control bytes, backslashes, an encoded absolute path, and a path that
+/// still begins with `/` after the request's one leading slash is removed
+/// (`/%2Fetc/passwd` decodes to `//etc/passwd`). A bare `/` maps to the root
+/// itself (then the index fallback applies).
 pub def Static.safe_path (root : String) (url_path : String) : Result String String :=
   if Static.unsafe url_path
   then Result.err "unsafe path"
@@ -54,8 +56,24 @@ pub def Static.safe_path (root : String) (url_path : String) : Result String Str
       Result.ok decoded =>
         if Static.unsafe decoded
         then Result.err "unsafe path"
-        else Static.join_under root (Static.strip_leading_slash decoded)
+        else
+          match Static.relative_after_slash decoded {
+            Result.err e => Result.err e,
+            Result.ok relative => Static.join_under root relative
+          }
     }
+
+/// Drop the URL's one leading slash, then refuse a remaining leading slash.
+/// Without the second check, `Path.join`'s absolute-second-operand rule turns
+/// the result into an arbitrary absolute path.
+pub def Static.relative_after_slash (decoded : String) : Result String String :=
+  if String.starts_with "/" decoded
+  then
+    let rest := String.slice decoded 1 (I64.sub (String.length decoded) 1) in
+    if String.starts_with "/" rest
+    then Result.err "absolute path"
+    else Result.ok rest
+  else Result.ok decoded
 
 def Static.join_under (root : String) (relative : String) : Result String String :=
   match Path.of root {
@@ -66,7 +84,10 @@ def Static.join_under (root : String) (relative : String) : Result String String
       else
         match Path.of relative {
           Result.err e => Result.err e,
-          Result.ok rel => Result.ok (Path.to_string (Path.join base rel))
+          Result.ok rel =>
+            if Path.is_absolute rel
+            then Result.err "absolute path"
+            else Result.ok (Path.to_string (Path.join base rel))
         }
   }
 
@@ -115,11 +136,6 @@ def Static.has_bad_byte (bytes : List U8) : Bool :=
       else if U8.beq b 127u8 then true
       else Static.has_bad_byte rest
   }
-
-def Static.strip_leading_slash (s : String) : String :=
-  if String.starts_with "/" s
-  then String.slice s 1 (I64.sub (String.length s) 1)
-  else s
 
 // ── MIME ────────────────────────────────────────────────────────────────
 
@@ -205,8 +221,27 @@ pub def Static.range (header : Option String) (len : I64) : Result String (Optio
     Option.none => Result.ok Option.none,
     Option.some h =>
       if String.starts_with "bytes=" h
-      then Static.parse_range (String.slice h 6 (I64.sub (String.length h) 6)) len
+      then Static.single_range (String.slice h 6 (I64.sub (String.length h) 6)) len
       else Result.ok Option.none
+  }
+
+/// A multipart range (`bytes=0-1,4-5`) is not implemented; RFC 9110 lets a
+/// server ignore `Range` and serve the whole representation, which is right.
+/// Answering 416 would claim none of the ranges is satisfiable.
+def Static.single_range (spec : String) (len : I64) : Result String (Option (Pair I64 I64)) :=
+  if Static.multi_range spec
+  then Result.ok Option.none
+  else Static.parse_range spec len
+
+#[terminating]
+def Static.multi_range (spec : String) : Bool :=
+  match Strings.split_on "," spec {
+    List.empty => false,
+    List.cons _ rest =>
+      match rest {
+        List.empty => false,
+        List.cons _ _ => true
+      }
   }
 
 def Static.parse_range (spec : String) (len : I64) : Result String (Option (Pair I64 I64)) :=
@@ -272,10 +307,44 @@ def Static.response_headers (cfg : StaticConfig) (path : String) (etag : String)
   let h2 := Headers.set "ETag" etag h1 in
   let h3 := Headers.set "Accept-Ranges" "bytes" h2 in
   let cc :=
-    if String.starts_with cfg.immutable_prefix path
+    if String.starts_with cfg.immutable_prefix (Static.url_path_of cfg.root path)
     then "max-age=31536000, immutable"
     else cfg.cache_control in
   if String.is_empty cc then h3 else Headers.set "Cache-Control" cc h3
+
+/// A URL-shaped path for a resolved file, so a URL prefix such as
+/// `/assets/` can be compared against it. `path` is `<root>/assets/x.js`,
+/// which does not start with the prefix itself.
+pub def Static.url_path_of (root : String) (path : String) : String :=
+  let base :=
+    if String.ends_with root "/"
+    then root
+    else String.concat root "/" in
+  if String.starts_with base path
+  then String.concat "/" (String.slice path (String.length base) (I64.sub (String.length path) (String.length base)))
+  else path
+
+/// Whether an `If-None-Match` value names `etag`. Handles `*`, a
+/// comma-separated list, and the weak `W/` prefix (the weak comparison is
+/// what a GET uses, RFC 9110 §13.1.2).
+pub def Static.etag_matches (header : String) (etag : String) : Bool :=
+  let trimmed := String.trim header in
+  if String.beq trimmed "*"
+  then true
+  else Static.etag_in_list (Strings.split_on "," trimmed) etag
+
+#[terminating]
+def Static.etag_in_list (candidates : List String) (etag : String) : Bool :=
+  match candidates {
+    List.empty => false,
+    List.cons c rest =>
+      let t := String.trim c in
+      let strong :=
+        if String.starts_with "W/" t
+        then String.trim (String.slice t 2 (I64.sub (String.length t) 2))
+        else t in
+      if String.beq strong etag then true else Static.etag_in_list rest etag
+  }
 
 /// Build the response for an existing file. `If-None-Match` wins over a
 /// range; an unsatisfiable range is 416 with `Content-Range: bytes */len`.
@@ -285,7 +354,7 @@ pub def Static.respond (cfg : StaticConfig) (path : String) (req : Request) (byt
   let headers := Static.response_headers cfg path etag in
   match Headers.get "if-none-match" req.headers {
     Option.some inm =>
-      if String.beq inm etag
+      if Static.etag_matches inm etag
       then Static.not_modified_response etag
       else Static.body_response headers req len bytes,
     Option.none => Static.body_response headers req len bytes
