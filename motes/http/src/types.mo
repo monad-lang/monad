@@ -12,7 +12,7 @@ use std::stream {Stream, StreamError, FdStream}
 // ── Method ──────────────────────────────────────────────────────────────
 // Variants mirror RFC 9110 §9.
 
-type Method {
+pub type Method {
   GET,
   HEAD,
   POST,
@@ -27,7 +27,7 @@ open Method { GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH }
 
 // ── HttpVersion ─────────────────────────────────────────────────────────
 
-type HttpVersion {
+pub type HttpVersion {
   http1_0,
   http1_1
 }
@@ -38,40 +38,40 @@ open HttpVersion { http1_0, http1_1 }
 // avoided; users write `Status.ok`, `Status.not_found`, etc. `Response.status`
 // holds a raw `U16`, so these are plain `U16` values, not a distinct type.
 
-def Status.ok : U16 := 200u16
-def Status.created : U16 := 201u16
-def Status.accepted : U16 := 202u16
-def Status.no_content : U16 := 204u16
-def Status.moved_permanently : U16 := 301u16
-def Status.found : U16 := 302u16
-def Status.see_other : U16 := 303u16
-def Status.not_modified : U16 := 304u16
-def Status.temporary_redirect : U16 := 307u16
-def Status.permanent_redirect : U16 := 308u16
-def Status.bad_request : U16 := 400u16
-def Status.unauthorized : U16 := 401u16
-def Status.forbidden : U16 := 403u16
-def Status.not_found : U16 := 404u16
-def Status.method_not_allowed : U16 := 405u16
-def Status.conflict : U16 := 409u16
-def Status.internal_server_error : U16 := 500u16
-def Status.bad_gateway : U16 := 502u16
-def Status.service_unavailable : U16 := 503u16
+pub def Status.ok : U16 := 200u16
+pub def Status.created : U16 := 201u16
+pub def Status.accepted : U16 := 202u16
+pub def Status.no_content : U16 := 204u16
+pub def Status.moved_permanently : U16 := 301u16
+pub def Status.found : U16 := 302u16
+pub def Status.see_other : U16 := 303u16
+pub def Status.not_modified : U16 := 304u16
+pub def Status.temporary_redirect : U16 := 307u16
+pub def Status.permanent_redirect : U16 := 308u16
+pub def Status.bad_request : U16 := 400u16
+pub def Status.unauthorized : U16 := 401u16
+pub def Status.forbidden : U16 := 403u16
+pub def Status.not_found : U16 := 404u16
+pub def Status.method_not_allowed : U16 := 405u16
+pub def Status.conflict : U16 := 409u16
+pub def Status.internal_server_error : U16 := 500u16
+pub def Status.bad_gateway : U16 := 502u16
+pub def Status.service_unavailable : U16 := 503u16
 
 // ── Headers ─────────────────────────────────────────────────────────────
 // A list of key/value pairs with case-insensitive key lookup. Keys are
 // lowercased on insert (`Headers.set`/`Headers.add`), so lookups are a plain
 // `List` scan against an already-lowercased stored key.
 
-type Headers {
+pub type Headers {
   headers (pairs : List (Pair String String))
 }
 open Headers { headers }
 
-def Headers.empty : Headers :=
+pub def Headers.empty : Headers :=
   Headers.headers List.empty
 
-def Headers.get (key : String) (h : Headers) : Option String :=
+pub def Headers.get (key : String) (h : Headers) : Option String :=
   let lk : String := String.to_lowercase key in
   match h {
     Headers.headers pairs => headers_lookup lk pairs
@@ -89,7 +89,7 @@ def headers_lookup (lk : String) (pairs : List (Pair String String)) : Option St
       }
   }
 
-def Headers.set (key : String) (val : String) (h : Headers) : Headers :=
+pub def Headers.set (key : String) (val : String) (h : Headers) : Headers :=
   let lk : String := String.to_lowercase key in
   match h {
     Headers.headers pairs =>
@@ -108,20 +108,20 @@ def headers_remove (lk : String) (pairs : List (Pair String String)) : List (Pai
       }
   }
 
-def Headers.add (key : String) (val : String) (h : Headers) : Headers :=
+pub def Headers.add (key : String) (val : String) (h : Headers) : Headers :=
   let lk : String := String.to_lowercase key in
   match h {
     Headers.headers pairs => Headers.headers (List.cons (Pair.pair lk val) pairs)
   }
 
 /// Drop every value stored under `key`. Absent is not an error.
-def Headers.remove (key : String) (h : Headers) : Headers :=
+pub def Headers.remove (key : String) (h : Headers) : Headers :=
   let lk : String := String.to_lowercase key in
   match h {
     Headers.headers pairs => Headers.headers (headers_remove lk pairs)
   }
 
-def Headers.is_empty (h : Headers) : Bool :=
+pub def Headers.is_empty (h : Headers) : Bool :=
   match h {
     Headers.headers pairs => List.is_empty pairs
   }
@@ -133,7 +133,7 @@ def Headers.is_empty (h : Headers) : Bool :=
 /// is the header where a duplicate matters -- two disagreeing values are a
 /// request-smuggling shape, not a precedence question -- so framing needs to
 /// see all of them.
-def Headers.get_all (key : String) (h : Headers) : List String :=
+pub def Headers.get_all (key : String) (h : Headers) : List String :=
   let lk : String := String.to_lowercase key in
   match h {
     Headers.headers pairs => headers_lookup_all lk pairs
@@ -154,12 +154,12 @@ def headers_lookup_all (lk : String) (pairs : List (Pair String String)) : List 
 // ── Uri ─────────────────────────────────────────────────────────────────
 // Structured URI. Built by the parser (uri.mo), never hand-constructed.
 
-type Uri {
+pub type Uri {
   uri (scheme : String) (userinfo : Option String) (host : String) (port : Option U16) (path : String) (query : Option String) (fragment : Option String)
 }
 open Uri { uri }
 
-def Uri.host (u : Uri) : String :=
+pub def Uri.host (u : Uri) : String :=
   match u {
     Uri.uri _ _ h _ _ _ _ => h
   }
@@ -170,7 +170,7 @@ def Uri.host (u : Uri) : String :=
 // of a serialization dependency). Callers pass `Body.bytes` with already-
 // encoded JSON and set `Content-Type` themselves.
 
-type Body {
+pub type Body {
   empty,
   bytes (data : List U8),
   text (data : String),
@@ -179,7 +179,7 @@ type Body {
 }
 open Body { empty, bytes, text, stream, form }
 
-def Body.is_empty (b : Body) : Bool :=
+pub def Body.is_empty (b : Body) : Bool :=
   match b {
     Body.empty => true,
     Body.bytes _ => false,
@@ -188,7 +188,7 @@ def Body.is_empty (b : Body) : Bool :=
     Body.form _ => false
   }
 
-def Body.is_text (b : Body) (s : String) : Bool :=
+pub def Body.is_text (b : Body) (s : String) : Bool :=
   match b {
     Body.text data => String.beq data s,
     Body.empty => false,
@@ -210,7 +210,7 @@ def Body.is_text (b : Body) (s : String) : Bool :=
 // a `ByteBuf` the caller frees, a zero-length one at end of stream; a
 // write writes the whole buffer, which stays the caller's to free.
 
-type Transport {
+pub type Transport {
   plain (s : FdStream),
   secure (read : I64 -> IO (Result StreamError ByteBuf))
          (write : ByteBuf -> IO (Result StreamError I64))
@@ -291,7 +291,7 @@ def Transport.wrote (r : Result StreamError I64) : Result String U64 :=
 // terminated by a zero chunk, so the end is knowable in-stream without
 // either a length or a close.
 
-type Framing {
+pub type Framing {
   content_length (len : I64),
   chunked,
   until_eof,
@@ -301,7 +301,7 @@ open Framing { content_length, chunked, until_eof, no_body }
 
 // ── Request / Response ──────────────────────────────────────────────────
 
-struct Request {
+pub struct Request {
   method : Method,
   uri : Uri,
   headers : Headers,
@@ -310,7 +310,7 @@ struct Request {
   params : List (Pair String String) := List.empty
 }
 
-struct Response {
+pub struct Response {
   status : U16,
   headers : Headers,
   version : HttpVersion,
@@ -318,11 +318,11 @@ struct Response {
 }
 
 /// Convenience constructor: a GET request with empty headers, HTTP/1.1, no body.
-def Request.get (uri : Uri) : Request :=
+pub def Request.get (uri : Uri) : Request :=
   { method := Method.GET, uri := uri, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
 
 /// Convenience constructor: a 200 response with a text body and empty headers.
-def Response.ok_text (s : String) : Response :=
+pub def Response.ok_text (s : String) : Response :=
   { status := Status.ok, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text s }
 
 // ── Instances ───────────────────────────────────────────────────────────

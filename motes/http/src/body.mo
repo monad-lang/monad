@@ -17,9 +17,12 @@
 /// is here is what a *body* means: its content type, its form encoding, and the
 /// multipart grammar.
 
-use http::strings {Strings.list_drop_prefix, Strings.list_starts_with}
+use http::strings {
+  Strings.list_drop_prefix, Strings.list_starts_with, Strings.split_at_byte,
+  Strings.split_on,
+}
 use lib::types {Body, Headers}
-use lib::uri {}
+use lib::uri {Uri.format_query, Uri.percent_decode}
 use http::wire {
   Wire.body_bytes, Wire.content_length_of, Wire.drop_leading_space,
   Wire.parse_one_header, Wire.split_lines, Wire.trim_trailing_crlf,
@@ -29,7 +32,7 @@ use http::wire {
 
 /// Default Content-Type per `Body` variant.
 /// `stream` has no default — the caller must set `Content-Type` explicitly.
-def Body.content_type (b : Body) : String :=
+pub def Body.content_type (b : Body) : String :=
   match b {
     Body.empty => "",
     Body.text _ => "text/plain; charset=utf-8",
@@ -40,20 +43,146 @@ def Body.content_type (b : Body) : String :=
 
 // ── body construction helpers ───────────────────────────────────────────
 
-def Body.from_bytes (data : List U8) : Body :=
+pub def Body.from_bytes (data : List U8) : Body :=
   if List.is_empty data
   then Body.empty
   else Body.bytes data
 
-def Body.from_text (s : String) : Body :=
+pub def Body.from_text (s : String) : Body :=
   if String.is_empty s
   then Body.empty
   else Body.text s
 
-def Body.from_form (fields : List (Pair String String)) : Body :=
+pub def Body.from_form (fields : List (Pair String String)) : Body :=
   if List.is_empty fields
   then Body.empty
   else Body.form fields
+
+// ── form data ───────────────────────────────────────────────────────────
+//
+// A submitted form is a transport-level concern: the caller has a
+// `Request`, and wants fields or parts without re-implementing content-type
+// parsing. `parse_form` dispatches on the media type; `parse_urlencoded`
+// and `parse_multipart_of` do the two encodings. Duplicate field names are
+// preserved in order (a browser may submit the same name twice), and a
+// malformed escape is an error rather than a silently garbled value.
+
+/// The media type of the request's `Content-Type`, lowercased and with its
+/// parameters removed. `""` when the header is absent.
+pub def Body.media_type (headers : Headers) : String :=
+  match Headers.get "content-type" headers {
+    Option.none => "",
+    Option.some ct => String.to_lowercase (String.trim (String.from_list (Body.take_until_semi (String.to_list ct))))
+  }
+
+/// The `boundary=` parameter of a multipart `Content-Type`. Quoted and bare
+/// forms are both accepted; an absent or empty boundary is an error.
+pub def Body.boundary_of (headers : Headers) : Result String String :=
+  match Headers.get "content-type" headers {
+    Option.none => Result.err "missing Content-Type",
+    Option.some ct =>
+      let b := Body.extract_param "boundary" ct in
+      if String.is_empty b
+      then Result.err "multipart boundary missing"
+      else Result.ok b
+  }
+
+/// Decode an `application/x-www-form-urlencoded` body. `+` means space and
+/// each key/value is percent-decoded. Duplicate keys are kept, in order.
+pub def Body.parse_urlencoded (s : String) : Result String (List (Pair String String)) :=
+  if String.is_empty s
+  then Result.ok List.empty
+  else Body.parse_urlencoded_entries (Strings.split_on "&" s)
+
+#[terminating]
+def Body.parse_urlencoded_entries (entries : List String) : Result String (List (Pair String String)) :=
+  match entries {
+    List.empty => Result.ok List.empty,
+    List.cons e rest =>
+      if String.is_empty e
+      then Body.parse_urlencoded_entries rest
+      else
+        match Body.parse_urlencoded_pair e {
+          Result.err err => Result.err err,
+          Result.ok pair =>
+            match Body.parse_urlencoded_entries rest {
+              Result.err err => Result.err err,
+              Result.ok pairs => Result.ok (List.cons pair pairs)
+            }
+        }
+  }
+
+def Body.parse_urlencoded_pair (e : String) : Result String (Pair String String) :=
+  match Strings.split_at_byte 61u8 (String.to_list e) {
+    Pair.pair k_bytes v_bytes =>
+      match Body.form_decode (String.from_list k_bytes) {
+        Result.err err => Result.err err,
+        Result.ok k =>
+          match Body.form_decode (String.from_list v_bytes) {
+            Result.err err => Result.err err,
+            Result.ok v => Result.ok (Pair.pair k v)
+          }
+      }
+  }
+
+/// `+` -> space, then percent-decode. An invalid escape is an error.
+def Body.form_decode (s : String) : Result String String :=
+  Uri.percent_decode (Body.plus_to_space s)
+
+def Body.plus_to_space (s : String) : String :=
+  String.from_list (Body.plus_to_space_go (String.to_list s))
+
+#[terminating]
+def Body.plus_to_space_go (bytes : List U8) : List U8 :=
+  match bytes {
+    List.empty => List.empty,
+    List.cons b rest =>
+      if U8.beq b 43u8
+      then List.cons 32u8 (Body.plus_to_space_go rest)
+      else List.cons b (Body.plus_to_space_go rest)
+  }
+
+/// The raw bytes of a body, for the form parsers. A stream cannot be
+/// decoded here; the caller must drain it first (the IO counterpart).
+def Body.bytes_content (b : Body) : Result String (List U8) :=
+  match b {
+    Body.empty => Result.ok List.empty,
+    Body.bytes data => Result.ok data,
+    Body.text s => Result.ok (String.to_list s),
+    Body.form fields => Result.ok (String.to_list (Uri.format_query fields)),
+    Body.stream _ => Result.err "form body is a stream"
+  }
+
+/// Dispatch on the request's media type and decode the body. Wrong media
+/// types are errors; an empty body is an empty field list.
+pub def Body.parse_form (headers : Headers) (body : Body) : Result String (List (Pair String String)) :=
+  let mt := Body.media_type headers in
+  if String.is_empty mt
+  then Result.err "missing Content-Type"
+  else if String.beq mt "application/x-www-form-urlencoded"
+  then
+    match Body.bytes_content body {
+      Result.err e => Result.err e,
+      Result.ok bytes => Body.parse_urlencoded (String.from_list bytes)
+    }
+  else Result.err (String.concat "not a form body: " mt)
+
+/// Dispatch on the request's media type and decode a multipart body.
+pub def Body.parse_multipart_of (headers : Headers) (body : Body) : Result String (List MultipartPart) :=
+  let mt := Body.media_type headers in
+  if String.is_empty mt
+  then Result.err "missing Content-Type"
+  else if String.beq mt "multipart/form-data"
+  then
+    match Body.boundary_of headers {
+      Result.err e => Result.err e,
+      Result.ok boundary =>
+        match Body.bytes_content body {
+          Result.err e => Result.err e,
+          Result.ok bytes => Body.parse_multipart boundary bytes
+        }
+    }
+  else Result.err (String.concat "not a multipart body: " mt)
 
 // ── body to bytes (pure projection) ─────────────────────────────────────
 
@@ -63,7 +192,7 @@ def Body.from_form (fields : List (Pair String String)) : Body :=
 /// goes through and it refuses a `Body.stream`; the projection renders one as
 /// zero bytes for callers that only want to look at a body they know is not a
 /// stream (`Body.length` below, and the tests).
-def Body.to_bytes_pure (b : Body) : List U8 :=
+pub def Body.to_bytes_pure (b : Body) : List U8 :=
   match Wire.body_bytes b {
     Result.ok bytes => bytes,
     Result.err _ => List.empty
@@ -74,7 +203,7 @@ def Body.to_bytes_pure (b : Body) : List U8 :=
 /// The byte length of a `Body`, projected the same way as `Body.to_bytes_pure`.
 /// `Wire.content_length_of` is the version framing uses, and it refuses a
 /// stream rather than declaring it zero bytes long.
-def Body.length (b : Body) : I64 :=
+pub def Body.length (b : Body) : I64 :=
   match Wire.content_length_of b {
     Result.ok len => len,
     Result.err _ => 0
@@ -99,14 +228,34 @@ def Body.length (b : Body) : I64 :=
 // returns a list of `MultipartPart` records. The final `--BOUNDARY--`
 // delimiter terminates the body; trailing data after it is ignored.
 
-type MultipartPart {
+pub type MultipartPart {
   part (name : String) (filename : Option String) (headers : Headers) (data : List U8)
 }
 open MultipartPart { part }
 
+pub def MultipartPart.field_name (p : MultipartPart) : String :=
+  match p {
+    MultipartPart.part name _ _ _ => name
+  }
+
+pub def MultipartPart.file_name (p : MultipartPart) : Option String :=
+  match p {
+    MultipartPart.part _ filename _ _ => filename
+  }
+
+pub def MultipartPart.content_type (p : MultipartPart) : Option String :=
+  match p {
+    MultipartPart.part _ _ hs _ => Headers.get "content-type" hs
+  }
+
+pub def MultipartPart.bytes (p : MultipartPart) : List U8 :=
+  match p {
+    MultipartPart.part _ _ _ data => data
+  }
+
 /// Parse a `multipart/form-data` body. `boundary` is the boundary string
 /// (without the leading `--`). Returns the parts or an error message.
-def Body.parse_multipart (boundary : String) (body : List U8) : Result String (List MultipartPart) :=
+pub def Body.parse_multipart (boundary : String) (body : List U8) : Result String (List MultipartPart) :=
   let delim := String.to_list (String.concat "--" boundary) in
   match Body.find_delim delim body {
     Option.none => Result.err "multipart boundary not found",

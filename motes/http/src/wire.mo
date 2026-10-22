@@ -132,7 +132,7 @@ def Wire.content_length_of (b : Body) : Result String I64 :=
 // both -- and it is the caller that decides what to do about it (the server
 // answers 500, the client returns the error).
 
-def Wire.format_request (req : Request) : Result String (List U8) :=
+pub def Wire.format_request (req : Request) : Result String (List U8) :=
   match Wire.content_length_of req.body {
     Result.err e => Result.err e,
     Result.ok len => Wire.format_request_at req len
@@ -172,7 +172,7 @@ def Wire.add_content_length (h : Headers) (len : I64) : Headers :=
 
 // ── format response ─────────────────────────────────────────────────────
 
-def Wire.format_response (res : Response) : Result String (List U8) :=
+pub def Wire.format_response (res : Response) : Result String (List U8) :=
   match Wire.content_length_of res.body {
     Result.err e => Result.err e,
     Result.ok len => Wire.format_response_at res len
@@ -220,7 +220,7 @@ def Wire.split_lines_go (bytes : List U8) (acc : List U8) : List (List U8) :=
 
 /// Find the blank line (CRLFCRLF) that separates headers from body. Returns
 /// the byte offset of the body start, or none if not found.
-def Wire.find_body_start (bytes : List U8) : Option I64 :=
+pub def Wire.find_body_start (bytes : List U8) : Option I64 :=
   Wire.find_body_start_go bytes 0i64
 
 #[terminating]
@@ -254,7 +254,7 @@ def Wire.find_body_start_go (bytes : List U8) (idx : I64) : Option I64 :=
       else Wire.find_body_start_go rest (I64.add idx 1i64)
   }
 
-def Wire.take_bytes (n : I64) (bytes : List U8) : List U8 :=
+pub def Wire.take_bytes (n : I64) (bytes : List U8) : List U8 :=
   if I64.beq n 0
   then List.empty
   else
@@ -436,7 +436,7 @@ def Wire.chunk_size_overflows (acc : I64) (digit : I64) : Bool :=
 /// decoded (a size line that is not hex, a data chunk not CRLF-terminated);
 /// `ok some` carries the number of bytes the body spans and the decoded
 /// data, trailers excluded.
-def Wire.decode_chunked (bytes : List U8) : Result String (Option (Pair I64 (List U8))) :=
+pub def Wire.decode_chunked (bytes : List U8) : Result String (Option (Pair I64 (List U8))) :=
   Wire.decode_chunk_size_line bytes 0i64 List.empty
 
 /// Read the next chunk's size line (up to its CRLF) and dispatch on the
@@ -525,7 +525,7 @@ def Wire.decode_chunk_trailers (rest : List U8) (offset : I64) (acc : List U8) :
 /// (possibly empty, also on the done path -- a step can decode data and then
 /// meet the terminal chunk), `pending'` the bytes the next step starts from.
 /// `err` for a body that cannot be decoded at all.
-def Wire.chunk_step (pending : List U8) (incoming : List U8) : Result String (Pair (Pair Bool (List U8)) (List U8)) :=
+pub def Wire.chunk_step (pending : List U8) (incoming : List U8) : Result String (Pair (Pair Bool (List U8)) (List U8)) :=
   Wire.chunk_step_go (List.append pending incoming) List.empty
 
 #[terminating]
@@ -579,7 +579,7 @@ def Wire.chunk_step_data (size : I64) (rest : List U8) (out : List U8) : Result 
 /// `HEAD` answers the request with the headers the `GET` would have produced,
 /// `Content-Length` included and no body behind it; 1xx, 204 and 304 are the
 /// same shape for their own reasons.
-def Wire.response_has_body (method : Method) (status : U16) : Bool :=
+pub def Wire.response_has_body (method : Method) (status : U16) : Bool :=
   if method == Method.HEAD
   then false
   else if U16.gt 200u16 status
@@ -621,7 +621,7 @@ def Wire.chunked_declared (headers : Headers) : Option Bool :=
 /// (`Option.some true => ...`) on a cross-module call result misdispatch
 /// in the compiled backend, and this is the decision that picks whether a
 /// body is decoded at all.
-def Wire.response_framing (method : Method) (status : U16) (headers : Headers) : Result String Framing :=
+pub def Wire.response_framing (method : Method) (status : U16) (headers : Headers) : Result String Framing :=
   if Bool.not (Wire.response_has_body method status)
   then Result.ok Framing.no_body
   else
@@ -692,11 +692,11 @@ def Wire.body_at (body_start : I64) (framing : Framing) (bytes : List U8) : Resu
       else Result.ok (Wire.body_of (Wire.take_bytes n (Strings.drop_bytes body_start bytes)))
   }
 
-def Wire.body_of (data : List U8) : Body :=
+pub def Wire.body_of (data : List U8) : Body :=
   if List.is_empty data then Body.empty else Body.bytes data
 
 /// The headers of a message whose body starts at `body_start`.
-def Wire.head_headers (body_start : I64) (bytes : List U8) : Result String Headers :=
+pub def Wire.head_headers (body_start : I64) (bytes : List U8) : Result String Headers :=
   let head := Wire.take_bytes body_start bytes in
   match Wire.split_lines head {
     List.empty => Result.err "empty message",
@@ -704,7 +704,7 @@ def Wire.head_headers (body_start : I64) (bytes : List U8) : Result String Heade
   }
 
 /// The status code of the response whose body starts at `body_start`.
-def Wire.head_status (body_start : I64) (bytes : List U8) : Result String U16 :=
+pub def Wire.head_status (body_start : I64) (bytes : List U8) : Result String U16 :=
   let head := Wire.take_bytes body_start bytes in
   match Wire.split_lines head {
     List.empty => Result.err "empty response",
@@ -724,7 +724,7 @@ def Wire.head_status (body_start : I64) (bytes : List U8) : Result String U16 :=
 /// Frame the first request in `bytes`: exactly one message, or `ok none` when
 /// it is not all here yet. `err` means the head cannot be trusted, so the
 /// caller must not guess a length from it.
-def Wire.frame_request (bytes : List U8) : Result String (Option I64) :=
+pub def Wire.frame_request (bytes : List U8) : Result String (Option I64) :=
   match Wire.find_body_start bytes {
     Option.none => Result.ok Option.none,
     Option.some body_start =>
@@ -739,7 +739,7 @@ def Wire.frame_request (bytes : List U8) : Result String (Option I64) :=
   }
 
 /// Frame the first response in `bytes`, for a request made with `method`.
-def Wire.frame_response (bytes : List U8) (method : Method) : Result String (Option I64) :=
+pub def Wire.frame_response (bytes : List U8) (method : Method) : Result String (Option I64) :=
   match Wire.find_body_start bytes {
     Option.none => Result.ok Option.none,
     Option.some body_start =>
@@ -759,7 +759,7 @@ def Wire.frame_response (bytes : List U8) (method : Method) : Result String (Opt
 
 // ── parse request ──────────────────────────────────────────────────────
 
-def Wire.parse_request (bytes : List U8) : Result String Request :=
+pub def Wire.parse_request (bytes : List U8) : Result String Request :=
   match Wire.find_body_start bytes {
     Option.none => Result.err "no header/body separator found",
     Option.some body_start => Wire.parse_request_after_headers body_start bytes
@@ -840,10 +840,10 @@ def Wire.target_to_uri (target : String) : Uri :=
 /// assumes. A caller that asked with `HEAD` -- whose response carries the
 /// `Content-Length` of the body it is *not* sending -- must use
 /// `Wire.parse_response_with_method`, or the body slice will not be there.
-def Wire.parse_response (bytes : List U8) : Result String Response :=
+pub def Wire.parse_response (bytes : List U8) : Result String Response :=
   Wire.parse_response_with_method bytes Method.GET
 
-def Wire.parse_response_with_method (bytes : List U8) (method : Method) : Result String Response :=
+pub def Wire.parse_response_with_method (bytes : List U8) (method : Method) : Result String Response :=
   match Wire.find_body_start bytes {
     Option.none => Result.err "no header/body separator found",
     Option.some body_start => Wire.parse_response_after_headers method body_start bytes

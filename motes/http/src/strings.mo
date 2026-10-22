@@ -10,7 +10,7 @@ type Strings {}
 
 // ── split_on ────────────────────────────────────────────────────────────
 
-def Strings.split_on (delim : String) (s : String) : List String :=
+pub def Strings.split_on (delim : String) (s : String) : List String :=
   Strings.split_on_bytes (String.to_list delim) (String.to_list s)
 
 def Strings.split_on_bytes (delim : List U8) (input : List U8) : List String :=
@@ -34,7 +34,7 @@ def Strings.split_on_go (delim : List U8) (input : List U8) (acc : List U8) : Li
 
 // ── list slicing ───────────────────────────────────────────────────────
 
-def Strings.list_starts_with (prefix : List U8) (xs : List U8) : Bool :=
+pub def Strings.list_starts_with (prefix : List U8) (xs : List U8) : Bool :=
   match prefix {
     List.empty => true,
     List.cons p ps =>
@@ -47,7 +47,7 @@ def Strings.list_starts_with (prefix : List U8) (xs : List U8) : Bool :=
       }
   }
 
-def Strings.list_drop_prefix (prefix : List U8) (xs : List U8) : List U8 :=
+pub def Strings.list_drop_prefix (prefix : List U8) (xs : List U8) : List U8 :=
   match prefix {
     List.empty => xs,
     List.cons _ ps =>
@@ -58,7 +58,7 @@ def Strings.list_drop_prefix (prefix : List U8) (xs : List U8) : List U8 :=
   }
 
 #[terminating]
-def Strings.drop_bytes (n : I64) (xs : List U8) : List U8 :=
+pub def Strings.drop_bytes (n : I64) (xs : List U8) : List U8 :=
   if I64.beq n 0
   then xs
   else
@@ -235,7 +235,7 @@ def Strings.base64_byte3 (v3 : U8) (v4 : U8) : U8 :=
   U8.add (U8.mul (Strings.u8_mod v3 4u8) 64u8) v4
 
 /// Decode a whole base64 string to the bytes it encodes.
-def Strings.base64_decode (s : String) : Result String (List U8) :=
+pub def Strings.base64_decode (s : String) : Result String (List U8) :=
   Strings.base64_decode_go (String.to_list s) List.empty
 
 /// Walk the input 4 characters at a time, collecting decoded bytes in

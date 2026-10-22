@@ -27,17 +27,17 @@ use http::strings {Strings.drop_bytes, Strings.split_at_byte_opt}
 use http::wire {Wire.take_bytes}
 use std::list {List.intercalate}
 
-struct SseState { buf : List U8 }
+pub struct SseState { buf : List U8 }
 
-struct SseEvent { event : String, data : String }
+pub struct SseEvent { event : String, data : String }
 
 /// A state with nothing buffered.
-def Sse.init : SseState :=
+pub def Sse.init : SseState :=
   { buf := List.empty }
 
 /// Feed `bytes` into the state machine: the new state and every event the
 /// push completed, in the order the wire dispatched them.
-def Sse.push (st : SseState) (bytes : List U8) : Pair SseState (List SseEvent) :=
+pub def Sse.push (st : SseState) (bytes : List U8) : Pair SseState (List SseEvent) :=
   Sse.push_go (List.append st.buf bytes) List.empty
 
 #[terminating]

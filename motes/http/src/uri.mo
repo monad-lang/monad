@@ -16,7 +16,7 @@ use lib::types {Uri}
 
 // ── percent-encoding (RFC 3986) ─────────────────────────────────────────
 
-def Uri.percent_encode (s : String) : String :=
+pub def Uri.percent_encode (s : String) : String :=
   String.from_list (Uri.pct_encode_bytes (String.to_list s))
 
 def Uri.pct_encode_bytes (bytes : List U8) : List U8 :=
@@ -33,7 +33,7 @@ def Uri.pct_encode_byte (b : U8) : List U8 :=
   let lo := U8.sub b (U8.mul hi 16u8) in
   List.cons 37u8 (List.cons (Strings.hex_char_of_nibble hi) (List.singleton (Strings.hex_char_of_nibble lo)))
 
-def Uri.percent_decode (s : String) : Result String String :=
+pub def Uri.percent_decode (s : String) : Result String String :=
   Uri.pct_decode_go (String.to_list s) List.empty
 
 #[terminating]
@@ -68,7 +68,7 @@ def Uri.pct_decode_pct (rest : List U8) : Result String (Pair U8 (List U8)) :=
   }
 
 /// Decode `s`, returning `fallback` (the raw string) on malformed input.
-def Uri.percent_decode_or (fallback : String) (s : String) : String :=
+pub def Uri.percent_decode_or (fallback : String) (s : String) : String :=
   match Uri.percent_decode s {
     Result.ok r => r,
     Result.err _ => fallback
@@ -76,7 +76,7 @@ def Uri.percent_decode_or (fallback : String) (s : String) : String :=
 
 // ── query parsing / formatting ──────────────────────────────────────────
 
-def Uri.parse_query (q : String) : List (Pair String String) :=
+pub def Uri.parse_query (q : String) : List (Pair String String) :=
   Uri.parse_query_entries (Strings.split_on "&" q)
 
 def Uri.parse_query_entries (entries : List String) : List (Pair String String) :=
@@ -93,7 +93,7 @@ def Uri.parse_one_query (e : String) : Pair String String :=
       Pair.pair k v
   }
 
-def Uri.format_query (pairs : List (Pair String String)) : String :=
+pub def Uri.format_query (pairs : List (Pair String String)) : String :=
   match pairs {
     List.empty => "",
     List.cons head rest =>
@@ -109,7 +109,7 @@ def Uri.format_query (pairs : List (Pair String String)) : String :=
 
 // ── formatting ──────────────────────────────────────────────────────────
 
-def Uri.format (u : Uri) : String :=
+pub def Uri.format (u : Uri) : String :=
   match u {
     Uri.uri scheme userinfo host port path query fragment =>
       let s1 := Uri.format_scheme_authority scheme userinfo host port in
@@ -173,7 +173,7 @@ def Uri.format_authority (userinfo : Option String) (host : String) (port : Opti
 
 // ── parsing ─────────────────────────────────────────────────────────────
 
-def Uri.parse (s : String) : Result String Uri :=
+pub def Uri.parse (s : String) : Result String Uri :=
   Uri.parse_bytes (String.to_list s)
 
 def Uri.parse_bytes (bytes : List U8) : Result String Uri :=
@@ -275,7 +275,7 @@ def Uri.parse_port (bytes : List U8) : Result String U16 :=
 // survive verbatim). Removing them is a self-contained addition in
 // `Uri.resolve_path`; until then callers that need them must normalise.
 
-def Uri.resolve (base : Uri) (ref : Uri) : Uri :=
+pub def Uri.resolve (base : Uri) (ref : Uri) : Uri :=
   match ref {
     Uri.uri rscheme ruserinfo rhost rport rpath rquery rfragment =>
       if Bool.not (String.is_empty rscheme)
@@ -362,7 +362,7 @@ def Uri.effective_port (u : Uri) : U16 :=
 /// The userinfo is deliberately not part of it: `http://u@a` and `http://a`
 /// are the same origin, which is exactly why credentials in a redirect must
 /// not be handed over on an origin check that *looks* different.
-def Uri.same_origin (a : Uri) (b : Uri) : Bool :=
+pub def Uri.same_origin (a : Uri) (b : Uri) : Bool :=
   Bool.and
     (String.beq (String.to_lowercase a.scheme) (String.to_lowercase b.scheme))
     (Bool.and
