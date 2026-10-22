@@ -370,7 +370,7 @@ pub def IO.write_stderr (s : String) : IO Unit := IO.write_to FdStream.stderr s
 // so it must not be something the evaluator can duplicate, reorder or
 // share. `std/bench.mo`'s `Bench.now` is the name callers use.
 #[native current_time]
-def IO.current_time : IO I64
+pub def IO.current_time : IO I64
 
 // Nanoseconds since the Unix epoch, from the same system WALL clock as
 // `IO.current_time` above -- same caveats (a backwards clock step can
@@ -385,7 +385,7 @@ def IO.current_time : IO I64
 // done in Monad, by the driver this runner synthesizes
 // (`lang/codegen/test_driver.mo`).
 #[native current_time_nano]
-def IO.current_time_nano : IO I64
+pub def IO.current_time_nano : IO I64
 
 pub def IO.file_exists (path : Path) : IO Bool :=
     IO.file_exists_native (Path.to_string path)

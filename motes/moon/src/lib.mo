@@ -37,3 +37,16 @@ pub use lib::static_files {
 // Form data is decoded in `http`; re-export the request-level helpers so a
 // `moon` handler can import its whole surface from one place.
 pub use http::request {Request.form_fields, Request.multipart, Request.param}
+
+pub use lib::session {
+    Session, Session.get, Session.put, SessionHandle,
+    SessionHandle.get, SessionHandle.put,
+    SessionStore, SessionStore.new, SessionStore.begin, SessionStore.load,
+    SessionStore.commit, SessionStore.rotate, SessionStore.destroy,
+    SessionStore.with_session, SessionStore.middleware,
+}
+
+pub use lib::csrf {
+    Csrf.token, Csrf.verify, Csrf.hidden_field, Csrf.check,
+    Csrf.secret_from_env,
+}

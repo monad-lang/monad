@@ -37,7 +37,7 @@ pub use lib::uri {
 pub use lib::strings {
     Strings.split_on, Strings.split_at_byte, Strings.list_starts_with,
     Strings.list_drop_prefix, Strings.drop_bytes, Strings.base64_decode,
-    Strings.parse_i64,
+    Strings.parse_i64, Strings.ct_eq,
 }
 
 pub use lib::wire {
@@ -59,5 +59,11 @@ pub use lib::body {
 }
 
 pub use lib::request {Request.form_fields, Request.multipart, Request.param}
+
+pub use lib::cookie {
+    SameSite, CookieAttrs, CookieAttrs.default,
+    Cookie.parse, Cookie.parse_headers, Cookie.lookup, Cookie.render,
+    Cookie.set_cookie, Cookie.clear,
+}
 
 pub use lib::sse {SseState, SseEvent, Sse.init, Sse.push}

@@ -436,3 +436,22 @@ def Strings.parse_i64_go (bytes : List U8) (acc : I64) : Option I64 :=
           else Strings.parse_i64_go rest (I64.add (I64.mul acc 10i64) v)
       }
   }
+
+/// Constant-time-ish equality: compares every byte of equal-length strings
+/// without the early exit `String.beq` takes. Lengths are not hidden. Use
+/// this for CSRF tokens and other secret comparisons.
+pub def Strings.ct_eq (a : String) (b : String) : Bool :=
+  if Bool.not (I64.beq (String.length a) (String.length b))
+  then false
+  else Strings.ct_eq_go (String.to_list a) (String.to_list b) true
+
+#[terminating]
+def Strings.ct_eq_go (a : List U8) (b : List U8) (same : Bool) : Bool :=
+  match a {
+    List.empty => same,
+    List.cons x xs =>
+      match b {
+        List.empty => false,
+        List.cons y ys => Strings.ct_eq_go xs ys (Bool.and same (U8.beq x y))
+      }
+  }
