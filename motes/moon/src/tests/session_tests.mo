@@ -120,6 +120,37 @@ def test_middleware_sets_cookie : IO Bool := do {
     Result.err _ => return false,
     Result.ok res =>
       match Headers.get "Set-Cookie" res.headers {
+        Option.none => return false,
+        Option.some sc =>
+          match cookie_id "sid" sc {
+            Option.none => return false,
+            Option.some id => do {
+              let loaded <- SessionStore.load st (req_with_session "sid" id);
+              match loaded {
+                Option.some _ => return true,
+                Option.none => return false
+              }
+            }
+          }
+      }
+  }
+}
+
+/// Rotation invalidates the old id: committing the rotated session must not
+/// leave the pre-rotation id loadable.
+#[test]
+def test_rotate_invalidates_old_id : IO Bool := do {
+  let st <- SessionStore.new "sid" 3600i64;
+  let s <- SessionStore.begin st;
+  let _ <- SessionStore.commit st s;
+  let rotated <- SessionStore.rotate st s;
+  let _ <- SessionStore.commit st rotated;
+  let old <- SessionStore.load st (req_with_session "sid" s.id);
+  let new <- SessionStore.load st (req_with_session "sid" rotated.id);
+  match old {
+    Option.some _ => return false,
+    Option.none =>
+      match new {
         Option.some _ => return true,
         Option.none => return false
       }

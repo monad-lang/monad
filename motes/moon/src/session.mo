@@ -172,8 +172,11 @@ def Session.take (n : I64) (sessions : List Session) : List Session :=
       List.cons s rest => List.cons s (Session.take (I64.sub n 1) rest)
     }
 
-/// New id and a fresh expiry. Call after a successful login.
+/// New id and a fresh expiry. Call after a successful login. The old id is
+/// removed from the store here, in the same step: returning a new id while
+/// leaving the old one live would not defeat fixation.
 pub def SessionStore.rotate (st : SessionStore) (s : Session) : IO Session := do {
+  let _ <- Ref.update st.sessions (fn (sessions : List Session) => Session.remove_id s.id sessions);
   let id <- SessionStore.new_id st;
   let now <- IO.current_time_nano;
   let rotated : Session :=
