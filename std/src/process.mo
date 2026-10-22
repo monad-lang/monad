@@ -1,7 +1,11 @@
 // IO is ambient (init/io.mo, always a loaded root) -- no `use` needed.
 
 use lib::io {}
-use lib::stream {StreamError, StreamError.is_not_found}
+use lib::stream {
+  FdStream, FdStream.read_line_bounded, PartialLinePolicy, Stream, StreamError,
+  StreamError.is_not_found, stream_result,
+}
+use lib::bytebuf {ByteBuf.free, ByteBuf.of_string}
 open IO {current_time_nano, read_file}
 
 #[native "exec_cmd"]
@@ -22,15 +26,23 @@ pub def process_id : I64
 // native" rule below gives way, for the reason that rule states: the
 // wiring cost buys a capability nothing else here can express.
 //
-// Four natives, not six: the former read/read-stderr and wait/kill
-// twins are merged behind I64 flags -- `proc_read`'s second argument
-// picks the stream, `proc_wait`'s picks plain reap vs
-// SIGKILL-then-reap. The natives return `RawIO _`, the raw payload
-// layer; the `IO.mk` wrap happens HERE, in the pub wrappers -- the
-// same split `IO.pure`/`RawIO.pure` use, so the Rust and C sides stay
-// raw payload producers while every user-facing operation is `IO _`.
-// The wrappers are the public API; the natives are `priv` so no other
-// module can reach past them.
+// Three natives, plus a view: `proc_spawn`, `proc_wait`, and
+// `proc_stream_fd`, which hands out an `FdStream` view of one of the
+// child's three pipes and lets `std/src/stream.mo` do the work -- a
+// write is `Stream.write`, a line is the shared `stream_read_line`
+// reader, and both report the `StreamError` every other stream
+// reports. `proc_wait`'s flag
+// picks plain reap vs SIGKILL-then-reap. The natives return `RawIO _`,
+// the raw payload layer; the `IO.mk` wrap happens HERE, in the pub
+// wrappers -- the same split `IO.pure`/`RawIO.pure` use, so the Rust
+// and C sides stay raw payload producers while every user-facing
+// operation is `IO _`. The wrappers are the public API; the natives
+// are `priv` so no other module can reach past them.
+//
+// `proc_stream_fd` is `priv` and never handed out: a view derived
+// before `proc_wait` names a pipe that call closes, so compiled it is
+// a stale -- possibly recycled -- descriptor. Every `Proc.*` wrapper
+// derives a view on the one call that uses it.
 //
 // `Child` is opaque the way `FdStream` is (std/src/stream.mo): the
 // constructor exists so the checker can see a type; the runtime value
@@ -49,13 +61,22 @@ pub type Child {
   child
 }
 
-/// `proc_read`'s stream flag: 0 = stdout. Named so the wrappers read
-/// as intent rather than as a magic number, and dotted so the
-/// whole-program bare-name table does not gain a `stdout`.
-priv def Proc.stdout_flag : I64 := 0
+/// `proc_stream_fd`'s flag: 0 = the child's stdin (the parent's write
+/// end). Named so the wrappers read as intent rather than as a magic
+/// number, and dotted so the whole-program bare-name table does not
+/// gain a `stdin`.
+priv def Proc.stdin_flag : I64 := 0
 
-/// `proc_read`'s stream flag: 1 = stderr.
-priv def Proc.stderr_flag : I64 := 1
+/// `proc_stream_fd`'s flag: 1 = the child's stdout (the read end).
+priv def Proc.stdout_flag : I64 := 1
+
+/// `proc_stream_fd`'s flag: 2 = the child's stderr (the read end).
+priv def Proc.stderr_flag : I64 := 2
+
+/// The longest line the piped readers accept, in bytes: one mebibyte.
+/// A peer that withholds its newline must fail the read rather than
+/// grow it without limit.
+priv def Proc.max_line : I64 := 1048576
 
 /// `proc_wait`'s kill flag: 0 = plain reap.
 priv def Proc.reap_flag : I64 := 0
@@ -64,31 +85,21 @@ priv def Proc.reap_flag : I64 := 0
 priv def Proc.kill_flag : I64 := 1
 
 /// Fork+exec `cmd args` with all three standard streams piped.
-/// Payload is `Result.err` (with the OS message) rather than a native
-/// failure when the child could not be spawned -- a caller composes
-/// the error through `ResultT` like every other failure here.
+/// Payload is `Result.err (Pair.pair <kind code> <message>)` rather
+/// than a native failure when the child could not be spawned;
+/// `Proc.spawn` decodes it to `StreamError`.
 #[native "proc_spawn"]
-priv def proc_spawn (cmd : String) (args : List String) : RawIO (Result String Child)
+priv def proc_spawn (cmd : String) (args : List String) : RawIO (Result (Pair I64 String) Child)
 
-/// Write `s` to the child's stdin and flush. Payload is `Result.err`
-/// when the child is gone (a dead peer's EPIPE surfaces here -- that
-/// is the signal to stop talking to it), `Result.ok` with the byte
-/// count otherwise.
-#[native "proc_write"]
-priv def proc_write (c : Child) (s : String) : RawIO (Result String U64)
-
-/// One line of the child's chosen stream (`stream`: 0 = stdout, 1 =
-/// stderr) WITHOUT its trailing newline (any `\r` stays -- toolkit's
-/// framing trims it, keeping one definition of "line" per concern).
-/// Payload's `Option.none` is end of stream; a final line truncated by
-/// EOF is DISCARDED rather than half-delivered, because a JSON-RPC
-/// frame without its newline is a truncated message, not a message.
-/// A line is BOUNDED: content beyond 1048576 bytes (one mebibyte) is
-/// `Result.err` -- a peer that withholds its newline must fail the
-/// read rather than grow it without limit. Both backends carry the
-/// same number; the caller should treat the peer as broken.
-#[native "proc_read"]
-priv def proc_read (c : Child) (stream : I64) : RawIO (Result String (Option String))
+/// An `FdStream` view of one of the child's pipes.
+///
+/// `priv` on purpose, and never handed to a caller: after `proc_wait`
+/// the pipes are closed, so a compiled view is a stale -- possibly
+/// recycled -- descriptor. Each wrapper below derives a view for the
+/// one call that uses it. Never `Stream.close` a view: compiled, that
+/// would close the child's pipe.
+#[native "proc_stream_fd"]
+priv def proc_stream_fd (c : Child) (which : I64) : RawIO FdStream
 
 /// Close the pipes, reap the child, and free its slot, returning the
 /// exit status -- or -1 if it died on a signal, `exec_cmd`'s own
@@ -100,33 +111,47 @@ priv def proc_read (c : Child) (stream : I64) : RawIO (Result String (Option Str
 priv def proc_wait (c : Child) (kill : I64) : RawIO I64
 
 /// Fork+exec `cmd args` with all three standard streams piped.
-/// `Result.err` (with the OS message) rather than a native failure
-/// when the child could not be spawned -- a caller composes the error
-/// through `ResultT` like every other failure here.
-pub def Proc.spawn (cmd : String) (args : List String) : IO (Result String Child) :=
-    IO.mk (proc_spawn cmd args)
+/// `Result.err` when the child could not be spawned -- a missing
+/// command is `not_found`, like every other absent thing.
+pub def Proc.spawn (cmd : String) (args : List String) : IO (Result StreamError Child) := do {
+    let r <- IO.mk (proc_spawn cmd args);
+    return (stream_result r)
+}
 
 /// Write `s` to the child's stdin and flush. `Result.err` when the
-/// child is gone (a dead peer's EPIPE surfaces here -- that is the
-/// signal to stop talking to it), `Result.ok` with the byte count
-/// otherwise.
-pub def Proc.write (c : Child) (s : String) : IO (Result String U64) :=
-    IO.mk (proc_write c s)
+/// child is gone (a dead peer's EPIPE arrives as `broken_pipe` -- that
+/// is the signal to stop talking to it), `Result.ok` with the byte
+/// count otherwise.
+pub def Proc.write (c : Child) (s : String) : IO (Result StreamError I64) := do {
+    // Annotated: the self-hosted checker does not infer `FdStream` through
+    // `IO.mk` here, so the `Stream FdStream` instance would not be found.
+    let view : FdStream <- IO.mk (proc_stream_fd c Proc.stdin_flag);
+    let buf <- ByteBuf.of_string s;
+    let r <- Stream.write view buf;
+    let _ <- ByteBuf.free buf;
+    return r
+}
 
 /// One line of the child's stdout WITHOUT its trailing newline (any
 /// `\r` stays -- toolkit's framing trims it, keeping one definition of
 /// "line" per concern). `Option.none` is end of stream; a final line
 /// truncated by EOF is DISCARDED rather than half-delivered, because
 /// a JSON-RPC frame without its newline is a truncated message, not a
-/// message. A line whose content exceeds one mebibyte is `Result.err`
-/// (see `proc_read`'s own contract for the bound).
-pub def Proc.read_line (c : Child) : IO (Result String (Option String)) :=
-    IO.mk (proc_read c Proc.stdout_flag)
+/// message. A line whose content exceeds `Proc.max_line` (one
+/// mebibyte) is `invalid_input` -- a peer that withholds its newline
+/// must fail the read rather than grow it without limit. Treat such a
+/// peer as broken.
+pub def Proc.read_line (c : Child) : IO (Result StreamError (Option String)) := do {
+    let view : FdStream <- IO.mk (proc_stream_fd c Proc.stdout_flag);
+    FdStream.read_line_bounded view Proc.max_line PartialLinePolicy.discard
+}
 
 /// `Proc.read_line`'s contract, over the child's stderr -- the log
 /// stream a server writes while its protocol stream stays clean.
-pub def Proc.read_stderr_line (c : Child) : IO (Result String (Option String)) :=
-    IO.mk (proc_read c Proc.stderr_flag)
+pub def Proc.read_stderr_line (c : Child) : IO (Result StreamError (Option String)) := do {
+    let view : FdStream <- IO.mk (proc_stream_fd c Proc.stderr_flag);
+    FdStream.read_line_bounded view Proc.max_line PartialLinePolicy.discard
+}
 
 /// Close the pipes, reap the child, and return its exit status -- or
 /// -1 if it died on a signal, `exec_cmd`'s own convention. The handle

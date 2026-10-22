@@ -58,6 +58,7 @@ use shuttle::message_types {Content}
 use shuttle::tools::shell_args {ShellArgs}
 use json::json {Json}
 use std::process {Child, Proc.spawn, Proc.read_line, Proc.kill, Proc.wait}
+use std::stream {StreamError}
 
 def tool_err (id : String) (msg : String) : Content := Content.tool_result id msg true
 def tool_ok (id : String) (msg : String) : Content := Content.tool_result id msg false
@@ -96,7 +97,7 @@ pub def shell_run (id : String) (j : Json) : ResultT String IO Content :=
 def shell_spawn (id : String) (command : String) : IO Content := do {
     let spawned <- Proc.spawn "sh" ["-c", "exec 2>&1; " ++ command];
     match spawned {
-        Result.err e => return (tool_err id ("shell: could not spawn sh: " ++ e)),
+        Result.err e => return (tool_err id ("shell: could not spawn sh: " ++ e.message)),
         Result.ok child => shell_read id child 0 "",
     }
 }
@@ -119,9 +120,9 @@ def shell_read (id : String) (c : Child) (count : I64) (acc : String) : IO Conte
 /// bound, or a broken pipe): the child is in an unknown state, so kill+reap
 /// it before reporting. This is the one exit that previously leaked the
 /// child alive.
-def shell_read_err (id : String) (c : Child) (e : String) : IO Content := do {
+def shell_read_err (id : String) (c : Child) (e : StreamError) : IO Content := do {
     let _killed <- Proc.kill c;
-    return (tool_err id ("shell: read failed: " ++ e))
+    return (tool_err id ("shell: read failed: " ++ e.message))
 }
 
 /// EOF ends the loop (wait for the exit status); a line under the line cap

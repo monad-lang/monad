@@ -5527,27 +5527,27 @@ def test_native_i64_family_entries_are_wired : Bool :=
 /// `.mo` wrappers' job (`std/src/process.mo`), the same split
 /// `IO.pure`/`RawIO.pure` use. An exact count is the only way to tell
 /// the two wrap kinds apart in the emitted IR: both call the same
-/// runtime fn and both allocate. `proc_read` is pinned; the other
-/// three share its wrap kind and are pinned, as a group, by
+/// runtime fn and both allocate. `proc_stream_fd` is pinned (it kept
+/// the pin the removed `proc_read` carried); the other two share its
+/// wrap kind and are pinned, as a group, by
 /// `test_native_proc_family_entries_are_wired` below.
 #[test]
-def test_native_proc_read_wraps_raw_io_not_io : Bool :=
-    let text := compile_native_def_fixture_text "Proc.read" "proc_read" in
-    if check_contains text "call i64 @monad_proc_read"
+def test_native_proc_stream_fd_wraps_raw_io_not_io : Bool :=
+    let text := compile_native_def_fixture_text "Proc.stream_fd" "proc_stream_fd" in
+    if check_contains text "call i64 @monad_proc_stream_fd"
     then if I64.beq (check_count text "@alloc_constructor") 1
         then not (check_contains text "@alloc_constructor(i64 0, i64 0)")
         else false
     else false
 
-/// All four proc natives must have a `native_runtime_fn_name` entry --
+/// All three proc natives must have a `native_runtime_fn_name` entry --
 /// without one, a value-position reference compiles to the Unit stub,
 /// silently (the same gap `test_native_i64_family_entries_are_wired`
 /// pins for the `I64` family).
 #[test]
 def test_native_proc_family_entries_are_wired : Bool :=
     native_wrap_is_some (native_attr "proc_spawn")
-        && native_wrap_is_some (native_attr "proc_write")
-        && native_wrap_is_some (native_attr "proc_read")
+        && native_wrap_is_some (native_attr "proc_stream_fd")
         && native_wrap_is_some (native_attr "proc_wait")
 
 /// `Option.some _ => true` -- a presence test without needing a `BEq`

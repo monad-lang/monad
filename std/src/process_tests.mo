@@ -8,7 +8,8 @@
 /// Same mote, so `Proc.first_quote` stays package-private and is still
 /// reachable here -- no API had to be widened to test it.
 
-use lib::process {}
+use lib::process {Child}
+use std::stream {StreamError, StreamErrorKind}
 
 // ─── Tests: shell_quote ───
 
@@ -109,7 +110,7 @@ def pr_some_is (o : Option String) (expected : String) : Bool :=
         Option.none => false
     }
 
-def pr_line_is (l : Result String (Option String)) (expected : String) : Bool :=
+def pr_line_is (l : Result StreamError (Option String)) (expected : String) : Bool :=
     match l {
         Result.ok o => pr_some_is o expected,
         Result.err _ => false
@@ -123,16 +124,16 @@ def pr_none_is (o : Option String) : Bool :=
         Option.some _s => false
     }
 
-def pr_is_eof (l : Result String (Option String)) : Bool :=
+def pr_is_eof (l : Result StreamError (Option String)) : Bool :=
     match l {
         Result.ok o => pr_none_is o,
         Result.err _ => false
     }
 
 /// A write reports the byte count it accepted.
-def pr_wrote (w : Result String U64) (expected : U64) : Bool :=
+def pr_wrote (w : Result StreamError I64) (expected : I64) : Bool :=
     match w {
-        Result.ok n => U64.beq n expected,
+        Result.ok n => I64.beq n expected,
         Result.err _ => false
     }
 
@@ -164,22 +165,50 @@ def test_spawn_cat_roundtrips_a_written_line : IO Bool := do {
             let w <- Proc.write c "hello\n";
             let l <- Proc.read_line c;
             let code <- Proc.wait c;
-            return (pr_wrote w 6u64 && pr_line_is l "hello" && code == 0)
+            return (pr_wrote w 6 && pr_line_is l "hello" && code == 0)
         }
     }
 }
 
-def pr_is_err (w : Result String U64) : Bool :=
-    match w {
-        Result.ok _ => false,
-        Result.err _ => true
+def pr_kind_is_broken_pipe (k : StreamErrorKind) : Bool :=
+    match k {
+        StreamErrorKind.broken_pipe => true,
+        _ => false
     }
 
-/// Writing to a child that has already exited is `Result.err` (EPIPE),
-/// not the death of THIS process by SIGPIPE -- the compiled runtime
-/// ignores SIGPIPE in `main` for exactly this. Reading stdout to its end
-/// first is what makes "already exited" deterministic: `true` closes it
-/// only by exiting.
+def pr_kind_is_invalid_input (k : StreamErrorKind) : Bool :=
+    match k {
+        StreamErrorKind.invalid_input => true,
+        _ => false
+    }
+
+/// A write failed with `broken_pipe` -- the dead peer's EPIPE, the
+/// reason a `Proc.write` reports rather than killing this process.
+def pr_write_is_broken_pipe (w : Result StreamError I64) : Bool :=
+    match w {
+        Result.ok _ => false,
+        Result.err e => pr_kind_is_broken_pipe e.kind
+    }
+
+/// A line read failed at the one-mebibyte bound.
+def pr_read_is_invalid_input (l : Result StreamError (Option String)) : Bool :=
+    match l {
+        Result.ok _ => false,
+        Result.err e => pr_kind_is_invalid_input e.kind
+    }
+
+/// A spawn failed because the command does not exist.
+def pr_spawn_is_not_found (r : Result StreamError Child) : Bool :=
+    match r {
+        Result.ok _ => false,
+        Result.err e => StreamError.is_not_found e
+    }
+
+/// Writing to a child that has already exited is `broken_pipe`, not the
+/// death of THIS process by SIGPIPE -- the compiled runtime ignores
+/// SIGPIPE in `main` for exactly this. Reading stdout to its end first is
+/// what makes "already exited" deterministic: `true` closes it only by
+/// exiting.
 #[test]
 def test_spawn_write_to_an_exited_child_is_an_error_not_a_signal : IO Bool := do {
     let r <- Proc.spawn "true" [];
@@ -189,7 +218,7 @@ def test_spawn_write_to_an_exited_child_is_an_error_not_a_signal : IO Bool := do
             let l <- Proc.read_line c;
             let w <- Proc.write c "hello\n";
             let _code <- Proc.wait c;
-            return (pr_is_eof l && pr_is_err w)
+            return (pr_is_eof l && pr_write_is_broken_pipe w)
         }
     }
 }
@@ -271,13 +300,13 @@ def test_spawn_discards_a_partial_line_at_eof : IO Bool := do {
     }
 }
 
-/// A spawn that cannot happen is `Result.err` with the OS message, not a
-/// native failure -- the caller composes it like every other error.
+/// A spawn that cannot happen is `not_found`, not a native failure -- the
+/// caller composes it like every other error.
 #[test]
 def test_spawn_of_a_missing_command_is_an_error : IO Bool := do {
     let r <- Proc.spawn "monad_no_such_command_exists" [];
     match r {
-        Result.err _ => return true,
+        Result.err _ => return (pr_spawn_is_not_found r),
         Result.ok c => do {
             let _code <- Proc.wait c;
             return false
@@ -285,11 +314,11 @@ def test_spawn_of_a_missing_command_is_an_error : IO Bool := do {
     }
 }
 
-/// A line is BOUNDED: 2 MB with no newline at all must be `Result.err`
-/// (the read failing at the bound), not a 2 MB "line" -- a peer that
-/// withholds its newline is a flood, and the flood must fail, not
-/// grow. Both backends carry the same number, and this is the pin that
-/// keeps them agreeing.
+/// A line is BOUNDED: 2 MB with no newline at all must fail as
+/// `invalid_input` at the one-mebibyte bound, not arrive as a 2 MB
+/// "line" -- a peer that withholds its newline is a flood, and the flood
+/// must fail, not grow. Both backends carry the same number, and this is
+/// the pin that keeps them agreeing.
 #[test]
 def test_spawn_read_line_is_bounded : IO Bool := do {
     let r <- Proc.spawn "sh" ["-c", "head -c 2000000 /dev/zero | tr '\\0' 'a'"];
@@ -300,10 +329,7 @@ def test_spawn_read_line_is_bounded : IO Bool := do {
             // The child exits on its own once the pipe closes; the
             // verdict is the read's, so `wait` is cleanup either way.
             let _code <- Proc.wait c;
-            return (match l {
-                Result.err _ => true,
-                Result.ok _ => false,
-            })
+            return (pr_read_is_invalid_input l)
         }
     }
 }

@@ -141,6 +141,60 @@ rt_word monad_stream_read(int64_t fd, int64_t max_bytes) {
     return wasm_ok(RT_WORD(obj));
 }
 
+/* `stream_read_line : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+   String) (Option String))` -- one line WITHOUT its newline, or
+   `Option.none` at end of stream and for a discarded partial line. A C
+   loop, so no stack growth; byte-at-a-time because these profiles have
+   only the console descriptors and no cross-call carry to keep. A read
+   error reads as end of stream, the convention the natives above set. */
+rt_word monad_stream_read_line(int64_t fd, int64_t max_len, int64_t discard) {
+    size_t cap = 256, len = 0;
+    char* buf = (char*)malloc(cap);
+    if (!buf) return wasm_ok(RT_WORD(alloc_constructor(3, 0)));
+    int eof = 0;
+    for (;;) {
+        char c;
+        ssize_t r = read((int)fd, &c, 1);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            eof = 1;
+            break;
+        }
+        if (r == 0) { eof = 1; break; }
+        if (c == '\n') break;
+        if (max_len > 0 && (int64_t)len >= max_len) {
+            free(buf);
+            return wasm_ok(RT_WORD(alloc_constructor(3, 0)));
+        }
+        if (len + 1 >= cap) {
+            size_t want = cap * 2;
+            char* grown = (char*)realloc(buf, want);
+            if (!grown) {
+                free(buf);
+                return wasm_ok(RT_WORD(alloc_constructor(3, 0)));
+            }
+            buf = grown;
+            cap = want;
+        }
+        buf[len++] = c;
+    }
+    if (eof && (discard || len == 0)) {
+        free(buf);
+        return wasm_ok(RT_WORD(alloc_constructor(3, 0)));
+    }
+    char* copy = (char*)RT_PTR(monad_alloc_atomic((rt_size)(len + 1)));
+    if (!copy) {
+        free(buf);
+        return wasm_ok(RT_WORD(alloc_constructor(3, 0)));
+    }
+    memcpy(copy, buf, len);
+    copy[len] = '\0';
+    free(buf);
+    Constructor* some = (Constructor*)RT_PTR(alloc_constructor(4, 1));
+    if (some) some->fields[0] = RT_FIELD(RT_WORD(copy));
+    return wasm_ok(RT_WORD(some));
+}
+
 rt_word monad_stream_close(int64_t fd) {
     if (fd > 2) close((int)fd);
     return alloc_constructor(0, 0);

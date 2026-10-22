@@ -10,7 +10,7 @@
 /// interpreted, a missing one leaks a registry slot for the life of the
 /// process.
 
-use lib::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.to_list}
+use lib::bytebuf {ByteBuf}
 use lib::path {Path}
 
 // ─── StreamError ────────────────────────────────────────────────────────
@@ -179,6 +179,31 @@ pub type PartialLinePolicy {
   discard
 }
 
+/// `PartialLinePolicy` as the native's flag: 0 = deliver, 1 = discard.
+def PartialLinePolicy.discard_flag (policy : PartialLinePolicy) : I64 :=
+  match policy {
+    PartialLinePolicy.deliver => 0,
+    PartialLinePolicy.discard => 1
+  }
+
+/// `stream_read_line : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+/// String) (Option String))` -- one line WITHOUT its `\n` (a `\r`
+/// stays), `Option.none` at end of stream or when `discard` (the third
+/// argument) drops a partial line, and `invalid_input` when the content
+/// exceeds `max_len` bytes (`max_len <= 0` is unbounded).
+///
+/// A NATIVE rather than the per-byte Monad recursion Phases 1-3 used:
+/// that loop consumed one Rust/machine stack frame per byte, so a line of
+/// a few thousand bytes overflowed the interpreter and a few hundred
+/// kilobytes overflowed a compiled binary -- both far below the one
+/// mebibyte bound the shell tool relies on. Reading in chunks also needs
+/// the bytes after the newline kept for the next call, so the runtime
+/// holds a per-stream carry (and the interpreter's stdin carry is the
+/// same one `read_stdin_exact` drains), which no `.mo` code could hold --
+/// `std` has no mutable cell.
+#[native "stream_read_line"]
+priv def stream_read_line (s : FdStream) (max_len : I64) (discard : I64) : RawIO (Result (Pair I64 String) (Option String))
+
 /// One line from `s`, WITHOUT its `\n` (a `\r` stays). `Result.ok
 /// Option.none` at end of stream. A line longer than `max_len` bytes is
 /// `invalid_input`; `max_len <= 0` means unbounded.
@@ -188,55 +213,7 @@ pub type PartialLinePolicy {
 /// call (plans/implementations/2026-10-18-compiled-constrained-generic-
 /// dict-call-miscompiles.md) -- the generic version segfaulted compiled
 /// while passing interpreted. Go back to `[Stream S]` once that is fixed.
-///
-/// One byte per read, deliberately: a reader that read ahead would have
-/// to keep the extra bytes for the NEXT call, and a caller like
-/// `IO.read_line` has no state to keep them in -- one byte at a time
-/// leaves the stream exactly where the next reader expects it.
-pub def FdStream.read_line_bounded (s : FdStream) (max_len : I64) (policy : PartialLinePolicy) : IO (Result StreamError (Option String)) :=
-  stream_line_go s max_len policy List.empty 0
-
-#[terminating]
-def stream_line_go (s : FdStream) (max_len : I64) (policy : PartialLinePolicy) (acc_rev : List U8) (n : I64) : IO (Result StreamError (Option String)) := do {
-  let r <- Stream.read s 1;
-  stream_line_got s max_len policy acc_rev n r
+pub def FdStream.read_line_bounded (s : FdStream) (max_len : I64) (policy : PartialLinePolicy) : IO (Result StreamError (Option String)) := do {
+  let r <- IO.mk (stream_read_line s max_len (PartialLinePolicy.discard_flag policy));
+  return (stream_result r)
 }
-
-#[terminating]
-def stream_line_got (s : FdStream) (max_len : I64) (policy : PartialLinePolicy) (acc_rev : List U8) (n : I64) (r : Result StreamError ByteBuf) : IO (Result StreamError (Option String)) :=
-  match r {
-    Result.err e => IO.pure (Result.err e),
-    Result.ok buf => stream_line_buf s max_len policy acc_rev n buf
-  }
-
-#[terminating]
-def stream_line_buf (s : FdStream) (max_len : I64) (policy : PartialLinePolicy) (acc_rev : List U8) (n : I64) (buf : ByteBuf) : IO (Result StreamError (Option String)) := do {
-  let bytes <- ByteBuf.to_list buf 1;
-  let _ <- ByteBuf.free buf;
-  stream_line_bytes s max_len policy acc_rev n bytes
-}
-
-#[terminating]
-def stream_line_bytes (s : FdStream) (max_len : I64) (policy : PartialLinePolicy) (acc_rev : List U8) (n : I64) (bytes : List U8) : IO (Result StreamError (Option String)) :=
-  match bytes {
-    List.empty => IO.pure (stream_line_at_eof policy acc_rev n),
-    List.cons b _ => stream_line_byte s max_len policy acc_rev n b
-  }
-
-#[terminating]
-def stream_line_byte (s : FdStream) (max_len : I64) (policy : PartialLinePolicy) (acc_rev : List U8) (n : I64) (b : U8) : IO (Result StreamError (Option String)) :=
-  if U8.beq b 10u8
-  then IO.pure (Result.ok (Option.some (String.from_list (List.reverse acc_rev))))
-  else if max_len > 0 && Bool.not (n < max_len)
-  then IO.pure (Result.err (StreamError.of StreamErrorKind.invalid_input (String.concat "line longer than " (String.concat (I64.to_string max_len) " bytes"))))
-  else stream_line_go s max_len policy (List.cons b acc_rev) (n + 1)
-
-/// End of stream with `n` bytes of an unterminated line in hand.
-def stream_line_at_eof (policy : PartialLinePolicy) (acc_rev : List U8) (n : I64) : Result StreamError (Option String) :=
-  match policy {
-    PartialLinePolicy.discard => Result.ok Option.none,
-    PartialLinePolicy.deliver =>
-      if n == 0
-      then Result.ok Option.none
-      else Result.ok (Option.some (String.from_list (List.reverse acc_rev)))
-  }

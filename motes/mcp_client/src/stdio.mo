@@ -27,8 +27,9 @@
 /// error is returned. A request that failed has no recoverable state --
 /// half a conversation is not a conversation -- so the contract is: a
 /// failed request leaves the child dead, and any stale `McpStdio` /
-/// `McpServer` values still naming it report "no such child" if used.
-/// That is what makes request failure leak-free.
+/// `McpServer` values still naming it report a bad-descriptor stream
+/// error if used. That is what makes request failure leak-free: a stale
+/// value's next read fails rather than hanging.
 ///
 /// The response wait is a BLOCKING read with no timeout (a poll or timer
 /// read is new native surface, deliberately out of scope): a server that
@@ -38,6 +39,7 @@
 use json::json {Json}
 use std::map {BTreeMap}
 use std::process {Child, Proc.kill, Proc.read_line, Proc.read_stderr_line, Proc.spawn, Proc.wait, Proc.write}
+use std::stream {StreamError}
 use toolkit::framing {bad_header, frame, framing_read, need_more, newline_delimited}
 
 /// One mounted transport: the child plus the frame buffer.
@@ -53,7 +55,7 @@ pub struct McpStdio {
 pub def Stdio.start (cmd : String) (args : List String) : IO (Result String McpStdio) := do {
   let r <- Proc.spawn cmd args;
   match r {
-    Result.err e => return (Result.err e),
+    Result.err e => return (Result.err e.message),
     Result.ok c =>
       // Annotated local: a bare struct literal in argument position is
       // the recorded self-hosted checker gap, silent in a dependency.
@@ -69,7 +71,7 @@ pub def Stdio.start (cmd : String) (args : List String) : IO (Result String McpS
 pub def Stdio.send (s : McpStdio) (body : String) : IO (Result String McpStdio) := do {
   let w <- Proc.write s.child (String.concat body "\n");
   match w {
-    Result.err e => return (Result.err e),
+    Result.err e => return (Result.err e.message),
     Result.ok _n => return (Result.ok s),
   }
 }
@@ -100,9 +102,9 @@ def stdio_frame_loop (c : Child) (buf : String) : IO (Result String (Pair McpStd
 }
 
 #[partial]
-def stdio_frame_on_line (c : Child) (buf : String) (l : Result String (Option String)) : IO (Result String (Pair McpStdio String)) :=
+def stdio_frame_on_line (c : Child) (buf : String) (l : Result StreamError (Option String)) : IO (Result String (Pair McpStdio String)) :=
   match l {
-    Result.err e => return (Result.err e),
+    Result.err e => return (Result.err e.message),
     Result.ok o => stdio_frame_on_option c buf o,
   }
 
@@ -223,9 +225,16 @@ def stdio_response_mismatch (s : McpStdio) : IO (Result String (Pair McpStdio St
 
 /// One line of the server's stderr -- its log stream, NOT part of the
 /// frame stream. `Option.none` is end of stream; the `Result.err` case is
-/// a transport problem, both `Proc.read_stderr_line`'s own contract.
-pub def Stdio.read_log (s : McpStdio) : IO (Result String (Option String)) :=
-  Proc.read_stderr_line s.child
+/// a transport problem, both `Proc.read_stderr_line`'s own contract. The
+/// `StreamError` is rendered to text here so this module's whole surface
+/// stays `Result String`.
+pub def Stdio.read_log (s : McpStdio) : IO (Result String (Option String)) := do {
+  let l <- Proc.read_stderr_line s.child;
+  return (match l {
+    Result.err e => Result.err e.message,
+    Result.ok o => Result.ok o,
+  })
+}
 
 /// Clean teardown: `Proc.wait` closes the pipes, reaps the child, and
 /// frees the slot. For a server that will not exit on its own, use

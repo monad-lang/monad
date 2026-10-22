@@ -562,45 +562,17 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
 }
 
-/* The runtime's Result-value helpers, shared by the piped-subprocess
-   section below and the tcp section below it -- the `tcp_` names
-   predate the second user. `Result.ok` is tag 10, `Result.err` tag 11
-   and `Unit.unit` tag 0 -- `lang/src/codegen/ctors.mo`'s fixed prelude
-   tags, the same table the generated `rt_tag_*` helpers mirror. The
-   ok field holds a raw word, so one `tcp_ok` serves an fd, a byte count,
-   a child slot and a `List U8` pointer alike. */
+/* The runtime's Result-value helpers, shared by the tcp section below
+   and the byte streams -- the `tcp_` names predate the second user.
+   `Result.ok` is tag 10 and `Unit.unit` tag 0 --
+   `lang/src/codegen/ctors.mo`'s fixed prelude tags, the same table the
+   generated `rt_tag_*` helpers mirror. The ok field holds a raw word,
+   so one `tcp_ok` serves an fd, a byte count, a child slot and a
+   `List U8` pointer alike. */
 static void* tcp_ok(void* payload) {
     Constructor* ok = (Constructor*)alloc_constructor_impl(10, 1);
     if (ok) ok->fields[0] = payload;
     return ok;
-}
-
-/* `Result.err` (tag 11) carrying `<a>: <b>`, or `<a>: <b> (os error
-   <n>)` when `errnum` is positive. The message is COPIED into a
-   GC-visible buffer: `strerror`'s storage is libc's and a format
-   string is the caller's, and every other `String` here is an owned
-   char* (same reasoning as `monad_get_env` above). */
-static void* tcp_err_pair(const char* a, const char* b, int errnum) {
-    char buf[512];
-    if (errnum != 0) {
-        snprintf(buf, sizeof(buf), "%s: %s (os error %d)", a, b, errnum);
-    } else {
-        snprintf(buf, sizeof(buf), "%s: %s", a, b);
-    }
-    size_t len = strlen(buf);
-    char* copy = (char*)monad_alloc_atomic(len + 1);
-    if (copy) memcpy(copy, buf, len + 1);
-    Constructor* err = (Constructor*)alloc_constructor_impl(11, 1);
-    if (err) err->fields[0] = copy;
-    return err;
-}
-
-/* `<op>: <strerror> (os error <errno>)` -- the shape the deleted Rust
-   implementation got from `std::io::Error`'s own Display. Nothing in
-   the corpus asserts on the text; keeping the shape keeps a familiar
-   debugging aid. */
-static void* tcp_os_err(const char* op, int errnum) {
-    return tcp_err_pair(op, strerror(errnum), errnum);
 }
 
 /* `Unit.unit` (tag 0). The nullary cache makes this the same instance
@@ -620,6 +592,9 @@ static void* tcp_unit(void) {
  * The Rust host keeps its own registry in `core_native.rs`; the two
  * agree on the surface (`std/src/process.mo`), not on handle values,
  * which are opaque and never cross a process boundary.
+ *
+ * Three natives: spawn, wait, and `monad_proc_stream_fd`, which hands
+ * out a pipe descriptor so `std/stream.mo`'s read/write do the rest.
  *
  * No lock: this registry is only ever touched from the one thread that
  * drives the interpreter loop, the same assumption `monad_exec_cmd`'s
@@ -642,18 +617,31 @@ static ProcChild* proc_slot(int64_t handle) {
     return pc->live ? pc : NULL;
 }
 
-/* `proc_spawn : String -> List String -> RawIO (Result String Child)`
- * -- argv via `monad_build_argv` (the same builder `monad_exec_cmd`
- * uses), then TWO pipes per stream direction: stdin's parent end is a
- * WRITE fd, stdout's and stderr's are READ fds, and stdout/stderr never
- * merge (the opposite of `Proc.capture`'s merged `2>&1`, which is right
- * for a toolchain probe and wrong for a protocol stream -- a server's
- * stderr log line must not land inside the JSON-RPC framing).
+/* Defined with the byte streams further down; `monad_proc_spawn` reports
+   `Result.err (Pair.pair <kind code> <message>)` like every other
+   stream operation, which is what `std/src/process.mo`'s `stream_result`
+   decodes. */
+static void* stream_err(int64_t kind, const char* a, const char* b, int errnum);
+static void* stream_os_err(const char* op, int errnum);
+/* Defined with the line reader below: drops a closed descriptor's
+   read-ahead so a reused fd cannot inherit it. */
+static void stream_carry_clear(int fd);
+
+/* `proc_spawn : String -> List String -> RawIO (Result (Pair I64 String)
+ * Child)` -- argv via `monad_build_argv` (the same builder
+ * `monad_exec_cmd` uses), then TWO pipes per stream direction: stdin's
+ * parent end is a WRITE fd, stdout's and stderr's are READ fds, and
+ * stdout/stderr never merge (the opposite of `Proc.capture`'s merged
+ * `2>&1`, which is right for a toolchain probe and wrong for a protocol
+ * stream -- a server's stderr log line must not land inside the
+ * JSON-RPC framing).
  *
  * The natives in this section return the RAW payload (a `Result`/
- * `Option`/`I64`); the `raw_io_passthrough` wrapper emitted by codegen
- * wraps it once as `RawIO.io`, and the `.mo` wrappers in std/process.mo
- * build the user-facing `IO` type on top.
+ * `I64`); the `raw_io_passthrough` wrapper emitted by codegen wraps it
+ * once as `RawIO.io`, and the `.mo` wrappers in std/process.mo build the
+ * user-facing `IO` type on top. Reads and writes are not natives at all:
+ * `monad_proc_stream_fd` hands out the descriptor and the byte-stream
+ * natives do the work.
  *
  * EXEC FAILURE IS AN ERROR, not a child that exits 127: a fourth pipe,
  * both ends `O_CLOEXEC`, is the handshake. The child writes one errno
@@ -664,23 +652,23 @@ static ProcChild* proc_slot(int64_t handle) {
  * is the contract `std/src/process.mo` declares. */
 void* monad_proc_spawn(char* cmd, void* args) {
     char** argv = monad_build_argv(cmd, args);
-    if (!argv) return tcp_err_pair("proc_spawn", "out of memory", 0);
+    if (!argv) return stream_err(9, "proc_spawn", "out of memory", 0);
 
     int in_pipe[2], out_pipe[2], err_pipe[2];
     if (pipe(in_pipe) < 0) {
         free(argv);
-        return tcp_os_err("proc_spawn", errno);
+        return stream_os_err("proc_spawn", errno);
     }
     if (pipe(out_pipe) < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         free(argv);
-        return tcp_os_err("proc_spawn", errno);
+        return stream_os_err("proc_spawn", errno);
     }
     if (pipe(err_pipe) < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
         free(argv);
-        return tcp_os_err("proc_spawn", errno);
+        return stream_os_err("proc_spawn", errno);
     }
     int status_pipe[2];
     if (pipe(status_pipe) < 0) {
@@ -688,7 +676,7 @@ void* monad_proc_spawn(char* cmd, void* args) {
         close(out_pipe[0]); close(out_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
         free(argv);
-        return tcp_os_err("proc_spawn", errno);
+        return stream_os_err("proc_spawn", errno);
     }
     /* FD_CLOEXEC by hand rather than pipe2(2): this file defines no
      * _GNU_SOURCE, and both ends must close on a successful exec for
@@ -705,7 +693,7 @@ void* monad_proc_spawn(char* cmd, void* args) {
         close(err_pipe[0]); close(err_pipe[1]);
         close(status_pipe[0]); close(status_pipe[1]);
         free(argv);
-        return tcp_os_err("proc_spawn", errno);
+        return stream_os_err("proc_spawn", errno);
     }
     if (pid == 0) {
         dup2(in_pipe[0], 0);
@@ -741,7 +729,7 @@ void* monad_proc_spawn(char* cmd, void* args) {
     if (n == 1) {
         close(in_pipe[1]); close(out_pipe[0]); close(err_pipe[0]);
         waitpid(pid, NULL, 0);
-        return tcp_os_err("proc_spawn", exec_errno);
+        return stream_os_err("proc_spawn", exec_errno);
     }
 
     int slot = -1;
@@ -755,7 +743,7 @@ void* monad_proc_spawn(char* cmd, void* args) {
         kill(pid, SIGKILL);
         close(in_pipe[1]); close(out_pipe[0]); close(err_pipe[0]);
         waitpid(pid, NULL, 0);
-        return tcp_err_pair("proc_spawn", "child registry full", 0);
+        return stream_err(9, "proc_spawn", "child registry full", 0);
     }
     proc_registry[slot].pid = pid;
     proc_registry[slot].in_fd = in_pipe[1];
@@ -765,104 +753,27 @@ void* monad_proc_spawn(char* cmd, void* args) {
     return tcp_ok((void*)(int64_t)(slot + 1));
 }
 
-/* `proc_write : Child -> String -> IO (Result String U64)` -- write_all
- * with EINTR retries; EPIPE lands in the `Result.err`, which is the
- * caller's signal the peer is gone. */
-void* monad_proc_write(int64_t handle, char* s) {
+/* `proc_stream_fd : Child -> I64 -> RawIO FdStream` -- the descriptor
+ * of one of the child's pipes: 0 = stdin (the parent's write end),
+ * 1 = stdout (read end), 2 = stderr (read end). Compiled, an `FdStream`
+ * IS the fd, so no registry entry is involved: `monad_stream_read` /
+ * `monad_stream_write` do the I/O, which is why the old
+ * `monad_proc_write`/`monad_proc_read` loops are gone.
+ *
+ * -1 for a dead child or an out-of-range flag (the Rust host returns
+ * the same, and the `.mo` side turns a read or write on it into the
+ * `Bad file descriptor` `StreamError`).
+ *
+ * NEVER close this view: `monad_stream_close` would close the child's
+ * pipe, and `monad_proc_wait` closes all three itself. `proc_stream_fd`
+ * is private to `std/process.mo`, which never closes a view. */
+int64_t monad_proc_stream_fd(int64_t handle, int64_t which) {
     ProcChild* pc = proc_slot(handle);
-    if (!pc) return tcp_err_pair("proc_write", "no such child", 0);
-    size_t len = strlen(s);
-    size_t done = 0;
-    while (done < len) {
-        ssize_t w = write(pc->in_fd, s + done, len - done);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            return tcp_os_err("proc_write", errno);
-        }
-        done += (size_t)w;
-    }
-    return tcp_ok((void*)(int64_t)(uint64_t)done);
-}
-
-/* One line off `fd`: `Result.ok (Option.some <line>)` without the
- * trailing newline (any `\r` stays -- toolkit's framing trims it),
- * `Result.ok (Option.none)` at end of stream. A partial line cut off
- * by EOF is DISCARDED, for the reason `std/src/process.mo`'s own
- * `read_line` doc records: a frame without its newline is a truncated
- * message, not a message, and the Rust host's `proc_line` agrees.
- *
- * Its former stdin near-twin is now `std/stream.mo`'s
- * `FdStream.read_line_bounded`, whose `PartialLinePolicy` is the first
- * of the policies the two differed on; this reader joins it in the
- * io-streams plan's Phase 5.
- *
- * Byte-at-a-time, deliberately: a per-slot pushback buffer would make
- * this one syscall per line instead of per byte, at the cost of
- * per-slot buffer state and a growth path -- and protocol lines are
- * small (this is the same call the lsp server's own reader makes, see
- * that file's header). `Option.some` is tag 4 arity 1, `Option.none`
- * tag 3 arity 0, the fixed prelude tags `monad_get_env` already uses.
- *
- * A line is BOUNDED (PROC_MAX_LINE below): without a bound the growth
- * loop doubles forever, and one caller is the shell tool, whose peer
- * is an arbitrary command, not a trusted protocol server -- a
- * newline-free flood must fail the read, not grow it. An over-long
- * line is `Result.err`, in both backends, with the same message. */
-#define PROC_MAX_LINE (1024 * 1024)
-
-static void* proc_read_line_off(int fd, const char* who) {
-    size_t cap = 256, len = 0;
-    char* buf = (char*)malloc(cap);
-    if (!buf) return tcp_err_pair(who, "out of memory", 0);
-    for (;;) {
-        char c;
-        ssize_t r = read(fd, &c, 1);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            free(buf);
-            return tcp_os_err(who, errno);
-        }
-        if (r == 0) {
-            free(buf);
-            return tcp_ok(alloc_constructor_impl(3, 0)); /* Option.none */
-        }
-        if (c == '\n') {
-            buf[len] = '\0';
-            char* copy = (char*)monad_alloc_atomic(len + 1);
-            if (copy) memcpy(copy, buf, len + 1);
-            free(buf);
-            if (!copy) return tcp_err_pair(who, "out of memory", 0);
-            Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
-            if (some) some->fields[0] = copy;
-            return tcp_ok(some);
-        }
-        if (len >= PROC_MAX_LINE) {
-            free(buf);
-            return tcp_err_pair(who, "line longer than 1048576 bytes", 0);
-        }
-        if (len + 2 > cap) {
-            cap *= 2;
-            char* grown = (char*)realloc(buf, cap);
-            if (!grown) {
-                free(buf);
-                return tcp_err_pair(who, "out of memory", 0);
-            }
-            buf = grown;
-        }
-        buf[len++] = c;
-    }
-}
-
-/* `proc_read : Child -> I64 -> RawIO (Result String (Option String))`
- * -- one line of the child's chosen stream, `stream` 0 = stdout (the
- * protocol stream) and 1 = stderr (the log stream). One entry point,
- * one line reader, one flag: the two former twins (`proc_read_line` /
- * `proc_read_stderr_line`) differed only in which fd they handed
- * `proc_read_line_off`. */
-void* monad_proc_read(int64_t handle, int64_t stream) {
-    ProcChild* pc = proc_slot(handle);
-    if (!pc) return tcp_err_pair("proc_read", "no such child", 0);
-    return proc_read_line_off(stream ? pc->err_fd : pc->out_fd, "proc_read");
+    if (!pc) return -1;
+    if (which == 0) return pc->in_fd;
+    if (which == 1) return pc->out_fd;
+    if (which == 2) return pc->err_fd;
+    return -1;
 }
 
 /* `proc_wait : Child -> I64 -> RawIO I64` -- close the pipes, free the
@@ -880,6 +791,9 @@ int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
     ProcChild* pc = proc_slot(handle);
     if (!pc) return -1;
     if (kill_first) kill(pc->pid, SIGKILL);
+    stream_carry_clear(pc->in_fd);
+    stream_carry_clear(pc->out_fd);
+    stream_carry_clear(pc->err_fd);
     close(pc->in_fd);
     close(pc->out_fd);
     close(pc->err_fd);
@@ -892,7 +806,7 @@ int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
 
 /* `term_ctl : I64 -> I64 -> RawIO I64` (motes/tui/src/terminal.mo) --
  * the tui mote's ONE terminal-control native, the same
- * one-entry-point-one-flag merge `monad_proc_read`/`monad_proc_wait`
+ * one-entry-point-one-flag merge `monad_proc_wait`/`monad_proc_stream_fd`
  * set: op 0 enters cbreak on stdin (ICANON, ECHO and ISIG off -- ISIG
  * too, so Ctrl-C is delivered to the app as a \x03 byte for the tui
  * app's double-press exit instead of SIGINT-killing the process;
@@ -1135,10 +1049,6 @@ void* monad_get_env(char* name) {
        killed process.
 */
 
-/* `stream_err`/`stream_os_err` are defined with the byte streams below. */
-static void* stream_err(int64_t kind, const char* a, const char* b, int errnum);
-static void* stream_os_err(const char* op, int errnum);
-
 /* `tcp_connect : String -> U16 -> RawIO (Result (Pair I64 String)
    FdStream)` -- blocking connect. `getaddrinfo` resolves the host the
    way the Rust version's `TcpStream::connect((host, port))` did, so
@@ -1258,7 +1168,8 @@ static int64_t stream_error_kind_of_errno(int errnum) {
 }
 
 /* `Result.err (Pair.pair kind "<a>: <b>[ (os error <n>)]")`, the message
-   formatted and GC-copied exactly as `tcp_err_pair` does. */
+   formatted and COPIED into a GC-visible buffer (`strerror`'s storage is
+   libc's), the shape `std::io::Error`'s Display gives the Rust host. */
 static void* stream_err(int64_t kind, const char* a, const char* b, int errnum) {
     char buf[512];
     if (errnum != 0) {
@@ -1283,6 +1194,230 @@ static void* stream_os_err(const char* op, int errnum) {
     return stream_err(stream_error_kind_of_errno(errnum), op, strerror(errnum), errnum);
 }
 
+/* ── Line reading (std/stream.mo's `stream_read_line`) ─────────────────
+ *
+ * A chunked reader pulls bytes past the newline off the descriptor. They
+ * are kept in this small per-descriptor carry table, and both
+ * `monad_stream_read` and `monad_read_stdin_exact` serve them first, so a
+ * caller that mixes line reads with byte reads never loses a byte (the
+ * LSP framing tests are the guard).
+ *
+ * A linear array, not a hash: a program has stdio plus a handful of open
+ * streams, and lookups happen once per call, never per byte. Entries are
+ * cleared when their descriptor is closed (`stream_close`, `proc_wait`)
+ * or reused (`stream_open`), so a new stream never inherits an old carry.
+ */
+#define MONAD_LINE_CHUNK 4096
+
+typedef struct {
+    int fd;
+    char* data;
+    size_t len;
+    size_t cap;
+} StreamCarry;
+
+static StreamCarry* stream_carries;
+static size_t stream_carry_count;
+static size_t stream_carry_cap;
+
+static StreamCarry* stream_carry_slot(int fd, int create) {
+    for (size_t i = 0; i < stream_carry_count; i++) {
+        if (stream_carries[i].fd == fd) return &stream_carries[i];
+    }
+    if (!create) return NULL;
+    if (stream_carry_count == stream_carry_cap) {
+        size_t cap = stream_carry_cap ? stream_carry_cap * 2 : 4;
+        StreamCarry* grown =
+            (StreamCarry*)realloc(stream_carries, cap * sizeof(StreamCarry));
+        if (!grown) return NULL;
+        stream_carries = grown;
+        stream_carry_cap = cap;
+    }
+    StreamCarry* c = &stream_carries[stream_carry_count++];
+    c->fd = fd;
+    c->data = NULL;
+    c->len = 0;
+    c->cap = 0;
+    return c;
+}
+
+static void stream_carry_clear(int fd) {
+    StreamCarry* c = stream_carry_slot(fd, 0);
+    if (!c) return;
+    free(c->data);
+    c->data = NULL;
+    c->len = 0;
+    c->cap = 0;
+}
+
+static int stream_carry_push(int fd, const char* bytes, size_t n) {
+    if (n == 0) return 1;
+    StreamCarry* c = stream_carry_slot(fd, 1);
+    if (!c) return 0;
+    if (c->len + n > c->cap) {
+        size_t cap = c->cap ? c->cap : MONAD_LINE_CHUNK;
+        while (cap < c->len + n) cap *= 2;
+        char* grown = (char*)realloc(c->data, cap);
+        if (!grown) return 0;
+        c->data = grown;
+        c->cap = cap;
+    }
+    memcpy(c->data + c->len, bytes, n);
+    c->len += n;
+    return 1;
+}
+
+/* Move at most `max` carried bytes into `out`, dropping them from the
+   carry. `-1` when there is nothing carried. */
+static ssize_t stream_carry_take(int fd, char* out, size_t max) {
+    StreamCarry* c = stream_carry_slot(fd, 0);
+    if (!c || c->len == 0) return -1;
+    size_t n = c->len < max ? c->len : max;
+    memcpy(out, c->data, n);
+    memmove(c->data, c->data + n, c->len - n);
+    c->len -= n;
+    return (ssize_t)n;
+}
+
+static void* stream_line_too_long(int64_t max_len) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "line longer than %lld bytes", (long long)max_len);
+    return stream_err(5, "stream_read_line", msg, 0);
+}
+
+/* `Result.ok (Option.some <line>)` from an owned malloc buffer. */
+static void* stream_line_some(char* buf, size_t len) {
+    char* copy = (char*)monad_alloc_atomic(len + 1);
+    if (!copy) {
+        free(buf);
+        return stream_err(9, "stream_read_line", "out of memory", 0);
+    }
+    memcpy(copy, buf, len);
+    copy[len] = '\0';
+    free(buf);
+    Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
+    if (some) some->fields[0] = copy;
+    return tcp_ok(some);
+}
+
+static void* stream_line_none(void) {
+    return tcp_ok(alloc_constructor_impl(3, 0));
+}
+
+/* stdin's line reader, ONE BYTE AT A TIME. Load-bearing, not an
+ * oversight: `motes/tui/src/input.mo` reads a byte and then `poll(2)`s raw
+ * fd 0, so bytes pulled into a userspace carry would be invisible to the
+ * poll (the Phase 3 stdin tests pin this). The loop is a C loop, so its
+ * depth is constant. */
+static void* stream_read_line_stdin(int64_t max_len, int64_t discard) {
+    size_t cap = 256, len = 0;
+    char* acc = (char*)malloc(cap);
+    if (!acc) return stream_err(9, "stream_read_line", "out of memory", 0);
+    for (;;) {
+        char c;
+        ssize_t r = read(0, &c, 1);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            int e = errno;
+            free(acc);
+            return stream_os_err("stream_read_line", e);
+        }
+        if (r == 0) {
+            if (discard || len == 0) { free(acc); return stream_line_none(); }
+            return stream_line_some(acc, len);
+        }
+        if (c == '\n') return stream_line_some(acc, len);
+        if (max_len > 0 && (int64_t)len >= max_len) {
+            free(acc);
+            return stream_line_too_long(max_len);
+        }
+        if (len + 2 > cap) {
+            size_t want = cap * 2;
+            char* grown = (char*)realloc(acc, want);
+            if (!grown) { free(acc); return stream_err(9, "stream_read_line", "out of memory", 0); }
+            acc = grown;
+            cap = want;
+        }
+        acc[len++] = c;
+    }
+}
+
+/* `stream_read_line : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+   String) (Option String))` -- one line WITHOUT its newline (a `\r`
+   stays), `Option.none` at end of stream or when `discard` drops a
+   partial line, and `invalid_input` once the content exceeds `max_len`
+   (`max_len <= 0` is unbounded).
+ *
+ * stdin goes through the byte-at-a-time loop above (poll contract);
+ * files and child pipes are read in chunks, because nothing polls them
+ * mid-line, and the bytes after the newline go into the carry so the next
+ * call -- line or byte read -- continues exactly where this one stopped. */
+void* monad_stream_read_line(int64_t fd, int64_t max_len, int64_t discard) {
+    if (fd == 0) return stream_read_line_stdin(max_len, discard);
+    size_t cap = 256, len = 0;
+    char* acc = (char*)malloc(cap);
+    if (!acc) return stream_err(9, "stream_read_line", "out of memory", 0);
+
+    StreamCarry* carry = stream_carry_slot((int)fd, 0);
+    if (carry && carry->len > 0) {
+        if (carry->len + 1 > cap) {
+            char* grown = (char*)realloc(acc, carry->len + 1);
+            if (!grown) { free(acc); return stream_err(9, "stream_read_line", "out of memory", 0); }
+            acc = grown;
+            cap = carry->len + 1;
+        }
+        memcpy(acc, carry->data, carry->len);
+        len = carry->len;
+        carry->len = 0;
+    }
+
+    size_t scanned = 0;
+    for (;;) {
+        char* nl = (char*)memchr(acc + scanned, '\n', len - scanned);
+        if (nl) {
+            size_t i = (size_t)(nl - acc);
+            if (max_len > 0 && (int64_t)i > max_len) {
+                free(acc);
+                stream_carry_clear((int)fd);
+                return stream_line_too_long(max_len);
+            }
+            if (!stream_carry_push((int)fd, acc + i + 1, len - i - 1)) {
+                free(acc);
+                return stream_err(9, "stream_read_line", "out of memory", 0);
+            }
+            return stream_line_some(acc, i);
+        }
+        scanned = len;
+        if (max_len > 0 && (int64_t)len > max_len) {
+            free(acc);
+            stream_carry_clear((int)fd);
+            return stream_line_too_long(max_len);
+        }
+        if (len + MONAD_LINE_CHUNK > cap) {
+            size_t want = cap;
+            while (want < len + MONAD_LINE_CHUNK) want *= 2;
+            char* grown = (char*)realloc(acc, want);
+            if (!grown) { free(acc); return stream_err(9, "stream_read_line", "out of memory", 0); }
+            acc = grown;
+            cap = want;
+        }
+        ssize_t r;
+        do {
+            r = read((int)fd, acc + len, MONAD_LINE_CHUNK);
+        } while (r < 0 && errno == EINTR);
+        if (r < 0) {
+            int e = errno;
+            free(acc);
+            return stream_os_err("stream_read_line", e);
+        }
+        if (r == 0) {
+            if (discard || len == 0) { free(acc); return stream_line_none(); }
+            return stream_line_some(acc, len);
+        }
+        len += (size_t)r;
+    }
+}
+
 /* `stream_open : String -> I64 -> RawIO (Result (Pair I64 String)
    FdStream)` -- mode 0 reads, mode 1 creates-or-truncates for writing,
    mode 2 creates-or-appends (both 0644). `O_CLOEXEC` so a spawned child
@@ -1298,6 +1433,7 @@ void* monad_stream_open(char* path, int64_t mode) {
         fd = open(path ? path : "", flags | O_CLOEXEC, 0644);
     } while (fd < 0 && errno == EINTR);
     if (fd < 0) return stream_os_err("stream_open", errno);
+    stream_carry_clear(fd); /* a reused descriptor inherits nothing */
     return tcp_ok((void*)(int64_t)fd);
 }
 
@@ -1307,6 +1443,16 @@ void* monad_stream_open(char* path, int64_t mode) {
    stream; `max_bytes <= 0` reads nothing and returns one too. */
 void* monad_stream_read(int64_t fd, int64_t max_bytes) {
     if (max_bytes <= 0) return tcp_ok(bytebuf_new(0));
+    StreamCarry* carry = stream_carry_slot((int)fd, 0);
+    if (carry && carry->len > 0) {
+        size_t n = carry->len < (size_t)max_bytes ? carry->len : (size_t)max_bytes;
+        BufObj* obj = bytebuf_new((int64_t)n);
+        if (!obj) return stream_err(9, "stream_read", "out of memory", 0);
+        memcpy(obj->payload, carry->data, n);
+        memmove(carry->data, carry->data + n, carry->len - n);
+        carry->len -= n;
+        return tcp_ok(obj);
+    }
     unsigned char small[4096];
     unsigned char* tmp = max_bytes <= (int64_t)sizeof(small)
         ? small : (unsigned char*)malloc((size_t)max_bytes);
@@ -1364,7 +1510,10 @@ void* monad_stream_write(int64_t fd, void* buf) {
    standard descriptors are left open: closing one would let the next
    `open` reuse fd 0/1/2 and silently receive the process's stdio. */
 void* monad_stream_close(int64_t fd) {
-    if (fd > 2) close((int)fd);
+    if (fd > 2) {
+        stream_carry_clear((int)fd);
+        close((int)fd);
+    }
     return tcp_unit();
 }
 
@@ -1434,6 +1583,10 @@ char* monad_read_stdin_exact(int64_t n) {
         return empty;
     }
     size_t got = 0;
+    /* Bytes a chunked line read pulled off fd 0 and did not use come
+       first -- they are already past the descriptor's read position. */
+    ssize_t carried = stream_carry_take(0, buf, want);
+    if (carried > 0) got = (size_t)carried;
     while (got < want) {
         ssize_t r = read(0, buf + got, want - got);
         if (r < 0) {
@@ -1523,8 +1676,9 @@ int main(int argc, char** argv) {
     /* A write to a pipe or socket whose reader has gone must come back as
        EPIPE (a `Result.err` the caller can see), not kill the process --
        Rust's std makes the same choice process-wide. `MSG_NOSIGNAL` only
-       covers `send`; `monad_proc_write`'s `write` to a child that already
-       exited had no such cover. Ignored dispositions survive `exec`, so
+       covers `send`; `monad_stream_write`'s `write` to a child that
+       already exited has no such cover. Ignored dispositions survive
+       `exec`, so
        every fork child (`monad_exec_cmd`, `monad_proc_spawn`) restores
        the default before exec'ing, or `yes | head` in a spawned shell
        would never stop. The process's own stdout/stderr keep dying of

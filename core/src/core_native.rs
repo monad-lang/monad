@@ -327,15 +327,15 @@ pub fn exec_native(
     "exec_cmd" => exec_cmd(args, natives),
     // The piped-subprocess family (`std/src/process.mo`, agent-skills.md
     // Phase 4) -- IO-returning, so none of them belongs in PURE_NATIVES.
+    // Reads and writes are NOT natives: `proc_stream_fd` hands out an
+    // `FdStream` view and the stream natives below do the I/O.
     "proc_spawn" => proc_spawn(args, natives),
-    "proc_write" => proc_write(args, natives),
-    "proc_read" => proc_read(args, natives),
+    "proc_stream_fd" => proc_stream_fd(args, natives),
     "proc_wait" => proc_wait(args, natives),
     // The tui mote's ONE terminal-control native (motes/tui/src/
     // terminal.mo) -- raw-mode enter/leave and TIOCGWINSZ merged behind
     // an I64 op flag, the same one-entry-point-one-flag shape
-    // `proc_read`/`proc_wait` set. IO-returning, so not in
-    // PURE_NATIVES.
+    // `proc_wait` sets. IO-returning, so not in PURE_NATIVES.
     "term_ctl" => term_ctl(args, natives),
     "fork_io" => fork_io(args, natives),
     // `await_fiber` is NOT dispatched here — it needs `globals`/`cache`
@@ -377,6 +377,7 @@ pub fn exec_native(
     "stream_write" => stream_write(args, natives),
     "stream_close" => stream_close(args, natives),
     "stream_fd" => stream_fd(args, natives),
+    "stream_read_line" => stream_read_line(args, natives),
     "std_fd" => std_fd(args),
     "bytebuf_len" => bytebuf_len(args),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
@@ -455,15 +456,6 @@ fn make_result_ok(natives: &NativeTable, payload: Value) -> Result<Value, CoreEv
   Ok(Value::Con {
     tag: ok.tag,
     args: std::sync::Arc::new(vec![payload].into()),
-  })
-}
-
-/// `Result.err <message>` as a `Value`.
-fn make_result_err(natives: &NativeTable, msg: String) -> Result<Value, CoreEvalError> {
-  let err = require_ctor(natives.well_known.result_err, "Result.err")?;
-  Ok(Value::Con {
-    tag: err.tag,
-    args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(msg.into()))].into()),
   })
 }
 
@@ -946,7 +938,7 @@ fn io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> 
 /// Wrap a raw value into a `RawIO` value: `RawIO.io inner` -- ONE layer,
 /// not the two-layer `IO.mk (RawIO.io ...)` that `io_wrap` produces. The
 /// `IO.mk` wrapping is done by the `.mo` wrappers in `std/src/process.mo`
-/// (`IO.mk (proc_read c 0)`), exactly the way `IO.pure` does it for
+/// (`IO.mk (proc_stream_fd c 0)`), exactly the way `IO.pure` does it for
 /// `RawIO.pure` -- the interpreter-side counterpart of codegen's
 /// `NativeWrapKind.raw_io_passthrough`.
 fn raw_io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> {
@@ -1367,6 +1359,14 @@ fn read_stdin_exact(args: &[Value], natives: &NativeTable) -> Result<Value, Core
     Err(poisoned) => poisoned.into_inner(),
   };
   let mut buf: Vec<u8> = std::mem::take(&mut *carry);
+  // A chunked line read can leave FAR more than `n` bytes here. Only the
+  // first `n` are this call's (that is the "up to n" contract); the rest
+  // goes back at the end of `buf`'s own leftovers below, in stream order.
+  let mut rest: Vec<u8> = if buf.len() > n {
+    buf.split_off(n)
+  } else {
+    Vec::new()
+  };
   let mut chunk = vec![0u8; n];
   let mut eof = false;
   // Fill to `n` (or EOF) first.
@@ -1406,17 +1406,24 @@ fn read_stdin_exact(args: &[Value], natives: &NativeTable) -> Result<Value, Core
           break out;
         }
         // Entirely an incomplete character, and not at EOF: read on
-        // rather than returning "" (rule 1).
-        let got = read_stdin_chunk(&mut chunk)?;
-        if got == 0 {
-          eof = true;
+        // rather than returning "" (rule 1). Bytes already carried past
+        // `n` are next, not the descriptor.
+        if !rest.is_empty() {
+          let take = rest.len().min(4);
+          buf.extend(rest.drain(..take));
         } else {
-          buf.extend_from_slice(&chunk[..got]);
+          let got = read_stdin_chunk(&mut chunk)?;
+          if got == 0 {
+            eof = true;
+          } else {
+            buf.extend_from_slice(&chunk[..got]);
+          }
         }
       }
     }
   };
   *carry = buf;
+  carry.extend_from_slice(&rest);
   drop(carry);
   raw_io_wrap(natives, Value::Lit(IrLit::Str(result.into())))
 }
@@ -1726,19 +1733,39 @@ fn bytebuf_copy_into(args: &[Value], natives: &NativeTable) -> Result<Value, Cor
 // is `StreamErrorKind`'s declaration index (`stream_error_code`), which
 // `std/stream.mo`'s `stream_result` decodes.
 
-enum FdEntry {
+enum FdKind {
   Stdin,
   Stdout,
   Stderr,
   File(std::fs::File),
 }
 
+/// One stream slot. `carry` holds bytes a CHUNKED line read pulled off the
+/// stream after the newline; the next read on this slot serves them first
+/// (`stream_read` drains them before touching the descriptor). stdin's
+/// carry is `STDIN_CARRY` instead, so `read_stdin_exact` and the line
+/// reader share one buffer. Child views need no entry at all: their
+/// `BufReader` keeps the surplus itself.
+struct FdEntry {
+  kind: FdKind,
+  carry: Vec<u8>,
+}
+
+impl FdEntry {
+  fn new(kind: FdKind) -> FdEntry {
+    FdEntry {
+      kind,
+      carry: Vec::new(),
+    }
+  }
+}
+
 static FD_STREAMS: std::sync::LazyLock<std::sync::Mutex<Vec<Option<FdEntry>>>> =
   std::sync::LazyLock::new(|| {
     std::sync::Mutex::new(vec![
-      Some(FdEntry::Stdin),
-      Some(FdEntry::Stdout),
-      Some(FdEntry::Stderr),
+      Some(FdEntry::new(FdKind::Stdin)),
+      Some(FdEntry::new(FdKind::Stdout)),
+      Some(FdEntry::new(FdKind::Stderr)),
     ])
   });
 
@@ -1750,24 +1777,71 @@ fn fd_streams() -> Result<std::sync::MutexGuard<'static, Vec<Option<FdEntry>>>, 
 
 /// What a stream handle names, without holding the registry lock across
 /// the I/O: a `File` is `try_clone`d (a dup sharing the file offset).
+/// `ChildIn`/`ChildOut`/`ChildErr` carry the 1-based `Child` handle;
+/// the child's `BufReader`/`ChildStdin` is taken out of `PROC_CHILDREN`
+/// for the call (never held across the blocking I/O) and put back.
 enum FdTarget {
   Stdin,
   Stdout,
   Stderr,
   File(std::fs::File),
+  ChildIn(usize),
+  ChildOut(usize),
+  ChildErr(usize),
+}
+
+/// A child-process stream view is a NEGATIVE tagged handle, not an
+/// `FD_STREAMS` slot: `proc_stream_fd` derives one per call, and a
+/// slot would leak because a view can never be closed (`stream_close`
+/// on a compiled view would close the child's pipe). The offset of 2
+/// keeps `-1` free for "invalid or dead", which is what
+/// `monad_proc_stream_fd` returns.
+const CHILD_VIEW_OFFSET: i64 = 2;
+
+fn child_view_handle(child: i64, which: i64) -> i64 {
+  -(CHILD_VIEW_OFFSET + (child - 1) * 4 + which)
+}
+
+/// Decode `child_view_handle`; `None` for anything that is not a view
+/// (including `-1` and a `which` outside 0..=2).
+fn child_view_of(handle: i64) -> Option<(usize, i64)> {
+  let v = handle.checked_neg()?.checked_sub(CHILD_VIEW_OFFSET)?;
+  if v < 0 {
+    return None;
+  }
+  let which = v % 4;
+  if which > 2 {
+    return None;
+  }
+  Some(((v / 4 + 1) as usize, which))
+}
+
+/// The error a dead/closed child stream reports. `EBADF` rather than
+/// `InvalidInput` so both backends agree on kind `other` and on
+/// `"Bad file descriptor (os error 9)"`.
+fn ebadf() -> std::io::Error {
+  std::io::Error::from_raw_os_error(libc::EBADF)
 }
 
 fn fd_target(handle: i64, name: &str) -> Result<std::io::Result<FdTarget>, CoreEvalError> {
+  if handle < 0 {
+    return Ok(match child_view_of(handle) {
+      Some((child, 0)) => Ok(FdTarget::ChildIn(child)),
+      Some((child, 1)) => Ok(FdTarget::ChildOut(child)),
+      Some((child, _)) => Ok(FdTarget::ChildErr(child)),
+      None => Err(ebadf()),
+    });
+  }
   let reg = fd_streams()?;
   let entry = usize::try_from(handle)
     .ok()
     .and_then(|i| reg.get(i))
     .and_then(|e| e.as_ref());
-  Ok(match entry {
-    Some(FdEntry::Stdin) => Ok(FdTarget::Stdin),
-    Some(FdEntry::Stdout) => Ok(FdTarget::Stdout),
-    Some(FdEntry::Stderr) => Ok(FdTarget::Stderr),
-    Some(FdEntry::File(f)) => f.try_clone().map(FdTarget::File),
+  Ok(match entry.map(|e| &e.kind) {
+    Some(FdKind::Stdin) => Ok(FdTarget::Stdin),
+    Some(FdKind::Stdout) => Ok(FdTarget::Stdout),
+    Some(FdKind::Stderr) => Ok(FdTarget::Stderr),
+    Some(FdKind::File(f)) => f.try_clone().map(FdTarget::File),
     None => Err(std::io::Error::new(
       std::io::ErrorKind::InvalidInput,
       format!("{name}: no such stream {handle}"),
@@ -1869,16 +1943,18 @@ fn stream_open(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
           reg.len() - 1
         }
       };
-      reg[slot] = Some(FdEntry::File(f));
+      reg[slot] = Some(FdEntry::new(FdKind::File(f)));
       make_result_ok(natives, Value::Lit(IrLit::Num(slot as i64, NumSuffix::I64)))?
     }
   };
   raw_io_wrap(natives, result)
 }
 
-/// One read of at most `max_bytes` from a `stdin`/`File` target; stdin
-/// hands over any `STDIN_CARRY` bytes first, since a previous
-/// `read_stdin_exact` already took them off fd 0.
+/// One read of at most `max_bytes` from a `stdin`/`File`/child target;
+/// stdin hands over any `STDIN_CARRY` bytes first, since a previous
+/// `read_stdin_exact` already took them off fd 0. A child's stdout or
+/// stderr is read through the child's `BufReader`, so a byte-at-a-time
+/// line reader costs no syscall per byte.
 fn stream_read_target(target: FdTarget, max: usize) -> std::io::Result<Vec<u8>> {
   use std::io::Read;
   let mut buf = vec![0u8; max];
@@ -1904,12 +1980,370 @@ fn stream_read_target(target: FdTarget, max: usize) -> std::io::Result<Vec<u8>> 
         other => break other?,
       }
     },
-    FdTarget::Stdout | FdTarget::Stderr => {
-      return Err(std::io::Error::from_raw_os_error(libc::EBADF));
-    }
+    FdTarget::ChildOut(child) => child_stream_read(child, false, &mut buf)?,
+    FdTarget::ChildErr(child) => child_stream_read(child, true, &mut buf)?,
+    FdTarget::Stdout | FdTarget::Stderr | FdTarget::ChildIn(_) => return Err(ebadf()),
   };
   buf.truncate(n);
   Ok(buf)
+}
+
+/// Take a child's reader out of `PROC_CHILDREN`, run `f` with the
+/// registry lock RELEASED (a blocking pipe read must not hold it), then
+/// put the reader back whether `f` succeeded or failed -- a failed read
+/// is not a dead stream. `child` is the 1-based `Child` handle. A
+/// missing child or an already-taken stream is `EBADF`: the view names
+/// a pipe `proc_wait` closed.
+fn with_child_reader<T: std::io::Read, R>(
+  child: usize,
+  take: impl Fn(&mut ProcChild) -> Option<std::io::BufReader<T>>,
+  put: impl Fn(&mut ProcChild, Option<std::io::BufReader<T>>),
+  f: impl FnOnce(&mut std::io::BufReader<T>) -> std::io::Result<R>,
+) -> std::io::Result<R> {
+  let slot = child.checked_sub(1).ok_or_else(ebadf)?;
+  let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
+  let mut taken = match reg.get_mut(slot) {
+    Some(Some(pc)) => take(pc),
+    _ => return Err(ebadf()),
+  };
+  drop(reg);
+  let result = match &mut taken {
+    None => Err(ebadf()),
+    Some(reader) => f(reader),
+  };
+  if taken.is_some() {
+    let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(pc) = reg.get_mut(slot).and_then(|o| o.as_mut()) {
+      put(pc, taken);
+    }
+  }
+  result
+}
+
+fn read_retrying<R: std::io::Read>(r: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+  loop {
+    match r.read(buf) {
+      Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+      other => return other,
+    }
+  }
+}
+
+/// One read of at most `buf.len()` bytes from the child's stdout
+/// (`stderr` false) or stderr.
+fn child_stream_read(child: usize, stderr: bool, buf: &mut [u8]) -> std::io::Result<usize> {
+  if stderr {
+    with_child_reader(
+      child,
+      |pc| pc.err.take(),
+      |pc, r| pc.err = r,
+      |r| read_retrying(r, buf),
+    )
+  } else {
+    with_child_reader(
+      child,
+      |pc| pc.out.take(),
+      |pc, r| pc.out = r,
+      |r| read_retrying(r, buf),
+    )
+  }
+}
+
+/// ALL of `bytes` into the child's stdin, then flush. Same take/put-back
+/// discipline as `with_child_reader`: a blocked write must not hold the
+/// registry lock.
+fn child_stream_write(child: usize, bytes: &[u8]) -> std::io::Result<()> {
+  use std::io::Write;
+  let slot = child.checked_sub(1).ok_or_else(ebadf)?;
+  let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
+  let mut taken = match reg.get_mut(slot) {
+    Some(Some(pc)) => pc.stdin.take(),
+    _ => return Err(ebadf()),
+  };
+  drop(reg);
+  let result = match &mut taken {
+    None => Err(ebadf()),
+    Some(stdin) => stdin.write_all(bytes).and_then(|()| stdin.flush()),
+  };
+  if taken.is_some() {
+    let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(pc) = reg.get_mut(slot).and_then(|o| o.as_mut()) {
+      pc.stdin = taken;
+    }
+  }
+  result
+}
+
+// ─── Line reading ───────────────────────────────────────────────────────
+//
+// Chunked (4 KiB) with a per-stream carry for the bytes after the
+// newline. The per-byte Monad loop this replaced consumed one stack frame
+// per byte, which overflowed both the interpreter (lines of a few KiB) and
+// compiled binaries (a few hundred KiB) -- far below the one-mebibyte
+// bound the shell tool relies on. `stream_read` drains the carry, so a
+// later read of the same stream sees those bytes first.
+
+/// How many bytes one chunked line read asks for.
+const LINE_CHUNK: usize = 4096;
+
+/// Whether `content` bytes fit the bound (`max_len <= 0` = unbounded).
+fn line_bound_ok(max_len: i64, content: usize) -> bool {
+  max_len <= 0 || (content as i64) <= max_len
+}
+
+fn line_bound_err(max_len: i64) -> std::io::Error {
+  std::io::Error::new(
+    std::io::ErrorKind::InvalidInput,
+    format!("line longer than {max_len} bytes"),
+  )
+}
+
+fn line_utf8(bytes: Vec<u8>) -> std::io::Result<String> {
+  String::from_utf8(bytes).map_err(|_| {
+    std::io::Error::new(
+      std::io::ErrorKind::InvalidData,
+      "stream did not contain valid UTF-8",
+    )
+  })
+}
+
+/// Drain up to `max` carried bytes from a registry-backed stream. stdin's
+/// carry lives in `STDIN_CARRY`, which `stream_read_target` already drains.
+fn stream_carry_read(handle: i64, max: usize) -> Result<Option<Vec<u8>>, CoreEvalError> {
+  let mut reg = fd_streams()?;
+  let entry = usize::try_from(handle)
+    .ok()
+    .and_then(|i| reg.get_mut(i))
+    .and_then(|e| e.as_mut());
+  Ok(match entry {
+    Some(e) if !e.carry.is_empty() => {
+      let take = e.carry.len().min(max);
+      Some(e.carry.drain(..take).collect())
+    }
+    _ => None,
+  })
+}
+
+/// The shared chunk loop: `fill` appends at most one chunk to `acc` and
+/// returns how many bytes it added (0 = end of stream). Returns the line
+/// (without its newline) and the bytes after it, which the caller stores
+/// as the stream's carry.
+fn read_line_loop(
+  max_len: i64,
+  discard: bool,
+  mut acc: Vec<u8>,
+  mut fill: impl FnMut(&mut Vec<u8>) -> std::io::Result<usize>,
+) -> std::io::Result<(Option<Vec<u8>>, Vec<u8>)> {
+  let mut scanned = 0;
+  loop {
+    if let Some(off) = acc[scanned..].iter().position(|&b| b == b'\n') {
+      let i = scanned + off;
+      if !line_bound_ok(max_len, i) {
+        return Err(line_bound_err(max_len));
+      }
+      let rest = acc.split_off(i + 1);
+      acc.truncate(i);
+      return Ok((Some(acc), rest));
+    }
+    scanned = acc.len();
+    if !line_bound_ok(max_len, acc.len()) {
+      return Err(line_bound_err(max_len));
+    }
+    if fill(&mut acc)? == 0 {
+      let line = if discard || acc.is_empty() {
+        None
+      } else {
+        Some(acc)
+      };
+      return Ok((line, Vec::new()));
+    }
+  }
+}
+
+/// One line from stdin, ONE BYTE AT A TIME. That is not an oversight:
+/// `motes/tui/src/input.mo` reads a byte and then `poll(2)`s raw fd 0 to
+/// ask whether the rest of an escape sequence is pending, so a chunked
+/// stdin read would move those bytes into userspace where poll cannot see
+/// them (the Phase 3 stdin test pins it). The loop is native, so its depth
+/// is constant -- the per-byte Monad recursion it replaced was the stack
+/// problem, not the byte count.
+///
+/// Holds `STDIN_CARRY` across the reads, as `read_stdin_exact` does: stdin
+/// is process-wide state. A carry left by `read_stdin_exact` (an
+/// incomplete character) is this line's first bytes.
+fn stdin_read_line(max_len: i64, discard: bool) -> std::io::Result<Option<String>> {
+  let mut carry = match STDIN_CARRY.lock() {
+    Ok(guard) => guard,
+    Err(poisoned) => poisoned.into_inner(),
+  };
+  let mut acc = std::mem::take(&mut *carry);
+  loop {
+    if let Some(i) = acc.iter().position(|&b| b == b'\n') {
+      if !line_bound_ok(max_len, i) {
+        return Err(line_bound_err(max_len));
+      }
+      let rest = acc.split_off(i + 1);
+      acc.truncate(i);
+      *carry = rest;
+      drop(carry);
+      return line_utf8(acc).map(Some);
+    }
+    if !line_bound_ok(max_len, acc.len()) {
+      return Err(line_bound_err(max_len));
+    }
+    let mut byte = [0u8; 1];
+    match read_fd_raw(libc::STDIN_FILENO, &mut byte)? {
+      0 => {
+        let line = if discard || acc.is_empty() {
+          None
+        } else {
+          Some(line_utf8(acc)?)
+        };
+        drop(carry);
+        return Ok(line);
+      }
+      _ => acc.push(byte[0]),
+    }
+  }
+}
+
+/// One line from a `File` stream. The descriptor is `try_clone`d so the
+/// line read does not hold the registry lock; the clone shares the file
+/// offset with the entry's `File`.
+fn file_read_line(
+  handle: i64,
+  max_len: i64,
+  discard: bool,
+) -> Result<std::io::Result<Option<String>>, CoreEvalError> {
+  let slot = match usize::try_from(handle) {
+    Ok(slot) => slot,
+    Err(_) => return Ok(Err(ebadf())),
+  };
+  let (cloned, acc) = {
+    let mut reg = fd_streams()?;
+    match reg.get_mut(slot).and_then(|e| e.as_mut()) {
+      Some(entry) => match &entry.kind {
+        FdKind::File(f) => (f.try_clone(), std::mem::take(&mut entry.carry)),
+        _ => return Ok(Err(ebadf())),
+      },
+      None => return Ok(Err(ebadf())),
+    }
+  };
+  let mut file = match cloned {
+    Ok(f) => f,
+    Err(e) => return Ok(Err(e)),
+  };
+  let outcome = read_line_loop(max_len, discard, acc, |acc| {
+    let mut chunk = vec![0u8; LINE_CHUNK];
+    let n = read_retrying(&mut file, &mut chunk)?;
+    acc.extend_from_slice(&chunk[..n]);
+    Ok(n)
+  });
+  if let Ok((_, rest)) = &outcome {
+    if !rest.is_empty() {
+      if let Ok(mut reg) = fd_streams() {
+        if let Some(entry) = reg.get_mut(slot).and_then(|e| e.as_mut()) {
+          entry.carry = rest.clone();
+        }
+      }
+    }
+  }
+  Ok(outcome.and_then(|(line, _)| line.map(line_utf8).transpose()))
+}
+
+/// The child-view half: `BufReader::fill_buf`/`consume` finds the newline
+/// and leaves everything after it in the buffer, so no carry is needed.
+fn child_line_in<R: std::io::BufRead>(
+  r: &mut R,
+  max_len: i64,
+  discard: bool,
+) -> std::io::Result<Option<String>> {
+  let mut acc: Vec<u8> = Vec::new();
+  loop {
+    let available = r.fill_buf()?;
+    if available.is_empty() {
+      return Ok(if discard || acc.is_empty() {
+        None
+      } else {
+        Some(line_utf8(acc)?)
+      });
+    }
+    match available.iter().position(|&b| b == b'\n') {
+      Some(i) => {
+        if !line_bound_ok(max_len, acc.len() + i) {
+          return Err(line_bound_err(max_len));
+        }
+        acc.extend_from_slice(&available[..i]);
+        r.consume(i + 1);
+        return Ok(Some(line_utf8(acc)?));
+      }
+      None => {
+        if !line_bound_ok(max_len, acc.len() + available.len()) {
+          return Err(line_bound_err(max_len));
+        }
+        let n = available.len();
+        acc.extend_from_slice(available);
+        r.consume(n);
+      }
+    }
+  }
+}
+
+fn child_read_line(
+  child: usize,
+  stderr: bool,
+  max_len: i64,
+  discard: bool,
+) -> std::io::Result<Option<String>> {
+  if stderr {
+    with_child_reader(
+      child,
+      |pc| pc.err.take(),
+      |pc, r| pc.err = r,
+      |r| child_line_in(r, max_len, discard),
+    )
+  } else {
+    with_child_reader(
+      child,
+      |pc| pc.out.take(),
+      |pc, r| pc.out = r,
+      |r| child_line_in(r, max_len, discard),
+    )
+  }
+}
+
+/// `stream_read_line : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+/// String) (Option String))` -- one line, without its newline, or
+/// `Option.none` at end of stream (and for a discarded partial line).
+/// `max_len <= 0` is unbounded; longer content is `invalid_input`, the
+/// bound the shell tool's flood test pins.
+fn stream_read_line(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let args = stream_args(args, 3, "stream_read_line")?;
+  let handle = extract_int(&args[0])?;
+  let max_len = extract_int(&args[1])?;
+  let discard = extract_int(&args[2])? != 0;
+  let outcome: std::io::Result<Option<String>> = if handle < 0 {
+    match child_view_of(handle) {
+      Some((child, 1)) => child_read_line(child, false, max_len, discard),
+      Some((child, 2)) => child_read_line(child, true, max_len, discard),
+      _ => Err(ebadf()),
+    }
+  } else if handle == 0 {
+    stdin_read_line(max_len, discard)
+  } else if handle > 2 {
+    file_read_line(handle, max_len, discard)?
+  } else {
+    Err(ebadf())
+  };
+  let value = match outcome {
+    Err(e) => make_stream_err(natives, "stream_read_line", &e)?,
+    Ok(None) => make_result_ok(natives, make_option(natives, None)?)?,
+    Ok(Some(line)) => make_result_ok(
+      natives,
+      make_option(natives, Some(Value::Lit(IrLit::Str(line.into()))))?,
+    )?,
+  };
+  raw_io_wrap(natives, value)
 }
 
 /// `stream_read : FdStream -> I64 -> RawIO (Result (Pair I64 String)
@@ -1922,7 +2356,12 @@ fn stream_read(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
   let read = if max == 0 {
     Ok(Vec::new())
   } else {
-    fd_target(handle, "stream_read")?.and_then(|t| stream_read_target(t, max))
+    match stream_carry_read(handle, max)? {
+      // A chunked line read left bytes after its newline: serve those
+      // first, exactly as if they were still in the descriptor.
+      Some(bytes) => Ok(bytes),
+      None => fd_target(handle, "stream_read")?.and_then(|t| stream_read_target(t, max)),
+    }
   };
   let result = match read {
     Err(e) => make_stream_err(natives, "stream_read", &e)?,
@@ -1956,7 +2395,8 @@ fn stream_write(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
         .inspect_err(die_on_stdio_epipe)
     }
     FdTarget::File(mut f) => f.write_all(&bytes),
-    FdTarget::Stdin => Err(std::io::Error::from_raw_os_error(libc::EBADF)),
+    FdTarget::ChildIn(child) => child_stream_write(child, &bytes),
+    FdTarget::Stdin | FdTarget::ChildOut(_) | FdTarget::ChildErr(_) => Err(ebadf()),
   });
   let result = match written {
     Err(e) => make_stream_err(natives, "stream_write", &e)?,
@@ -1970,6 +2410,10 @@ fn stream_write(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
 
 /// `stream_close : FdStream -> RawIO Unit` -- never fails; the stdio
 /// slots stay open (closing them would let the process lose its stdio).
+/// A child view (negative handle) is a no-op here, but COMPILED it is a
+/// real descriptor and closing it would close the child's pipe: the
+/// `Proc.*` wrappers never close a view, and `proc_stream_fd` keeps it
+/// out of reach (see `child_view_handle`).
 fn stream_close(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let args = stream_args(args, 1, "stream_close")?;
   let handle = extract_int(&args[0])?;
@@ -1988,19 +2432,35 @@ fn stream_fd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   use std::os::fd::AsRawFd;
   let args = stream_args(args, 1, "stream_fd")?;
   let handle = extract_int(&args[0])?;
-  let reg = fd_streams()?;
-  let fd = match usize::try_from(handle)
-    .ok()
-    .and_then(|i| reg.get(i))
-    .and_then(|e| e.as_ref())
-  {
-    Some(FdEntry::Stdin) => 0,
-    Some(FdEntry::Stdout) => 1,
-    Some(FdEntry::Stderr) => 2,
-    Some(FdEntry::File(f)) => f.as_raw_fd() as i64,
-    None => -1,
+  let fd = match child_view_of(handle) {
+    Some((child, which)) => {
+      let reg = proc_registry()?;
+      let child = reg.get(child.saturating_sub(1)).and_then(|o| o.as_ref());
+      match (child, which) {
+        (Some(pc), 0) => pc.stdin.as_ref().map(|s| s.as_raw_fd() as i64),
+        (Some(pc), 1) => pc.out.as_ref().map(|r| r.get_ref().as_raw_fd() as i64),
+        (Some(pc), _) => pc.err.as_ref().map(|r| r.get_ref().as_raw_fd() as i64),
+        (None, _) => None,
+      }
+      .unwrap_or(-1)
+    }
+    None if handle < 0 => -1,
+    None => {
+      let reg = fd_streams()?;
+      match usize::try_from(handle)
+        .ok()
+        .and_then(|i| reg.get(i))
+        .and_then(|e| e.as_ref())
+        .map(|e| &e.kind)
+      {
+        Some(FdKind::Stdin) => 0,
+        Some(FdKind::Stdout) => 1,
+        Some(FdKind::Stderr) => 2,
+        Some(FdKind::File(f)) => f.as_raw_fd() as i64,
+        None => -1,
+      }
+    }
   };
-  drop(reg);
   raw_io_wrap(natives, Value::Lit(IrLit::Num(fd, NumSuffix::I32)))
 }
 
@@ -2092,20 +2552,25 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
 // not on the handle VALUES, which are opaque and never cross a
 // process boundary.
 //
-// The four natives here return `RawIO <payload>` -- a SINGLE
-// `RawIO.io` layer via `raw_io_wrap`, not the two-layer `io_wrap` --
-// and the `Proc.*` wrappers in `std/src/process.mo` build the
-// user-facing `IO` type with `IO.mk`, the same split `IO.pure`/
-// `RawIO.pure` already use. That keeps the payload building here and
-// the naming/defaults in `.mo` source, and it is what codegen's
+// The natives here return `RawIO <payload>` -- a SINGLE `RawIO.io`
+// layer via `raw_io_wrap`, not the two-layer `io_wrap` -- and the
+// `Proc.*` wrappers in `std/src/process.mo` build the user-facing `IO`
+// type with `IO.mk`, the same split `IO.pure`/`RawIO.pure` already use.
+// That keeps the payload building here and the naming/defaults in `.mo`
+// source, and it is what codegen's
 // `NativeWrapKind.raw_io_passthrough` emits compiled.
+//
+// Reads and writes are NOT natives: `proc_stream_fd` hands out an
+// `FdStream` view of one pipe as a negative tagged handle (see
+// `child_view_handle`), and the stream natives do the I/O through the
+// child's `BufReader`/`ChildStdin`.
 //
 // `Mutex` because `run_tests_parallel` runs `#[test]` defs on real
 // threads that all reach this one table. The lock is per native call,
-// never per byte, and `proc_read` does its blocking `read_line`
-// OUTSIDE the lock (it takes the `BufReader` out, reads, puts it back)
-// -- holding the lock across a blocking read would deadlock every
-// other test thread's proc native against a child that never writes.
+// never per byte, and a child stream read or write does its blocking
+// I/O OUTSIDE the lock (it takes the reader out, I/O, puts it back) --
+// holding the lock across a blocking read would deadlock every other
+// test thread's proc native against a child that never writes.
 
 /// One live child with its three pipe ends. `stdin` is `Option`
 /// because `Child::wait` wants it dropped before reaping (a child
@@ -2128,13 +2593,14 @@ fn proc_registry() -> Result<std::sync::MutexGuard<'static, Vec<Option<ProcChild
     .map_err(|_| CoreEvalError::NativeArgError("proc registry poisoned".into()))
 }
 
-/// `Proc.spawn (cmd : String) (args : List String) : RawIO (Result String
-/// Child)` -- fork+exec with all three standard streams piped. stdout
-/// and stderr are SEPARATE pipes (unlike `Proc.capture`'s merged
-/// redirect): a protocol stream must not have a server's log lines
-/// spliced into its JSON frames. Errors before the child exists are
-/// `Result.err` rather than a native failure, matching the surface
-/// the compiled backend's `monad_proc_spawn` returns.
+/// `Proc.spawn (cmd : String) (args : List String) : RawIO (Result
+/// (Pair I64 String) Child)` -- fork+exec with all three standard
+/// streams piped. stdout and stderr are SEPARATE pipes (unlike
+/// `Proc.capture`'s merged redirect): a protocol stream must not have a
+/// server's log lines spliced into its JSON frames. Errors before the
+/// child exists are `Result.err (Pair.pair <kind code> <message>)`
+/// rather than a native failure, matching the compiled backend's
+/// `monad_proc_spawn`; `Proc.spawn` decodes the pair to `StreamError`.
 fn proc_spawn(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
@@ -2160,10 +2626,7 @@ fn proc_spawn(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
   let mut child = match spawned {
     Ok(c) => c,
     Err(e) => {
-      return raw_io_wrap(
-        natives,
-        make_result_err(natives, format!("proc_spawn \"{cmd}\" failed: {e}"))?,
-      );
+      return raw_io_wrap(natives, make_stream_err(natives, "proc_spawn", &e)?);
     }
   };
   let stdin = child.stdin.take();
@@ -2185,8 +2648,8 @@ fn proc_spawn(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
   )
 }
 
-/// The slot index for a `Child` handle, or a `Result.err` message --
-/// shared by every handle-taking native below.
+/// The slot index for a `Child` handle, or a `NativeArgError` --
+/// shared by `proc_wait` and `proc_stream_fd`.
 fn proc_handle(args: &[Value], name: &'static str) -> Result<usize, CoreEvalError> {
   let h = extract_int(
     args
@@ -2201,175 +2664,29 @@ fn proc_handle(args: &[Value], name: &'static str) -> Result<usize, CoreEvalErro
   Ok(h as usize)
 }
 
-/// `Proc.write (c : Child) (s : String) : RawIO (Result String U64)` --
-/// bytes written, or `Result.err` (a dead child's EPIPE arrives here,
-/// which is the caller's signal the peer is gone).
-fn proc_write(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.len() < 2 {
-    return Err(CoreEvalError::NativeArgError(
-      "proc_write needs 2 args".into(),
-    ));
-  }
-  let slot = proc_handle(args, "proc_write")?;
-  let s = extract_string(&args[1])?;
-  let outcome = {
-    let mut reg = proc_registry()?;
-    match reg.get_mut(slot - 1) {
-      Some(Some(pc)) => match pc.stdin.as_mut() {
-        None => Err("proc_write: child's stdin is closed".to_string()),
-        Some(w) => {
-          use std::io::Write;
-          w.write_all(s.as_bytes())
-            .and_then(|()| w.flush())
-            .map_err(|e| format!("proc_write: {e}"))
-        }
-      },
-      _ => Err("proc_write: no such child".to_string()),
-    }
-  };
-  let value = match outcome {
-    Err(msg) => make_result_err(natives, msg)?,
-    Ok(()) => make_result_ok(
-      natives,
-      Value::Lit(IrLit::Num(s.len() as i64, NumSuffix::U64)),
-    )?,
-  };
-  raw_io_wrap(natives, value)
-}
-
-/// One complete, newline-terminated line off `r`, or `None` at end of
-/// stream. A partial line at EOF (bytes with no trailing newline) is
-/// DISCARDED: JSON-RPC-over-stdio frames are newline-terminated by
-/// specification, so those bytes are a truncated message, not a
-/// message -- surfacing them as one would fabricate a frame the peer
-/// never finished writing. Both backends agree on the answer.
-///
-/// A line is BOUNDED (`PROC_MAX_LINE`): a peer that withholds its
-/// newline would otherwise grow the buffer without limit, and one
-/// caller of `Proc.read_line` is the shell tool, whose peer is an
-/// arbitrary command, not a trusted protocol server. The bound is
-/// checked against the line's CONTENT (the newline does not count), a
-/// line of more than a mebibyte errors, and the check runs on each
-/// chunk BEFORE it is accumulated -- so a flood fails the read at the
-/// bound, it does not grow to the bound first. `runtime.c`'s
-/// `proc_read_line_off` carries the same number and the same message.
-const PROC_MAX_LINE: usize = 1024 * 1024;
-
-fn proc_line<R: std::io::BufRead>(r: &mut R) -> std::io::Result<Option<String>> {
-  let mut buf: Vec<u8> = Vec::new();
-  // `fill_buf`/`consume` rather than `read_line`: `read_line` reads
-  // the WHOLE line before any caller-side check could fire, which is
-  // exactly the unbounded read the bound exists to stop.
-  loop {
-    let available = r.fill_buf()?;
-    if available.is_empty() {
-      // EOF: `buf` may hold a partial line, which is discarded per the
-      // contract above.
-      return Ok(None);
-    }
-    match available.iter().position(|&b| b == b'\n') {
-      Some(i) => {
-        buf.extend_from_slice(&available[..=i]);
-        r.consume(i + 1);
-        break;
-      }
-      None => {
-        if buf.len() + available.len() > PROC_MAX_LINE {
-          return Err(std::io::Error::other("line longer than 1048576 bytes"));
-        }
-        buf.extend_from_slice(available);
-        let n = available.len();
-        r.consume(n);
-      }
-    }
-  }
-  if buf.len() - 1 > PROC_MAX_LINE {
-    return Err(std::io::Error::other("line longer than 1048576 bytes"));
-  }
-  buf.pop(); // the '\n'
-  match String::from_utf8(buf) {
-    Ok(s) => Ok(Some(s)),
-    // The message `BufRead::read_line` itself used for the same case.
-    Err(_) => Err(std::io::Error::other("stream did not contain valid UTF-8")),
-  }
-}
-
-/// `Proc.read_line`/`Proc.read_stderr_line : Child -> IO (Result String
-/// (Option String))` -- `Option.none` is end of stream (or a truncated
-/// final line), `Option.some line` is one line WITHOUT its trailing
-/// newline but WITH any `\r` (toolkit's framing trims that -- the same
-/// split of responsibilities the compiled backend uses).
-///
-/// The take-out, blocking-read, put-back dance shared by the stdout
-/// and stderr readers. `take` pulls the stream out of the slot (so the
-/// registry lock is NOT held across a blocking read -- see the
-/// registry's own comment), `put` returns it; the two closures exist
-/// only because `BufReader<ChildStdout>` and `BufReader<ChildStderr>`
-/// are different types that no single field access could name. A panic
-/// between take and put-back loses the slot, which a test crash
-/// already abandons.
-fn proc_read_stream<T: std::io::Read>(
-  slot: usize,
-  take: impl Fn(&mut ProcChild) -> Option<std::io::BufReader<T>>,
-  put: impl Fn(&mut ProcChild, Option<std::io::BufReader<T>>),
-) -> std::io::Result<Option<String>> {
-  let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
-  let mut taken = match reg.get_mut(slot - 1) {
-    Some(Some(pc)) => take(pc),
-    _ => return Err(std::io::Error::other("no such child")),
-  };
-  drop(reg);
-  let r = match &mut taken {
-    None => Err(std::io::Error::other("stream already closed")),
-    Some(reader) => proc_line(reader),
-  };
-  // Put the reader back whether the read succeeded OR failed. The
-  // lock must not be held across the blocking read (the registry's own
-  // comment), but a FAILED read is not a dead stream: the underlying
-  // fd is unchanged and a later read can still make progress, so
-  // dropping the reader on one error would close the stream for good.
-  // (When the slot itself is gone -- a concurrent `proc_wait` took the
-  // child -- the put-back finds no home, and `taken` dropping closes
-  // the fd, which is what `wait` wants anyway.)
-  if taken.is_some() {
-    let mut reg = proc_registry().map_err(|e| std::io::Error::other(e.to_string()))?;
-    if let Some(pc) = reg.get_mut(slot - 1).and_then(|o| o.as_mut()) {
-      put(pc, taken);
-    }
-  }
-  r
-}
-
-/// `Proc.read (c : Child) (stream : I64) : RawIO (Result String (Option
-/// String))` -- one line of the child's chosen stream (`stream` 0 =
-/// stdout, 1 = stderr), the former `read_line`/`read_stderr_line` twins
-/// merged behind one flag. `Option.none` is end of stream (or a
-/// truncated final line), `Option.some line` is one line WITHOUT its
-/// trailing newline but WITH any `\r` (toolkit's framing trims that --
-/// the same split of responsibilities the compiled backend uses). See
-/// `proc_read_stream`'s own doc for why the lock is not held across
-/// the blocking read.
-fn proc_read(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  if args.len() < 2 {
-    return Err(CoreEvalError::NativeArgError(
-      "proc_read needs 2 args".into(),
-    ));
-  }
-  let slot = proc_handle(args, "proc_read")?;
-  let stderr = extract_int(&args[1])? != 0;
-  let outcome = if stderr {
-    proc_read_stream(slot, |pc| pc.err.take(), |pc, r| pc.err = r)
+/// `proc_stream_fd (c : Child) (which : I64) : RawIO FdStream` -- a view
+/// of one of the child's pipes: 0 = stdin (write end), 1 = stdout
+/// (read end), 2 = stderr (read end). Encoded as a negative tagged
+/// handle rather than an `FD_STREAMS` slot (`child_view_handle`):
+/// `proc_stream_fd` is called once per read/write, and a slot would
+/// leak because a view is never closed. `-1` for a dead child or an
+/// out-of-range flag, exactly what `monad_proc_stream_fd` returns.
+fn proc_stream_fd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let args = stream_args(args, 2, "proc_stream_fd")?;
+  let child = extract_int(&args[0])?;
+  let which = extract_int(&args[1])?;
+  let live = child >= 1
+    && (0..=2).contains(&which)
+    && proc_registry()?
+      .get((child - 1) as usize)
+      .and_then(|o| o.as_ref())
+      .is_some();
+  let handle = if live {
+    child_view_handle(child, which)
   } else {
-    proc_read_stream(slot, |pc| pc.out.take(), |pc, r| pc.out = r)
+    -1
   };
-  let value = match outcome {
-    Err(e) => make_result_err(natives, format!("proc_read: {e}"))?,
-    Ok(opt) => make_result_ok(
-      natives,
-      make_option(natives, opt.map(|s| Value::Lit(IrLit::Str(s.into()))))?,
-    )?,
-  };
-  raw_io_wrap(natives, value)
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(handle, NumSuffix::I64)))
 }
 
 /// `Proc.wait (c : Child) (kill : I64) : RawIO I64` -- close the pipes,
