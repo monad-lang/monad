@@ -285,10 +285,10 @@ def input_sel_span (s : InputSel) : Pair (Pair I64 I64) (Pair I64 I64) :=
     if forward then Pair.pair a f else Pair.pair f a
 
 #[terminating]
-def line_count (ls : List InputLine) : I64 :=
+def input_line_count (ls : List InputLine) : I64 :=
     match ls {
         List.empty => 0,
-        List.cons _ rest => 1 + line_count rest,
+        List.cons _ rest => 1 + input_line_count rest,
     }
 
 /// The byte offset at `(line, display column)`, clamped to the line.
@@ -368,7 +368,7 @@ pub def InputState.hit (st : InputState) (width : I64) (height : I64) (row : I64
         Option.some found => match found {
             Pair.pair cidx _ =>
                 let first : I64 := if cidx - (h - 1) < 0 then 0 else cidx - (h - 1) in
-                let n : I64 := line_count lines in
+                let n : I64 := input_line_count lines in
                 let li : I64 := clamp (first + row) 0 (if n < 1 then 0 else n - 1) in
                 match nth_lines lines li {
                     List.empty => Pair.pair li 0,

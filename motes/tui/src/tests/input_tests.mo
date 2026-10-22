@@ -61,16 +61,16 @@ def test_left_right_cross_a_multibyte_char_in_one_step : Bool :=
 // ── multiline (Phase 11b, the input pass) ────────────────────────────────
 
 #[partial]
-def line_at (ls : List InputLine) (i : I64) : InputLine :=
+def input_line_at (ls : List InputLine) (i : I64) : InputLine :=
     match ls {
         List.empty => { start := 0, len := 0 },
-        List.cons h rest => if i < 1 then h else line_at rest (i - 1),
+        List.cons h rest => if i < 1 then h else input_line_at rest (i - 1),
     }
 
 #[test]
 def test_input_lines_trailing_newline_makes_a_last_empty_line : Bool :=
     let ls : List InputLine := input_lines "a\n" 0 in
-    line_at ls 1 == ({ start := 2, len := 0 } : InputLine)
+    input_line_at ls 1 == ({ start := 2, len := 0 } : InputLine)
 
 #[test]
 def test_alt_enter_inserts_a_newline : Bool :=

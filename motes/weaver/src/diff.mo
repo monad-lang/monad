@@ -42,8 +42,8 @@ pub def Diff.render (old : String) (new : String) : String :=
 
 def render_lines (a : List String) (b : List String) : String :=
     let p : I64 := common_prefix a b in
-    let total_a : I64 := line_count a in
-    let total_b : I64 := line_count b in
+    let total_a : I64 := diff_line_count a in
+    let total_b : I64 := diff_line_count b in
     let s : I64 := capped (common_prefix (List.reverse a) (List.reverse b)) (min_of (total_a - p) (total_b - p)) in
     mid_block
         (drop_lines p (take_lines (total_a - s) a))
@@ -70,10 +70,10 @@ def prefix_walk (xs : List String) (ys : List String) (n : I64) : I64 :=
     }
 
 #[partial]
-def line_count (xs : List String) : I64 :=
+def diff_line_count (xs : List String) : I64 :=
     match xs {
         List.empty => 0,
-        List.cons _ rest => 1 + line_count rest,
+        List.cons _ rest => 1 + diff_line_count rest,
     }
 
 #[partial]
