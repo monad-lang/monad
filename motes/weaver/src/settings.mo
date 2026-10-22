@@ -20,6 +20,7 @@ use std::io {IO.get_env, IO.read_file}
 use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of}
 use std::map {BTreeMap, BTreeMap.to_list}
+use std::list {List.intercalate}
 
 /// One settings file's worth of knobs -- every field optional, an
 /// absent file is simply all-absent.
@@ -181,7 +182,7 @@ pub def Settings.load_of_path (path : String) : IO Settings := do {
 pub def parse_warned (path : String) (text : String) : Loaded :=
     match Toml.parse text {
         Result.err e => parse_failed path e,
-        Result.ok root => parse_loaded root,
+        Result.ok root => parse_loaded path root,
     }
 
 def parse_failed (path : String) (e : Toml.ParseError) : Loaded :=
@@ -189,10 +190,64 @@ def parse_failed (path : String) (e : Toml.ParseError) : Loaded :=
     let l : Loaded := { settings := Settings.empty, warnings := [w] } in
     l
 
-def parse_loaded (root : BTreeMap String Toml.Value) : Loaded :=
+def parse_loaded (path : String) (root : BTreeMap String Toml.Value) : Loaded :=
     let s : Settings := settings_of root in
-    let l : Loaded := { settings := s, warnings := List.empty } in
+    let l : Loaded := { settings := s, warnings := unknown_warnings path (unknown_keys (BTreeMap.to_list root) List.empty) } in
     l
+
+/// Every key this mote reads at the top level. The TABLE keys
+/// (`mcp_caps`, `api_keys`) hold user-named entries, so only the table
+/// names are checked -- their contents are free-form.
+pub def Settings.known_keys : List String :=
+    ["api_keys", "max_turns", "mcp_caps", "mode", "model", "provider"]
+
+#[partial]
+def known_key (k : String) (ks : List String) : Bool :=
+    match ks {
+        List.empty => false,
+        List.cons h rest => if h == k then true else known_key k rest,
+    }
+
+#[partial]
+def unknown_keys (entries : List (Pair String Toml.Value)) (acc : List String) : List String :=
+    match entries {
+        List.empty => List.reverse acc,
+        List.cons kv rest =>
+            match kv {
+                Pair.pair k _ =>
+                    if known_key k Settings.known_keys
+                    then unknown_keys rest acc
+                    else unknown_keys rest (List.cons k acc),
+            },
+    }
+
+/// A near-miss suggestion: a known key that this one extends or that
+/// extends this one (`api_key` -> `api_keys`, `max_turn` -> `max_turns`).
+#[partial]
+def suggest_in (k : String) (ks : List String) : Option String :=
+    match ks {
+        List.empty => Option.none,
+        List.cons h rest =>
+            if Bool.or (String.starts_with h k) (String.starts_with k h)
+            then Option.some h
+            else suggest_in k rest,
+    }
+
+def unknown_warning (path : String) (k : String) : WeaverError :=
+    let hint : String := match suggest_in k Settings.known_keys {
+        Option.none => "",
+        Option.some s => String.concat " -- did you mean \"" (String.concat s "\"?"),
+    } in
+    WeaverError.settings (String.concat "unknown config key \"" (String.concat k
+        (String.concat "\" in " (String.concat path (String.concat " (known: "
+            (String.concat (List.intercalate ", " Settings.known_keys) (String.concat ")" hint)))))))
+
+#[partial]
+def unknown_warnings (path : String) (ks : List String) : List WeaverError :=
+    match ks {
+        List.empty => List.empty,
+        List.cons k rest => List.cons (unknown_warning path k) (unknown_warnings path rest),
+    }
 
 /// `toml`'s own `to_string` is package-private to that mote, so the
 /// warning renders the shape here -- `show` stays Weaver's one render
@@ -221,8 +276,10 @@ def parse_error_show (e : Toml.ParseError) : String :=
 /// ```
 ///
 /// A parse failure is the empty settings (see `Settings.load`); unknown
-/// keys are ignored -- a settings file may well hold another tool's
-/// keys too.
+/// keys are ignored by this pure projection -- a settings file may well
+/// hold another tool's keys too -- while the LOADING path
+/// (`parse_warned`) reports each one so a typo like `[api_key]` for
+/// `[api_keys]` is not silently dead.
 pub def parse_settings (text : String) : Settings :=
     match Toml.parse text {
         Result.err _ => Settings.empty,

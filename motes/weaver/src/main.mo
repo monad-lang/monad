@@ -52,7 +52,7 @@ use json::json {Json}
 use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO.get_env, IO.is_dir}
 use std::stream {StreamError}
 use std::path {Path, Path.of}
-use std::list {List.intercalate}
+use std::list {List.intercalate, List.length}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's
 /// whole point is the write/edit pair; shuttle's own CLI ships only
@@ -114,8 +114,9 @@ struct Plan {
     mcps : List String,
     resume : String,
     cont : Bool,
-    /// A startup warning the run should show (a configured model that did
-    /// not belong to the configured provider, so the default replaced it).
+    /// Startup warnings the run should show, one per line: settings
+    /// problems (unknown keys, parse failures), a configured model that
+    /// did not belong to the provider, and the crash note.
     model_note : Option String,
 }
 
@@ -209,7 +210,7 @@ def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
 /// built-in floor (ollama / the provider's default model / 40 turns).
 /// Phase 9: a bad plan is a `config` error -- the run was misshapen
 /// before it started, and `main` exits 1 on it.
-def plan_of (s : Settings) (c : CliArgs) : Result WeaverError Plan :=
+def plan_of (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result WeaverError Plan :=
     if Bool.not (String.is_empty c.error)
     then Result.err (WeaverError.config c.error)
     else if Bool.and c.cont (Bool.not (String.is_empty c.resume))
@@ -217,6 +218,10 @@ def plan_of (s : Settings) (c : CliArgs) : Result WeaverError Plan :=
     else
         let provider : String := resolve_provider s c.provider in
         let model : String := resolve_model s c.model in
+        // Settings warnings (unknown keys, parse failures) ride the same
+        // startup note, so the TUI shows them in its first block instead
+        // of losing them behind the alternate screen.
+        let base : Option String := warnings_note ws in
         // A model that plainly belongs to another provider (a settings file
         // with `provider = "mistral"` and an ollama tag) is replaced by the
         // provider's default with one visible warning, instead of a server
@@ -224,16 +229,42 @@ def plan_of (s : Settings) (c : CliArgs) : Result WeaverError Plan :=
         match Weaver.model_error provider model {
             Option.none => match Weaver.preset provider model s.api_keys {
                 Result.err e => Result.err (WeaverError.config e),
-                Result.ok cfg => plan_turns s c provider cfg Option.none,
+                Result.ok cfg => plan_turns s c provider cfg base,
             },
             Option.some e => match Weaver.default_model provider {
                 Result.err _ => Result.err (WeaverError.config e),
                 Result.ok d => match Weaver.preset provider d s.api_keys {
                     Result.err e2 => Result.err (WeaverError.config e2),
-                    Result.ok cfg => plan_turns s c provider cfg (Option.some (String.concat "warning: " e)),
+                    Result.ok cfg => plan_turns s c provider cfg
+                        (note_join base (Option.some (String.concat "warning: " e))),
                 },
             },
         }
+
+/// Settings warnings as note lines, in order; `none` when there are
+/// none.
+#[partial]
+def warning_lines (ws : List WeaverError) (acc : List String) : List String :=
+    match ws {
+        List.empty => List.reverse acc,
+        List.cons w rest => warning_lines rest (List.cons (String.concat "warning: " (WeaverError.show w)) acc),
+    }
+
+def warnings_note (ws : List WeaverError) : Option String :=
+    match ws {
+        List.empty => Option.none,
+        List.cons _ _ => Option.some (List.intercalate "\n" (warning_lines ws List.empty)),
+    }
+
+/// Two optional note fragments, newline-joined; either may be absent.
+def note_join (a : Option String) (b : Option String) : Option String :=
+    match a {
+        Option.none => b,
+        Option.some x => match b {
+            Option.none => a,
+            Option.some y => Option.some (String.concat x (String.concat "\n" y)),
+        },
+    }
 
 def resolve_provider (s : Settings) (flag : String) : String :=
     if String.is_empty flag
@@ -444,18 +475,17 @@ pub def main (args : List String) : IO I64 := do {
     let loaded <- Settings.load;
     let _ <- warn_settings setup.log loaded.warnings;
     let _ <- warn_project_keys loaded.project_keys;
-    let code <- main_plan setup colors_on_main loaded.settings (parse_args args);
+    let code <- main_plan setup colors_on_main loaded.settings loaded.warnings (parse_args args);
     Logs.finish setup.log code;
     IO.pure code
 }
 
-/// Phase 9's settings visibility: the parse failures `Settings.load`
-/// swallowed silently now print at startup, one `warning:` line each
-/// (rendered through the one render point) -- and the run continues
-/// with whatever the files did contribute.
+/// Phase 9's settings visibility: parse failures and unknown keys are
+/// logged here and ride the startup note -- the TUI's first transcript
+/// block, or stderr for the line-based fallback. They no longer write
+/// stderr directly, which the TUI's alternate screen hid.
 #[partial]
 def warn_one (log : Option Logger) (w : WeaverError) (rest : List WeaverError) : IO Unit := do {
-    write_errln (String.concat "warning: " (WeaverError.show w));
     Logs.info log (String.concat "ev=settings_warning " (WeaverError.show w));
     warn_settings log rest
 }
@@ -479,9 +509,9 @@ def warn_project_keys (names : List String) : IO Unit :=
             write_errln (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
     }
 
-def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (c : CliArgs) : IO I64 :=
+def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : CliArgs) : IO I64 :=
     let effective : Bool := Bool.and colors (Bool.not c.no_color) in
-    match plan_of s c {
+    match plan_of s ws c {
         Result.err e => do {
             write_errln (String.concat "error: " (WeaverError.show e));
             Logs.error setup.log (String.concat "ev=config_error " (WeaverError.show e));

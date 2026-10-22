@@ -243,8 +243,13 @@ mistral = "..."         # ollama | mistral | openrouter | anthropic
 ```
 
 A missing or unparsable file contributes nothing; a bad value drops its
-own entry, never the file. The built-in floor is
-ollama / the provider's default model / 40 turns / manual mode.
+own entry, never the file. Unknown top-level keys are ignored but
+reported in the startup warnings (the TUI's first transcript block, or
+stderr in the line-based UI), with a near-miss hint -- `[api_key]`
+instead of `[api_keys]` would otherwise be silently dead. The entries
+inside `[mcp_caps]` and `[api_keys]` are free-form and never warn. The
+built-in floor is ollama / the provider's default model / 40 turns /
+manual mode.
 
 ### Colors
 

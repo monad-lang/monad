@@ -1,6 +1,6 @@
 /// The `task` subagent's surface: its spec, its read-only registry, and
 /// the read-only gate it installs on the child loop.
-use weaver::subagent {Subagent.spec, Subagent.system_prompt, Subagent.read_registry}
+use weaver::subagent {Subagent.spec, Subagent.system_prompt, Subagent.read_registry, Subagent.task_tool}
 use shuttle::gate {Gate, Gate.read_only, Pick, Capability, Approval}
 use shuttle::registry {ToolRegistry}
 use shuttle::provider {ProviderConfig, Wire}

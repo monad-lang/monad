@@ -130,6 +130,34 @@ def test_parse_warned_good_file_is_silent : Bool :=
     let l : Loaded := parse_warned "/tmp/weaver/config.toml" "provider = \"mistral\"\n" in
     opt_str_eq l.settings.provider (Option.some "mistral") && no_more l.warnings
 
+/// Unknown top-level keys are ignored by the parser but reported, with
+/// a near-miss hint -- `[api_key]` (the real-world typo) must point at
+/// `[api_keys]`.
+#[test]
+def test_parse_warned_unknown_table_warns_with_a_hint : Bool :=
+    let l : Loaded := parse_warned "/tmp/weaver/config.toml" "[api_key]\nmistral = \"x\"\n" in
+    match l.warnings {
+        List.cons w rest =>
+            is_settings w
+                && String.contains (WeaverError.show w) "unknown config key \"api_key\""
+                && String.contains (WeaverError.show w) "did you mean \"api_keys\""
+                && no_more rest,
+        List.empty => false,
+    }
+
+/// A misspelled scalar is reported too, and the known table keys do not
+/// warn just because their entries are arbitrary.
+#[test]
+def test_parse_warned_unknown_scalar_warns : Bool :=
+    let l : Loaded := parse_warned "/tmp/c.toml" "max_turn = 5\nmodel = \"m\"\n\n[api_keys]\nmistral = \"k\"\n\n[mcp_caps]\nsrv = \"read\"\n" in
+    match l.warnings {
+        List.cons w rest =>
+            String.contains (WeaverError.show w) "unknown config key \"max_turn\""
+                && String.contains (WeaverError.show w) "max_turns"
+                && no_more rest,
+        List.empty => false,
+    }
+
 /// The best-effort contract: a wrong TYPE drops its scalar, a wrong
 /// capability NAME drops its caps entry -- and every other entry of the
 /// same file survives both.
