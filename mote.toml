@@ -41,6 +41,8 @@ members = [
   "motes/http",
   "motes/json",
   "motes/log",
+  "motes/jsgen",
+  "motes/web_wasm",
   "motes/lsp",
   "motes/mcp_client",
   "motes/monadup",

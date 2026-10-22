@@ -1,0 +1,31 @@
+# The browser platform boundary. This mote is wasm-only: every extern it
+# declares is implemented by the web runtime (`runtime/src/platform_web.c`
+# / `wasm/web/web_runtime.js`), and the non-web platform files provide
+# aborting stubs so a native or wasi build that links one fails loudly at
+# the call instead of silently doing nothing.
+#
+# ALL web externs live here. Side-effecting externs are declared `RawIO A`
+# and exposed through the thin `IO` wrappers in `dom.mo`, `fetch.mo`,
+# `clock.mo`, `storage.mo` and `console.mo`. No other mote declares a
+# DOM/fetch/event/timer/storage extern.
+#
+# `targets` is the declaration of intent; the manifest-level gate lands with
+# the loader work in Phase 8 (it is not enforced by the current loader, so
+# the aborting stubs are the active guard today).
+#
+# `jsgen` renders the browser glue from `src/web_abi.mo`, so the import map,
+# the C declarations and the externs cannot drift.
+[mote]
+name = "web_wasm"
+version = "0.1.0"
+edition = "2026"
+targets = ["web"]
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.jsgen]
+path = "../jsgen"
