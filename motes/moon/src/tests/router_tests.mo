@@ -4,7 +4,8 @@
 /// and check the response status and body.
 
 use http::types {
-  GET, Headers.empty, Method, POST, Request, Response, Status.not_found,
+  GET, Headers.empty, Headers.get, Method, POST, Request, Response,
+  Status.method_not_allowed, Status.no_content, Status.not_found,
   Status.ok, empty, http1_1, uri,
 }
 use moon::router {
@@ -56,12 +57,44 @@ def test_route_param_capture : IO Bool := do {
   return (resp_ok res Status.ok "42")
 }
 
-/// Method mismatch: POST /health when only GET registered → 404.
+/// Method mismatch: POST /health when only GET registered → 405 + Allow.
 #[test]
 def test_route_method_mismatch : IO Bool := do {
   let routes := List.cons (Router.get "/health" ok_handler) List.empty;
   let res <- Router.route routes (mk_req Method.POST "/health");
-  return (resp_ok res Status.not_found "Not Found")
+  let allow := match Headers.get "Allow" res.headers {
+    Option.some v => v,
+    Option.none => ""
+  };
+  return (Bool.and (U16.beq res.status Status.method_not_allowed) (String.beq allow "GET, HEAD"))
+}
+
+/// OPTIONS on a known path → 204 with Allow.
+#[test]
+def test_route_options_returns_allow : IO Bool := do {
+  let routes := List.cons (Router.get "/health" ok_handler) List.empty;
+  let res <- Router.route routes (mk_req Method.OPTIONS "/health");
+  let allow := match Headers.get "Allow" res.headers {
+    Option.some v => v,
+    Option.none => ""
+  };
+  return (Bool.and (U16.beq res.status Status.no_content) (String.beq allow "GET, HEAD"))
+}
+
+/// HEAD falls back to the GET route (the server suppresses the body).
+#[test]
+def test_route_head_falls_back_to_get : IO Bool := do {
+  let routes := List.cons (Router.get "/health" ok_handler) List.empty;
+  let res <- Router.route routes (mk_req Method.HEAD "/health");
+  return (resp_ok res Status.ok "ok")
+}
+
+/// A path parameter is percent-decoded after the split.
+#[test]
+def test_route_param_percent_decoded : IO Bool := do {
+  let routes := List.cons (Router.get "/users/:id" echo_param_handler) List.empty;
+  let res <- Router.route routes (mk_req Method.GET "/users/a%20b");
+  return (resp_ok res Status.ok "a b")
 }
 
 /// No match: GET /unknown → 404.
@@ -114,5 +147,15 @@ def test_route_mount : IO Bool := do {
   let sub_routes := List.cons (Router.get "/status" ok_handler) List.empty;
   let routes := List.cons (Router.get "/api/*" (fn req => Router.mount "/api" sub_routes req)) List.empty;
   let res <- Router.route routes (mk_req Method.GET "/api/status");
+  return (resp_ok res Status.ok "ok")
+}
+
+/// Mounting at `/api` also serves the bare prefix: the sub-router's `/`
+/// route answers `/api` itself.
+#[test]
+def test_route_mount_bare_prefix : IO Bool := do {
+  let sub_routes := List.cons (Router.get "/" ok_handler) List.empty;
+  let routes := List.cons (Router.get "/api/*" (fn req => Router.mount "/api" sub_routes req)) List.empty;
+  let res <- Router.route routes (mk_req Method.GET "/api");
   return (resp_ok res Status.ok "ok")
 }

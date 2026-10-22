@@ -5,11 +5,16 @@
 /// function composition: each middleware takes a handler and returns a new
 /// handler. Compose by nesting: `Middleware.cors (Middleware.content_type handler)`.
 ///
+/// The canonical handler type is `Request -> IO (Result String Response)`
+/// (`handler.mo`): a failure is a value, so `recover` is a real adapter and
+/// middleware passes `Err` through untouched. Use `Handler.of_response` to
+/// wrap a total `Request -> IO Response` handler.
+///
 /// Built-in middleware:
 ///   - `Middleware.logging`      — prints method + path to stdout
 ///   - `Middleware.cors`         — adds Access-Control-Allow-* headers
 ///   - `Middleware.content_type` — sets Content-Type if not present
-///   - `Middleware.recover`     — placeholder for error recovery (no-op in v1)
+///   - `Middleware.recover`      — maps `Err` to an error response
 ///   - `Middleware.auth_basic`   — checks Basic Authorization header
 ///   - `Middleware.auth_bearer`  — checks Bearer token in Authorization header
 
@@ -21,20 +26,25 @@ use http::body {Body.content_type}
 use http::strings {
   Strings.base64_decode, Strings.list_drop_prefix, Strings.list_starts_with,
 }
+use lib::handler {Handler.recover}
 
 /// Log the request method and path to stdout before calling the handler.
-pub def Middleware.logging (handler : Request -> IO Response) (req : Request) : IO Response := do {
+pub def Middleware.logging (handler : Request -> IO (Result String Response)) (req : Request) : IO (Result String Response) := do {
   IO.println req.uri.path;
   handler req
 }
 
 // ── CORS ────────────────────────────────────────────────────────────────
 
-/// Add permissive CORS headers to the response. Allows all origins, common
-/// methods, and common headers.
-pub def Middleware.cors (handler : Request -> IO Response) (req : Request) : IO Response :=
-  Monad.bind (handler req) (fn res =>
-    return (Middleware.cors_response res))
+/// Add permissive CORS headers to a successful response. An `Err` passes
+/// through unchanged.
+pub def Middleware.cors (handler : Request -> IO (Result String Response)) (req : Request) : IO (Result String Response) := do {
+  let r <- handler req;
+  match r {
+    Result.ok res => return (Result.ok (Middleware.cors_response res)),
+    Result.err msg => return (Result.err msg)
+  }
+}
 
 /// Add CORS headers to a response.
 def Middleware.cors_response (res : Response) : Response :=
@@ -47,9 +57,13 @@ def Middleware.cors_response (res : Response) : Response :=
 
 /// If the response has a body but no Content-Type header, infer one from
 /// the body variant (text → text/plain, bytes → application/octet-stream, etc.).
-pub def Middleware.content_type (handler : Request -> IO Response) (req : Request) : IO Response :=
-  Monad.bind (handler req) (fn res =>
-    return (Middleware.ensure_content_type res))
+pub def Middleware.content_type (handler : Request -> IO (Result String Response)) (req : Request) : IO (Result String Response) := do {
+  let r <- handler req;
+  match r {
+    Result.ok res => return (Result.ok (Middleware.ensure_content_type res)),
+    Result.err msg => return (Result.err msg)
+  }
+}
 
 /// Add Content-Type if missing, inferred from the body.
 def Middleware.ensure_content_type (res : Response) : Response :=
@@ -64,12 +78,11 @@ def Middleware.ensure_content_type (res : Response) : Response :=
 
 // ── recover ─────────────────────────────────────────────────────────────
 
-/// Catch handler errors and return a 500 response. Since Monad IO has no
-/// built-in exception catching (no try/catch), this is a no-op wrapper in v1.
-/// It exists as a placeholder for when error handling lands; the handler
-/// runs directly.
-pub def Middleware.recover (handler : Request -> IO Response) (req : Request) : IO Response :=
-  handler req
+/// Map a handler failure to a response. `on_error` receives the message and
+/// owns the status/body (a 500 by convention). The result is `Ok`: an error
+/// page is a successful generation of a response.
+pub def Middleware.recover (on_error : String -> Response) (handler : Request -> IO (Result String Response)) (req : Request) : IO (Result String Response) :=
+  Handler.recover on_error handler req
 
 // ── auth_basic ──────────────────────────────────────────────────────────
 
@@ -78,22 +91,28 @@ pub def Middleware.recover (handler : Request -> IO Response) (req : Request) : 
 /// header carries it base64-encoded (RFC 7617), so `check` sees plain
 /// `user:pass` and a credential that is not valid base64 is rejected as
 /// unauthorized rather than handed to `check` as encoded text.
-pub def Middleware.auth_basic (check : String -> Bool) (handler : Request -> IO Response) (req : Request) : IO Response :=
+pub def Middleware.auth_basic (check : String -> Bool) (handler : Request -> IO (Result String Response)) (req : Request) : IO (Result String Response) :=
   match Headers.get "Authorization" req.headers {
-    Option.none => Middleware.unauthorized,
+    Option.none => Middleware.as_ok Middleware.unauthorized,
     Option.some cred =>
       if Strings.list_starts_with (String.to_list "Basic ") (String.to_list cred)
       then
         let encoded := String.from_list (Strings.list_drop_prefix (String.to_list "Basic ") (String.to_list cred)) in
         match Strings.base64_decode encoded {
-          Result.err _ => Middleware.unauthorized,
+          Result.err _ => Middleware.as_ok Middleware.unauthorized,
           Result.ok bytes =>
             if check (String.from_list bytes)
             then handler req
-            else Middleware.forbidden
+            else Middleware.as_ok Middleware.forbidden
         }
-      else Middleware.unauthorized
+      else Middleware.as_ok Middleware.unauthorized
   }
+
+/// Lift an `IO Response` into the error-aware handler result.
+def Middleware.as_ok (io_res : IO Response) : IO (Result String Response) := do {
+  let res <- io_res;
+  return (Result.ok res)
+}
 
 /// 401 Unauthorized response with WWW-Authenticate header.
 def Middleware.unauthorized : IO Response :=
@@ -107,15 +126,15 @@ def Middleware.forbidden : IO Response :=
 
 /// Check for a Bearer token in the Authorization header. If missing or the
 /// token doesn't pass the predicate, return 401.
-pub def Middleware.auth_bearer (check : String -> Bool) (handler : Request -> IO Response) (req : Request) : IO Response :=
+pub def Middleware.auth_bearer (check : String -> Bool) (handler : Request -> IO (Result String Response)) (req : Request) : IO (Result String Response) :=
   match Headers.get "Authorization" req.headers {
-    Option.none => Middleware.unauthorized,
+    Option.none => Middleware.as_ok Middleware.unauthorized,
     Option.some cred =>
       if Strings.list_starts_with (String.to_list "Bearer ") (String.to_list cred)
       then
         let token := String.from_list (Strings.list_drop_prefix (String.to_list "Bearer ") (String.to_list cred)) in
         if check token
         then handler req
-        else Middleware.unauthorized
-      else Middleware.unauthorized
+        else Middleware.as_ok Middleware.unauthorized
+      else Middleware.as_ok Middleware.unauthorized
   }

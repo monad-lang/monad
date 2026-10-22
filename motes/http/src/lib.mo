@@ -37,7 +37,7 @@ pub use lib::strings {
 
 pub use lib::wire {
     Wire.parse_request, Wire.parse_response, Wire.parse_response_with_method,
-    Wire.format_request, Wire.format_response,
+    Wire.format_request, Wire.format_response, Wire.format_response_head,
     Wire.frame_request, Wire.frame_response,
     Wire.response_framing, Wire.response_has_body,
     Wire.chunk_step, Wire.decode_chunked,

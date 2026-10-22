@@ -9,15 +9,16 @@
 use std::process {process_id}
 use moon::server {
   Server.handle_connection, Server.header_has_token, Server.keep_alive,
-  Server.read_message, Server.read_request, Server.serve_connection,
-  Server.static, Server.with_connection_header,
+  Server.read_message, Server.read_request, Server.run, Server.serve_connection,
+  Server.shutdown, Server.start, Server.static, Server.with_connection_header,
+  ServerConfig, ServerConfig.on,
 }
 use std::stream {Stream, FdStream}
 use http::types {
   Transport, Transport.read_bytes, Transport.write_bytes,
-  GET, Headers, Headers.empty, Headers.get, Headers.set, POST, Request, Response,
-  Status.bad_request, Status.not_found, Status.ok, Uri, empty, http1_0, http1_1,
-  text,
+  GET, Headers, Headers.empty, Headers.get, Headers.set, Method, POST, Request,
+  Response, Status.bad_request, Status.not_found, Status.ok, Uri, empty,
+  http1_0, http1_1, text,
 }
 use http::strings {Strings.drop_bytes}
 use http::wire {
@@ -60,6 +61,10 @@ def get_req (port : U16) : Request :=
 /// Make a POST request with a text body for a loopback URL.
 def post_req (port : U16) (body : String) : Request :=
   { method := Method.POST, uri := uri_of (url_for port), headers := Headers.empty, version := HttpVersion.http1_1, body := Body.from_text body }
+
+/// Make a HEAD request for a loopback URL.
+def head_req (port : U16) : Request :=
+  { method := Method.HEAD, uri := uri_of (url_for port), headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
 
 /// Check a response: status matches and body text matches.
 def resp_ok (resp : Result String Response) (want_status : U16) (want_body : String) : Bool :=
@@ -151,6 +156,44 @@ def test_serve_simple : IO Bool := do {
               let resp <- client_read client_sock;
               Stream.close client_sock;
               return (resp_ok resp Status.ok "hello")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// HEAD: the server sends the head (with the representation's
+/// Content-Length) and no body, even though the route is a GET handler.
+#[test]
+def test_head_sends_no_body : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res <- IO.tcp_connect "127.0.0.1" port;
+      match conn_res {
+        Result.err _ => do { Stream.close listener; return false },
+        Result.ok client_sock => do {
+          let accept_res <- IO.tcp_accept listener;
+          Stream.close listener;
+          match accept_res {
+            Result.err _ => do { Stream.close client_sock; return false },
+            Result.ok server_sock => do {
+              client_write client_sock (head_req port);
+              Server.handle_connection hello_handler server_sock;
+              let read <- tcp_read_bytes client_sock 4096;
+              Stream.close client_sock;
+              match read {
+                Result.err _ => return false,
+                Result.ok bytes =>
+                  let s := String.from_list bytes in
+                  return (Bool.or
+                    (String.beq s "HTTP/1.1 200 \r\ncontent-length: 5\r\n\r\n")
+                    (String.beq s "HTTP/1.1 200 \r\n\r\ncontent-length: 5\r\n"))
+              }
             }
           }
         }
@@ -566,6 +609,37 @@ def test_read_closed_connection_is_clean : IO Bool := do {
           }
         }
       }
+    }
+  }
+}
+
+/// `Server.run` reports a bind failure instead of silently returning.
+#[test]
+def test_run_reports_bind_failure : IO Bool := do {
+  let first <- IO.tcp_listen 0u16;
+  match first {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let run_res <- Server.run (ServerConfig.on port) hello_handler;
+      Stream.close listener;
+      match run_res {
+        Result.err _ => return true,
+        Result.ok _ => return false
+      }
+    }
+  }
+}
+
+/// `Server.start` returns a handle and `shutdown` closes its listener.
+#[test]
+def test_start_and_shutdown : IO Bool := do {
+  let started <- Server.start (ServerConfig.on 0u16) hello_handler;
+  match started {
+    Result.err _ => return false,
+    Result.ok handle => do {
+      Server.shutdown handle;
+      return true
     }
   }
 }

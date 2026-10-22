@@ -6,14 +6,21 @@
 // `Router.get/post/...` rather than by hand.
 
 pub use lib::server {
-    Server.serve, Server.serve_concurrent, Server.static,
+    Server.serve, Server.serve_result, Server.serve_concurrent, Server.static,
     Server.handle_connection, Server.serve_connection,
     Server.max_keep_alive_requests,
+    ServerConfig, ServerConfig.default, ServerConfig.on, ServerHandle,
+    Server.run, Server.run_response, Server.start, Server.wait, Server.shutdown,
+}
+
+pub use lib::handler {
+    Handler.of_response, Handler.recover, Handler.map_error, Handler.try,
 }
 
 pub use lib::router {
     Route, Router.route, Router.get, Router.post, Router.put, Router.delete,
-    Router.patch, Router.mount, Router.param,
+    Router.patch, Router.head, Router.options, Router.mount, Router.allowed,
+    Router.param,
 }
 
 pub use lib::middleware {

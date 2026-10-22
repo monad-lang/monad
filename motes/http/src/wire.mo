@@ -38,7 +38,7 @@ def Wire.append_all (xs : List (List U8)) : List U8 :=
 
 // ── helpers for method / status / version strings ───────────────────────
 
-def Wire.method_str (m : Method) : String :=
+pub def Wire.method_str (m : Method) : String :=
   match m {
     Method.GET => "GET",
     Method.HEAD => "HEAD",
@@ -176,6 +176,20 @@ pub def Wire.format_response (res : Response) : Result String (List U8) :=
   match Wire.content_length_of res.body {
     Result.err e => Result.err e,
     Result.ok len => Wire.format_response_at res len
+  }
+
+/// Serialise only the response head, keeping the representation's
+/// `Content-Length` but writing no body. This is what a `HEAD`, 204 or 304
+/// answer needs: the peer is told how large the body would be, and the
+/// connection stays framed.
+pub def Wire.format_response_head (res : Response) : Result String (List U8) :=
+  match Wire.content_length_of res.body {
+    Result.err e => Result.err e,
+    Result.ok len =>
+      let status_line := Wire.status_line res.status res.version in
+      let hs := Wire.add_content_length res.headers len in
+      let hdrs := Wire.header_lines hs in
+      Result.ok (List.append (List.append status_line hdrs) Wire.crlf)
   }
 
 /// Format a response whose body length is already known.

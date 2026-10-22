@@ -35,14 +35,15 @@ use std::concurrent::fiber {Fiber, await_fiber, forkIO}
 use std::stream {Stream, FdStream, StreamError, StreamError.is_not_found}
 use http::types {
   Transport, Transport.read_bytes, Transport.write_bytes,
-  Body, Headers, Request, Response, Status.bad_request,
+  Body, Headers, Method, Request, Response, Status.bad_request,
   Status.internal_server_error, Status.not_found, Status.ok, http1_0, http1_1,
 }
 use http::strings {Strings.drop_bytes}
 use http::wire {
-  Wire.format_response, Wire.frame_request, Wire.parse_request,
-  Wire.take_bytes,
+  Wire.format_response, Wire.format_response_head, Wire.frame_request,
+  Wire.parse_request, Wire.response_has_body, Wire.take_bytes,
 }
+use lib::handler {Handler.try}
 
 // ── socket bytes ────────────────────────────────────────────────────────
 
@@ -201,7 +202,7 @@ def Server.serve_one (handler : Request -> IO Response) (sock : FdStream) (bytes
     Result.ok req => do {
       let closing := Bool.not (Server.keep_alive req served);
       let res <- handler req;
-      Server.write_response sock closing res
+      Server.write_response_for sock req.method closing res
     }
   }
 
@@ -213,6 +214,28 @@ def Server.serve_one (handler : Request -> IO Response) (sock : FdStream) (bytes
 /// as complete would be a claim about bytes that do not exist.
 def Server.write_response (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
   match Wire.format_response (Server.with_connection_header closing res) {
+    Result.err _ => do {
+      Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
+      return false
+    },
+    Result.ok bytes => do {
+      Server.write_bytes sock bytes;
+      return (Bool.not closing)
+    }
+  }
+
+/// Write a response for `method`: `HEAD`, 204 and 304 send the head (with
+/// the representation's `Content-Length`) but no body, so a HEAD fallback to
+/// a GET route is correct on the wire. Everything else uses the ordinary
+/// framed writer.
+pub def Server.write_response_for (sock : FdStream) (method : Method) (closing : Bool) (res : Response) : IO Bool :=
+  if Bool.not (Wire.response_has_body method res.status)
+  then Server.write_response_head sock closing res
+  else Server.write_response sock closing res
+
+/// The head-only writer used by `write_response_for`.
+def Server.write_response_head (sock : FdStream) (closing : Bool) (res : Response) : IO Bool :=
+  match Wire.format_response_head (Server.with_connection_header closing res) {
     Result.err _ => do {
       Server.write_bytes sock (Server.canned_bytes Server.internal_error_response);
       return false
@@ -299,6 +322,79 @@ pub def Server.serve (handler : Request -> IO Response) (port : U16) : IO Unit :
     Result.ok listener => Server.serve_loop handler listener
   }
 }
+
+/// Serve with the error-aware handler type: an `Err` becomes the canned 500.
+/// The existing `serve` remains for total handlers; `Handler.of_response`
+/// adapts one to this shape.
+pub def Server.serve_result (handler : Request -> IO (Result String Response)) (port : U16) : IO Unit :=
+  Server.serve (Handler.try Server.internal_error_response handler) port
+
+// ── lifecycle ───────────────────────────────────────────────────────────
+//
+// `run` reports a bind/accept failure instead of the old silent `unit`;
+// `start` hands back a handle whose listener can be closed to stop the
+// accept loop. `host` and `max_keep_alive` are recorded for the
+// `tcp_listen_on`/per-server-cap work; the current listener binds 0.0.0.0.
+
+pub struct ServerConfig {
+  host : String,
+  port : U16,
+  max_in_flight : I64,
+  max_keep_alive : I64
+}
+
+pub def ServerConfig.default : ServerConfig :=
+  let cfg : ServerConfig :=
+    { host := "0.0.0.0", port := 8080u16, max_in_flight := 1, max_keep_alive := 100 } in
+  cfg
+
+pub def ServerConfig.on (port : U16) : ServerConfig :=
+  let cfg : ServerConfig := { ServerConfig.default with port := port } in
+  cfg
+
+/// A running server: the listener to close for shutdown and the accept-loop
+/// fiber to await.
+pub struct ServerHandle {
+  listener : FdStream,
+  fiber : Fiber Unit
+}
+
+/// Run a server and report a bind/accept failure. Sequential (one connection
+/// at a time); returns only when the listener fails.
+#[terminating]
+pub def Server.run (cfg : ServerConfig) (handler : Request -> IO Response) : IO (Result String Unit) := do {
+  let listen_res <- IO.tcp_listen cfg.port;
+  match listen_res {
+    Result.err e => return (Result.err e.message),
+    Result.ok listener => do {
+      Server.serve_loop handler listener;
+      return (Result.ok unit)
+    }
+  }
+}
+
+/// `run` for the error-aware handler type.
+#[terminating]
+pub def Server.run_response (cfg : ServerConfig) (handler : Request -> IO (Result String Response)) : IO (Result String Unit) :=
+  Server.run cfg (Handler.try Server.internal_error_response handler)
+
+/// Start the accept loop on a fiber and return a handle. `shutdown` closes
+/// the listener; the loop then exits on the next accept failure.
+pub def Server.start (cfg : ServerConfig) (handler : Request -> IO Response) : IO (Result String ServerHandle) := do {
+  let listen_res <- IO.tcp_listen cfg.port;
+  match listen_res {
+    Result.err e => return (Result.err e.message),
+    Result.ok listener => do {
+      let fiber <- forkIO (fn (_ : Unit) => Server.serve_loop handler listener);
+      let h : ServerHandle := { listener := listener, fiber := fiber };
+      return (Result.ok h)
+    }
+  }
+}
+
+pub def Server.wait (h : ServerHandle) : IO Unit := await_fiber h.fiber
+
+pub def Server.shutdown (h : ServerHandle) : IO Unit := Stream.close h.listener
 
 /// Accept one connection, serve it to completion, then recurse.
 #[terminating]
