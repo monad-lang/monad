@@ -32,6 +32,12 @@ pub struct MoteMeta {
   pub name: String,
   pub version: String,
   pub edition: Option<String>,
+  /// `[mote] targets = [...]`: the build profiles this mote's side effects
+  /// are implemented for. Informational -- availability is enforced per
+  /// extern/native at codegen, not per mote, so a mote's pure parts stay
+  /// usable on every target. Kept here for parity with the self-hosted
+  /// loader (`lang/src/mote.mo`) and for tooling that reads manifests.
+  pub targets: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +153,8 @@ struct RawMoteMeta {
   name: String,
   version: String,
   edition: Option<String>,
+  #[serde(default)]
+  targets: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -244,6 +252,7 @@ impl Manifest {
         name: m.name,
         version: m.version,
         edition: m.edition,
+        targets: m.targets,
       }),
       link_libs: raw.link.map(|l| l.libs).unwrap_or_default(),
       lib_path: raw.lib.and_then(|l| l.path),
@@ -621,6 +630,33 @@ version = "0.1.0"
     assert_eq!(mote.version, "0.1.0");
     assert!(mote.edition.is_none());
     assert!(raw.dependencies.is_empty());
+  }
+
+  #[test]
+  fn test_parse_mote_toml_targets() {
+    // `targets` is informational (availability is per declaration), but the
+    // key must round-trip through the host's manifest so tooling and the
+    // self-hosted loader agree on what a manifest says.
+    let toml_str = r#"
+[mote]
+name = "web_wasm"
+version = "0.1.0"
+targets = ["web"]
+"#;
+    let raw: RawManifest = toml::from_str(toml_str).unwrap();
+    let mote = raw.mote.unwrap();
+    assert_eq!(mote.targets, vec!["web".to_string()]);
+  }
+
+  #[test]
+  fn test_parse_mote_toml_without_targets_defaults_empty() {
+    let toml_str = r#"
+[mote]
+name = "plain"
+version = "0.1.0"
+"#;
+    let raw: RawManifest = toml::from_str(toml_str).unwrap();
+    assert!(raw.mote.unwrap().targets.is_empty());
   }
 
   #[test]

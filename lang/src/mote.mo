@@ -76,6 +76,14 @@ pub struct MoteManifest {
     /// exists is what `build_target` checks before building it, which is what
     /// keeps a default from becoming an invention.
     bins : List BinTarget,
+    /// `[mote] targets = [...]`: the build PROFILES this mote's side effects
+    /// are implemented for (`"web"` for the browser boundary). Informational
+    /// only -- availability is enforced per extern/native at codegen
+    /// (`validate_native_target_availability`), not per mote, because a
+    /// mote's pure parts (an ABI spec, a generator) must stay usable on
+    /// every target. Do not confuse it with `Mote.target_roots`, which is
+    /// about SOURCE files.
+    targets : List String,
 }
 
 /// One binary target: what `monad build` selects between.
@@ -528,6 +536,7 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
             let pkgs := Mote.table_string_array (Toml.table_get "link" root) "pkg-config" in
             let lib_path := Mote.lib_target_path dir root in
             let bins := Mote.bin_targets dir name root in
+            let targets := Mote.table_string_array (Toml.table_get "mote" root) "targets" in
             let m : MoteManifest := {
                 name := name,
                 dir := dir,
@@ -537,6 +546,7 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
                 link_pkgs := pkgs,
                 lib_path := lib_path,
                 bins := bins,
+                targets := targets,
             } in
             Option.some m
     }
@@ -1183,6 +1193,9 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
                 // `src/` tree to hold.
                 lib_path := Option.none,
                 bins := List.empty,
+                // The inline annotation carries no `targets` key; it is a
+                // target FILE, and profile availability is per declaration.
+                targets := List.empty,
             } in
             Option.some m
     }
@@ -1216,6 +1229,15 @@ def roots_joined (roots : List String) : String :=
 /// defaults are what `Mote.target_roots` has to work from.
 def no_target_manifest_fixture : String :=
   "[mote]\nname = \"plain\"\nversion = \"0.1.0\"\n"
+
+/// `[mote] targets` is parsed so the declaration is real data. Availability
+/// itself is enforced per extern/native at codegen, not per mote.
+#[test]
+def test_parse_manifest_targets : Bool :=
+    match Mote.parse_manifest "web_wasm" "[mote]\nname = \"web_wasm\"\nversion = \"0.1.0\"\ntargets = [\"web\"]\n" {
+        Option.none => false,
+        Option.some m => String.beq (roots_joined m.targets) "web",
+    }
 
 /// A declared `[lib] path = "src/lib.mo"` means the mote's sources are
 /// under `src`, not under the whole mote directory.

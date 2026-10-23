@@ -114,4 +114,14 @@ grep -q 'fork_io' "$tmp/gate-wasi.log" \
 grep -q 'not available on target' "$tmp/gate-wasi.log" \
     || fail "wasi gate did not explain the target: $(cat "$tmp/gate-wasi.log")"
 
+echo "== gating: web externs fail on native =="
+if "$MONAD" build fixtures/wasm/web_extern_native.mo \
+    -o "$tmp/gate-native" --no-cache >"$tmp/gate-native.log" 2>&1; then
+    fail "native build accepted a web_* extern"
+fi
+grep -q 'web_dom_create' "$tmp/gate-native.log" \
+    || fail "native gate did not name web_dom_create: $(cat "$tmp/gate-native.log")"
+grep -q 'not available on target' "$tmp/gate-native.log" \
+    || fail "native gate did not explain the target: $(cat "$tmp/gate-native.log")"
+
 echo "ok: wasm target checks passed"

@@ -285,7 +285,11 @@ def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs 
                     match strip_db_lams term_ {
                         Term.hole =>
                             match native_attr_target_name attrs {
-                                Option.none => find_unavailable_native_defs_go kind triple rest acc,
+                                Option.none =>
+                                    match extern_target_problem kind triple name attrs {
+                                        Option.none => find_unavailable_native_defs_go kind triple rest acc,
+                                        Option.some msg => find_unavailable_native_defs_go kind triple rest (List.cons msg acc),
+                                    },
                                 Option.some target =>
                                     match native_target_availability kind target {
                                         NativeAvailability.available =>
@@ -298,6 +302,37 @@ def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs 
                             },
                         _ => find_unavailable_native_defs_go kind triple rest acc,
                     },
+            },
+    }
+
+/// A `#[extern "c"]` binding that only exists on the web profile.
+///
+/// `motes/web_wasm` owns every browser extern and names each one `web_*`
+/// (the prefix is also what keeps `validate_no_monad_externs` from treating
+/// a browser import as a runtime symbol). On native/wasi the symbol has no
+/// implementation at all, so a REACHABLE one is a compile error naming the
+/// extern and the target instead of an `undefined symbol` at link -- the
+/// same shape `native_target_availability` gives an unsupported native.
+///
+/// The check is reachability-based, not mote-based: `web_wasm`'s PURE parts
+/// (`WebAbi`, `Glue.loader`) must keep running on every target, including
+/// the golden and drift tests, so a whole-mote "web only" gate would be
+/// wrong.
+#[partial]
+def extern_target_problem (kind : TargetKind) (triple : String) (name : NamePath) (attrs : List Attribute) : Option String :=
+    match kind {
+        TargetKind.web => Option.none,
+        _ =>
+            match extern_link_name attrs {
+                Option.none => Option.none,
+                Option.some link =>
+                    if String.starts_with "web_" link
+                    then
+                        let def_name := name_path_to_str name in
+                        Option.some (String.concat
+                            ("extern `" ++ link ++ "` (needed by def `" ++ def_name ++ "`) is not available on target `" ++ triple ++ "` (" ++ TargetKind.name kind ++ "): ")
+                            "it is part of the browser boundary (motes/web_wasm), which only the web profile implements")
+                    else Option.none,
             },
     }
 
