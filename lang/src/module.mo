@@ -7686,6 +7686,57 @@ def test_resolve_class_calls_expect_resolves_zero_arg_constrained_op : IO Bool :
     })
 }
 
+/// A VARIABLE-HEADED instance must never override a dict-carrying scope's
+/// own `__dict_<Cls>` (`dict_forwarding_override`): the prelude's
+/// `instance {I} [IndexedMonad M] Monad (M I I)` matches any carrier whose
+/// head is a type variable, and inside a `[Monad M]` def the call is checked
+/// at the ARGUMENT's type (`r : R` here, `R`/`Option B` in
+/// `init/src/transformers.mo`), which is exactly such a carrier. Diverting
+/// there resolves the bridge's own `[IndexedMonad M]` -- impossible -- and
+/// the call falls back to the abstract signature, staying unresolved.
+/// MEASURED as `no instance found for prelude::Monad.pure` in every
+/// `[Monad M]` def of `init/transformers.mo` once the syntactic pass stopped
+/// covering for it. The local dictionary IS this class's own dictionary, so
+/// forwarding is the answer; a CONCRETE-headed instance still diverts (the
+/// `BEq (List A)` recursive-tail case the override exists for).
+#[test]
+def test_elaborate_forwards_dict_past_a_variable_headed_instance : IO Bool := do {
+    let src : String :=
+        "class IndexedMonad (M : Type -> Type -> Type -> Type) { def ipure (a : A) : M I I A }\n" ++
+        "class Monad (M : Type -> Type) { def pure (a : A) : M A }\n" ++
+        "instance {I : Type} [IndexedMonad M] Monad (M I I) { def pure (a : A) : M I I A := IndexedMonad.ipure a }\n" ++
+        "def lift_pure [Monad M] {A : Type} {R : Type} (r : R) : M A := Monad.pure r";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let elaborated := elaborate_parsed_decls decl_list;
+            // Non-vacuity: the def's body must still call the method at all.
+            let calls_pure := decl_list_def_term_body_uses elaborated "lift_pure" "pure";
+            let forwards := decl_list_def_term_body_uses elaborated "lift_pure" "__dict_Monad";
+            Bool.and calls_pure forwards
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
+/// The four argument-carrier sources the retired syntactic pass's
+/// `infer_carrier_type`/`infer_all_carriers_from_args_go` provided, pinned
+/// on the checker alone -- every one of them left a class call unresolved
+/// without the port:
+///
+///   * `some N.n` is typed `Opt N` from its ARGUMENT (`some`'s own parameter),
+///     which is what lets `Fold.foldl`'s `T A` bind.
+///   * `Fold.foldl`'s LAMBDA is checked against the parameter the call's LATER
+///     arguments solve (`B := N` from `N.n`), so `HAdd.add acc x` resolves.
+///   * `Bnd.max_bound` is a zero-argument class call in FIRST position; only
+///     the chain's next domain (`N.n : N`) names its instance.
+///   * `dfl`'s lambda is a DEF call's first argument, so the def's own
+///     signature is pre-solved from its later arguments before pairing.
+///
+/// MEASURED without them: `std/src/array.mo`'s `test_array_foldl_sums`,
+/// `init/src/foldable_tests.mo`'s `test_foldr_option_none` and
+/// `std/src/base.mo`'s `test_bounded_max` all report `no instance found`
+/// once `resolve_class_calls_decls` stops covering for the checker.
 /// The see-through gap (`collect_constrained_def_classes`): `through`
 /// reaches `Bind` ONLY through a call to another constrained def, so a
 /// body-local predicate reads `[Bind M]` as phantom, Phase 3 gives it no
