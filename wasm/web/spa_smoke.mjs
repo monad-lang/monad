@@ -108,6 +108,11 @@ class FakeNode {
 let lastCreated = null;
 
 const body = new FakeNode(1, 'BODY');
+// A stand-in for a server-rendered page: `oak_mount` must clear the
+// container before mounting (v1 hydration replaces, it does not adopt).
+const stale = new FakeNode(1, 'DIV');
+stale.setAttribute('id', 'server-rendered');
+body.appendChild(stale);
 globalThis.document = {
   body,
   querySelector(selector) {
@@ -141,6 +146,9 @@ host.set_root('#app');
 
 instance.exports.oak_mount();
 
+if (body.childNodes.some((n) => n.attrs.id === 'server-rendered')) {
+  fail('oak_mount did not clear the server-rendered content under the root');
+}
 const root = body.childNodes.find((n) => n.tagName === 'DIV');
 if (!root) fail('oak_mount did not append the view under the root');
 const counter = () => root.childNodes.find((n) => n.tagName === 'SPAN');

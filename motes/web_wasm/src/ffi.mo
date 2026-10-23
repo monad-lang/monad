@@ -57,6 +57,9 @@ def dom_add_listener_raw (n : Node) (event : String) (handler : I64) : RawIO Uni
 #[extern "c" {link_name := "web_dom_child"}]
 def dom_child_raw (n : Node) (index : I64) : RawIO Node
 
+#[extern "c" {link_name := "web_dom_child_count"}]
+def dom_child_count_raw (n : Node) : RawIO I64
+
 #[extern "c" {link_name := "web_fetch_begin"}]
 def fetch_begin_raw (url : String) (method : I64) (body : String) : RawIO RequestId
 

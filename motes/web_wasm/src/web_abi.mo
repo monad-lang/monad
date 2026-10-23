@@ -69,6 +69,9 @@ def WebImport.dom_add_listener : WebImport :=
 def WebImport.dom_child : WebImport :=
   { module := "monad", name := "dom_child", params := ["i64", "i64"], result := "i64" }
 
+def WebImport.dom_child_count : WebImport :=
+  { module := "monad", name := "dom_child_count", params := ["i64"], result := "i64" }
+
 def WebImport.fetch_begin : WebImport :=
   { module := "monad", name := "fetch_begin", params := ["i64", "i64", "i64", "i64", "i64"], result := "i64" }
 
@@ -124,6 +127,7 @@ pub def WebAbi.default : WebAbi :=
         WebImport.dom_append, WebImport.dom_insert_before, WebImport.dom_remove,
         WebImport.dom_replace, WebImport.dom_set_attr, WebImport.dom_remove_attr,
         WebImport.dom_set_text, WebImport.dom_add_listener, WebImport.dom_child,
+        WebImport.dom_child_count,
         WebImport.fetch_begin, WebImport.fetch_poll, WebImport.fetch_status,
         WebImport.fetch_read, WebImport.now_ms, WebImport.storage_get_raw,
         WebImport.storage_set, WebImport.console_log,

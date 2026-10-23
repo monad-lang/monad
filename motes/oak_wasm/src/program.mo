@@ -24,7 +24,7 @@ use oak::app {Command, Host, Host.run_effect, Program, Program.step, Program.vie
 use web_wasm::dom {Dom.append, Dom.root}
 use web_wasm::keep {Keep.load, Keep.save}
 use web_wasm::types {Node}
-use lib::patch {Patch.mount_node, Patch.diff, Patch.apply}
+use lib::patch {Patch.mount_node, Patch.diff, Patch.apply, Patch.clear}
 
 pub type RuntimeState (S : Type) (Msg : Type) {
     st (root : Node) (last : Html.Node) (model : S) (queue : List Msg) (stopped : Bool)
@@ -34,6 +34,9 @@ pub type RuntimeState (S : Type) (Msg : Type) {
 /// to the next export call.
 pub def Runtime.mount {S : Type} {Msg : Type} (init : S) (view : S -> Html.Node) : IO Unit := do {
     let root <- Dom.root;
+    // v1 hydration: replace whatever the container already holds (an
+    // SSR-rendered page) rather than adopting it.
+    let _ <- Patch.clear root;
     let tree := view init;
     let node <- Patch.mount_node tree;
     let _ <- Dom.append root node;

@@ -263,6 +263,11 @@ export const host = {
     return addNode(child);
   },
 
+  dom_child_count(node) {
+    const n = nodeById(node);
+    return BigInt(n ? n.childNodes.length : 0);
+  },
+
   // ── fetch (two-phase: a promise must not re-enter wasm) ─────────────
   fetch_begin(uptr, ulen, method, bptr, blen) {
     const url = str(uptr, ulen);

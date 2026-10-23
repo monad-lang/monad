@@ -194,6 +194,9 @@ extern int64_t monad_js_dom_add_listener(int64_t node, int64_t eptr, int64_t ele
 __attribute__((import_module("monad"), import_name("dom_child")))
 extern int64_t monad_js_dom_child(int64_t node, int64_t index);
 
+__attribute__((import_module("monad"), import_name("dom_child_count")))
+extern int64_t monad_js_dom_child_count(int64_t node);
+
 __attribute__((import_module("monad"), import_name("fetch_begin")))
 extern int64_t monad_js_fetch_begin(int64_t uptr, int64_t ulen, int64_t method,
                                     int64_t bptr, int64_t blen);
@@ -305,6 +308,10 @@ int64_t web_dom_add_listener(int64_t node, const char* event, int64_t handler) {
 
 int64_t web_dom_child(int64_t node, int64_t index) {
     return monad_js_dom_child(node, index);
+}
+
+int64_t web_dom_child_count(int64_t node) {
+    return monad_js_dom_child_count(node);
 }
 
 int64_t web_fetch_begin(const char* url, int64_t method, const char* body) {
