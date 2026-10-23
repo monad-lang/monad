@@ -7,8 +7,10 @@
 /// completes before the next starts.
 
 use moose::client {
-  Client.close, Client.connect, Client.get, Client.host_port,
-  Client.read_response, Client.redirect_request, Client.stream_response,
+  Client.close, Client.connect, Client.connect_with_timeout,
+  Client.connect_with_timeout_io, Client.get,
+  Client.get_timeout, Client.host_port, Client.read_response,
+  Client.redirect_request, Client.stream_response, Client.stream_response_timeout,
   Client.write_request, Connection,
 }
 use std::stream {Stream, FdStream}
@@ -774,6 +776,117 @@ def test_stream_response_callback_error_aborts : IO Bool := do {
               Client.close conn;
               match res {
                 Result.err e => return (e == "callback-failed"),
+                Result.ok _ => return false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// ── timeouts ────────────────────────────────────────────────────────────
+
+/// A listener that never accepts or answers: the client's connect and
+/// write complete (the kernel backlog holds them), then the read waits
+/// under its deadline instead of hanging.
+#[test]
+def test_get_timeout_is_bounded : IO Bool := do {
+  let lr <- IO.tcp_listen 0u16;
+  match lr {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let u : Uri := uri_of (url_for port);
+      let start <- IO.current_time;
+      let res <- Client.get_timeout u Headers.empty 200i64;
+      let now <- IO.current_time;
+      let elapsed : I64 := now - start;
+      Stream.close listener;
+      match res {
+        Result.err e => return (String.contains e "timed out" && elapsed < 3000i64),
+        Result.ok _ => return false
+      }
+    }
+  }
+}
+
+#[test]
+def test_connect_with_timeout_completes_on_loopback : IO Bool := do {
+  let lr <- IO.tcp_listen 0u16;
+  match lr {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let res <- Client.connect_with_timeout (url_for port) 1000i64;
+      Stream.close listener;
+      match res {
+        Result.err _ => return false,
+        Result.ok conn => do { Client.close conn; return true }
+      }
+    }
+  }
+}
+
+/// The two-bound connect path: the connection keeps the connect value as
+/// its non-streaming deadline while the socket carries the I/O bound.
+/// Loopback cannot observe SO_RCVTIMEO, so this pins the wiring and the
+/// preserved `Connection.timeout_ms`.
+#[test]
+def test_connect_with_timeout_io_completes_on_loopback : IO Bool := do {
+  let lr <- IO.tcp_listen 0u16;
+  match lr {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let res <- Client.connect_with_timeout_io (url_for port) 1000i64 60000i64;
+      Stream.close listener;
+      match res {
+        Result.err _ => return false,
+        Result.ok conn => do {
+          let deadline : I64 := conn.timeout_ms;
+          let ok : Bool := I64.beq deadline 1000i64;
+          Client.close conn;
+          return ok
+        }
+      }
+    }
+  }
+}
+
+/// Headers plus one chunk, then silence: the body walker's per-read idle
+/// bound fails the read rather than waiting for a terminal chunk forever.
+#[test]
+def test_stream_idle_timeout_is_bounded : IO Bool := do {
+  let lr <- IO.tcp_listen 0u16;
+  match lr {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { Stream.close listener; return false },
+        Result.ok conn => do {
+          let srv <- IO.tcp_accept listener;
+          match srv {
+            Result.err _ => do { Client.close conn; Stream.close listener; return false },
+            Result.ok sock => do {
+              Client.write_request conn (get_req port);
+              tcp_read_bytes sock 8192;
+              tcp_write_bytes sock (String.to_list "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n");
+              let init : List U8 := List.empty;
+              let collect : List U8 -> List U8 -> IO (Result String (Pair (List U8) Unit)) :=
+                fn (acc : List U8) (bytes : List U8) => IO.pure (Result.ok (Pair.pair acc unit));
+              let start <- IO.current_time;
+              let res <- Client.stream_response_timeout Method.GET conn.socket 200i64 init collect;
+              let now <- IO.current_time;
+              let elapsed : I64 := now - start;
+              Client.close conn;
+              Stream.close sock;
+              Stream.close listener;
+              match res {
+                Result.err e => return (String.contains e "timed out" && elapsed < 3000i64),
                 Result.ok _ => return false
               }
             }

@@ -220,6 +220,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     budget := budget,
     mcps := List.empty,
     keys := BTreeMap.empty,
+    catalog := BTreeMap.empty,
     quit := false,
     fatal := Option.none,
     colors := true,

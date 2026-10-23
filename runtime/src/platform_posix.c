@@ -1083,6 +1083,105 @@ void* monad_tcp_connect(char* host, int64_t port) {
     return tcp_ok((void*)(int64_t)fd);
 }
 
+/* `tcp_connect_timeout : String -> U16 -> I64 -> RawIO (Result (Pair I64
+   String) FdStream)` -- `tcp_connect` with one deadline spanning every
+   address tried (the DNS lookup itself is unbounded). A zero or negative
+   timeout means "block", matching `tcp_connect`. */
+static int64_t connect_monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+}
+
+/* The absolute deadline a timeout names, saturating instead of wrapping
+   (an absurd timeout must mean "very long", not "already expired"). */
+static int64_t connect_deadline_ms(int64_t timeout_ms) {
+    if (timeout_ms <= 0) return 0;
+    int64_t now = connect_monotonic_ms();
+    if (timeout_ms > INT64_MAX - now) return INT64_MAX;
+    return now + timeout_ms;
+}
+
+static int connect_remaining_ms(int64_t deadline, int64_t timeout_ms) {
+    if (timeout_ms <= 0) return -1;
+    int64_t left = deadline - connect_monotonic_ms();
+    if (left < 0) left = 0;
+    if (left > INT_MAX) left = INT_MAX;
+    return (int)left;
+}
+
+void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms) {
+    struct addrinfo hints;
+    struct addrinfo* res = NULL;
+    char portbuf[16];
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    snprintf(portbuf, sizeof(portbuf), "%u", (unsigned)(uint16_t)port);
+    int rc = getaddrinfo(host ? host : "", portbuf, &hints, &res);
+    if (rc != 0) return stream_err(8, "tcp_connect_timeout", gai_strerror(rc), 0);
+    int64_t deadline = connect_deadline_ms(timeout_ms);
+    int fd = -1;
+    int last_errno = 0;
+    int last_flags = 0;
+    for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) { last_errno = errno; continue; }
+        int flags = fcntl(fd, F_GETFL, 0);
+        if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+            last_errno = errno;
+            close(fd);
+            fd = -1;
+            continue;
+        }
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+            last_flags = flags;
+            break;
+        }
+        if (errno != EINPROGRESS && errno != EINTR) {
+            last_errno = errno;
+            close(fd);
+            fd = -1;
+            continue;
+        }
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        int ready;
+        do {
+            ready = poll(&pfd, 1, connect_remaining_ms(deadline, timeout_ms));
+        } while (ready < 0 && errno == EINTR);
+        if (ready == 0) {
+            last_errno = ETIMEDOUT;
+            close(fd);
+            fd = -1;
+            continue;
+        }
+        if (ready < 0) {
+            last_errno = errno;
+            close(fd);
+            fd = -1;
+            continue;
+        }
+        int soerr = 0;
+        socklen_t slen = sizeof(soerr);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0) soerr = errno;
+        if (soerr == 0) {
+            last_flags = flags;
+            break;
+        }
+        last_errno = soerr;
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0) return stream_os_err("tcp_connect_timeout", last_errno);
+    fcntl(fd, F_SETFL, last_flags);
+    return tcp_ok((void*)(int64_t)fd);
+}
+
 /* `tcp_listen : U16 -> RawIO (Result (Pair I64 String) FdStream)` --
    binds `0.0.0.0:port`, with port 0 asking the OS for one (read it back
    with `tcp_local_port`). Deliberately NO `SO_REUSEADDR`: the Rust
@@ -1199,7 +1298,15 @@ static int64_t stream_error_kind_of_errno(int errnum) {
         case ECONNRESET: return 3;
         case EPIPE: return 4;
         case EINVAL: return 5;
+        /* A socket operation on a non-socket (`set_timeout` on a file):
+           an invalid input, which is `FdStream.set_timeout`'s contract. */
+        case ENOTSOCK: return 5;
         case ETIMEDOUT: return 6;
+        /* `SO_RCVTIMEO`/`SO_SNDTIMEO` surface as EAGAIN (or its alias). */
+#if EAGAIN != EWOULDBLOCK
+        case EWOULDBLOCK:
+#endif
+        case EAGAIN: return 6;
         case EADDRINUSE: return 7;
         default: return 9;
     }
@@ -1563,6 +1670,52 @@ void* monad_stream_close(int64_t fd) {
 /* `stream_fd : FdStream -> RawIO I32` -- the value already is the fd. */
 int64_t monad_stream_fd(int64_t fd) {
     return fd;
+}
+
+/* `stream_poll : FdStream -> I64 -> I64 -> RawIO (Result (Pair I64
+   String) I64)` -- `poll(2)` on an arbitrary descriptor, the general
+   form of `term_ctl`'s stdin wait. Events: 1 readable, 2 writable.
+   Result 1 ready, 0 timeout. */
+void* monad_stream_poll(int64_t fd, int64_t events, int64_t timeout_ms) {
+    struct pollfd pfd;
+    pfd.fd = (int)fd;
+    pfd.events = 0;
+    if (events & 1) pfd.events |= POLLIN;
+    if (events & 2) pfd.events |= POLLOUT;
+    pfd.revents = 0;
+    /* One deadline across EINTR retries, as the connect loop does: a
+       signal must not hand the wait a fresh budget. */
+    int64_t deadline = connect_deadline_ms(timeout_ms);
+    int rc;
+    do {
+        int t;
+        if (timeout_ms > 0) t = connect_remaining_ms(deadline, timeout_ms);
+        else if (timeout_ms < 0) t = -1;
+        else t = 0;
+        rc = poll(&pfd, 1, t);
+    } while (rc < 0 && errno == EINTR);
+    if (rc < 0) return stream_os_err("stream_poll", errno);
+    return tcp_ok((void*)(int64_t)(rc > 0 ? 1 : 0));
+}
+
+/* `stream_set_timeout : FdStream -> I64 -> I64 -> RawIO (Result (Pair
+   I64 String) Unit)` -- SO_RCVTIMEO/SO_SNDTIMEO on a socket. A zero
+   bound leaves that direction unchanged. */
+void* monad_stream_set_timeout(int64_t fd, int64_t recv_ms, int64_t send_ms) {
+    struct timeval tv;
+    if (recv_ms > 0) {
+        tv.tv_sec = (time_t)(recv_ms / 1000);
+        tv.tv_usec = (suseconds_t)((recv_ms % 1000) * 1000);
+        if (setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0)
+            return stream_os_err("stream_set_timeout", errno);
+    }
+    if (send_ms > 0) {
+        tv.tv_sec = (time_t)(send_ms / 1000);
+        tv.tv_usec = (suseconds_t)((send_ms % 1000) * 1000);
+        if (setsockopt((int)fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0)
+            return stream_os_err("stream_set_timeout", errno);
+    }
+    return tcp_ok(tcp_unit());
 }
 
 /* `std_fd : I64 -> FdStream` -- pure; 0/1/2 name stdin/stdout/stderr. */

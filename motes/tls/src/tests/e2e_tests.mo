@@ -19,7 +19,10 @@
 /// alone would pass a client that fails closed for the wrong reason.
 
 use std::io {IO.get_env, IO.println}
-use lib::stream {Tls.Stream, Tls.close, Tls.connect, Tls.read, Tls.write}
+use lib::stream {
+  Tls.Stream, Tls.close, Tls.connect, Tls.has_pending, Tls.pending, Tls.read,
+  Tls.set_timeout, Tls.write,
+}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_string, ByteBuf.to_string}
 use std::stream {StreamError}
 
@@ -123,6 +126,50 @@ def known_good_reply (r : Result StreamError ByteBuf) : IO Bool :=
       return (String.contains text "HTTP/1.1")
     }
   }
+
+/// `SSL_has_pending` links and answers on a live connection. The truth
+/// is peer-dependent (TLS 1.3 tickets), so the pinned invariant is the
+/// superset relation: processed plaintext implies buffered data.
+#[test]
+def test_tls_has_pending_on_a_live_connection : IO Bool := do {
+  let enabled <- tls_network_enabled;
+  if Bool.not enabled
+  then return true
+  else do {
+    let res <- connect_retry "badssl.com" 5;
+    match res {
+      Result.err e => do { IO.println ("has_pending: " ++ e); return false },
+      Result.ok s => do {
+        let processed : I64 := Tls.pending s;
+        let buffered : Bool := Tls.has_pending s;
+        Tls.close s;
+        return (Bool.not (I64.gt processed 0) || buffered)
+      }
+    }
+  }
+}
+
+/// `Tls.set_timeout` re-bounds a live stream; the same stream can still
+/// carry a request afterwards, so the re-bound value did not corrupt it.
+#[test]
+def test_tls_set_timeout_rebounds_a_live_connection : IO Bool := do {
+  let enabled <- tls_network_enabled;
+  if Bool.not enabled
+  then return true
+  else do {
+    let res <- connect_retry "badssl.com" 5;
+    match res {
+      Result.err e => do { IO.println ("set_timeout: " ++ e); return false },
+      Result.ok s => do {
+        let set_res <- Tls.set_timeout s 5000i64;
+        match set_res {
+          Result.err e => do { IO.println ("set_timeout: " ++ e.message); return false },
+          Result.ok s2 => known_good_exchange s2
+        }
+      }
+    }
+  }
+}
 
 /// An expired certificate is rejected by the chain check.
 #[test]

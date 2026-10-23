@@ -26,8 +26,9 @@ use shuttle::context {usage_zero}
 use shuttle::tool {ToolSpec}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
-use weaver::providers {Weaver.preset, Weaver.model_error, Weaver.repair_session_model}
-use weaver::error {WeaverError}
+use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of}
+use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
+use weaver::error {WeaverError, WeaverError.of_shuttle}
 use weaver::store {
     StoreState, Store.new_session, Store.latest_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.base_name,
@@ -56,6 +57,10 @@ pub struct WeaverState {
     budget : I64,
     mcps : List String,
     keys : BTreeMap String String,
+    /// The last model list fetched per provider (`/models`, `/model` with
+    /// no argument, a `/provider` choice). The API is the authority; this
+    /// is only the session's cache of its answer.
+    catalog : BTreeMap String (List String),
     quit : Bool,
     fatal : Option WeaverError := Option.none,
     /// The dumb UI's palette switch: `NO_COLOR` (or a future --no-color)
@@ -83,6 +88,9 @@ pub struct Effect {
     state : WeaverState,
     output : String,
     transcript : TranscriptChange,
+    /// A model list the TUI should show as a picker (none in dumb mode,
+    /// which prints `output` instead).
+    picker : Option (List String) := Option.none,
 }
 
 /// One table entry -- a uniform signature, the Phase 7 rewiring point.
@@ -91,12 +99,12 @@ pub struct SlashCommand {
 }
 
 pub def Effect.ok (st : WeaverState) (output : String) : Effect :=
-    let e : Effect := { state := st, output := output, transcript := TranscriptChange.keep } in
+    let e : Effect := { state := st, output := output, transcript := TranscriptChange.keep, picker := Option.none } in
     e
 
 /// A command that switched sessions: the caller loads the new window.
 pub def Effect.reset (st : WeaverState) (output : String) : Effect :=
-    let e : Effect := { state := st, output := output, transcript := TranscriptChange.reset } in
+    let e : Effect := { state := st, output := output, transcript := TranscriptChange.reset, picker := Option.none } in
     e
 
 /// Every handler's success shape: the effect, wrapped in the typed
@@ -116,6 +124,7 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/mcp" (SlashCommand.mk cmd_mcp)
         (Map.insert "/mode" (SlashCommand.mk cmd_mode)
         (Map.insert "/model" (SlashCommand.mk cmd_model)
+        (Map.insert "/models" (SlashCommand.mk cmd_models)
         (Map.insert "/plan" (SlashCommand.mk cmd_plan)
         (Map.insert "/provider" (SlashCommand.mk cmd_provider)
         (Map.insert "/q" (SlashCommand.mk cmd_quit)
@@ -126,7 +135,7 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/processes" (SlashCommand.mk cmd_processes)
         (Map.insert "/procs" (SlashCommand.mk cmd_processes)
         (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty)))))))))))))))
+            BTreeMap.empty))))))))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -185,23 +194,70 @@ def mode_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :
             respond st2 (String.concat "mode: " (Mode.show m)),
     }
 
-/// `/model` with no argument shows the current model; with a name, it
-/// swaps the session config's model (the wire, key and host stay).
+/// `/model` with no argument lists what the provider serves (and opens
+/// the TUI picker); with a name, it swaps the session config's model
+/// (the wire, key and host stay) and notes when the cached list lacks
+/// it.
 def cmd_model (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then respond st (String.concat "model: " st.run.session.config.model)
-    else match Weaver.model_error st.provider arg {
-        Option.some e => respond st (String.concat "model unchanged: " e),
-        Option.none =>
-            let st2 : WeaverState := set_model st arg in
-            respond st2 (String.concat "model: " arg),
+    then show_models st
+    else match Catalog.lookup st.provider st.catalog {
+        Option.none => respond (Commands.set_model st arg) (String.concat "model: " arg),
+        Option.some models => match Catalog.note st.provider models arg {
+            Option.none => respond (Commands.set_model st arg) (String.concat "model: " arg),
+            Option.some note => respond (Commands.set_model st arg)
+                (String.concat "model: " (String.concat arg (String.concat "\n" note))),
+        },
+    }
+
+/// `/models`: always asks the provider (the explicit refresh; the TUI
+/// opens the picker from the effect).
+def cmd_models (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let fresh <- Catalog.fetch st.run.session.config;
+    match fresh {
+        Result.err e => return (Result.err (WeaverError.of_shuttle e)),
+        Result.ok models => IO.pure (Result.ok (models_effect st st.provider models)),
+    }
+}
+
+/// The cached list when there is one, else one fetch; a provider that
+/// cannot be reached still leaves `/model` usable (the current name is
+/// shown with the reason the list is missing).
+def show_models (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match Catalog.lookup st.provider st.catalog {
+        Option.some models => IO.pure (Result.ok (models_effect st st.provider models)),
+        Option.none => do {
+            let fresh <- Catalog.fetch st.run.session.config;
+            match fresh {
+                Result.err e => respond st (String.concat "model: "
+                    (String.concat st.run.session.config.model
+                        (String.concat "\nmodel list unavailable: " e))),
+                Result.ok models => IO.pure (Result.ok (models_effect st st.provider models)),
+            }
+        },
+    }
+
+/// Cache the fetched list and shape the output/picker.
+def models_effect (st : WeaverState) (provider : String) (models : List String) : Effect :=
+    let cat : BTreeMap String (List String) := Catalog.remember provider models st.catalog in
+    let st2 : WeaverState := { st with catalog := cat } in
+    let out : String := Catalog.render provider models st2.run.session.config.model in
+    let pick : Option (List String) := if catalog_empty models then Option.none else Option.some models in
+    let e : Effect := { state := st2, output := out, transcript := TranscriptChange.keep, picker := pick } in
+    e
+
+def catalog_empty (models : List String) : Bool :=
+    match models {
+        List.empty => true,
+        List.cons _ _ => false,
     }
 
 /// `/provider [name] [model]`: with no argument shows the preset name;
-/// with a name it swaps the whole config (wire, key and host with it) and
-/// uses that provider's DEFAULT model unless the second word names one --
-/// the old provider's model is never carried across. Phase 10: the NEW
-/// provider's direct key re-resolves from the merged `[api_keys]` table.
+/// with a name it swaps the whole config (wire, key and host with it).
+/// An explicit model is used as given; without one the provider's
+/// fetched list chooses (or, offline, its preferred name does). Phase
+/// 10: the NEW provider's direct key re-resolves from the merged
+/// `[api_keys]` table.
 def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
     then respond st (String.concat "provider: " st.provider)
@@ -210,22 +266,72 @@ def cmd_provider (arg : String) (st : WeaverState) : IO (Result WeaverError Effe
 /// An unknown provider name stays a session-local refusal (command
 /// output, state untouched): an argument typo must not kill an
 /// otherwise healthy interactive session -- that is what a config
-/// error's fatal classification would do. The STARTUP path keeps its
-/// own fatal shape for the same misspelling. A model that the new
-/// provider does not serve is refused the same way.
+/// error's fatal classification would do.
 def provider_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match split_command arg {
         Pair.pair name model =>
-            match Weaver.preset name model st.keys {
-                Result.err e => respond st e,
-                Result.ok cfg => match Weaver.model_error name cfg.model {
-                    Option.some e => respond st (String.concat "provider unchanged: " e),
-                    Option.none =>
-                        let st2 : WeaverState := set_config st cfg name in
-                        respond st2 (String.concat "provider: " (String.concat name (String.concat " (model " (String.concat cfg.model ")")))),
-                },
-            },
+            if Bool.not (String.is_empty model)
+            then explicit_model name model st
+            else provider_no_model name st
     }
+
+/// An explicit model is used exactly as given: no fetch, no name check.
+def explicit_model (name : String) (model : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match Weaver.config_for name model st.keys {
+        Result.err e => respond st e,
+        Result.ok cfg => respond (set_config st cfg name) (provider_output name cfg),
+    }
+
+/// No model argument: a cached list chooses; without one the preferred
+/// name keeps the switch offline, and only a provider with no preference
+/// at all (openrouter) asks the API.
+def provider_no_model (name : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match Catalog.lookup name st.catalog {
+        Option.some models => match Weaver.model_for name models {
+            Result.err e => respond st e,
+            Result.ok chosen => provider_with name chosen models st,
+        },
+        Option.none => match Weaver.preferred_model name {
+            Result.ok p => match Weaver.config_for name p st.keys {
+                Result.err e => respond st e,
+                Result.ok cfg => respond (set_config st cfg name) (provider_output name cfg),
+            },
+            Result.err _ => provider_fetch name st,
+        },
+    }
+
+/// Fetch the target provider's list, choose from it, and cache it. A
+/// failure refuses the switch rather than guessing a vendor-qualified
+/// name.
+def provider_fetch (name : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match Weaver.config_for name "" st.keys {
+        Result.err e => respond st e,
+        Result.ok base_cfg => do {
+            let fresh <- Catalog.fetch base_cfg;
+            match fresh {
+                Result.err e => respond st (String.concat "provider unchanged: " e),
+                Result.ok models => match Weaver.model_for name models {
+                    Result.err e => respond st e,
+                    Result.ok chosen => provider_with name chosen models st,
+                },
+            }
+        },
+    }
+
+def provider_with (name : String) (chosen : String) (models : List String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match Weaver.config_for name chosen st.keys {
+        Result.err e => respond st e,
+        Result.ok cfg =>
+            let cat : BTreeMap String (List String) := Catalog.remember name models st.catalog in
+            let with_cat : WeaverState := { st with catalog := cat } in
+            let st2 : WeaverState := set_config with_cat cfg name in
+            respond st2 (provider_output name cfg),
+    }
+
+def provider_output (name : String) (cfg : ProviderConfig) : String :=
+    String.concat "provider: "
+        (String.concat name
+            (String.concat " (model " (String.concat cfg.model ")")))
 
 /// `/tools`: every registered tool with its capability tag -- what the
 /// gate will consult before each of them runs.
@@ -479,20 +585,18 @@ def resume_import_into (st : WeaverState) (s : Session) (old : StoreState) (labe
 /// The budget spans halves and the resumed config re-resolves the
 /// CURRENT provider's direct key (a checkpoint never carries one).
 def resume_effect (st : WeaverState) (s : Session) (store : Option StoreState) (label : String) : Effect :=
-    match Weaver.repair_session_model st.provider s {
-        Pair.pair fixed note =>
-            let keyed : Session := rekey_session st fixed in
-            let st2 : WeaverState := set_session st keyed st.budget in
-            let st3 : WeaverState := set_store st2 store in
-            let base : String := String.concat "resumed " label in
-            let out : String := match note {
-                Option.none => base,
-                Option.some n => String.concat base (String.concat " -- warning: " n),
-            } in
-            if st.budget - s.turns < 1
-            then Effect.reset st3 (String.concat out " -- the whole turn budget is already spent")
-            else Effect.reset st3 out,
-    }
+    let keyed : Session := rekey_session st s in
+    // The resumed session talks to ITS provider: the label and the
+    // catalogue follow the saved config, not the flag this run started
+    // with.
+    let prov : String := Weaver.provider_of st.provider s.config in
+    let st2 : WeaverState := set_session st keyed st.budget in
+    let st3 : WeaverState := { st2 with provider := prov } in
+    let st4 : WeaverState := set_store st3 store in
+    let out : String := String.concat "resumed " label in
+    if st.budget - s.turns < 1
+    then Effect.reset st4 (String.concat out " -- the whole turn budget is already spent")
+    else Effect.reset st4 out
 
 def rekey_session (st : WeaverState) (s : Session) : Session :=
     let s2 : Session := { s with config := rekey_config st s.config } in
@@ -523,7 +627,8 @@ def store_at_parent (p : Path) : Option StoreState :=
 /// the merged `[api_keys]` table (the state's `keys`), env-second as
 /// everywhere else.
 def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
-    { cfg with api_key := Map.lookup st.provider st.keys }
+    let prov : String := Weaver.provider_of st.provider cfg in
+    { cfg with api_key := Map.lookup prov st.keys }
 
 /// `/clear`: drop the transcript and the accounting, keep the config
 /// and the tools. The turn budget resets to the full amount. With a
@@ -563,7 +668,8 @@ def cmd_help (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) 
 def help_text : String :=
     List.intercalate "\n" [
         "/mode [manual|plan|allow_edit|auto]  show or set the approval mode",
-        "/model [name]                        show or set the model",
+        "/model [name]                        show/pick or set the model",
+        "/models                              ask the provider which models it serves",
         "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
         "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
         "/tools                               list tools with their capability tags",
@@ -599,7 +705,7 @@ def set_fatal (st : WeaverState) (e : WeaverError) : WeaverState :=
     let st2 : WeaverState := { st with fatal := Option.some e } in
     st2
 
-def set_model (st : WeaverState) (model : String) : WeaverState :=
+pub def Commands.set_model (st : WeaverState) (model : String) : WeaverState :=
     let cfg2 : ProviderConfig := { (st.run.session.config) with model := model } in
     let s2 : Session := { (st.run.session) with config := cfg2 } in
     let run2 : RunState := { (st.run) with session := s2 } in

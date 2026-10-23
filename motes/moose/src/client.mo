@@ -31,14 +31,28 @@
 /// verified handshake (certificate chain AND hostname), and everything
 /// below `Client.connect` speaks `Transport`, not `FdStream`, so the two
 /// schemes share one request/response path.
+///
+/// Timeouts: non-streaming requests get ONE deadline covering connect,
+/// write and read (`Client.default_timeout_ms`, 30 s). Streaming keeps
+/// only a per-read IDLE bound (`Client.default_stream_idle_ms`, 120 s),
+/// so a long generation between tokens is fine but a silent peer fails;
+/// the connect and TLS handshake still use the 30 s default, after which
+/// the socket itself (and the TLS stall classification) is re-bound to
+/// the idle value. Name resolution (`getaddrinfo`) has no timeout of its
+/// own. The `*_timeout` entry points take an explicit bound; the old
+/// names use the defaults.
 
 use http::types {
   Body, Framing, Headers, Method, Request, Response, Status.found,
   Status.moved_permanently, Status.permanent_redirect, Status.see_other,
   Status.temporary_redirect, Transport, Uri, http1_1,
 }
-use tls::stream {Tls.Stream, Tls.close, Tls.connect, Tls.read, Tls.write}
-use std::stream {StreamError, FdStream}
+use tls::stream {
+  Tls.Stream, Tls.close, Tls.connect, Tls.connect_timeout, Tls.pending,
+  Tls.read, Tls.set_timeout, Tls.wait_read, Tls.wait_write, Tls.write,
+}
+use std::stream {StreamError, FdStream, FdStream.set_timeout}
+use std::io {IO.current_time, IO.tcp_connect_timeout}
 use http::strings {Strings.drop_bytes}
 use http::wire {
   Wire.body_of, Wire.chunk_step, Wire.find_body_start,
@@ -55,7 +69,110 @@ use std::list {List.length}
 struct Connection {
   socket : Transport,
   host : String,
-  port : U16
+  port : U16,
+  /// The non-streaming deadline this connection's `send` uses.
+  timeout_ms : I64
+}
+
+/// A read loop's clock: the transport plus the bound each read waits
+/// under. Non-streaming (`streaming = false`) has one absolute
+/// `deadline_ms` and reports `total_ms` on failure; streaming resets
+/// `idle_ms` on every read, so a talkative peer never hits the bound.
+struct Client.Reader {
+  t : Transport,
+  deadline_ms : I64,
+  idle_ms : I64,
+  total_ms : I64,
+  streaming : Bool
+}
+
+/// Non-streaming default: connect + write + read share one deadline.
+pub def Client.default_timeout_ms : I64 := 30000
+/// Streaming default: the bound between two arriving reads.
+pub def Client.default_stream_idle_ms : I64 := 120000
+
+pub def Client.timeout_error (ms : I64) : String :=
+  String.concat "request timed out after "
+    (String.concat (I64.to_string ms) " ms")
+
+/// A reader whose whole response must arrive within `ms`.
+def Client.total_reader (tr : Transport) (ms : I64) : IO Client.Reader := do {
+  let now <- IO.current_time;
+  return ({ t := tr, deadline_ms := now + ms, idle_ms := 0i64, total_ms := ms, streaming := false } : Client.Reader)
+}
+
+/// A reader whose every read is allowed `ms` of silence.
+def Client.idle_reader (tr : Transport) (ms : I64) : Client.Reader :=
+  ({ t := tr, deadline_ms := 0i64, idle_ms := ms, total_ms := 0i64, streaming := true } : Client.Reader)
+
+/// Wait for readable within the reader's bound; `Result.err` is the
+/// timeout message, so both read loops report it the same way.
+def Client.reader_wait (r : Client.Reader) : IO (Result String Unit) := do {
+  if r.streaming
+  then Client.wait_read_until r.t r.idle_ms r.idle_ms
+  else do {
+    let now <- IO.current_time;
+    let remaining : I64 := r.deadline_ms - now;
+    if remaining < 1
+    then return (Result.err (Client.timeout_error r.total_ms))
+    else Client.wait_read_until r.t remaining r.total_ms
+  }
+}
+
+/// One wait: ready or timed out; a transport error is its own message.
+def Client.wait_read_until (tr : Transport) (wait_ms : I64) (report_ms : I64) : IO (Result String Unit) := do {
+  let w <- Transport.wait_read tr wait_ms;
+  match w {
+    Result.err e => return (Result.err e.message),
+    Result.ok ready =>
+      if ready then return (Result.ok Unit.unit)
+      else return (Result.err (Client.timeout_error report_ms)),
+  }
+}
+
+/// One wait for writability: ready or timed out; a transport error is
+/// its own message.
+def Client.wait_write_until (tr : Transport) (wait_ms : I64) (report_ms : I64) : IO (Result String Unit) := do {
+  let w <- Transport.wait_write tr wait_ms;
+  match w {
+    Result.err e => return (Result.err e.message),
+    Result.ok ready =>
+      if ready then return (Result.ok Unit.unit)
+      else return (Result.err (Client.timeout_error report_ms)),
+  }
+}
+
+/// The write-side twin of `reader_wait`: a non-streaming write waits
+/// only for the time the hop has LEFT, and reports the hop's bound; a
+/// streaming write resets on every write.
+def Client.writer_wait (r : Client.Reader) : IO (Result String Unit) := do {
+  if r.streaming
+  then Client.wait_write_until r.t r.idle_ms r.idle_ms
+  else do {
+    let now <- IO.current_time;
+    let remaining : I64 := r.deadline_ms - now;
+    if remaining < 1
+    then return (Result.err (Client.timeout_error r.total_ms))
+    else Client.wait_write_until r.t remaining r.total_ms
+  }
+}
+
+/// One bounded read: wait, then read 4096 bytes.
+def Client.reader_read (r : Client.Reader) : IO (Result String (List U8)) := do {
+  let w <- Client.reader_wait r;
+  match w {
+    Result.err e => return (Result.err e),
+    Result.ok _ => Transport.read_bytes r.t 4096,
+  }
+}
+
+/// One bounded write: wait for writability, then write all the bytes.
+def Client.reader_write (r : Client.Reader) (bytes : List U8) : IO (Result String U64) := do {
+  let w <- Client.writer_wait r;
+  match w {
+    Result.err e => return (Result.err e),
+    Result.ok _ => Transport.write_bytes r.t bytes,
+  }
 }
 
 // ── small helpers ───────────────────────────────────────────────────────
@@ -110,7 +227,7 @@ def Client.prepare_request (req : Request) : Request :=
 
 /// Read one whole response to `method`, buffering until it frames.
 #[terminating]
-def Client.read_message (method : Method) (t : Transport) (carry : List U8) : IO (Result String Response) := do {
+def Client.read_message (method : Method) (r : Client.Reader) (carry : List U8) : IO (Result String Response) := do {
   let frame : Result String (Option I64) := Wire.frame_response carry method;
   match frame {
     Result.err e => return (Result.err e),
@@ -118,22 +235,22 @@ def Client.read_message (method : Method) (t : Transport) (carry : List U8) : IO
       match opt {
         Option.some n => return (Client.parse_framed method (Wire.take_bytes n carry)),
         Option.none => do {
-          let read_res <- Transport.read_bytes t 4096;
-          Client.read_message_step method t carry read_res
+          let read_res <- Client.reader_read r;
+          Client.read_message_step method r carry read_res
         }
       }
   }
 }
 
-/// One `Transport.read` result, while the response is still incomplete.
+/// One read's result, while the response is still incomplete.
 #[terminating]
-def Client.read_message_step (method : Method) (t : Transport) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String Response) :=
+def Client.read_message_step (method : Method) (r : Client.Reader) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String Response) :=
   match read_res {
     Result.err e => return (Result.err e),
     Result.ok chunk =>
       if List.is_empty chunk
       then return (Client.parse_framed method carry)
-      else Client.read_message method t (List.append carry chunk)
+      else Client.read_message method r (List.append carry chunk)
   }
 
 /// Parse a buffered response. A frame that completed and a buffer that ended
@@ -149,51 +266,94 @@ def Client.parse_framed (method : Method) (bytes : List U8) : Result String Resp
 /// The remainder after the frame is dropped rather than carried, unlike the
 /// server's reader: a client that asks for one response at a time is not sent
 /// a second one ahead of its request.
-def Client.read_response (t : Transport) (method : Method) : IO (Result String Response) :=
-  Client.read_message method t List.empty
+/// Read a full response on an existing transport under the default
+/// deadline (the staged tests' entry point; `send` uses its connection's
+/// own bound through `read_message`).
+def Client.read_response (t : Transport) (method : Method) : IO (Result String Response) := do {
+  let r <- Client.total_reader t Client.default_timeout_ms;
+  Client.read_message method r List.empty
+}
 
 // ── connection-handle API (keep-alive) ───────────────────────────────────
 
 /// Open a connection to the host:port in `url` — TLS for `https`, TCP for
 /// everything else.
 def Client.connect (url : String) : IO (Result String Connection) :=
+  Client.connect_with_timeout url Client.default_timeout_ms
+
+/// `Client.connect` with an explicit connect deadline (and the same
+/// bound on the established socket's reads and writes).
+def Client.connect_with_timeout (url : String) (timeout_ms : I64) : IO (Result String Connection) :=
+  Client.connect_with_timeout_io url timeout_ms timeout_ms
+
+/// Connect under `timeout_ms` (the TCP deadline and the TLS handshake
+/// bound), then bound the established socket's reads and writes to
+/// `io_ms`. The streaming path passes its idle bound as `io_ms`; the
+/// `Connection`'s `timeout_ms` (the non-streaming deadline) stays the
+/// connect value.
+def Client.connect_with_timeout_io (url : String) (timeout_ms : I64) (io_ms : I64) : IO (Result String Connection) :=
   match Uri.parse url {
     Result.err e => return (Result.err e),
     Result.ok u =>
       if String.beq u.scheme "https"
-      then Client.connect_tls u
-      else Client.connect_tcp u
+      then Client.connect_tls u timeout_ms io_ms
+      else Client.connect_tcp u timeout_ms io_ms
   }
 
 /// Connect to the host:port extracted from `u` and wrap in `Connection`.
-def Client.connect_tcp (u : Uri) : IO (Result String Connection) :=
+def Client.connect_tcp (u : Uri) (timeout_ms : I64) (io_ms : I64) : IO (Result String Connection) :=
   let hp := Client.host_port u in
-  Monad.bind (IO.tcp_connect hp.first hp.second) (fn connect_res =>
-    Client.connect_done hp connect_res)
+  Monad.bind (IO.tcp_connect_timeout hp.first hp.second timeout_ms) (fn connect_res =>
+    Client.connect_done hp timeout_ms io_ms connect_res)
 
-/// Wrap a successful `tcp_connect` result in a `Connection`.
-def Client.connect_done (hp : Pair String U16) (connect_res : Result StreamError FdStream) : IO (Result String Connection) :=
+/// Wrap a successful `tcp_connect_timeout` result in a `Connection`.
+def Client.connect_done (hp : Pair String U16) (timeout_ms : I64) (io_ms : I64) (connect_res : Result StreamError FdStream) : IO (Result String Connection) :=
   match connect_res {
     Result.err e => return (Result.err e.message),
-    Result.ok sock =>
+    Result.ok sock => do {
+      // Socket-level backstop for the WRITE side: a readiness wait only
+      // proves the send buffer has room for some bytes, and the write is
+      // one blocking loop. TLS gets the same treatment in connect_tls.
+      let _ <- FdStream.set_timeout sock io_ms io_ms;
       // Bare bindings, not `hp.first`/`hp.second` inline: the self-hosted
       // checker types a `Pair` read with the inductive's parameter left
       // unsubstituted, which a literal's field position cannot absorb.
-      let host := hp.first in
-      let port := hp.second in
-      return (Result.ok ({ socket := Transport.plain sock, host := host, port := port } : Connection))
+      let host := hp.first;
+      let port := hp.second;
+      return (Result.ok ({ socket := Transport.plain sock, host := host, port := port, timeout_ms := timeout_ms } : Connection))
+    }
   }
 
-/// Hand `host:port` to `Tls.connect`, whose handshake verifies the
-/// certificate chain AND the hostname before it returns.
-def Client.connect_tls (u : Uri) : IO (Result String Connection) :=
+/// Hand `host:port` to `Tls.connect_timeout`, whose handshake verifies
+/// the certificate chain AND the hostname before it returns.
+def Client.connect_tls (u : Uri) (timeout_ms : I64) (io_ms : I64) : IO (Result String Connection) :=
   let hp := Client.host_port u in
-  Monad.bind (Tls.connect hp.first hp.second) (fn tls_res =>
-    Client.connect_tls_done hp tls_res)
+  Monad.bind (Tls.connect_timeout hp.first hp.second timeout_ms) (fn tls_res =>
+    Client.connect_tls_io hp timeout_ms io_ms tls_res)
+
+/// Split out so the re-bind below is a top-level def (a `let … <-` inside
+/// a match arm's `do` is a self-hosted parser trap).
+def Client.connect_tls_io (hp : Pair String U16) (timeout_ms : I64) (io_ms : I64) (tls_res : Result String Tls.Stream) : IO (Result String Connection) :=
+  match tls_res {
+    Result.err e => return (Result.err e),
+    Result.ok s => Client.connect_tls_set_io hp timeout_ms io_ms s
+  }
+
+/// Re-bound the live stream BEFORE `connect_tls_done` builds the
+/// `Transport.secure` closures: they capture the stream by value, so a
+/// later rebind would never reach `SSL_read`/`SSL_write` or the elapsed
+/// time classification.
+def Client.connect_tls_set_io (hp : Pair String U16) (timeout_ms : I64) (io_ms : I64) (s : Tls.Stream) : IO (Result String Connection) := do {
+  let set_res <- Tls.set_timeout s io_ms;
+  match set_res {
+    Result.err e => return (Result.err (String.concat "tls: socket timeout: " e.message)),
+    Result.ok s2 => Client.connect_tls_done hp timeout_ms (Result.ok s2),
+  }
+}
 
 /// Wrap a verified `Tls.Stream` in a `Connection` carrying `Transport.secure`
 /// — the one place http's transport closures and the tls mote are joined.
-def Client.connect_tls_done (hp : Pair String U16) (tls_res : Result String Tls.Stream) : IO (Result String Connection) :=
+def Client.connect_tls_done (hp : Pair String U16) (timeout_ms : I64) (tls_res : Result String Tls.Stream) : IO (Result String Connection) :=
   match tls_res {
     Result.err e => return (Result.err e),
     Result.ok s =>
@@ -204,8 +364,13 @@ def Client.connect_tls_done (hp : Pair String U16) (tls_res : Result String Tls.
       // (same family as the bare struct literal in argument position), and
       // an action-typed close field executes at construction — killing the
       // session before the first write. `Transport.close`'s comment in
-      // http/types.mo has the full story.
-      return (Result.ok ({ socket := Transport.secure (fn n => Tls.read s n) (fn data => Tls.write s data) (fn _ => Tls.close s), host := host, port := port } : Connection))
+      // http/types.mo has the full story. The readiness closures make TLS
+      // buffered plaintext (`pending`) count as ready before any poll.
+      let pending : Unit -> IO I64 := fn (_ : Unit) => IO.pure (Tls.pending s) in
+      let wait_read : I64 -> IO (Result StreamError Bool) := fn (ms : I64) => Tls.wait_read s ms in
+      let wait_write : I64 -> IO (Result StreamError Bool) := fn (ms : I64) => Tls.wait_write s ms in
+      let socket : Transport := Transport.secure (fn n => Tls.read s n) (fn data => Tls.write s data) (fn _ => Tls.close s) pending wait_read wait_write in
+      return (Result.ok ({ socket := socket, host := host, port := port, timeout_ms := timeout_ms } : Connection))
   }
 
 /// Write a request to the connection's socket (no read). Exposed so callers
@@ -229,16 +394,33 @@ def Client.write_request (conn : Connection) (req : Request) : IO (Result String
 def Client.send (conn : Connection) (req : Request) : IO (Result String Response) :=
   match Wire.format_request (Client.prepare_request req) {
     Result.err e => return (Result.err e),
-    Result.ok bytes =>
-      Monad.bind (Transport.write_bytes conn.socket bytes) (fn write_res =>
-        Client.send_after_write conn.socket req.method write_res)
+    Result.ok bytes => do {
+      let r <- Client.total_reader conn.socket conn.timeout_ms;
+      let write_res <- Client.reader_write r bytes;
+      Client.send_after_write r req.method write_res
+    }
+  }
+
+/// `send` under an absolute deadline already running: the one-shot path
+/// starts it before the connect, so a slow connect spends the same
+/// budget the write and read draw from.
+def Client.send_until (conn : Connection) (req : Request) (deadline_ms : I64) (total_ms : I64) : IO (Result String Response) :=
+  match Wire.format_request (Client.prepare_request req) {
+    Result.err e => return (Result.err e),
+    Result.ok bytes => do {
+      let sock : Transport := conn.socket;
+      let r : Client.Reader :=
+        ({ t := sock, deadline_ms := deadline_ms, idle_ms := 0i64, total_ms := total_ms, streaming := false } : Client.Reader);
+      let write_res <- Client.reader_write r bytes;
+      Client.send_after_write r req.method write_res
+    }
   }
 
 /// After writing the request, read the response and parse it.
-def Client.send_after_write (t : Transport) (method : Method) (write_res : Result String U64) : IO (Result String Response) :=
+def Client.send_after_write (r : Client.Reader) (method : Method) (write_res : Result String U64) : IO (Result String Response) :=
   match write_res {
     Result.err e => return (Result.err e),
-    Result.ok _ => Client.read_response t method
+    Result.ok _ => Client.read_message method r List.empty
   }
 
 /// Close a connection (and, under `Transport.secure`, everything the TLS
@@ -253,56 +435,68 @@ def Client.close (conn : Connection) : IO Unit :=
 /// Follows up to `max_redirects` redirects (0 = no redirect following).
 #[terminating]
 def Client.request_with (max_redirects : I64) (req : Request) : IO (Result String Response) :=
-  Monad.bind (Client.connect (Uri.format req.uri)) (fn conn_res =>
-    Client.request_with_conn max_redirects req conn_res)
+  Client.request_with_timeout max_redirects Client.default_timeout_ms req
 
-/// After connecting: send, close, then optionally follow redirects.
-def Client.request_with_conn (max_redirects : I64) (req : Request) (conn_res : Result String Connection) : IO (Result String Response) :=
+/// `request_with` with one deadline per hop (a redirect starts a fresh
+/// one; the alternative -- one cap across every hop -- makes a slow
+/// redirect chain indistinguishable from a stalled peer).
+#[terminating]
+def Client.request_with_timeout (max_redirects : I64) (timeout_ms : I64) (req : Request) : IO (Result String Response) := do {
+  let now <- IO.current_time;
+  let deadline : I64 := now + timeout_ms;
+  let conn_res <- Client.connect_with_timeout (Uri.format req.uri) timeout_ms;
+  Client.request_with_conn max_redirects deadline timeout_ms req conn_res
+}
+
+/// After connecting: send under the hop's deadline, close, then
+/// optionally follow redirects.
+#[terminating]
+def Client.request_with_conn (max_redirects : I64) (deadline_ms : I64) (timeout_ms : I64) (req : Request) (conn_res : Result String Connection) : IO (Result String Response) :=
   match conn_res {
     Result.err e => return (Result.err e),
     Result.ok conn =>
-      Monad.bind (Client.send conn req) (fn send_res =>
-        Client.request_after_send max_redirects req conn send_res)
+      Monad.bind (Client.send_until conn req deadline_ms timeout_ms) (fn send_res =>
+        Client.request_after_send max_redirects timeout_ms req conn send_res)
   }
 
 /// After send: close the connection, then check for redirects.
 #[terminating]
-def Client.request_after_send (max_redirects : I64) (req : Request) (conn : Connection) (send_res : Result String Response) : IO (Result String Response) :=
+def Client.request_after_send (max_redirects : I64) (timeout_ms : I64) (req : Request) (conn : Connection) (send_res : Result String Response) : IO (Result String Response) :=
   Monad.bind (Client.close conn) (fn _ =>
-    Client.request_check_redirect max_redirects req send_res)
+    Client.request_check_redirect max_redirects timeout_ms req send_res)
 
 /// If the response is a redirect and we have redirects left, follow it.
 /// Otherwise return the response as-is.
-def Client.request_check_redirect (max_redirects : I64) (req : Request) (send_res : Result String Response) : IO (Result String Response) :=
+def Client.request_check_redirect (max_redirects : I64) (timeout_ms : I64) (req : Request) (send_res : Result String Response) : IO (Result String Response) :=
   match send_res {
     Result.err e => return (Result.err e),
     Result.ok res =>
       if Bool.not (Client.is_redirect res.status)
       then return (Result.ok res)
-      else Client.request_follow max_redirects req res
+      else Client.request_follow max_redirects timeout_ms req res
   }
 
 /// Follow a redirect response.
 #[terminating]
-def Client.request_follow (max_redirects : I64) (req : Request) (res : Response) : IO (Result String Response) :=
+def Client.request_follow (max_redirects : I64) (timeout_ms : I64) (req : Request) (res : Response) : IO (Result String Response) :=
   if Bool.not (I64.gt max_redirects 0i64)
   then return (Result.ok res)
   else
     match Headers.get "Location" res.headers {
       Option.none => return (Result.ok res),
-      Option.some loc => Client.request_follow_location max_redirects req res loc
+      Option.some loc => Client.request_follow_location max_redirects timeout_ms req res loc
     }
 
 /// Parse the Location header, resolve it against the original URI, build the
-/// redirect request the status asks for, and recurse via `request_with`.
+/// redirect request the status asks for, and recurse via the timed entry.
 #[terminating]
-def Client.request_follow_location (max_redirects : I64) (req : Request) (res : Response) (loc : String) : IO (Result String Response) :=
+def Client.request_follow_location (max_redirects : I64) (timeout_ms : I64) (req : Request) (res : Response) (loc : String) : IO (Result String Response) :=
   match Uri.parse loc {
     Result.err e => return (Result.err (String.concat "invalid redirect Location: " e)),
     Result.ok redirect_uri =>
       let resolved := Uri.resolve req.uri redirect_uri in
       let new_req := Client.redirect_request req res.status resolved in
-      Client.request_with (I64.sub max_redirects 1i64) new_req
+      Client.request_with_timeout (I64.sub max_redirects 1i64) timeout_ms new_req
   }
 
 // ── redirect policy ─────────────────────────────────────────────────────
@@ -396,10 +590,13 @@ def Client.request (req : Request) : IO (Result String Response) :=
 /// can fail on malformed input) is the caller's own concern, same as
 /// `Request`'s own `uri` field.
 def Client.get (u : Uri) (hdrs : Headers) : IO (Result String Response) :=
+  Client.get_timeout u hdrs Client.default_timeout_ms
+
+pub def Client.get_timeout (u : Uri) (hdrs : Headers) (timeout_ms : I64) : IO (Result String Response) :=
   let req : Request :=
     { method := Method.GET, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := Body.empty }
   in
-  Client.request_with 10i64 req
+  Client.request_with_timeout 10i64 timeout_ms req
 
 /// Convenience: POST a body to a `Uri` with the given headers, one-shot
 /// -- NOT following redirects. `redirect_preserves` is itself correct
@@ -408,10 +605,13 @@ def Client.get (u : Uri) (hdrs : Headers) : IO (Result String Response) :=
 /// is the wrong default for an API client; following one is the
 /// caller's decision (`Client.request_with`, directly).
 pub def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Response) :=
+  Client.post_timeout u hdrs body Client.default_timeout_ms
+
+pub def Client.post_timeout (u : Uri) (hdrs : Headers) (body : Body) (timeout_ms : I64) : IO (Result String Response) :=
   let req : Request :=
     { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
   in
-  Client.request_with 0i64 req
+  Client.request_with_timeout 0i64 timeout_ms req
 
 // ── streaming response bodies ───────────────────────────────────────────
 //
@@ -434,33 +634,42 @@ pub def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String
 /// `on_bytes` as it arrives, close, and return the caller's final state with
 /// the whole response (the streamed bytes reassembled as its body).
 pub def Client.post_stream {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  Client.post_stream_timeout u hdrs body Client.default_stream_idle_ms init on_bytes
+
+/// `post_stream` with an explicit per-read idle bound. The connect and
+/// TLS handshake keep the non-streaming default; the socket (and the
+/// TLS stall classification) is re-bound to `idle_ms`, so a read that
+/// stalls mid-record fails at the idle bound, not the connect bound.
+pub def Client.post_stream_timeout {S : Type} (u : Uri) (hdrs : Headers) (body : Body) (idle_ms : I64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   let req : Request :=
     { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
   in
   match Wire.format_request (Client.prepare_request req) {
     Result.err e => return (Result.err e),
     Result.ok bytes =>
-      Monad.bind (Client.connect (Uri.format u)) (fn conn_res =>
-        Client.post_stream_conn bytes conn_res init on_bytes)
+      Monad.bind (Client.connect_with_timeout_io (Uri.format u) Client.default_timeout_ms idle_ms) (fn conn_res =>
+        Client.post_stream_conn idle_ms bytes conn_res init on_bytes)
   }
 
 /// After connecting: write the request, then stream the response, then close.
-def Client.post_stream_conn {S : Type} (bytes : List U8) (conn_res : Result String Connection) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.post_stream_conn {S : Type} (idle_ms : I64) (bytes : List U8) (conn_res : Result String Connection) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   match conn_res {
     Result.err e => return (Result.err e),
-    Result.ok conn =>
-      Monad.bind (Transport.write_bytes conn.socket bytes) (fn write_res =>
-        Client.post_stream_sent conn write_res init on_bytes)
+    Result.ok conn => do {
+      let r : Client.Reader := Client.idle_reader conn.socket idle_ms;
+      let write_res <- Client.reader_write r bytes;
+      Client.post_stream_sent idle_ms conn write_res init on_bytes
+    }
   }
 
 /// After the write: stream, then close on every exit path. A failed write
 /// closes too -- the connection is open, and its socket is this call's to
 /// reap.
-def Client.post_stream_sent {S : Type} (conn : Connection) (write_res : Result String U64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.post_stream_sent {S : Type} (idle_ms : I64) (conn : Connection) (write_res : Result String U64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   match write_res {
     Result.err e => do { Client.close conn; return (Result.err e) },
     Result.ok _ =>
-      Monad.bind (Client.stream_response Method.POST conn.socket init on_bytes) (fn res =>
+      Monad.bind (Client.stream_response_timeout Method.POST conn.socket idle_ms init on_bytes) (fn res =>
         Client.post_stream_close conn res)
   }
 
@@ -479,13 +688,19 @@ def Client.post_stream_close {S : Type} (conn : Connection) (res : Result String
 /// or past `Content-Length` -- are dropped rather than carried, the same
 /// remainder policy as `Client.read_response`: a client asks for one
 /// response at a time and is not sent a second one ahead of its request.
-def Client.stream_response {S : Type} (method : Method) (t : Transport) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
-  Monad.bind (Client.read_head t List.empty) (fn head =>
-    Client.stream_response_head method t head init on_bytes)
+def Client.stream_response {S : Type} (method : Method) (tr : Transport) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+  Client.stream_response_timeout method tr Client.default_stream_idle_ms init on_bytes
+
+/// `stream_response` with an explicit per-read idle bound.
+def Client.stream_response_timeout {S : Type} (method : Method) (tr : Transport) (idle_ms : I64) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+  let r : Client.Reader := Client.idle_reader tr idle_ms;
+  let head <- Client.read_head r List.empty;
+  Client.stream_response_head method r head init on_bytes
+}
 
 /// The framed half of the stream: dispatch the head's framing and hand the
 /// body bytes (carry included) to the right walker.
-def Client.stream_response_head {S : Type} (method : Method) (t : Transport) (head : Result String (Pair (Pair U16 Headers) (List U8))) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.stream_response_head {S : Type} (method : Method) (t : Client.Reader) (head : Result String (Pair (Pair U16 Headers) (List U8))) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   match head {
     Result.err e => return (Result.err e),
     Result.ok pr =>
@@ -505,7 +720,7 @@ def Client.stream_response_head {S : Type} (method : Method) (t : Transport) (he
 /// sent to feed), a length counts down, chunked decodes chunks as they
 /// complete, read-to-close ends at EOF. The carry -- body bytes that arrived
 /// with the head -- is fed first in every body case.
-def Client.stream_body {S : Type} (method : Method) (t : Transport) (status : U16) (headers : Headers) (framing : Framing) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.stream_body {S : Type} (method : Method) (t : Client.Reader) (status : U16) (headers : Headers) (framing : Framing) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   match framing {
     Framing.no_body =>
       let resp : Response :=
@@ -558,10 +773,10 @@ def Client.feed {S : Type} (on_bytes : S -> List U8 -> IO (Result String (Pair S
 /// Read until the head ends: its status and headers, plus the body bytes that
 /// arrived in the same reads (the carry the body walkers start from).
 #[terminating]
-def Client.read_head (t : Transport) (carry : List U8) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
+def Client.read_head (t : Client.Reader) (carry : List U8) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
   match Wire.find_body_start carry {
     Option.none => do {
-      let read_res <- Transport.read_bytes t 4096;
+      let read_res <- Client.reader_read t;
       Client.read_head_step t carry read_res
     },
     Option.some head_end => Client.parse_head head_end carry
@@ -570,7 +785,7 @@ def Client.read_head (t : Transport) (carry : List U8) : IO (Result String (Pair
 /// One read's answer while the head is still incomplete. EOF before the
 /// blank line is a truncation, not an empty head.
 #[terminating]
-def Client.read_head_step (t : Transport) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
+def Client.read_head_step (t : Client.Reader) (carry : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair (Pair U16 Headers) (List U8))) :=
   match read_res {
     Result.err e => return (Result.err e),
     Result.ok chunk =>
@@ -609,19 +824,19 @@ def Client.take_min (n : I64) (xs : List U8) : List U8 :=
 
 /// `Content-Length`: feed the carry (sliced to the declared length), then
 /// read exactly what remains of the length.
-def Client.stream_length_carry {S : Type} (t : Transport) (status : U16) (headers : Headers) (n : I64) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+def Client.stream_length_carry {S : Type} (t : Client.Reader) (status : U16) (headers : Headers) (n : I64) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
   let head_bytes : List U8 := Client.take_min n carry;
   let fed <- Client.feed on_bytes init List.empty head_bytes;
   Client.stream_length_fed t status headers n fed on_bytes
 }
 
-def Client.stream_length_fed {S : Type} (t : Transport) (status : U16) (headers : Headers) (n : I64) (fed : Result String (Pair S (List U8))) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.stream_length_fed {S : Type} (t : Client.Reader) (status : U16) (headers : Headers) (n : I64) (fed : Result String (Pair S (List U8))) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   match fed {
     Result.err e => return (Result.err e),
     Result.ok pr => Client.stream_length_fed_ok t status headers n pr on_bytes
   }
 
-def Client.stream_length_fed_ok {S : Type} (t : Transport) (status : U16) (headers : Headers) (n : I64) (pr : Pair S (List U8)) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+def Client.stream_length_fed_ok {S : Type} (t : Client.Reader) (status : U16) (headers : Headers) (n : I64) (pr : Pair S (List U8)) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
   let fed_state : S := pr.first;
   let fed_acc : List U8 := pr.second;
   let remaining : I64 := I64.sub n (List.length fed_acc);
@@ -632,16 +847,16 @@ def Client.stream_length_fed_ok {S : Type} (t : Transport) (status : U16) (heade
 /// Count a `Content-Length` down to zero. EOF before zero is a truncation,
 /// reported rather than answered as a complete body.
 #[terminating]
-def Client.stream_length {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) : IO (Result String (Pair S (List U8))) := do {
+def Client.stream_length {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) : IO (Result String (Pair S (List U8))) := do {
   if Bool.not (I64.gt remaining 0i64)
   then return (Result.ok (Pair.pair s acc))
   else do {
-    let read_res <- Transport.read_bytes t 4096;
+    let read_res <- Client.reader_read t;
     Client.stream_length_step t on_bytes s acc remaining read_res
   }
 }
 
-def Client.stream_length_step {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_length_step {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
   match read_res {
     Result.err e => return (Result.err e),
     Result.ok chunk =>
@@ -653,14 +868,14 @@ def Client.stream_length_step {S : Type} (t : Transport) (on_bytes : S -> List U
 /// A read that overruns the remaining length feeds only what the length
 /// vouches for -- the excess would be the next message's, not this body's.
 #[terminating]
-def Client.stream_length_feed {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) (chunk : List U8) : IO (Result String (Pair S (List U8))) := do {
+def Client.stream_length_feed {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (remaining : I64) (chunk : List U8) : IO (Result String (Pair S (List U8))) := do {
   let feed : List U8 := Client.take_min remaining chunk;
   let remaining2 : I64 := I64.sub remaining (List.length feed);
   let fed <- Client.feed on_bytes s acc feed;
   Client.stream_length_fed2 t on_bytes remaining2 fed
 }
 
-def Client.stream_length_fed2 {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (remaining : I64) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_length_fed2 {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (remaining : I64) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
   match fed {
     Result.err e => return (Result.err e),
     Result.ok pr =>
@@ -670,18 +885,18 @@ def Client.stream_length_fed2 {S : Type} (t : Transport) (on_bytes : S -> List U
   }
 
 /// Read-to-close: every byte until EOF, which is the body's only end.
-def Client.stream_eof_carry {S : Type} (t : Transport) (status : U16) (headers : Headers) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+def Client.stream_eof_carry {S : Type} (t : Client.Reader) (status : U16) (headers : Headers) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
   let fed <- Client.feed on_bytes init List.empty carry;
   Client.stream_eof_fed t status headers fed on_bytes
 }
 
-def Client.stream_eof_fed {S : Type} (t : Transport) (status : U16) (headers : Headers) (fed : Result String (Pair S (List U8))) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
+def Client.stream_eof_fed {S : Type} (t : Client.Reader) (status : U16) (headers : Headers) (fed : Result String (Pair S (List U8))) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) :=
   match fed {
     Result.err e => return (Result.err e),
     Result.ok pr => Client.stream_eof_fed_ok t status headers pr on_bytes
   }
 
-def Client.stream_eof_fed_ok {S : Type} (t : Transport) (status : U16) (headers : Headers) (pr : Pair S (List U8)) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+def Client.stream_eof_fed_ok {S : Type} (t : Client.Reader) (status : U16) (headers : Headers) (pr : Pair S (List U8)) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
   let fed_state : S := pr.first;
   let fed_acc : List U8 := pr.second;
   let body_res <- Client.stream_eof t on_bytes fed_state fed_acc;
@@ -689,14 +904,14 @@ def Client.stream_eof_fed_ok {S : Type} (t : Transport) (status : U16) (headers 
 }
 
 #[terminating]
-def Client.stream_eof {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) : IO (Result String (Pair S (List U8))) := do {
-  let read_res <- Transport.read_bytes t 4096;
+def Client.stream_eof {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) : IO (Result String (Pair S (List U8))) := do {
+  let read_res <- Client.reader_read t;
   Client.stream_eof_step t on_bytes s acc read_res
 }
 
 /// EOF is the end of a read-to-close body, not an error.
 #[terminating]
-def Client.stream_eof_step {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_eof_step {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
   match read_res {
     Result.err e => return (Result.err e),
     Result.ok chunk =>
@@ -708,7 +923,7 @@ def Client.stream_eof_step {S : Type} (t : Transport) (on_bytes : S -> List U8 -
       }
   }
 
-def Client.stream_eof_fed2 {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_eof_fed2 {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
   match fed {
     Result.err e => return (Result.err e),
     Result.ok pr =>
@@ -719,13 +934,13 @@ def Client.stream_eof_fed2 {S : Type} (t : Transport) (on_bytes : S -> List U8 -
 
 /// Chunked: decode with `Wire.chunk_step` as reads arrive, feeding each
 /// step's decoded bytes. EOF before the terminal chunk is a truncation.
-def Client.stream_chunked_carry {S : Type} (t : Transport) (status : U16) (headers : Headers) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
+def Client.stream_chunked_carry {S : Type} (t : Client.Reader) (status : U16) (headers : Headers) (carry : List U8) (init : S) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) : IO (Result String (Pair S Response)) := do {
   let body_res <- Client.stream_chunked t on_bytes init List.empty carry;
   Client.stream_finish status headers body_res
 }
 
 #[terminating]
-def Client.stream_chunked {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_chunked {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) : IO (Result String (Pair S (List U8))) :=
   match Wire.chunk_step pending List.empty {
     Result.err e => return (Result.err e),
     Result.ok pr => Client.stream_chunked_decoded t on_bytes s acc pr
@@ -734,7 +949,7 @@ def Client.stream_chunked {S : Type} (t : Transport) (on_bytes : S -> List U8 ->
 /// One step's answer: feed what it decoded (also on the done path -- a step
 /// can decode data and then meet the terminal chunk), then finish or read.
 #[terminating]
-def Client.stream_chunked_decoded {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pr : Pair (Pair Bool (List U8)) (List U8)) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_chunked_decoded {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pr : Pair (Pair Bool (List U8)) (List U8)) : IO (Result String (Pair S (List U8))) :=
   match pr {
     Pair.pair step pending2 =>
       match step {
@@ -746,7 +961,7 @@ def Client.stream_chunked_decoded {S : Type} (t : Transport) (on_bytes : S -> Li
   }
 
 #[terminating]
-def Client.stream_chunked_fed {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (pending : List U8) (done : Bool) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_chunked_fed {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (pending : List U8) (done : Bool) (fed : Result String (Pair S (List U8))) : IO (Result String (Pair S (List U8))) :=
   match fed {
     Result.err e => return (Result.err e),
     Result.ok pr =>
@@ -759,12 +974,12 @@ def Client.stream_chunked_fed {S : Type} (t : Transport) (on_bytes : S -> List U
   }
 
 #[terminating]
-def Client.stream_chunked_read {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) : IO (Result String (Pair S (List U8))) := do {
-  let read_res <- Transport.read_bytes t 4096;
+def Client.stream_chunked_read {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) : IO (Result String (Pair S (List U8))) := do {
+  let read_res <- Client.reader_read t;
   Client.stream_chunked_step t on_bytes s acc pending read_res
 }
 
-def Client.stream_chunked_step {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_chunked_step {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) (read_res : Result String (List U8)) : IO (Result String (Pair S (List U8))) :=
   match read_res {
     Result.err e => return (Result.err e),
     Result.ok chunk =>
@@ -774,7 +989,7 @@ def Client.stream_chunked_step {S : Type} (t : Transport) (on_bytes : S -> List 
   }
 
 #[terminating]
-def Client.stream_chunked_more {S : Type} (t : Transport) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) (chunk : List U8) : IO (Result String (Pair S (List U8))) :=
+def Client.stream_chunked_more {S : Type} (t : Client.Reader) (on_bytes : S -> List U8 -> IO (Result String (Pair S Unit))) (s : S) (acc : List U8) (pending : List U8) (chunk : List U8) : IO (Result String (Pair S (List U8))) :=
   match Wire.chunk_step pending chunk {
     Result.err e => return (Result.err e),
     Result.ok pr => Client.stream_chunked_decoded t on_bytes s acc pr

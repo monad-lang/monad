@@ -33,6 +33,9 @@ def recorder (sink : Ref (List U8)) : Transport :=
       return (Result.ok len)
     })
     (fn (_ : Unit) => IO.pure Unit.unit)
+    (fn (_ : Unit) => IO.pure 0i64)
+    (fn (_ : I64) => IO.pure (Result.ok true))
+    (fn (_ : I64) => IO.pure (Result.ok true))
 
 #[test]
 def test_hex_i64 : Bool :=

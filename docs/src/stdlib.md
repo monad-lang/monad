@@ -297,9 +297,12 @@ cooperative, so the two backends disagree about what a `forkIO` means.
   import of `std.show`'s. Prefer `std.show`.
 - **Three declared-but-unimplemented natives**: `eq_rec` (so `Eq.rec` cannot be
   called), `string_to_chars`, and `string_from_chars`.
-- **TCP has no timeout** and no non-blocking mode: `tcp_connect`, `tcp_accept`
-  and `Stream.read` block until they complete, so a peer that connects and then
-  stays silent holds a fiber and its OS thread indefinitely. And TCP is
-  self-hosted only — the Rust host cannot run a socket at all.
+- **TCP timeouts are caller-enforced.** `IO.tcp_connect_timeout` bounds the
+  connect (one deadline across every address tried; the `getaddrinfo` lookup
+  itself is unbounded), `FdStream.set_timeout` applies `SO_RCVTIMEO`/
+  `SO_SNDTIMEO`, and `FdStream.poll` waits for readiness with a deadline. The
+  base `tcp_connect`/`tcp_accept`/`Stream.read` still block as before; blocking
+  mode is the default, and `motes/moose` layers per-request deadlines on top.
+  TCP is self-hosted only — the Rust host cannot run a socket at all.
 
 See the [Maturity Matrix](./maturity.md) for the summary view.

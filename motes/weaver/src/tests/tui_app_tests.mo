@@ -11,14 +11,19 @@ use shuttle::gate {Gate}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
-use weaver::commands {WeaverState, set_fatal}
+use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
-use weaver::model {TuiModel, WeaverMsg, DisplayRow, init_tui_model, Model.append_block, Model.scroll_step, Model.display_rows, Model.thinking_text}
+use weaver::model {
+    TuiModel, WeaverMsg, DisplayRow, init_tui_model, Model.append_block,
+    Model.scroll_step, Model.display_rows, Model.thinking_text,
+    PickerState, Picker.count, Picker.selected_model, Picker.init, Picker.move,
+    Picker.window_offset, Picker.visible,
+}
 use weaver::overlay {OverlayState}
 use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage}
 use std::path {Path, Path.of}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use weaver::tui_app {TuiApp.update}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
@@ -36,7 +41,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false }
 
 def state_of (mode : Mode) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
     let m : TuiModel := init_tui_model Option.none (state_of mode) 24 80 in
@@ -590,6 +595,106 @@ def test_tick_advances_the_banner_sweep : Bool :=
     let shown : TuiModel := { base with banner := true } in
     match TuiApp.update shown (WeaverMsg.key_event Event.tick) {
         Pair.pair m2 _ => m2.banner && m2.banner_frame == 1,
+    }
+
+// ── the model picker ───────────────────────────────────────────────────
+
+def picker_models : List String := ["alpha", "beta", "gamma"]
+
+/// A command result carrying a model list: the shape `/models` builds
+/// (`command_keep` is what opens the picker).
+def picker_command (models : List String) : WeaverMsg :=
+    let cat : BTreeMap String (List String) := Map.insert "mock" models BTreeMap.empty in
+    let st : WeaverState := { (state_of Mode.manual) with catalog := cat } in
+    let e : Effect := {
+        state := st,
+        output := "models (mock): 3",
+        transcript := TranscriptChange.keep,
+        picker := Option.some models,
+    } in
+    WeaverMsg.command_result e
+
+#[test]
+def test_command_result_opens_the_picker : Bool :=
+    match TuiApp.update (model_of Mode.manual) (picker_command picker_models) {
+        Pair.pair m2 _ =>
+            match m2.picker {
+                Option.some p => Picker.count p == 3 && Picker.selected_model p == "alpha",
+                Option.none => false,
+            },
+    }
+
+#[test]
+def test_picker_enter_sets_the_selected_model : Bool :=
+    match TuiApp.update (model_of Mode.manual) (picker_command picker_models) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg Key.down) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg Key.enter) {
+                        Pair.pair m3 _ =>
+                            m3.state.run.session.config.model == "beta"
+                                && (match m3.picker {
+                                    Option.none => true,
+                                    Option.some _ => false,
+                                }),
+                    },
+            },
+    }
+
+#[test]
+def test_picker_escape_closes_without_changing_the_model : Bool :=
+    match TuiApp.update (model_of Mode.manual) (picker_command picker_models) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg Key.escape) {
+                Pair.pair m2 _ =>
+                    m2.state.run.session.config.model == "mock"
+                        && (match m2.picker {
+                            Option.none => true,
+                            Option.some _ => false,
+                        }),
+            },
+    }
+
+#[test]
+def test_picker_swallows_typing : Bool :=
+    match TuiApp.update (model_of Mode.manual) (picker_command picker_models) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.char "x")) {
+                Pair.pair m2 _ => m2.input.value == "",
+            },
+    }
+
+#[test]
+def test_picker_move_clamps_at_both_ends : Bool :=
+    // A one-item list still reaches both clamped ends; nothing indexes
+    // past them.
+    let p : PickerState := Picker.init ["only"] "only" in
+    let up : PickerState := Picker.move (0i64 - 1i64) 2i64 p in
+    let down : PickerState := Picker.move 9i64 2i64 p in
+    Picker.selected_model up == "only" && Picker.selected_model down == "only"
+
+#[test]
+def test_picker_window_follows_the_selection : Bool :=
+    let p : PickerState := Picker.init ["a", "b", "c", "d", "e", "f"] "a" in
+    let p2 : PickerState := Picker.move 4i64 2i64 p in
+    let vis : List String := Picker.visible 2i64 p2 in
+    Picker.selected_model p2 == "e"
+        && Picker.window_offset 2i64 p2 == 3i64
+        && List.length vis == 2
+
+#[test]
+def test_picker_init_misses_the_current_name_without_breaking : Bool :=
+    let p : PickerState := Picker.init picker_models "not-listed" in
+    Picker.count p == 3 && Picker.selected_model p == "alpha"
+
+#[test]
+def test_empty_model_list_opens_no_picker : Bool :=
+    match TuiApp.update (model_of Mode.manual) (picker_command []) {
+        Pair.pair m2 _ =>
+            match m2.picker {
+                Option.none => true,
+                Option.some _ => false,
+            },
     }
 
 

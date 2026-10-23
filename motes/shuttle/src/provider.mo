@@ -13,15 +13,15 @@
 /// capture-pass limitation that forces that split elsewhere).
 use shuttle::message {Message, Turn}
 use shuttle::tool {ToolSpec}
-use init::transformers {ResultT}
+use init::transformers {ResultT, ResultT.run}
 use json::json {
     Json, Json.make_object, Json.make_str, Json.make_num_int,
     Json.get_object, Json.get_str, Json.get_num_i64, Json.object_get,
 }
 use std::map {Map, BTreeMap}
-use openai::client {OpenAI.complete_stream}
+use openai::client {OpenAI.complete_stream, OpenAI.list_models}
 use shuttle::wire::openai {OpenAI.encode_request, OpenAI.decode_response}
-use anthropic::client {Anthropic.complete_stream}
+use anthropic::client {Anthropic.complete_stream, Anthropic.list_models}
 use anthropic::types {MessagesRequest, MessagesResponse}
 use shuttle::wire::anthropic {Anthropic.encode_request, Anthropic.decode_response}
 use shuttle::wire::mock {Mock.send}
@@ -163,10 +163,13 @@ def send_openai (cfg : ProviderConfig) (system : String) (tools : List ToolSpec)
 /// The anthropic key is REQUIRED, not `Option` -- a missing key errors
 /// here, named, rather than sending an empty `x-api-key` the wire would
 /// reject with a less legible 401.
+def anthropic_no_key (cfg : ProviderConfig) : String :=
+    String.concat "anthropic: no API key (env " (String.concat cfg.api_key_env " unset, and no direct key)")
+
 def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : MessagesRequest) (emit : String -> IO Unit) : ResultT String IO MessagesResponse :=
     match key_opt {
         Option.none =>
-            ResultT.mk (return (Result.err (String.concat "anthropic: no API key (env " (String.concat cfg.api_key_env " unset, and no direct key)")))),
+            ResultT.mk (return (Result.err (anthropic_no_key cfg))),
         Option.some key => Anthropic.complete_stream cfg.base_url key req emit,
     }
 
@@ -196,4 +199,23 @@ pub def Provider.send (cfg : ProviderConfig) (system : String) (tools : List Too
         Wire.openai => send_openai cfg system tools history emit,
         Wire.anthropic => send_anthropic cfg system tools history emit,
         Wire.mock => Mock.send tools history emit,
+    }
+
+/// The models this config's provider serves. The mock wire answers its
+/// one scripted name, offline, so the command path is testable without
+/// a socket.
+pub def Provider.list_models (cfg : ProviderConfig) : IO (Result String (List String)) :=
+    match cfg.wire {
+        Wire.mock => IO.pure (Result.ok ["mock"]),
+        Wire.openai => do {
+            let key <- ProviderConfig.effective_key cfg;
+            ResultT.run (OpenAI.list_models cfg.base_url key)
+        },
+        Wire.anthropic => do {
+            let key_opt <- ProviderConfig.effective_key cfg;
+            match key_opt {
+                Option.none => IO.pure (Result.err (anthropic_no_key cfg)),
+                Option.some key => ResultT.run (Anthropic.list_models cfg.base_url key),
+            }
+        },
     }

@@ -94,6 +94,19 @@ def SSL_write (ssl : Ptr) (buf : Ptr) (num : I32) : RawIO I32
 #[extern "c"]
 def SSL_get_error (ssl : Ptr) (ret : I32) : I32
 
+/// Bytes already decrypted and waiting in the SSL object. Pure; a
+/// readiness wait must not poll the socket while this is positive.
+#[extern "c"]
+def SSL_pending (ssl : Ptr) : I32
+
+/// 1 when the SSL object holds ANY buffered data, processed or not
+/// (`SSL_has_pending`, OpenSSL 1.1.0+). Unlike `SSL_pending`, this also
+/// covers a record that is buffered but not yet decrypted -- the exact
+/// state in which a readiness poll on the socket would sleep even though
+/// `SSL_read` has work to do.
+#[extern "c"]
+def SSL_has_pending (ssl : Ptr) : I32
+
 #[extern "c"]
 def SSL_shutdown (ssl : Ptr) : RawIO I32
 

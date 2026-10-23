@@ -20,7 +20,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
-use weaver::commands {WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch}
+use weaver::commands {WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model}
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
 use weaver::gate {pick_header, cap_name, capped_diff}
@@ -33,7 +33,8 @@ use weaver::model {
     DisplayRow, Model.display_line, Model.take_last_rows, Model.display_row_widget,
     Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
     Model.clear_input_selection, Model.in_input, Model.input_drag, Model.input_press,
-    Model.input_release, Model.input_sel_active,
+    Model.input_release, Model.input_sel_active, Model.picker_height,
+    PickerState, Picker.init, Picker.selected_model, Picker.move,
     list_length, panel_height, input_placeholder,
 }
 use weaver::logs {Logs.info, Logs.debug, Logs.warn}
@@ -506,9 +507,23 @@ def command_result_step (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd We
         TranscriptChange.reset => command_reset m effect,
     }
 
+/// A command that fetched a model list opens the picker (the listing is
+/// still appended: it stays as the transcript's record).
+def open_picker_from (m : TuiModel) (models_opt : Option (List String)) : TuiModel :=
+    match models_opt {
+        Option.none => m,
+        Option.some models => match models {
+            List.empty => m,
+            List.cons _ _ =>
+                let current : String := m.state.run.session.config.model in
+                { m with picker := Option.some (Picker.init models current) },
+        },
+    }
+
 def command_keep (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
     let with_state : TuiModel := set_state m effect.state in
-    let pair := append_block_at with_state (plain_lines (Diff.lines effect.output)) in
+    let opened : TuiModel := open_picker_from with_state effect.picker in
+    let pair := append_block_at opened (plain_lines (Diff.lines effect.output)) in
     match pair {
         Pair.pair m2 at => match at {
             Pair.pair start block =>
@@ -549,7 +564,9 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
         Event.resize rows cols =>
             Pair.pair (with_streak_reset (fn (mm : TuiModel) => set_size mm rows cols) m) Cmd.none,
         Event.paste text =>
-            Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with input := insert_text text mm.input }) m) Cmd.none,
+            if picker_open m
+            then Pair.pair m Cmd.none
+            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with input := insert_text text mm.input }) m) Cmd.none,
         Event.mouse me => update_mouse m me,
         // The frame clock: the spinner advances ONLY while a turn is
         // pending, so an idle tick folds to an unchanged model (a
@@ -584,7 +601,9 @@ def is_left (b : MouseButton) : Bool :=
     }
 
 def update_mouse (m : TuiModel) (me : MouseEvent) : Pair TuiModel (Cmd WeaverMsg) :=
-    match me {
+    if picker_open m
+    then Pair.pair m Cmd.none
+    else match me {
         MouseEvent.scroll_up _ _ => scroll_with_pages m wheel_step,
         MouseEvent.scroll_down _ _ => scroll_with_pages m (0 - wheel_step),
         MouseEvent.press btn r c =>
@@ -644,7 +663,57 @@ def finish_input_selection_step (m : TuiModel) (r : I64) (c : I64) : Pair TuiMod
 
 def wheel_step : I64 := 3
 
+def picker_open (m : TuiModel) : Bool :=
+    match m.picker {
+        Option.none => false,
+        Option.some _ => true,
+    }
+
+/// While the model picker is open it owns the keys: the app loop still
+/// reads stdin, so every key is routed here instead of the editor.
 def update_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
+    match m.picker {
+        Option.some p => picker_key m p k,
+        Option.none => editor_key m k,
+    }
+
+def picker_moved (m : TuiModel) (p : PickerState) (delta : I64) : Pair TuiModel (Cmd WeaverMsg) :=
+    let p2 : PickerState := Picker.move delta (Model.picker_height m) p in
+    Pair.pair (with_streak_reset (fn (mm : TuiModel) => { mm with picker := Option.some p2 }) m) Cmd.none
+
+def picker_close (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    let m2 : TuiModel := { m with picker := Option.none } in
+    Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2) repaint_cmd
+
+/// Enter: set the selected model and echo it through the command path,
+/// which appends and persists the line and repaints (keeping the store
+/// index in sync).
+def picker_choose (m : TuiModel) (p : PickerState) : Pair TuiModel (Cmd WeaverMsg) :=
+    let chosen : String := Picker.selected_model p in
+    let st2 : WeaverState := Commands.set_model m.state chosen in
+    let effect : Effect := Effect.ok st2 (String.concat "model: " chosen) in
+    let m2 : TuiModel := { m with picker := Option.none } in
+    command_result_step (with_streak_reset (fn (mm : TuiModel) => mm) m2) effect
+
+def picker_key (m : TuiModel) (p : PickerState) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
+    match k {
+        Key.up => picker_moved m p (0i64 - 1i64),
+        Key.down => picker_moved m p 1i64,
+        Key.page_up => picker_moved m p (0i64 - 10i64),
+        Key.page_down => picker_moved m p 10i64,
+        Key.home => picker_moved m p (0i64 - 999999i64),
+        Key.end => picker_moved m p 999999i64,
+        Key.enter => picker_choose m p,
+        Key.escape => picker_close m,
+        Key.ctrl c =>
+            if String.beq c "c"
+            then picker_close m
+            else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+        _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
+    }
+
+/// The editor's key map (the picker is closed).
+def editor_key (m : TuiModel) (k : Key) : Pair TuiModel (Cmd WeaverMsg) :=
     match k {
         Key.tab => Pair.pair (with_streak_reset cycle_mode m) Cmd.none,
         Key.enter => enter_key m,

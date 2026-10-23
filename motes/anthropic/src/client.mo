@@ -17,13 +17,16 @@
 use init::transformers {ResultT}
 use json::json {
     Json, Json.to_string, Json.parse, Json.ParseError.to_string, Json.get_str,
-    Json.get_object, Json.get_num, Json.get_num_i64, Json.object_get, Json.make_object,
+    Json.get_array, Json.get_object, Json.get_num, Json.get_num_i64, Json.object_get, Json.make_object,
 }
 use http::types {Headers, Headers.empty, Headers.set, Response, Uri, Status.ok}
 use http::uri {Uri.parse}
 use http::body {Body.from_text, Body.to_bytes_pure}
 use http::sse {Sse.init, Sse.push, SseState, SseEvent}
-use moose::client {Client.post, Client.post_stream}
+use moose::client {
+    Client.default_stream_idle_ms, Client.default_timeout_ms,
+    Client.get_timeout, Client.post_stream_timeout, Client.post_timeout,
+}
 use anthropic::types {MessagesRequest, MessagesResponse, AnthropicUsage, Block}
 use std::map {BTreeMap}
 
@@ -45,7 +48,7 @@ def decode_messages_response (r : Response) : Result String MessagesResponse :=
             (String.concat ": " text)))
 
 def anthropic_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String MessagesResponse) := do {
-    let resp <- Client.post u headers (Body.from_text body_str);
+    let resp <- Client.post_timeout u headers (Body.from_text body_str) Client.default_timeout_ms;
     return (match resp {
         Result.err e => Result.err e,
         Result.ok r => decode_messages_response r,
@@ -64,6 +67,77 @@ pub def Anthropic.complete (base_url : String) (api_key : String) (req : Message
     match Uri.parse url_str {
         Result.err e => ResultT.mk (return (Result.err e)),
         Result.ok u => ResultT.mk (anthropic_complete_io u (anthropic_headers api_key) body_str),
+    }
+
+// ── Listing models ──────────────────────────────────────────────────────
+
+/// The ids in a model list (`{"data":[{"id": …}, …]}`). Pure; a
+/// malformed entry fails the whole list.
+pub def Anthropic.parse_models (text : String) : Result String (List String) :=
+    match Json.parse text {
+        Result.err e => Result.err (Json.ParseError.to_string e),
+        Result.ok j => anthropic_models_of_json j,
+    }
+
+def anthropic_models_of_json (j : Json) : Result String (List String) :=
+    match Json.get_object j {
+        Result.err e => Result.err (String.concat "models: " e),
+        Result.ok o => match Json.object_get "data" o {
+            Option.none => Result.err "models: missing data",
+            Option.some d => match Json.get_array d {
+                Result.err e => Result.err (String.concat "models: " e),
+                Result.ok xs => anthropic_model_ids xs 0,
+            },
+        },
+    }
+
+#[terminating]
+def anthropic_model_ids (xs : List Json) (i : I64) : Result String (List String) :=
+    match xs {
+        List.empty => Result.ok List.empty,
+        List.cons x rest => match anthropic_model_id x i {
+            Result.err e => Result.err e,
+            Result.ok id => match anthropic_model_ids rest (i + 1i64) {
+                Result.err e => Result.err e,
+                Result.ok ids => Result.ok (List.cons id ids),
+            },
+        },
+    }
+
+def anthropic_model_id (j : Json) (i : I64) : Result String String :=
+    match Json.get_object j {
+        Result.err e => Result.err (String.concat "models: entry " (String.concat (I64.to_string i) (String.concat ": " e))),
+        Result.ok o => match Json.object_get "id" o {
+            Option.none => Result.err (String.concat "models: entry " (String.concat (I64.to_string i) " has no id")),
+            Option.some idj => match Json.get_str idj {
+                Result.err e => Result.err (String.concat "models: entry " (String.concat (I64.to_string i) (String.concat ": " e))),
+                Result.ok id => Result.ok id,
+            },
+        },
+    }
+
+def anthropic_models_io (u : Uri) (headers : Headers) : IO (Result String (List String)) := do {
+    let resp <- Client.get_timeout u headers Client.default_timeout_ms;
+    return (match resp {
+        Result.err e => Result.err e,
+        Result.ok r =>
+            let text := String.from_list (Body.to_bytes_pure r.body) in
+            if U16.beq r.status Status.ok
+            then Anthropic.parse_models text
+            else Result.err (String.concat "anthropic: HTTP "
+                (String.concat (U16.to_string r.status)
+                (String.concat ": " text))),
+    })
+}
+
+/// GET `{base_url}/v1/models?limit=1000`: Anthropic paginates this
+/// endpoint, but its maximum page covers any realistic catalogue; a
+/// `has_more` that survives that is ignored for now.
+pub def Anthropic.list_models (base_url : String) (api_key : String) : ResultT String IO (List String) :=
+    let url_str := String.concat base_url "/v1/models?limit=1000" in
+    match Uri.parse url_str {
+        Result.err e => ResultT.mk (return (Result.err e)),
+        Result.ok u => ResultT.mk (anthropic_models_io u (anthropic_headers api_key)),
     }
 
 // ── Streaming ──────────────────────────────────────────────────────────
@@ -526,7 +600,7 @@ def anthropic_emit_all (on_text : String -> IO Unit) (deltas : List String) : IO
 
 def anthropic_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text : String -> IO Unit) : IO (Result String MessagesResponse) := do {
     let init : AnthropicAcc := { sse := Sse.init, blocks := List.empty, stop := "", usage := AnthropicUsage.mk 0 0 0 };
-    let res <- Client.post_stream u headers (Body.from_text body_str) init (fn st bytes => anthropic_stream_bytes on_text st bytes);
+    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => anthropic_stream_bytes on_text st bytes);
     return (match res {
         Result.err e => Result.err e,
         Result.ok pr =>

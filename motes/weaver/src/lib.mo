@@ -26,4 +26,11 @@ pub use lib::commands {
 }
 pub use lib::dumb {Dumb.run}
 pub use lib::diff {Diff.lines, Diff.render, Diff.for_input}
-pub use lib::providers {Weaver.preset, Weaver.default_model, Weaver.mock_config}
+pub use lib::providers {
+    Weaver.preset, Weaver.preferred_model, Weaver.config_for,
+    Weaver.model_for, Weaver.mock_config,
+}
+pub use lib::catalog {
+    Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.contains,
+    Catalog.note, Catalog.render, Catalog.max_shown,
+}

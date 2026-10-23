@@ -558,3 +558,59 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     compile_source_run_expect source "cell_ref_roundtrip" 7
+
+/// The timeout natives end to end: `tcp_connect_timeout` completes on
+/// loopback, `stream_set_timeout` applies the socket bound, `stream_poll`
+/// reports a silent descriptor as not-ready, and the bounded `read`
+/// comes back `timed_out` instead of blocking forever.
+#[test]
+def test_c_tcp_timeouts : IO Bool :=
+    let source := r#"use std::stream {Stream, StreamError, StreamErrorKind, FdStream, FdStream.poll, FdStream.poll_read, FdStream.set_timeout}
+
+def read_state (s : FdStream) : IO I64 := do {
+    let r <- Stream.read s 16;
+    match r {
+        Result.ok _ => return 10i64,
+        Result.err e => match e.kind { StreamErrorKind.timed_out => return 0i64, _ => return 11i64 }
+    }
+}
+
+def poll_state (s : FdStream) : IO I64 := do {
+    let r <- FdStream.poll s FdStream.poll_read 50i64;
+    match r {
+        Result.err _ => return 9i64,
+        Result.ok ready => if ready then return 6i64 else return 0i64
+    }
+}
+
+def main (args : List String) : IO I64 := do {
+    let listen_res <- IO.tcp_listen 0u16;
+    match listen_res {
+        Result.err _ => return 1,
+        Result.ok listener => do {
+            let port <- IO.tcp_local_port listener;
+            let conn_res <- IO.tcp_connect_timeout "127.0.0.1" port 1000i64;
+            match conn_res {
+                Result.err _ => do { let _ <- Stream.close listener; return 2 },
+                Result.ok client => do {
+                    let accept_res <- IO.tcp_accept listener;
+                    let _ <- Stream.close listener;
+                    match accept_res {
+                        Result.err _ => do { let _ <- Stream.close client; return 3 },
+                        Result.ok server => do {
+                            let bound <- FdStream.set_timeout client 100i64 100i64;
+                            let bound_ok := match bound { Result.err _ => false, Result.ok _ => true };
+                            let ps <- poll_state client;
+                            let rs <- read_state client;
+                            let _ <- Stream.close client;
+                            let _ <- Stream.close server;
+                            if Bool.not bound_ok then return 5 else if Bool.not (ps == 0i64) then return ps else if Bool.not (rs == 0i64) then return rs else return 7
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+"# in
+    compile_source_run_expect source "c_tcp_timeouts" 7

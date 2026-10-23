@@ -7,7 +7,7 @@
 
 use std::show {Show}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.to_list}
-use std::stream {Stream, StreamError, FdStream}
+use std::stream {Stream, StreamError, FdStream, FdStream.poll, FdStream.poll_read, FdStream.poll_write}
 
 // ── Method ──────────────────────────────────────────────────────────────
 // Variants mirror RFC 9110 §9.
@@ -296,19 +296,24 @@ pub type Transport {
   secure (read : I64 -> IO (Result StreamError ByteBuf))
          (write : ByteBuf -> IO (Result StreamError I64))
          (close : Unit -> IO Unit)
+         /// Decrypted bytes already buffered by TLS (`SSL_pending`); a
+         /// readiness wait must not sleep on those.
+         (pending : Unit -> IO I64)
+         (wait_read : I64 -> IO (Result StreamError Bool))
+         (wait_write : I64 -> IO (Result StreamError Bool))
 }
 open Transport { plain, secure }
 
 pub def Transport.read (t : Transport) (max : I64) : IO (Result StreamError ByteBuf) :=
   match t {
     Transport.plain s => Stream.read s max,
-    Transport.secure read _ _ => read max
+    Transport.secure read _ _ _ _ _ => read max
   }
 
 pub def Transport.write (t : Transport) (buf : ByteBuf) : IO (Result StreamError I64) :=
   match t {
     Transport.plain s => Stream.write s buf,
-    Transport.secure _ write _ => write buf
+    Transport.secure _ write _ _ _ _ => write buf
   }
 
 // `close` takes a `Unit` where the two payload fields are called with the
@@ -320,7 +325,22 @@ pub def Transport.write (t : Transport) (buf : ByteBuf) : IO (Result StreamError
 pub def Transport.close (t : Transport) : IO Unit :=
   match t {
     Transport.plain s => Stream.close s,
-    Transport.secure _ _ close => close unit
+    Transport.secure _ _ close _ _ _ => close unit
+  }
+
+/// Wait up to `timeout_ms` for readable: `ok true` ready, `ok false`
+/// timed out. Plain streams poll the descriptor; TLS first consults
+/// `pending` so plaintext already decrypted in the SSL object never waits.
+pub def Transport.wait_read (t : Transport) (timeout_ms : I64) : IO (Result StreamError Bool) :=
+  match t {
+    Transport.plain s => FdStream.poll s FdStream.poll_read timeout_ms,
+    Transport.secure _ _ _ _ wait_read _ => wait_read timeout_ms
+  }
+
+pub def Transport.wait_write (t : Transport) (timeout_ms : I64) : IO (Result StreamError Bool) :=
+  match t {
+    Transport.plain s => FdStream.poll s FdStream.poll_write timeout_ms,
+    Transport.secure _ _ _ _ _ wait_write => wait_write timeout_ms
   }
 
 // The wire parsers work on `List U8`, so the clients and servers above the

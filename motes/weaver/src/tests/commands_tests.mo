@@ -16,6 +16,7 @@ use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
 use weaver::commands {WeaverState, Effect, Commands.dispatch}
+use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::store {StoreState, TLine, TLine.user_line, Store.new_session, Store.append_transcript}
@@ -52,6 +53,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     budget := budget,
     mcps := mcps,
     keys := BTreeMap.empty,
+    catalog := BTreeMap.empty,
     quit := false,
     fatal := Option.none,
     colors := true,
@@ -338,31 +340,88 @@ def test_provider_switch_accepts_an_explicit_model : IO Bool := do {
     })
 }
 
-/// A model the new provider does not serve is refused before the config
-/// changes, so a typo cannot leave an invalid pair in the session.
+/// An explicit model is the user's call: no name table refuses it (the
+/// old `zai-glm-5-3` rejection was the bug this feature removes).
 #[test]
-def test_provider_switch_refuses_a_foreign_model : IO Bool := do {
+def test_provider_switch_accepts_a_foreign_model : IO Bool := do {
     let r <- Commands.dispatch "/provider mistral zai-glm-5-3" (state_provider "ollama" "qwen2.5-coder");
     return (match r {
         Result.err _ => false,
-        Result.ok e => prov_is e "ollama"
-            && model_is e "qwen2.5-coder"
-            && String.contains e.output "does not accept model",
+        Result.ok e => prov_is e "mistral" && model_is e "zai-glm-5-3",
+    })
+}
+
+def state_catalog (provider : String) (model : String) (models : List String) : WeaverState :=
+    let cat : BTreeMap String (List String) := Map.insert provider models BTreeMap.empty in
+    let st : WeaverState := state_provider provider model in
+    { st with catalog := cat }
+
+/// A cached list chooses the switch: the preferred name when listed,
+/// otherwise the first the provider returned.
+#[test]
+def test_provider_switch_uses_the_cached_list : IO Bool := do {
+    let st : WeaverState := state_catalog "mistral" "qwen2.5-coder" ["zai-glm-5-3", "mistral-small-latest"];
+    let r <- Commands.dispatch "/provider mistral" st;
+    return (match r {
+        Result.err _ => false,
+        Result.ok e => prov_is e "mistral" && model_is e "zai-glm-5-3",
     })
 }
 
 #[test]
-def test_model_change_is_validated_per_provider : IO Bool := do {
-    let st : WeaverState := state_provider "mistral" "mistral-large-latest";
-    let bad <- Commands.dispatch "/model qwen2.5-coder" st;
-    let good <- Commands.dispatch "/model mistral-small-latest" st;
-    return (match bad {
+def test_model_outside_the_cached_list_is_set_with_a_note : IO Bool := do {
+    let st : WeaverState := state_catalog "mistral" "mistral-large-latest" ["mistral-large-latest"];
+    let r <- Commands.dispatch "/model zai-glm-5-3" st;
+    return (match r {
         Result.err _ => false,
-        Result.ok e => model_is e "mistral-large-latest"
-            && String.contains e.output "model unchanged",
-    }) && (match good {
+        Result.ok e => model_is e "zai-glm-5-3"
+            && String.contains e.output "not in mistral's model list",
+    })
+}
+
+#[test]
+def test_model_listed_in_the_cache_is_set_silently : IO Bool := do {
+    let st : WeaverState := state_catalog "mistral" "mistral-large-latest" ["mistral-small-latest"];
+    let r <- Commands.dispatch "/model mistral-small-latest" st;
+    return (match r {
         Result.err _ => false,
-        Result.ok e => model_is e "mistral-small-latest",
+        Result.ok e => model_is e "mistral-small-latest"
+            && Bool.not (String.contains e.output "not in"),
+    })
+}
+
+/// `/models` asks the configured provider. The mock wire answers offline,
+/// so the whole command (fetch, cache, render, picker) is testable.
+#[test]
+def test_models_lists_the_mock_provider : IO Bool := do {
+    let r <- Commands.dispatch "/models" (state_of Mode.manual []);
+    return (match r {
+        Result.err _ => false,
+        Result.ok e =>
+            String.contains e.output "models (mock): 1"
+                && (match Catalog.lookup "mock" e.state.catalog {
+                    Option.some models => models == ["mock"],
+                    Option.none => false,
+                })
+                && (match e.picker {
+                    Option.some _ => true,
+                    Option.none => false,
+                }),
+    })
+}
+
+/// `/model` with no argument fetches (the cache is empty here) and lists.
+#[test]
+def test_model_with_no_argument_lists_and_offers_the_picker : IO Bool := do {
+    let r <- Commands.dispatch "/model" (state_of Mode.manual []);
+    return (match r {
+        Result.err _ => false,
+        Result.ok e =>
+            String.contains e.output "models (mock): 1"
+                && (match e.picker {
+                    Option.some _ => true,
+                    Option.none => false,
+                }),
     })
 }
 

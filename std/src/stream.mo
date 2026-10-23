@@ -125,6 +125,12 @@ priv def stream_close (s : FdStream) : RawIO Unit
 #[native "stream_fd"]
 priv def stream_fd (s : FdStream) : RawIO I32
 
+#[native "stream_poll"]
+priv def stream_poll (s : FdStream) (events : I64) (timeout_ms : I64) : RawIO (Result (Pair I64 String) I64)
+
+#[native "stream_set_timeout"]
+priv def stream_set_timeout (s : FdStream) (recv_ms : I64) (send_ms : I64) : RawIO (Result (Pair I64 String) Unit)
+
 /// Pure: naming one of the three standard descriptors is not an effect.
 #[native "std_fd"]
 priv def std_fd (which : I64) : FdStream
@@ -158,6 +164,32 @@ pub def FdStream.open_file (path : Path) (mode : I64) : IO (Result StreamError F
 
 /// The raw descriptor, for FFI calls that take one (`SSL_set_fd`).
 pub def FdStream.raw_fd (s : FdStream) : IO I32 := IO.mk (stream_fd s)
+
+/// `FdStream.poll`'s readiness bits (`poll(2)`'s POLLIN/POLLOUT).
+pub def FdStream.poll_read : I64 := 1
+pub def FdStream.poll_write : I64 := 2
+
+/// Wait up to `timeout_ms` for readiness: `ok true` ready, `ok false`
+/// timed out. The deadline belongs to the caller; this is one wait, not
+/// a loop.
+pub def FdStream.poll (s : FdStream) (events : I64) (timeout_ms : I64) : IO (Result StreamError Bool) := do {
+  let r <- IO.mk (stream_poll s events timeout_ms);
+  return (match stream_result r {
+    Result.err e => Result.err e,
+    Result.ok n => Result.ok (Bool.not (I64.beq n 0)),
+  })
+}
+
+/// A socket's per-read and per-write timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO`).
+/// A read or write that exceeds it fails with `timed_out`. Only sockets
+/// accept this; a file descriptor is `invalid_input`. A write that hits
+/// the bound may already have sent a PREFIX of its buffer: that stream
+/// is not resumable (a retry would duplicate the prefix), so abandon the
+/// connection rather than retry.
+pub def FdStream.set_timeout (s : FdStream) (recv_ms : I64) (send_ms : I64) : IO (Result StreamError Unit) := do {
+  let r <- IO.mk (stream_set_timeout s recv_ms send_ms);
+  return (stream_result r)
+}
 
 /// Writes to stdout go through the C runtime's stdio buffer (Rust's
 /// `Stdout` when interpreted) -- `IO.println` and `IO.write_stdout` are

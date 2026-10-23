@@ -1,87 +1,128 @@
-/// Provider/model pair validation: the check that keeps a settings file's
-/// stale model from being sent to a provider that does not serve it.
-use weaver::providers {
-    Weaver.model_matches, Weaver.model_error, Weaver.default_model,
-    Weaver.repair_session_model,
-}
-use shuttle::session {Session}
+/// Provider presets, preferred defaults, and the catalogue-driven model
+/// choice: the API list is the authority, so the only pinned names are
+/// the PREFERENCES used when no list is available.
+use weaver::providers {Weaver.preferred_model, Weaver.config_for, Weaver.model_for, Weaver.provider_of}
+use weaver::catalog {Catalog.contains, Catalog.note, Catalog.render, Catalog.max_shown}
 use shuttle::provider {ProviderConfig, Wire}
-use shuttle::message {Usage}
-
-def cfg (model : String) : ProviderConfig :=
-    { base_url := "mock", model := model, api_key_env := "K", max_tokens := 8, wire := Wire.mock }
-
-def usage : Usage := { input_tokens := 0, output_tokens := 0, cached_tokens := 0 }
-
-def session_with (model : String) : Session :=
-    { config := cfg model, system_prompt := "", tools := List.empty, history := List.empty, turns := 0, spent := usage }
+use std::map {BTreeMap}
 
 #[test]
-def test_mistral_family_matches : Bool :=
-    Weaver.model_matches "mistral" "mistral-large-latest"
-        && Weaver.model_matches "mistral" "codestral-latest"
-        && Weaver.model_matches "mistral" "ministral-8b-latest"
-        && Weaver.model_matches "mistral" "open-mistral-nemo"
-
-#[test]
-def test_foreign_model_does_not_match_mistral : Bool :=
-    Bool.not (Weaver.model_matches "mistral" "zai-glm-5-3")
-        && Bool.not (Weaver.model_matches "mistral" "qwen2.5-coder")
-
-#[test]
-def test_openrouter_requires_a_vendor_prefix : Bool :=
-    Weaver.model_matches "openrouter" "mistralai/mistral-large"
-        && Bool.not (Weaver.model_matches "openrouter" "mistral-large-latest")
-
-#[test]
-def test_anthropic_requires_claude : Bool :=
-    Weaver.model_matches "anthropic" "claude-opus-5"
-        && Bool.not (Weaver.model_matches "anthropic" "gpt-4")
-
-#[test]
-def test_ollama_and_mock_are_permissive : Bool :=
-    Weaver.model_matches "ollama" "qwen3:8b"
-        && Weaver.model_matches "mock" "anything"
-
-#[test]
-def test_empty_model_is_left_to_the_default : Bool :=
-    match Weaver.model_error "mistral" "" {
-        Option.none => true,
-        Option.some _ => false,
-    }
-
-#[test]
-def test_model_error_names_the_mismatch : Bool :=
-    match Weaver.model_error "mistral" "zai-glm-5-3" {
-        Option.none => false,
-        Option.some e => String.contains e "does not accept model" && String.contains e "mistral-large-latest",
-    }
-
-#[test]
-def test_repair_replaces_a_foreign_model : Bool :=
-    match Weaver.repair_session_model "mistral" (session_with "zai-glm-5-3") {
-        Pair.pair fixed note =>
-            let model : String := fixed.config.model in
-            model == "mistral-large-latest"
-                && (match note { Option.some _ => true, Option.none => false }),
-    }
-
-#[test]
-def test_repair_leaves_a_valid_model_alone : Bool :=
-    match Weaver.repair_session_model "mistral" (session_with "mistral-small-latest") {
-        Pair.pair fixed note =>
-            let model : String := fixed.config.model in
-            model == "mistral-small-latest"
-                && (match note { Option.some _ => false, Option.none => true }),
-    }
-
-#[test]
-def test_default_models_are_valid_for_their_providers : Bool :=
-    match Weaver.default_model "mistral" {
+def test_preferred_defaults_are_the_documented_names : Bool :=
+    (match Weaver.preferred_model "mistral" {
+        Result.ok m => String.beq m "mistral-large-latest",
         Result.err _ => false,
-        Result.ok m => Weaver.model_matches "mistral" m,
-    }
-        && (match Weaver.default_model "anthropic" {
+    })
+        && (match Weaver.preferred_model "anthropic" {
+            Result.ok m => String.beq m "claude-opus-5",
             Result.err _ => false,
-            Result.ok m => Weaver.model_matches "anthropic" m,
         })
+        && (match Weaver.preferred_model "ollama" {
+            Result.ok m => String.beq m "qwen2.5-coder",
+            Result.err _ => false,
+        })
+
+#[test]
+def test_provider_of_follows_the_config_not_the_flag : Bool :=
+    // A session resumed under the wrong flag still talks to the vendor
+    // its saved config names -- and the catalogue must be keyed by it.
+    match Weaver.config_for "mistral" "mistral-large-latest" BTreeMap.empty {
+        Result.err _ => false,
+        Result.ok cfg => String.beq (Weaver.provider_of "ollama" cfg) "mistral",
+    }
+
+#[test]
+def test_provider_of_keeps_an_unknown_config_name : Bool :=
+    let cfg : ProviderConfig := { base_url := "https://example.test", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.openai } in
+    String.beq (Weaver.provider_of "ollama" cfg) "ollama"
+
+#[test]
+def test_openrouter_has_no_preferred_name : Bool :=
+    match Weaver.preferred_model "openrouter" {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_model_for_prefers_the_listed_default : Bool :=
+    match Weaver.model_for "mistral" ["mistral-small-latest", "mistral-large-latest"] {
+        Result.ok m => String.beq m "mistral-large-latest",
+        Result.err _ => false,
+    }
+
+#[test]
+def test_model_for_falls_back_to_the_first_listed : Bool :=
+    match Weaver.model_for "mistral" ["codestral-latest", "mistral-small-latest"] {
+        Result.ok m => String.beq m "codestral-latest",
+        Result.err _ => false,
+    }
+
+#[test]
+def test_model_for_uses_the_preference_for_an_empty_list : Bool :=
+    match Weaver.model_for "mistral" [] {
+        Result.ok m => String.beq m "mistral-large-latest",
+        Result.err _ => false,
+    }
+
+/// OpenRouter's no-preference error only applies when the API answered
+/// with nothing; a fetched list supplies the choice.
+#[test]
+def test_model_for_openrouter_takes_the_first_listed : Bool :=
+    match Weaver.model_for "openrouter" ["mistralai/mistral-large", "openai/gpt-5"] {
+        Result.ok m => String.beq m "mistralai/mistral-large",
+        Result.err _ => false,
+    }
+
+#[test]
+def test_model_for_openrouter_without_a_list_still_errors : Bool :=
+    match Weaver.model_for "openrouter" [] {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }
+
+#[test]
+def test_config_for_leaves_the_model_alone : Bool :=
+    match Weaver.config_for "openrouter" "vendor/model" BTreeMap.empty {
+        Result.ok cfg => String.beq cfg.model "vendor/model"
+            && (match cfg.wire { Wire.openai => true, _ => false }),
+        Result.err _ => false,
+    }
+
+#[test]
+def test_catalog_contains_and_note : Bool :=
+    Catalog.contains "b" ["a", "b"]
+        && Bool.not (Catalog.contains "c" ["a", "b"])
+        && (match Catalog.note "mistral" ["a"] "z" {
+            Option.some _ => true,
+            Option.none => false,
+        })
+        && (match Catalog.note "mistral" ["z"] "z" {
+            Option.some _ => false,
+            Option.none => true,
+        })
+
+#[test]
+def test_render_shows_the_list_and_the_absent_note : Bool :=
+    let out : String := Catalog.render "mistral" ["mistral-large-latest", "codestral-latest"] "zai-glm-5-3" in
+    String.contains out "model: zai-glm-5-3"
+        && String.contains out "models (mistral): 2"
+        && String.contains out "  mistral-large-latest"
+        && String.contains out "is not in mistral's model list"
+
+#[test]
+def test_render_omits_the_note_for_a_listed_model : Bool :=
+    let out : String := Catalog.render "mistral" ["mistral-large-latest"] "mistral-large-latest" in
+    Bool.not (String.contains out "is not in")
+
+#[partial]
+def many_models (n : I64) (acc : List String) : List String :=
+    if n < 1i64
+    then acc
+    else many_models (n - 1i64) (List.cons (String.concat "m" (I64.to_string (n - 1i64))) acc)
+
+#[test]
+def test_render_caps_a_long_list : Bool :=
+    let models : List String := many_models (Catalog.max_shown + 5i64) List.empty in
+    let out : String := Catalog.render "mistral" models "m0" in
+    String.contains out "  ... and 5 more"
+        && String.contains out "models (mistral): 205"
+        && Bool.not (String.contains out "  m204")

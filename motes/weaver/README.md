@@ -17,7 +17,8 @@ monad build motes/weaver/src/main.mo -o ./weaver
 usage: weaver [--provider <name>] [--model <name>] [--max-turns <n>] [--mcp <exe>]...
               [--resume <id|file>] [--continue] [--no-color]
   --provider ollama|mistral|openrouter|anthropic|mock  (default ollama)
-  --model <name>       (default: the provider's preset model)
+  --model <name>       (default: the provider's preferred model; /models
+                        lists what the API actually serves)
   --max-turns <n>      (default 40, total across a save/resume)
   --mcp <exe>          (repeatable; bare executable, no arguments yet)
   --resume <id|file>   open a session directory/id or a /save checkpoint
@@ -160,7 +161,8 @@ warning flag shuttle's loop prints.
 
 ```
 /mode [manual|plan|allow_edit|auto]  show or set the approval mode
-/model [name]                        show or set the model
+/model [name]                        show/pick (TUI) or set the model
+/models                              ask the provider which models it serves
 /provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider
 /plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode
 /tools                               list tools with their capability tags
@@ -174,13 +176,22 @@ warning flag shuttle's loop prints.
 /quit (or /q)                        exit (MCP servers are disposed)
 ```
 
-A model is validated against the selected provider: `/provider mistral`
-always starts from `mistral-large-latest` (the old provider's model is
-never carried over), `/provider mistral <model>` and `/model <model>`
-refuse a name the provider does not serve, and a settings file whose
-provider/model pair disagrees (say `provider = "mistral"` with an ollama
-tag) falls back to the provider's default with one startup warning
-instead of a server-side `Invalid model`.
+The provider decides which models exist: `/models` fetches its
+`/v1/models` list (the mock wire answers `mock` offline), caches it for
+the session, and prints it; in the TUI it also opens a picker. `/model`
+with no argument does the same, and `/model <name>` sets a name as given
+-- when a fetched list does not contain it, the output says so but the
+name is still selectable (an API list can be partial). The settings
+`model` is used as-is; no built-in family table rewrites or refuses it.
+Without a list, `/provider mistral` starts from its preferred name
+(`mistral-large-latest`); a fetched list picks the preferred name when
+listed, else the first model returned. OpenRouter has no preferred name,
+so `/provider openrouter` fetches its list (or takes an explicit model).
+
+Every provider request has a timeout: one 30 s deadline covering
+connect, write and response for one-shot calls, a 120 s per-read idle
+bound while streaming, so a blackholed host, a peer that stops reading,
+or a silent connection fails instead of hanging.
 
 MCP servers mount with `--mcp <executable>`; their proxy tools default
 to `exec` capability (a server's catalogue is arbitrary code) and are
@@ -234,7 +245,7 @@ Two TOML files, in resolution order GLOBAL -> PROJECT -> RUNTIME:
 ```toml
 mode = "plan"          # manual | plan | allow_edit | auto
 provider = "ollama"
-model = "qwen3:8b"
+model = "qwen3:8b"     # used as-is; /models lists the API's catalogue
 max_turns = 20
 
 [mcp_caps]             # per-server capability override, keyed by the

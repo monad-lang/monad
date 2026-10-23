@@ -13,7 +13,10 @@ use http::types {Headers, Headers.empty, Headers.set, Response, Uri, Status.ok}
 use http::uri {Uri.parse}
 use http::body {Body.from_text, Body.to_bytes_pure}
 use http::sse {Sse.init, Sse.push, SseState, SseEvent}
-use moose::client {Client.post, Client.post_stream}
+use moose::client {
+    Client.default_stream_idle_ms, Client.default_timeout_ms,
+    Client.get_timeout, Client.post_stream_timeout, Client.post_timeout,
+}
 use openai::types {ChatRequest, ChatResponse, ApiUsage, ChatMessage, Choice}
 use openai::tool {ToolCall, ToolDef}
 use std::map {Map, BTreeMap}
@@ -60,7 +63,7 @@ def decode_chat_response (r : Response) : Result String ChatResponse :=
     }
 
 def openai_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (Result String ChatResponse) := do {
-    let resp <- Client.post u headers (Body.from_text body_str);
+    let resp <- Client.post_timeout u headers (Body.from_text body_str) Client.default_timeout_ms;
     return (match resp {
         Result.err e => Result.err e,
         Result.ok r => match openai_http_error r {
@@ -69,6 +72,74 @@ def openai_complete_io (u : Uri) (headers : Headers) (body_str : String) : IO (R
         },
     })
 }
+
+// ── Listing models ──────────────────────────────────────────────────────
+
+/// The ids in a `{"data":[{"id": …}, …]}` model list. Pure, so the
+/// response shape is testable without a socket; a malformed entry fails
+/// the whole list rather than silently shortening it.
+pub def OpenAI.parse_models (text : String) : Result String (List String) :=
+    match Json.parse text {
+        Result.err e => Result.err (Json.ParseError.to_string e),
+        Result.ok j => openai_models_of_json j,
+    }
+
+def openai_models_of_json (j : Json) : Result String (List String) :=
+    match Json.get_object j {
+        Result.err e => Result.err (String.concat "models: " e),
+        Result.ok o => match Json.object_get "data" o {
+            Option.none => Result.err "models: missing data",
+            Option.some d => match Json.get_array d {
+                Result.err e => Result.err (String.concat "models: " e),
+                Result.ok xs => openai_model_ids xs 0,
+            },
+        },
+    }
+
+#[terminating]
+def openai_model_ids (xs : List Json) (i : I64) : Result String (List String) :=
+    match xs {
+        List.empty => Result.ok List.empty,
+        List.cons x rest => match openai_model_id x i {
+            Result.err e => Result.err e,
+            Result.ok id => match openai_model_ids rest (i + 1i64) {
+                Result.err e => Result.err e,
+                Result.ok ids => Result.ok (List.cons id ids),
+            },
+        },
+    }
+
+def openai_model_id (j : Json) (i : I64) : Result String String :=
+    match Json.get_object j {
+        Result.err e => Result.err (String.concat "models: entry " (String.concat (I64.to_string i) (String.concat ": " e))),
+        Result.ok o => match Json.object_get "id" o {
+            Option.none => Result.err (String.concat "models: entry " (String.concat (I64.to_string i) " has no id")),
+            Option.some idj => match Json.get_str idj {
+                Result.err e => Result.err (String.concat "models: entry " (String.concat (I64.to_string i) (String.concat ": " e))),
+                Result.ok id => Result.ok id,
+            },
+        },
+    }
+
+def openai_models_io (u : Uri) (headers : Headers) : IO (Result String (List String)) := do {
+    let resp <- Client.get_timeout u headers Client.default_timeout_ms;
+    return (match resp {
+        Result.err e => Result.err e,
+        Result.ok r => match openai_http_error r {
+            Option.some e => Result.err e,
+            Option.none => OpenAI.parse_models (String.from_list (Body.to_bytes_pure r.body)),
+        },
+    })
+}
+
+/// GET `{base_url}/v1/models`: the models this provider serves. Works
+/// for every OpenAI-compatible host (Ollama, Mistral, OpenRouter).
+pub def OpenAI.list_models (base_url : String) (api_key : Option String) : ResultT String IO (List String) :=
+    let url_str := String.concat base_url "/v1/models" in
+    match Uri.parse url_str {
+        Result.err e => ResultT.mk (return (Result.err e)),
+        Result.ok u => ResultT.mk (openai_models_io u (openai_headers api_key)),
+    }
 
 // ── The request body, hand-written ──────────────────────────────────────
 //
@@ -512,7 +583,7 @@ def openai_finish (acc : OpenaiAcc) : Result String ChatResponse :=
 
 def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text : String -> IO Unit) : IO (Result String ChatResponse) := do {
     let init : OpenaiAcc := { sse := Sse.init, text := "", tools := List.empty, finish := "", usage := ApiUsage.mk 0 0, error := Option.none };
-    let res <- Client.post_stream u headers (Body.from_text body_str) init (fn st bytes => openai_stream_bytes on_text st bytes);
+    let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => openai_stream_bytes on_text st bytes);
     return (match res {
         Result.err e => Result.err e,
         Result.ok pr =>

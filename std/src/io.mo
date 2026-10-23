@@ -428,6 +428,9 @@ pub def IO.list_dir (path : Path) : IO (List Path) := do {
 #[native "tcp_connect"]
 priv def tcp_connect (host : String) (port : U16) : RawIO (Result (Pair I64 String) FdStream)
 
+#[native "tcp_connect_timeout"]
+priv def tcp_connect_timeout (host : String) (port : U16) (timeout_ms : I64) : RawIO (Result (Pair I64 String) FdStream)
+
 #[native "tcp_listen"]
 priv def tcp_listen (port : U16) : RawIO (Result (Pair I64 String) FdStream)
 
@@ -442,6 +445,13 @@ priv def tcp_local_port (listener : FdStream) : RawIO U16
 
 pub def IO.tcp_connect (host : String) (port : U16) : IO (Result StreamError FdStream) := do {
   let r <- IO.mk (tcp_connect host port);
+  return (stream_result r)
+}
+
+/// Connect with a deadline, including the per-address connect attempts.
+/// Name resolution (`getaddrinfo`) still has no timeout.
+pub def IO.tcp_connect_timeout (host : String) (port : U16) (timeout_ms : I64) : IO (Result StreamError FdStream) := do {
+  let r <- IO.mk (tcp_connect_timeout host port timeout_ms);
   return (stream_result r)
 }
 

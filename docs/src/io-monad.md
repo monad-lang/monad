@@ -222,12 +222,15 @@ so you never need a write loop.
   of these fails at run time with `unknown native: tcp_listen` (or whichever was
   called). A socket test therefore cannot run under `cargo run -- test`, and the
   `examples/` HTTP entry is pure by design for exactly that reason.
-- **No read timeout, and no non-blocking mode.** `tcp_connect`, `tcp_accept` and
-  `Stream.read` block until they complete. A peer that connects and then sends
-  nothing holds the accepting fiber and its OS thread indefinitely; nothing in
-  the library breaks that. The mitigation in `motes/moon/src/server.mo` is a cap
-  on requests served per connection, which bounds an *idle keep-alive client*,
-  not a silent one. A real timeout is not implemented.
+- **Timeouts are explicit, and there is no non-blocking mode.** The blocking
+  calls are still `tcp_connect`, `tcp_accept` and `Stream.read`; the timeout
+  surface is `IO.tcp_connect_timeout`, `FdStream.set_timeout` (socket
+  `SO_RCVTIMEO`/`SO_SNDTIMEO`, surfacing as `StreamErrorKind.timed_out`) and
+  `FdStream.poll` (readiness with a deadline). `motes/moose` uses all three:
+  one deadline per non-streaming request, a per-read idle bound while
+  streaming. The `moon` server still bounds a talking client with a request cap,
+  and `close` shuts the listening socket down to wake a blocked `accept`;
+  name resolution (`getaddrinfo`) remains unbounded.
 - **EOF is not an error.** When the peer closes, `Stream.read` returns a
   zero-length buffer rather than failing, and read loops terminate on exactly
   that. `Stream.close` never fails.

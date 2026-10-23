@@ -37,7 +37,8 @@ use weaver::store {
 use weaver::theme {theme_split_lines}
 use weaver::dumb {Dumb.run, Dumb.poll_sleep}
 use weaver::policy {Mode}
-use weaver::providers {Weaver.preset, Weaver.model_error, Weaver.default_model, Weaver.repair_session_model}
+use weaver::providers {Weaver.preset, Weaver.provider_of}
+use std::map {BTreeMap}
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
@@ -223,23 +224,11 @@ def plan_of (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result Weaver
         // startup note, so the TUI shows them in its first block instead
         // of losing them behind the alternate screen.
         let base : Option String := warnings_note ws in
-        // A model that plainly belongs to another provider (a settings file
-        // with `provider = "mistral"` and an ollama tag) is replaced by the
-        // provider's default with one visible warning, instead of a server
-        // round trip that answers `Invalid model`.
-        match Weaver.model_error provider model {
-            Option.none => match Weaver.preset provider model s.api_keys {
-                Result.err e => Result.err (WeaverError.config e),
-                Result.ok cfg => plan_turns s c provider cfg base,
-            },
-            Option.some e => match Weaver.default_model provider {
-                Result.err _ => Result.err (WeaverError.config e),
-                Result.ok d => match Weaver.preset provider d s.api_keys {
-                    Result.err e2 => Result.err (WeaverError.config e2),
-                    Result.ok cfg => plan_turns s c provider cfg
-                        (note_join base (Option.some (String.concat "warning: " e))),
-                },
-            },
+        // The configured model is used as-is: whether the provider serves
+        // it is the provider's answer (/models asks), never a name table's.
+        match Weaver.preset provider model s.api_keys {
+            Result.err e => Result.err (WeaverError.config e),
+            Result.ok cfg => plan_turns s c provider cfg base,
         }
 
 /// Settings warnings as note lines, in order; `none` when there are
@@ -255,16 +244,6 @@ def warnings_note (ws : List WeaverError) : Option String :=
     match ws {
         List.empty => Option.none,
         List.cons _ _ => Option.some (List.intercalate "\n" (warning_lines ws List.empty)),
-    }
-
-/// Two optional note fragments, newline-joined; either may be absent.
-def note_join (a : Option String) (b : Option String) : Option String :=
-    match a {
-        Option.none => b,
-        Option.some x => match b {
-            Option.none => a,
-            Option.some y => Option.some (String.concat x (String.concat "\n" y)),
-        },
     }
 
 def resolve_provider (s : Settings) (flag : String) : String :=
@@ -432,18 +411,18 @@ def fresh_session (p : Plan) (reg : ToolRegistry) : Session :=
     let s : Session := { config := p.cfg, system_prompt := system_prompt, tools := ToolRegistry.specs reg, history := List.empty, turns := 0, spent := usage_zero } in
     s
 
-/// The loaded session with its model repaired to the current provider
-/// (a saved config may carry the model of the provider it was saved
-/// under) and its key re-resolved from this run's settings (a checkpoint
-/// never carries one). The note is the repair's reason, when it fired.
+/// The loaded session with its key re-resolved from this run's settings
+/// (a checkpoint never carries one). The saved model is kept as-is: it
+/// was what that session ran with, and availability is the provider's
+/// answer, not a name table's. The key comes from the provider the
+/// SAVED config talks to, not from this run's flag: a session resumed
+/// without `--provider` still sends to the vendor it was saved under.
 def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Option String) :=
-    match Weaver.repair_session_model p.provider sess {
-        Pair.pair fixed note =>
-            let cfg0 : ProviderConfig := fixed.config in
-            let cfg2 : ProviderConfig := { cfg0 with api_key := Map.lookup p.provider s.api_keys } in
-            let sess2 : Session := { fixed with config := cfg2 } in
-            Pair.pair sess2 note,
-    }
+    let cfg0 : ProviderConfig := sess.config in
+    let prov : String := Weaver.provider_of p.provider cfg0 in
+    let cfg2 : ProviderConfig := { cfg0 with api_key := Map.lookup prov s.api_keys } in
+    let sess2 : Session := { sess with config := cfg2 } in
+    Pair.pair sess2 Option.none
 
 /// The initial interactive state: the opened session, the remaining
 /// budget, the settings' mode (manual is the safe default; `/mode`
@@ -452,7 +431,8 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
 def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) : WeaverState :=
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false } in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := p.provider, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, quit := false, colors := colors, fatal := Option.none, store := store } in
+    let prov : String := Weaver.provider_of p.provider session.config in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -755,10 +735,7 @@ def resume_file (root : Path) (p : Plan) (s : Settings) : IO (Result WeaverError
 }
 
 def resume_import_file (root : Path) (p : Plan) (s : Settings) (sess : Session) : IO (Result WeaverError OpenedSession) := do {
-    let fixed : Session := match Weaver.repair_session_model p.provider sess {
-        Pair.pair f _ => f,
-    };
-    let imp <- Store.import_session root fixed;
+    let imp <- Store.import_session root sess;
     match imp {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
         Result.ok st => match rekey_loaded p s sess {
