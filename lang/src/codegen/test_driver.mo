@@ -66,7 +66,7 @@ use lang::module {
   get_loaded_main, resolve_open_aliases_in_modules, try_parse_decls,
 }
 use lib::scope {
-  collect_classes, resolve_class_calls_decls, strip_all_leading_binders,
+  collect_classes, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
 use std::list {List.intercalate, List.length}
@@ -679,7 +679,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     let input : CompileInput <- compile_input_of_modules target_mp qualified_mods false;
                     let elab_report : BestEffortElab := input.report;
                     let elaborated : List Decl := input.decls;
-                    let dispatched_decls := resolve_class_calls_decls elaborated;
+                    let dispatched_decls := elaborated;
                     // The root has to match the branch actually taken
                     // above: on the fallback the decls are still
                     // UNqualified, and rooting at `__test_driver::main`

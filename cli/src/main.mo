@@ -22,7 +22,6 @@ use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
 use lang::codegen::decls {collect_all_decls_from_modules, export_names}
 use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
-use lang::scope {resolve_class_calls_decls}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
   Mote.workspace_members, MoteManifest, BinTarget,
@@ -918,7 +917,7 @@ def eval_file_typechecked (em : ElaboratedModules) (verbose : Bool) : IO I64 {
     // `HMul.mul` underneath) are still syntactic, and lowering them
     // failed with `le_unresolved_name` before this.
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-    let dispatched := resolve_class_calls_decls (elaborate_module_decls_best_effort em.scope em.elaborated_decls empty_locs);
+    let dispatched := elaborate_module_decls_best_effort em.scope em.elaborated_decls empty_locs;
     // `lower_root` roots at a DEF name, not a module name: the target
     // file's `main` def. The graph above is from BEFORE codegen's
     // `qualify_modules` stage, so def names are still bare -- rooting

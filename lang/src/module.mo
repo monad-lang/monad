@@ -54,7 +54,7 @@ use lib::scope {
   modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
   param_names, promote_instance_decl_groups, promote_instance_defs, refine_scope_instances,
   alias_map_empty, build_alias_map,
-  resolve_class_calls_decls, resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
+  resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
   scope_find_inductive, scope_push_local, scope_resolve_name,
 }
@@ -6016,7 +6016,7 @@ def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (targe
         // this validation only ever ran when a `reflect_type_info!` call
         // was present in the graph, and the downstream gate runs the same
         // check unconditionally.
-        let dispatched := resolve_class_calls_decls (elaborate_module_decls_best_effort scope whole_graph_decls empty_locs) in
+        let dispatched := elaborate_module_decls_best_effort scope whole_graph_decls empty_locs in
         match resolve_reflect_calls inds dispatched graph_subst {
             Result.err e => Result.err e,
             Result.ok graph_final =>
@@ -7534,20 +7534,17 @@ def test_elaborate_module_decls_rewrites_class_method_call : IO Bool := do {
     }
 }
 
-/// `resolve_class_calls_decls`'s own syntactic (Phase 4) resolution --
-/// unlike the test above (which goes through the real type-checker-
-/// driven `elaborate_module_decls`), this exercises the SYNTACTIC
-/// fallback directly, and specifically a class method call with NO
-/// carrier-revealing arg at all (`MakeEmpty.empty`, zero args -- the
-/// exact shape `std/derive.mo`'s `lens_getter`'s own list-literal-
-/// desugared `FromListLiteral.empty` call hits, confirmed via direct
-/// repro). Without a class-declared-default fallback
-/// (`resolve_class_method_call_d4_default_carrier`), this call is left
-/// permanently unresolved (`rebuild_call orig_head resolved_args`) --
-/// `MakeEmpty.empty` staying literally `MakeEmpty.empty` in the output,
-/// never becoming a real, directly-callable reference.
+/// A class method call with NO carrier-revealing arg at all
+/// (`MakeEmpty.empty`, zero args -- the exact shape `std/derive.mo`'s
+/// `lens_getter`'s own list-literal-desugared `FromListLiteral.empty`
+/// call hits, confirmed via direct repro). Without the class's own
+/// DECLARED default carrier (`C : Type -> Type := MyBox`) the checker
+/// leaves the call unresolved and it stays literally `MakeEmpty.empty`
+/// in the output, never becoming a real, directly-callable reference.
+/// Pinned on the checker alone -- the old syntactic pass that first
+/// covered this shape is retired.
 #[test]
-def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool := do {
+def test_elaborate_zero_arg_class_method_uses_class_declared_default_carrier : IO Bool := do {
     let src : String :=
         "class MakeEmpty (C : Type -> Type := MyBox) { def empty : C I64 }\n" ++
         "type MyBox A { mk (a : A) }\n" ++
@@ -7556,12 +7553,8 @@ def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool
     let result : ParseResult (List Decl) := parse_all_decls src;
     return (match result {
         ParseResult.success _ decl_list => do {
-            let infixes := collect_infixes decl_list;
-            let resolved := resolve_infix_decls infixes decl_list;
-            let promoted := promote_instance_defs resolved;
-            let dict_paramed := add_constraint_dict_params_decls promoted;
-            let dispatched := resolve_class_calls_decls dict_paramed;
-            decl_list_has_use_it_calling_makeempty_mybox_empty dispatched
+            let elaborated := elaborate_parsed_decls decl_list;
+            decl_list_has_use_it_calling_makeempty_mybox_empty elaborated
         },
         ParseResult.fail _ => false,
     })
@@ -7612,7 +7605,7 @@ def elaborate_parsed_decls (decl_list : List Decl) : List Decl :=
 /// the real codegen composition -- so the checker reifies the call-site
 /// dictionary from the argument-solved substitution and the pass agrees.
 #[test]
-def test_resolve_class_calls_skips_unreferenced_constrained_callee : IO Bool := do {
+def test_elaborate_skips_unreferenced_constrained_callee : IO Bool := do {
     let src : String :=
         "class Wrap (M : Type -> Type) { def wrap (m : M A) : M A }\n" ++
         "type Id A { id_mk (a : A) }\n" ++
@@ -7625,18 +7618,12 @@ def test_resolve_class_calls_skips_unreferenced_constrained_callee : IO Bool := 
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
-            let dispatched := resolve_class_calls_decls elaborated;
             let refs_ok := decl_list_def_term_contains elaborated "use_refs" "__Dict_Wrap_Id";
             let norefs_ok := Bool.not (decl_list_def_term_contains elaborated "use_norefs" "__Dict_Wrap");
             // Non-vacuity: a failed elaboration would re-emit the
             // original body, making the negative assertion trivially true.
             let calls_norefs := decl_list_def_term_contains elaborated "use_norefs" "norefs_step";
-            // ... and the real codegen composition (checker, then the
-            // syntactic pass) must agree with the checker alone.
-            let refs_composition := decl_list_def_term_contains dispatched "use_refs" "__Dict_Wrap_Id";
-            let norefs_composition := Bool.not (decl_list_def_term_contains dispatched "use_norefs" "__Dict_Wrap");
-            Bool.and (Bool.and refs_ok norefs_ok)
-                (Bool.and calls_norefs (Bool.and refs_composition norefs_composition))
+            Bool.and (Bool.and refs_ok norefs_ok) calls_norefs
         },
         ParseResult.fail _ => false,
     })
@@ -7664,7 +7651,7 @@ def test_resolve_class_calls_skips_unreferenced_constrained_callee : IO Bool := 
 /// against the callee's codomain `M I64`) and inserting the dictionary
 /// at the BARE reference.
 #[test]
-def test_resolve_class_calls_expect_resolves_zero_arg_constrained_op : IO Bool := do {
+def test_elaborate_expect_resolves_zero_arg_constrained_op : IO Bool := do {
     let src : String :=
         "class Wrappable (M : Type -> Type) { def mk (a : I64) : M I64 }\n" ++
         "type Id A { id_mk (a : A) }\n" ++
@@ -7675,12 +7662,7 @@ def test_resolve_class_calls_expect_resolves_zero_arg_constrained_op : IO Bool :
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
-            let checker_ok := decl_list_def_term_contains elaborated "use_op" "__Dict_Wrappable_Id";
-            // The real codegen composition (checker, then the syntactic
-            // pass) must insert the same dictionary -- not a second one.
-            let composition_ok :=
-                decl_list_def_term_contains (resolve_class_calls_decls elaborated) "use_op" "__Dict_Wrappable_Id";
-            Bool.and checker_ok composition_ok
+            decl_list_def_term_contains elaborated "use_op" "__Dict_Wrappable_Id"
         },
         ParseResult.fail _ => false,
     })
@@ -7759,7 +7741,6 @@ def test_elaborate_see_through_constrained_callee : IO Bool := do {
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
-            let dispatched := resolve_class_calls_decls elaborated;
             // Phase 3 must give `through` the parameter, through the
             // callee's own constraint.
             let param_ok := decl_list_def_term_contains elaborated "through" "__dict_Bind";
@@ -7767,12 +7748,10 @@ def test_elaborate_see_through_constrained_callee : IO Bool := do {
             // re-emits its original term, which would pass below anyway).
             let calls_step := decl_list_def_term_body_uses elaborated "through" "step";
             // ... and the dict must actually reach the call, not merely be
-            // declared -- on the checker alone (its D5 tier answers from
-            // `through`'s own binding) and through the codegen
-            // composition.
-            let checker_forwards := decl_list_def_term_body_uses elaborated "through" "__dict_Bind";
-            let forwards := decl_list_def_term_body_uses dispatched "through" "__dict_Bind";
-            Bool.and (Bool.and param_ok calls_step) (Bool.and checker_forwards forwards)
+            // declared: the checker's D5 tier answers from `through`'s own
+            // binding.
+            let forwards := decl_list_def_term_body_uses elaborated "through" "__dict_Bind";
+            Bool.and (Bool.and param_ok calls_step) forwards
         },
         ParseResult.fail _ => false,
     })
@@ -7866,15 +7845,10 @@ def test_elaborate_do_at_equal_indices_picks_the_wrapper_instance : IO Bool := d
             let elaborated := best_effort_decls report;
             // The checker's rewrite is final: once elaboration names the
             // bridge's method, nothing downstream revisits it.
-            let elaborated_ok : Bool :=
-                Bool.not (decl_list_def_term_contains elaborated "prog_do" "Monad_M_I_I_bind");
-            let dispatched := resolve_class_calls_decls elaborated;
-            let dispatched_ok : Bool :=
-                decl_list_def_term_contains dispatched "prog_do" "Monad_TI_M_I_I_bind"
-                    && decl_list_def_term_contains dispatched "prog_do" "Monad_TI_M_I_I_pure"
-                    && Bool.not (decl_list_def_term_contains dispatched "prog_do" "Monad_M_I_I_bind")
-                    && Bool.not (decl_list_def_term_contains dispatched "prog_do" "Monad_M_I_I_pure");
-            Bool.and elaborated_ok dispatched_ok
+            Bool.not (decl_list_def_term_contains elaborated "prog_do" "Monad_M_I_I_bind")
+                && decl_list_def_term_contains elaborated "prog_do" "Monad_TI_M_I_I_bind"
+                && decl_list_def_term_contains elaborated "prog_do" "Monad_TI_M_I_I_pure"
+                && Bool.not (decl_list_def_term_contains elaborated "prog_do" "Monad_M_I_I_pure")
         },
         ParseResult.fail _ => false,
     })
@@ -7929,11 +7903,9 @@ def test_dict_hint_selects_named_instance : IO Bool := do {
                 incomplete_match_ok := false,
             };
             let elaborated := elaborate_module_decls_best_effort scope dict_paramed empty_locals;
-            let dispatched := resolve_class_calls_decls elaborated;
             let auto_ok : Bool := decl_list_def_term_contains elaborated "auto_pick" "Show_I64_show_ShowA";
             let hinted_ok : Bool := decl_list_def_term_contains elaborated "hinted_pick" "Show_I64_show_ShowB";
-            let dispatched_ok : Bool := decl_list_def_term_contains dispatched "hinted_pick" "Show_I64_show_ShowB";
-            Bool.and (Bool.and auto_ok hinted_ok) dispatched_ok
+            Bool.and auto_ok hinted_ok
         },
         ParseResult.fail _ => false,
     })
@@ -8056,12 +8028,8 @@ def test_instance_omitting_defaulted_method_dispatches : IO Bool := do {
     let result : ParseResult (List Decl) := parse_all_decls src;
     return (match result {
         ParseResult.success _ decl_list => do {
-            let infixes := collect_infixes decl_list;
-            let resolved := resolve_infix_decls infixes decl_list;
-            let promoted := promote_instance_defs resolved;
-            let dict_paramed := add_constraint_dict_params_decls promoted;
-            let dispatched := resolve_class_calls_decls dict_paramed;
-            decl_list_def_term_contains dispatched "loud" "Speak_Dog_shout"
+            let elaborated := elaborate_parsed_decls decl_list;
+            decl_list_def_term_contains elaborated "loud" "Speak_Dog_shout"
         },
         ParseResult.fail _ => false,
     })
@@ -8083,13 +8051,9 @@ def test_return_only_carrier_dispatches : IO Bool := do {
     let result : ParseResult (List Decl) := parse_all_decls src;
     return (match result {
         ParseResult.success _ decl_list => do {
-            let infixes := collect_infixes decl_list;
-            let resolved := resolve_infix_decls infixes decl_list;
-            let promoted := promote_instance_defs resolved;
-            let dict_paramed := add_constraint_dict_params_decls promoted;
-            let dispatched := resolve_class_calls_decls dict_paramed;
-            let cow_ok := decl_list_def_term_contains dispatched "as_cow" "Decode_Cow_decode";
-            let cat_ok := decl_list_def_term_contains dispatched "as_cat" "Decode_Cat_decode";
+            let elaborated := elaborate_parsed_decls decl_list;
+            let cow_ok := decl_list_def_term_contains elaborated "as_cow" "Decode_Cow_decode";
+            let cat_ok := decl_list_def_term_contains elaborated "as_cat" "Decode_Cat_decode";
             Bool.and cow_ok cat_ok
         },
         ParseResult.fail _ => false,

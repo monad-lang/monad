@@ -82,7 +82,7 @@ use lib::scope {
   alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
   modpath_eq, refine_scope_instances, scope_find_inductive,
   resolve_open_alias_decls,
-  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
+  collect_infixes, promote_instance_defs,
   resolve_infix_decls, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
@@ -6307,8 +6307,12 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     let elab_report : BestEffortElab := input.report;
     let elaborated : List Decl := input.decls;
     if verbose then report_elab_failures (best_effort_failed elab_report) else return unit;
-    let dispatched_decls := resolve_class_calls_decls elaborated;
-    let _t_dispatch : I64 <- bench_step verbose "  front end: resolve_class_calls_decls" t_elab (List.length dispatched_decls);
+    // The checker's elaboration IS the dispatch now: the old syntactic
+    // `resolve_class_calls_decls` pass is retired (a no-op probe produced
+    // byte-identical IR for the whole golden corpus and a clean full-corpus
+    // `check` before it was deleted).
+    let dispatched_decls := elaborated;
+    let _t_dispatch : I64 <- bench_step verbose "  front end: elaborated decls" t_elab (List.length dispatched_decls);
     if verbose then do {
         Bench.report_since "elaborate_class" t_elab;
         return unit
@@ -6354,7 +6358,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     let dispatched_classes := collect_classes dispatched_decls;
     match gate_then (validate_reachable_elaborated strict_elab elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
         Result.err e => do {
-            if verbose then do { fail_line ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")"); return unit } else return unit;
+            if verbose then do { fail_line ("FAILED at stage: validate_no_unresolved_class_calls (" ++ e ++ ")"); return unit } else return unit;
             return (Result.err e)
         },
         Result.ok _ =>
