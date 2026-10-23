@@ -3,14 +3,18 @@
 
 use lib::types {Node}
 use lib::ffi {
-  dom_create_raw, dom_create_text_raw, dom_root_raw, dom_append_raw,
+  dom_create_raw, dom_create_text_raw, dom_create_comment_raw, dom_root_raw, dom_append_raw,
   dom_insert_before_raw, dom_remove_raw, dom_replace_raw, dom_set_attr_raw,
-  dom_remove_attr_raw, dom_set_text_raw, dom_add_listener_raw,
+  dom_remove_attr_raw, dom_set_text_raw, dom_add_listener_raw, dom_child_raw,
 }
 
 pub def Dom.create (tag : String) : IO Node := IO.mk (dom_create_raw tag)
 
 pub def Dom.text_node (text : String) : IO Node := IO.mk (dom_create_text_raw text)
+
+/// A comment node -- what an `Html.Node.node_comment` mounts as (a text
+/// node would render its `<!--...-->` markup to the user).
+pub def Dom.comment (text : String) : IO Node := IO.mk (dom_create_comment_raw text)
 
 pub def Dom.root : IO Node := IO.mk dom_root_raw
 
@@ -34,3 +38,8 @@ pub def Dom.set_text (n : Node) (text : String) : IO Unit := IO.mk (dom_set_text
 /// `oak_dispatch_event(handler_id)` when it fires.
 pub def Dom.on (n : Node) (event : String) (handler_id : I64) : IO Unit :=
   IO.mk (dom_add_listener_raw n event handler_id)
+
+/// The indexed child of `n` (text nodes included, matching `childNodes`).
+/// Returns a null handle (`0`) when the index is out of range; patch
+/// application never asks for one, so the caller can treat it as a bug.
+pub def Dom.child (n : Node) (index : I64) : IO Node := IO.mk (dom_child_raw n index)

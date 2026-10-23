@@ -23,6 +23,9 @@ def dom_create_raw (tag : String) : RawIO Node
 #[extern "c" {link_name := "web_dom_create_text"}]
 def dom_create_text_raw (text : String) : RawIO Node
 
+#[extern "c" {link_name := "web_dom_create_comment"}]
+def dom_create_comment_raw (text : String) : RawIO Node
+
 #[extern "c" {link_name := "web_dom_root"}]
 def dom_root_raw : RawIO Node
 
@@ -49,6 +52,9 @@ def dom_set_text_raw (n : Node) (text : String) : RawIO Unit
 
 #[extern "c" {link_name := "web_dom_add_listener"}]
 def dom_add_listener_raw (n : Node) (event : String) (handler : I64) : RawIO Unit
+
+#[extern "c" {link_name := "web_dom_child"}]
+def dom_child_raw (n : Node) (index : I64) : RawIO Node
 
 #[extern "c" {link_name := "web_fetch_begin"}]
 def fetch_begin_raw (url : String) (method : I64) (body : String) : RawIO RequestId

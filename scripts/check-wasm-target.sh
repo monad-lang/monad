@@ -72,11 +72,20 @@ echo "== web: #[export \"c\"] (exports + eager IO) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/export_probe.mo \
     -o "$tmp/exports.wasm" --no-cache
 node wasm/web/export_smoke.mjs "$tmp/exports.wasm"
+# Exports-only: no `def main`, so the runtime's weak `main_monad` is 0.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/export_only.mo \
+    -o "$tmp/exports-only.wasm" --no-cache
+node wasm/web/export_smoke.mjs "$tmp/exports-only.wasm" exports-only
 # The same program must still build natively: exports are a web-only ABI,
 # and a library that declares them has to stay testable.
 "$MONAD" build fixtures/wasm/export_probe.mo -o "$tmp/exports-native" --no-cache \
     || fail "native build rejected #[export \"c\"]"
 [ -x "$tmp/exports-native" ] || fail "native build produced no binary"
+
+echo "== web: web_wasm DOM surface (C wrappers + JS host) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_dom.mo \
+    -o "$tmp/web_dom.wasm" --no-cache
+node wasm/web/dom_smoke.mjs "$tmp/web_dom.wasm"
 
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.

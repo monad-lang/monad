@@ -14,6 +14,18 @@
 use jsgen::js {Js.Expr, Js.Module, Js.Stmt, Js.render_module, Js.valid_ident}
 use lib::web_abi {WebAbi, WebImport}
 
+/// The loader body.
+///
+/// `set_root` tells the runtime which selector `dom_root` means (the DOM
+/// side owns the selector string; no Monad string crosses the export ABI),
+/// `bind` hands the runtime its instance so DOM listeners can call
+/// `oak_dispatch_event`, and `start_ticks` drives `oak_tick` from
+/// `requestAnimationFrame`. The snippet is a `Js.Expr.raw` literal --
+/// visibly the one hand-written piece of the generated file, which is why
+/// `Glue.loader`'s goldens pin it.
+def Glue.start_snippet : String :=
+  "async (url, selector) => { host.set_root(selector); const { instance } = await WebAssembly.instantiateStreaming(fetch(url), imports); host.bind(instance); if (instance.exports.oak_mount) instance.exports.oak_mount(); host.start_ticks(instance); return instance; }"
+
 pub def Glue.loader (abi : WebAbi) : String :=
   Js.render_module (Glue.module abi)
 
@@ -27,7 +39,7 @@ def Glue.module (abi : WebAbi) : Js.Module :=
     Js.Stmt.let_bind "imports"
       (Js.Expr.object (Glue.module_fields (Glue.module_names abi.imports List.empty) abi.imports)),
     Js.Stmt.expr (Js.Expr.raw "export { imports }"),
-    Js.Stmt.let_bind "start" (Js.Expr.raw "async (url, selector) => { const { instance } = await WebAssembly.instantiateStreaming(fetch(url), imports); if (instance.exports.oak_mount) instance.exports.oak_mount(selector); return instance; }"),
+    Js.Stmt.let_bind "start" (Js.Expr.raw Glue.start_snippet),
     Js.Stmt.expr (Js.Expr.raw "export { start }")
   ] in
   let m : Js.Module := { header := header, imports := imports, body := body } in

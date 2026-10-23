@@ -13,9 +13,9 @@ pub use lib::web_abi {
 pub use lib::glue {Glue.loader}
 
 pub use lib::dom {
-    Dom.create, Dom.text_node, Dom.root, Dom.append, Dom.insert_before,
+    Dom.create, Dom.text_node, Dom.comment, Dom.root, Dom.append, Dom.insert_before,
     Dom.remove, Dom.replace, Dom.set_attr, Dom.remove_attr, Dom.set_text,
-    Dom.on,
+    Dom.on, Dom.child,
 }
 
 pub use lib::fetch {Fetch.begin, Fetch.poll, Fetch.status, Fetch.read}

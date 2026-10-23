@@ -130,6 +130,215 @@ extern int64_t monad_js_read_stdin(int64_t ptr, int64_t max);
 __attribute__((import_module("monad"), import_name("now_ms")))
 extern int64_t monad_js_now_ms(void);
 
+/* `monad_main` is only emitted for a program with a `def main`. An
+   exports-only SPA (`#[export "c"]` defs and no main) is legitimate, so the
+   entry reference is weak: wasm-ld resolves it to 0 and `monad_web_entry`
+   returns without calling. A module WITH a main is unaffected. */
+__attribute__((weak))
+extern int64_t main_monad(int64_t args);
+
+/* ── web_wasm externs (motes/web_wasm/src/ffi.mo) ───────────────────────
+   The browser boundary. `motes/web_wasm` declares each of these as
+   `#[extern "c" {link_name := "web_..."}]`; the JS side is
+   `wasm/web/web_runtime.js` (the `host` object the generated loader
+   imports), reached through one import module ("monad").
+
+   Marshalling, both directions:
+   * a Monad `String` is a NUL-terminated char* word, so a string ARGUMENT
+     crosses as (ptr, len) with `strlen` done here (the loader's own strings
+     come from Monad source, where an embedded NUL cannot survive anyway);
+   * a string RESULT is written by JS into a buffer THIS side allocates,
+     and copied into a fresh `monad_alloc_atomic` string, because successive
+     calls must not alias (Monad strings are immutable values);
+   * a Node/RequestId is an opaque numeric id: JS owns the table, wasm holds
+     the id in a word. Nothing here dereferences it. */
+
+__attribute__((import_module("monad"), import_name("dom_create")))
+extern int64_t monad_js_dom_create(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("dom_create_text")))
+extern int64_t monad_js_dom_create_text(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("dom_create_comment")))
+extern int64_t monad_js_dom_create_comment(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("dom_root")))
+extern int64_t monad_js_dom_root(void);
+
+__attribute__((import_module("monad"), import_name("dom_append")))
+extern int64_t monad_js_dom_append(int64_t parent, int64_t child);
+
+__attribute__((import_module("monad"), import_name("dom_insert_before")))
+extern int64_t monad_js_dom_insert_before(int64_t parent, int64_t child, int64_t before);
+
+__attribute__((import_module("monad"), import_name("dom_remove")))
+extern int64_t monad_js_dom_remove(int64_t node);
+
+__attribute__((import_module("monad"), import_name("dom_replace")))
+extern int64_t monad_js_dom_replace(int64_t old_node, int64_t new_node);
+
+__attribute__((import_module("monad"), import_name("dom_set_attr")))
+extern int64_t monad_js_dom_set_attr(int64_t node, int64_t kptr, int64_t klen,
+                                     int64_t vptr, int64_t vlen);
+
+__attribute__((import_module("monad"), import_name("dom_remove_attr")))
+extern int64_t monad_js_dom_remove_attr(int64_t node, int64_t kptr, int64_t klen);
+
+__attribute__((import_module("monad"), import_name("dom_set_text")))
+extern int64_t monad_js_dom_set_text(int64_t node, int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("dom_add_listener")))
+extern int64_t monad_js_dom_add_listener(int64_t node, int64_t eptr, int64_t elen,
+                                         int64_t handler);
+
+__attribute__((import_module("monad"), import_name("dom_child")))
+extern int64_t monad_js_dom_child(int64_t node, int64_t index);
+
+__attribute__((import_module("monad"), import_name("fetch_begin")))
+extern int64_t monad_js_fetch_begin(int64_t uptr, int64_t ulen, int64_t method,
+                                    int64_t bptr, int64_t blen);
+
+__attribute__((import_module("monad"), import_name("fetch_poll")))
+extern int64_t monad_js_fetch_poll(int64_t request);
+
+__attribute__((import_module("monad"), import_name("fetch_status")))
+extern int64_t monad_js_fetch_status(int64_t request);
+
+__attribute__((import_module("monad"), import_name("fetch_read")))
+extern int64_t monad_js_fetch_read(int64_t request, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("storage_get_raw")))
+extern int64_t monad_js_storage_get(int64_t kptr, int64_t klen, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("storage_set")))
+extern int64_t monad_js_storage_set(int64_t kptr, int64_t klen, int64_t vptr, int64_t vlen);
+
+__attribute__((import_module("monad"), import_name("console_log")))
+extern int64_t monad_js_console_log(int64_t ptr, int64_t len);
+
+/* A result string can be at most this long; `storage_get_raw` has no
+   length channel, and a longer value is truncated rather than overrunning
+   the scratch buffer. `fetch_read` takes its cap from the caller. */
+#define WEB_SCRATCH_BYTES 65536
+static char web_scratch[WEB_SCRATCH_BYTES];
+
+static int64_t web_str_len(const char* p) {
+    return p ? (int64_t)strlen(p) : 0;
+}
+
+static int64_t web_str_ptr(const char* p) {
+    return (int64_t)(intptr_t)p;
+}
+
+/* `buf[0..n)` -> a fresh NUL-terminated Monad string. A Monad `String`
+   crosses the FFI as `i8*`, so this returns `char*`, not a word. */
+static char* web_take_str(const char* buf, int64_t n) {
+    if (n < 0) n = 0;
+    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)(n + 1)));
+    if (!out) return 0;
+    if (n > 0) memcpy(out, buf, (size_t)n);
+    out[n] = '\0';
+    return out;
+}
+
+/* A `Node`/`RequestId` is an inductive value: an i64 word in codegen.
+   A `Unit` result is a word too (the constructor). Only `String` is a
+   pointer, and only in the `web_fetch_read`/`web_storage_get_raw`
+   returns above. */
+
+int64_t web_dom_create(const char* tag) {
+    return monad_js_dom_create(web_str_ptr(tag), web_str_len(tag));
+}
+
+int64_t web_dom_create_text(const char* text) {
+    return monad_js_dom_create_text(web_str_ptr(text), web_str_len(text));
+}
+
+int64_t web_dom_create_comment(const char* text) {
+    return monad_js_dom_create_comment(web_str_ptr(text), web_str_len(text));
+}
+
+int64_t web_dom_root(void) {
+    return monad_js_dom_root();
+}
+
+int64_t web_dom_append(int64_t parent, int64_t child) {
+    return monad_js_dom_append(parent, child);
+}
+
+int64_t web_dom_insert_before(int64_t parent, int64_t child, int64_t before) {
+    return monad_js_dom_insert_before(parent, child, before);
+}
+
+int64_t web_dom_remove(int64_t node) {
+    return monad_js_dom_remove(node);
+}
+
+int64_t web_dom_replace(int64_t old_node, int64_t new_node) {
+    return monad_js_dom_replace(old_node, new_node);
+}
+
+int64_t web_dom_set_attr(int64_t node, const char* key, const char* value) {
+    return monad_js_dom_set_attr(node, web_str_ptr(key), web_str_len(key),
+                                 web_str_ptr(value), web_str_len(value));
+}
+
+int64_t web_dom_remove_attr(int64_t node, const char* key) {
+    return monad_js_dom_remove_attr(node, web_str_ptr(key), web_str_len(key));
+}
+
+int64_t web_dom_set_text(int64_t node, const char* text) {
+    return monad_js_dom_set_text(node, web_str_ptr(text), web_str_len(text));
+}
+
+int64_t web_dom_add_listener(int64_t node, const char* event, int64_t handler) {
+    return monad_js_dom_add_listener(node, web_str_ptr(event), web_str_len(event), handler);
+}
+
+int64_t web_dom_child(int64_t node, int64_t index) {
+    return monad_js_dom_child(node, index);
+}
+
+int64_t web_fetch_begin(const char* url, int64_t method, const char* body) {
+    return monad_js_fetch_begin(web_str_ptr(url), web_str_len(url), method,
+                                web_str_ptr(body), web_str_len(body));
+}
+
+int64_t web_fetch_poll(int64_t request) {
+    return monad_js_fetch_poll(request);
+}
+
+int64_t web_fetch_status(int64_t request) {
+    return monad_js_fetch_status(request);
+}
+
+char* web_fetch_read(int64_t request, int64_t max) {
+    if (max <= 0) return web_take_str("", 0);
+    if (max > WEB_SCRATCH_BYTES) max = WEB_SCRATCH_BYTES;
+    int64_t n = monad_js_fetch_read(request, (int64_t)(intptr_t)web_scratch, max);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_now_ms(void) {
+    return monad_js_now_ms();
+}
+
+char* web_storage_get_raw(const char* key) {
+    int64_t n = monad_js_storage_get(web_str_ptr(key), web_str_len(key),
+                                     (int64_t)(intptr_t)web_scratch,
+                                     WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_storage_set(const char* key, const char* value) {
+    return monad_js_storage_set(web_str_ptr(key), web_str_len(key),
+                                web_str_ptr(value), web_str_len(value));
+}
+
+int64_t web_console_log(const char* s) {
+    return monad_js_console_log(web_str_ptr(s), web_str_len(s));
+}
+
 rt_void monad_print_str(rt_str s) {
     const char* str = RT_STR(s);
     if (str) {
@@ -295,6 +504,9 @@ rt_str monad_u64_to_string(int64_t n) {
 
 __attribute__((export_name("monad_main")))
 int64_t monad_web_entry(int64_t args) {
+    /* Exports-only module: no `def main` was compiled, so the weak
+       reference is 0 and there is nothing to run. */
+    if (!main_monad) return 0;
     rt_word list = args ? (rt_word)args : alloc_constructor(5, 0);
     return (int64_t)(intptr_t)main_monad(list);
 }
