@@ -371,17 +371,32 @@ def export_check (triple : String) (decl_list : List Decl) : Result String (List
 #[partial]
 def find_export_msgs (defs : List Def) (seen : List String) (acc : List String) : List String := match defs {
     List.empty => List.reverse acc,
-    List.cons d rest =>
-        match export_def_name d {
-            Option.none => find_export_msgs rest seen acc,
-            Option.some plain =>
-                let dup := if list_contains_str seen plain
-                    then List.cons (String.concat "duplicate `#[export \"c\"]` name `" (String.concat plain "`") List.empty)
-                    else List.empty in
-                let problems := List.append dup (export_def_problems plain d) in
-                find_export_msgs rest (List.cons plain seen) (List.append (List.reverse problems) acc),
-        },
+    List.cons d rest => find_export_msgs_one d rest seen acc,
 }
+
+/// One def's contribution, split out of the list walk: a `let` bound to an
+/// `if` inside a `match` arm is a shape the Rust host's checker rejects
+/// ("expected a function type, found `String`"), while the self-hosted
+/// checker accepts it -- so the shared code keeps the conservative shape.
+#[partial]
+def find_export_msgs_one (d : Def) (rest : List Def) (seen : List String) (acc : List String) : List String :=
+    match export_def_name d {
+        Option.none => find_export_msgs rest seen acc,
+        Option.some plain =>
+            find_export_msgs rest (List.cons plain seen) (export_msgs_for plain d seen acc),
+    }
+
+#[partial]
+def export_msgs_for (plain : String) (d : Def) (seen : List String) (acc : List String) : List String :=
+    let dup := export_dup_msg plain seen in
+    let problems := List.append dup (export_def_problems plain d) in
+    List.append (List.reverse problems) acc
+
+#[partial]
+def export_dup_msg (plain : String) (seen : List String) : List String :=
+    if list_contains_str seen plain
+    then List.cons (String.concat "duplicate `#[export \"c\"]` name `" (String.concat plain "`")) List.empty
+    else List.empty
 
 /// The JS-visible name of an `#[export "c"]` def, or `none` for every other
 /// def.
