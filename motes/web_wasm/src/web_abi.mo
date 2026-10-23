@@ -93,6 +93,13 @@ def WebImport.storage_set : WebImport :=
 def WebImport.console_log : WebImport :=
   { module := "monad", name := "console_log", params := ["i64", "i64"], result := "void" }
 
+/// The export-call state slot: one opaque word in, one out.
+def WebImport.keep_set : WebImport :=
+  { module := "monad", name := "keep_set", params := ["i64"], result := "void" }
+
+def WebImport.keep_get : WebImport :=
+  { module := "monad", name := "keep_get", params := List.empty, result := "i64" }
+
 /// The runtime's own console I/O. `platform_web.c` declares these next to
 /// the `web_*` wrappers (module "monad"), so every program that can print
 /// needs them in the import object even if it never calls a `web_*` one.
@@ -120,6 +127,7 @@ pub def WebAbi.default : WebAbi :=
         WebImport.fetch_begin, WebImport.fetch_poll, WebImport.fetch_status,
         WebImport.fetch_read, WebImport.now_ms, WebImport.storage_get_raw,
         WebImport.storage_set, WebImport.console_log,
+        WebImport.keep_set, WebImport.keep_get,
         WebImport.write_stdout, WebImport.write_stderr, WebImport.read_stdin
       ],
       exports := [

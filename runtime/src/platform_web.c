@@ -216,6 +216,14 @@ extern int64_t monad_js_storage_set(int64_t kptr, int64_t klen, int64_t vptr, in
 __attribute__((import_module("monad"), import_name("console_log")))
 extern int64_t monad_js_console_log(int64_t ptr, int64_t len);
 
+/* The export-call state slot (`motes/web_wasm/src/keep.mo`): one opaque
+   word the JS host stores between export calls. */
+__attribute__((import_module("monad"), import_name("keep_set")))
+extern int64_t monad_js_keep_set(int64_t value);
+
+__attribute__((import_module("monad"), import_name("keep_get")))
+extern int64_t monad_js_keep_get(void);
+
 /* A result string can be at most this long; `storage_get_raw` has no
    length channel, and a longer value is truncated rather than overrunning
    the scratch buffer. `fetch_read` takes its cap from the caller. */
@@ -337,6 +345,14 @@ int64_t web_storage_set(const char* key, const char* value) {
 
 int64_t web_console_log(const char* s) {
     return monad_js_console_log(web_str_ptr(s), web_str_len(s));
+}
+
+int64_t web_keep_set(int64_t value) {
+    return monad_js_keep_set(value);
+}
+
+int64_t web_keep_get(void) {
+    return monad_js_keep_get();
 }
 
 rt_void monad_print_str(rt_str s) {

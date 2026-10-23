@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node smoke test for `#[export "c"]`. Usage:
-//   node wasm/web/export_smoke.mjs <module.wasm> [exports-only]
+//   node wasm/web/export_smoke.mjs <module.wasm> [exports-only|keep]
 //
 // The default mode runs fixtures/wasm/export_probe.mo and asserts the three
 // properties the export ABI promises:
@@ -17,35 +17,39 @@
 // The `exports-only` mode runs fixtures/wasm/export_only.mo: no `def main`,
 // so the runtime's weak `main_monad` is 0, the module still links, and
 // `monad_main` returns 0 while the exports work.
+//
+// The `keep` mode runs fixtures/wasm/web_keep.mo: one export saves a `Ref`
+// through the JS state slot, a later export reads it back and logs it --
+// the state channel every SPA export call relies on.
 
 import { readFile } from 'node:fs/promises';
+import { imports } from './web.js';
+import { host } from './web_runtime.js';
 
 const path = process.argv[2];
 const mode = process.argv[3] ?? 'probe';
 if (!path) {
-  console.error('usage: node wasm/web/export_smoke.mjs <module.wasm> [exports-only]');
+  console.error('usage: node wasm/web/export_smoke.mjs <module.wasm> [exports-only|keep]');
   process.exit(2);
 }
 const exportsOnly = mode === 'exports-only';
+const keepMode = mode === 'keep';
 
 const bytes = await readFile(path);
 let memory = null;
 let stdout = '';
+const logs = [];
 
-const imports = {
+const importObject = {
   monad: {
+    ...imports.monad,
     write_stdout(ptr, len) {
       stdout += Buffer.from(memory.buffer, Number(ptr), Number(len)).toString('utf8');
       return 0n;
     },
-    write_stderr() {
+    console_log(ptr, len) {
+      logs.push(Buffer.from(memory.buffer, Number(ptr), Number(len)).toString('utf8'));
       return 0n;
-    },
-    read_stdin() {
-      return 0n;
-    },
-    now_ms() {
-      return BigInt(Date.now());
     },
   },
 };
@@ -59,7 +63,7 @@ if (exportsOnly) {
       process.exit(1);
     }
   }
-  const instance = await WebAssembly.instantiate(module, imports);
+  const instance = await WebAssembly.instantiate(module, importObject);
   memory = instance.exports.memory;
   const rc = instance.exports.monad_main(0n);
   if (rc !== 0n) {
@@ -75,6 +79,21 @@ if (exportsOnly) {
   process.exit(0);
 }
 
+if (keepMode) {
+  // The state slot lives in the REAL runtime, so bind the instance to it.
+  const instance = await WebAssembly.instantiate(module, importObject);
+  memory = instance.exports.memory;
+  host.bind(instance);
+  instance.exports.probe_set();
+  instance.exports.probe_get();
+  if (logs.length !== 1 || logs[0] !== '41') {
+    console.error(`Keep round-trip failed; console saw ${JSON.stringify(logs)}`);
+    process.exit(1);
+  }
+  console.log(`ok: ${path} -> Keep carried a Ref between export calls`);
+  process.exit(0);
+}
+
 for (const want of ['probe_add', 'probe_emit']) {
   if (!names.includes(want)) {
     console.error(`missing export ${want}; exports are ${names.join(', ')}`);
@@ -82,8 +101,9 @@ for (const want of ['probe_add', 'probe_emit']) {
   }
 }
 
-const instance = await WebAssembly.instantiate(module, imports);
+const instance = await WebAssembly.instantiate(module, importObject);
 memory = instance.exports.memory;
+host.bind(instance);
 
 const sum = instance.exports.probe_add(41n);
 if (sum !== 42n) {
@@ -100,4 +120,5 @@ if (stdout !== 'probe\n') {
 }
 
 console.log(`ok: ${path} -> exports probe_add/probe_emit, eager IO`);
+
 

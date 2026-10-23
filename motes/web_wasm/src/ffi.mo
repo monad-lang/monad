@@ -16,6 +16,7 @@
 /// the multi-byte-string externs to `(ptr, len)` when that lands.
 
 use lib::types {Node, RequestId}
+use std::ref {Ref}
 
 #[extern "c" {link_name := "web_dom_create"}]
 def dom_create_raw (tag : String) : RawIO Node
@@ -79,3 +80,13 @@ def storage_set_raw (key : String) (value : String) : RawIO Unit
 
 #[extern "c" {link_name := "web_console_log"}]
 def console_log_raw (s : String) : RawIO Unit
+
+/// The export-call state slot. Exports cannot take or return Monad values
+/// (the export ABI is i64 words), so a `Ref` is stashed in the JS host and
+/// read back by the next export. `Ref A` is one opaque word at runtime and
+/// the JS side never dereferences it.
+#[extern "c" {link_name := "web_keep_set"}]
+def keep_set_raw {A : Type} (r : Ref A) : RawIO Unit
+
+#[extern "c" {link_name := "web_keep_get"}]
+def keep_get_raw {A : Type} : RawIO (Ref A)

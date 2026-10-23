@@ -22,3 +22,4 @@ pub use lib::fetch {Fetch.begin, Fetch.poll, Fetch.status, Fetch.read}
 pub use lib::clock {Clock.now_ms}
 pub use lib::storage {Storage.get, Storage.set}
 pub use lib::console {Console.log}
+pub use lib::keep {Keep.save, Keep.load}

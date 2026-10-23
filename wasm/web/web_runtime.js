@@ -22,6 +22,7 @@
 let instance = null;
 let memory = null;
 let rootSelector = 'body';
+let kept = 0n; // the export-call state slot (`Keep.save`/`Keep.load`)
 
 const nodes = [null]; // id -> DOM node; 0 is the null handle
 const nodeIds = new WeakMap(); // node -> id, so a re-read keeps its handle
@@ -332,6 +333,16 @@ export const host = {
   console_log(ptr, len) {
     console.log(str(ptr, len));
     return 0n;
+  },
+
+  // Opaque state for the export calls: a Monad `Ref` word, stored verbatim.
+  keep_set(value) {
+    kept = value;
+    return 0n;
+  },
+
+  keep_get() {
+    return kept;
   },
 
   write_stdout(ptr, len) {
