@@ -3831,7 +3831,13 @@ def term_head_is_raw_io (t : Term) : Bool := match term_peel t {
 /// explicit parameter binder is stepped past to reach the return type.
 #[partial]
 def return_is_raw_io (typ : Term) : Bool := match term_peel typ {
-    Term.pi b _ body => if binder_is_explicit b then return_is_raw_io body else term_head_is_raw_io typ,
+    // EVERY `pi` binder is a parameter, implicit or not, so the return type
+    // is what lies past all of them. The old `binder_is_explicit` test read
+    // the whole quantifier on an implicit binder, where the head is `pi`,
+    // not `RawIO` -- so a generic extern (`{A : Type} ... : RawIO A`, the
+    // shape `web_wasm.Keep` needs to pass a `Ref` through an opaque slot)
+    // silently lost its `monad_io_pure` box and broke the caller's IO chain.
+    Term.pi _b _arg body => return_is_raw_io body,
     _ => term_head_is_raw_io typ,
 }
 
