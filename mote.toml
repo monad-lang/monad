@@ -62,4 +62,5 @@ members = [
   "motes/loom",
   "motes/xml_html",
   "motes/oak",
+  "motes/oak_wasm",
 ]

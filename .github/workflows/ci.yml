@@ -358,6 +358,7 @@ jobs:
             --profile "$HOME/.monad-ci-devshell" \
             -c "$PWD/target-monad/ci-self-compile/monad" test \
                  motes/http motes/moon motes/jsgen motes/web_wasm motes/xml_html \
+                 motes/oak_wasm \
                  motes/oak/src/tests/elements_tests.mo \
                  motes/oak/src/tests/ssr_tests.mo \
                  motes/oak/src/tests/stack_tests.mo \

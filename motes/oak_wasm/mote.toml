@@ -1,0 +1,31 @@
+# The Oak runtime for the browser: diff/patch over `xml_html` trees, and the
+# Elm-style mount/dispatch/tick loop an app exposes through `#[export "c"]`.
+#
+# It declares no web externs of its own -- every browser call goes through
+# `web_wasm`'s `Dom`/`Keep` wrappers, which is the one-owner rule for the
+# web boundary. `targets = ["web"]` records that its code is only meaningful
+# there; availability itself is enforced per extern at codegen, so the pure
+# patch tests still run on every target.
+[mote]
+name = "oak_wasm"
+version = "0.1.0"
+edition = "2026"
+targets = ["web"]
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.xml_html]
+path = "../xml_html"
+
+[dependencies.oak]
+path = "../oak"
+
+[dependencies.web_wasm]
+path = "../web_wasm"
+
+[dependencies.parsec]
+path = "../parsec"

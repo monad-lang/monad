@@ -87,6 +87,16 @@ echo "== web: web_wasm DOM surface (C wrappers + JS host) =="
     -o "$tmp/web_dom.wasm" --no-cache
 node wasm/web/dom_smoke.mjs "$tmp/web_dom.wasm"
 
+echo "== web: export state slot (Keep) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_keep.mo \
+    -o "$tmp/web_keep.wasm" --no-cache
+node wasm/web/export_smoke.mjs "$tmp/web_keep.wasm" keep
+
+echo "== web: Oak SPA (mount, dispatch, tick, patch) =="
+"$MONAD" build --target wasm32-unknown-unknown examples/oak_spa.mo \
+    -o "$tmp/oak_spa.wasm" --no-cache
+node wasm/web/spa_smoke.mjs "$tmp/oak_spa.wasm"
+
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \
