@@ -24,7 +24,7 @@ use lang::scope {
   dict_hint_marker_terms, dict_hint_name, dict_param_name, emitted_dict_constraints,
   find_constructor_in_inductive, find_matching_instance,
   flatten_call_spine, identifier_tail, inductive_has_constructor, instance_module_prefix,
-  instance_wildcard_names, list_append, mangle_instance_dict_name,
+  instance_wildcard_names, instance_head_is_concrete, list_append, mangle_instance_dict_name,
   mangle_instance_method_name, mangled_to_identifier, param_names,
   rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes, scope_data_constrained_def_classes,
@@ -947,7 +947,21 @@ def dict_forwarding_override (cls_name : NamePath) (cls : Class) (method_name : 
             then Option.none
             else match find_matching_instance (scope_instance_candidates_in scope cls_name) cls_name carrier {
                 Option.none => Option.none,
-                Option.some _ => Option.some carrier,
+                // A VARIABLE-HEADED instance (the prelude's
+                // `instance {I} [IndexedMonad M] Monad (M I I)`) matches
+                // any carrier whose head is a type variable, and it is
+                // never the "the instance wins" answer this branch is
+                // for: inside a dict-carrying scope the local
+                // `__dict_<Cls>` is the dictionary for the class's own
+                // parameter, and diverting to that instance only fails
+                // on ITS `[IndexedMonad M]` constraint (measured: every
+                // `[Monad M]` def in `init/transformers.mo`, whose
+                // `Monad.pure` is checked at the ARGUMENT's type --
+                // `R`, `Option B` -- and matched the bridge). A concrete
+                // head (`instance [BEq A] BEq (List A)`'s `List A`, the
+                // recursive-tail case this branch exists for) still
+                // diverts.
+                Option.some ins => if instance_head_is_concrete ins then Option.some carrier else Option.none,
             },
     }
 
