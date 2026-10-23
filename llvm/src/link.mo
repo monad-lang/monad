@@ -164,6 +164,15 @@ pub def map_dash_l (libs : List String) : List String := match libs {
     List.cons hd tl => List.cons (String.concat "-l" hd) (map_dash_l tl),
 }
 
+/// Maps `#[export "c"]` symbol names to the `wasm-ld` flags that export
+/// them (`["oak_mount"]` -> `["-Wl,--export=oak_mount"]`). The same split of
+/// duties as `map_dash_l`: codegen collects the names, the linker knows the
+/// argv shape.
+pub def map_export_flags (syms : List String) : List String := match syms {
+    List.empty => List.empty,
+    List.cons hd tl => List.cons (String.concat "-Wl,--export=" hd) (map_export_flags tl),
+}
+
 /// The `-L` flags for a program's `[link] pkg-config` packages (the
 /// closure's union, `lang.module`'s `collect_link_pkgs`), as
 /// `pkg-config --libs-only-L` reports them.
@@ -335,19 +344,19 @@ pub def mkdir_parent (p : Path) : IO I64 :=
 /// where the "compile_file total minus compile_loaded_modules_to_ir total"
 /// remainder actually goes, before guessing at a fix.
 #[partial]
-pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 := do {
+pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 := do {
     let plan <- TargetPlan.resolve spec;
     match plan {
         Result.err e => do {
             fail_line e;
             return 1
         },
-        Result.ok p => link_ir_plan runtime_c ir_text ir_path output_dir output_name link_libs link_pkgs compiler_commit verbose spec p,
+        Result.ok p => link_ir_plan runtime_c ir_text ir_path output_dir output_name link_libs link_pkgs export_syms compiler_commit verbose spec p,
     }
 }
 
 #[partial]
-def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) (plan : TargetPlan) : IO I64 {
+def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) (plan : TargetPlan) : IO I64 {
     // `Path.join` here is THE fix for the mangled-double-slash bug this
     // whole `Path` type exists to prevent: if `output_name` is already
     // absolute, it replaces `output_dir` outright instead of naively
@@ -441,7 +450,15 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
                 // `-L` before the `-l`s it serves; `link_objects` puts both
                 // after the objects.
                 let pkg_flags : List String <- pkg_config_link_flags link_pkgs;
-                let link_flags : List String := List.append pkg_flags (List.append dash_l (verbose_argv verbose));
+                // `#[export "c"]` symbols: `wasm-ld` exports a symbol under
+                // its own name, so each one becomes `-Wl,--export=<name>`.
+                // Only the web profile has an export ABI; a native link
+                // would reject the flag outright.
+                let export_flags : List String :=
+                    if String.beq (TargetKind.name plan.kind) "web"
+                    then map_export_flags export_syms
+                    else List.empty;
+                let link_flags : List String := List.append export_flags (List.append pkg_flags (List.append dash_l (verbose_argv verbose)));
                 let result <- link_objects_for plan [obj_path_s, runtime_obj_s] output_path_s link_flags;
                 if verbose then do {
                     Bench.report_since "link_ir: clang link" t_link;

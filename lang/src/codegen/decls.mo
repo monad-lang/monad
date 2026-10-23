@@ -14,11 +14,11 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.length}
 use lang::types {
-  Decl, Def, Identifier, Inductive, Multiplicity, NamePath, Struct, StructField,
-  Term, Visibility, concrete,
+  Attribute, Decl, Def, Identifier, Inductive, Multiplicity, NamePath, Struct, StructField,
+  Term, Visibility, concrete, id_eq,
 }
 use lib::module {ModuleInfo}
-use lib::codegen::symbols {def_symbol_name}
+use lib::codegen::symbols {def_symbol_name, unqualify_def_name}
 use lib::codegen::free_names {collect_referenced_names}
 use lib::codegen::util {}
 use std::map {HashMap}
@@ -120,8 +120,12 @@ def extract_structs_go (decl_list : List Decl) (acc : List Struct) : List Struct
 /// names nothing at all, and a wrapper supplying it would silently
 /// return the empty closure. The caller knows which module is the
 /// program's entry point (`get_loaded_main`) and has to say.
+///
+/// `roots` is a LIST because a wasm program can also be entered through
+/// `#[export "c"]` defs, which `main` never references (see
+/// `export_roots`). Everything else is unchanged.
 #[partial]
-def filter_reachable_decls (root : String) (decl_list : List Decl) : List Decl :=
+def filter_reachable_decls (roots : List String) (decl_list : List Decl) : List Decl :=
     let all_defs := extract_defs decl_list in
     let all_inds := extract_inductives decl_list in
     let all_structs := extract_structs decl_list in
@@ -134,7 +138,7 @@ def filter_reachable_decls (root : String) (decl_list : List Decl) : List Decl :
     // calling `Map.insert`/`Map.lookup` -- same latent-bug workaround
     // `lang/scope.mo`'s `modpath_map_*` already uses.
     let defs_map := build_def_name_map all_defs str_map_empty in
-    let reachable := reachable_defs_from defs_map (List.cons root List.empty) str_map_empty List.empty in
+    let reachable := reachable_defs_from defs_map roots str_map_empty List.empty in
     List.append (map_inductive_decl all_inds) (List.append (map_struct_decl all_structs) (map_def_decl reachable))
 
 #[partial]
@@ -185,6 +189,89 @@ def def_name_str (d : Def) : String := match d {
 #[partial]
 def def_body_term (d : Def) : Term := match d {
     Def.mk {name := _name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} => term_,
+}
+
+/// Whether this def carries `#[export "c"]` -- a wasm export. The
+/// attribute name is compared exactly, like `has_extern_attr`
+/// (`validate.mo`) does for `#[extern]`.
+#[partial]
+def has_export_attr (attrs : List Attribute) : Bool := match attrs {
+    List.empty => false,
+    List.cons a rest =>
+        match a {
+            Attribute.mk aname _ =>
+                if id_eq aname (Identifier.id "export") then true else has_export_attr rest,
+        },
+}
+
+/// The qualified symbol of every `#[export "c"]` def, in decl order.
+/// These are extra reachability roots: `main` never references an export,
+/// so without them the def is filtered out before codegen and the export
+/// does not exist.
+#[partial]
+def export_roots (decl_list : List Decl) : List String :=
+    List.reverse (export_roots_go decl_list List.empty)
+
+#[partial]
+def export_roots_go (decl_list : List Decl) (acc : List String) : List String := match decl_list {
+    List.empty => acc,
+    List.cons d rest =>
+        match d {
+            Decl.def_d def_ =>
+                if has_export_attr (def_attrs def_)
+                then export_roots_go rest (List.cons (def_name_str def_) acc)
+                else export_roots_go rest acc,
+            _ => export_roots_go rest acc,
+        },
+}
+
+/// The JS-visible name of every `#[export "c"]` def: the SOURCE name
+/// (`oak_mount`), not the qualified symbol every def is emitted under.
+/// `wasm-ld --export=` can only export a symbol under its own name, which
+/// is why `add_export_shims` (emit.mo) emits a thunk per export.
+#[partial]
+def export_names (decl_list : List Decl) : List String :=
+    List.reverse (export_names_go decl_list List.empty)
+
+#[partial]
+def export_names_go (decl_list : List Decl) (acc : List String) : List String := match decl_list {
+    List.empty => acc,
+    List.cons d rest =>
+        match d {
+            Decl.def_d def_ =>
+                if has_export_attr (def_attrs def_)
+                then export_names_go rest (List.cons (unqualify_def_name (def_name_str def_)) acc)
+                else export_names_go rest acc,
+            _ => export_names_go rest acc,
+        },
+}
+
+/// `(JS name, qualified symbol)` for every `#[export "c"]` def, in decl
+/// order. `add_export_shims` needs both halves to emit the thunk.
+#[partial]
+def export_pairs (decl_list : List Decl) : List (Pair String String) :=
+    List.reverse (export_pairs_go decl_list List.empty)
+
+#[partial]
+def export_pairs_go (decl_list : List Decl) (acc : List (Pair String String)) : List (Pair String String) := match decl_list {
+    List.empty => acc,
+    List.cons d rest =>
+        match d {
+            Decl.def_d def_ =>
+                if has_export_attr (def_attrs def_)
+                then
+                    let qualified := def_name_str def_ in
+                    let plain := unqualify_def_name qualified in
+                    let pair_ : Pair String String := Pair.pair plain qualified in
+                    export_pairs_go rest (List.cons pair_ acc)
+                else export_pairs_go rest acc,
+            _ => export_pairs_go rest acc,
+        },
+}
+
+#[partial]
+def def_attrs (d : Def) : List Attribute := match d {
+    Def.mk {name := _name, typ := _typ, term := _term, constraints := _constraints, attrs, vis := _vis, ..} => attrs,
 }
 
 /// Worklist-based reachability closure: BFS/DFS over Def names starting
@@ -286,7 +373,7 @@ def unit_test_inductive_decl (type_name : String) : Inductive :=
 def test_filter_reachable_decls_keeps_structs : Bool :=
     let decls : List Decl := List.cons (Decl.struct_d (unit_test_struct_decl "Point"))
         (List.cons (Decl.inductive_d (unit_test_inductive_decl "Slim")) List.empty) in
-    let filtered := filter_reachable_decls "cli.main::main" decls in
+    let filtered := filter_reachable_decls (List.cons "cli.main::main" List.empty) decls in
     I64.beq (List.length (extract_structs filtered)) 1
         && I64.beq (List.length (extract_inductives filtered)) 1
         && I64.beq (List.length (extract_defs filtered)) 0

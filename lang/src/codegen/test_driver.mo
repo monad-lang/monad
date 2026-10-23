@@ -689,7 +689,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                         if qualified_ok
                         then qualified_def_name_str driver_mp (bare_npath "main")
                         else "main";
-                    let reachable := filter_reachable_decls driver_root dispatched_decls;
+                    let reachable := filter_reachable_decls (List.cons driver_root List.empty) dispatched_decls;
                     report_elab_stats false (best_effort_errors elab_report) elaborated reachable;
                     // Validate the REACHABLE decls, not the full spliced
                     // graph -- see `lang.codegen.emit`'s own

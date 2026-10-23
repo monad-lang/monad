@@ -1749,16 +1749,22 @@ fn def_parser(input: Span) -> Res<Def> {
 
   let is_native = attrs.iter().any(|a| a.name.as_str() == "native");
 
-  // `#[export "c"]` / `#[extern "c" ...]` — codegen-only declarations.
-  // Only the self-hosted compiler lowers these: `#[extern]` into a C-ABI
-  // wrapper plus link flags (lang/codegen/emit.mo, lang/main.mo's
-  // link_libs), `#[export]` into a C-export symbol. The Rust host has no
-  // C bridge at all, so it records the attribute and parses the def as an
-  // ordinary `Term::Ntv` under the def's own name — enough for
+  // `#[extern "c" ...]` — codegen-only declarations. Only the self-hosted
+  // compiler lowers these: `#[extern]` into a C-ABI wrapper plus link
+  // flags (lang/codegen/emit.mo, lang/main.mo's link_libs). The Rust host
+  // has no C bridge at all, so it records the attribute and parses the def
+  // as an ordinary `Term::Ntv` under the def's own name — enough for
   // ffi_example-style motes to LOAD and type-check (`module_warnings`
   // emits `extern_attr_warnings` for each one at load time), while
   // actually evaluating such a def fails with `unknown native: <name>`
   // from `exec_native`'s fallback arm.
+  //
+  // `#[export "c"]` is deliberately NOT in this set: an exported def has a
+  // real Monad body (the self-hosted compiler exports its own symbol, it
+  // does not synthesize a foreign binding), so it parses as an ordinary
+  // def with the attribute retained. Treating it as a body-less codegen
+  // attribute would leave the `:= ...` body unconsumed and fail the whole
+  // file's parse.
   //
   // `#[cubical "..."]` takes the same body-less shape for the same
   // reason at one remove: the cubical primitives (the `with Cubical`
@@ -1767,9 +1773,9 @@ fn def_parser(input: Span) -> Res<Def> {
   // load and type-check as an opaque signature. The marker's string is
   // the self-hosted checker's binding key (`build_scope_def`,
   // lang/src/scope.mo); the host never reads it.
-  let is_codegen_attr = attrs.iter().any(|a| {
-    a.name.as_str() == "export" || a.name.as_str() == "extern" || a.name.as_str() == "cubical"
-  });
+  let is_codegen_attr = attrs
+    .iter()
+    .any(|a| a.name.as_str() == "extern" || a.name.as_str() == "cubical");
   if is_codegen_attr {
     let plain_params: Vec<Param> = params.iter().map(parsed_param_as_param).collect();
     let native_name = name.last().clone();

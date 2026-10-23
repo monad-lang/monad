@@ -20,6 +20,7 @@ use llvm::link {link_ir, mkdir_parent}
 use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
+use lang::codegen::decls {collect_all_decls_from_modules, export_names}
 use lang::module {ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_file_cached_affine, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::scope {resolve_class_calls_decls}
 use lang::mote {
@@ -80,7 +81,7 @@ def default_output_dir : Path := Path.path ("/tmp/monad_out_" ++ I64.to_string p
 /// is enough here (the `--verbose` compile pipeline prints the precise
 /// stage names too).
 #[partial]
-def link_compiled_module (mod_result : Result String LLVMModule) (link_libs : List String) (link_pkgs : List String) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose : Bool) (target : TargetSpec) : IO I64 :=
+def link_compiled_module (mod_result : Result String LLVMModule) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose : Bool) (target : TargetSpec) : IO I64 :=
     match mod_result {
         Result.err e => do {
             println ("FAILED at stage: compile_loaded_modules_to_ir (" ++ e ++ ")");
@@ -102,6 +103,7 @@ def link_compiled_module (mod_result : Result String LLVMModule) (link_libs : Li
                 ir_path := resolve_ir_path ir output_dir output_name,
                 output_dir := output_dir, output_name := output_name,
                 link_libs := link_libs, link_pkgs := link_pkgs,
+                export_syms := export_syms,
                 compiler_commit := build_commit,
                 verbose := verbose, spec := target }
         },
@@ -130,6 +132,7 @@ def compile_parsed_decls (decl_list : List Decl) (base_dir : String) (output_dir
     link_ir { runtime_c := runtime_src, ir_text := ir_text, ir_path := ir_path,
         output_dir := output_dir, output_name := output_name,
         link_libs := List.empty, link_pkgs := List.empty,
+        export_syms := List.empty,
         compiler_commit := build_commit,
         verbose := verbose, spec := target }
 }
@@ -1042,7 +1045,16 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             // rather than from any `#[extern "c"]` attribute.
             let link_libs : List String <- collect_link_libs (get_loaded_all loaded);
             let link_pkgs : List String <- collect_link_pkgs (get_loaded_all loaded);
+            // `#[export "c"]` symbols for the wasm link. Read from the
+            // LOADED decls (unqualified names, which `unqualify_def_name`
+            // leaves alone); `link_ir` only turns them into flags on the
+            // web profile. The same helper runs inside codegen over the
+            // qualified list, and both agree by construction -- see
+            // `decls.export_names`.
+            let export_syms : List String :=
+                export_names (collect_all_decls_from_modules (get_loaded_all loaded) List.empty);
             link_compiled_module { mod_result := mod_result, link_libs := link_libs, link_pkgs := link_pkgs,
+                export_syms := export_syms,
                 base_dir := extract_directory file_path,
                 output_dir := output_dir, output_name := output_name,
                 ir := ir, verbose := verbose, target := target }
@@ -1865,6 +1877,7 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
                 output_dir := (Path.path out_dir),
                 output_name := (Path.path bin_name),
                 link_libs := link_libs, link_pkgs := link_pkgs,
+                export_syms := List.empty,
                 compiler_commit := build_commit,
                 verbose := verbose, spec := native };
             if not (link_result == 0) then do { return (TestFileOutcome.fail_outcome "compilation failed") }

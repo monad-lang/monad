@@ -30,16 +30,16 @@ use llvm::ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
   LLVMValue, PhiPair,
 }
-use lib::codegen::decls {def_name_str, extract_defs, extract_inductives}
+use lib::codegen::decls {def_name_str, extract_defs, extract_inductives, has_export_attr}
 use runtime::natives {runtime_native_functions}
 use lib::codegen::natives {
   lookup_native_any, native_attr_target_name, native_runtime_fn_name,
   runtime_declarations, NativeAvailability, native_target_availability,
 }
 use llvm::target {TargetKind}
-use lang::codegen::symbols {def_symbol_name, name_path_to_str}
+use lang::codegen::symbols {def_symbol_name, ends_with_main, name_path_to_str, unqualify_def_name}
 use lib::codegen::util {
-  dedup_strs, join_semicolon_msgs
+  dedup_strs, join_semicolon_msgs, list_contains_str
 }
 use std::map {HashMap}
 
@@ -300,6 +300,124 @@ def find_unavailable_native_defs_go (kind : TargetKind) (triple : String) (defs 
                     },
             },
     }
+
+/// `#[export "c"]` shape checks. Run only on the web profile: every other
+/// target ignores the attribute (a library that declares exports must stay
+/// testable natively), so there is nothing to enforce there.
+///
+/// What a web export must be, and why:
+/// * a real def with a body -- the compiler exports the def's own code, it
+///   does not synthesize a foreign binding;
+/// * a single identifier segment -- the name becomes a JS property
+///   (`instance.exports.oak_mount`), so a dotted `with`-block name or a
+///   path is not addressable;
+/// * not `main` -- `ren_main_and_wrap` renames that symbol, so the export
+///   would point at nothing;
+/// * monomorphic and constraint-free -- the exported symbol has the
+///   uniform i64 ABI with no dictionary arguments, so a caller in JS could
+///   not supply them;
+/// * unique -- two exports on one name would collide at link.
+#[partial]
+pub def validate_export_defs (kind : TargetKind) (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
+    match kind {
+        TargetKind.native => Result.ok decl_list,
+        TargetKind.wasi => Result.ok decl_list,
+        TargetKind.web => export_check triple decl_list,
+    }
+
+#[partial]
+def export_check (triple : String) (decl_list : List Decl) : Result String (List Decl) :=
+    let msgs := find_export_msgs (extract_defs decl_list) List.empty List.empty in
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+    }
+
+#[partial]
+def find_export_msgs (defs : List Def) (seen : List String) (acc : List String) : List String := match defs {
+    List.empty => List.reverse acc,
+    List.cons d rest =>
+        match export_def_name d {
+            Option.none => find_export_msgs rest seen acc,
+            Option.some plain =>
+                let dup := if list_contains_str seen plain
+                    then List.cons (String.concat "duplicate `#[export \"c\"]` name `" (String.concat plain "`") List.empty)
+                    else List.empty in
+                let problems := List.append dup (export_def_problems plain d) in
+                find_export_msgs rest (List.cons plain seen) (List.append (List.reverse problems) acc),
+        },
+}
+
+/// The JS-visible name of an `#[export "c"]` def, or `none` for every other
+/// def.
+#[partial]
+def export_def_name (d : Def) : Option String :=
+    match d {
+        Def.mk {name, typ := _typ, term := _term, constraints := _constraints, attrs, vis := _vis, ..} =>
+            if has_export_attr attrs then Option.some (unqualify_def_name (def_symbol_name name)) else Option.none,
+    }
+
+#[partial]
+def export_def_problems (plain : String) (d : Def) : List String :=
+    match d {
+        Def.mk {name, typ, term := term_, constraints, attrs, vis := _vis, ..} =>
+            let label := String.concat "`#[export \"c\"]` def `" (String.concat plain "`") in
+            // `rename_main` renames the entry symbol (`ends_with_main`,
+            // i.e. source name exactly `main`), so that export would leave
+            // its thunk with no target.
+            let main_problem := if ends_with_main (def_symbol_name name)
+                then List.cons (String.concat label " cannot be `main`: the runtime entry renames that symbol") List.empty
+                else List.empty in
+            let shape_problem := if String.contains plain "."
+                then List.cons (String.concat label " must be a single identifier segment; a dotted name is not a JS property") List.empty
+                else List.empty in
+            let abi_problem := if export_abi_is_c attrs
+                then List.empty
+                else List.cons (String.concat label " must name the C ABI as `#[export \"c\"]`") List.empty in
+            let body_problem := match strip_db_lams term_ {
+                Term.hole => List.cons (String.concat label " needs a body: an export is the def's own code, not a foreign binding") List.empty,
+                _ => List.empty,
+            } in
+            let implicit_problem := if export_has_implicit_param typ
+                then List.cons (String.concat label " cannot have implicit parameters: the export ABI passes only explicit i64 words") List.empty
+                else List.empty in
+            let constraint_problem := if List.is_empty constraints
+                then List.empty
+                else List.cons (String.concat label " cannot have type-class constraints: no dictionary can cross the export ABI") List.empty in
+            List.append main_problem (List.append shape_problem (List.append abi_problem (List.append body_problem (List.append implicit_problem constraint_problem)))),
+    }
+
+/// Whether the def's `#[export ...]` attribute names the C ABI. Mirrors the
+/// `#[extern]` check (`build_extern_info`), which requires a positional
+/// `"c"`: an unknown ABI string is a diagnostic, never silently treated as
+/// C.
+#[partial]
+def export_abi_is_c (attrs : List Attribute) : Bool := match attrs {
+    List.empty => false,
+    List.cons a rest =>
+        match a {
+            Attribute.mk aname aargs =>
+                if id_eq aname (Identifier.id "export")
+                then export_args_have_c aargs
+                else export_abi_is_c rest,
+        },
+}
+
+#[partial]
+def export_args_have_c (args : List AttrArg) : Bool := match args {
+    List.empty => false,
+    List.cons a rest =>
+        match a {
+            AttrArg.str s => if String.beq s "c" then true else export_args_have_c rest,
+            _ => export_args_have_c rest,
+        },
+}
+
+#[partial]
+def export_has_implicit_param (typ : Term) : Bool := match term_peel typ {
+    Term.pi b _ body => if binder_is_explicit b then export_has_implicit_param body else true,
+    _ => false,
+}
 
 /// Fail fast on a struct literal that reached codegen still spelled as
 /// `Literal.struct_lit`/`Literal.struct_update` instead of a real

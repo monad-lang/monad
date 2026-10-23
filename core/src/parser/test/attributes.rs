@@ -533,9 +533,9 @@ fn test_multiple_attributes_stacked() {
 fn test_extern_c_basic() {
   // FFI is a self-hosted-compiler-only feature: the Rust host keeps no C
   // bridge, so `#[extern "c"]` parses to an ordinary `Term::Ntv` under
-  // the def's OWN name, exactly like `#[export "c"]`. The attribute stays
-  // on the def — that is what `module_warnings`' `extern_attr_warnings`
-  // scans for — and evaluating the def fails with `unknown native: puts`.
+  // the def's OWN name. The attribute stays on the def — that is what
+  // `module_warnings`' `extern_attr_warnings` scans for — and evaluating
+  // the def fails with `unknown native: puts`.
   let s = r#"#[extern "c"]
     def puts (s : String) : I64
     "#
@@ -546,6 +546,32 @@ fn test_extern_c_basic() {
   assert_eq!(native.num_args, 1);
   match res.value() {
     Decl::Def(d) => assert_eq!(d.attributes[0].name, id("extern")),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_export_c_keeps_its_body() {
+  // `#[export "c"]` marks a WASM export. Unlike `#[extern "c"]` it is a
+  // REAL Monad def with a body — the self-hosted compiler exports the
+  // def's own code — so the host parses it as an ordinary def and keeps
+  // the attribute. Treating it as a body-less codegen attribute (the
+  // shape `extern` still has) left the `:= …` body unconsumed and failed
+  // the whole file's parse.
+  let s = r#"#[export "c"]
+    def oak_mount (a : I64) : I64 := a + 1
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Def(d) => {
+      assert_eq!(d.attributes.len(), 1);
+      assert_eq!(d.attributes[0].name, id("export"));
+      assert!(
+        !matches!(d.term, Term::Ntv { .. }),
+        "an exported def must keep its body, not parse as a native"
+      );
+    }
     _ => panic!("expected Def"),
   }
 }

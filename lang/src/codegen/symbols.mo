@@ -210,17 +210,27 @@ def replace_dots_loop (s : String) (acc : String) : String :=
         else
             replace_dots_loop rest (String.concat acc (String.slice s 0 1))
 
-/// Check if a function name is a main function (handles both "main" and module_main)
+/// Whether this symbol is the program's ENTRY `main`: its source name,
+/// after unqualifying, is exactly `main` (`cli.main::main` -> `main`).
+///
+/// The old second branch tested for a `_main` suffix and never fired:
+/// `String.slice`'s third argument is a LENGTH, so it compared the three
+/// characters `ain` with `_main`. It was also the wrong rule to want --
+/// the compiler's own closure contains helpers like `has_main`/
+/// `rename_main`, and renaming those to `main_monad` would collide with the
+/// real entry. Kept as a named rule because `rename_main` and the export
+/// validator both ask it.
 #[partial]
 def ends_with_main (name : String) : Bool :=
-    // On the UNQUALIFIED tail: a symbol is `cli.main::main` now, which
-    // ends in neither `main`-the-whole-string nor `_main`.
-    let src := unqualify_def_name name in
-    if String.beq src "main" then true
-    else if String.length src > 3 then
-        let suffix := String.slice src (String.length src - 3) (String.length src) in
-        String.beq suffix "_main"
-    else false
+    String.beq (unqualify_def_name name) "main"
+
+#[test]
+def test_ends_with_main_is_the_exact_source_name : Bool :=
+    if Bool.not (ends_with_main "cli.main::main") then false
+    else if Bool.not (ends_with_main "main") then false
+    else if ends_with_main "cli.main::run_main" then false
+    else if ends_with_main "lang.codegen.emit::rename_main" then false
+    else true
 
 /// The source name inside a qualified symbol -- `init.string::String.beq`
 /// back to `String.beq`. A name that was never qualified (a synthesized

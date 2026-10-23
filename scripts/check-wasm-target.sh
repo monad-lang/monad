@@ -68,6 +68,16 @@ echo "== web: hello (freestanding build + Node loader) =="
     -o "$tmp/hello.wasm" --no-cache
 node wasm/web/smoke.mjs "$tmp/hello.wasm"
 
+echo "== web: #[export \"c\"] (exports + eager IO) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/export_probe.mo \
+    -o "$tmp/exports.wasm" --no-cache
+node wasm/web/export_smoke.mjs "$tmp/exports.wasm"
+# The same program must still build natively: exports are a web-only ABI,
+# and a library that declares them has to stay testable.
+"$MONAD" build fixtures/wasm/export_probe.mo -o "$tmp/exports-native" --no-cache \
+    || fail "native build rejected #[export \"c\"]"
+[ -x "$tmp/exports-native" ] || fail "native build produced no binary"
+
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \

@@ -27,7 +27,7 @@ use llvm::ir {
 use runtime::natives {runtime_native_functions}
 use lang::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
-  strip_db_lams, validate_no_colliding_def_symbols,
+  strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
   report_elab_stats, strict_elab_enabled, validate_no_undesugared_struct_lits,
   validate_no_monad_externs, validate_no_unwired_natives,
   validate_native_target_availability,
@@ -45,8 +45,9 @@ use lib::codegen::natives {
 }
 use llvm::target {TargetKind}
 use lib::codegen::decls {
-  build_def_name_map, collect_all_decls_from_modules, def_name_str, extract_defs,
-  extract_inductives, extract_structs, filter_reachable_decls, reachable_defs_from,
+  build_def_name_map, collect_all_decls_from_modules, def_name_str, export_names,
+  export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
+  filter_reachable_decls, reachable_defs_from,
 }
 use lib::codegen::tco {apply_self_tco}
 use lib::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
@@ -68,7 +69,7 @@ use lib::codegen::symbols {
 use lib::elaborate {names_of_decls}
 use lib::codegen::util {
   dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
-  ident_in_list, identifier_eq, join_semicolon_msgs, rev_vals
+  ident_in_list, identifier_eq, join_semicolon_msgs, list_contains_str, rev_vals
 }
 use lib::module {
   BestEffortElab, LoadedModules, ModuleInfo, bench_step, best_effort_decls,
@@ -6077,6 +6078,78 @@ def take_first_n (xs : List String) (n : I64) : List String :=
         List.cons x rest => List.cons x (take_first_n rest (n - 1)),
     }
 
+/// Emit the JS-visible thunks behind `#[export "c"]`.
+///
+/// Every def is emitted under its module-qualified symbol
+/// (`app.main::oak_mount`), but a wasm export has to carry the SOURCE name
+/// the loader calls (`oak_mount`), and `wasm-ld --export=` cannot rename a
+/// symbol. Each export therefore gets a three-instruction shim under the
+/// export's own name that forwards to the qualified def with the def's own
+/// parameter list -- the same shape `compile_extern_def_wrapper_ir` uses for
+/// the import side, only in the other direction.
+///
+/// Total by construction: `validate_export_defs` has already rejected a
+/// duplicate name, an export named `main` (which `ren_main_and_wrap`
+/// renames) and a def with no body, and every export is a reachability
+/// root, so its qualified symbol is in the module. A pair whose target is
+/// somehow absent emits no shim; the `--export=` flag then fails at link
+/// naming the missing symbol rather than silently exporting nothing.
+#[partial]
+def add_export_shims (pairs : List (Pair String String)) (m : LLVMModule) : LLVMModule :=
+    let funcs : List LLVMFunction := module_funcs m in
+    let shims : List LLVMFunction := export_shim_funcs pairs funcs List.empty in
+    match m {
+        LLVMModule.mk triple globals all_funcs decls src files =>
+            LLVMModule.mk triple globals (List.append all_funcs shims) decls src files,
+    }
+
+#[partial]
+def export_shim_funcs (pairs : List (Pair String String)) (funcs : List LLVMFunction) (acc : List LLVMFunction) : List LLVMFunction := match pairs {
+    List.empty => List.reverse acc,
+    List.cons p rest =>
+        match p {
+            Pair.pair plain qualified =>
+                match find_llvm_function qualified funcs {
+                    Option.none => export_shim_funcs rest funcs acc,
+                    Option.some target =>
+                        match target {
+                            LLVMFunction.mk _name params ret_ty _blocks _dbg =>
+                                export_shim_funcs rest funcs (List.cons (export_shim plain qualified params ret_ty) acc),
+                        },
+                },
+        },
+}
+
+#[partial]
+def export_shim (plain : String) (qualified : String) (params : List ParamPair) (ret_ty : LLVMType) : LLVMFunction :=
+    let args : List LLVMValue := export_shim_args params List.empty in
+    let call_ : LLVMValue := LLVMValue.call qualified ret_ty args false in
+    let instrs : List LLVMInstruction :=
+        if String.beq (show_llvm_type ret_ty) "void"
+        then List.cons (LLVMInstruction.call_void call_) (List.cons (LLVMInstruction.ret (LLVMValue.int_ (0i64))) List.empty)
+        else List.cons (LLVMInstruction.assign "t0" call_) (List.cons (LLVMInstruction.ret (LLVMValue.var_ "t0")) List.empty) in
+    let block : LLVMBasicBlock := LLVMBasicBlock.mk "entry" instrs in
+    LLVMFunction.mk plain params ret_ty (List.cons block List.empty) Option.none
+
+#[partial]
+def export_shim_args (params : List ParamPair) (acc : List LLVMValue) : List LLVMValue := match params {
+    List.empty => List.reverse acc,
+    List.cons p rest =>
+        match p {
+            ParamPair.mk name _ty => export_shim_args rest (List.cons (LLVMValue.var_ name) acc),
+        },
+}
+
+#[partial]
+def find_llvm_function (name : String) (funcs : List LLVMFunction) : Option LLVMFunction := match funcs {
+    List.empty => Option.none,
+    List.cons f rest =>
+        match f {
+            LLVMFunction.mk fname _params _ret _blocks _dbg =>
+                if String.beq fname name then Option.some f else find_llvm_function name rest,
+        },
+}
+
 /// Field accessors for the sub-timing of the call-target gate below --
 /// `LLVMModule` is matched positionally elsewhere in this file, and a
 /// `match` cannot be spliced into a `let` chain.
@@ -6246,7 +6319,16 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     // identifier, not on a parenthesised call result.
     let main_mi : ModuleInfo := get_loaded_main loaded;
     let main_root : String := qualified_def_name_str main_mi.path (bare_npath "main");
-    let reachable_decls := filter_reachable_decls main_root dispatched_decls;
+    // `#[export "c"]` defs are entered from JS, not from `main`, so they are
+    // extra roots -- and only on the web profile, where an export is a real
+    // thing. On every other target the attribute is ignored: a library that
+    // declares exports must still be testable natively.
+    let export_roots_: List String :=
+        if String.beq (TargetKind.name (TargetKind.of_triple triple)) "web"
+        then export_roots dispatched_decls
+        else List.empty;
+    let root_list : List String := List.cons main_root export_roots_;
+    let reachable_decls := filter_reachable_decls root_list dispatched_decls;
     report_elab_stats verbose (best_effort_errors elab_report) elaborated reachable_decls;
     if verbose then do {
         let reachable_count := List.length reachable_decls;
@@ -6289,6 +6371,12 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                         return (Result.err e)
                     },
                     Result.ok _ =>
+                  match validate_export_defs (TargetKind.of_triple triple) triple reachable_decls {
+                    Result.err e => do {
+                        if verbose then do { fail_line ("FAILED at stage: validate_export_defs (" ++ e ++ ")"); return unit } else return unit;
+                        return (Result.err e)
+                    },
+                    Result.ok _ =>
                   // And once more for the OTHER silent-placeholder path
                   // codegen has: a struct literal that best-effort
                   // elaboration never desugared still compiles to
@@ -6311,7 +6399,14 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     stage verbose "emit LLVM IR";
                     let t_llvm : I64 <- Bench.now;
-                    let mod_ : LLVMModule := compile_db_module_with_debug reachable_decls source_path debug_files triple;
+                    let mod_raw : LLVMModule := compile_db_module_with_debug reachable_decls source_path debug_files triple;
+                    // The thunks the `--export=` flags name (web only, the
+                    // same condition the roots used above).
+                    let shim_pairs : List (Pair String String) :=
+                        if String.beq (TargetKind.name (TargetKind.of_triple triple)) "web"
+                        then export_pairs dispatched_decls
+                        else List.empty;
+                    let mod_ : LLVMModule := add_export_shims shim_pairs mod_raw;
                     if verbose then do {
                         Bench.report_since "compile_db_module" t_llvm;
                         return unit
@@ -6360,6 +6455,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                       },
                   },
                   },
+            },
             },
     }
       },
