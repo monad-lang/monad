@@ -1,16 +1,18 @@
-# The browser platform boundary. This mote is wasm-only: every extern it
-# declares is implemented by the web runtime (`runtime/src/platform_web.c`
-# / `wasm/web/web_runtime.js`). The runtime side is not implemented yet, so
-# the `web_*` symbols are unbound on every target today; a non-web build
-# fails at link rather than silently doing nothing.
+# The browser platform boundary. Every extern it declares is implemented by
+# the web runtime (`runtime/src/platform_web.c` / `wasm/web/web_runtime.js`),
+# and reached through the generated loader `wasm/web/web.js`.
 #
 # ALL web externs live here. Side-effecting externs are declared `RawIO A`
 # and exposed through the thin `IO` wrappers in `dom.mo`, `fetch.mo`,
-# `clock.mo`, `storage.mo` and `console.mo`. No other mote declares a
-# DOM/fetch/event/timer/storage extern.
+# `clock.mo`, `storage.mo`, `console.mo` and `keep.mo`. No other mote
+# declares a DOM/fetch/event/timer/storage extern.
 #
-# `targets` is a declaration of intent; neither loader enforces it yet, so a
-# native build is stopped late (at link) rather than at load.
+# `targets` is parsed by both loaders but stays informational: availability
+# is enforced per declaration, at codegen. A reachable `web_*` extern on a
+# non-web target is a compile error naming the extern and the target
+# (`validate_native_target_availability`), while this mote's PURE parts
+# (`WebAbi`, `Glue.loader`) keep running everywhere -- their goldens and the
+# `wasm/web/web.js` drift test are ordinary tests.
 #
 # `jsgen` renders the browser glue from `src/web_abi.mo`, so the import map,
 # the C declarations and the externs cannot drift.
