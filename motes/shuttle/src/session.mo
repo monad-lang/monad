@@ -19,7 +19,7 @@ use json::json {
     Json.get_object, Json.get_array, Json.get_str, Json.get_num_i64,
     Json.object_get,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::io {IO.read_file, IO.write_file}
 use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of, Path.to_string}

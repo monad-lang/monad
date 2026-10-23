@@ -42,7 +42,7 @@ def test_undeclared_class_method_fails_the_compile_clearly : IO Bool := do {
 	def put (a : A) : A
 }
 
-instance Bag I64 {
+pub instance Bag I64 {
 	def put (a : I64) : I64 := a
 }
 
@@ -50,7 +50,7 @@ class Other A {
 	def zzz (a : A) : A
 }
 
-instance Other I64 {
+pub instance Other I64 {
 	def zzz (a : I64) : I64 := a
 }
 

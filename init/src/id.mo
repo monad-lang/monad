@@ -4,19 +4,19 @@ type Id A {
 }
 open Id {id}
 
-instance Functor Id {
+pub instance Functor Id {
     def map (f : A -> B) (a : Id A) : Id B :=
         match a { id a => id (f a) }
 }
 
-instance Applicative Id {
+pub instance Applicative Id {
     def pure (a : A) : Id A := id a
 
     def apply (f : Id (A -> B)) (a : Id A) : Id B :=
         match f { id f2 => match a { id a2 => id (f2 a2) } }
 }
 
-instance Monad Id {
+pub instance Monad Id {
     def pure (a : A) : Id A := id a
 
     def bind (a : Id A) (f : A -> Id B) : Id B :=
@@ -24,7 +24,7 @@ instance Monad Id {
 }
 
 /// The identity comonad: there is no context to push inwards.
-instance Comonad Id {
+pub instance Comonad Id {
     def extract (a : Id A) : A :=
         match a { id a => a }
 

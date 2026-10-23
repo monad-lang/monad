@@ -291,7 +291,7 @@ pub def Sqlite.last_insert_rowid (conn : SqliteConn) : I64 :=
 
 // ─── The class instance ──────────────────────────────────────────────────
 
-instance Backend SqliteConn {
+pub instance Backend SqliteConn {
     def close (b : SqliteConn) : IO (Result SqlError Unit) := Sqlite.close b
     def exec (b : SqliteConn) (sql : String) (params : List Value) :
             IO (Result SqlError I64) := Sqlite.exec_io b sql params

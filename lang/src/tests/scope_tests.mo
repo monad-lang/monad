@@ -11,10 +11,16 @@ use lang::scope {
   list_append, lookup_binding, mk, npath_eq, placeholder_carrier, resolve_def_in_scope_by_name,
   scope_data_add_def, scope_data_add_inductive, scope_data_add_instance,
   scope_data_empty, scope_find_inductive, scope_find_inductive_by_constructor,
-  scope_find_local, scope_globals, scope_push_local, scope_resolve_instance,
+  scope_find_local, scope_globals, scope_instance_candidates_in, scope_push_local, scope_resolve_instance,
   scope_resolve_name, term_to_slug,
 }
 use llvm::strmap {str_map_empty, str_map_insert}
+use std::list {List.length}
+
+/// The declaring module for the hand-built instances below. The scopes
+/// these tests resolve against have an empty module path -- no consumer --
+/// so the visibility filter admits every instance regardless of owner.
+def test_owner : ModulePath := ModulePath.mk [Identifier.id "Test"]
 
 // --- Build scope from empty decl_list ---
 
@@ -440,7 +446,7 @@ def test_scope_resolve_instance_found : Bool :=
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
-    let sd : ScopeData := scope_data_add_instance scope_data_empty ins in
+    let sd : ScopeData := scope_data_add_instance scope_data_empty test_owner ins in
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let s : Scope := {
@@ -516,7 +522,7 @@ def test_scope_resolve_instance_matches_class : Bool :=
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
-    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty inst_show) inst_monad in
+    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty test_owner inst_show) test_owner inst_monad in
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let s : Scope := {
@@ -632,7 +638,7 @@ def test_instance_key_matches_type_args : Bool :=
     // deliberately share the same level-1 sort arg (see above), so
     // `first_matching_instance`'s scan needs this exact order to
     // return `show_i64` first, matching this test's intent.
-    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty show_i64) show_bool in
+    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty test_owner show_i64) test_owner show_bool in
     let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
@@ -668,7 +674,7 @@ def test_instance_key_matches_wrong_type_args : Bool :=
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
-    let sd : ScopeData := scope_data_add_instance scope_data_empty show_i64 in
+    let sd : ScopeData := scope_data_add_instance scope_data_empty test_owner show_i64 in
     let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
@@ -1086,3 +1092,44 @@ def test_bind_term_vars_walks_a_hole_heads_args_along_the_carrier_tail : Bool :=
 #[test]
 def test_bind_term_vars_aligns_equal_arity_spines : Bool :=
     String.beq (bound_slug [Identifier.id "A"] (list_of (var_named "A")) (list_of (var_named "I64")) "A") "I64"
+
+// --- Instance visibility ---
+//
+// An instance's visibility follows the same boundary as a declaration's:
+// package-private inside its own mote, `pub` everywhere. A hidden instance
+// is not a candidate at all, so `Copy` fails closed to affine and dispatch
+// reports "no instance" rather than silently using another mote's.
+
+def show_cls : NamePath := NamePath.mk [Identifier.id "Show"]
+
+def sample_instance (name : String) (vis : Visibility) : Instance :=
+    Instance.mk (Identifier.id name) show_cls ([] : List TypeConstraint) ([] : List Term)
+        vis ([] : List Param) ([] : List Def)
+
+def candidate_count (consumer : ModulePath) (owner : ModulePath) (vis : Visibility) : I64 :=
+    let sd : ScopeData := scope_data_add_instance scope_data_empty owner (sample_instance "showI64" vis) in
+    let s : Scope := {
+        module_id := consumer,
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    } in
+    List.length (scope_instance_candidates_in s show_cls)
+
+def consumer_mote_path : ModulePath := ModulePath.mk [Identifier.id "consumer", Identifier.id "child"]
+
+def sibling_mote_path : ModulePath := ModulePath.mk [Identifier.id "consumer", Identifier.id "widgets"]
+
+def other_mote_path : ModulePath := ModulePath.mk [Identifier.id "other", Identifier.id "instances"]
+
+#[test]
+def test_a_cross_mote_package_private_instance_is_hidden : Bool :=
+    I64.beq (candidate_count consumer_mote_path other_mote_path Visibility.package_private) 0
+
+#[test]
+def test_a_same_mote_package_private_instance_is_a_candidate : Bool :=
+    I64.beq (candidate_count consumer_mote_path sibling_mote_path Visibility.package_private) 1
+
+#[test]
+def test_a_pub_instance_crosses_motes : Bool :=
+    I64.beq (candidate_count consumer_mote_path other_mote_path Visibility.pub_) 1

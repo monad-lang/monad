@@ -31,7 +31,7 @@
 /// workaround — an empty import, to avoid naming `std.map`'s
 /// `Map`-class-instance exports — which that file's note explains was
 /// unnecessary.
-use std::map {BTreeMap, HashMap}
+use std::map {Map, BTreeMap, HashMap}
 use std::bench {Bench.now, Bench.report_since}
 
 // --- List: build via repeated cons (matches `scope_data_add_def`'s

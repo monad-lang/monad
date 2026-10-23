@@ -33,7 +33,7 @@ use json::json {
     Json.make_object, Json.get_str, Json.get_bool, Json.get_num, Json.get_num_i64,
     Json.get_object, Json.get_array, Json.object_get,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 // ─── Content blocks ───
 

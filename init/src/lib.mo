@@ -25,7 +25,7 @@ class From T A {
  def from (t: T): A
 }
 
-instance [BEq A] BEq (Option A) {
+pub instance [BEq A] BEq (Option A) {
 	def beq (oa ob : Option A) : Bool :=
 		match oa {
 			some a => match ob {

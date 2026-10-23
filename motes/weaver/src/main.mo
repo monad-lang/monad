@@ -53,6 +53,7 @@ use std::io {IO.write_stdout, IO.flush_stdout, IO.read_line, IO.write_stderr, IO
 use std::stream {StreamError}
 use std::path {Path, Path.of}
 use std::list {List.intercalate, List.length}
+use std::map {Map}
 
 /// The registry Weaver ships: all six built-ins (a coding agent's
 /// whole point is the write/edit pair; shuttle's own CLI ships only

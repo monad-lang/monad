@@ -56,9 +56,10 @@ went stale is prose. For the next doc pass:
 - `modules.md` — "There is also no package system … the self-hosted compiler
   does not read manifests at all" is false. `lang/src/mote.mo` reads `mote.toml`,
   and using a mote the manifest does not declare is an error.
-- `modules.md`, "Visibility" — `priv` is enforced by the self-hosted compiler
-  (not by `monad-rs check`), and package-private now warns when it crosses a
-  mote boundary.
+- `modules.md`, "Visibility" — both `priv` and the mote boundary are enforced
+  by BOTH compilers now (`monad-rs check` included), at every reference and on
+  every load path. The old claim that the Rust host does not gate `priv` is
+  false.
 - `bootstrap-host.md` — "**The self-hosted compiler has no mote support at
   all**" is false, and the section framing motes as a host-only feature needs
   rewriting around the workspace that ships in the repo.

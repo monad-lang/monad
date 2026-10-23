@@ -14,7 +14,7 @@ use weaver::settings {
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::policy {Mode}
 use shuttle::gate {Capability}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::process {process_id}
 
 // ── Option equality, field by field ─────────────────────────────────────

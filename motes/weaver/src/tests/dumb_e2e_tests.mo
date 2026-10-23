@@ -28,7 +28,7 @@ use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
 use json::json {Json, Json.parse, Json.get_array, Json.get_str, Json.make_str, Json.make_array, Json.make_object, Json.make_null, Json.to_string}
 use parsec::number {parse_i64}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::io {IO.file_exists}
 use std::path {Path.of}
 use std::process {process_id}

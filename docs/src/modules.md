@@ -320,8 +320,20 @@ priv def internal : I64 := 2       // visible only in this file
 def package_private : I64 := 3     // the default
 ```
 
-The default is package-private. `pub use module {*}` re-exports an import, which
-is how the `init` and `std` hubs work.
+The default is package-private: visible to every module of the declaring
+mote, and to no other mote. `priv` is narrower (that one module), `pub` is
+wider (everywhere). `pub use module {*}` re-exports an import, which is how
+the `init` and `std` hubs work.
+
+Both boundaries are **enforced** — by the self-hosted compiler and by
+`monad-rs check`, on every load path (`check`, `run`, `test`, `build`, the
+LSP). The rule is judged where a name is *used*, not where it is imported:
+if another mote reaches a declaration that is not `pub`, the file fails to
+load with `` `X` is not visible here ``, and the remedy is to mark the
+declaration `pub` (or to stop reaching it). Declarations a `derive` generates
+are `pub` automatically. Naming the declaration in a
+`use` line does not help. Instances follow the same rule, so a hidden
+instance is not a dictionary candidate in another mote.
 
 ## Unused Imports
 

@@ -108,9 +108,9 @@ pub struct BinTarget {
 /// (the def can be emitted with the FIELD's LLVM type as its return type).
 /// A one-line accessor whose return type IS the field's type costs nothing
 /// and sidesteps it.
-def BinTarget.target_path (b : BinTarget) : String := b.path
+pub def BinTarget.target_path (b : BinTarget) : String := b.path
 
-def BinTarget.target_name (b : BinTarget) : String := b.name
+pub def BinTarget.target_name (b : BinTarget) : String := b.name
 
 /// The mote's source root -- `<dir>/src`, always.
 ///
@@ -416,7 +416,7 @@ pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
 /// from being tested. The caller sees a shorter list, and the manifest
 /// is checked by the Rust host in CI anyway.
 #[partial]
-def Mote.workspace_members (dir : String) : IO (List String) := do {
+pub def Mote.workspace_members (dir : String) : IO (List String) := do {
     let found <- read_file_or_none (Path.path (mote_toml_in dir));
     match found {
         Option.none => return List.empty,
@@ -978,7 +978,7 @@ def path_option_is_dir (p : Option String) : IO Bool := do {
 ///
 /// `none`, never an error: a development checkout has no `~/.monad`, and
 /// resolution reads "no root" as "no candidates from this tier".
-def Mote.toolchain_root : IO (Option String) := do {
+pub def Mote.toolchain_root : IO (Option String) := do {
     let root <- IO.get_env "MONAD_ROOT";
     match non_empty_env root {
         Option.some r => return (Option.some r),

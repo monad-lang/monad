@@ -602,13 +602,20 @@ fn reify_def_value(
       } else {
         lams(param_terms, body)
       };
-      Ok(crate::term::def(
+      let mut generated = crate::term::def(
         NamePath::from(name_to_module_path(&name)),
         vec![],
         full_typ,
         full_body,
         vec![],
-      ))
+      );
+      // Macro-generated declarations are `pub`: a derive's output is the
+      // type's public API (its serializer, its `beq`, ...), and generated
+      // instances have to stay usable from other motes. Nothing can mark
+      // them later -- `MetaDecl.d_def`/`d_instance` carry no visibility --
+      // so expansion decides, and it decides public.
+      generated.vis = crate::term::Visibility::Pub;
+      Ok(generated)
     }
     other => Err(MacroError::Generic(format!(
       "meta: expected a MetaDecl.d_def value, got: {other:?}"
@@ -636,7 +643,7 @@ fn reify_decl_value(v: Value, inductives: &Map<NamePath, Inductive>) -> Result<D
           for mv in methods_list {
             impls.push(reify_def_value(mv, inductives)?);
           }
-          let ins = instance(
+          let mut ins = instance(
             None,
             NamePath::top(&class_name),
             vec![],
@@ -645,6 +652,8 @@ fn reify_decl_value(v: Value, inductives: &Map<NamePath, Inductive>) -> Result<D
             impls,
             vec![],
           );
+          // See `reify_def_value`: generated instances are `pub` too.
+          ins.vis = crate::term::Visibility::Pub;
           Ok(Decl::Ins(ins))
         }
         "d_error" => {

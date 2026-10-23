@@ -13,7 +13,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::gate {Capability}
 use shuttle::tools::shell {shell_run}
 use json::json {Json}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 /// A JSON-Schema object for one string parameter. The implementation
 /// deserializes its arguments via `ShellArgs` (`shell_args.mo`), so the

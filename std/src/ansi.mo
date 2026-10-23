@@ -43,7 +43,7 @@ pub def Color.beq (a b : Color) : Bool :=
         }
     }
 
-instance BEq Color {
+pub instance BEq Color {
     def beq (a b : Color) : Bool := Color.beq a b
 }
 

@@ -2,7 +2,7 @@
 // the `HashMap` carrier, and it is why naming `std.map`'s exports is
 // considered safe — see that file's comment for the claim, the runtimes
 // it was checked against, and why the import used to be empty.
-use std::map {BTreeMap, HashMap}
+use std::map {Map, BTreeMap, HashMap}
 
 /// Verify Map.empty and Map.insert type-check and evaluate.
 #[test]

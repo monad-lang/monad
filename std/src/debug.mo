@@ -10,15 +10,15 @@ class Debug A {
     def debug : A -> String
 }
 
-instance Debug String {
+pub instance Debug String {
     def debug (s : String) : String := String.concat "\"" (String.concat s "\"")
 }
 
-instance Debug I64 {
+pub instance Debug I64 {
     def debug (n : I64) : String := I64.to_string n
 }
 
-instance Debug Bool {
+pub instance Debug Bool {
     def debug (b : Bool) : String :=
         if b then "true" else "false"
 }

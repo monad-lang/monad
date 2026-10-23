@@ -76,7 +76,7 @@ use init::transformers {ResultT}
 use std::io {IO.read_stdin_exact, IO.write_stdout, IO.flush_stdout, IO.read_file, IO.write_file}
 use std::path {Path, Path.to_string}
 use std::process {process_id}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use json::json {
     Json, Json.parse, Json.to_string, Json.make_object, Json.make_num_int,
     Json.get_object, Json.get_num, Json.get_num_i64, Json.object_get,

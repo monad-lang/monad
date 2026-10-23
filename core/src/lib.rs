@@ -27,7 +27,7 @@ use crate::term::module::ParsedModule;
 use crate::term::module::module;
 use crate::term::module::{
   LoadedModules, default_module_source_files, default_modules, load_module_files,
-  load_module_from_text, load_module_from_text_at, module_warnings, module_warnings_with_loaded,
+  load_module_from_text, load_module_from_text_at, module_warnings,
 };
 use crate::term::{
   GlobalRef, InductiveVariant, ModulePath, NamePath, Named, SearchPaths, SourceContext, SourceRange,
@@ -1789,7 +1789,7 @@ fn check_one_source(
     Ok(()) => {
       let warnings = loaded
         .get_module(module_path)
-        .map(|module| module_warnings_with_loaded(module, &loaded, Some(path)))
+        .map(|module| module_warnings(module, Some(path)))
         .unwrap_or_default();
       (warnings, loaded)
     }

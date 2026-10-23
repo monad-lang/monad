@@ -39,7 +39,7 @@ use std::list {List.length}
 /// measured `BTreeMap` as ~25x *slower* than `List`+linear-scan for the
 /// small collection sizes typical of this self-hosted interpreter's own
 /// code. An environment stack is exactly that shape.
-type Env {
+pub type Env {
   env_nil,
   env_cons (v: Value) (rest: Env),
 }

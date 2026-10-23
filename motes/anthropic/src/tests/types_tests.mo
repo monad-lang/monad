@@ -5,7 +5,7 @@
 /// could agree with itself while diverging from the wire.
 use anthropic::types {Block, AnthropicMessage, AnthropicTool, MessagesRequest, AnthropicUsage, MessagesResponse}
 use json::json {Json}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 #[test]
 def test_request_minimal_shape_max_tokens_required : Bool :=

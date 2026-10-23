@@ -23,7 +23,7 @@ pub def String.length (s : String) : I64
 /// Scanning in place keeps it O(len) on both runtimes and allocates
 /// nothing. `len` past the end of `s` is clamped, not an error.
 #[native string_count_newlines]
-def String.count_newlines (s : String) (len : I64) : I64
+pub def String.count_newlines (s : String) (len : I64) : I64
 
 /// Number of CHARACTERS after the last `'\n'` among the first `len`
 /// bytes of `s` -- or, if that range holds no newline, the character
@@ -38,10 +38,10 @@ def String.count_newlines (s : String) (len : I64) : I64
 /// substring convention, and for the same reason, as
 /// `String.count_newlines` above.
 #[native string_trailing_chars]
-def String.trailing_chars (s : String) (len : I64) : I64
+pub def String.trailing_chars (s : String) (len : I64) : I64
 
 #[native string_to_lowercase]
-def String.to_lowercase (s : String) : String
+pub def String.to_lowercase (s : String) : String
 
 #[native string_slice]
 pub def String.slice (s : String) (start : I64) (len : I64) : String
@@ -53,7 +53,7 @@ pub def String.drop (n : I64) (s : String) : String
 pub def String.starts_with (prefix : String) (s : String) : Bool
 
 #[native string_get]
-def String.get (s : String) (i : I64) : Option U8
+pub def String.get (s : String) (i : I64) : Option U8
 
 /// NOT USABLE FOR SCANNING -- see AGENTS.md's `Char` item.
 /// `i` is a CHARACTER index, not a byte offset, and the native decodes
@@ -63,13 +63,13 @@ def String.get (s : String) (i : I64) : Option U8
 /// this reason. There is also nothing you can do with the `Char` you get
 /// back: `Char` has no operations and no `BEq` instance anywhere.
 #[native string_get_char]
-def String.get_char (s : String) (i : I64) : Option Char
+pub def String.get_char (s : String) (i : I64) : Option Char
 
 #[native string_to_list]
 pub def String.to_list (s : String) : List U8
 
 #[native string_from_list]
-def String.from_list (bytes : List U8) : String
+pub def String.from_list (bytes : List U8) : String
 
 /// UNWIRED -- declared here but absent from `exec_native`'s dispatch
 /// table (`core/src/core_native.rs`), so calling it fails at runtime.
@@ -122,7 +122,7 @@ def String.hash_selfhosted (s : String) : U64 :=
   String.hash_bytes_selfhosted (String.to_list s) 5381u64
 
 #[native string_hash]
-def String.hash (s : String) : U64
+pub def String.hash (s : String) : U64
 
 pub instance BEq String {
 	def beq (a b : String) : Bool := String.beq a b
@@ -160,7 +160,7 @@ def String.lt_selfhosted (a b : String) : Bool := bytes_lt_selfhosted (String.to
 def String.gt_selfhosted (a b : String) : Bool := bytes_gt_selfhosted (String.to_list a) (String.to_list b)
 
 #[native string_lt]
-def String.lt (a b : String) : Bool
+pub def String.lt (a b : String) : Bool
 
 #[native string_gt]
 pub def String.gt (a b : String) : Bool
@@ -174,15 +174,15 @@ pub instance ToString String {
 	def to_string (s : String) : String := s
 }
 
-instance Add String {
+pub instance Add String {
 	def add (a b : String) : String := String.concat a b
 }
 
-instance Append String {
+pub instance Append String {
   def append (a b : String) : String := String.concat a b
 }
 
-instance Hashable String {
+pub instance Hashable String {
   def hash (s : String) : U64 := String.hash s
 }
 
@@ -197,10 +197,10 @@ def List.reverse_append (bytes : List A) (acc : List A) : List A :=
 		cons b rest => List.reverse_append rest (List.cons b acc)
 	}
 
-def List.reverse (self : List A) : List A :=
+pub def List.reverse (self : List A) : List A :=
 	List.reverse_append self List.empty
 
-def List.singleton (a : A) : List A :=
+pub def List.singleton (a : A) : List A :=
 	List.cons a List.empty
 
 // ── List U8 helpers (pattern-only, concrete) ──
@@ -228,13 +228,13 @@ def list_contains (haystack : List U8) (needle : List U8) : Bool :=
 
 // ── Prefix / Suffix ──
 
-def String.ends_with (s : String) (suffix : String) : Bool :=
+pub def String.ends_with (s : String) (suffix : String) : Bool :=
 	String.starts_with (String.reverse suffix) (String.reverse s)
 
 // ── Repetition ──
 
 #[terminating]
-def String.repeat (s : String) (n : I64) : String :=
+pub def String.repeat (s : String) (n : I64) : String :=
 	if I64.beq n 0
 	then ""
 	else String.concat s (String.repeat s (n - 1))
@@ -246,7 +246,7 @@ def String.reverse (s : String) : String :=
 
 // ── Search ──
 
-def String.contains (s : String) (sub : String) : Bool :=
+pub def String.contains (s : String) (sub : String) : Bool :=
 	list_contains (String.to_list s) (String.to_list sub)
 
 // ── Trim ──
@@ -263,7 +263,7 @@ def trim_leading (bytes : List U8) : List U8 :=
 			else bytes
 	}
 
-def String.trim (s : String) : String :=
+pub def String.trim (s : String) : String :=
 	String.from_list (List.reverse (trim_leading (List.reverse (trim_leading (String.to_list s)))))
 
 /// Index of the last occurrence of `needle` in `haystack`, or -1.

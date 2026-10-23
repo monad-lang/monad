@@ -458,11 +458,11 @@ def Method.to_i64 (m : Method) : I64 :=
     Method.PATCH => 8
   }
 
-instance BEq Method {
+pub instance BEq Method {
   def beq (a b : Method) : Bool := I64.beq (Method.to_i64 a) (Method.to_i64 b)
 }
 
-instance Show Method {
+pub instance Show Method {
   def show (m : Method) : String :=
     match m {
       Method.GET => "GET",
@@ -483,11 +483,11 @@ def HttpVersion.to_i64 (v : HttpVersion) : I64 :=
     HttpVersion.http1_1 => 1
   }
 
-instance BEq HttpVersion {
+pub instance BEq HttpVersion {
   def beq (a b : HttpVersion) : Bool := I64.beq (HttpVersion.to_i64 a) (HttpVersion.to_i64 b)
 }
 
-instance Show HttpVersion {
+pub instance Show HttpVersion {
   def show (v : HttpVersion) : String :=
     match v {
       HttpVersion.http1_0 => "HTTP/1.0",

@@ -88,7 +88,7 @@
 /// report surfaces the consequence honestly: `Nat` binders show up
 /// under `value_used_after_move`, which is the correct answer for a
 /// linked structure moved twice.
-class Copy A {
+pub class Copy A {
     def copy : A -> Pair A A
 }
 
@@ -97,39 +97,39 @@ class Copy A {
 // Scalars, `Bool`, `Char`, `Unit` — Design B's *Copy policy for core
 // types*. These are the types whose duplication is a register move.
 
-instance Copy I64 {
+pub instance Copy I64 {
     def copy (x : I64) : Pair I64 I64 := Pair.pair x x
 }
 
-instance Copy U64 {
+pub instance Copy U64 {
     def copy (x : U64) : Pair U64 U64 := Pair.pair x x
 }
 
-instance Copy I32 {
+pub instance Copy I32 {
     def copy (x : I32) : Pair I32 I32 := Pair.pair x x
 }
 
-instance Copy U32 {
+pub instance Copy U32 {
     def copy (x : U32) : Pair U32 U32 := Pair.pair x x
 }
 
-instance Copy U8 {
+pub instance Copy U8 {
     def copy (x : U8) : Pair U8 U8 := Pair.pair x x
 }
 
-instance Copy F64 {
+pub instance Copy F64 {
     def copy (x : F64) : Pair F64 F64 := Pair.pair x x
 }
 
-instance Copy Bool {
+pub instance Copy Bool {
     def copy (x : Bool) : Pair Bool Bool := Pair.pair x x
 }
 
-instance Copy Char {
+pub instance Copy Char {
     def copy (x : Char) : Pair Char Char := Pair.pair x x
 }
 
-instance Copy Unit {
+pub instance Copy Unit {
     def copy (x : Unit) : Pair Unit Unit := Pair.pair x x
 }
 
@@ -137,6 +137,6 @@ instance Copy Unit {
 /// duplicating it copies the pointer, never the bytes. Every operation
 /// on a `String` is read-only, so the alias is unobservable. The bytes
 /// stay collector-owned; that is why this instance needs no free.
-instance Copy String {
+pub instance Copy String {
     def copy (x : String) : Pair String String := Pair.pair x x
 }

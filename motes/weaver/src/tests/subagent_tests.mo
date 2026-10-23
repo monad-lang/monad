@@ -12,7 +12,7 @@ use init::transformers {ResultT}
 use json::json {
     Json, Json.to_string, Json.make_object, Json.make_str, Json.make_num_int, Json.make_array,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::io {IO.write_file}
 use std::path {Path}
 use std::process {process_id, exec_cmd}

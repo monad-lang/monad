@@ -124,7 +124,7 @@ pub instance IndexedMonad Agent {
 /// bridge instance never dispatches (variable head); this concrete one
 /// is what `KnownInstances` actually finds -- see
 /// `examples/indexed_monads.mo`'s own `Monad (Protocol I I)`.
-instance Monad (Agent I I) {
+pub instance Monad (Agent I I) {
     def pure (a : A) : Agent I I A := Agent.pure a
     def bind (ma : Agent I I A) (f : A -> Agent I I B) : Agent I I B := Agent.bind ma f
 }

@@ -5,7 +5,7 @@
 use std::test {Test.write_fixture}
 use weaver::diff {Diff.lines, Diff.render, Diff.for_input}
 use json::json {Json, Json.make_str, Json.make_object}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::process {process_id}
 use std::list {List.length}
 

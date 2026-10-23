@@ -57,7 +57,7 @@
 /// pass (an IR diff before/after), not a rushed addition here.
 use init::copy {Copy}
 
-type Borrow A {
+pub type Borrow A {
     of (value : A)
 }
 
@@ -76,7 +76,7 @@ pub def Borrow.get (b : Borrow A) : A :=
 /// instance-admission rule to resolve at all — see that file's
 /// `instance_unconditionally_copy`, and `bench/src/affine_report.mo`
 /// for the measurement this instance existing was meant to produce.
-instance {A : Type} Copy (Borrow A) {
+pub instance {A : Type} Copy (Borrow A) {
     def copy (b : Borrow A) : Pair (Borrow A) (Borrow A) := Pair.pair b b
 }
 

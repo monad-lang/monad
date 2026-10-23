@@ -25,17 +25,17 @@ class [Show A] ShowDouble A {
 // --- Instances ---
 
 // Show I64 exists (no constraints)
-instance Show I64 {
+pub instance Show I64 {
   def show (a : I64) : String := I64.to_string a
 }
 
 // ShowWrap I64 requires Show I64 (which exists)
-instance ShowWrap I64 {
+pub instance ShowWrap I64 {
   def show_wrap (a : I64) : String := I64.to_string a
 }
 
 // ShowDouble I64 requires Show I64 (which exists)
-instance ShowDouble I64 {
+pub instance ShowDouble I64 {
   def show_double (a : I64) : String := I64.to_string a
 }
 

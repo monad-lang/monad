@@ -1738,111 +1738,166 @@ fn test_unused_def_warnings_five_cases() {
   assert!(unused_names.contains("unused def `call_it`"));
 }
 
-// ─── cross-mote `pub` warnings across a GROUPED directory ────────────
+// ─── The visibility boundary, judged at the gate ─────────────────────
 //
-// The target mote used to be resolved by joining the module path's first
-// segment onto the cwd -- `Path::new("http").join("mote.toml")` -- which is
-// true only for a mote that is a direct child of the cwd and named after
-// its directory. Every mote under `motes/` (and every planned `pkgs/`
-// library) therefore dropped out of the inventory with no warning, no note
-// and no count; `plans/implementations/cross-mote-pub-unenforced-for-motes.md`.
-// The resolution now goes through the workspace member list, so the target
-// side is manifest-derived exactly like `here`.
+// Enforcement lives in the `use`-completeness gate, not in a separate
+// import-declaration warning: the gate is the one place that already knows,
+// for every name a file REACHES, which module declares it. These rows pin
+// both ends -- a package-private declaration reached across a mote is
+// rejected, and the same reach from inside its own mote is not.
 
-/// A real source path inside a mote under the grouped `motes/` directory.
-/// The file need not exist -- `mote_name_of_file` walks up to a `mote.toml`.
-fn motes_src(mote: &str, rel: &str) -> std::path::PathBuf {
-  std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../motes"))
-    .join(mote)
-    .join("src")
-    .join(rel)
-}
-
-/// `import_src` as a real file at `file`, importing `target_src` registered
-/// at `target_path`. The importer's own module is never registered, because
-/// the check asks about the TARGET only.
-fn cross_mote_warnings(
+/// Run the gate on `import_src` (module `consumer`, whose manifest-declared
+/// mote is `consumer_mote`) against a world holding the target.
+fn gate_findings(
   import_src: &str,
+  consumer: &[&str],
+  consumer_mote: Option<&str>,
   target_src: &str,
   target_path: &[&str],
-  file: &std::path::PathBuf,
-) -> Vec<Diagnostic> {
+) -> Vec<UnimportedName> {
   let mut loaded = default_modules().unwrap();
-  loaded.add_module(module_at(
-    ModulePath::new(target_path.iter().map(|s| id(*s)).collect()),
-    target_src,
-  ));
-  cross_mote_package_private_warnings(
-    &module_at(ModulePath::top("importer"), import_src),
-    &loaded,
-    Some(file),
-  )
+  let target = ModulePath::new(target_path.iter().map(|s| id(*s)).collect());
+  loaded.add_module(module_at(target, target_src));
+  let parsed = parse_file(import_src.into()).unwrap();
+  let consumer = ModulePath::new(consumer.iter().map(|s| id(*s)).collect());
+  unimported_names_from(&consumer, consumer_mote, &parsed.decls, &loaded)
 }
 
-/// The headline case. `motes/moose` imports `motes/http`, whose manifest is
-/// at `motes/http/mote.toml` -- not at `<cwd>/http/mote.toml`, which is
-/// where the old rule looked and, from a cargo test binary's cwd, never
-/// found. A package-private `Body` must be inventoried.
+fn only_hidden(findings: &[UnimportedName]) -> &UnimportedName {
+  assert_eq!(findings.len(), 1, "unexpected: {findings:?}");
+  assert_eq!(findings[0].kind, FindingKind::Hidden, "{findings:?}");
+  &findings[0]
+}
+
+/// The headline case: `http`'s package-private `Body`, imported by another
+/// mote. The message names the declaration and its owner, and offers the
+/// remedy (`mark it pub`).
 #[test]
-fn test_cross_mote_warning_resolves_a_grouped_mote() {
-  let warnings = cross_mote_warnings(
-    "use http::types {Body}\n\ndef f : I64 := 0\n",
+fn test_cross_mote_package_private_is_hidden() {
+  let findings = gate_findings(
+    "use http::types {Body}\n\ndef f (b : Body) : I64 := 0\n",
+    &["moose", "client"],
+    Some("moose"),
     "struct Body { bytes : List U8 }\n",
     &["http", "types"],
-    &motes_src("moose", "client.mo"),
   );
-  assert_eq!(warnings.len(), 1, "unexpected: {warnings:?}");
-  assert!(warnings[0].message.contains("`Body`"), "{:?}", warnings[0]);
-  assert!(
-    warnings[0].message.contains("from mote `http`"),
-    "{:?}",
-    warnings[0]
-  );
+  let finding = only_hidden(&findings);
+  let message = finding.to_string();
+  assert!(message.contains("`Body` is not visible here"), "{message}");
+  assert!(message.contains("not marked `pub`"), "{message}");
+  assert!(message.contains("mote `http`"), "{message}");
 }
 
-/// The other direction: the same edge with the declaration marked `pub` is
-/// silent, so the row above cannot pass by warning unconditionally.
+/// The other direction: the same edge with the declaration `pub` is clean,
+/// so the row above cannot pass by reporting unconditionally.
 #[test]
-fn test_cross_mote_warning_is_silent_for_a_pub_declaration() {
-  let warnings = cross_mote_warnings(
+fn test_cross_mote_pub_declaration_is_allowed() {
+  let findings = gate_findings(
     "use http::types {Body}\n\ndef f : I64 := 0\n",
+    &["moose", "client"],
+    Some("moose"),
     "pub struct Body { bytes : List U8 }\n",
     &["http", "types"],
-    &motes_src("moose", "client.mo"),
   );
-  assert!(warnings.is_empty(), "unexpected: {warnings:?}");
+  assert!(findings.is_empty(), "unexpected: {findings:?}");
 }
 
-/// A mote that IS a direct child of the repository root still warns -- the
-/// case the old rule handled, pinned so the workspace walk cannot trade one
-/// blind spot for another.
+/// Package-private means the MOTE, not the file: a sibling module of the
+/// declaring mote sees it.
 #[test]
-fn test_cross_mote_warning_still_resolves_a_root_level_mote() {
-  let warnings = cross_mote_warnings(
-    "use std::io {Socket}\n\ndef f : I64 := 0\n",
-    "struct Socket { fd : I64 }\n",
-    &["std", "io"],
-    &init_src("helper.mo"),
+fn test_same_mote_package_private_is_visible() {
+  let findings = gate_findings(
+    "use http::routes {Body}\n\ndef f : I64 := 0\n",
+    &["http", "client"],
+    Some("http"),
+    "struct Body { bytes : List U8 }\n",
+    &["http", "types"],
   );
-  assert_eq!(warnings.len(), 1, "unexpected: {warnings:?}");
+  assert!(findings.is_empty(), "unexpected: {findings:?}");
+}
+
+/// `priv` is narrower than package-private, and says so.
+#[test]
+fn test_priv_is_hidden_from_a_sibling_module() {
+  let findings = gate_findings(
+    "use http::types {Body}\n\ndef f (b : Body) : I64 := 0\n",
+    &["http", "client"],
+    Some("http"),
+    "priv struct Body { bytes : List U8 }\n",
+    &["http", "types"],
+  );
+  let finding = only_hidden(&findings);
   assert!(
-    warnings[0].message.contains("from mote `std`"),
-    "{:?}",
-    warnings[0]
+    finding.to_string().contains("is declared `priv`"),
+    "{}",
+    finding
   );
 }
 
-/// A name no manifest declares is not a mote, so no boundary is crossed --
-/// `use io {IO}` names a MODULE of the importer's own mote, and importing
-/// `std::io`'s `Socket` from a mote named `io` is a self-import, not an
-/// edge. Without this the set lookup would make every first segment a mote.
+/// A glob crosses the boundary like any other reach: selecting everything
+/// does not make a package-private declaration public.
 #[test]
-fn test_cross_mote_warning_ignores_a_name_that_is_no_mote() {
-  let warnings = cross_mote_warnings(
-    "use notamote::types {Thing}\n\ndef f : I64 := 0\n",
-    "struct Thing { x : I64 }\n",
-    &["notamote", "types"],
-    &motes_src("moose", "client.mo"),
+fn test_cross_mote_glob_of_a_package_private_is_hidden() {
+  let findings = gate_findings(
+    "use http::types {*}\n\ndef f (b : Body) : I64 := 0\n",
+    &["moose", "client"],
+    Some("moose"),
+    "struct Body { bytes : List U8 }\n",
+    &["http", "types"],
   );
-  assert!(warnings.is_empty(), "unexpected: {warnings:?}");
+  only_hidden(&findings);
+}
+
+/// A class method inherits its class's visibility; method references are
+/// indexed under the qualified spelling so the boundary can judge them.
+#[test]
+fn test_a_class_method_inherits_the_class_visibility() {
+  let findings = gate_findings(
+    "use http::types {Response}\n\ndef f (r : Response I64) : I64 := Response.status r\n",
+    &["moose", "client"],
+    Some("moose"),
+    "class Response A { def status (a : A) : I64 := 0 }\n",
+    &["http", "types"],
+  );
+  // Both the class and its method are hidden; the METHOD row is the one
+  // this test exists for (methods were invisible to the gate before).
+  assert!(
+    findings
+      .iter()
+      .any(|f| f.name.to_string() == "Response.status"),
+    "unexpected: {findings:?}"
+  );
+}
+
+/// An `open` of another mote's package-private member is caught where it is
+/// written, because the reference judges skip opened names.
+#[test]
+fn test_a_cross_mote_open_of_a_package_private_is_hidden() {
+  let findings = gate_findings(
+    "open MetaParam {meta_param}\n\ndef f : I64 := 0\n",
+    &["serde", "derive"],
+    Some("serde"),
+    "type MetaParam { meta_param (name : String) }\n",
+    &["init", "meta"],
+  );
+  let finding = only_hidden(&findings);
+  assert!(
+    finding.name.to_string().contains("meta_param"),
+    "{}",
+    finding
+  );
+}
+
+/// A script outside any mote has no package boundary to cross (the same
+/// answer `monad-rs check` gives for a bare file).
+#[test]
+fn test_no_consumer_mote_means_no_boundary() {
+  let findings = gate_findings(
+    "use http::types {Body}\n\ndef f : I64 := 0\n",
+    &["script"],
+    None,
+    "struct Body { bytes : List U8 }\n",
+    &["http", "types"],
+  );
+  assert!(findings.is_empty(), "unexpected: {findings:?}");
 }

@@ -54,7 +54,7 @@ pub def input_state (value : String) (placeholder : String) : InputState :=
 def InputState.beq (a b : InputState) : Bool :=
     a.value == b.value && a.cursor == b.cursor && a.placeholder == b.placeholder
 
-instance BEq InputState {
+pub instance BEq InputState {
     def beq (a b : InputState) : Bool := InputState.beq a b
 }
 
@@ -169,7 +169,7 @@ struct InputLine {
 pub def InputLine.beq (a b : InputLine) : Bool :=
     a.start == b.start && a.len == b.len
 
-instance BEq InputLine {
+pub instance BEq InputLine {
     def beq (a b : InputLine) : Bool := InputLine.beq a b
 }
 

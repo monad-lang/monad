@@ -4,7 +4,7 @@
 // file and are listed here like any other import — see std/map_tests.mo's
 // note for the instance/dictionary-resolution claim that used to keep
 // `std::map`'s import empty.
-use std::map {BTreeMap, BTreeMap.to_list, empty}
+use std::map {Map, BTreeMap, BTreeMap.to_list, empty}
 use std::list {List.intercalate, Show}
 use init::string {}
 use init::number {}
@@ -58,7 +58,7 @@ def Json.Number.beq (a b : Json.Number) : Bool :=
     }
   }
 
-instance BEq Json.Number {
+pub instance BEq Json.Number {
   def beq (a b : Json.Number) : Bool := Json.Number.beq a b
 }
 
@@ -78,7 +78,7 @@ pub type Json {
 // `A`'s BEq instance at runtime — a pre-existing evaluator limitation (see the
 // similar note on `resolve_class_method_instance` in std/map.mo's HashMap instance).
 // Concrete (non-generic) BEq instances, e.g. BEq I64/String/Bool used below, are fine.
-def Json.beq (a b : Json) : Bool :=
+pub def Json.beq (a b : Json) : Bool :=
   match a {
     null => match b {
       null => true,
@@ -141,12 +141,12 @@ def Json.pairs_beq (a b : List (Pair String Json)) : Bool :=
 def Json.object_beq (a b : BTreeMap String Json) : Bool :=
   Json.pairs_beq (BTreeMap.to_list a) (BTreeMap.to_list b)
 
-instance BEq Json {
+pub instance BEq Json {
   def beq (a b : Json) : Bool := Json.beq a b
 }
 
 /// Explicit BEq instance for BTreeMap String Json
-instance BEq (BTreeMap String Json) {
+pub instance BEq (BTreeMap String Json) {
   def beq (a b : BTreeMap String Json) : Bool := Json.object_beq a b
 }
 
@@ -169,7 +169,7 @@ def Json.ParseError.beq (a b : Json.ParseError) : Bool :=
     _ => false,
   }
 
-instance BEq Json.ParseError {
+pub instance BEq Json.ParseError {
   def beq (a b : Json.ParseError) : Bool := Json.ParseError.beq a b
 }
 
@@ -626,11 +626,11 @@ def Json.object_to_string (o : BTreeMap String Json) : String :=
 
 // ─── Show instances ───
 
-instance Show Json.Number {
+pub instance Show Json.Number {
   def show (n : Json.Number) : String := Json.Number.to_string n
 }
 
-instance Show Json {
+pub instance Show Json {
   def show (j : Json) : String := Json.to_string j
 }
 
@@ -727,23 +727,23 @@ class Json.Deserializer (D: Type) {
   def deserialize (json: Json) : Result String D
 }
 
-instance Json.Serializer Bool {
+pub instance Json.Serializer Bool {
   def serialize (b: Bool) : Json := Json.make_bool b
 }
 
-instance Json.Serializer I64 {
+pub instance Json.Serializer I64 {
   def serialize (n: I64) : Json := Json.make_num_int n
 }
 
-instance Json.Serializer String {
+pub instance Json.Serializer String {
   def serialize (s: String) : Json := Json.make_str s
 }
 
-instance Json.Deserializer Bool {
+pub instance Json.Deserializer Bool {
   def deserialize (j: Json) : Result String Bool := Json.get_bool j
 }
 
-instance Json.Deserializer String {
+pub instance Json.Deserializer String {
   def deserialize (j: Json) : Result String String := Json.get_str j
 }
 
@@ -759,14 +759,14 @@ pub def Json.get_num_i64 (r : Result String Json.Number) : Result String I64 :=
     err e => err e
   }
 
-instance Json.Deserializer I64 {
+pub instance Json.Deserializer I64 {
   def deserialize (j: Json) : Result String I64 := Json.get_num_i64 (Json.get_num j)
 }
 
 /// List serialization: a real generic instance, not a hand-written helper — see NOTE
 /// above. `A`'s dictionary is forward-inferable from `xs : List A`, so
 /// `Json.Serializer.serialize` dispatches correctly both here and at call sites.
-instance [Json.Serializer A] Json.Serializer (List A) {
+pub instance [Json.Serializer A] Json.Serializer (List A) {
   def serialize (xs: List A) : Json :=
     Json.make_array (List.map Json.Serializer.serialize xs)
 }
@@ -829,7 +829,7 @@ pub struct Person {
   age : I64,
 }
 
-instance Json.Serializer Person {
+pub instance Json.Serializer Person {
   def serialize (p : Person) : Json :=
     match p {
       mk name age =>
@@ -864,7 +864,7 @@ def Person.deserialize_with_name (obj : BTreeMap String Json) (name : String) : 
     err e => err e
   }
 
-instance Json.Deserializer Person {
+pub instance Json.Deserializer Person {
   def deserialize (j: Json) : Result String Person :=
     match Json.get_object j {
       ok obj =>

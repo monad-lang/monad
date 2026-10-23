@@ -15,7 +15,7 @@
 /// mechanism needs.
 use serde::format {Serializer, Deserializer}
 use serde::derive {derive_serialize_meta, derive_deserialize_meta}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use json::json {
     Json, Json.make_null, Json.make_bool, Json.make_num_int, Json.make_str,
     Json.make_array, Json.make_object, Json.get_bool, Json.get_num,
@@ -33,7 +33,7 @@ def json_pairs_to_object (fields : List (Pair String Json)) (acc : BTreeMap Stri
             }
     }
 
-instance Serializer Json {
+pub instance Serializer Json {
     def ser_null : Json := Json.make_null
     def ser_bool (b : Bool) : Json := Json.make_bool b
     def ser_int (i : I64) : Json := Json.make_num_int i
@@ -43,7 +43,7 @@ instance Serializer Json {
         Json.make_object (json_pairs_to_object fields BTreeMap.empty)
 }
 
-instance Deserializer Json {
+pub instance Deserializer Json {
     def de_is_null (d : Json) : Bool :=
         match d { Json.null => true, _ => false }
     def de_get_bool (d : Json) : Result String Bool := Json.get_bool d

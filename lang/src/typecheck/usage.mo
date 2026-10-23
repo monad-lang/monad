@@ -47,6 +47,7 @@
 /// 3 (drop points), and it is noted here because this module is where
 /// someone will look for it first.
 use lib::types {
+  Similar,
   Binder, Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive, Literal,
   Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope, ScopeData,
   SortLevel, StructLitField, Term, Visibility, binder_anon, binder_binder, binder_explicit,

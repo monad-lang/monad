@@ -41,7 +41,7 @@ use lib::scope {struct_fields_to_params}
 use lang::types {
   AttrArg, Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
   NamePath, Param, Struct, Term, TypeConstraint, binder_anon, binder_named, i64, if_,
-  many, match_, named, no_attrs, num, package_private, sentinel, show_name_path, str,
+  many, match_, named, no_attrs, num, package_private, pub_, sentinel, show_name_path, str,
   unnamed,
 }
 
@@ -822,7 +822,7 @@ def reify_d_def (args : List Value) : Result String Def :=
                                                                                 (NamePath.mk (List.cons (Identifier.id name) List.empty))
                                                                                 (build_pi_chain params ret_term)
                                                                                 (build_lam_chain params body_term)
-                                                                                no_constraints no_attrs Visibility.package_private List.empty),
+                                                                                no_constraints no_attrs Visibility.pub_ List.empty),
                                                                     },
                                                             },
                                                     },
@@ -865,7 +865,7 @@ def reify_d_instance (args : List Value) : Result String Decl :=
                                                                 (NamePath.mk (List.cons (Identifier.id class_name) List.empty))
                                                                 no_constraints
                                                                 (List.cons target_term List.empty)
-                                                                Visibility.package_private
+                                                                Visibility.pub_
                                                                 List.empty
                                                                 defs)),
                                                     },

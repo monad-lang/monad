@@ -11,7 +11,7 @@ use std::io {IO.write_stdout, IO.write_stderr, IO.current_time}
 use std::path {Path}
 use std::bytebuf {ByteBuf, ByteBuf.of_string, ByteBuf.free}
 use std::stream {FdStream, FdStream.open_file, FdStream.append_mode, Stream}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use json::json {Json, Json.make_object, Json.make_str, Json.make_num_int, Json.to_string}
 use log::level {LogLevel}
 

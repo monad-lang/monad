@@ -34,7 +34,7 @@ use weaver::store {
 }
 use std::path {Path, Path.of, Path.parent}
 use std::io {IO.is_dir, IO.current_time_nano}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::list {List.intercalate}
 use weaver::procs {ProcEntry, ProcEntry.line, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}

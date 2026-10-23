@@ -31,14 +31,14 @@ def test_mutual_class_bridge_with_no_concrete_instance_fails_fast : IO Bool := d
     let src_path := output_dir ++ "/mutual_class_bridge.mo";
     let source := r#"class Foo A { def foo : A -> A -> A }
 class Bar A B C { def bar : A -> B -> C }
-instance [Bar A A A] Foo A { def foo (a b : A) : A := Bar.bar a b }
-instance [Foo A] Bar A A A { def bar (a b : A) : A := Foo.foo a b }
+pub instance [Bar A A A] Foo A { def foo (a b : A) : A := Bar.bar a b }
+pub instance [Foo A] Bar A A A { def bar (a b : A) : A := Foo.foo a b }
 class Pump (W : Type -> Type) {
     def unwrap (w : W A) : A
     def pump (f : W A -> B) (w : W A) : W B
 }
 type Box A { box (a : A) }
-instance Pump Box {
+pub instance Pump Box {
     def unwrap (b : Box A) : A := match b { box a => a }
     def pump (f : Box A -> B) (b : Box A) : Box B := match b { box a => Box.box (f b) }
 }

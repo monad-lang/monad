@@ -15,7 +15,7 @@
 /// `HashMap` is already this codebase's own preferred `Map` instance
 /// (see `filter_reachable_decls`'s own doc comment on why), so it's the
 /// correct default here too.
-class Map (M: (K : Type) -> (V : Type) -> Type := HashMap) {
+pub class Map (M: (K : Type) -> (V : Type) -> Type := HashMap) {
   def empty : M K V
   def insert (key: K) (val: V) (m: M K V) : M K V
   def lookup (key: K) (m: M K V) : Option V
@@ -33,7 +33,7 @@ def BTreeMap.beq [BEq K, BEq V] (a b : BTreeMap K V) : Bool :=
     r && Map.lookup ka b == some va
   ) true a
 
-instance [BEq K, BEq V] BEq BTreeMap K V {
+pub instance [BEq K, BEq V] BEq BTreeMap K V {
   def beq (a b : BTreeMap K V) : Bool := BTreeMap.beq a b
 }
 
@@ -134,7 +134,7 @@ def BTreeMap.fold (f: A -> K -> V -> A) (init: A) (m: BTreeMap K V) : A :=
   }
 
 /// Convert the map to a list of (key, value) pairs in ascending key order.
-def BTreeMap.to_list {K V : Type} (m: BTreeMap K V) : List (Pair K V) :=
+pub def BTreeMap.to_list {K V : Type} (m: BTreeMap K V) : List (Pair K V) :=
   BTreeMap.to_list_asc m (List.empty : List (Pair K V))
 
 def BTreeMap.to_list_asc (m: BTreeMap K V) (acc: List (Pair K V)) : List (Pair K V) :=
@@ -202,7 +202,7 @@ def BTreeMap.delete_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) 
     BTreeMap.empty
 
 /// Instance: BTreeMap implements the Map type class.
-instance [BOrd K] Map BTreeMap {
+pub instance [BOrd K] Map BTreeMap {
   def empty : BTreeMap K V := BTreeMap.empty
 
   // `with_node`'s callback params are explicitly typed (`left`/`right :
@@ -284,7 +284,7 @@ instance [BOrd K] Map BTreeMap {
 /// per bucket, and `bucket_lookup_eq` scans a bucket LINEARLY. That made
 /// every lookup ~130 key comparisons on the hottest paths in the
 /// backend. At 256 the same maps sit at ~16 per bucket.
-def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 256u64
+pub def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 256u64
 
 /// One level of 16-way dispatch, generic in what a slot holds.
 ///
@@ -292,7 +292,7 @@ def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 256u64
 /// `Bucket16 (Bucket16 (List (Pair K V)))`, which is 256 buckets built
 /// from ONE 16-arm dispatch written once, rather than a 256-field
 /// constructor and two 256-arm chains.
-type Bucket16 P {
+pub type Bucket16 P {
   buckets (
     b0 b1 b2 b3 b4 b5 b6 b7
     b8 b9 b10 b11 b12 b13 b14 b15
@@ -300,7 +300,7 @@ type Bucket16 P {
 }
 
 /// Hash map type: 256-bucket chaining hash table, as 16x16.
-type HashMap K V {
+pub type HashMap K V {
   map (Bucket16 (Bucket16 (List (Pair K V))))
 }
 
@@ -331,7 +331,7 @@ def Bucket16.map2 {P : Type} (f : P -> P -> P) (x : Bucket16 P) (y : Bucket16 P)
   }
 
 /// 16 empty buckets.
-def HashMap.empty_buckets {K V : Type} : Bucket16 (Bucket16 (List (Pair K V))) :=
+pub def HashMap.empty_buckets {K V : Type} : Bucket16 (Bucket16 (List (Pair K V))) :=
   Bucket16.replicate (Bucket16.replicate (List.empty : List (Pair K V)))
 
 /// One 16-way step per level. The index is a flat 0-255 so that every
@@ -380,10 +380,10 @@ def Bucket16.set {P : Type} (b : Bucket16 P) (idx : U64) (v : P) : Bucket16 P :=
       Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 v
   }
 
-def HashMap.get_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) : List (Pair K V) :=
+pub def HashMap.get_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) : List (Pair K V) :=
   Bucket16.get (Bucket16.get b (U64.div idx 16u64)) (U64.mod idx 16u64)
 
-def HashMap.set_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) (new_val: List (Pair K V)) : Bucket16 (Bucket16 (List (Pair K V))) :=
+pub def HashMap.set_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) (new_val: List (Pair K V)) : Bucket16 (Bucket16 (List (Pair K V))) :=
   let hi : U64 := U64.div idx 16u64 in
   let lo : U64 := U64.mod idx 16u64 in
   Bucket16.set b hi (Bucket16.set (Bucket16.get b hi) lo new_val)
@@ -393,7 +393,7 @@ def HashMap.set_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (
 /// The evaluator's resolve_class_method_instance picks the first registered instance
 /// (BOrd I64 is correctly first for I64 keys, but BEq Bool is first for BEq, producing
 /// wrong instance when abstract K is concrete I64 at runtime).
-instance [Hashable K, BOrd K] Map HashMap {
+pub instance [Hashable K, BOrd K] Map HashMap {
   def empty : HashMap K V := HashMap.map HashMap.empty_buckets
 
   #[terminating]
@@ -494,7 +494,7 @@ def HashMap.bucket_lookup_eq {K V : Type} (eq: K -> K -> Bool) (key: K) (bucket:
 /// `lang/codegen/util.mo`, where they used to live) and `lang/scope.mo`'s
 /// `alias_map_*`.
 #[terminating]
-def HashMap.bucket_lookup_str {V : Type} (key: String) (bucket: List (Pair String V)) : Option V :=
+pub def HashMap.bucket_lookup_str {V : Type} (key: String) (bucket: List (Pair String V)) : Option V :=
   match bucket {
     List.empty => Option.none,
     List.cons pair rest =>
@@ -506,7 +506,7 @@ def HashMap.bucket_lookup_str {V : Type} (key: String) (bucket: List (Pair Strin
   }
 
 #[terminating]
-def HashMap.bucket_insert_str {V : Type} (key: String) (val: V) (bucket: List (Pair String V)) : List (Pair String V) :=
+pub def HashMap.bucket_insert_str {V : Type} (key: String) (val: V) (bucket: List (Pair String V)) : List (Pair String V) :=
   match bucket {
     List.empty => List.cons (Pair.pair key val) List.empty,
     List.cons pair rest =>
@@ -568,7 +568,7 @@ def HashMap.concat_all {K V : Type} (lists : List (List (Pair K V))) : List (Pai
 /// `BTreeMap.to_list`, in NO particular order (buckets are visited
 /// 0..15, each bucket's own chain in insertion order, which has no
 /// relationship to key order for a hash table).
-def HashMap.to_list {K V : Type} (m: HashMap K V) : List (Pair K V) :=
+pub def HashMap.to_list {K V : Type} (m: HashMap K V) : List (Pair K V) :=
   match m {
     HashMap.map outer => HashMap.concat_inners (Bucket16.to_list outer)
   }
@@ -603,7 +603,7 @@ def HashMap.inners_all_empty {K V : Type} (inners : List (Bucket16 (List (Pair K
       else false
   }
 
-def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
+pub def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
   match m {
     HashMap.map outer => HashMap.inners_all_empty (Bucket16.to_list outer)
   }
@@ -668,7 +668,7 @@ def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
 /// re-walking/reallocating a bucket on every single insert; this does a
 /// fixed 16 bucket-pair appends regardless of N) — see AGENTS.md's
 /// performance section for the measured before/after.
-def HashMap.merge_buckets {K V : Type} (m1: HashMap K V) (m2: HashMap K V) : HashMap K V :=
+pub def HashMap.merge_buckets {K V : Type} (m1: HashMap K V) (m2: HashMap K V) : HashMap K V :=
   match m1 {
     HashMap.map a =>
       match m2 {

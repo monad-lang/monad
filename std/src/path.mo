@@ -63,7 +63,7 @@ pub def Path.is_absolute (p : Path) : Bool :=
 /// deliberate -- a rule kept in one place is inherited by callers that
 /// do not exist yet, which is what `Path.join`'s old comment was
 /// asking for.
-def raw_path_join (a : String) (b : String) : String :=
+pub def raw_path_join (a : String) (b : String) : String :=
     if String.beq a "" then b
     else if String.beq b "" then a
     else if raw_path_is_absolute b then b
@@ -92,7 +92,7 @@ pub def Path.with_suffix (p : Path) (suffix : String) : Path :=
 /// `lang/src/module.mo`'s `extract_directory` delegates here rather than
 /// keeping its own copy, exactly as `path_join` delegates to
 /// `raw_path_join`.
-def raw_parent_dir (s : String) : String :=
+pub def raw_parent_dir (s : String) : String :=
     let last_slash : I64 := raw_find_last_slash s (String.length s) in
     if I64.lt last_slash 0
     then ""
@@ -139,7 +139,7 @@ pub def Path.file_name (p : Path) : String :=
 pub def Path.beq (a b : Path) : Bool :=
     String.beq (Path.to_string a) (Path.to_string b)
 
-instance BEq Path {
+pub instance BEq Path {
     def beq (a b : Path) : Bool := Path.beq a b
 }
 

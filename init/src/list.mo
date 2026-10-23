@@ -2,7 +2,7 @@
 // (init/prelude.mo). Re-exported ambiently via init/lib.mo.
 
 /// Get the element at index
-def List.get (index : I64) (l : List A) : Option A :=
+pub def List.get (index : I64) (l : List A) : Option A :=
 	// TODO fails to parse properly
 	let b := index == 0 in
 	if b

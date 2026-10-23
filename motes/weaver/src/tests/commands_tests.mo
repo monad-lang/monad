@@ -22,7 +22,7 @@ use weaver::store {StoreState, TLine, TLine.user_line, Store.new_session, Store.
 use std::path {Path, Path.of, Path.to_string}
 use std::process {exec_cmd}
 use json::json {Json}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::process {process_id}
 
 // ── The offline state (main.mo's shape, per-command parameterized) ──────

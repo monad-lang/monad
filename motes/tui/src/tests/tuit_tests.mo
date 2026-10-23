@@ -42,7 +42,7 @@ def mock_bind_run {A : Type} {B : Type} (f : A -> MockM B) (log : List String) (
         MockM.mock_m log2 b => MockM.mock_m (List.append log log2) b
     }
 
-instance Monad MockM {
+pub instance Monad MockM {
     def pure (a : A) : MockM A := mock_pure a
     def bind (ma : MockM A) (f : A -> MockM B) : MockM B :=
         match ma {

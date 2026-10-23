@@ -11,7 +11,7 @@ use lib::scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
 
 // --- Similar instances for scope types ---
 
-instance Similar Infix {
+pub instance Similar Infix {
     def similar (a : Infix) (b : Infix) : Bool :=
         match a {
             mk op1 nm1 => match b {
@@ -20,7 +20,7 @@ instance Similar Infix {
         }
 }
 
-instance Similar InstanceKey {
+pub instance Similar InstanceKey {
     def similar (a : InstanceKey) (b : InstanceKey) : Bool :=
         match a {
             mk cls1 cons1 args1 => match b {
@@ -30,7 +30,7 @@ instance Similar InstanceKey {
         }
 }
 
-instance Similar ScopeDef {
+pub instance Similar ScopeDef {
     def similar (a : ScopeDef) (b : ScopeDef) : Bool :=
         match a {
             mk nm1 mod1 sig1 body1 vis1 => match b {
@@ -42,7 +42,7 @@ instance Similar ScopeDef {
         }
 }
 
-instance Similar ScopeClassDef {
+pub instance Similar ScopeClassDef {
     def similar (a : ScopeClassDef) (b : ScopeClassDef) : Bool :=
         match a {
             mk cls1 fn1 id1 sig1 => match b {
@@ -53,7 +53,7 @@ instance Similar ScopeClassDef {
         }
 }
 
-instance Similar ScopeInstance {
+pub instance Similar ScopeInstance {
     def similar (a : ScopeInstance) (b : ScopeInstance) : Bool :=
         match a {
             mk cn1 ins1 => match b {
@@ -62,7 +62,7 @@ instance Similar ScopeInstance {
         }
 }
 
-instance Similar ScopeConflict {
+pub instance Similar ScopeConflict {
     def similar (a : ScopeConflict) (b : ScopeConflict) : Bool :=
         match a {
             mk nm1 cands1 => match b {
@@ -71,7 +71,7 @@ instance Similar ScopeConflict {
         }
 }
 
-instance Similar LocalVar {
+pub instance Similar LocalVar {
     def similar (a : LocalVar) (b : LocalVar) : Bool :=
         match a {
             mk nm1 typ1 mult1 => match b {
@@ -82,7 +82,7 @@ instance Similar LocalVar {
         }
 }
 
-instance Similar Module {
+pub instance Similar Module {
     def similar (a : Module) (b : Module) : Bool :=
         match a {
             mk p1 ind1 defs1 infs1 ins1 => match b {
@@ -91,7 +91,7 @@ instance Similar Module {
         }
 }
 
-instance Similar ModuleRegistry {
+pub instance Similar ModuleRegistry {
     def similar (a : ModuleRegistry) (b : ModuleRegistry) : Bool :=
         match a {
             mk mods1 => match b {

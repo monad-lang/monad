@@ -230,7 +230,7 @@ def export_roots_go (decl_list : List Decl) (acc : List String) : List String :=
 /// `wasm-ld --export=` can only export a symbol under its own name, which
 /// is why `add_export_shims` (emit.mo) emits a thunk per export.
 #[partial]
-def export_names (decl_list : List Decl) : List String :=
+pub def export_names (decl_list : List Decl) : List String :=
     List.reverse (export_names_go decl_list List.empty)
 
 #[partial]
@@ -333,7 +333,7 @@ def reachable_defs_from (defs_map : HashMap String Def) (worklist : List String)
     }
 
 #[partial]
-def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {
+pub def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {
     List.empty => acc,
     List.cons mod_ rest =>
         let mod_decls := mod_.decl_list in

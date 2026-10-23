@@ -27,7 +27,7 @@ def id_eq (a : Identifier) (b : Identifier) : Bool :=
         },
     }
 
-instance BEq Identifier {
+pub instance BEq Identifier {
     def beq (a b : Identifier) : Bool := id_eq a b
 }
 
@@ -115,7 +115,7 @@ def attr_arg_eq (a : AttrArg) (b : AttrArg) : Bool :=
         AttrArg.group aitems => match b { AttrArg.group bitems => attr_args_eq aitems bitems, _ => false },
     }
 
-instance BEq Attribute {
+pub instance BEq Attribute {
     def beq (a b : Attribute) : Bool := attr_eq a b
 }
 
@@ -212,6 +212,25 @@ pub struct ModulePath {
     segments: List Identifier,
 }
 
+/// The mote a canonical module path belongs to: its first segment.
+/// `lang::scope` -> `lang`, `init::prelude` -> `init`. Every stored module
+/// path is mote-qualified (`lib::` is rewritten at load), so this needs no
+/// manifest read and has no IO.
+pub def module_mote_of (mp : ModulePath) : Option String :=
+    match mp {
+        ModulePath.mk ids =>
+            match ids {
+                List.cons hd _rest => Option.some (show_identifier hd),
+                List.empty => Option.none,
+            },
+    }
+
+/// An empty module path is not a module: codegen and the unit harness build
+/// whole-program scopes with one. Visibility rules treat it as "no
+/// boundary", so every caller must ask this before comparing motes.
+pub def module_path_is_empty (mp : ModulePath) : Bool :=
+    match mp { ModulePath.mk ids => List.is_empty ids }
+
 /// A term-level dotted name path (`Foo.bar.baz`) — a DECL name or a
 /// legacy dotted reference. Distinct from `ModulePath` (a FILE path,
 /// `use`d with `::`) since the qualified-names split; see
@@ -285,7 +304,7 @@ def join_identifiers (ids : List Identifier) : String :=
     List.intercalate "." (List.map show_identifier ids)
 
 
-instance Show ModulePath {
+pub instance Show ModulePath {
     def show (mp : ModulePath) : String := show_module_path mp
 }
 
@@ -293,18 +312,18 @@ instance Show ModulePath {
 /// Rust host's own `impl Display for NamePath` (core/src/term.rs). The
 /// two render identically (`.`-joined); the instances exist separately
 /// because the two types are no longer interchangeable.
-instance Show NamePath {
+pub instance Show NamePath {
     def show (np : NamePath) : String := show_name_path np
 }
 
 /// Identifiers can't contain ".", so the dotted-string-join used by
 /// show_identifier/show_module_path is collision-free as an ordering key.
-instance BOrd Identifier {
+pub instance BOrd Identifier {
     def lt (a b : Identifier) : Bool := BOrd.lt (show_identifier a) (show_identifier b)
     def gt (a b : Identifier) : Bool := BOrd.gt (show_identifier a) (show_identifier b)
 }
 
-instance BOrd ModulePath {
+pub instance BOrd ModulePath {
     def lt (a b : ModulePath) : Bool := BOrd.lt (show_module_path a) (show_module_path b)
     def gt (a b : ModulePath) : Bool := BOrd.gt (show_module_path a) (show_module_path b)
 }
@@ -317,15 +336,15 @@ instance BOrd ModulePath {
 /// `bench/scope_lookup.mo` for why: at realistic sizes, `HashMap`
 /// clearly outperforms both `List`+linear-scan and `BTreeMap` for
 /// scope's lookup-heavy access pattern).
-instance Hashable Identifier {
+pub instance Hashable Identifier {
     def hash (a : Identifier) : U64 := String.hash (show_identifier a)
 }
 
-instance Hashable ModulePath {
+pub instance Hashable ModulePath {
     def hash (mp : ModulePath) : U64 := String.hash (show_module_path mp)
 }
 
-instance Hashable NamePath {
+pub instance Hashable NamePath {
     def hash (np : NamePath) : U64 := String.hash (show_name_path np)
 }
 
@@ -713,7 +732,7 @@ pub struct Cubical {
 
 // `CubicalPrim` is a flat, payload-free tag -- duplicating it is a register
 // move, the same shape as the scalar instances in `init/src/copy.mo`.
-instance Copy CubicalPrim {
+pub instance Copy CubicalPrim {
     def copy (p : CubicalPrim) : Pair CubicalPrim CubicalPrim := Pair.pair p p
 }
 
@@ -741,7 +760,7 @@ pub type DebugName {
 /// one LLVM symbol `@sentinel`, of which the emitted binary silently
 /// kept one -- see `validate_no_colliding_def_symbols`
 /// (`lang/codegen/emit.mo`), which now rejects that shape outright.
-def sentinel : I64 := -1
+pub def sentinel : I64 := -1
 
 /// Visibility of a declaration. Mirrors the Rust reference's
 /// `core::term::Visibility` exactly: `priv` is enforced immediately
@@ -1885,11 +1904,11 @@ def list_reverse {A : Type} (xs : List A) : List A :=
 
 // --- Similar class for structural comparison ---
 
-class Similar A {
+pub class Similar A {
     def similar (a : A) (b : A) : Bool
 }
 
-instance Similar Identifier {
+pub instance Similar Identifier {
     def similar (a : Identifier) (b : Identifier) : Bool :=
         match a {
             id s1 => match b {
@@ -1898,7 +1917,7 @@ instance Similar Identifier {
         }
 }
 
-instance Similar Operator {
+pub instance Similar Operator {
     def similar (a : Operator) (b : Operator) : Bool :=
         match a {
             Operator.mk s1 => match b {
@@ -1971,7 +1990,7 @@ def opt_db_term_list_similar (a : List (Option Term)) (b : List (Option Term)) :
         }
     }
 
-instance Similar ModulePath {
+pub instance Similar ModulePath {
     def similar (a : ModulePath) (b : ModulePath) : Bool :=
         match a {
             ModulePath.mk ids1 => match b {
@@ -1986,12 +2005,12 @@ instance Similar ModulePath {
 /// split moved to the def-name role (`Infix.name`, `ScopeDef.name`,
 /// `Inductive.name` ...). Delegates to `name_path_similar` below so the
 /// segment-wise rule has one home.
-instance Similar NamePath {
+pub instance Similar NamePath {
     def similar (a : NamePath) (b : NamePath) : Bool :=
         name_path_similar a b
 }
 
-instance Similar NameRef {
+pub instance Similar NameRef {
     def similar (a : NameRef) (b : NameRef) : Bool :=
         match a {
             NameRef.nid id1 => match b {
@@ -2035,7 +2054,7 @@ pub def name_path_similar (a : NamePath) (b : NamePath) : Bool :=
         }
     }
 
-instance Similar NumSuffix {
+pub instance Similar NumSuffix {
     def similar (a : NumSuffix) (b : NumSuffix) : Bool :=
         match a {
             i8 => match b {
@@ -2091,7 +2110,7 @@ instance Similar NumSuffix {
         }
 }
 
-instance Similar Con {
+pub instance Similar Con {
     def similar (a : Con) (b : Con) : Bool :=
         match a {
             mk name1 typ1 nargs1 args1 => match b {
@@ -2101,7 +2120,7 @@ instance Similar Con {
         }
 }
 
-instance Similar Native {
+pub instance Similar Native {
     def similar (a : Native) (b : Native) : Bool :=
         match a {
             mk name1 nargs1 args1 => match b {
@@ -2111,7 +2130,7 @@ instance Similar Native {
         }
 }
 
-instance Similar MatchCase {
+pub instance Similar MatchCase {
     def similar (a : MatchCase) (b : MatchCase) : Bool :=
         match a {
             MatchCase.mk name1 args1 body1 _ _ => match b {
@@ -2121,7 +2140,7 @@ instance Similar MatchCase {
         }
 }
 
-instance Similar Multiplicity {
+pub instance Similar Multiplicity {
     def similar (a : Multiplicity) (b : Multiplicity) : Bool :=
         match a {
             zero => match b { zero => true, many => false, linear => false, affine => false },
@@ -2131,7 +2150,7 @@ instance Similar Multiplicity {
         }
 }
 
-instance Similar Param {
+pub instance Similar Param {
     def similar (a : Param) (b : Param) : Bool :=
         match a {
             mk name1 typ1 mult1 def1 _attrs1 => match b {
@@ -2142,7 +2161,7 @@ instance Similar Param {
         }
 }
 
-instance Similar Location {
+pub instance Similar Location {
     def similar (a : Location) (b : Location) : Bool :=
         match a {
             mk off1 line1 col1 => match b {
@@ -2164,7 +2183,7 @@ def opt_str_similar (a : Option String) (b : Option String) : Bool :=
         }
     }
 
-instance Similar SourceRange {
+pub instance Similar SourceRange {
     def similar (a : SourceRange) (b : SourceRange) : Bool :=
         match a {
             mk start1 end1 path1 => match b {
@@ -2174,7 +2193,7 @@ instance Similar SourceRange {
         }
 }
 
-instance Similar Literal {
+pub instance Similar Literal {
     def similar (a : Literal) (b : Literal) : Bool :=
         match a {
             str s1 => match b {
@@ -2199,7 +2218,7 @@ instance Similar Literal {
 
 // --- Similar instances for de Bruijn types (Phase 0) ---
 
-instance Similar BinderInfo {
+pub instance Similar BinderInfo {
     /// Dense tag comparison, not a cross product -- the `cubical_prim_eq`
     /// pattern, and for the same reason.
     def similar (a : BinderInfo) (b : BinderInfo) : Bool := binder_info_eq a b
@@ -2217,12 +2236,12 @@ instance Similar BinderInfo {
 /// `similar_term_go` that ignored `info` would call `forall u. C` and
 /// `(x : Prop) -> C` convertible, and `pi_arity` counts one of those as a value
 /// parameter and not the other.
-instance Similar Binder {
+pub instance Similar Binder {
     def similar (a : Binder) (b : Binder) : Bool :=
         binder_info_eq (binder_info_of a) (binder_info_of b)
 }
 
-instance Similar DebugName {
+pub instance Similar DebugName {
     def similar (a : DebugName) (b : DebugName) : Bool :=
         match a {
             named id1 => match b {
@@ -2388,7 +2407,7 @@ def test_sort_level_of_reads_the_only_spelling : Bool :=
 ///
 /// Deliberately NOT `pub`: `proofs/` writes the explicit constructor instead,
 /// so a test convenience never becomes part of `lang`'s public surface.
-def sort_n (n : I64) : Term := Term.sort (SortLevel.concrete n)
+pub def sort_n (n : I64) : Term := Term.sort (SortLevel.concrete n)
 
 /// The sort level of a term known to be a TYPE, for a caller that must answer
 /// with a level rather than an `Option`.
@@ -2651,7 +2670,7 @@ pub def cubical_prim_of (t : Term) : Option CubicalPrim := match term_peel t {
     _ => Option.none,
 }
 
-instance Similar Term {
+pub instance Similar Term {
     /// Peels BOTH sides before comparing, so a location wrapper never
     /// makes two otherwise-identical terms compare unequal. Without this,
     /// `--debug` would change what the type checker decides, not just what
@@ -2988,10 +3007,19 @@ pub struct ScopeClassDef {
     sig : Term,
 }
 
+/// An instance together with the module that declared it. The registry
+/// groups instances by class, and ONE group collects instances from every
+/// module that declares one, so the owner has to travel per instance --
+/// it is what the visibility rule compares against the consumer's mote.
+pub struct OwnedInstance {
+    owner : ModulePath,
+    ins : Instance,
+}
+
 // Instance entries grouped by class name.
 pub struct ScopeInstance {
     class_name : NamePath,
-    instances : List Instance,
+    instances : List OwnedInstance,
 }
 
 // Conflicting name resolution entry.

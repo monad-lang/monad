@@ -86,7 +86,7 @@ pub type MetaMatchArm {
 }
 
 /// One parameter of a generated `def` (`MetaDecl.d_def`).
-type MetaParam {
+pub type MetaParam {
     meta_param (name : String) (typ : Expr)
 }
 

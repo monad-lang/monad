@@ -33,7 +33,7 @@ use lang::scope {
   scope_find_def_params, scope_find_def_return_type,
   scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_instance_by_name, scope_find_local, scope_globals,
-  scope_all_instances, scope_instance_candidates, scope_push_local,
+  scope_all_instances_in, scope_instance_candidates_in, scope_push_local,
   scope_find_cubical_prim, scope_resolve_name, strip_all_leading_binders,
   strip_dict_hint_args,
   type_mentions_any, validate_dict_hints,
@@ -546,7 +546,7 @@ def dict_args_for_constraints (constraints : List TypeConstraint) (bindings : Li
             } in
         match fallback {
             Option.some c =>
-                resolve_dict_args (scope_data_classes (scope_globals scope)) (scope_all_instances (scope_globals scope)) (dict_env_from_locals locals) List.empty bindings c List.empty constraints,
+                resolve_dict_args (scope_data_classes (scope_globals scope)) (scope_all_instances_in scope) (dict_env_from_locals locals) List.empty bindings c List.empty constraints,
             Option.none => Option.none,
         }
 
@@ -717,7 +717,7 @@ def resolve_class_method_d4
                 List.cons _ _ =>
                     let classes := scope_data_classes (scope_globals scope) in
                     // All classes' instances: a constraint of ANOTHER class (`[Add A] HAdd A A A`) is resolved here too.
-                    let instances := scope_all_instances (scope_globals scope) in
+                    let instances := scope_all_instances_in scope in
                     let dict_env := dict_env_from_locals locals in
                     // `List.empty` -- extending this call site with the same
                     // args-derived `extra_carriers` fallback `lang.scope`'s
@@ -898,7 +898,7 @@ def class_has_single_param (cls : Class) : Bool :=
 /// known `carrier`. Factored out of `resolve_class_method` so both of its
 /// non-forwarding paths share it verbatim.
 def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifier) (carrier : Term) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
-    let candidates := scope_instance_candidates (scope_globals scope) class_name in
+    let candidates := scope_instance_candidates_in scope class_name in
     match find_matching_instance candidates class_name carrier {
         Option.none => err (TypeError.custom "no matching instance found"),
         Option.some ins =>
@@ -945,7 +945,7 @@ def dict_forwarding_override (cls_name : NamePath) (cls : Class) (method_name : 
         Option.some carrier =>
             if carrier_is_class_param cls method_name carrier
             then Option.none
-            else match find_matching_instance (scope_instance_candidates (scope_globals scope) cls_name) cls_name carrier {
+            else match find_matching_instance (scope_instance_candidates_in scope cls_name) cls_name carrier {
                 Option.none => Option.none,
                 Option.some _ => Option.some carrier,
             },

@@ -16,7 +16,7 @@ use http::sse {Sse.init, Sse.push, SseState, SseEvent}
 use moose::client {Client.post, Client.post_stream}
 use openai::types {ChatRequest, ChatResponse, ApiUsage, ChatMessage, Choice}
 use openai::tool {ToolCall, ToolDef}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 /// Named `ApiUsage`, not `Usage` -- this is a whole-program-scope
 /// language (`mote.toml`'s own comment), and a consumer mote almost

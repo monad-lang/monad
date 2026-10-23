@@ -41,8 +41,8 @@
 use lang::types {
   Attribute, Class, ClassDef, DebugName, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, Literal, MatchCase, ModulePath, NamePath, Param, Struct, StructField,
-  Term, TypeConstraint, UseFilter, UseItem, OpenFilter, StructLitField,
-  id_eq, module_path_to_string_colon, open_all, open_only,
+  Term, TypeConstraint, UseFilter, UseItem, OpenFilter, StructLitField, Visibility,
+  id_eq, module_mote_of, module_path_is_empty, module_path_to_string_colon, open_all, open_only,
   sentinel, show_identifier, show_module_path, show_name_path,
   use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
 }
@@ -147,6 +147,43 @@ def qualified_half (s : String) : Option (Pair ModulePath String) :=
 // A module absent from the selection map is unfiltered on both axes:
 // the consumer itself, and the ambient modules.
 
+// ─── Visibility ─────────────────────────────────────────────────────
+//
+// The visibility boundary is enforced HERE, in the same pass that decides
+// whether a reference is imported, because this is the one place that
+// already knows, for every name a file reaches, WHICH module declares it.
+// Enforcement therefore happens at reference resolution -- not at import
+// declarations -- on every load path (`check`/`run`/`test`/`build`/LSP),
+// and it covers what an import-line rule cannot see: dotted items, globs,
+// `open`s and the ambient prelude.
+
+/// `consumer_mote` is the consumer FILE's mote, resolved from its
+/// manifest -- not derived from `consumer`, because the entry module of a
+/// `monad check path/to/file.mo` run is named by its stem (`copy_tests`),
+/// while every module it reaches is mote-qualified (`init::copy`).
+/// Deriving the consumer's mote from that path would put every sibling
+/// module in a different mote. `None` means the file is outside any mote
+/// (a script, or `examples/` at the virtual workspace root), where there
+/// is no package boundary to cross -- the same answer the Rust host gives.
+pub def visibility_visible_from (consumer : ModulePath) (consumer_mote : Option String) (owner : ModulePath) (vis : Visibility) : Bool :=
+    if module_path_is_empty consumer then true
+    else
+        match vis {
+            Visibility.pub_ => true,
+            Visibility.priv_ => modpath_eq owner consumer,
+            Visibility.package_private =>
+                match consumer_mote {
+                    Option.none => true,
+                    Option.some c =>
+                        match module_mote_of owner {
+                            // A builtin or otherwise unowned declaration has
+                            // no boundary to cross.
+                            Option.none => true,
+                            Option.some o => String.beq o c,
+                        },
+                },
+        }
+
 /// Which names of a module a brace list selects, along ONE axis.
 /// `an_only` holds brace-item spellings, compared against a
 /// declaration's own spelled name.
@@ -225,6 +262,14 @@ pub struct DeclRow {
     spelling : String,
     bare_tail : String,
     is_ctor : Bool,
+    /// The declaration's own visibility. Constructors and class methods
+    /// inherit the visibility of the block that declares them, exactly
+    /// as the scope builder treats them. DELIBERATELY NOT DEFAULTED: the
+    /// Rust host's checker does not give a defaulted field's expression a
+    /// lowering path when the literal is lowered in another def, and
+    /// `bare_finding` failed the self-compile with `UnresolvedAtom`
+    /// because of it.
+    vis : Visibility,
 }
 
 /// The spelling a brace item must use to select `row`'s declaration:
@@ -425,69 +470,100 @@ def index_add_row (key : String) (row : DeclRow) (m : HashMap String (List DeclR
 /// agree on the SET or CI's dual-compiler corpus check rejects a file
 /// one accepts. The bare tail stays the ctor's own single segment,
 /// which is the only spelling a brace item can select it by.
-def index_ctor (owner : ModulePath) (ind : String) (name : NamePath) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+def index_ctor (owner : ModulePath) (ind : String) (vis : Visibility) (name : NamePath) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
     let spelling : String :=
         String.concat ind (String.concat "." (show_name_path name)) in
-    let row : DeclRow := { owner := owner, spelling := spelling, bare_tail := after_last_dot spelling, is_ctor := true } in
+    let row : DeclRow := { owner := owner, spelling := spelling, bare_tail := after_last_dot spelling, is_ctor := true, vis := vis } in
     index_add_row row.bare_tail row (index_add_row spelling row m)
+
+/// A class's methods, indexed under their QUALIFIED spelling only
+/// (`Map.empty`), not under the bare tail. A method is reached through
+/// its type's name, and indexing `empty` bare would make every class in
+/// the corpus a candidate of one short name -- an ambiguity report, not a
+/// visibility one. Constructors are the opposite case (`index_ctor`
+/// indexes both) because source writes them bare.
+#[partial]
+def index_class_methods (owner : ModulePath) (cls : String) (vis : Visibility) (methods : List ClassDef) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+    match methods {
+        List.empty => m,
+        List.cons md rest =>
+            match md {
+                ClassDef.mk name _typ _default =>
+                    let spelling : String :=
+                        String.concat cls (String.concat "." (show_identifier name)) in
+                    index_class_methods owner cls vis rest
+                        (index_add_row spelling
+                            { owner := owner, spelling := spelling, bare_tail := show_identifier name, is_ctor := false, vis := vis }
+                            m),
+            },
+    }
 
 #[partial]
 def index_decl (owner : ModulePath) (d : Decl) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
     match d {
         Decl.def_d def_ =>
             match def_ {
-                Def.mk { name, .. } =>
+                Def.mk { name, vis, .. } =>
                     index_add_row (show_name_path name)
-                        { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false }
+                        { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := vis }
                         m,
             },
+        // Macro declarations are EXEMPT from the boundary: the decl-gen
+        // form (`defmacro f p := decls { ... }`, `DeclGen`) carries no
+        // visibility field in either compiler, so a macro name that
+        // crossed a mote could not be marked `pub` -- the rule would have
+        // no remedy to offer. They are compile-time-only and expanded
+        // away before checking; the declarations they generate carry
+        // their own visibility.
         Decl.def_macro_d def_ =>
             match def_ {
                 Def.mk { name, .. } =>
                     index_add_row (show_name_path name)
-                        { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false }
+                        { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := Visibility.pub_ }
                         m,
             },
         Decl.decl_gen_d name _params _decls _attrs =>
             index_add_row (show_name_path name)
-                { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false }
+                { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := Visibility.pub_ }
                 m,
         Decl.inductive_d ind =>
             match ind {
-                Inductive.mk name _params _typ constructors _attrs _vis =>
-                    index_ctors owner (show_name_path name) constructors
+                Inductive.mk name _params _typ constructors _attrs vis =>
+                    index_ctors owner (show_name_path name) vis constructors
                         (index_add_row (show_name_path name)
-                            { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false }
+                            { owner := owner, spelling := show_name_path name, bare_tail := after_last_dot (show_name_path name), is_ctor := false, vis := vis }
                             m),
             },
         Decl.struct_d st =>
             match st {
-                Struct.mk name _fields _attrs _vis =>
+                Struct.mk name _fields _attrs vis =>
                     index_add_row (show_identifier name)
-                        { owner := owner, spelling := show_identifier name, bare_tail := show_identifier name, is_ctor := false }
+                        { owner := owner, spelling := show_identifier name, bare_tail := show_identifier name, is_ctor := false, vis := vis }
                         m,
             },
         Decl.class_d cls =>
             match cls {
-                Class.mk name _params _constraints _methods _vis =>
-                    index_add_row (show_identifier name)
-                        { owner := owner, spelling := show_identifier name, bare_tail := show_identifier name, is_ctor := false }
-                        m,
+                Class.mk name _params _constraints methods vis =>
+                    index_class_methods owner (show_identifier name) vis methods
+                        (index_add_row (show_identifier name)
+                            { owner := owner, spelling := show_identifier name, bare_tail := show_identifier name, is_ctor := false, vis := vis }
+                            m),
             },
         // Instances are deliberately not indexed, mirroring the host's
         // `declaration_index` (core/src/term/module.rs): an instance is
         // reached through class resolution, and its own name binds no
-        // reference a `use` line could be asked about.
+        // reference a `use` line could be asked about. Their visibility is
+        // enforced in the instance registries instead (`lang/scope.mo`).
         _ => m,
     }
 
 #[partial]
-def index_ctors (owner : ModulePath) (ind : String) (cns : List InductConstructor) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
+def index_ctors (owner : ModulePath) (ind : String) (vis : Visibility) (cns : List InductConstructor) (m : HashMap String (List DeclRow)) : HashMap String (List DeclRow) :=
     match cns {
         List.empty => m,
         List.cons cn rest =>
             match cn {
-                InductConstructor.mk name _params _typ => index_ctors owner ind rest (index_ctor owner ind name m),
+                InductConstructor.mk name _params _typ => index_ctors owner ind vis rest (index_ctor owner ind vis name m),
             },
     }
 
@@ -1017,6 +1093,9 @@ def opens_filter_step (filter : OpenFilter) (rest : List Decl) (opens : Opens) :
 /// wrong argument ends up in the wrong slot.
 struct Judge {
     consumer : ModulePath,
+    /// The consumer FILE's mote, from its manifest (`None` outside any
+    /// mote). See `visibility_visible_from`.
+    consumer_mote : Option String,
     opens : HashMap String Bool,
     selection : HashMap String Selection,
     ambient : HashMap String Bool,
@@ -1025,21 +1104,55 @@ struct Judge {
     file_path : String,
 }
 
+/// Why a name is not usable here. The two are different failures with
+/// different remedies, so they render differently: an unimported name is
+/// reachable once named in a `use` line, while a hidden one is not
+/// reachable from this mote at all.
+type FindingKind {
+    fk_unimported,
+    fk_hidden,
+}
+
 struct Finding {
     name : String,
     owner : ModulePath,
     spelling : String,
+    kind : FindingKind,
+    vis : Visibility,
 }
 
 /// One finding, in the host's message shape.
 def render_finding (file_path : String) (f : Finding) : String :=
-    let module_str : String := module_path_to_string_colon f.owner in
-    String.concat_all [
-        "error: `", f.name, "` is not imported\n",
-        "  `", f.spelling, "` is declared in `", module_str, "`\n",
-        "  hint: add it to a `use ", module_str, " {...}` line -- `use ", module_str, " {", f.spelling, "}` names it\n",
-        "  in ", file_path,
-    ]
+    match f.kind {
+        fk_unimported =>
+            let module_str : String := module_path_to_string_colon f.owner in
+            String.concat_all [
+                "error: `", f.name, "` is not imported\n",
+                "  `", f.spelling, "` is declared in `", module_str, "`\n",
+                "  hint: add it to a `use ", module_str, " {...}` line -- `use ", module_str, " {", f.spelling, "}` names it\n",
+                "  in ", file_path,
+            ],
+        fk_hidden =>
+            let module_str : String := module_path_to_string_colon f.owner in
+            let declaration : String :=
+                match f.vis {
+                    Visibility.priv_ =>
+                        String.concat_all ["`", f.spelling, "` is declared `priv` in `", module_str, "`"],
+                    _ =>
+                        String.concat_all ["`", f.spelling, "` is declared in `", module_str, "` and is not marked `pub`"],
+                } in
+            let mote_hint : String :=
+                match module_mote_of f.owner {
+                    Option.some m => String.concat_all [" in mote `", m, "`"],
+                    Option.none => "",
+                } in
+            String.concat_all [
+                "error: `", f.name, "` is not visible here\n",
+                "  ", declaration, "\n",
+                "  hint: mark `", f.spelling, "` `pub`", mote_hint, ", or reword the reference\n",
+                "  in ", file_path,
+            ],
+    }
 
 def set_member (key : String) (m : HashMap String Bool) : Bool :=
     match str_map_lookup key m {
@@ -1071,35 +1184,69 @@ def row_of_owner (rows : Option (List DeclRow)) (mp : ModulePath) : Option DeclR
             },
     }
 
-/// Whether a module-qualified reference is accounted for.
-def qualified_visible (j : Judge) (mp : ModulePath) (name : String) (row : DeclRow) : Bool :=
-    modpath_eq mp j.consumer
-        || ambient_member j mp
-        || set_member name j.own
-        || set_member name j.opens
+/// Whether the consumer's mote may see `row`'s declaration at all.
+///
+/// The own-module check comes first and does not consult motes: the ENTRY
+/// module is named by its file stem (`foldable`, `optics_tests`), not
+/// mote-qualified (`init::foldable`), so a file's own declarations would
+/// otherwise look like another mote's. Everything a module declares is
+/// visible to it, by definition.
+def row_visible (j : Judge) (row : DeclRow) : Bool :=
+    modpath_eq row.owner j.consumer
+        || visibility_visible_from j.consumer j.consumer_mote row.owner row.vis
+
+/// Whether a module-qualified reference is SELECTED by the consumer's
+/// imports -- the import half of the judgment, before visibility.
+def qualified_selected (j : Judge) (mp : ModulePath) (row : DeclRow) : Bool :=
+    ambient_member j mp
         || match selection_of j mp {
             Option.some sel => selects_qual sel row,
             Option.none => false,
         }
 
+/// Whether a module-qualified reference is accounted for.
+def qualified_visible (j : Judge) (mp : ModulePath) (name : String) (row : DeclRow) : Bool :=
+    modpath_eq mp j.consumer
+        || set_member name j.own
+        || set_member name j.opens
+        || (qualified_selected j mp row && row_visible j row)
+
+/// Whether `row` is accounted for by the IMPORT rules alone, ignoring
+/// visibility. The distinction matters to the message: an unimported
+/// name is fixed by naming it in a `use` line, while a hidden one is not
+/// reachable from this mote at all and must be marked `pub`.
+#[partial]
+def row_imported (j : Judge) (row : DeclRow) : Bool :=
+    modpath_eq row.owner j.consumer
+        || ambient_member j row.owner
+        || match selection_of j row.owner {
+            Option.some sel => selects_bare sel row,
+            Option.none => false,
+        }
+
 /// Whether a bare reference's candidates include one that is accounted
 /// for: the consumer itself, an ambient owner, or a `use` selection
-/// that names it bare.
+/// that names it bare -- AND whose declaration this mote may see.
 #[partial]
 def bare_reachable (j : Judge) (rows : List DeclRow) : Bool :=
     match rows {
         List.empty => false,
         List.cons row rest =>
-            if modpath_eq row.owner j.consumer || ambient_member j row.owner
+            if Bool.and (row_imported j row) (row_visible j row)
             then true
-            else
-                match selection_of j row.owner {
-                    Option.some sel =>
-                        if selects_bare sel row
-                        then true
-                        else bare_reachable j rest,
-                    Option.none => bare_reachable j rest,
-                },
+            else bare_reachable j rest,
+    }
+
+/// The first candidate the import rules DO account for but visibility
+/// does not: the declaration that has to be marked `pub`.
+#[partial]
+def bare_hidden_row (j : Judge) (rows : List DeclRow) : Option DeclRow :=
+    match rows {
+        List.empty => Option.none,
+        List.cons row rest =>
+            if Bool.and (row_imported j row) (Bool.not (row_visible j row))
+            then Option.some row
+            else bare_hidden_row j rest,
     }
 
 /// Prefer naming a module the consumer already `use`s -- the fix is
@@ -1141,7 +1288,13 @@ def judge_qualified (j : Judge) (items : List (Pair ModulePath String)) (seen : 
                                 if set_member name seen
                                 then judge_qualified j rest seen acc
                                 else
-                                    let finding : Finding := { name := name, owner := mp, spelling := item_spelling row } in
+                                    let kind : FindingKind :=
+                                        if Bool.and (qualified_selected j mp row) (Bool.not (row_visible j row))
+                                        then FindingKind.fk_hidden
+                                        else FindingKind.fk_unimported in
+                                    let finding : Finding :=
+                                        { name := name, owner := mp, spelling := item_spelling row,
+                                          kind := kind, vis := row.vis } in
                                     judge_qualified j rest (str_map_insert name true seen) (List.append acc (List.cons finding List.empty)),
                     },
             },
@@ -1165,8 +1318,7 @@ def judge_bare (j : Judge) (names : List String) (seen : HashMap String Bool) (a
                         if bare_reachable j rows
                         then judge_bare j rest (str_map_insert name true seen) acc
                         else
-                            let picked : DeclRow := pick_row j rows (first_row rows) in
-                            let finding : Finding := { name := name, owner := picked.owner, spelling := item_spelling picked } in
+                            let finding : Finding := bare_finding j name rows in
                             judge_bare j rest (str_map_insert name true seen) (List.append acc (List.cons finding List.empty)),
                 },
     }
@@ -1174,7 +1326,25 @@ def judge_bare (j : Judge) (names : List String) (seen : HashMap String Bool) (a
 def first_row (rows : List DeclRow) : DeclRow :=
     match rows {
         List.cons row _rest => row,
-        List.empty => { owner := init_module_path, spelling := "", bare_tail := "", is_ctor := false },
+        List.empty => { owner := init_module_path, spelling := "", bare_tail := "", is_ctor := false, vis := Visibility.package_private },
+    }
+
+/// Why a bare name with no reachable candidate is unusable. A candidate
+/// the import rules account for but visibility does not is a `pub`
+/// problem on the declaration; anything else is a missing import.
+def bare_finding (j : Judge) (name : String) (rows : List DeclRow) : Finding :=
+    match bare_hidden_row j rows {
+        Option.some hidden =>
+            let f : Finding :=
+                { name := name, owner := hidden.owner, spelling := item_spelling hidden,
+                  kind := FindingKind.fk_hidden, vis := hidden.vis } in
+            f,
+        Option.none =>
+            let picked : DeclRow := pick_row j rows (first_row rows) in
+            let f : Finding :=
+                { name := name, owner := picked.owner, spelling := item_spelling picked,
+                  kind := FindingKind.fk_unimported, vis := picked.vis } in
+            f,
     }
 
 /// Insertion by name, keeping the reports in the host's order (the gate
@@ -1203,18 +1373,109 @@ def sort_findings (fs : List Finding) (acc : List Finding) : List Finding :=
 /// its stored, load-expanded list (whose declared names count as its
 /// own), and `world` every loaded module's `(path, decls)`.
 pub def use_completeness_errors (file_path : String) (consumer : ModulePath)
+    (consumer_mote : Option String)
     (pre_decls : List Decl) (expanded_decls : List Decl)
     (world : List (Pair ModulePath (List Decl))) : List String :=
     match collect_opens pre_decls (struct_opens_empty) {
         // An unfiltered `open T` silences the whole file.
         Option.none => List.empty,
-        Option.some opens => judge_all file_path consumer pre_decls expanded_decls world opens,
+        Option.some opens => judge_all file_path consumer consumer_mote pre_decls expanded_decls world opens,
+    }
+
+// ─── `open` and visibility ──────────────────────────────────────────
+//
+// `open M {x}` puts `x` in bare scope, and the reference judges skip
+// every opened name, so the `open` line is the only place that can judge
+// it. The declaration is found through the index: first as the dotted
+// member (`open IO {println}` -> `IO.println`, `open MetaParam {p}` ->
+// `MetaParam.p`, both spellings the index carries), then as a plain
+// name. An unfiltered `open T` (and `open T {*}`) still silences the
+// whole gate -- it can put an unbounded set of names in scope, so any
+// claim would be a guess -- exactly as it does for `use` completeness.
+
+#[partial]
+def rows_any_visible (j : Judge) (rows : List DeclRow) : Bool :=
+    match rows {
+        List.empty => false,
+        List.cons row rest =>
+            if row_visible j row then true else rows_any_visible j rest,
+    }
+
+#[partial]
+def rows_first_hidden (j : Judge) (rows : List DeclRow) : Option DeclRow :=
+    match rows {
+        List.empty => Option.none,
+        List.cons row rest =>
+            if row_visible j row
+            then rows_first_hidden j rest
+            else Option.some row,
+    }
+
+/// The hidden row among a name's candidates, or none when at least one
+/// candidate is visible (resolution may then use that one).
+#[partial]
+def open_row_hidden (j : Judge) (rows : List DeclRow) : Option DeclRow :=
+    if rows_any_visible j rows
+    then Option.none
+    else rows_first_hidden j rows
+
+#[partial]
+def judge_open_names (j : Judge) (path : NamePath) (names : List Identifier)
+    (rest : List Decl) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+    match names {
+        List.empty => judge_opens j rest seen acc,
+        List.cons n names_rest =>
+            let name : String := show_identifier n in
+            let dotted : String :=
+                String.concat (show_name_path path) (String.concat "." name) in
+            let hidden : Option DeclRow :=
+                match str_map_lookup dotted j.index {
+                    Option.some rows => open_row_hidden j rows,
+                    Option.none =>
+                        match str_map_lookup name j.index {
+                            Option.some rows => open_row_hidden j rows,
+                            Option.none => Option.none,
+                        },
+                } in
+            match hidden {
+                Option.none => judge_open_names j path names_rest rest seen acc,
+                Option.some row =>
+                    if set_member name seen
+                    then judge_open_names j path names_rest rest seen acc
+                    else
+                        let finding : Finding :=
+                            { name := name, owner := row.owner, spelling := name,
+                              kind := FindingKind.fk_hidden, vis := row.vis } in
+                        judge_open_names j path names_rest rest
+                            (str_map_insert name true seen)
+                            (List.append acc (List.cons finding List.empty)),
+            },
+    }
+
+#[partial]
+def judge_open_one (j : Judge) (path : NamePath) (filter : OpenFilter)
+    (rest : List Decl) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+    match filter {
+        open_all => judge_opens j rest seen acc,
+        open_only names => judge_open_names j path names rest seen acc,
+    }
+
+#[partial]
+def judge_opens (j : Judge) (decls : List Decl) (seen : HashMap String Bool) (acc : List Finding) : JudgeOut :=
+    match decls {
+        List.empty => { findings := acc, seen := seen },
+        List.cons d rest =>
+            match d {
+                Decl.open_d path filter => judge_open_one j path filter rest seen acc,
+                Decl.scoped_open_d path filter _inner => judge_open_one j path filter rest seen acc,
+                _ => judge_opens j rest seen acc,
+            },
     }
 
 /// The body of `use_completeness_errors` once its opens are known: build
 /// the selection/ambient/index/own tables, walk the references, judge
 /// them, and render the findings sorted by name.
-def judge_all (file_path : String) (consumer : ModulePath) (pre_decls : List Decl)
+def judge_all (file_path : String) (consumer : ModulePath) (consumer_mote : Option String) (pre_decls : List Decl)
     (expanded_decls : List Decl) (world : List (Pair ModulePath (List Decl)))
     (opens : Opens) : List String :=
     let selection : HashMap String Selection := sel_map_of_decls pre_decls str_map_empty in
@@ -1226,9 +1487,14 @@ def judge_all (file_path : String) (consumer : ModulePath) (pre_decls : List Dec
     let refs_start : Refs := refs_add_bares macro_names refs_empty in
     let refs : Refs := collect_decls pre_decls refs_start in
     let j : Judge :=
-        { consumer := consumer, opens := opens.names, selection := selection,
-          ambient := ambient, index := index, own := own, file_path := file_path } in
-    let qualified_out : JudgeOut := judge_qualified j refs.qualified str_map_empty List.empty in
+        { consumer := consumer, consumer_mote := consumer_mote, opens := opens.names,
+          selection := selection, ambient := ambient, index := index, own := own,
+          file_path := file_path } in
+    // `open`s first: an opened name is skipped by the two reference
+    // judges (`set_member name j.opens`), so a hidden declaration reached
+    // that way has to be caught at the `open` site itself.
+    let open_out : JudgeOut := judge_opens j pre_decls str_map_empty List.empty in
+    let qualified_out : JudgeOut := judge_qualified j refs.qualified open_out.seen open_out.findings in
     let bare_out : JudgeOut := judge_bare j refs.bare qualified_out.seen qualified_out.findings in
     let all : List Finding := List.append qualified_out.findings bare_out.findings in
     List.map (render_finding file_path) (sort_findings all List.empty)
@@ -1281,7 +1547,7 @@ def probe_errors (world : List (Pair ModulePath String)) (consumer : ModulePath)
         Option.some w =>
             match probe_parse src {
                 Option.none => [ "the probe consumer did not parse" ],
-                Option.some ds => use_completeness_errors "consumer.mo" consumer ds ds w,
+                Option.some ds => use_completeness_errors "consumer.mo" consumer (module_mote_of consumer) ds ds w,
             },
     }
 
@@ -1291,7 +1557,7 @@ def widgets_path : ModulePath := ModulePath.mk [Identifier.id "widgets"]
 /// module its references reach into.
 def consumer_path : ModulePath := ModulePath.mk [Identifier.id "consumer"]
 
-def widgets_src : String := "def widget : I64 := 1\n"
+def widgets_src : String := "pub def widget : I64 := 1\n"
 
 /// The headline case: a bare name reached from another module with no
 /// `use` naming it fails, and the report names both the name and the
@@ -1313,6 +1579,140 @@ def test_importing_the_name_clears_it : Bool :=
         (probe_errors [Pair.pair widgets_path widgets_src] consumer_path
             "use widgets {widget}\ndef use_it : I64 := widget")
 
+// ─── Visibility at the gate ─────────────────────────────────────────
+//
+// The boundary is judged at the REFERENCE, not at the `use` line: an
+// imported name can still be invisible, and the finding says so with the
+// declaration's own remedy. Motes are the first segment of a module path;
+// `consumer::child` and `consumer::widgets` are siblings in one mote.
+
+def child_path : ModulePath := ModulePath.mk [Identifier.id "consumer", Identifier.id "child"]
+
+def sibling_path : ModulePath := ModulePath.mk [Identifier.id "consumer", Identifier.id "widgets"]
+
+/// Imported, but package-private and declared in another mote.
+#[test]
+def test_cross_mote_package_private_is_hidden : Bool :=
+    match probe_errors [Pair.pair widgets_path "def widget : I64 := 1\n"] consumer_path
+            "use widgets {widget}\ndef use_it : I64 := widget" {
+        List.cons msg rest =>
+            Bool.and (List.is_empty rest)
+                (Bool.and (String.contains msg "`widget` is not visible here")
+                    (Bool.and (String.contains msg "is not marked `pub`")
+                        (String.contains msg "mote `widgets`"))),
+        List.empty => false,
+    }
+
+/// The same declaration, reached from a SIBLING module of its own mote:
+/// package-private means the mote, not the file.
+#[test]
+def test_same_mote_package_private_is_visible : Bool :=
+    List.is_empty
+        (probe_errors [Pair.pair sibling_path "def widget : I64 := 1\n"] child_path
+            "use consumer::widgets {widget}\ndef use_it : I64 := widget")
+
+/// `pub` is the remedy, and it works.
+#[test]
+def test_pub_declaration_crosses_motes : Bool :=
+    List.is_empty
+        (probe_errors [Pair.pair widgets_path widgets_src] consumer_path
+            "use widgets {widget}\ndef use_it : I64 := widget")
+
+/// `priv` is narrower than package-private: a sibling module cannot see
+/// it, and the message says `priv` rather than "not pub".
+#[test]
+def test_priv_is_hidden_from_a_sibling_module : Bool :=
+    match probe_errors [Pair.pair sibling_path "priv def widget : I64 := 1\n"] child_path
+            "use consumer::widgets {widget}\ndef use_it : I64 := widget" {
+        List.cons msg rest =>
+            Bool.and (List.is_empty rest)
+                (Bool.and (String.contains msg "`widget` is not visible here")
+                    (String.contains msg "is declared `priv`")),
+        List.empty => false,
+    }
+
+/// ...but its own module sees it, as ever.
+#[test]
+def test_priv_is_visible_in_its_own_module : Bool :=
+    List.is_empty
+        (probe_errors [] sibling_path
+            "priv def widget : I64 := 1\ndef use_it : I64 := widget")
+
+/// Constructors inherit the type's visibility -- here a package-private
+/// `type` reached from another mote.
+#[test]
+def test_a_constructor_inherits_its_type_visibility : Bool :=
+    match probe_errors [Pair.pair widgets_path "type Opt { some (a : I64), none }\n"] consumer_path
+            "use widgets {Opt, some}\ndef f (o : Opt) : I64 := match o { some x => x, none => 0 }" {
+        List.cons msg _rest => String.contains msg "is not visible here",
+        List.empty => false,
+    }
+
+/// A module's own declarations are visible to it even though the ENTRY
+/// module is named by its file stem (`test_constraints`) while the loaded
+/// world's sibling modules are mote-qualified (`init::copy`). Both probes
+/// put the consumer in the world, which is the shape the real gate sees.
+#[test]
+def test_a_modules_own_class_method_is_visible : Bool :=
+    let src : String := "class C A { def m (a : A) : I64 := 1 }\ndef f : I64 := C.m 1" in
+    List.is_empty (probe_errors [Pair.pair consumer_path src] consumer_path src)
+
+#[test]
+def test_a_modules_own_opened_constructor_is_visible : Bool :=
+    let src : String :=
+        "type Shape { circle (r : F64) }\nopen Shape {circle}\ndef f (s : Shape) : F64 := match s { circle r => r }" in
+    List.is_empty (probe_errors [Pair.pair consumer_path src] consumer_path src)
+
+/// A class's methods inherit its visibility, and method references are
+/// indexed under their qualified spelling so the boundary can judge them.
+#[test]
+def test_a_class_method_inherits_the_class_visibility : Bool :=
+    let cls_src : String := "class C A { def m (a : A) : I64 := 1 }\n" in
+    match probe_errors [Pair.pair widgets_path cls_src] consumer_path
+            "use widgets {C}\ndef f : I64 := C.m 1" {
+        List.cons msg _rest => String.contains msg "`C.m` is not visible here",
+        List.empty => false,
+    }
+
+#[test]
+def test_a_pub_class_method_crosses_motes : Bool :=
+    let cls_src : String := "pub class C A { def m (a : A) : I64 := 1 }\n" in
+    List.is_empty
+        (probe_errors [Pair.pair widgets_path cls_src] consumer_path
+            "use widgets {C}\ndef f : I64 := C.m 1")
+
+/// `open M {x}` is the only place an opened name can be judged: the
+/// reference judges skip it by construction.
+#[test]
+def test_a_cross_mote_open_of_a_package_private_is_hidden : Bool :=
+    match probe_errors [Pair.pair widgets_path "type MetaParam A { meta_param (a : A) }\n"] consumer_path
+            "open MetaParam {meta_param}\ndef f : I64 := 0" {
+        List.cons msg _rest => String.contains msg "`meta_param` is not visible here",
+        List.empty => false,
+    }
+
+#[test]
+def test_a_same_mote_open_of_a_package_private_is_allowed : Bool :=
+    List.is_empty
+        (probe_errors [Pair.pair sibling_path "type MetaParam A { meta_param (a : A) }\n"] child_path
+            "open MetaParam {meta_param}\ndef f : I64 := 0")
+
+/// The ambient prelude is a mote like any other: being visible without a
+/// `use` line does not make a package-private name importable.
+#[test]
+def test_an_ambient_package_private_name_is_hidden : Bool :=
+    match probe_errors [Pair.pair prelude_module_path "def widget : I64 := 1\n"] consumer_path
+            "def use_it : I64 := widget" {
+        List.cons msg _rest => String.contains msg "`widget` is not visible here",
+        List.empty => false,
+    }
+
+#[test]
+def test_a_pub_ambient_name_is_allowed : Bool :=
+    List.is_empty
+        (probe_errors [Pair.pair prelude_module_path "pub def widget : I64 := 1\n"] consumer_path
+            "def use_it : I64 := widget")
+
 /// A module-qualified reference is judged against the QUALIFIED axis:
 /// `use widgets {}` holds every name of `widgets` reachable qualified
 /// and none bare.
@@ -1333,7 +1733,7 @@ def test_qualified_reference_with_empty_braces : Bool :=
 /// the dotted spelling.
 #[test]
 def test_dotted_prefix_selects_members : Bool :=
-    let dotted : String := "def List.length : I64 := 1\n" in
+    let dotted : String := "pub def List.length : I64 := 1\n" in
     Bool.and
         (List.is_empty
             (probe_errors [Pair.pair widgets_path dotted] consumer_path
@@ -1359,7 +1759,7 @@ def test_own_struct_constructor_is_not_reported : Bool :=
 /// An inductive constructor is importable by its bare name.
 #[test]
 def test_constructor_import_binds_bare : Bool :=
-    let sum_src : String := "type Opt { some (a : I64), none }\n" in
+    let sum_src : String := "pub type Opt { some (a : I64), none }\n" in
     Bool.and
         (List.is_empty
             (probe_errors [Pair.pair widgets_path sum_src] consumer_path
@@ -1378,7 +1778,7 @@ def test_pub_use_reexports_are_ambient : Bool :=
     let init_path : ModulePath := ModulePath.mk [Identifier.id "init"] in
     let init_list_path : ModulePath := ModulePath.mk [Identifier.id "init", Identifier.id "list"] in
     let hub : String := "pub use init::list {*}\n" in
-    let list_src : String := "def List.length : I64 := 1\n" in
+    let list_src : String := "pub def List.length : I64 := 1\n" in
     let world : List (Pair ModulePath String) :=
         [Pair.pair init_path hub, Pair.pair init_list_path list_src] in
     Bool.and
@@ -1437,7 +1837,7 @@ def test_derive_attribute_reaches_the_handler : Bool :=
 /// inductive's name.
 #[test]
 def test_dotted_prefix_selects_pattern_constructors : Bool :=
-    let kind_src : String := "type Kind { not_found, denied }\n" in
+    let kind_src : String := "pub type Kind { not_found, denied }\n" in
     Bool.and
         (List.is_empty
             (probe_errors [Pair.pair widgets_path kind_src] consumer_path

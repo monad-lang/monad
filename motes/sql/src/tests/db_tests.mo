@@ -22,7 +22,7 @@ type Fake {
     fake
 }
 
-instance Backend Fake {
+pub instance Backend Fake {
     def close (b : Fake) : IO (Result SqlError Unit) :=
         IO.pure (Result.ok Unit.unit)
     def exec (b : Fake) (sql : String) (params : List Value) : IO (Result SqlError I64) :=

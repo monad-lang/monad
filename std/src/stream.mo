@@ -129,7 +129,7 @@ priv def stream_fd (s : FdStream) : RawIO I32
 #[native "std_fd"]
 priv def std_fd (which : I64) : FdStream
 
-instance Stream FdStream {
+pub instance Stream FdStream {
   def read (s : FdStream) (max_bytes : I64) : IO (Result StreamError ByteBuf) := do {
     let r <- IO.mk (stream_read s max_bytes);
     return (stream_result r)

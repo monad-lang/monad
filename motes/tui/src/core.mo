@@ -107,7 +107,7 @@ def row_list_beq (a b : List (List Cell)) : Bool :=
 def Screen.beq (a b : Screen) : Bool :=
     a.rows == b.rows && a.cols == b.cols && row_list_beq a.row_cells b.row_cells
 
-instance BEq Screen {
+pub instance BEq Screen {
     def beq (a b : Screen) : Bool := Screen.beq a b
 }
 
@@ -176,7 +176,7 @@ pub def rect_contains (r : Rect) (x : I64) (y : I64) : Bool :=
     Bool.not (x < r.x) && x < r.x + r.width && Bool.not (y < r.y) && y < r.y + r.height
 
 /// Clamp a value between min and max
-def clamp (value : I64) (min : I64) (max : I64) : I64 :=
+pub def clamp (value : I64) (min : I64) (max : I64) : I64 :=
     if value < min then min else if value > max then max else value
 
 /// Create a rectangle from position and size

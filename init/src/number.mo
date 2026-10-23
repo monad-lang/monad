@@ -27,7 +27,7 @@ pub def I8.gt (a b : I8) : Bool
 #[native i8_to_string]
 pub def I8.to_string (a : I8) : String
 
-instance Add I8 {
+pub instance Add I8 {
 	def add (a b : I8) : I8 := I8.add a b
 }
 
@@ -35,11 +35,11 @@ pub instance Sub I8 {
 	def sub (a b : I8) : I8 := I8.sub a b
 }
 
-instance HMul I8 I8 I8 {
+pub instance HMul I8 I8 I8 {
 	def mul (a b : I8) : I8 := I8.mul a b
 }
 
-instance Div I8 {
+pub instance Div I8 {
 	def div (a b : I8) : I8 := I8.div a b
 }
 
@@ -82,7 +82,7 @@ pub def I16.gt (a b : I16) : Bool
 #[native i16_to_string]
 pub def I16.to_string (a : I16) : String
 
-instance Add I16 {
+pub instance Add I16 {
 	def add (a b : I16) : I16 := I16.add a b
 }
 
@@ -90,11 +90,11 @@ pub instance Sub I16 {
 	def sub (a b : I16) : I16 := I16.sub a b
 }
 
-instance HMul I16 I16 I16 {
+pub instance HMul I16 I16 I16 {
 	def mul (a b : I16) : I16 := I16.mul a b
 }
 
-instance Div I16 {
+pub instance Div I16 {
 	def div (a b : I16) : I16 := I16.div a b
 }
 
@@ -140,7 +140,7 @@ pub def I32.to_string (a : I32) : String
 #[native i32_to_i64]
 pub def I32.to_i64 (a : I32) : I64
 
-instance Add I32 {
+pub instance Add I32 {
 	def add (a b : I32) : I32 := I32.add a b
 }
 
@@ -148,11 +148,11 @@ pub instance Sub I32 {
 	def sub (a b : I32) : I32 := I32.sub a b
 }
 
-instance HMul I32 I32 I32 {
+pub instance HMul I32 I32 I32 {
 	def mul (a b : I32) : I32 := I32.mul a b
 }
 
-instance Div I32 {
+pub instance Div I32 {
 	def div (a b : I32) : I32 := I32.div a b
 }
 
@@ -172,25 +172,25 @@ pub instance ToString I32 {
 // I64
 
 #[native i64_add]
-def I64.add (a b : I64) : I64
+pub def I64.add (a b : I64) : I64
 
 #[native i64_sub]
 pub def I64.sub (a b : I64) : I64
 
 #[native i64_mul]
-def I64.mul (a b : I64) : I64
+pub def I64.mul (a b : I64) : I64
 
 #[native i64_div]
-def I64.div (a b : I64) : I64
+pub def I64.div (a b : I64) : I64
 
 #[native i64_lt]
-def I64.lt (a b : I64) : Bool
+pub def I64.lt (a b : I64) : Bool
 
 #[native i64_gt]
 pub def I64.gt (a b : I64) : Bool
 
 #[native i64_to_u64]
-def I64.to_u64 (a : I64) : U64
+pub def I64.to_u64 (a : I64) : U64
 
 /// For FFI calls that take a C `int` (`SSL_set_fd` in motes/tls takes
 /// the socket's descriptor). Identity at the payload level; no
@@ -199,7 +199,7 @@ def I64.to_u64 (a : I64) : U64
 pub def I64.to_i32 (a : I64) : I32
 
 #[native i64_to_u32]
-def I64.to_u32 (a : I64) : U32
+pub def I64.to_u32 (a : I64) : U32
 
 #[native i64_eq]
 pub def I64.beq (a b : I64) : Bool
@@ -210,9 +210,9 @@ pub def I64.to_string (a : I64) : String
 /// Arithmetic negation. Canonical home for what `lang/json.mo` and
 /// `lang/toml.mo` each had as their own `neg_i64`/`Toml.neg_i64`
 /// (duplicated only because top-level names are not file-scoped).
-def I64.neg (n : I64) : I64 := 0 - n
+pub def I64.neg (n : I64) : I64 := 0 - n
 
-instance Add I64 {
+pub instance Add I64 {
 	def add (a b : I64) : I64 := I64.add a b
 }
 
@@ -222,11 +222,11 @@ pub instance Sub I64 {
 	def sub (a b : I64) : I64 := I64.sub a b
 }
 
-instance HMul I64 I64 I64 {
+pub instance HMul I64 I64 I64 {
 	def mul (a b : I64) : I64 := I64.mul a b
 }
 
-instance Div I64 {
+pub instance Div I64 {
 	def div (a b : I64) : I64 := I64.div a b
 }
 
@@ -243,23 +243,23 @@ pub instance ToString I64 {
   def to_string (a : I64) : String := I64.to_string a
 }
 
-instance Hashable I64 {
+pub instance Hashable I64 {
   def hash (a : I64) : U64 := I64.to_u64 a
 }
 
 // U8
 
 #[native u8_add]
-def U8.add (a b : U8) : U8
+pub def U8.add (a b : U8) : U8
 
 #[native u8_sub]
 pub def U8.sub (a b : U8) : U8
 
 #[native u8_mul]
-def U8.mul (a b : U8) : U8
+pub def U8.mul (a b : U8) : U8
 
 #[native u8_div]
-def U8.div (a b : U8) : U8
+pub def U8.div (a b : U8) : U8
 
 #[native u8_eq]
 pub def U8.beq (a b : U8) : Bool
@@ -268,10 +268,10 @@ pub def U8.beq (a b : U8) : Bool
 def U8.to_u64 (a : U8) : U64
 
 #[native u8_to_u32]
-def U8.to_u32 (a : U8) : U32
+pub def U8.to_u32 (a : U8) : U32
 
 #[native u8_lt]
-def U8.lt (a b : U8) : Bool
+pub def U8.lt (a b : U8) : Bool
 
 #[native u8_gt]
 pub def U8.gt (a b : U8) : Bool
@@ -279,7 +279,7 @@ pub def U8.gt (a b : U8) : Bool
 #[native u8_to_string]
 pub def U8.to_string (a : U8) : String
 
-instance Add U8 {
+pub instance Add U8 {
 	def add (a b : U8) : U8 := U8.add a b
 }
 
@@ -287,11 +287,11 @@ pub instance Sub U8 {
 	def sub (a b : U8) : U8 := U8.sub a b
 }
 
-instance HMul U8 U8 U8 {
+pub instance HMul U8 U8 U8 {
 	def mul (a b : U8) : U8 := U8.mul a b
 }
 
-instance Div U8 {
+pub instance Div U8 {
 	def div (a b : U8) : U8 := U8.div a b
 }
 
@@ -311,13 +311,13 @@ pub instance ToString U8 {
 // U16
 
 #[native u16_add]
-def U16.add (a b : U16) : U16
+pub def U16.add (a b : U16) : U16
 
 #[native u16_sub]
 pub def U16.sub (a b : U16) : U16
 
 #[native u16_mul]
-def U16.mul (a b : U16) : U16
+pub def U16.mul (a b : U16) : U16
 
 #[native u16_div]
 def U16.div (a b : U16) : U16
@@ -334,7 +334,7 @@ pub def U16.gt (a b : U16) : Bool
 #[native u16_to_string]
 pub def U16.to_string (a : U16) : String
 
-instance Add U16 {
+pub instance Add U16 {
 	def add (a b : U16) : U16 := U16.add a b
 }
 
@@ -342,11 +342,11 @@ pub instance Sub U16 {
 	def sub (a b : U16) : U16 := U16.sub a b
 }
 
-instance HMul U16 U16 U16 {
+pub instance HMul U16 U16 U16 {
 	def mul (a b : U16) : U16 := U16.mul a b
 }
 
-instance Div U16 {
+pub instance Div U16 {
 	def div (a b : U16) : U16 := U16.div a b
 }
 
@@ -366,13 +366,13 @@ pub instance ToString U16 {
 // U32
 
 #[native u32_add]
-def U32.add (a b : U32) : U32
+pub def U32.add (a b : U32) : U32
 
 #[native u32_sub]
 pub def U32.sub (a b : U32) : U32
 
 #[native u32_mul]
-def U32.mul (a b : U32) : U32
+pub def U32.mul (a b : U32) : U32
 
 #[native u32_div]
 def U32.div (a b : U32) : U32
@@ -381,7 +381,7 @@ def U32.div (a b : U32) : U32
 pub def U32.beq (a b : U32) : Bool
 
 #[native u32_lt]
-def U32.lt (a b : U32) : Bool
+pub def U32.lt (a b : U32) : Bool
 
 #[native u32_gt]
 pub def U32.gt (a b : U32) : Bool
@@ -389,7 +389,7 @@ pub def U32.gt (a b : U32) : Bool
 #[native u32_to_string]
 pub def U32.to_string (a : U32) : String
 
-instance Add U32 {
+pub instance Add U32 {
 	def add (a b : U32) : U32 := U32.add a b
 }
 
@@ -397,11 +397,11 @@ pub instance Sub U32 {
 	def sub (a b : U32) : U32 := U32.sub a b
 }
 
-instance HMul U32 U32 U32 {
+pub instance HMul U32 U32 U32 {
 	def mul (a b : U32) : U32 := U32.mul a b
 }
 
-instance Div U32 {
+pub instance Div U32 {
 	def div (a b : U32) : U32 := U32.div a b
 }
 
@@ -419,32 +419,32 @@ pub instance ToString U32 {
 }
 
 #[native u32_and]
-def U32.and (a b : U32) : U32
+pub def U32.and (a b : U32) : U32
 
 #[native u32_or]
-def U32.or (a b : U32) : U32
+pub def U32.or (a b : U32) : U32
 
 #[native u32_xor]
-def U32.xor (a b : U32) : U32
+pub def U32.xor (a b : U32) : U32
 
 #[native u32_shl]
-def U32.shl (a b : U32) : U32
+pub def U32.shl (a b : U32) : U32
 
 #[native u32_shr]
-def U32.shr (a b : U32) : U32
+pub def U32.shr (a b : U32) : U32
 
 #[native u32_to_u8]
-def U32.to_u8 (a : U32) : U8
+pub def U32.to_u8 (a : U32) : U8
 
-def U32.not (a : U32) : U32 := U32.xor a 0xFFFFFFFFu32
+pub def U32.not (a : U32) : U32 := U32.xor a 0xFFFFFFFFu32
 
-def U32.rotr (a n : U32) : U32 :=
+pub def U32.rotr (a n : U32) : U32 :=
 	U32.or (U32.shr a n) (U32.shl a (U32.sub 32u32 n))
 
 // U64
 
 #[native u64_add]
-def U64.add (a b : U64) : U64
+pub def U64.add (a b : U64) : U64
 
 #[native u64_sub]
 pub def U64.sub (a b : U64) : U64
@@ -453,10 +453,10 @@ pub def U64.sub (a b : U64) : U64
 def U64.mul (a b : U64) : U64
 
 #[native u64_div]
-def U64.div (a b : U64) : U64
+pub def U64.div (a b : U64) : U64
 
 #[native u64_mod]
-def U64.mod (a b : U64) : U64
+pub def U64.mod (a b : U64) : U64
 
 #[native u64_xor]
 def U64.xor (a b : U64) : U64
@@ -473,7 +473,7 @@ pub def U64.gt (a b : U64) : Bool
 #[native u64_to_string]
 pub def U64.to_string (a : U64) : String
 
-instance Add U64 {
+pub instance Add U64 {
 	def add (a b : U64) : U64 := U64.add a b
 }
 
@@ -481,15 +481,15 @@ pub instance Sub U64 {
 	def sub (a b : U64) : U64 := U64.sub a b
 }
 
-instance HMul U64 U64 U64 {
+pub instance HMul U64 U64 U64 {
 	def mul (a b : U64) : U64 := U64.mul a b
 }
 
-instance Div U64 {
+pub instance Div U64 {
   def div (a b : U64) : U64 := U64.div a b
 }
 
-instance Hashable U64 {
+pub instance Hashable U64 {
   def hash (a : U64) : U64 := a
 }
 
@@ -532,7 +532,7 @@ pub def F32.gt (a b : F32) : Bool
 #[native f32_to_string]
 pub def F32.to_string (a : F32) : String
 
-instance Add F32 {
+pub instance Add F32 {
 	def add (a b : F32) : F32 := F32.add a b
 }
 
@@ -540,11 +540,11 @@ pub instance Sub F32 {
 	def sub (a b : F32) : F32 := F32.sub a b
 }
 
-instance HMul F32 F32 F32 {
+pub instance HMul F32 F32 F32 {
 	def mul (a b : F32) : F32 := F32.mul a b
 }
 
-instance Div F32 {
+pub instance Div F32 {
 	def div (a b : F32) : F32 := F32.div a b
 }
 
@@ -607,7 +607,7 @@ pub def F64.to_string (a : F64) : String
 #[native f64_of_string]
 pub def F64.bits_of_string (text : String) : I64
 
-instance Add F64 {
+pub instance Add F64 {
 	def add (a b : F64) : F64 := F64.add a b
 }
 
@@ -615,11 +615,11 @@ pub instance Sub F64 {
 	def sub (a b : F64) : F64 := F64.sub a b
 }
 
-instance HMul F64 F64 F64 {
+pub instance HMul F64 F64 F64 {
 	def mul (a b : F64) : F64 := F64.mul a b
 }
 
-instance Div F64 {
+pub instance Div F64 {
 	def div (a b : F64) : F64 := F64.div a b
 }
 

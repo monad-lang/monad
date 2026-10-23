@@ -13,7 +13,7 @@ type Protocol (I : Type) (J : Type) (A : Type) {
     protocol (val : A)
 }
 
-instance IndexedMonad Protocol {
+pub instance IndexedMonad Protocol {
     def pure (a : A) : Protocol I I A :=
         Protocol.protocol a
 
@@ -41,7 +41,7 @@ instance IndexedMonad Protocol {
 /// type (it keys on `(class, type_head)`, and the bridge has `M` as its head, not
 /// `Protocol`). This direct instance works around that limitation —
 /// `term_head_path(Protocol I I)` returns `Protocol`, which `KnownInstances` finds.
-instance Monad (Protocol I I) {
+pub instance Monad (Protocol I I) {
     def pure (a : A) : Protocol I I A :=
         Protocol.protocol a
     def bind (a : Protocol I I A) (f : A -> Protocol I I B) : Protocol I I B :=

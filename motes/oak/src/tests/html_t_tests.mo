@@ -29,7 +29,7 @@ def render_bind_run {A : Type} {B : Type} (f : A -> RenderM B) (log : List Strin
         RenderM.render_m log2 b => RenderM.render_m (List.append log log2) b
     }
 
-instance Monad RenderM {
+pub instance Monad RenderM {
     def pure (a : A) : RenderM A := render_pure a
     def bind (ma : RenderM A) (f : A -> RenderM B) : RenderM B :=
         match ma { render_m log a => render_bind_run f log a }

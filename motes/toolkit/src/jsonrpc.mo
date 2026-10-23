@@ -32,7 +32,7 @@ use json::json {Json}
 // default in the loader). A warning shared with main's own corpus beats an
 // error that fails the build, and `lang/src/json.mo:7`'s `{BTreeMap, BTreeMap.to_list, empty}` is the
 // spelling to match. The 21 such warnings in this corpus all predate these motes.
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 // --- Error codes ---
 //

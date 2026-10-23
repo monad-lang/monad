@@ -22,7 +22,7 @@
 use json::json {
     Json, Json.make_str, Json.make_object, Json.get_str, Json.get_object, Json.object_get,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 pub struct ToolCall {
     id : String,

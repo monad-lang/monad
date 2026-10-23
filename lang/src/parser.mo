@@ -1,6 +1,7 @@
 /// Self-hosted Monad grammar parser.
 /// Split into modules for maintainability.
 use lang::types {
+  Similar,
   AttrArg, Attribute, Decl, DebugName, DoStmt, FieldPattern, FieldPatternEntry, Identifier,
   InductConstructor, LocatedSpan, Location, ModulePath, Multiplicity, NamePath,
   NameRef, OpenFilter, Param, ParseClass, ParseClassDef, ParseDecl, ParseDef,

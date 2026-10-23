@@ -23,7 +23,7 @@ def app_bind_run {A : Type} {B : Type} (f : A -> AppM B) (log : List String) (a 
         AppM.app_m log2 b => AppM.app_m (List.append log log2) b
     }
 
-instance Monad AppM {
+pub instance Monad AppM {
     def pure (a : A) : AppM A := app_pure a
     def bind (ma : AppM A) (f : A -> AppM B) : AppM B :=
         match ma { app_m log a => app_bind_run f log a }

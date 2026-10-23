@@ -17,14 +17,14 @@ def State.bind_step (ma : State S A) (f : A -> State S B) (s : S) : Pair S B :=
         Pair.pair ns a => State.run (f a) ns
     }
 
-instance Monad (State S) {
+pub instance Monad (State S) {
     def pure (a : A) : State S A :=
         State.state (fn s => Pair.pair s a)
     def bind (ma : State S A) (f : A -> State S B) : State S B :=
         State.state (State.bind_step ma f)
 }
 
-instance MonadState (State I64) {
+pub instance MonadState (State I64) {
     def get : State I64 I64 :=
         State.state (fn s => Pair.pair s s)
     def set (new_s : I64) : State I64 Unit :=

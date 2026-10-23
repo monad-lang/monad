@@ -64,9 +64,20 @@ def package_private : I64 := 2  // visible inside this mote (the default)
 priv def module_only : I64 := 3 // visible only in this file's module
 ```
 
-`priv` is enforced by the self-hosted compiler (and the LSP); `monad-rs check`
-does not gate it. The default is package-private and a cross-mote reference
-to an unmarked declaration warns — mark it `pub` or reconsider the import.
+Both boundaries are **enforced as load errors** by both compilers, on every
+load path (`check`/`run`/`test`/`build`/the LSP): a `priv` declaration is
+invisible outside its own module, and a package-private (unmarked) one is
+invisible outside its own mote. The rule is judged at the *reference* — every
+name a file reaches, including dotted member names, glob imports, `open`ed
+names and the ambient prelude — by the `use`-completeness gate
+(`lang/src/use_completeness.mo`, `core/src/term/module.rs`), so naming a
+hidden declaration in a `use` line does not help; the declaration itself has
+to be marked `pub`. Instances follow the same rule: a hidden instance is not
+a dictionary candidate for another mote. A macro's own NAME is exempt (a
+`defmacro`/`DeclGen` carries no visibility field, so no remedy could be
+offered), but the declarations it generates are `pub`: expansion decides,
+because `MetaDecl.d_def`/`d_instance` carry no visibility either and a
+derive's output is the type's public API.
 
 The **affine usage rule** (an unannotated binder may be used at most once
 unless `Copy A` resolves) is likewise enforced only by the self-hosted

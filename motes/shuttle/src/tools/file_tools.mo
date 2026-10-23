@@ -10,7 +10,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::gate {Capability}
 use shuttle::tools::file {read_run, write_run, edit_run}
 use json::json {Json}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 /// A JSON-Schema object for one string parameter. The three tools'
 /// implementations deserialize their arguments via

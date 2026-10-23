@@ -1,37 +1,37 @@
 
-type Any {
+pub type Any {
 	any {A : Type} (value: A)
 }
 
-class Functor (F: Type -> Type) {
+pub class Functor (F: Type -> Type) {
 	def map (f: A -> B) : (F A) -> F B
 }
 
-class FromListLiteral (L : Type -> Type := List) {
+pub class FromListLiteral (L : Type -> Type := List) {
 	def cons (a : A) (L A) : L A
 	def empty : L A 
 }
 
 /// Hetrogenous addition class
-class HAdd A B C {
+pub class HAdd A B C {
 	def add : A -> B -> C
 }
 
 /// Homogenous addition
-class Add A {
+pub class Add A {
 	def add : A -> A -> A
 }
 
-instance [HAdd A A A] Add A {
+pub instance [HAdd A A A] Add A {
 	def add (a b : A) : A := HAdd.add a b
 }
 
-instance [Add A] HAdd A A A {
+pub instance [Add A] HAdd A A A {
 	def add (a b : A) : A := Add.add a b
 }
 
 /// Heterogeneous multiplication
-class HMul A B C {
+pub class HMul A B C {
 	def mul : A -> B -> C
 }
 
@@ -40,35 +40,35 @@ pub class Sub A {
 	def sub : A -> A -> A
 }
 
-class Div A {
+pub class Div A {
 	def div : A -> A -> A
 }
-infix (+) := HAdd.add
+pub infix (+) := HAdd.add
 
-infix (/) := Div.div
+pub infix (/) := Div.div
 
-infix (*) := HMul.mul
+pub infix (*) := HMul.mul
 
-infix (-) := Sub.sub
+pub infix (-) := Sub.sub
 
 
-class [Functor F] Applicative (F: Type -> Type) {
+pub class [Functor F] Applicative (F: Type -> Type) {
     def pure : A -> F A
     def apply : F (A -> B) -> F A -> F B
 }
 
-class [Applicative M] Monad (M: Type -> Type) {
+pub class [Applicative M] Monad (M: Type -> Type) {
     def bind (a : M A) (f : A -> M B) : M B
     def pure : A -> M A
 }
 
-infix (>>=) := Monad.bind
+pub infix (>>=) := Monad.bind
 
 /// Dual of `Monad`: `extract` pulls the value out of a context; `duplicate`
 /// and `extend` push the context inwards. All three are required -- the usual
 /// `extend f = map f . duplicate` default would need a `Functor` superclass
 /// constraint, and a superclass constraint gets no slot in the dictionary.
-class Comonad (W : Type -> Type) {
+pub class Comonad (W : Type -> Type) {
     def extract (W A) : A
     def duplicate (W A) : W (W A)
     def extend (f : W A -> B) (W A) : W B
@@ -93,31 +93,31 @@ pub class MonadState (M : Type -> Type) {
 }
 
 /// Lift computations from monad `m` into monad `n`
-class MonadLift (m : Type -> Type) (n : Type -> Type) {
+pub class MonadLift (m : Type -> Type) (n : Type -> Type) {
     def monad_lift (a : m A) : n A
 }
 
 /// Transitive monad lift. The reflexive instance (lifting from
 /// `m` to `m`) is the identity below; for other pairs, provide
 /// an instance that delegates to `MonadLift`.
-class MonadLiftT (m : Type -> Type) (n : Type -> Type) {
+pub class MonadLiftT (m : Type -> Type) (n : Type -> Type) {
     def monad_lift_t (a : m A) : n A
 }
 
 /// Reflexive: lifting from m to m is the identity
-instance MonadLiftT m m {
+pub instance MonadLiftT m m {
     def monad_lift_t (a : m A) : m A := a
 }
 
-type Void {}
+pub type Void {}
 
 /// UTF8 string
-type String {
+pub type String {
 	of_bytes (List U8)
 }
 
 /// UTF8 code point
-type Char {
+pub type Char {
 	of_bytes (List U8)
 }
 
@@ -127,36 +127,36 @@ pub class ToString A {
 
 /// Primitive number types
 
-type I64 {}
-type I32 {}
-type I16 {}
-type I8 {}
+pub type I64 {}
+pub type I32 {}
+pub type I16 {}
+pub type I8 {}
 
-type U64 {}
-type U32 {}
-type U16 {}
-type U8 {}
+pub type U64 {}
+pub type U32 {}
+pub type U16 {}
+pub type U8 {}
 
-type F64 {}
-type F32 {}
+pub type F64 {}
+pub type F32 {}
 
 /// Opaque C pointer for the `#[extern "c"]` FFI. A `Ptr` value is the
 /// raw machine word under every backend; never match, compare or print
 /// one (the `FdStream` convention, std/src/stream.mo).
-type Ptr {}
+pub type Ptr {}
 
 /// The NULL pointer — `SSL_set_verify`'s callback argument is the first
 /// caller (motes/tls).
 #[native "ptr_null"]
-def Ptr.null : Ptr
+pub def Ptr.null : Ptr
 
 /// The fixed `(void*)-1` sentinel (SQLite's `SQLITE_TRANSIENT` is one
 /// user). It takes no input, so unlike a general I64-to-Ptr conversion it
 /// cannot produce an arbitrary address.
 #[native "ptr_minus_one"]
-def Ptr.minus_one : Ptr
+pub def Ptr.minus_one : Ptr
 
-type Unit {
+pub type Unit {
 	unit
 }
 
@@ -170,7 +170,7 @@ type Unit {
 // hand if this file's `open`s ever change.
 open Unit {unit}
 
-type Bool {
+pub type Bool {
 	true,
 	false
 }
@@ -178,20 +178,20 @@ type Bool {
 open Bool {and, false, not, or, true}
 
 /// Trivially true proposition (unit in Prop)
-type True : Prop {
+pub type True : Prop {
     trivial
 }
 
 open True {trivial}
 
 /// Propositional equality: Eq A a b lives in Prop (Sort 0)
-type Eq (A : Sort 1) (a : A) (b : A) : Prop {
+pub type Eq (A : Sort 1) (a : A) (b : A) : Prop {
     refl : Eq A a a
 }
 
 /// Native J eliminator for propositional equality
 #[native "eq_rec"]
-def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
+pub def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
     (h : P a (Eq.refl a)) (b : A) (e : Eq A a b) : P b e
 
 /// Equals
@@ -208,7 +208,7 @@ pub instance BEq Bool {
 // TODO Constraint resolving
 // def BEq.not_beq [BEq A] (a b : A) : Bool := not (a == b)
 
-infix (==) := BEq.beq
+pub infix (==) := BEq.beq
 // infix (!=) := BEq.not_beq
 
 /// Ordered comparison
@@ -220,13 +220,13 @@ pub class BOrd A {
   // def gte (a b : A) : Bool := not (BOrd.lt a b)
 }
 
-infix (<) := BOrd.lt
+pub infix (<) := BOrd.lt
 
 // TODO
 // infix (<=) := BOrd.lte
 // infix (>=) := BOrd.gte
 
-infix (>) := BOrd.gt
+pub infix (>) := BOrd.gt
 
 pub instance BOrd Bool {
   def lt (a b : Bool) : Bool :=
@@ -239,44 +239,44 @@ pub instance BOrd Bool {
 }
 
 /// Hashable: produce a hash value for an element.
-class Hashable A {
+pub class Hashable A {
   def hash (a : A) : U64
 }
 
-type DefaultValue (A: Type) (default : A) {
+pub type DefaultValue (A: Type) (default : A) {
 	default
 }
 
-def Bool.not (b : Bool) : Bool := if b then false else true
+pub def Bool.not (b : Bool) : Bool := if b then false else true
 
-def Bool.and (a b : Bool) : Bool := if a then b else false
+pub def Bool.and (a b : Bool) : Bool := if a then b else false
 
-infix (&&) := Bool.and
+pub infix (&&) := Bool.and
 
-def Bool.or (a b : Bool) : Bool := if a then true else b
+pub def Bool.or (a b : Bool) : Bool := if a then true else b
 
-infix (||) := Bool.or
+pub infix (||) := Bool.or
 
-type Result E A {
+pub type Result E A {
 	ok (a: A),
 	err (e: E)
 }
 
 /// Whether `r` is `Result.ok` -- for a caller that checks an effect's
 /// outcome (a test asserting a write landed) without needing its value.
-def Result.is_ok {E A : Type} (r : Result E A) : Bool :=
+pub def Result.is_ok {E A : Type} (r : Result E A) : Bool :=
 	match r {
 		Result.ok _ => true,
 		Result.err _ => false
 	}
 
-type Pair A B {
+pub type Pair A B {
 	pair (first : A) (second : B)
 }
 
 /// The product comonad: `E` is a read-only environment, so `extract` is the
 /// second component and `duplicate` copies it into both halves.
-instance {E : Type} Comonad (Pair E) {
+pub instance {E : Type} Comonad (Pair E) {
     def extract (p : Pair E A) : A :=
         match p { Pair.pair _ a => a }
 
@@ -300,7 +300,7 @@ instance {E : Type} Comonad (Pair E) {
 /// shape was unrepresentable until constructor parameter lists were made
 /// to bind; before that the mention dangled and was silently generalized
 /// into an unrelated implicit.
-type Sigma (A : Type) (B : A -> Type) {
+pub type Sigma (A : Type) (B : A -> Type) {
 	dpair (fst : A) (snd : B fst)
 }
 
@@ -312,7 +312,7 @@ type Sigma (A : Type) (B : A -> Type) {
 /// `Type` (`Sort 1`), so an `Exists` built from it would lose the `Prop`
 /// discipline. Merging the two is for when universe levels become
 /// variables.
-type Exists (A : Type) (P : A -> Prop) : Prop {
+pub type Exists (A : Type) (P : A -> Prop) : Prop {
 	intro (a : A) (proof : P a)
 }
 
@@ -337,25 +337,25 @@ pub def Sigma.fst {A : Type} {B : A -> Type} (p : Sigma A B) : A :=
 
 open Result {err, ok}
 
-type Option A {
+pub type Option A {
 	some (a: A),
 	none
 }
 
 open Option {none, some}
 
-def Option.get_or_default (default : A) (self : Option A) : A :=
+pub def Option.get_or_default (default : A) (self : Option A) : A :=
 	match self {
 		some a => a,
 		none => default
 	}
 
-type Nat {
+pub type Nat {
 	zero,
 	succ (n : Nat)
 }
 
-def Nat.add (a b : Nat) : Nat :=
+pub def Nat.add (a b : Nat) : Nat :=
 	match a {
 		zero => b,
 		succ n => Nat.succ (Nat.add n b)
@@ -370,13 +370,13 @@ pub def Nat.sub (a b : Nat) : Nat :=
 		}
 	}
 
-def Nat.mul (a b : Nat) : Nat :=
+pub def Nat.mul (a b : Nat) : Nat :=
 	match a {
 		zero => Nat.zero,
 		succ n => Nat.add b (Nat.mul n b)
 	}
 
-def Nat.eq (a b : Nat) : Bool :=
+pub def Nat.eq (a b : Nat) : Bool :=
 	match a {
 		zero => match b {
 			zero => true,
@@ -394,7 +394,7 @@ pub instance BEq Nat {
 	def beq (a b : Nat) : Bool := Nat.eq a b
 }
 
-instance Add Nat {
+pub instance Add Nat {
 	def add (a b : Nat) : Nat := Nat.add a b
 }
 
@@ -405,12 +405,12 @@ pub instance Sub Nat {
 pub def Lens [Functor F] {F : Type -> Type} (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
 	(A -> F B) -> S -> F T
 
-type List A {
+pub type List A {
 	empty,
 	cons (a : A) (List A) : List A
 }
 
-instance FromListLiteral List {
+pub instance FromListLiteral List {
 	def cons (a: A) (l : List A) : List A := List.cons a l
 	def empty : List A := List.empty
 }
@@ -422,7 +422,7 @@ pub def List.is_empty (self : List A) : Bool :=
 		_ => true
 	}
 
-def List.append (a b : List A) : List A :=
+pub def List.append (a b : List A) : List A :=
 	match a {
 		empty => b,
 		cons el_a tail => List.cons el_a (List.append tail b),
@@ -430,19 +430,19 @@ def List.append (a b : List A) : List A :=
 	}
 
 /// Append b to value a
-class Append A {
+pub class Append A {
 	def append (a b : A) : A
 }
 
-infix (++) := Append.append
+pub infix (++) := Append.append
 
-def List.first (self : List A) : Option A :=
+pub def List.first (self : List A) : Option A :=
 	match self {
 		empty => none,
 		cons a tail => some a,
 		_ => none
 	}
-def List.last (self : List A) : Option A :=
+pub def List.last (self : List A) : Option A :=
 	match self {
 		empty => none,
 		cons a tail => if List.is_empty tail
@@ -450,21 +450,21 @@ def List.last (self : List A) : Option A :=
 			else List.last tail,
 		_ => none
 	}
-def List.flatten (self : List (List A)) : List A :=
+pub def List.flatten (self : List (List A)) : List A :=
 	match self {
 		empty => List.empty,
 		cons list tail => List.append list (List.flatten tail),
 		_ => List.empty
 	}
 
-def List.tail (l : List A) : List A :=
+pub def List.tail (l : List A) : List A :=
 	match l {
 		empty => List.empty,
 		cons a tail => tail,
 		_ => List.empty
 	}
 
-def List.map (f : A -> B) (self: List A) : List B :=
+pub def List.map (f : A -> B) (self: List A) : List B :=
 		match self {
 			empty => List.empty,
 			cons a tail => List.cons (f a) (List.map f tail),
@@ -472,7 +472,7 @@ def List.map (f : A -> B) (self: List A) : List B :=
 		}
 
 
-instance Functor List {
+pub instance Functor List {
   // `List.map` (not the recursive `Functor.map`) -- a match-arm PATTERN-
   // bound variable (`tail`, from `cons a tail => ...`) is never added to
   // `env` by `resolve_class_call_term`'s term walker (`lang/scope.mo`,
@@ -491,22 +491,22 @@ instance Functor List {
 }
 
 /// A length-indexed vector: Vec len A is a list of exactly len elements of type A
-type Vec (len : Nat) A {
+pub type Vec (len : Nat) A {
 	nil : Vec Nat.zero A,
 	cons (head : A) (tail : Vec len A) : Vec (Nat.succ len) A
 }
 
-def fun_apply (f : A -> B) (a : A) : B := f a 
+pub def fun_apply (f : A -> B) (a : A) : B := f a
 
-infix (<|) := fun_apply
+pub infix (<|) := fun_apply
 
-def apply_fun (a : A) (f : A -> B) : B := f a 
+pub def apply_fun (a : A) (f : A -> B) : B := f a
 
-infix (|>) := apply_fun
+pub infix (|>) := apply_fun
 
 /// Indexed monad: M I J A
 /// I = initial index, J = final index, A = value
-class IndexedMonad (M : Type -> Type -> Type -> Type) {
+pub class IndexedMonad (M : Type -> Type -> Type -> Type) {
     def pure (a : A) : M I I A
     def bind (a : M I J A) (f : A -> M J K B) : M I K B
 
@@ -525,7 +525,7 @@ class IndexedMonad (M : Type -> Type -> Type -> Type) {
 /// Any `IndexedMonad M` at equal indices (`M I I`) is a regular `Monad`.
 /// This bridge instance provides `Monad (M I I)` for every `IndexedMonad M`,
 /// enabling do-notation for indexed monads without type-checker changes.
-instance {I : Type} [IndexedMonad M] Monad (M I I) {
+pub instance {I : Type} [IndexedMonad M] Monad (M I I) {
     def pure (a : A) : M I I A := IndexedMonad.pure a
     def bind (a : M I I A) (f : A -> M I I B) : M I I B := IndexedMonad.bind a f
 }
@@ -542,7 +542,7 @@ pub class IndexedMonadState (M : Type -> Type -> Type -> Type) {
 }
 
 /// Lift computations from indexed monad `m` into indexed monad `n`
-class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type -> Type -> Type) {
+pub class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type -> Type -> Type) {
     def monad_lift (a : m I J A) : n I J A
 }
 

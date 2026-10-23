@@ -18,7 +18,7 @@ use json::json {
     Json, Json.make_object, Json.make_str, Json.make_num_int,
     Json.get_object, Json.get_str, Json.get_num_i64, Json.object_get,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use openai::client {OpenAI.complete_stream}
 use shuttle::wire::openai {OpenAI.encode_request, OpenAI.decode_response}
 use anthropic::client {Anthropic.complete_stream}

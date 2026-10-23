@@ -35,13 +35,13 @@ def show_body (show_elem : A -> String) (xs : List A) : String :=
     }
 
 // Element-wise Show (List A) - dispatches via runtime type inference
-instance [Show A] Show (List A) {
+pub instance [Show A] Show (List A) {
     def show (xs: List A) : String :=
         list_show (fn a => Show.show a) xs
 }
 
 // Element-wise BEq (List A) - dispatches via runtime type inference
-instance [BEq A] BEq (List A) {
+pub instance [BEq A] BEq (List A) {
     def beq (xs ys : List A) : Bool :=
         match xs {
             empty => match ys {
@@ -58,7 +58,7 @@ instance [BEq A] BEq (List A) {
             _ => false
         }
 }
-instance {A : Type} Append (List A) {
+pub instance {A : Type} Append (List A) {
     def append (a b : List A) : List A := List.append a b
 }
 

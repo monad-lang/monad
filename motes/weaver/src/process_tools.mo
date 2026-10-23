@@ -8,7 +8,7 @@ use json::json {
     Json, Json.make_object, Json.make_str, Json.make_array, Json.get_array,
 }
 use weaver::process_args {StartProcessArgs, ReadProcessArgs, KillProcessArgs}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::io {IO.current_time_nano}
 use std::path {Path.to_string}
 use init::transformers {ResultT}

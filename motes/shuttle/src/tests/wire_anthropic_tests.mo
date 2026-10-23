@@ -12,7 +12,7 @@ use shuttle::tool {ToolSpec}
 use anthropic::types {AnthropicMessage, Block, MessagesRequest, MessagesResponse}
 use json::json {Json, Json.parse, Json.to_string}
 use std::list {List.length}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 /// A recorded text-turn body, exactly as Anthropic sends it: content
 /// is a block ARRAY, `stop_reason` is `end_turn`, and the cold-start

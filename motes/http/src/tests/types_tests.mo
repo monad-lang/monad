@@ -7,6 +7,7 @@ use http::types {
   Response.with_header, Status.internal_server_error, Status.not_found,
   Status.ok, Uri, http1_0, http1_1,
 }
+use std::show {Show}
 
 #[test]
 def test_request_get_fields : Bool :=

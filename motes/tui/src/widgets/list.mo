@@ -41,7 +41,7 @@ def string_list_beq (a b : List String) : Bool :=
 def ListState.beq (a b : ListState) : Bool :=
     string_list_beq a.items b.items && a.selected == b.selected && a.offset == b.offset
 
-instance BEq ListState {
+pub instance BEq ListState {
     def beq (a b : ListState) : Bool := ListState.beq a b
 }
 

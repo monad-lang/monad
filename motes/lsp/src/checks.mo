@@ -46,7 +46,7 @@ use lang::module {
   ModuleInfoCache, RangedFileCheck, check_file_cached_from_source_ranged, module_info_cache_empty,
   ranged_file_cache,
 }
-use std::map {BTreeMap, BTreeMap.to_list}
+use std::map {Map, BTreeMap, BTreeMap.to_list}
 use toolkit::docstore {docstore_path_of_uri}
 
 // --- One check ---

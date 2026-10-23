@@ -18,7 +18,7 @@ use shuttle::gate {Capability}
 use shuttle::tools::file_tools {ReadTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use json::json {Json, Json.make_object, Json.make_str, Json.make_array}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::io {IO.current_time_nano}
 use std::path {Path, Path.to_string, Path.with_suffix}
 use std::process {process_id, exec_cmd}

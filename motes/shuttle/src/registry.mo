@@ -5,7 +5,7 @@
 /// constructors fails macro-expansion's capture pass with `unbound
 /// variable`, even though the constructor is real.
 use shuttle::tool {ToolSpec, ToolImpl}
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 pub type ToolRegistry {
     registry (tools : BTreeMap String ToolImpl),

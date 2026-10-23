@@ -34,7 +34,7 @@ def BorderStyle.beq (a b : BorderStyle) : Bool :=
         thick => match b { thick => true, _ => false }
     }
 
-instance BEq BorderStyle {
+pub instance BEq BorderStyle {
     def beq (a b : BorderStyle) : Bool := BorderStyle.beq a b
 }
 

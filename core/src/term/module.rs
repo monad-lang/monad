@@ -609,13 +609,23 @@ impl GlobalScopeData {
       })
       .collect();
 
-    // Build instances from all visible modules
+    // Build instances from all visible modules, minus the ones this
+    // consumer may not use. An instance's visibility follows the same
+    // boundary as a declaration's (`pub` everywhere, `priv` only in its
+    // own module, the default only in its own mote); a hidden instance is
+    // simply not a candidate, so `Copy` fails closed and dictionary
+    // dispatch reports "no instance" rather than silently using another
+    // mote's. `from_modules` (the whole-program scope the evaluator uses)
+    // has no single consumer and stays unfiltered -- a documented gap in
+    // `plans/implementations/visibility-declarations.md`.
+    let consumer = module.path();
     let instances: Map<NamePath, Vec<Instance>> = visible_modules
       .iter()
-      .flat_map(|(_path, modu)| {
+      .flat_map(|(path, modu)| {
         modu
           .instances
           .iter()
+          .filter(|ins| instance_visible_from(consumer, path, ins.value().vis))
           .map(|ins| (ins.class_name.clone(), ins.value().clone()))
       })
       .fold(Map::new(), merge_push_instance);
@@ -2013,7 +2023,8 @@ fn check_use_completeness(
   loaded: &LoadedModules,
   file: Option<&std::path::Path>,
 ) -> Result<(), LoadingError> {
-  let unimported = unimported_names(&consumer, decls, loaded);
+  let consumer_mote = file.and_then(mote_name_of_file);
+  let unimported = unimported_names_from(&consumer, consumer_mote.as_deref(), decls, loaded);
   if unimported.is_empty() {
     return Ok(());
   }
@@ -2530,6 +2541,15 @@ fn declared_names_of(module: &Module) -> Vec<String> {
 // editor sees and the check the loader runs cannot drift apart.
 
 /// One name a module reaches from another module without importing it.
+/// Why a name is not usable here. The two are different failures with
+/// different remedies: an unimported name is reachable once named in a
+/// `use` line, while a hidden one is not reachable from this mote at all.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FindingKind {
+  Unimported,
+  Hidden,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnimportedName {
   /// The name as written at the reference site.
@@ -2543,6 +2563,9 @@ pub struct UnimportedName {
   /// Whether the declaration is an inductive constructor, which may also
   /// be named by its bare tail (`{cons}` for `List.cons`).
   pub is_constructor: bool,
+  pub kind: FindingKind,
+  /// The declaration's visibility, for the hidden message's remedy.
+  pub vis: Visibility,
 }
 
 /// The finding itself, WITHOUT a severity word: it is the load failure's
@@ -2553,12 +2576,106 @@ pub struct UnimportedName {
 impl Display for UnimportedName {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let module = module_path_spelling(&self.owner);
-    write!(
-      f,
-      "`{}` is not imported\n  `{}` is declared in `{}`\n  hint: add it to a `use {} {{...}}` line -- `use {} {{{}}}` names it",
-      self.name, self.spelling, module, module, module, self.spelling
-    )
+    match self.kind {
+      FindingKind::Unimported => write!(
+        f,
+        "`{}` is not imported\n  `{}` is declared in `{}`\n  hint: add it to a `use {} {{...}}` line -- `use {} {{{}}}` names it",
+        self.name, self.spelling, module, module, module, self.spelling
+      ),
+      FindingKind::Hidden => {
+        let declaration = match self.vis {
+          Visibility::Priv => {
+            format!("`{}` is declared `priv` in `{}`", self.spelling, module)
+          }
+          _ => format!(
+            "`{}` is declared in `{}` and is not marked `pub`",
+            self.spelling, module
+          ),
+        };
+        let mote = self
+          .owner
+          .first()
+          .map(|m| format!(" in mote `{}`", m.as_str()))
+          .unwrap_or_default();
+        write!(
+          f,
+          "`{}` is not visible here\n  {}\n  hint: mark `{}` `pub`{}, or reword the reference",
+          self.name, declaration, self.spelling, mote
+        )
+      }
+    }
   }
+}
+
+/// May a module whose path is `consumer` -- whose MOTE is `consumer_mote`,
+/// resolved from its manifest -- reference `row`'s declaration?
+///
+/// `pub` is visible everywhere; `priv` only inside the module that
+/// declares it; the default (package-private) inside its own MOTE. The
+/// own-module check comes first and does not consult motes: the entry
+/// module of a single-file check is named by its file stem, not
+/// mote-qualified, and a module always sees everything it declares.
+///
+/// `consumer_mote == None` means the file is outside any mote (a script,
+/// or `examples/` at the virtual workspace root): no package boundary to
+/// cross.
+fn decl_row_visible(consumer: &ModulePath, consumer_mote: Option<&str>, row: &DeclRow) -> bool {
+  if row.owner == *consumer {
+    return true;
+  }
+  match row.vis {
+    Visibility::Pub => true,
+    Visibility::Priv => false,
+    Visibility::PackagePrivate => match consumer_mote {
+      None => true,
+      Some(here) => match row.owner.first() {
+        // A builtin or otherwise unowned declaration has no boundary.
+        Some(m) => m.as_str() == here,
+        None => true,
+      },
+    },
+  }
+}
+
+/// May a module whose path is `consumer` use an instance that `owner`
+/// declares with visibility `vis`? Same rule as `decl_row_visible`, minus
+/// the file-stem caveat: `GlobalScopeData::from_module` is built from
+/// canonical module paths only.
+fn instance_visible_from(consumer: &ModulePath, owner: &ModulePath, vis: Visibility) -> bool {
+  if owner == consumer {
+    return true;
+  }
+  match vis {
+    Visibility::Pub => true,
+    Visibility::Priv => false,
+    Visibility::PackagePrivate => match (consumer.first(), owner.first()) {
+      (Some(c), Some(o)) => c.as_str() == o.as_str(),
+      _ => true,
+    },
+  }
+}
+
+/// The import half of the judgment, ignoring visibility: is this candidate
+/// accounted for by the consumer's own `use`/`open` lines, or by ambient
+/// visibility?
+fn row_imported(
+  consumer: &ModulePath,
+  ambient: &Set<ModulePath>,
+  selection: &Map<ModulePath, Selection>,
+  spelling: &NamePath,
+  is_ctor: bool,
+  owner: &ModulePath,
+  qual: bool,
+) -> bool {
+  owner == consumer
+    || ambient.contains(owner)
+    || selection.get(owner).is_some_and(|s| {
+      if qual {
+        s.selects_qual(spelling, is_ctor)
+      } else {
+        s.selects_bare(spelling, is_ctor)
+      }
+    })
 }
 
 /// The selection each of a consumer's own `use` lines makes, keyed by the
@@ -2751,40 +2868,116 @@ fn own_constructor_tails(module: &Module) -> Vec<String> {
 /// either written form finds its declaration, and the check then asks the
 /// `use` line about the declaration's OWN spelling — so `{cons}` and
 /// `{List.cons}` are judged by the same rule.
-fn declaration_index(loaded: &LoadedModules) -> Map<String, Vec<(ModulePath, NamePath, bool)>> {
-  let mut index: Map<String, Vec<(ModulePath, NamePath, bool)>> = Map::new();
-  let mut push = |key: String, owner: &ModulePath, spelling: NamePath, is_ctor: bool| {
-    let entry = index.entry(key).or_default();
-    let row = (owner.clone(), spelling, is_ctor);
-    if !entry.contains(&row) {
-      entry.push(row);
-    }
-  };
+/// One declaration a loaded module provides, as the judgment needs it:
+/// the owner, the declaration's own spelled name, whether it is a
+/// constructor, and its visibility (constructors and class methods inherit
+/// the block's).
+#[derive(Clone, Debug, PartialEq)]
+struct DeclRow {
+  owner: ModulePath,
+  spelling: NamePath,
+  is_ctor: bool,
+  vis: Visibility,
+}
+
+fn declaration_index(loaded: &LoadedModules) -> Map<String, Vec<DeclRow>> {
+  let mut index: Map<String, Vec<DeclRow>> = Map::new();
+  let mut push =
+    |key: String, owner: &ModulePath, spelling: NamePath, is_ctor: bool, vis: Visibility| {
+      let entry = index.entry(key).or_default();
+      let row = DeclRow {
+        owner: owner.clone(),
+        spelling,
+        is_ctor,
+        vis,
+      };
+      if !entry.contains(&row) {
+        entry.push(row);
+      }
+    };
   for module in loaded.modules() {
     let owner = module.path().clone();
     for ctx in module.defs() {
-      let spelling = ctx.value().name.clone();
-      push(spelling.to_string(), &owner, spelling, false);
+      let def = ctx.value();
+      let spelling = def.name.clone();
+      // MACRO-GENERATED declarations are EXEMPT, matching the self-hosted
+      // gate, whose index is built from parsed decls and so never contains
+      // them (`use_completeness.mo`'s header records the asymmetry: "macro-
+      // generated names are silent, on both sides of the rule"). Expansion
+      // gives generated decls the default (zero) source location,
+      // `SourceContext::no_ctx`; a parsed decl is always at line >= 1.
+      //
+      // The remedy a real rule would offer does not exist yet either:
+      // `MetaDecl.d_def` carries no visibility, so a derive cannot emit
+      // `pub`. Recorded as follow-up in
+      // `plans/implementations/visibility-declarations.md`.
+      let vis = if ctx.loc.start.line == 0 {
+        Visibility::Pub
+      } else {
+        def.vis
+      };
+      push(spelling.to_string(), &owner, spelling, false, vis);
     }
+    // Macro declarations are EXEMPT from the boundary: the decl-gen form
+    // (`defmacro f p := decls { ... }`) carries no visibility field in
+    // either compiler, so a macro name that crossed a mote could not be
+    // marked `pub` -- the rule would have no remedy to offer. They are
+    // compile-time-only and expanded away before checking; the
+    // declarations they generate carry their own visibility.
     for ctx in module.get_macro_defs() {
       let spelling = ctx.value().name.clone();
-      push(spelling.to_string(), &owner, spelling, false);
+      push(
+        spelling.to_string(),
+        &owner,
+        spelling,
+        false,
+        Visibility::Pub,
+      );
     }
     for (name, _) in module.decl_gens_map() {
-      push(name.to_string(), &owner, name.clone(), false);
+      push(
+        name.to_string(),
+        &owner,
+        name.clone(),
+        false,
+        Visibility::Pub,
+      );
     }
     for ind in module.inductives() {
       let name = ind.name().clone();
-      push(name.to_string(), &owner, name, false);
-      // Only an ordinary inductive names constructors — see
-      // `declared_names_of` for why a struct/class must not widen this.
-      if *ind.variant() != InductiveVariant::Generic {
-        continue;
-      }
-      for cons in ind.constructors() {
-        let spelling = cons.name().clone();
-        push(spelling.last().to_string(), &owner, spelling.clone(), true);
-        push(spelling.to_string(), &owner, spelling, true);
+      let vis = ind.vis;
+      push(name.to_string(), &owner, name.clone(), false, vis);
+      match ind.variant() {
+        // Only an ordinary inductive names constructors — see
+        // `declared_names_of` for why a struct/class must not widen this.
+        InductiveVariant::Generic => {
+          for cons in ind.constructors() {
+            let spelling = cons.name().clone();
+            push(
+              spelling.last().to_string(),
+              &owner,
+              spelling.clone(),
+              true,
+              vis,
+            );
+            push(spelling.to_string(), &owner, spelling, true, vis);
+          }
+        }
+        // A Rust class stores its methods as the params of the class's
+        // single synthesized constructor. Indexed under the QUALIFIED
+        // spelling only (`Map.empty`), matching the self-hosted gate: a
+        // method is reached through its type's name, and a bare `empty`
+        // would be a candidate of every class in the corpus.
+        InductiveVariant::Class => {
+          if let Some(con) = ind.constructors().first() {
+            let cls = name.last().clone();
+            for param in con.params() {
+              let spelling = NamePath::new(vec![cls.clone(), param.name.clone()]);
+              push(spelling.to_string(), &owner, spelling, false, vis);
+            }
+          }
+        }
+        InductiveVariant::Struct => {}
       }
     }
   }
@@ -2821,13 +3014,22 @@ fn item_spelling(spelling: &NamePath, is_ctor: bool) -> NamePath {
 /// or `open T {*}`): such an `open` can put an unbounded set of names in
 /// scope, so anything said about it would be a guess. Silence there is a
 /// false negative, never a false positive.
-pub fn unimported_names(
+/// The gate's findings. `consumer_mote` is the consumer FILE's mote, from
+/// its manifest, so the package-private boundary can be judged; `None`
+/// means the file is outside any mote (a script, or a caller with no file
+/// to resolve), where there is no boundary to cross.
+pub fn unimported_names_from(
   consumer: &ModulePath,
+  consumer_mote: Option<&str>,
   decls: &[SourceContext<Decl>],
   loaded: &LoadedModules,
 ) -> Vec<UnimportedName> {
   let test_mode = loaded.config.test_mode;
   let mut opened_bare: Set<NamePath> = Set::default();
+  // The `open` SITE, for the visibility half: a reference judge skips every
+  // opened name, so an `open` that reaches another mote's package-private
+  // declaration has to be caught where it is written.
+  let mut open_items: Vec<(NamePath, String)> = Vec::new();
   for ctx in decls {
     let (path, filter) = match ctx.value() {
       Decl::Open(o) => (&o.path, &o.filter),
@@ -2847,8 +3049,14 @@ pub fn unimported_names(
       if let Some(last) = segments.last() {
         opened_bare.insert(NamePath::single(last.clone()));
       }
+      open_items.push((
+        path.clone(),
+        segments
+          .last()
+          .map(|i| i.as_str().to_string())
+          .unwrap_or_default(),
+      ));
     }
-    let _ = path;
   }
 
   let uses: Vec<&Use> = decls
@@ -2895,6 +3103,37 @@ pub fn unimported_names(
   let mut out: Vec<UnimportedName> = Vec::new();
   let mut seen: Set<NamePath> = Set::default();
 
+  // The `open` SITE first: an opened name is skipped by both reference
+  // judges below, so this is the only place a hidden declaration reached
+  // through `open T {n}` can be caught. The declaration is found as the
+  // dotted member (`open IO {println}` -> `IO.println`, `open MetaParam
+  // {p}` -> `MetaParam.p`), then as a plain name.
+  for (path, item) in &open_items {
+    let dotted = format!("{}.{}", path, item);
+    let Some(rows) = index.get(&dotted).or_else(|| index.get(item)) else {
+      continue;
+    };
+    if rows
+      .iter()
+      .any(|row| decl_row_visible(consumer, consumer_mote, row))
+    {
+      continue;
+    }
+    let Some(row) = rows.first() else { continue };
+    let name = NamePath::single(Identifier::new(item.clone()));
+    if !seen.insert(name.clone()) {
+      continue;
+    }
+    out.push(UnimportedName {
+      name,
+      owner: row.owner.clone(),
+      spelling: row.spelling.clone(),
+      is_constructor: row.is_ctor,
+      kind: FindingKind::Hidden,
+      vis: row.vis,
+    });
+  }
+
   // A QUALIFIED reference names its module outright (`std::map::HashMap`),
   // so it is judged against that module's qualified axis -- the axis
   // `use M {}` and bare `use M` leave wide open. Nothing here is ambiguous
@@ -2905,31 +3144,37 @@ pub fn unimported_names(
     // `List.cons`, and only the latter is a legal list item.
     let declared = index
       .get(&name.to_string())
-      .and_then(|rows| rows.iter().find(|(owner, _, _)| owner == module));
-    let Some((_, declared_spelling, declared_ctor)) = declared else {
+      .and_then(|rows| rows.iter().find(|row| row.owner == *module));
+    let Some(row) = declared else {
       // Not a top-level declaration of `module` at all: no brace item
       // could name it, so there is nothing to suggest. Whether the name
       // exists anywhere is resolution's business, not this check's.
       continue;
     };
-    let spelling = item_spelling(declared_spelling, *declared_ctor);
-    let is_ctor = *declared_ctor;
-    let visible = module == consumer
-      || ambient.contains(module)
-      || own.contains(&name)
-      || own_keys.contains(&name.to_string())
-      || opened_bare.contains(&name)
-      || selection
-        .get(module)
-        .is_some_and(|s| s.selects_qual(&spelling, is_ctor));
+    let spelling = item_spelling(&row.spelling, row.is_ctor);
+    let is_ctor = row.is_ctor;
+    let accounted_by_name =
+      own.contains(name) || own_keys.contains(&name.to_string()) || opened_bare.contains(name);
+    let selected = module == consumer
+      || row_imported(
+        consumer, &ambient, &selection, &spelling, is_ctor, module, true,
+      );
+    let visible = accounted_by_name || (selected && decl_row_visible(consumer, consumer_mote, row));
     if visible || !seen.insert(name.clone()) {
       continue;
     }
+    let kind = if selected && !decl_row_visible(consumer, consumer_mote, row) {
+      FindingKind::Hidden
+    } else {
+      FindingKind::Unimported
+    };
     out.push(UnimportedName {
       name: name.clone(),
       owner: module.clone(),
       spelling,
       is_constructor: is_ctor,
+      kind,
+      vis: row.vis,
     });
   }
 
@@ -2947,28 +3192,49 @@ pub fn unimported_names(
       // Not this check's business.
       continue;
     };
-    let reachable = candidates.iter().any(|(owner, spelling, is_ctor)| {
-      owner == consumer
-        || ambient.contains(owner)
-        || selection
-          .get(owner)
-          .is_some_and(|s| s.selects_bare(spelling, *is_ctor))
-    });
+    let imported = |row: &DeclRow| {
+      row_imported(
+        consumer,
+        &ambient,
+        &selection,
+        &row.spelling,
+        row.is_ctor,
+        &row.owner,
+        false,
+      )
+    };
+    let reachable = candidates
+      .iter()
+      .any(|row| imported(row) && decl_row_visible(consumer, consumer_mote, row));
     if reachable {
       continue;
     }
+    // An imported (or ambient) candidate that only visibility rejects: the
+    // declaration itself has to be marked `pub`. Otherwise this is a
+    // missing import.
+    let hidden = candidates
+      .iter()
+      .find(|row| imported(row) && !decl_row_visible(consumer, consumer_mote, row));
     // Prefer naming a module the consumer already `use`s — the fix is then
     // one more item in an existing brace list, not a new line.
-    let pick = candidates
+    let fallback = candidates
       .iter()
-      .find(|(owner, _, _)| selection.contains_key(owner))
+      .find(|row| selection.contains_key(&row.owner))
       .or_else(|| candidates.first())
       .expect("`index` values are never empty");
+    let pick = hidden.unwrap_or(fallback);
+    let kind = if hidden.is_some() {
+      FindingKind::Hidden
+    } else {
+      FindingKind::Unimported
+    };
     out.push(UnimportedName {
       name,
-      owner: pick.0.clone(),
-      spelling: item_spelling(&pick.1, pick.2),
-      is_constructor: pick.2,
+      owner: pick.owner.clone(),
+      spelling: item_spelling(&pick.spelling, pick.is_ctor),
+      is_constructor: pick.is_ctor,
+      kind,
+      vis: pick.vis,
     });
   }
   out.sort_by(|a, b| a.name.to_string().cmp(&b.name.to_string()));
@@ -3000,7 +3266,7 @@ pub fn import_completion(
   loaded: &LoadedModules,
 ) -> Result<ImportCompletion, String> {
   let file_path = file.unwrap_or_else(|| path.to_file_path());
-  let context = ModuleContext::new(path.clone(), Some(file_path));
+  let context = ModuleContext::new(path.clone(), Some(file_path.clone()));
   let decls = load_decls_from_text_with_path(text, &context)?;
   let insert_line = decls
     .iter()
@@ -3014,7 +3280,12 @@ pub fn import_completion(
     })
     .unwrap_or(1);
   Ok(ImportCompletion {
-    unimported: unimported_names(path, &decls, loaded),
+    unimported: unimported_names_from(
+      path,
+      mote_name_of_file(&file_path).as_deref(),
+      &decls,
+      loaded,
+    ),
     insert_line,
   })
 }
@@ -4354,153 +4625,6 @@ pub fn unused_def_warnings(loaded: &LoadedModules) -> Vec<(ModulePath, Diagnosti
     .collect()
 }
 
-/// Names imported from ANOTHER mote that are not marked `pub`.
-///
-/// Visibility defaults to package-private: visible inside the mote that
-/// declared it, and (one day) not outside. This is the warn-first half of
-/// that -- the reference still resolves, but every site that would break
-/// when it becomes an error is named now. `scripts/mark-cross-mote-exports-pub.py`
-/// is what clears them in bulk.
-///
-/// Reported per importing FILE rather than per declaration, because that
-/// is where the fix usually is: either the import is wrong or the
-/// declaration should be `pub`.
-/// Every mote name declared by the workspace the given file belongs to.
-///
-/// `here` is derived from a MANIFEST (`mote_name_of_file` walks up to a
-/// `mote.toml` and reads its declared `name`), so the target side has to be
-/// too, or the two halves of "do these cross a boundary" are computed by
-/// different rules. It used to be a path join against the working
-/// directory -- `Path::new("http").join("mote.toml")` -- which is true only
-/// for a mote that sits at the repository root and named after its own
-/// directory. Every mote under `motes/` therefore dropped out of the
-/// inventory silently: no warning, no note, no count, and nothing checks a
-/// count (`plans/implementations/cross-mote-pub-unenforced-for-motes.md`).
-///
-/// Falls back to the importing mote's own declared dependency names when
-/// there is no workspace above it, which is the external-mote case: a mote
-/// built on its own with path deps still has edges worth warning about.
-fn workspace_mote_names(path: Option<&std::path::PathBuf>) -> Set<String> {
-  let mut names: Set<String> = Set::default();
-  let Some(dir) = path.and_then(|p| p.parent()) else {
-    return names;
-  };
-  let Some((manifest_path, manifest)) = crate::term::mote::Manifest::discover(dir) else {
-    return names;
-  };
-  let mote_dir = manifest_path.parent().unwrap_or(std::path::Path::new("."));
-  // The importing mote's own declared dependencies, by name: the only
-  // answer available without a workspace, and correct for an external mote.
-  names.extend(manifest.dependencies.keys().cloned());
-  names.extend(manifest.dev_dependencies.keys().cloned());
-  // The workspace, if the mote is in one. `discover` stops at the first
-  // manifest, which for a member is the member's own, so the root is found
-  // by continuing upward from it.
-  let mut cursor: Option<std::path::PathBuf> = mote_dir.parent().map(|p| p.to_path_buf());
-  while let Some(up) = cursor.take() {
-    let Some((root_path, root)) = crate::term::mote::Manifest::discover(&up) else {
-      break;
-    };
-    let root_dir = root_path
-      .parent()
-      .unwrap_or(std::path::Path::new("."))
-      .to_path_buf();
-    if let Some(ws) = &root.workspace {
-      if let Ok(dirs) = ws.resolve_members(&root_dir) {
-        for d in dirs {
-          if let Ok(m) = crate::term::mote::Manifest::parse(&d.join("mote.toml")) {
-            if let Some(mote) = m.mote {
-              names.insert(mote.name);
-            }
-          }
-        }
-      }
-      break;
-    }
-    cursor = root_dir.parent().map(|p| p.to_path_buf());
-  }
-  names
-}
-
-pub fn cross_mote_package_private_warnings(
-  module: &Module,
-  loaded: &LoadedModules,
-  path: Option<&std::path::PathBuf>,
-) -> Vec<Diagnostic> {
-  let Some(here) = path.and_then(|p| mote_name_of_file(p)) else {
-    // Script mode: a file outside any mote crosses no mote boundary.
-    return Vec::new();
-  };
-  // Every mote NAME the importing file's workspace declares, resolved once
-  // for the whole module rather than per `use`: the per-use test below is a
-  // set lookup, and the manifests are read once.
-  let known_motes = workspace_mote_names(path);
-  module
-    .get_uses()
-    .iter()
-    .filter_map(|ctx| {
-      let u = ctx.value();
-      let target = loaded.get_module(&u.module_path)?;
-      // The first segment of a module path names a mote only if there IS
-      // such a mote -- `use io {IO}` names a MODULE of the init mote, and
-      // crosses no boundary that `io` itself defines.
-      let target_mote = target
-        .path()
-        .first()
-        .map(|i| i.as_str().to_string())
-        .filter(|m| m != &here)
-        .filter(|m| known_motes.contains(m.as_str()))?;
-      let UseFilter::Items(items) = &u.filter else {
-        return None;
-      };
-      // Only the names this `use` actually asks for -- a glob is
-      // deliberately skipped: it names nothing specific, so there is no
-      // actionable list to report.
-      let requested: Set<&str> = items
-        .iter()
-        .filter_map(|item| match item {
-          UseItem::Name(n) => Some(n.as_str()),
-          UseItem::Rename(n, _) => Some(n.as_str()),
-          _ => None,
-        })
-        .collect();
-      if requested.is_empty() {
-        return None;
-      }
-      let hidden: Vec<String> = target
-        .get_def_refs(&Vec::new(), loaded.test_mode())
-        .into_iter()
-        .filter(|d| d.vis() == Visibility::PackagePrivate)
-        .map(|d| d.name().last().as_str().to_string())
-        .filter(|name| requested.contains(name.as_str()))
-        .collect();
-      if hidden.is_empty() {
-        return None;
-      }
-      Some(Diagnostic {
-        severity: Severity::Warning,
-        message: format!(
-          "`{}` from mote `{target_mote}` is not marked `pub`",
-          hidden.join(", ")
-        ),
-        location: Some(u.source_location.clone()),
-        path: path.cloned(),
-        suggestions: vec![Suggestion {
-          message: format!(
-            "mark {} `pub` in `{target_mote}` -- package-private will stop crossing mote boundaries",
-            hidden
-              .iter()
-              .map(|n| format!("`{n}`"))
-              .collect::<Vec<_>>()
-              .join(", ")
-          ),
-        }],
-        ..Default::default()
-      })
-    })
-    .collect()
-}
-
 /// All non-fatal, style/deprecation-level warnings for a successfully
 /// loaded module, combined: bare `use`, bare `open`, `#[extern]`
 /// declarations the Rust host can't lower (`extern_attr_warnings`), and
@@ -4511,6 +4635,10 @@ pub fn cross_mote_package_private_warnings(
 /// — that one is whole-*program*, not per-module, so it's called
 /// separately, once per whole loaded corpus, not once per file — see its
 /// own doc comment.
+///
+/// The cross-mote package-private rule is NOT a warning: it is enforced by
+/// the loader's `use`-completeness gate (`check_use_completeness`), so a
+/// violation fails the load before any warning is produced.
 pub fn module_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Vec<Diagnostic> {
   let mut warnings = bare_use_warnings(module.get_uses(), path);
   warnings.extend(bare_open_warnings(module.get_opens(), path));
@@ -4520,19 +4648,6 @@ pub fn module_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Ve
     path,
   ));
   warnings.extend(extern_attr_warnings(module, path));
-  warnings
-}
-
-/// `module_warnings` plus the warnings that need the whole loaded set to
-/// decide (today: cross-mote package-private references). Separate because
-/// `module_warnings`'s callers do not all have a `LoadedModules` to hand.
-pub fn module_warnings_with_loaded(
-  module: &Module,
-  loaded: &LoadedModules,
-  path: Option<&std::path::PathBuf>,
-) -> Vec<Diagnostic> {
-  let mut warnings = module_warnings(module, path);
-  warnings.extend(cross_mote_package_private_warnings(module, loaded, path));
   warnings
 }
 

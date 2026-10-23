@@ -32,7 +32,7 @@
 // file and are listed here like any other import; see std/map_tests.mo's
 // note for the instance/dictionary-resolution claim that used to keep
 // this import empty, and for why it no longer does.
-use std::map {BTreeMap, BTreeMap.to_list, empty}
+use std::map {Map, BTreeMap, BTreeMap.to_list, empty}
 use std::list {List.filter, List.intercalate, Show}
 use init::string {}
 use init::number {}
@@ -112,11 +112,11 @@ def Toml.pairs_beq (a b : List (Pair String Toml.Value)) : Bool :=
 def Toml.table_beq (a b : BTreeMap String Toml.Value) : Bool :=
   Toml.pairs_beq (BTreeMap.to_list a) (BTreeMap.to_list b)
 
-instance BEq Toml.Value {
+pub instance BEq Toml.Value {
   def beq (a b : Toml.Value) : Bool := Toml.beq a b
 }
 
-instance BEq (BTreeMap String Toml.Value) {
+pub instance BEq (BTreeMap String Toml.Value) {
   def beq (a b : BTreeMap String Toml.Value) : Bool := Toml.table_beq a b
 }
 
@@ -1172,7 +1172,7 @@ def Toml.to_string (root : BTreeMap String Toml.Value) : String :=
 
 // ─── Show instance ───
 
-instance Show Toml.Value {
+pub instance Show Toml.Value {
   def show (v : Toml.Value) : String := Toml.value_to_string v
 }
 

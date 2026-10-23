@@ -58,7 +58,7 @@ class [Enum A] Bounded A {
 
 // ---------- Instances ----------
 
-instance BEq Ordering {
+pub instance BEq Ordering {
     def beq (a b : Ordering) : Bool :=
         match a {
             lt => match b {
@@ -79,7 +79,7 @@ instance BEq Ordering {
         }
 }
 
-instance Ord Ordering {
+pub instance Ord Ordering {
     def compare (a b : Ordering) : Ordering :=
         match a {
             lt => match b {
@@ -100,23 +100,23 @@ instance Ord Ordering {
         }
 }
 
-instance Semigroup String {
+pub instance Semigroup String {
     def combine (a b : String) : String := a ++ b
 }
 
-instance Monoid String {
+pub instance Monoid String {
     def empty : String := ""
 }
 
-instance Default Bool {
+pub instance Default Bool {
     def default : Bool := false
 }
 
-instance Default I64 {
+pub instance Default I64 {
     def default : I64 := 0
 }
 
-instance Enum Ordering {
+pub instance Enum Ordering {
     def succ (o : Ordering) : Ordering :=
         if BEq.beq o lt then eq
         else if BEq.beq o eq then gt
@@ -138,82 +138,82 @@ instance Enum Ordering {
         else gt
 }
 
-instance Bounded Ordering {
+pub instance Bounded Ordering {
     def min_bound : Ordering := lt
     def max_bound : Ordering := gt
 }
 
-instance Ord I64 {
+pub instance Ord I64 {
     def compare (a b : I64) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord Bool {
+pub instance Ord Bool {
     def compare (a b : Bool) : Ordering :=
         if a == b then eq
         else if a then gt
         else lt
 }
 
-instance Ord U8 {
+pub instance Ord U8 {
     def compare (a b : U8) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord I8 {
+pub instance Ord I8 {
     def compare (a b : I8) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord I16 {
+pub instance Ord I16 {
     def compare (a b : I16) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord I32 {
+pub instance Ord I32 {
     def compare (a b : I32) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord U16 {
+pub instance Ord U16 {
     def compare (a b : U16) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord U32 {
+pub instance Ord U32 {
     def compare (a b : U32) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord U64 {
+pub instance Ord U64 {
     def compare (a b : U64) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord F32 {
+pub instance Ord F32 {
     def compare (a b : F32) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt
         else gt
 }
 
-instance Ord F64 {
+pub instance Ord F64 {
     def compare (a b : F64) : Ordering :=
         if a == b then eq
         else if BOrd.lt a b then lt

@@ -6,19 +6,19 @@ class [Semigroup A] Monoid A {
   def mempty (u : Unit) : A
 }
 
-instance {A : Type} Semigroup (List A) {
+pub instance {A : Type} Semigroup (List A) {
   def combine (a b : List A) : List A := List.append a b
 }
 
-instance {A : Type} Monoid (List A) {
+pub instance {A : Type} Monoid (List A) {
   def mempty (u : Unit) : List A := List.empty
 }
 
-instance Semigroup String {
+pub instance Semigroup String {
   def combine (a b : String) : String := String.concat a b
 }
 
-instance Monoid String {
+pub instance Monoid String {
   def mempty (u : Unit) : String := ""
 }
 
@@ -32,7 +32,7 @@ class [Foldable T] Traversable (T : Type -> Type) {
   def traverse [Applicative F] {A B : Type} (f : A -> F B) (t : T A) : F (T B)
 }
 
-instance Foldable List {
+pub instance Foldable List {
   def foldr (f : A -> B -> B) (z : B) (t : List A) : B :=
     match t {
       empty => z,
@@ -46,7 +46,7 @@ instance Foldable List {
     }
 }
 
-instance Foldable Option {
+pub instance Foldable Option {
   def foldr (f : A -> B -> B) (z : B) (t : Option A) : B :=
     match t {
       none => z,

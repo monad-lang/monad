@@ -19,7 +19,7 @@ use toml::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.g
 use std::io {IO.get_env, IO.read_file}
 use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of}
-use std::map {BTreeMap, BTreeMap.to_list}
+use std::map {Map, BTreeMap, BTreeMap.to_list}
 use std::list {List.intercalate}
 
 /// One settings file's worth of knobs -- every field optional, an

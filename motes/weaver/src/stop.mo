@@ -7,7 +7,7 @@ use json::json {
     Json, Json.to_string, Json.parse, Json.make_object, Json.make_num_int, Json.make_bool,
     Json.get_object, Json.object_get, Json.get_num_i64, Json.get_num, Json.get_bool,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use std::path {Path}
 use std::io {IO.read_file, IO.write_file}
 use std::process {process_id}

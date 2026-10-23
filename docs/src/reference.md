@@ -93,7 +93,10 @@ priv def internal : I64 := 2
 def package_private : I64 := 3
 ```
 
-Package-private is the default. `pub use module {*}` re-exports an import.
+Package-private is the default: visible throughout its own mote and nowhere
+else. `pub use module {*}` re-exports an import. Both boundaries are enforced
+at every reference by both compilers, so a cross-mote reference to a
+non-`pub` declaration is a load error.
 
 ## Lambda Expressions
 

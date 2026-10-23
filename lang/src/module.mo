@@ -3683,7 +3683,7 @@ def show_module_info (m : ModuleInfo) : String :=
             "\n\tdecls: " ++ Show.show (List.map Decl.to_name decl_list : List NamePath)
     }
 
-instance Show ModuleInfo {
+pub instance Show ModuleInfo {
     def show (m : ModuleInfo) : String := show_module_info m
 }
 
@@ -3703,7 +3703,7 @@ def show_loaded_modules (m : LoadedModules) : String :=
         mk main all => "main: " ++ Show.show main ++ "\nall: " ++ Show.show all
     }
 
-instance Show LoadedModules {
+pub instance Show LoadedModules {
     def show (m : LoadedModules) : String := show_loaded_modules m
 }
 
@@ -3714,7 +3714,7 @@ def get_loaded_main (loaded : LoadedModules) : ModuleInfo :=
     }
 
 #[partial]
-def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
+pub def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
     match loaded {
         LoadedModules.mk main_module all_modules => all_modules
     }
@@ -5174,8 +5174,8 @@ def world_of_loaded (loaded : LoadedModules) : List (Pair ModulePath (List Decl)
 
 /// The pure half of the gate: the walk's findings turned into the
 /// load's own result, first-error-wins.
-def apply_completeness_errors (loaded : LoadedModules) (main : ModuleInfo) (pre : List Decl) : Result String LoadedModules :=
-    match use_completeness_errors main.file_path main.path pre main.decl_list (world_of_loaded loaded) {
+def apply_completeness_errors (loaded : LoadedModules) (main : ModuleInfo) (here : Option String) (pre : List Decl) : Result String LoadedModules :=
+    match use_completeness_errors main.file_path main.path here pre main.decl_list (world_of_loaded loaded) {
         List.empty => Result.ok loaded,
         List.cons e _ => Result.err e,
     }
@@ -5207,7 +5207,11 @@ def gate_use_completeness (source : Option String) (r : Result String LoadedModu
                     // owner paths are keyed by.
                     let rewritten : List Decl <-
                         resolve_lib_alias_decls (extract_directory main.file_path) pre;
-                    return (apply_completeness_errors loaded main rewritten)
+                    // The consumer's mote, from its manifest: the entry
+                    // module is named by its file stem (`copy_tests`), not
+                    // mote-qualified, so it cannot be read off `main.path`.
+                    let here <- owning_mote_name main.file_path;
+                    return (apply_completeness_errors loaded main here rewritten)
                 },
             }
         }

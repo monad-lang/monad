@@ -16,7 +16,7 @@
 // `Map.delete` cases the failure would have broken.
 // `std/src/test_map_full.mo` is the same probe against a `HashMap`
 // carrier.
-use std::map {BTreeMap, BTreeMap.fold, BTreeMap.to_list}
+use std::map {Map, BTreeMap, BTreeMap.fold, BTreeMap.to_list}
 use std::list {List.all, List.length}
 
 #[test]

@@ -5,13 +5,13 @@ use lang::types {
   ModulePath, ModuleRegistry, NamePath, NameRef, Native, NumSuffix, OpenFilter,
   Operator, Param, QualifiedName, Scope, ScopeClassDef, ScopeData, ScopeDef,
   ScopeError, ScopeInstance, Similar, SortLevel, Struct, StructField,
-  StructLitField, Term, TypeConstraint, TypeError, UseFilter, UseItem, Visibility,
+  OwnedInstance, StructLitField, Term, TypeConstraint, TypeError, UseFilter, UseItem, Visibility,
   attr_args, binder_anon, binder_binder, binder_explicit, binder_is_explicit,
   binder_is_level,
   binder_level, binder_name, binder_named, cubical_prim_of_name, dict_hint_marker_prefix,
   f32, f64, i16, i32,
   i64, i8, id_eq, id_member,
-  many, name_path_similar, open_all, open_only, package_private, param_many,
+  many, module_mote_of, module_path_is_empty, name_path_similar, open_all, open_only, package_private, param_many,
   priv_, pub_, sentinel, show_identifier, show_module_path, show_name_path, show_operator,
   term_peel, u16, u32, u64, u8, union_ids, use_bare, use_glob, use_items,
   use_name, use_rename, use_sub, use_sub_rename,
@@ -462,8 +462,22 @@ def refine_scope_instance_groups (known : List Identifier) (groups : List ScopeI
     match groups {
         List.empty => List.empty,
         List.cons g rest =>
-            List.cons { g with instances := refine_instance_wildcards known g.instances }
+            List.cons { g with instances := refine_owned_instance_wildcards known g.instances }
                 (refine_scope_instance_groups known rest),
+    }
+
+/// `refine_instance_wildcards` over owned entries, keeping each instance's
+/// declaring module attached.
+#[partial]
+def refine_owned_instance_wildcards (known : List Identifier) (owned : List OwnedInstance) : List OwnedInstance :=
+    match owned {
+        List.empty => List.empty,
+        List.cons o rest =>
+            match o {
+                OwnedInstance.mk owner ins =>
+                    List.cons (OwnedInstance.mk owner (add_unquantified_instance_vars known ins))
+                        (refine_owned_instance_wildcards known rest),
+            },
     }
 
 def build_scope_from_groups_go (groups : List DeclGroup) (acc : ScopeData) : ScopeData :=
@@ -621,7 +635,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
         Decl.def_d df => build_scope_def df path acc,
         Decl.inductive_d ind => build_scope_inductive ind path acc,
         Decl.class_d cls => build_scope_class cls path acc,
-        Decl.instance_d ins => scope_data_add_instance acc ins,
+        Decl.instance_d ins => scope_data_add_instance acc path ins,
         Decl.infix_d op name _vis => scope_data_add_infix acc op name,
         Decl.use_d _ _ _ => acc,
         Decl.open_d _ _ => acc,
@@ -1004,7 +1018,7 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_np : NamePat
 
 // --- scope_globals: extract ScopeData from Scope ---
 
-def scope_globals (s : Scope) : ScopeData := s.scope
+pub def scope_globals (s : Scope) : ScopeData := s.scope
 
 // ---- scope_find_inductive ---
 
@@ -1614,12 +1628,14 @@ def scope_data_find_inductive_by_key (sd : ScopeData) (key : String) : Option In
 
 // --- Instance handling helpers ---
 
-def scope_data_add_instance (sd : ScopeData) (ins : Instance) : ScopeData :=
+def scope_data_add_instance (sd : ScopeData) (owner : ModulePath) (ins : Instance) : ScopeData :=
     match ins {
         mk _ cname _ _ _ _ _ =>
             // One registration path (`scope_add_instances_to_group`),
-            // so candidate order is decided in exactly one place.
-            { sd with instances := scope_add_instances_to_group sd.instances cname [ins] }
+            // so candidate order is decided in exactly one place. The
+            // declaring module travels with the instance: the visibility
+            // rule compares it against the consumer's mote.
+            { sd with instances := scope_add_instances_to_group sd.instances cname owner [ins] }
     }
 
 def scope_data_add_infix (sd : ScopeData) (op : Operator) (name : NamePath) : ScopeData :=
@@ -1798,18 +1814,32 @@ def add_module_instance_group (acc : ScopeData) (si : ScopeInstance) : ScopeData
 def scope_add_instance_group (insts : List ScopeInstance) (si : ScopeInstance) : List ScopeInstance :=
     match si {
         mk cn ins_list =>
-            scope_add_instances_to_group insts cn ins_list
+            scope_add_owned_to_group insts cn ins_list
+    }
+
+/// Wrap a freshly-registered instance with the module that declared it.
+#[partial]
+def own_instances (owner : ModulePath) (ins_list : List Instance) : List OwnedInstance :=
+    match ins_list {
+        List.empty => List.empty,
+        List.cons ins rest =>
+            List.cons (OwnedInstance.mk owner ins) (own_instances owner rest),
     }
 
 /// APPEND, never cons: a class group's list IS the matching candidate
 /// order, and every matcher over it is first-match-wins -- declaration
 /// order is the language's documented policy.
-def scope_add_instances_to_group (insts : List ScopeInstance) (cls_name : NamePath) (ins_list : List Instance) : List ScopeInstance :=
+def scope_add_instances_to_group (insts : List ScopeInstance) (cls_name : NamePath) (owner : ModulePath) (ins_list : List Instance) : List ScopeInstance :=
+    scope_add_owned_to_group insts cls_name (own_instances owner ins_list)
+
+/// The same append with owners already attached -- the path
+/// `scope_add_instance_group` takes when it re-adds a whole existing group.
+def scope_add_owned_to_group (insts : List ScopeInstance) (cls_name : NamePath) (owned : List OwnedInstance) : List ScopeInstance :=
     match insts {
         List.empty =>
             let si : ScopeInstance := {
                 class_name := cls_name,
-                instances := ins_list,
+                instances := owned,
             } in
             let empty_rest : List ScopeInstance := List.empty in
             List.cons si empty_rest,
@@ -1818,13 +1848,13 @@ def scope_add_instances_to_group (insts : List ScopeInstance) (cls_name : NamePa
                 mk cn existing_list =>
                     if class_name_eq cn cls_name
                     then
-                        let merged_list : List Instance := list_append existing_list ins_list in
+                        let merged_list : List OwnedInstance := list_append existing_list owned in
                         let new_si : ScopeInstance := {
                             class_name := cn,
                             instances := merged_list,
                         } in
                         List.cons new_si rest
-                    else List.cons existing (scope_add_instances_to_group rest cls_name ins_list)
+                    else List.cons existing (scope_add_owned_to_group rest cls_name owned)
             }
     }
 
@@ -6534,20 +6564,21 @@ def dict_hinted_instance (instances : List Instance) (cls_name : NamePath) (hint
 
 /// Flatten the scope's per-class instance groups for a by-name lookup.
 #[partial]
-def scope_find_instance_by_name_go (groups : List ScopeInstance) (hint : String) : Option Instance :=
+def scope_find_instance_by_name_go (consumer : ModulePath) (groups : List ScopeInstance) (hint : String) : Option Instance :=
     match groups {
         List.empty => Option.none,
         List.cons g rest =>
-            match instance_named g.instances hint {
+            match instance_named (visible_owned_instances consumer g.instances) hint {
                 Option.some ins => Option.some ins,
-                Option.none => scope_find_instance_by_name_go rest hint,
+                Option.none => scope_find_instance_by_name_go consumer rest hint,
             },
     }
 
-/// The instance named `hint` anywhere in the scope's globals.
+/// The instance named `hint` anywhere in the scope's globals, as seen from
+/// the scope's own module (a hidden instance is not a candidate).
 pub def scope_find_instance_by_name (s : Scope) (hint : String) : Option Instance :=
     let sd : ScopeData := scope_globals s in
-    scope_find_instance_by_name_go sd.instances hint
+    scope_find_instance_by_name_go s.module_id sd.instances hint
 
 /// Can the callee USE a hint for class `ins_cls`? Yes when the callee is
 /// that class's own method (`Ord.compare` hints an `Ord` instance), or
@@ -8783,37 +8814,102 @@ def full_return_carrier (typ : Term) : Option Term :=
 
 // --- scope_resolve_instance: find concrete instance by class name ---
 
+/// May a module whose path is `consumer` use this instance?
+///
+/// The same rule a declaration's visibility gets: `pub` everywhere, `priv`
+/// only in the module that declares it, the default (package-private) in
+/// its own mote, and an empty consumer path (codegen and the unit harness
+/// build whole-program scopes with one) sees everything. A hidden instance
+/// is not a candidate at all, which is how the boundary is enforced:
+/// `Copy` fails closed to affine, and dispatch reports `instance_not_found`.
+pub def owned_instance_visible (consumer : ModulePath) (o : OwnedInstance) : Bool :=
+    if module_path_is_empty consumer then true
+    else
+        match o {
+            OwnedInstance.mk owner ins =>
+                match ins {
+                    Instance.mk _ _ _ _ vis _ _ =>
+                        match vis {
+                            Visibility.pub_ => true,
+                            Visibility.priv_ => modpath_eq owner consumer,
+                            Visibility.package_private =>
+                                match module_mote_of consumer {
+                                    Option.none => true,
+                                    Option.some c =>
+                                        match module_mote_of owner {
+                                            Option.none => true,
+                                            Option.some o_mote => String.beq o_mote c,
+                                        },
+                                },
+                        },
+                },
+        }
+
+/// The instance list, in REGISTRATION ORDER, minus everything the
+/// consumer's module may not see. Order matters: every matcher over a
+/// class's candidates is first-match-wins.
+#[partial]
+def visible_owned_instances (consumer : ModulePath) (owned : List OwnedInstance) : List Instance :=
+    match owned {
+        List.empty => List.empty,
+        List.cons o rest =>
+            match o {
+                OwnedInstance.mk _ ins =>
+                    if owned_instance_visible consumer o
+                    then List.cons ins (visible_owned_instances consumer rest)
+                    else visible_owned_instances consumer rest,
+            },
+    }
+
+def no_consumer : ModulePath := ModulePath.mk List.empty
+
 def scope_resolve_instance (class_name : NamePath) (instance_key : InstanceKey) (s : Scope) : Result ScopeError Instance :=
-    let g : ScopeData := scope_globals s in
-    let candidates : List Instance := scope_instance_candidates g class_name in
+    let candidates : List Instance := scope_instance_candidates_in s class_name in
     first_matching_instance candidates instance_key
 
-def scope_instance_candidates (sd : ScopeData) (cls_name : NamePath) : List Instance :=
-    find_instances_by_class sd.instances cls_name
+/// Candidates for `cls_name` as seen from `scope`'s own module.
+pub def scope_instance_candidates_in (scope : Scope) (cls_name : NamePath) : List Instance :=
+    let sd : ScopeData := scope_globals scope in
+    find_instances_by_class_in scope.module_id sd.instances cls_name
+
+/// Candidates with NO consumer: every instance, hidden or not. For callers
+/// that have only a `ScopeData` (tests, the harness). The type checker uses
+/// `scope_instance_candidates_in`.
+pub def scope_instance_candidates (sd : ScopeData) (cls_name : NamePath) : List Instance :=
+    find_instances_by_class_in no_consumer sd.instances cls_name
 
 /// Every instance in scope, whatever its class -- what a CONSTRAINT of a
 /// different class than the matched instance's own (`[Add A] HAdd A A A`) is resolved against.
 pub def scope_all_instances (sd : ScopeData) : List Instance :=
-    all_scope_instances sd.instances
+    all_scope_instances_in no_consumer sd.instances
 
-def all_scope_instances (insts : List ScopeInstance) : List Instance :=
+/// The same list as seen from `scope`'s module.
+pub def scope_all_instances_in (scope : Scope) : List Instance :=
+    let sd : ScopeData := scope_globals scope in
+    all_scope_instances_in scope.module_id sd.instances
+
+def all_scope_instances_in (consumer : ModulePath) (insts : List ScopeInstance) : List Instance :=
     match insts {
         List.empty => List.empty,
         List.cons si rest =>
             match si {
-                mk _ ins_list => list_append ins_list (all_scope_instances rest),
+                mk _ ins_list =>
+                    list_append (visible_owned_instances consumer ins_list)
+                        (all_scope_instances_in consumer rest),
             },
     }
 
-def find_instances_by_class (insts : List ScopeInstance) (cls_name : NamePath) : List Instance :=
+def find_instances_by_class_in (consumer : ModulePath) (insts : List ScopeInstance) (cls_name : NamePath) : List Instance :=
     match insts {
         List.empty => List.empty,
         List.cons si rest =>
             match si {
                 mk cn ins_list =>
                     if class_name_eq cn cls_name
-                    then list_append ins_list (find_instances_by_class rest cls_name)
-                    else find_instances_by_class rest cls_name
+                    then
+                        list_append (visible_owned_instances consumer ins_list)
+                            (find_instances_by_class_in consumer rest cls_name)
+                    else find_instances_by_class_in consumer rest cls_name
             }
     }
 

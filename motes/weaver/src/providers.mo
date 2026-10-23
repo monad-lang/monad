@@ -8,7 +8,7 @@ use shuttle::presets {
     ProviderConfig.ollama, ProviderConfig.mistral,
     ProviderConfig.openrouter, ProviderConfig.anthropic,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 
 /// The scripted wire (`shuttle::wire::mock`) as a preset: offline runs
 /// and the e2e tests. `base_url` is decorative -- the mock wire reads

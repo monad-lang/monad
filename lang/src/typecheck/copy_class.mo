@@ -51,7 +51,7 @@
 use lib::types {DebugName, Identifier, Instance, NamePath, Scope, Term, Visibility, binder_anon, id_member, term_peel}
 use lib::scope {
   instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
-  scope_globals, scope_instance_candidates, term_is_wildcard,
+  scope_globals, scope_instance_candidates_in, term_is_wildcard,
 }
 
 /// The gate's verdict. Three outcomes, not two, because "I could not
@@ -90,7 +90,7 @@ pub def copy_verdict (scope : Scope) (typ : Term) : CopyVerdict :=
     let carrier : Term := carrier_of typ in
     if not (carrier_is_resolvable carrier) then CopyVerdict.cv_not_copy
     else
-        let candidates : List Instance := scope_instance_candidates (scope_globals scope) copy_class_name in
+        let candidates : List Instance := scope_instance_candidates_in scope copy_class_name in
         let concrete : List Instance := keep_admissible candidates in
         let matches : I64 := count_matching concrete carrier in
         if I64.beq matches 1 then CopyVerdict.cv_copy

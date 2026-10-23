@@ -13,7 +13,7 @@ use json::json {
     Json, Json.parse, Json.to_string, Json.make_object, Json.make_str, Json.make_num_int,
     Json.get_object, Json.get_str, Json.get_num, Json.get_num_i64, Json.object_get,
 }
-use std::map {BTreeMap}
+use std::map {Map, BTreeMap}
 use parsec::number {parse_i64}
 use weaver::store {Store.sessions_root, Store.child}
 use weaver::format {format_elapsed}

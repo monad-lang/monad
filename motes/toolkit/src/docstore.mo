@@ -43,7 +43,7 @@
 /// which this repository's own filenames avoid but which are unremarkable
 /// elsewhere -- would be handed to the checker as the literal text `%20` and
 /// fail to open. LSP URIs are RFC 3986 URIs, so decoding is not optional.
-use std::map {BTreeMap, BTreeMap.to_list}
+use std::map {Map, BTreeMap, BTreeMap.to_list}
 
 pub def docstore_uri_scheme : String := "file://"
 
