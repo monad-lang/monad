@@ -76,6 +76,22 @@ pub def empty_locals : LocalScope := {
 /// Empty list of local types (no de Bruijn bindings).
 pub def empty_local_types : List Term := List.empty
 
+/// Is this reference qualified by a CLASS name (`Sub.sub`)? See the guard
+/// in `try_type_check_con_call`.
+#[partial]
+def qualified_by_class (id : Identifier) (scope : Scope) : Bool :=
+    match id {
+        Identifier.id s =>
+            match dotted_qualifier s {
+                Option.some q =>
+                    match scope_find_class (NamePath.mk (List.cons (Identifier.id q) List.empty)) scope {
+                        Option.some _ => true,
+                        Option.none => false,
+                    },
+                Option.none => false,
+            },
+    }
+
 /// Type check a term bidirectionally.
 ///
 /// `Term.quote_`/`Term.var_macro` are macro-expansion-only shapes --
@@ -3574,7 +3590,12 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                 if I64.gt (List.length real_args) (List.length params)
                                                                 then Option.none
                                                                 else
-                                                                    match def_call_check_args real_args params List.empty scope local_types locals {
+                                                                    // Seed the substitution from the arguments whose
+                                                                    // own type is recoverable INTRINSICALLY before any
+                                                                    // argument is paired -- see `presolve_def_args`.
+                                                                    let pre : List (Pair Identifier Term) :=
+                                                                        presolve_def_args real_args params scope local_types locals List.empty in
+                                                                    match def_call_check_args real_args params pre scope local_types locals {
                                                                         err _ => Option.none,
                                                                         ok pair =>
                                                                             match pair {
@@ -3729,6 +3750,15 @@ def try_type_check_con_call (app_term : Term) (expected_type : Term) (scope : Sc
                         DebugName.named id =>
                             if not (I64.beq idx sentinel) then Option.none
                             else if is_some_local (scope_find_local id locals) then Option.none
+                            // A reference `SomeClass.method` is never a constructor
+                            // application, even when a constructor of the same bare
+                            // name exists: `con_call_resolve_inductive` falls back to
+                            // the bare-constructor scan when the qualifier is not an
+                            // inductive, and `Sub.sub` (the `(-)` infix) then resolves
+                            // to `LLVMValue`'s own `sub` constructor, whose fields are
+                            // `LLVMValue`. Declining here leaves it to the class-method
+                            // path, which is what it is.
+                            else if qualified_by_class id scope then Option.none
                             else
                                 let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
                                 let con_mp : NamePath := NamePath.mk (List.cons bare_name List.empty) in
@@ -3743,14 +3773,61 @@ def try_type_check_con_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                         if not (I64.beq (List.length args) (List.length params)) then Option.none
                                                         else
                                                             let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
-                                                            if List.is_empty bindings then Option.none
-                                                            else
-                                                                match con_call_check_args args params bindings scope local_types locals {
-                                                                    err e => Option.some (err e),
-                                                                    ok elab_args =>
-                                                                        let c : Con := Con.mk (struct_lit_con_name con_name) (inductive_type_path ind) (List.length params) (wrap_all_some elab_args) in
-                                                                        Option.some (ok (mk_typed (Term.con c) (con_result_type ind expected_type))),
-                                                                },
+                                                            match con_call_check_args_solving ind args params bindings scope local_types locals {
+                                                                // Empty `bindings` is the pre-port DECLINE case
+                                                                // (`con_own_param_bindings` found nothing in the
+                                                                // expectation): the old probe returned `Option.none`
+                                                                // before checking any argument, so an argument that
+                                                                // does not fit the constructor's ABSTRACT parameters
+                                                                // fell through to the bottom-up path instead of
+                                                                // failing here. Keep that: only a probe that already
+                                                                // knew the constructor's params may report an error.
+                                                                err e => if List.is_empty bindings then Option.none else Option.some (err e),
+                                                                ok pair =>
+                                                                    match pair {
+                                                                        Pair.pair elab_args final_bindings =>
+                                                                            // The applied result is only a real answer when the
+                                                                            // constructor name is unambiguous, or the source
+                                                                            // qualified it: `cons` belongs to both `List` and
+                                                                            // `Vec`, and the bare scan can pick either
+                                                                            // (`con_call_resolve_inductive`'s own ambiguity) --
+                                                                            // handing the call a wrong concrete type instead of
+                                                                            // the old hole, which measurably mis-typed
+                                                                            // `cli/src/main.mo`'s list code.
+                                                                            let usable : Bool :=
+                                                                                match id {
+                                                                                    Identifier.id s =>
+                                                                                        match dotted_qualifier s {
+                                                                                            Option.some _ => true,
+                                                                                            Option.none => I64.beq (List.length (scope_find_all_inductives_by_constructor con_mp scope)) 1,
+                                                                                        },
+                                                                                } in
+                                                                            // Keep the EXPECTED type whenever it already names this
+                                                                            // inductive: its spelling is the one the rest of the term
+                                                                            // uses (`Toml.Line`, a dotted declaration name), and the
+                                                                            // bare name `inductive_bare_name` yields would mismatch it
+                                                                            // literally (`expected Toml.Line, found Line`). The applied
+                                                                            // result exists for the case the expectation does NOT name it
+                                                                            // (`some 42` against `F A`).
+                                                                            let expected_names : Bool :=
+                                                                                match type_head_name (term_peel expected_type) {
+                                                                                    Option.some h => String.beq (identifier_tail h) (identifier_tail (inductive_bare_name ind)),
+                                                                                    Option.none => false,
+                                                                                } in
+                                                                            match (if usable && Bool.not expected_names then con_applied_result_type ind final_bindings else Option.none) {
+                                                                                Option.some result_typ =>
+                                                                                    let c : Con := Con.mk (struct_lit_con_name con_name) (inductive_type_path ind) (List.length params) (wrap_all_some elab_args) in
+                                                                                    Option.some (ok (mk_typed (Term.con c) result_typ)),
+                                                                                // Nothing solved: the old answers still apply.
+                                                                                Option.none =>
+                                                                                    if List.is_empty bindings
+                                                                                    then Option.none
+                                                                                    else
+                                                                                        let c : Con := Con.mk (struct_lit_con_name con_name) (inductive_type_path ind) (List.length params) (wrap_all_some elab_args) in
+                                                                                        Option.some (ok (mk_typed (Term.con c) (con_result_type ind expected_type))),
+                                                                            },
+                                                                    },
+                                                            },
                                                 }
                                         },
                                 },
@@ -3760,32 +3837,76 @@ def try_type_check_con_call (app_term : Term) (expected_type : Term) (scope : Sc
     }
 
 /// `try_type_check_con_call`'s argument loop: every argument checked
-/// TOP-DOWN against its own (bindings-substituted) declared param type --
-/// the right order here specifically because `bindings` already came
-/// from solving the constructor's OWN return type against `expected_type`
-/// before any argument is examined (see `try_type_check_con_call`'s own
-/// doc comment for why this is safe, unlike checking an ordinary def's
-/// still-unsolved param type directly).
+/// TOP-DOWN against its own (bindings-substituted) declared param type,
+/// with the constructor's OWN type params bound as each argument's
+/// inferred type comes back -- `some 42` therefore yields `Option I64`
+/// even when nothing in the expected type says so.
+///
+/// That argument-side source is what the checker lacked: the retired
+/// syntactic pass inferred it (`infer_carrier_type`), and without it a
+/// bare constructor application stayed a HOLE by design
+/// (`con_ref_result_type` declines applied forms), which starved every
+/// consumer downstream -- `def_call_check_args` could not bind
+/// `F A := Option I64`, so `class_method_next_param` handed a lambda
+/// argument the class's still-abstract `A -> B -> B`, and
+/// `Foldable.foldl (fn acc x => acc + x) 0 (some 42)` left `acc + x`
+/// unresolved.
 #[partial]
-def con_call_check_args (args : List Term) (params : List Param) (bindings : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (List Term) :=
+def con_call_check_args_solving (ind : Inductive) (args : List Term) (params : List Param) (bindings : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Pair (List Term) (List (Pair Identifier Term))) :=
     match args {
-        List.empty => ok List.empty,
+        List.empty => ok (Pair.pair List.empty bindings),
         List.cons a rest =>
             match params {
                 List.empty => err (TypeError.custom "constructor arity mismatch"),
                 List.cons p prest =>
                     match p {
                         Param.mk _ ptyp _ _ _ =>
-                            match type_check a (apply_con_param_bindings bindings ptyp) scope local_types locals {
+                            let field_typ : Term := apply_con_param_bindings bindings ptyp in
+                            match type_check a field_typ scope local_types locals {
                                 err e => err e,
                                 ok a_tt =>
-                                    match con_call_check_args rest prest bindings scope local_types locals {
+                                    let more : List (Pair Identifier Term) :=
+                                        bind_term_vars (inductive_param_names ind) field_typ a_tt.typ bindings in
+                                    match con_call_check_args_solving ind rest prest more scope local_types locals {
                                         err e => err e,
-                                        ok rest_elab => ok (List.cons (a_tt.term) rest_elab),
+                                        ok tail =>
+                                            match tail {
+                                                Pair.pair rest_elab rest_bindings =>
+                                                    ok (Pair.pair (List.cons a_tt.term rest_elab) rest_bindings),
+                                            },
                                     },
-                            }
-                    }
-            }
+                            },
+                    },
+            },
+    }
+
+/// `ind`'s own declared type-parameter names -- the wildcard set
+/// `bind_term_vars` matches a constructor's field type against an
+/// argument's inferred type with.
+#[partial]
+def inductive_param_names (ind : Inductive) : List Identifier :=
+    match ind { Inductive.mk _ params _ _ _ _ => param_names params }
+
+/// `ind`'s head applied to every one of its own params, substituted with
+/// the bindings the call site solved (`Option I64` for `some 42`).
+/// `Option.none` while any param is unbound -- the call site then knows
+/// no more than it did, and the other result-type paths answer.
+#[partial]
+def con_applied_result_type (ind : Inductive) (bindings : List (Pair Identifier Term)) : Option Term :=
+    con_applied_result_go (Term.var sentinel (DebugName.named (inductive_bare_name ind))) (inductive_param_names ind) bindings
+
+#[partial]
+def con_applied_result_go (head : Term) (names : List Identifier) (bindings : List (Pair Identifier Term)) : Option Term :=
+    match names {
+        List.empty => Option.some head,
+        List.cons n rest =>
+            match binding_of bindings n {
+                Option.some t => match con_applied_result_go (Term.app head t) rest bindings {
+                    Option.some r => Option.some r,
+                    Option.none => Option.none,
+                },
+                Option.none => Option.none,
+            },
     }
 
 #[partial]
@@ -3850,6 +3971,40 @@ pub struct DccPair {
 /// that cannot be inferred in isolation -- a struct literal, which
 /// needs its expected type to know which struct it is -- fall back to
 /// checking against the parameter type itself.
+/// Solve a def call's type variables from the arguments whose own type is
+/// recoverable INTRINSICALLY, before any argument is paired with its
+/// parameter. Arguments are otherwise paired strictly left-to-right, so a
+/// higher-order FIRST argument (`Array.foldl (fn acc x => acc + x) 0 a`) is
+/// checked against the still-abstract `B -> A -> B`, and the class calls
+/// inside the lambda (`acc + x`) have no carrier -- even though the LATER
+/// arguments pin both variables. The retired syntactic pass pre-solved the
+/// same way per call site (`call_arg_hints`).
+#[partial]
+def presolve_def_args (args : List Term) (params : List Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) (acc : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match args {
+        List.empty => acc,
+        List.cons arg rest =>
+            match params {
+                List.empty => acc,
+                List.cons param_ty rest_params =>
+                    match type_check arg Term.hole scope local_types locals {
+                        err _ => presolve_def_args rest rest_params scope local_types locals acc,
+                        // An argument that still carries a class-method call was
+                        // only PARTLY resolved (a list literal's
+                        // `FromListLiteral.empty` with nothing yet to read its
+                        // carrier from). Binding its type into the call's
+                        // substitution poisons the parameters every later
+                        // argument -- and the enclosing expectation -- are
+                        // checked against, MEASURED as a self-compile failure
+                        // (`lang.module::coverage_warning_of_match`'s `[]`).
+                        ok a_tt =>
+                            if mentions_class_method_ref a_tt.term scope locals
+                            then presolve_def_args rest rest_params scope local_types locals acc
+                            else presolve_def_args rest rest_params scope local_types locals (solve_typevars scope param_ty a_tt.typ acc),
+                    },
+            },
+    }
+
 #[partial]
 def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
     match args {
@@ -4792,12 +4947,12 @@ def app_arg_expected_type_from_callee (f : Term) (a : Term) (expected_type : Ter
                 match lam_binder_hint cd scope {
                     Option.some bt => Term.pi binder_anon bt (class_method_lam_body_expected f expected_type cd scope),
                     Option.none =>
-                        let body : Term := class_method_lam_body_expected f expected_type cd scope in
+                        let body : Term := class_method_lam_body_chain_expect f expected_type cd scope in
                         if is_hole body then written else Term.pi binder_anon Term.hole body,
                 },
         }
     else if is_hole written then
-        match class_method_result_domain f expected_type scope {
+        match class_method_result_domain f expected_type scope local_types locals {
             Option.some d => d,
             Option.none => written,
         }
@@ -4867,16 +5022,38 @@ def has_informative_head (t : Term) : Bool :=
 /// `Monad.bind (Monad.pure c) k : IO I64` hands `Monad.pure c` the type
 /// `IO _`, which is what lets the inner call resolve its own carrier.
 #[partial]
-def class_method_result_domain (f : Term) (expected : Term) (scope : Scope) : Option Term :=
+def class_method_result_domain (f : Term) (expected : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option Term :=
     match class_method_result_solution f expected scope {
-        Option.none => Option.none,
         Option.some sol =>
             match sol.subst {
-                List.empty => Option.none,
                 List.cons _ _ =>
                     let d : Term := fill_unsolved_vars sol.vars (subst_typevars_term sol.next_param sol.subst) in
-                    if has_informative_head d then Option.some d else Option.none,
+                    if has_informative_head d then Option.some d else class_method_chain_domain f expected scope local_types locals,
+                List.empty => class_method_chain_domain f expected scope local_types locals,
             },
+        Option.none => class_method_chain_domain f expected scope local_types locals,
+    }
+
+/// The argument's declared parameter type with what the call's LATER
+/// arguments -- the rest of the expected Pi chain -- fix substituted in
+/// (`class_method_next_param`'s domain, the lambda-hint channel's own
+/// source). `BEq.beq Bounded.max_bound gt` is the motivating shape: the
+/// zero-argument class call is the FIRST argument, so its own expectation
+/// is a hole, and only `gt`'s `Ordering` names the instance it means.
+/// Refused when the domain still holds an unresolvable name or one of the
+/// method's own unsolved variables -- an argument checked against those
+/// would resolve against the wrong instance, exactly what `lam_binder_hint`
+/// refuses to hand a lambda.
+#[partial]
+def class_method_chain_domain (f : Term) (expected : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option Term :=
+    match class_method_next_param f expected scope local_types locals {
+        Option.none => Option.none,
+        Option.some cd =>
+            if has_informative_head cd.dom
+                && Bool.not (mentions_unresolved_name cd.dom scope)
+                && Bool.not (type_mentions_any cd.vars cd.dom)
+            then Option.some cd.dom
+            else Option.none,
     }
 
 /// The expected type of an unannotated continuation's BODY: the domain's
@@ -4894,6 +5071,28 @@ def class_method_lam_body_expected (f : Term) (expected : Term) (cd : CalleeDoma
                     if has_informative_head filled then filled else Term.hole,
             },
         _ => Term.hole,
+    }
+
+/// `class_method_lam_body_expected` for a lambda whose BINDER the hint gate
+/// refused (`app_arg_expected_type_from_callee`'s `Option.none` arm): the
+/// chain-solved domain's codomain still applies -- `class_method_next_param`
+/// already substituted what the call's LATER arguments fix, so
+/// `Foldable.foldr (fn x acc => x + acc) 0 t` keeps `acc : I64` and `I64` as
+/// the body's result, which is what resolves its `HAdd.add`. With the binder
+/// unknown this codomain is the body's only expectation; the retired pass
+/// read the same one (`sig_arg_hints`). Refused, falling back to the
+/// result-only answer, when it still names something unresolved or one of
+/// the method's own unsolved variables.
+#[partial]
+def class_method_lam_body_chain_expect (f : Term) (expected : Term) (cd : CalleeDomain) (scope : Scope) : Term :=
+    match term_peel cd.dom {
+        Term.pi _ _ cod =>
+            if has_informative_head cod
+                && Bool.not (mentions_unresolved_name cod scope)
+                && Bool.not (type_mentions_any cd.vars cod)
+            then cod
+            else class_method_lam_body_expected f expected cd scope,
+        _ => class_method_lam_body_expected f expected cd scope,
     }
 
 /// Is this argument a lambda whose written parameter type is a hole? Peeled,
