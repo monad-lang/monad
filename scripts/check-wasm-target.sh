@@ -93,7 +93,7 @@ echo "== web: export state slot (Keep) =="
 node wasm/web/export_smoke.mjs "$tmp/web_keep.wasm" keep
 
 echo "== web: Oak SPA (mount, dispatch, tick, patch) =="
-"$MONAD" build --target wasm32-unknown-unknown examples/oak_spa.mo \
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa.mo \
     -o "$tmp/oak_spa.wasm" --no-cache
 node wasm/web/spa_smoke.mjs "$tmp/oak_spa.wasm"
 

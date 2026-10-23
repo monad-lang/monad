@@ -1,30 +1,55 @@
-# Monad Web REPL
+# The web profile: loader, runtime and an Oak SPA
 
-A web-based REPL for the Monad programming language.
+The `wasm32-unknown-unknown` ("web") profile produces a freestanding
+`.wasm` that a browser page instantiates with a JS import object.
 
-## Prerequisites
+## Files
 
-- [Rust](https://rustup.rs/)
-- [wasm-pack](https://rustwasm.github.io/wasm-pack/)
+| File | What it is |
+|---|---|
+| `web.js` | **Generated** by `examples/gen_web_js.mo` from `WebAbi` (`motes/web_wasm/src/web_abi.mo`). It builds the import object and exports `start(url, selector)`. Do not edit: `motes/web_wasm`'s drift test compares the committed file with the generator's output. |
+| `web_runtime.js` | The hand-written host behind those imports: DOM node table, fetch, storage, console/stdin, the `Keep` state slot and the `requestAnimationFrame` tick loop. |
+| `main.js` | The older direct loader for a plain program (`monad_main`); still used by `?autorun=1&render=1` browser proofs. |
+| `smoke.mjs` | Node smoke test for `monad_main` (hello/wide-value fixtures). |
+| `export_smoke.mjs` | Node test for `#[export "c"]`: exports, eager `IO`, the exports-only module, and the `Keep` slot. |
+| `dom_smoke.mjs` | Node test driving `fixtures/wasm/web_dom.mo` through `web.js` + `web_runtime.js` over a stub DOM. |
+| `spa_smoke.mjs` | Node test driving `fixtures/wasm/oak_spa.mo` (mount → two clicks → tick → patch → reset). |
 
-## Building
+## Running an SPA
 
-```bash
-wasm-pack build --target web
+A program exposes three `#[export "c"]` thunks and calls `motes/oak_wasm`'s
+runtime (`fixtures/wasm/oak_spa.mo` is the worked example):
+
+```monad
+#[export "c"]
+def oak_mount : IO Unit := Runtime.mount init view
+
+#[export "c"]
+def oak_dispatch_event (handler : I64) : IO Unit := Runtime.dispatch decode handler
+
+#[export "c"]
+def oak_tick : IO Unit := Runtime.tick app host
 ```
 
-This will generate the WASM package in the `pkg/` directory.
+```bash
+monad build --target wasm32-unknown-unknown fixtures/wasm/oak_spa.mo -o app.wasm
+```
 
-## Running
+```html
+<script type="module">
+  import { start } from './web.js';
+  start('./app.wasm', '#app');
+</script>
+```
 
+`start` sets the mount selector, instantiates the module with the generated
+import object, calls `oak_mount()` and starts the tick loop. On every frame
+`oak_tick` folds queued messages, re-renders and patches the DOM; DOM
+listeners registered from `data-oak-on-<event>` attributes call
+`oak_dispatch_event(id)`.
 
-### Example Programs
+## Checking
 
-Click the example buttons to load and run sample programs:
-
-- **Basic**: Simple variable definitions
-- **Add**: Function definitions with multiple arguments
-- **Factorial**: Recursive function
-- **Fibonacci**: Another recursive example
-- **Map list**: Higher-order functions
-- **Fold**: List folding
+`scripts/check-wasm-target.sh` builds and runs every one of these (it needs
+`WASI_SDK_PATH`, `node` and `wasmtime`), and runs in CI as the WASM target
+proof.

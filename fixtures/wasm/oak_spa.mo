@@ -11,6 +11,13 @@
 //
 // `scripts/check-wasm-target.sh` builds this for the web profile and
 // `wasm/web/spa_smoke.mjs` drives it over a stub DOM.
+//
+// A FIXTURE, not an `examples/` program: the Rust host's multi-target
+// `check` resolves bare top-level names across every target in one scope,
+// so an example that imports `Command` (and declares `Msg`) collides with
+// `motes/monadup`'s own `Command` and `motes/oak`'s `Msg` type parameter.
+// `fixtures/` is not swept by the whole-corpus check; the polished example
+// waits on that host scoping fix.
 #![mote { name := "oak_spa", deps := [oak, oak_wasm, web_wasm, xml_html] }]
 
 use xml_html::html {Html.Node}

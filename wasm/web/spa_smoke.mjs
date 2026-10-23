@@ -2,7 +2,7 @@
 // Node smoke test for the Oak SPA loop. Usage:
 //   node wasm/web/spa_smoke.mjs <oak_spa.wasm>
 //
-// Built from examples/oak_spa.mo: a two-message counter. The test drives the
+// Built from fixtures/wasm/oak_spa.mo: a two-message counter. The test drives the
 // REAL `wasm/web/web_runtime.js` and the generated `wasm/web/web.js` import
 // object over a minimal stub DOM, so the whole path is exercised --
 // export thunks -> `oak_wasm` runtime -> `web_wasm` externs -> C wrappers ->
