@@ -229,3 +229,30 @@ def Build.leaf_written (path : Path) (r : Result StreamError Unit) : IO Bool :=
 #[partial]
 pub def Build.ensure_entry_dir (target_dir : String) (e : Entry) : IO I64 :=
     Build.ensure_dir (Build.entry_root_dir target_dir e)
+
+def Build.non_blank (v : Option String) : Option String :=
+    match v {
+        Option.none => Option.none,
+        Option.some s =>
+            let t : String := String.trim s in
+            if String.is_empty t then Option.none else Option.some t,
+    }
+
+/// `$MONAD_HOME` when set, else `$HOME/.monad` -- monadup's layout, so the
+/// git cache lands beside the toolchain instead of somewhere of its own.
+/// Blank counts as unset. `none` means a process with no home at all.
+#[partial]
+pub def Build.monad_home : IO (Option String) := do {
+    let monad_home <- IO.get_env "MONAD_HOME";
+    match Build.non_blank monad_home {
+        Option.some h => return (Option.some h),
+        Option.none => do {
+            let home <- IO.get_env "HOME";
+            match Build.non_blank home {
+                Option.some h => return (Option.some (raw_path_join h ".monad")),
+                Option.none => return Option.none,
+            }
+        }
+    }
+}
+

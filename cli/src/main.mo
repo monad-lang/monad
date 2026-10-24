@@ -28,7 +28,7 @@ use lang::mote {
 }
 use build::closure {Build.input_hash}
 use build::store {
-  Build.artifact_ir_path, Build.ensure_dir, Build.ensure_entry_dir,
+  Build.artifact_ir_path, Build.ensure_dir, Build.ensure_entry_dir, Build.monad_home,
   Build.store_path, Build.target_dir_at, Build.target_dir_for,
   Build.target_dir_of, artifact,
 }
@@ -40,6 +40,7 @@ use build::check {
 use build::manage {
   Build.clean_run, Build.gc_run, Build.store_ls, Build.store_verify,
 }
+use build::fetch {Build.fetch_run, FetchMode}
 use std::map {}
 use lang::pretty {show_decls}
 use lang::codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, driver_report_note, driver_report_parsed}
@@ -621,7 +622,7 @@ def build_target (path : String) (out_name : String) (bin : String) (verbose : B
 def install_target (path : String) (out_name : String) (bin : String) (verbose : Bool) (no_cache : Bool) (spec : TargetSpec) : IO I64 := do {
     // Resolve the destination BEFORE compiling: no home is a usage error,
     // not something to discover after a full build.
-    let home_opt <- install_home;
+    let home_opt <- Build.monad_home;
     match home_opt {
         Option.none => do {
             println "error: MONAD_HOME and HOME are unset; cannot choose an install directory";
@@ -664,34 +665,6 @@ def install_resolved (home : String) (path : String) (out_name : String) (bin : 
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-/// A non-blank environment value; blank counts as unset (the same rule
-/// `Mote.toolchain_home_of` applies to `MONAD_HOME`).
-#[partial]
-def non_blank_env (v : Option String) : Option String :=
-    match v {
-        Option.none => Option.none,
-        Option.some s =>
-            let t : String := String.trim s in
-            if String.is_empty t then Option.none else Option.some t,
-    }
-
-/// `$MONAD_HOME` when set, else `$HOME/.monad` -- monadup's own layout, so
-/// an installed binary lands on the same `bin/` directory as the compiler.
-/// `none` when neither is set: a process with no home has nowhere to look.
-def install_home : IO (Option String) := do {
-    let monad_home <- IO.get_env "MONAD_HOME";
-    match non_blank_env monad_home {
-        Option.some h => IO.pure (Option.some h),
-        Option.none => do {
-            let home <- IO.get_env "HOME";
-            match non_blank_env home {
-                Option.none => IO.pure Option.none,
-                Option.some h => IO.pure (Option.some (raw_path_join h ".monad")),
             }
         }
     }
@@ -2120,6 +2093,12 @@ type Command {
     gc (files: List String) (workspace: Bool) (apply: Bool) (target_dir: String),
     /// `monad store ls|verify [--target-dir <dir>]`.
     store (sub: String) (target_dir: String),
+    /// `monad fetch [<dir>]` / `monad update [<dir>]`: resolve git
+    /// dependencies into `$MONAD_HOME/cache/git` and write `mote.lock` in
+    /// the mote's directory. `fetch` keeps the commit an existing lock
+    /// names (a moved tag does not change a locked build); `update`
+    /// re-resolves every pin. The only verbs that touch the network.
+    fetch (update: Bool) (dir: String),
     /// `monad print-targets`: the triples `--target` accepts, which of them
     /// this llc can actually build for, and what this machine's own target is.
     print_targets,
@@ -2431,6 +2410,18 @@ def Command.from_args (args : List String) : Command :=
                                 },
                         },
                 }
+            else if cmd == "fetch" || cmd == "update" then
+                // One optional positional directory, defaulting to the
+                // working directory. `take_positional` walks the whole
+                // list, so a `--target-dir`-style flag cannot smuggle
+                // itself in as the path.
+                match Cli.take_positional rest {
+                    Cli.PosResult.pos_result dir_opt _rest2 =>
+                        match dir_opt {
+                            Option.none => Command.fetch (String.beq cmd "update") ".",
+                            Option.some d => Command.fetch (String.beq cmd "update") d,
+                        },
+                }
             else if cmd == "print-targets" then
                 Command.print_targets
             else if cmd == "lsp" then
@@ -2532,6 +2523,9 @@ def main (args : List String) : IO I64 {
         store sub target_dir => do {
             run_store sub target_dir
         },
+        fetch update dir => do {
+            Build.fetch_run dir (if update then FetchMode.update else FetchMode.fetch)
+        },
         print_targets => run_print_targets,
         lsp => lsp_serve,
         version => do {
@@ -2618,6 +2612,11 @@ def print_help : IO I64 {
     println "         Dry run by default; --apply removes them. Takes the same <path> forms as check";
     println "         Refuses to remove ANYTHING when it cannot derive a complete reachable set,";
     println "           because an incomplete one would delete the store itself";
+    println "       monad fetch [<dir>]  Resolve git dependencies into $MONAD_HOME/cache/git and write mote.lock";
+    println "         The only verb that uses the network. `fetch` keeps the commit mote.lock already names,";
+    println "           so a tag that moved upstream does not change a locked build";
+    println "       monad update [<dir>]  Like fetch, but re-resolve every tag/branch/HEAD pin";
+    println "         Writes mote.lock from scratch; `fetch` is the one to run after a manifest edit";
     println "       monad store ls|verify [--target-dir <dir>]  List the store, or check its entries";
     println "         Each line is <kind> <key> <bytes> <state>; an artifact is its binary AND its IR";
     println "         verify is structural: an entry records neither the file nor the sources behind";

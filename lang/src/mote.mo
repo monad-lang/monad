@@ -29,6 +29,11 @@ use std::stream {StreamError, StreamError.is_not_found}
 /// `init` pure in its manifest, which is the part that documents intent.
 pub struct MoteManifest {
     name : String,
+    /// `[mote] version`, or `""` when the manifest declares none. A git or
+    /// registry dependency's `mote.lock` entry needs it (`package-system`
+    /// §2b), and the lock is written from the DEPENDENCY's own manifest,
+    /// so this has to be readable rather than assumed.
+    version : String,
     dir : String,
     deps : List String,
     /// Where each declared dependency COMES FROM: the parsed source of
@@ -666,6 +671,16 @@ pub def Mote.affine_mode_of_text (text : String) : AffineMode :=
             },
     }
 
+/// `[mote] version`, or `""` when absent. Empty is the honest answer: a
+/// manifest that declares no version is not given an invented one
+/// (`package-system` §2a lists the key, and a `mote.lock` entry renders
+/// whatever this is).
+def Mote.manifest_version (root : BTreeMap String Toml.Value) : String :=
+    match Mote.table_string (Toml.table_get "mote" root) "version" {
+        Option.some v => v,
+        Option.none => "",
+    }
+
 def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : Option MoteManifest :=
     match Mote.table_string (Toml.table_get "mote" root) "name" {
         Option.none => Option.none,
@@ -684,6 +699,7 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
             let targets := Mote.table_string_array (Toml.table_get "mote" root) "targets" in
             let m : MoteManifest := {
                 name := name,
+                version := Mote.manifest_version root,
                 dir := dir,
                 deps := deps,
                 deps_full := deps_full,
@@ -1378,6 +1394,14 @@ def Mote.mote_attr_string (attr : Attribute) (key : String) : Option String :=
         Option.some v => attr_arg_as_string v
     }
 
+/// `mote_attr_string`, with `""` for absent -- the same "declares none"
+/// reading `Mote.manifest_version` gives the table spelling.
+def Mote.mote_attr_string_or_empty (attr : Attribute) (key : String) : String :=
+    match Mote.mote_attr_string attr key {
+        Option.some v => v,
+        Option.none => "",
+    }
+
 /// Every key the annotation's block sets, in source order.
 def Mote.mote_attr_keys (attr : Attribute) : List String :=
     mote_attr_keys_of (mote_attr_flatten attr.args) List.empty
@@ -1438,6 +1462,7 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
         Option.some name =>
             let m : MoteManifest := {
                 name := name,
+                version := Mote.mote_attr_string_or_empty attr "version",
                 dir := dir,
                 deps := Mote.mote_attr_list attr "deps",
                 // No `[dependencies.<name>] path` spelling exists in the

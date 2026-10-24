@@ -289,8 +289,11 @@ with Lock {
     def is_checksum (s : String) : Bool :=
         String.starts_with "sha256:" s && Lock.is_hex_of_length (String.drop 7 s) 64
 
-    /// SHA-1 repositories have 40-digit ids, SHA-256 ones 64.
-    def is_commit (s : String) : Bool :=
+    /// SHA-1 repositories have 40-digit ids, SHA-256 ones 64. Public
+    /// because `build::git` resolves a `rev` against exactly this rule --
+    /// one definition, so a commit the lock accepts is a commit the
+    /// transport will look up.
+    pub def is_commit (s : String) : Bool :=
         Lock.is_hex_of_length s 40 || Lock.is_hex_of_length s 64
 
     def is_hex_of_length (s : String) (n : I64) : Bool :=
