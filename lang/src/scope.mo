@@ -6479,6 +6479,21 @@ def find_constraint_bound_carrier_any (instances : List Instance) (cls_name : Na
             match find_matching_instance instances cls_name c {
                 Option.none => find_constraint_bound_carrier_any instances cls_name vars rest,
                 Option.some ins =>
+                    // A variable-headed instance (the prelude's
+                    // `instance [IndexedMonad M] Monad (M I I)` bridge) is a
+                    // CATCH-ALL: it matches any carrier, and reading the
+                    // constraint variable out of that match binds it to the
+                    // carrier's bare HEAD (`Holder` for `Holder IO I64`),
+                    // which then re-matches the same catch-all and commits
+                    // its dictionary. Such a match is no evidence at all --
+                    // the same rule `dict_forwarding_override`
+                    // (`lang/typecheck/infer.mo`) applies to a variable-headed
+                    // instance. Skip it and let the plain first-match
+                    // fallback answer from the candidate that named the
+                    // class's own type (`IO`, whose instance is concrete).
+                    if Bool.not (instance_head_is_concrete ins)
+                    then find_constraint_bound_carrier_any instances cls_name vars rest
+                    else
                     match ins {
                         Instance.mk _ _ _ ins_args _ _ _ =>
                             match bound_constraint_carrier (carrier_bindings (instance_wildcard_names ins) ins_args c) vars {

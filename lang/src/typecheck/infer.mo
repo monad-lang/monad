@@ -3592,7 +3592,23 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                     // argument is paired -- see `presolve_def_args`.
                                                                     let pre : List (Pair Identifier Term) :=
                                                                         presolve_def_args real_args params scope local_types locals List.empty in
-                                                                    match def_call_check_args real_args params pre scope local_types locals {
+                                                                    // ...and again from the RETURN direction BEFORE
+                                                                    // the arguments are checked. A parameter type
+                                                                    // that mentions a class variable (`HtmlT M I J A`
+                                                                    // in `HtmlT.map f ma`) otherwise hands an
+                                                                    // abstract carrier to every nested constrained
+                                                                    // call in its argument (`HtmlT.body_node ...`
+                                                                    // gets `HtmlT M I J A`, cannot resolve
+                                                                    // `[Monad M]`, and codegen later turns it into a
+                                                                    // partial application waiting for a dictionary).
+                                                                    // The expectation is the same evidence the return
+                                                                    // direction already uses below, one step earlier;
+                                                                    // the intrinsic-argument presolve keeps precedence
+                                                                    // because `solve_typevars` never overwrites.
+                                                                    let ret_seed : List (Pair Identifier Term) :=
+                                                                        drop_no_progress_bindings
+                                                                            (solve_typevars scope (rebuild_pi_chain (drop_params (List.length real_args) params) ret) expected_type List.empty) in
+                                                                    match def_call_check_args real_args params (List.append pre ret_seed) scope local_types locals {
                                                                         err _ => Option.none,
                                                                         ok pair =>
                                                                             match pair {
@@ -4002,9 +4018,44 @@ def presolve_def_args (args : List Term) (params : List Term) (scope : Scope) (l
                         ok a_tt =>
                             if mentions_class_method_ref a_tt.term scope locals
                             then presolve_def_args rest rest_params scope local_types locals acc
-                            else presolve_def_args rest rest_params scope local_types locals (solve_typevars scope param_ty a_tt.typ acc),
+                            else presolve_def_args rest rest_params scope local_types locals
+                                (drop_no_progress_bindings (solve_typevars scope param_ty a_tt.typ acc)),
                     },
             },
+    }
+
+/// A binding `X := X` (or `X := hole`) is no information, and worse than
+/// none: `lookup_binding` returns the FIRST entry for a name and
+/// `solve_typevars` never overwrites, so leaving one in the accumulator
+/// hides every later, real binding. MEASURED: `outer id (inner 41)` where
+/// `outer [Monad M] (f : A -> B) (m : M A)` -- the second argument's own
+/// still-abstract type is `M A`, so presolve recorded `M := M`, the return
+/// direction's `M := IO` was then ignored, `[Monad M]` had no informative
+/// carrier, and BOTH calls compiled as partial applications waiting for a
+/// dictionary (codegen's arity saw an argument missing) -- the oak
+/// `HtmlT.map` / `html_t_tests` SIGSEGV. The same self-binding arises for
+/// a list literal's nested `FromListLiteral.cons` (`L A` against `L A`).
+#[partial]
+def binding_no_progress (k : Identifier) (t : Term) : Bool :=
+    match term_peel t {
+        Term.hole => true,
+        Term.var _ dbg => match dbg {
+            DebugName.named id => id_eq id k,
+            DebugName.unnamed => true,
+        },
+        _ => false,
+    }
+
+#[partial]
+def drop_no_progress_bindings (bs : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match bs {
+        List.empty => List.empty,
+        List.cons b rest => match b {
+            Pair.pair k t =>
+                if binding_no_progress k t
+                then drop_no_progress_bindings rest
+                else List.cons b (drop_no_progress_bindings rest),
+        },
     }
 
 #[partial]
@@ -4016,7 +4067,26 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                 List.empty => err (TypeError.custom "over-application"),
                 List.cons param_ty rest_params =>
                     let a_expected : Term := subst_typevars_term param_ty subst in
-                    match type_check arg Term.hole scope local_types locals {
+                    // A CALL argument gets the parameter type as its
+                    // expectation when that type is fully solved: a nested
+                    // constrained call (`outer id (inner 41)`,
+                    // `HtmlT.map f (HtmlT.body_node n)`) can only resolve
+                    // its own dictionary from it. This REPLACES the
+                    // intrinsic pass rather than adding one -- re-checking
+                    // after the fact re-elaborated the whole subtree at
+                    // every nesting level and was a measured ~100x
+                    // slowdown on `monad check examples`. Every other
+                    // argument, and any parameter still carrying an
+                    // unsolved variable (opened to holes by
+                    // `open_free_type_vars`), keeps the pre-existing
+                    // intrinsic behavior.
+                    let want : Term := open_free_type_vars a_expected scope in
+                    let prefer : Bool :=
+                        match term_peel arg {
+                            Term.app _ _ => Bool.not (mentions_hole want),
+                            _ => false,
+                        } in
+                    match check_arg_for_call prefer arg want scope local_types locals {
                         ok a_tt0 =>
                             let a_tt : TypedTerm := recheck_unresolved_class_calls arg a_tt0 a_expected scope local_types locals in
                             def_call_continue arg a_tt param_ty rest rest_params subst scope local_types locals,
@@ -4047,6 +4117,37 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                     },
             },
     }
+
+/// The argument check `def_call_check_args` runs: the expectation when the
+/// argument is a CALL and `prefer`, else intrinsic inference. A failed
+/// expectation check falls back to the intrinsic one, preserving the old
+/// leniency for an argument that cannot be checked that way.
+///
+/// A result that STILL mentions a class-method ref falls back as well.
+/// The expectation turns the nested call onto `try_type_check_def_call`'s
+/// infer-only path, which commits an elaboration the intrinsic pass would
+/// otherwise have declined -- and this function cannot tell "solved it
+/// with the expectation" from "accepted it without solving". The test is
+/// `recheck_unresolved_class_calls`'s own: a term still naming
+/// `HAdd.add` has no carrier, since every resolved one is rewritten to a
+/// dictionary projection. MEASURED: `Comonad.extend (fn a => Id.run a +
+/// 1) (Id.id 41)` inside `Id.run (...)` -- the outer call expected `Id
+/// A`, the inner `extend` was checked against it, and codegen died with
+/// `no instance found for prelude::HAdd.add` (`init/src/tests.mo`'s
+/// comonad-id extend test), while the intrinsic pass leaves the call for
+/// `type_check_app` to resolve against the callee's own domain.
+#[partial]
+def check_arg_for_call (prefer : Bool) (arg : Term) (want : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    if prefer
+    then
+        match type_check arg want scope local_types locals {
+            ok tt =>
+                if mentions_class_method_ref tt.term scope locals
+                then type_check arg Term.hole scope local_types locals
+                else ok tt,
+            err _ => type_check arg Term.hole scope local_types locals,
+        }
+    else type_check arg Term.hole scope local_types locals
 
 /// An argument inferred in isolation leaves a class-method call whose carrier
 /// only the PARAMETER type can supply (`len [1, 2]`: the literal's

@@ -98,6 +98,50 @@ def test_sibling_lambda_preserves_outer_locals : IO Bool :=
     in
     compile_source_run_expect source "test_sibling_lambda_preserves_outer_locals" 5
 
+/// A nested constrained call as an ARGUMENT whose parameter type is still
+/// abstract (`m : M A`) must still receive its dictionary: the outer
+/// call's return direction (`IO I64`) has to seed the substitution BEFORE
+/// the argument is checked. Without it, `inner 41` is checked against the
+/// abstract `M A`, cannot resolve `[Monad M]`, and compiles to a partial
+/// application waiting for a dictionary (the `HtmlT.map` driver SIGSEGV
+/// in oak's `html_t_tests`).
+#[test]
+def test_nested_constrained_arg_carries_the_expectation : IO Bool :=
+    let source :=
+        "def outer [Monad M] {A B : Type} (f : A -> B) (m : M A) : M B :=\n" ++
+        "    Monad.bind m (fn (a : A) => Monad.pure (f a))\n" ++
+        "def inner [Monad M] {A : Type} (a : A) : M A := Monad.pure a\n" ++
+        "def run : IO I64 := outer (fn (n : I64) => n) (inner 41)\n" ++
+        "def main (args : List String) : IO I64 := run\n"
+    in
+    compile_source_run_expect source "test_nested_constrained_arg_carries_the_expectation" 41
+
+/// A dictionary-capturing closure stored in a CONSTRUCTOR (the
+/// `dict-capturing-closure-segfault` reproduction): `holder_pure`'s
+/// leading `[Monad M]` dictionary becomes a `__dict_Monad` parameter, and
+/// the lambda it stores captures it. The compiled backends used to
+/// resolve that dictionary to the prelude's catch-all bridge
+/// (`Monad (M I I)`) and crash applying its mismatched layout (native
+/// SIGSEGV, web trap); the lambda's env was always correct.
+/// `holder_pure 42` ignores its `x` argument and returns 42, so the exit
+/// code is the verdict.
+#[test]
+def test_dict_capture_in_constructor : IO Bool :=
+    let source :=
+        "type Holder (M : Type -> Type) A {\n" ++
+        "    holder (f : A -> M A)\n" ++
+        "}\n" ++
+        "def holder_pure [Monad M] {A : Type} (a : A) : Holder M A :=\n" ++
+        "    Holder.holder (fn (x : A) => Monad.pure a)\n" ++
+        "def holder_run [Monad M] {A : Type} (h : Holder M A) (a : A) : M A :=\n" ++
+        "    match h { Holder.holder f => f a }\n" ++
+        "def main (args : List String) : IO I64 := do {\n" ++
+        "    let h : Holder IO I64 := holder_pure 42;\n" ++
+        "    holder_run h 1\n" ++
+        "}\n"
+    in
+    compile_source_run_expect source "test_dict_capture_in_constructor" 42
+
 /// Shim-path regression test: a top-level (arity>0) def referenced as a
 /// first-class VALUE -- passed to another function and applied
 /// indirectly via `apply_closureN` -- must still work once

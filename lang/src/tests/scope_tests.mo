@@ -1,15 +1,15 @@
 use lang::types {
-  Attribute, Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
+  Attribute, Decl, DebugName, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
   InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NamePath,
   NameRef, Param, QualifiedName, Scope, ScopeData, ScopeDef, ScopeError,
   ScopeInstance, Similar, Term, TypeConstraint, Visibility, binder_binder, many, named,
-  package_private, param_many, priv_, pub_, sort_n, unnamed,
+  package_private, param_many, priv_, pub_, show_identifier, sort_n, unnamed,
 }
 use lang::scope {
   LocalTypeBinding, add_constraint_dict_params, bare_map_empty, bind_term_vars, build_scope_from_decls,
   build_scope_from_modules, find_constraint_bound_carrier_any, infer_carrier_type,
   list_append, lookup_binding, mk, npath_eq, placeholder_carrier, resolve_def_in_scope_by_name,
-  scope_data_add_def, scope_data_add_inductive, scope_data_add_instance,
+  resolve_dict_args, scope_data_add_def, scope_data_add_inductive, scope_data_add_instance,
   scope_data_empty, scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_local, scope_globals, scope_instance_candidates_in, scope_push_local, scope_resolve_instance,
   scope_resolve_name, term_to_slug,
@@ -991,6 +991,80 @@ def test_constraint_bound_carrier_needs_a_candidate : Bool :=
     match find_constraint_bound_carrier_any (only_instance beq_list_instance) beq_cls (List.cons (Identifier.id "A") List.empty) List.empty {
         Option.some _ => false,
         Option.none => true,
+    }
+
+def monad_cls : NamePath :=
+    NamePath.mk (List.cons (Identifier.id "Monad") List.empty)
+
+def indexed_cls : NamePath :=
+    NamePath.mk (List.cons (Identifier.id "IndexedMonad") List.empty)
+
+def app2 (h : Term) (a : Term) (b : Term) : Term :=
+    Term.app (Term.app h a) b
+
+/// The prelude's bridge: `instance {I} [IndexedMonad M] Monad (M I I)` --
+/// a wildcard HEAD, so it matches every carrier whatsoever.
+def monad_bridge_instance : Instance :=
+    Instance.mk (Identifier.id "Monad_M_I_I") monad_cls
+        (List.cons (TypeConstraint.mk indexed_cls (List.cons (Identifier.id "M") List.empty)) List.empty)
+        (List.cons (app2 (var_named "M") (var_named "I") (var_named "I")) List.empty)
+        Visibility.package_private
+        [param_many (Identifier.id "I") (sort_n 1), param_many (Identifier.id "M") (sort_n 1)]
+        List.empty
+
+/// A CATCH-ALL must not answer for a carrier it merely matches. Reading
+/// the constraint's `M` out of `Monad (M I I)` against `Holder IO I64`
+/// binds `M` to the carrier's bare HEAD (`Holder`), which then re-matches
+/// the same catch-all and commits its dictionary -- the
+/// `Holder IO I64` / `Monad.pure` compiled SIGSEGV. No bound carrier is
+/// evidence here, so the answer is `<none>` and the caller falls back to
+/// the plain first-match, where a concrete `Monad IO` wins.
+#[test]
+def test_constraint_bound_carrier_skips_a_catch_all : Bool :=
+    String.beq
+        (bound_carrier_slug monad_bridge_instance monad_cls
+            (List.cons (Identifier.id "M") List.empty)
+            (app2 (var_named "Holder") (var_named "IO") (var_named "I64")))
+        "<none>"
+
+/// `instance Monad IO`, fully concrete, beside the bridge above.
+def monad_io_instance : Instance :=
+    Instance.mk (Identifier.id "Monad_IO") monad_cls List.empty
+        (List.cons (var_named "IO") List.empty)
+        Visibility.package_private List.empty List.empty
+
+def dict_arg_name (ds : List Term) : Option String :=
+    match ds {
+        List.empty => Option.none,
+        List.cons t _ => match t {
+            Term.var _ dbg => match dbg {
+                DebugName.named id => Option.some (show_identifier id),
+                DebugName.unnamed => Option.none,
+            },
+            _ => Option.none,
+        },
+    }
+
+/// The whole resolution, not just the helper: with `M := IO` bound and
+/// both `instance Monad IO` and the catch-all bridge declared, the dict
+/// must be the concrete one. Before the head-concreteness guard the
+/// bridge won here, and the compiled `Holder IO I64` program applied
+/// `Monad.pure` through a dictionary of the wrong layout (SIGSEGV).
+#[test]
+def test_dict_resolution_prefers_the_concrete_instance : Bool :=
+    let bindings : List (Pair Identifier Term) :=
+        List.cons (Pair.pair (Identifier.id "M") (var_named "IO")) List.empty in
+    let constraints : List TypeConstraint :=
+        List.cons (TypeConstraint.mk monad_cls (List.cons (Identifier.id "M") List.empty)) List.empty in
+    let instances : List Instance := List.cons monad_bridge_instance (List.cons monad_io_instance List.empty) in
+    let carrier : Term := app2 (var_named "Holder") (var_named "IO") (var_named "I64") in
+    match resolve_dict_args List.empty instances List.empty List.empty bindings carrier List.empty constraints {
+        Option.none => false,
+        Option.some ds => match dict_arg_name ds {
+            Option.none => false,
+            Option.some name => String.contains name "__Dict_Monad"
+                && Bool.not (String.contains name "Monad_M_I_I"),
+        },
     }
 
 // --- The def-type table is `forall`-wrapped, so a HEAD read off it must
