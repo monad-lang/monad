@@ -44,6 +44,10 @@ def cancel_i64 (fibers : List (Fiber I64)) : IO Unit :=
     }
   }
 
+// Test-local specialization of `combine.mo`'s `race` -- same reasoning:
+// no value of I64 is correct for racing zero fibers, and both call sites
+// (`test_race_first`, `test_race_single`) pass >=1 fiber.
+#[allow_incomplete_match "race_i64 specialization; no value of I64 is correct for racing zero fibers"]
 def race_i64 (fibers : List (Fiber I64)) : IO I64 :=
   match fibers {
     List.cons f rest => do {

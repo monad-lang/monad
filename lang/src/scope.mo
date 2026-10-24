@@ -3344,6 +3344,19 @@ def def_references_class (constrained_def_classes : HashMap String (List String)
         Term.quote_ inner => def_references_class constrained_def_classes cls_str inner,
         Term.ctx _loc inner => def_references_class constrained_def_classes cls_str inner,
         Term.cubical c => match c { { prim := _, args := args } => terms_reference_class constrained_def_classes cls_str args },
+        // Mirrors the `var` arm above: a macro-template variable's own
+        // name is checked the same way a resolved var's would be.
+        Term.var_macro _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    let spelled : String := show_identifier id in
+                    if String.starts_with (cls_str ++ ".") spelled
+                    then true
+                    else if String.beq spelled ("__dict_" ++ cls_str)
+                    then true
+                    else calls_constrained_def_for_class constrained_def_classes cls_str spelled,
+                DebugName.unnamed => false,
+            },
     }
 
 #[partial]
@@ -7332,6 +7345,16 @@ def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : Li
     // Must recurse, same as `ctx`: an unresolved class call under a cubical
     // argument is still unresolved.
     Term.cubical c => match c { { prim := _, args := args } => find_unresolved_class_calls_terms classes args acc },
+    // Must recurse: `quote_`'s wrapper persists through macro expansion
+    // (`resolve_quote`, lang/typecheck/macro_expand.mo), so an unresolved
+    // class call under a quoted sub-expression is still unresolved -- same
+    // reason as `ctx`/`cubical` above.
+    Term.quote_ inner => find_unresolved_class_calls_term classes inner acc,
+    // A macro-template variable is never itself the rewrite target of
+    // `class_method_ref`/dict-resolution (only `Term.var` is, per this
+    // module's own doc comment above on that rewrite), so it carries no
+    // new information.
+    Term.var_macro _idx _dbg => acc,
 }
 
 #[partial]

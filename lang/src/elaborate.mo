@@ -18,6 +18,13 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 /// A free variable is a var with de Bruijn index == sentinel (-1)
 /// and a named debug name that is NOT in known_names.
 /// Mirrors Rust's free_vars (type.rs:1901).
+///
+/// `Term.quote_`/`Term.var_macro` are intentionally not covered: this is
+/// only ever called on a def's declared TYPE, at the same pipeline point
+/// `type_check` is about to run on its body -- and `type_check` itself
+/// unconditionally rejects both shapes before elaboration ever sees them
+/// (`lang/typecheck/infer.mo`'s own doc comment for that rejection).
+#[allow_incomplete_match "mirrors type_check's own quote_/var_macro rejection at the same pipeline point"]
 def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
     match typ {
         Term.var idx dbg =>
@@ -568,6 +575,11 @@ def test_elaborate_decl_decl_gen_d_passthrough : Bool :=
         _ => false,
     }
 
+// `np`'s sole call site (the test just above) always passes a user-written
+// `decl_gen` macro name, never `Decl.to_name`'s `NamePath.mk []` placeholder
+// (a different, unrelated construction site) -- so `ids` is never empty
+// here, though nothing in `np`'s own type says so.
+#[allow_incomplete_match "np always comes from a decl_gen name; its one call site never passes an empty path"]
 #[partial]
 def name_path_head (np : NamePath) : Identifier :=
     match np { NamePath.mk ids => match ids { List.cons hd _ => hd } }

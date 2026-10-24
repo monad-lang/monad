@@ -488,13 +488,10 @@ def Body.take_until_quote (input : List U8) : List U8 :=
 def Body.take_until_quote_go (input : List U8) (acc : List U8) : List U8 :=
   match input {
     List.empty => List.reverse acc,
-    List.cons x _ =>
+    List.cons x rest =>
       if U8.beq x 34u8
       then List.reverse acc
-      else
-        match input {
-          List.cons _ rest => Body.take_until_quote_go rest (List.cons x acc)
-        }
+      else Body.take_until_quote_go rest (List.cons x acc)
   }
 
 def Body.take_until_semi (input : List U8) : List U8 :=
@@ -542,13 +539,10 @@ def Body.find_delim (delim : List U8) (input : List U8) : Option (List U8) :=
 def Body.find_delim_go (delim : List U8) (input : List U8) : Option (List U8) :=
   match input {
     List.empty => Option.none,
-    List.cons _ _ =>
+    List.cons _ rest =>
       if Strings.list_starts_with delim input
       then Option.some (Strings.list_drop_prefix delim input)
-      else
-        match input {
-          List.cons _ rest => Body.find_delim_go delim rest
-        }
+      else Body.find_delim_go delim rest
   }
 
 /// Take bytes until the delimiter is found (exclusive).
@@ -559,13 +553,10 @@ def Body.take_until_delim (delim : List U8) (input : List U8) : List U8 :=
 def Body.take_until_delim_go (delim : List U8) (input : List U8) (acc : List U8) : List U8 :=
   match input {
     List.empty => List.reverse acc,
-    List.cons _ _ =>
+    List.cons x rest =>
       if Strings.list_starts_with delim input
       then List.reverse acc
-      else
-        match input {
-          List.cons x rest => Body.take_until_delim_go delim rest (List.cons x acc)
-        }
+      else Body.take_until_delim_go delim rest (List.cons x acc)
   }
 
 // ── param name constants (avoid reserved keyword conflicts) ────────────

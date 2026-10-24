@@ -12,6 +12,7 @@ use lang::types {
   has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
   pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
   pd_infix_d, pd_instance_d, pd_macro_call_d, pd_mote_d, pd_open_d,
+  dict_hint, do_,
   pd_scoped_open_d, pd_struct_d, pd_use_d, pd_with_d, pi, plain, priv_, pt_app, pt_at, pt_dict_hint, pt_do,
   pt_from, pt_hole, pt_lam, pt_lit, pt_pi, pt_quote_, pt_sort, pt_var,
   pt_var_macro, pub_, sentinel, show_identifier, show_name_path, str, struct_lit,
@@ -8209,7 +8210,8 @@ def test_t_var_bound : Bool :=
 				Term.pi _ _ _ => false, Term.app _ _ => false,
 				Term.lit _ => false, Term.ntv _ => false,
 				Term.con _ => false, Term.sort _ => false, Term.hole => false,
-				Term.cubical _ => false
+				Term.cubical _ => false,
+				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false
 			},
 		fail _ => false
 	}
@@ -8225,7 +8227,8 @@ def test_t_var_unbound : Bool :=
 				Term.pi _ _ _ => false, Term.app _ _ => false,
 				Term.lit _ => false, Term.ntv _ => false,
 				Term.con _ => false, Term.sort _ => false, Term.hole => false,
-				Term.cubical _ => false
+				Term.cubical _ => false,
+				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false
 			},
 		fail _ => false
 	}
@@ -8245,7 +8248,8 @@ def test_t_var_shadow : Bool :=
 				Term.pi _ _ _ => false, Term.app _ _ => false,
 				Term.lit _ => false, Term.ntv _ => false,
 				Term.con _ => false, Term.sort _ => false, Term.hole => false,
-				Term.cubical _ => false
+				Term.cubical _ => false,
+				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false
 			},
 		fail _ => false
 	}
@@ -8320,13 +8324,17 @@ def test_t_lambda_identity : Bool :=
 						ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
 						ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
 						ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
-						ParseTermKind.sort _ => false
+						ParseTermKind.sort _ => false,
+						ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
+						ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false
 					},
 				ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
 				ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,
 				ParseTermKind.lit _ => false, ParseTermKind.ntv _ => false,
 				ParseTermKind.con _ => false,
-				ParseTermKind.sort _ => false, ParseTermKind.hole => false
+				ParseTermKind.sort _ => false, ParseTermKind.hole => false,
+				ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
+				ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false
 			},
 		fail _ => false
 	}

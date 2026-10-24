@@ -1625,26 +1625,23 @@ def uncovered_constructors (cases : List MatchCase) (ind : Inductive) : List Nam
 /// `Scope.incomplete_match_ok` (set in lang/module.mo; see
 /// `has_incomplete_match_exemption`).
 ///
-/// THIS IS A WARNING, NOT AN ERROR, AND THE `ok` BELOW IS DELIBERATE.
-/// Returning `err` here was measured to be unshippable twice over. It
-/// reaches codegen through `elaborate_def_with_scope`, whose caller
-/// (`elaborate_module_decls_reporting`, lang/module.mo) is best-effort and
-/// SWALLOWS the error, leaving the def un-elaborated for codegen's syntactic
-/// fallbacks to miscompile into a SIGSEGV with no diagnostic
-/// (`lang/codegen/validate.mo` documents that exact shape; it cost a ladder
-/// rung on 2026-10-06). And it rejects ~22+ existing corpus defs that are
-/// total by invariant rather than by syntax, which fails their whole file
-/// under `monad test`. `plans/implementations/strict-exhaustiveness.md`
-/// prescribes the sequencing: warn, sweep the corpus (its Phase 4), then
-/// flip. `match_coverage_warning` below is the reporting half; flipping it
-/// back means making THIS return `err` again and is one edit.
+/// THIS IS NOW AN ERROR (strict-exhaustiveness.md Phase 4, flipped once the
+/// corpus was swept clean). It used to be a deliberate warning, because
+/// returning `err` reached codegen through `elaborate_def_with_scope`, whose
+/// caller (`elaborate_module_decls_reporting`, lang/module.mo) is
+/// best-effort and SWALLOWED the error, leaving the def un-elaborated for
+/// codegen's syntactic fallbacks to miscompile into a SIGSEGV with no
+/// diagnostic (`lang/codegen/validate.mo` documents that exact shape; it
+/// cost a ladder rung on 2026-10-06). `scope_for_elab_body` (lang/module.mo)
+/// still forces `incomplete_match_ok := true` unconditionally, so that path
+/// stays exempt by design -- only `check` (via `check_def_with_scope`)
+/// enforces this rule now. `match_coverage_warning` below is the reporting
+/// half and renders the same message this now returns.
 def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inductive) (scope : Scope) : Result TypeError Bool :=
     match match_coverage_gap cases maybe_ind scope {
-        // The gap is REAL and deliberately not fatal. Phase 4 flips this arm
-        // to `err (TypeError.custom (non_exhaustive_match_message ind missing))`
-        // -- `match_coverage_warning` already renders exactly that text -- once
-        // the corpus is clean.
-        Option.some _ => ok true,
+        Option.some p => match p {
+            Pair.pair ind missing => err (TypeError.custom (non_exhaustive_match_message ind missing)),
+        },
         Option.none => ok true,
     }
 
@@ -3747,6 +3744,11 @@ def try_type_check_con_call (app_term : Term) (expected_type : Term) (scope : Sc
             match head {
                 Term.var idx dbg =>
                     match dbg {
+                        // An unnamed variable carries no name to resolve a
+                        // constructor by -- the same "insufficient evidence,
+                        // decline" answer this function already gives for
+                        // every other non-matching head shape.
+                        DebugName.unnamed => Option.none,
                         DebugName.named id =>
                             if not (I64.beq idx sentinel) then Option.none
                             else if is_some_local (scope_find_local id locals) then Option.none

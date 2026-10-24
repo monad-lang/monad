@@ -172,6 +172,11 @@ def term_type_level (t : Term) : I64 :=
             Option.some n => n,
             Option.none => sentinel,
         },
+        // A private test-canary helper: decodes a `Term.sort N` canary
+        // value after it has run through the transformation under test.
+        // Any other shape has no level to report either, so it is the
+        // same "nothing to report" sentinel, not a guess.
+        _ => sentinel,
     }
 
 /// `defmacro double x := x` -- the one real `lang/parser.mo` test

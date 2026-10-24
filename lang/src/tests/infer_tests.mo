@@ -9,6 +9,7 @@ use lang::types {
   cub,
 }
 use lib::scope {build_scope_from_decls, scope_find_inductive}
+use lib::typecheck::diagnostic {type_error_message}
 use lib::typecheck::infer {
   CalleeDomain, TypedTerm, empty_local_types, empty_locals,
   is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
@@ -710,20 +711,58 @@ def test_match_bare_field_pattern_name_covers_nothing : Bool :=
 // --- the same rule end to end, through the checker ---
 
 #[test]
-def test_match_missing_arm_does_not_fail_the_check_end_to_end : Bool :=
-    // The rule is a WARNING, so an uncovered match must type-check. This is
-    // the pin that would have caught the 2026-10-06 regression from the other
-    // side: when this returned `err`, the error reached codegen through
-    // `elaborate_def_with_scope`, was swallowed by its best-effort caller, and
-    // the un-elaborated body miscompiled into a SIGSEGV. Flipping the rule to
-    // an error again (strict-exhaustiveness.md Phase 4) means inverting this
-    // test and fixing the corpus in the same change.
+def test_match_missing_arm_now_fails_the_check_end_to_end : Bool :=
+    // The rule is an ERROR again (strict-exhaustiveness.md Phase 4, flipped
+    // once the corpus was swept clean). This is the inverse of the pin that
+    // used to live here under the warning regime -- see that era's note,
+    // still true in reverse: when this returns `err`, the error reaches
+    // codegen through `elaborate_def_with_scope`, whose caller
+    // (`elaborate_module_decls_reporting`) is best-effort and SWALLOWS it,
+    // which is why `scope_for_elab_body` (lang/module.mo) keeps elaboration
+    // exempt regardless -- only `check`'s path is meant to see this `err`.
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
     let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none Option.none in
     let cases : List MatchCase := List.cons case_some List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+/// The error path, not just the pure query: the rejected `type_check` call
+/// above still names the missing constructor in its rendered message,
+/// mirroring `test_match_missing_arm_message_names_the_type_and_constructor`
+/// but through the real entry point rather than `match_coverage_warning`
+/// directly -- a check that errored for the wrong reason would pass the pin
+/// above and be worthless.
+#[test]
+def test_match_missing_arm_error_names_the_constructor_end_to_end : Bool :=
+    let scrutinee : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none Option.none in
+    let cases : List MatchCase := List.cons case_some List.empty in
+    let t : Term := Term.lit (Literal.match_ scrutinee cases) in
+    match type_check t Term.hole maybe_scope empty_local_types empty_locals {
+        ok _ => false,
+        err e => String.contains (type_error_message e) "`Maybe.none`",
+    }
+
+/// `#[allow_incomplete_match]`'s effect through the real entry point: with
+/// the exemption set, the SAME incomplete match that just failed above must
+/// type-check. `test_match_incomplete_match_exemption_switches_the_rule_off`
+/// pins the pure query only; this is its `type_check`-level counterpart, so
+/// a regression that wires the exemption into the query but not into the
+/// checker's own call site would still be caught.
+#[test]
+def test_match_incomplete_match_exemption_still_checks_end_to_end : Bool :=
+    let exempt_scope : Scope := { maybe_scope with incomplete_match_ok := true } in
+    let scrutinee : Term := sort_n 1 in
+    let body : Term := sort_n 1 in
+    let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none Option.none in
+    let cases : List MatchCase := List.cons case_some List.empty in
+    let t : Term := Term.lit (Literal.match_ scrutinee cases) in
+    match type_check t Term.hole exempt_scope empty_local_types empty_locals {
         ok _ => true,
         err _ => false,
     }

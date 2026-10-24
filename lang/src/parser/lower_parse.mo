@@ -1015,6 +1015,17 @@ def lower_parse_decl (ctx : ParseLowerCtx) (d : ParseDecl) : Decl :=
     lower_parse_decl_kind ctx d.kind
 
 
+// `ParseDeclKind.with_d` is deliberately NOT covered: `with_d` expands to
+// its (possibly several) prefixed INNER decls, which `lower_parse_decls`
+// above special-cases and splices out before this function is ever
+// reached -- a `with_d` therefore has no correct single-`Decl` value to
+// return here even in principle, not merely one this function happens
+// not to need. `scoped_open_d`'s own recursive call is the only other
+// path in, and the grammar restricts a scoped `open`'s wrapped decl to
+// `[def_parser, class_parser, instance_parser, struct_parser, type_parser]`
+// (`scoped_open_inner_decl_at`, lang/parser.mo) -- `with_parser` is not in
+// that list, so `with_d` can't reach this function that way either.
+#[allow_incomplete_match "with_d is spliced out by lower_parse_decls before reaching here; no single Decl value fits"]
 #[partial]
 def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
     match k {

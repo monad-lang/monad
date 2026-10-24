@@ -102,6 +102,18 @@ def uses_of (target : I64) (t : Term) : I64 :=
         Term.hole => 0,
         Term.quote_ _inner => 0,
         Term.ctx _loc inner => uses_of target inner,
+        // A cubical primitive's arguments all run, so they SUM -- same
+        // rule as `uses_of_con`/`uses_of_native`'s `Option Term` args.
+        Term.cubical c => match c { { prim := _, args := args } => uses_of_terms target args },
+    }
+
+/// Plain-`List Term` SUM for `Term.cubical`'s `args` -- `Con`/`Native`
+/// use `uses_of_opt_args` because their own `args : List (Option Term)`.
+#[partial]
+def uses_of_terms (target : I64) (ts : List Term) : I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest => uses_of target t + uses_of_terms target rest,
     }
 
 #[partial]
@@ -488,6 +500,18 @@ def borrow_aware_at (borrows : HashMap String Bool) (borrowed_here : Bool) (targ
         Term.hole => 0,
         Term.quote_ _inner => 0,
         Term.ctx _loc inner => borrow_aware_at borrows borrowed_here target inner,
+        // Same treatment as `borrow_aware_opt_args`: no cubical primitive
+        // argument position is documented as a borrow site.
+        Term.cubical c => match c { { prim := _, args := args } => borrow_aware_terms borrows target args },
+    }
+
+/// Plain-`List Term` SUM for `Term.cubical`'s `args` -- `borrow_aware_opt_args`
+/// is for `Con`/`Native`'s `List (Option Term)` instead.
+#[partial]
+def borrow_aware_terms (borrows : HashMap String Bool) (target : I64) (ts : List Term) : I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest => borrow_aware_at borrows false target t + borrow_aware_terms borrows target rest,
     }
 
 #[partial]
@@ -598,6 +622,25 @@ def owning_at (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx
         Term.hole => 0,
         Term.quote_ _inner => 0,
         Term.ctx _loc inner => owning_at ctors borrows ctx target inner,
+        // A cubical primitive's arguments are call arguments, not
+        // stores -- same treatment as `Term.ntv` just above.
+        Term.cubical c =>
+            match c { { prim := _, args := args } => owning_at_terms ctors borrows UsePos.up_app_arg target args },
+    }
+
+/// Plain-`List Term` SUM for `Term.cubical`'s `args` -- `owning_at_opt_args`
+/// is for `Con`/`Native`'s `List (Option Term)` instead.
+#[partial]
+def owning_at_terms
+    (ctors : HashMap String Bool)
+    (borrows : HashMap String Bool)
+    (ctx : UsePos)
+    (target : I64)
+    (ts : List Term) :
+    I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest => owning_at ctors borrows ctx target t + owning_at_terms ctors borrows ctx target rest,
     }
 
 def pos_is_owning (p : UsePos) : Bool :=
@@ -803,6 +846,23 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         Term.hole => acc,
         Term.quote_ _inner => acc,
         Term.ctx _loc inner => collect_uses_term ctors borrows inner acc,
+        // Recurse, mirroring `collect_uses_con`/`collect_uses_native`:
+        // a cubical argument can itself contain a binder reference.
+        Term.cubical c => match c { { prim := _, args := args } => collect_uses_terms ctors borrows args acc },
+    }
+
+/// Plain-`List Term` walk for `Term.cubical`'s `args` -- `collect_uses_opt_args`
+/// is for `Con`/`Native`'s `List (Option Term)` instead.
+#[partial]
+def collect_uses_terms
+    (ctors : HashMap String Bool)
+    (borrows : HashMap String Bool)
+    (ts : List Term)
+    (acc : List BinderUse) :
+    List BinderUse :=
+    match ts {
+        List.empty => acc,
+        List.cons t rest => collect_uses_terms ctors borrows rest (collect_uses_term ctors borrows t acc),
     }
 
 #[partial]

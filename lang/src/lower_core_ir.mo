@@ -169,6 +169,14 @@ pub type LowerError {
   /// `plans/implementations/2026-09-26-external-mote-gaps-for-forge.md`,
   /// Gap 5.
   le_float_literal_unsupported,
+  /// A `Term.quote_`/`Term.var_macro` reached lowering. Unlike
+  /// `le_type_level_term`'s callers, this one has no type-check
+  /// prerequisite (this module's own doc comment, and `meta_eval.mo`'s
+  /// caller contract): `expand_decls_graph`'s best-effort macro expansion
+  /// can legitimately leave either shape in place mid-expansion. Named
+  /// rather than reused, following `le_struct_lit_survived`'s own
+  /// precedent -- this used to be a bare missing arm too.
+  le_unresolved_macro_artifact,
 }
 
 /// Accumulates whole-program global discovery + lowering. See this
@@ -917,6 +925,11 @@ def lower_term (ctx : LowerCtx) (t : Term) (acc : LowerAcc) : Pair (Result Lower
     // silent placeholder. `plans/type-system/univalence.md` records when the
     // runtime story comes due -- the first EXECUTABLE cubical proof.
     Term.cubical _c => lower_err LowerError.le_type_level_term acc,
+    // See `le_unresolved_macro_artifact`'s own doc comment: this pass has
+    // no type-check prerequisite, so either shape can legitimately still
+    // be here mid-macro-expansion.
+    Term.quote_ _inner => lower_err LowerError.le_unresolved_macro_artifact acc,
+    Term.var_macro _idx _dbg => lower_err LowerError.le_unresolved_macro_artifact acc,
   }
 
 // ─── Whole-program global table: the worklist pass ──────────────────

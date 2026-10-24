@@ -46,6 +46,7 @@ def show_lower_error_debug (e : LowerError) : String :=
         LowerError.le_con_hole_before_filled_arg => "le_con_hole_before_filled_arg",
         LowerError.le_struct_lit_survived => "le_struct_lit_survived",
         LowerError.le_float_literal_unsupported => "le_float_literal_unsupported",
+        LowerError.le_unresolved_macro_artifact => "le_unresolved_macro_artifact",
         LowerError.le_in_def path inner => String.concat "in " (String.concat (show_module_path_ path) (String.concat ": " (show_lower_error_debug inner))),
     }
 

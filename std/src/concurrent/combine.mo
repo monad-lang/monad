@@ -48,6 +48,14 @@ def cancel_all (fibers : List (Fiber A)) : IO Unit :=
   }
 
 // Race: cancel all but the first fiber, await the first.
+//
+// `List.empty` is deliberately NOT covered, unlike `all`/`cancel_all`
+// above: those have an obviously correct answer for zero fibers (nothing
+// to accumulate/cancel), but there is no value of `A` to synthesize for
+// the winner of racing zero contestants -- a structural non-totality in
+// the API itself, the same shape as `head`/`last` of an empty list, not a
+// provable invariant. Callers are expected to pass at least one fiber.
+#[allow_incomplete_match "race requires >=1 fiber; no value of A exists for racing zero contestants"]
 #[partial]
 pub def race (fibers : List (Fiber A)) : IO A :=
   match fibers {

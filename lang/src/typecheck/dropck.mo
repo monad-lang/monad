@@ -230,6 +230,25 @@ def collect_drop_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         Term.hole => acc,
         Term.quote_ _inner => acc,
         Term.ctx _loc inner => collect_drop_term ctors borrows inner acc,
+        // Mirrors `usage.mo`'s `collect_uses_term` exactly, per this
+        // function's own doc comment above -- a cubical argument is an
+        // ordinary runtime term that can reference a bound variable.
+        Term.cubical c => match c { { prim := _, args := args } => collect_drop_terms ctors borrows args acc },
+    }
+
+/// Plain-`List Term` walk for `Term.cubical`'s `args` -- `Con`/`Native`
+/// use `collect_drop_opt_args` because their own `args : List (Option
+/// Term)`; `Cubical.args` has no such sparseness.
+#[partial]
+def collect_drop_terms
+    (ctors : HashMap String Bool)
+    (borrows : HashMap String Bool)
+    (ts : List Term)
+    (acc : List DropInfo) :
+    List DropInfo :=
+    match ts {
+        List.empty => acc,
+        List.cons t rest => collect_drop_terms ctors borrows rest (collect_drop_term ctors borrows t acc),
     }
 
 #[partial]

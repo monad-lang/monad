@@ -48,7 +48,10 @@
 /// collisions are endemic here — `lang/src/typecheck/usage.mo`'s own
 /// attribution had to fail closed on exactly this — and a wrong pick in
 /// *this* predicate frees memory that is still live.
-use lib::types {DebugName, Identifier, Instance, NamePath, Scope, Term, Visibility, binder_anon, id_member, term_peel}
+use lib::types {
+  CubicalPrim, DebugName, Identifier, Instance, NamePath, Scope, Term, Visibility,
+  binder_anon, cubical_prim_eq, id_member, term_peel,
+}
 use lib::scope {
   instance_args_match_carrier, instance_is_fully_concrete, instance_wildcard_names,
   scope_globals, scope_instance_candidates_in, term_is_wildcard,
@@ -147,6 +150,15 @@ def carrier_is_resolvable (t : Term) : Bool :=
         Term.var_macro _idx _dbg => false,
         Term.app _callee _arg => false,
         Term.ctx _loc _inner => false,
+        // The interval (arity 0) IS a nameable carrier, like any other
+        // concrete type reference -- mirrors `is_uninformative_carrier`'s
+        // identical cubical arm (lang/typecheck/infer.mo). Any other
+        // cubical shape (`i0`, `i1`, `ineg i`, ...) is a dimension TERM,
+        // never a type, so it falls to `false`.
+        Term.cubical c =>
+            match c {
+                { prim := p, args := as } => cubical_prim_eq p CubicalPrim.interval && List.is_empty as,
+            },
     }
 
 /// Kept for `instance_admissible` below to fall back on — every

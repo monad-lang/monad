@@ -123,6 +123,14 @@ pub def show_term (t : Term) : String := match t {
         let inner := String.concat lhs sp in
         String.concat inner ")",
     lit value => show_literal value,
+    // Not type-checked terms: `resolve_quote` (lang/typecheck/macro_expand.mo)
+    // leaves the `quote_` wrapper itself in place while resolving its
+    // inner references, and an unexpanded macro-template variable is a
+    // genuine, persisting shape until expansion runs -- both can reach a
+    // printer that runs before or outside `type_check` (diagnostics,
+    // hover). Printed as their own surface syntax, round-tripping.
+    quote_ term => String.concat "quote { " (String.concat (show_term term) " }"),
+    var_macro idx dbg => String.concat (show_debug_name dbg) "!",
     ntv native => show_native native,
     con c => show_con c,
     sort level => show_sort_level level,
@@ -201,6 +209,11 @@ def show_literal (lit : Literal) : String := match lit {
     struct_lit fields type_name =>
         let tn := match type_name { Option.some t => String.concat (show_term t) " ", Option.none => "" } in
         String.concat tn (String.concat "{ " (String.concat (show_struct_lit_fields fields) " }")),
+    // Same survivor state as `struct_lit` just above -- its own doc
+    // comment explains why this printer must cover it.
+    struct_update base fields =>
+        let mid := String.concat (show_term base) (String.concat " with " (show_struct_lit_fields fields)) in
+        String.concat "{ " (String.concat mid " }"),
 }
 
 /// One `name := value` pair of a literal's field list, comma-separated.

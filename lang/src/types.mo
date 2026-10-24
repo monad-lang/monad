@@ -183,7 +183,13 @@ def test_attr_args_returns_the_named_attributes_args : Bool :=
             match args {
                 List.cons a more =>
                     List.length more == 0
-                        && match a { AttrArg.ident id => id_eq id (Identifier.id "n") },
+                        && match a {
+                            AttrArg.ident id => id_eq id (Identifier.id "n"),
+                            AttrArg.str _ => false,
+                            AttrArg.num _ => false,
+                            AttrArg.named _ _ => false,
+                            AttrArg.group _ => false,
+                        },
                 List.empty => false,
             },
         Option.none => false,
@@ -2198,22 +2204,89 @@ pub instance Similar Literal {
         match a {
             str s1 => match b {
                 str s2 => String.beq s1 s2,
-                num _ _ => false, if_ _ _ _ => false, match_ _ _ => false
+                num _ _ => false, if_ _ _ _ => false, match_ _ _ => false,
+                char _ => false, flt _ _ => false,
+                struct_lit _ _ => false, struct_update _ _ => false
             },
             num v1 s1 => match b {
                 num v2 s2 => I64.beq v1 v2 && Similar.similar s1 s2,
-                str _ => false, if_ _ _ _ => false, match_ _ _ => false
+                str _ => false, if_ _ _ _ => false, match_ _ _ => false,
+                char _ => false, flt _ _ => false,
+                struct_lit _ _ => false, struct_update _ _ => false
             },
             if_ o1 t1 th1 => match b {
                 if_ o2 t2 th2 => Similar.similar o1 o2 && Similar.similar t1 t2 && Similar.similar th1 th2,
-                str _ => false, num _ _ => false, match_ _ _ => false
+                str _ => false, num _ _ => false, match_ _ _ => false,
+                char _ => false, flt _ _ => false,
+                struct_lit _ _ => false, struct_update _ _ => false
             },
             match_ v1 cs1 => match b {
                 match_ v2 cs2 => Similar.similar v1 v2 && mc_list_similar cs1 cs2,
-                str _ => false, num _ _ => false, if_ _ _ _ => false
+                str _ => false, num _ _ => false, if_ _ _ _ => false,
+                char _ => false, flt _ _ => false,
+                struct_lit _ _ => false, struct_update _ _ => false
+            },
+            // `char`/`flt` are ordinary literals, present in every normal
+            // parsed program -- this instance predates both being added to
+            // `Literal`. `struct_lit`/`struct_update` are the same survivor
+            // state `similar_term_go`'s neighbours document: a literal that
+            // never desugared because best-effort elaboration failed on its
+            // def, which this comparator (used by structural test pinning)
+            // must still be able to compare rather than crash on.
+            char c1 => match b {
+                char c2 => String.beq (char_to_string c1) (char_to_string c2),
+                str _ => false, num _ _ => false, if_ _ _ _ => false, match_ _ _ => false,
+                flt _ _ => false, struct_lit _ _ => false, struct_update _ _ => false
+            },
+            flt t1 s1 => match b {
+                flt t2 s2 => String.beq t1 t2 && Similar.similar s1 s2,
+                str _ => false, num _ _ => false, if_ _ _ _ => false, match_ _ _ => false,
+                char _ => false, struct_lit _ _ => false, struct_update _ _ => false
+            },
+            struct_lit fields1 tn1 => match b {
+                struct_lit fields2 tn2 => struct_lit_fields_similar fields1 fields2 && opt_term_similar tn1 tn2,
+                str _ => false, num _ _ => false, if_ _ _ _ => false, match_ _ _ => false,
+                char _ => false, flt _ _ => false, struct_update _ _ => false
+            },
+            struct_update base1 fields1 => match b {
+                struct_update base2 fields2 => Similar.similar base1 base2 && struct_lit_fields_similar fields1 fields2,
+                str _ => false, num _ _ => false, if_ _ _ _ => false, match_ _ _ => false,
+                char _ => false, flt _ _ => false, struct_lit _ _ => false
             }
         }
 }
+
+def opt_term_similar (a : Option Term) (b : Option Term) : Bool :=
+    match a {
+        Option.some x => match b {
+            Option.some y => Similar.similar x y,
+            Option.none => false,
+        },
+        Option.none => match b {
+            Option.some _ => false,
+            Option.none => true,
+        },
+    }
+
+def struct_lit_fields_similar (a : List StructLitField) (b : List StructLitField) : Bool :=
+    match a {
+        List.cons x xs => match b {
+            List.cons y ys =>
+                match x {
+                    StructLitField.mk xname xvalue => match y {
+                        StructLitField.mk yname yvalue =>
+                            Similar.similar xname yname
+                                && Similar.similar xvalue yvalue
+                                && struct_lit_fields_similar xs ys,
+                    },
+                },
+            List.empty => false,
+        },
+        List.empty => match b {
+            List.empty => true,
+            List.cons _ _ => false,
+        },
+    }
 
 
 // --- Similar instances for de Bruijn types (Phase 0) ---
@@ -2694,6 +2767,20 @@ pub instance Similar Term {
         similar_term_go (term_peel a) (term_peel b)
 }
 
+// `quote_`/`var_macro` get real arms: both persist as genuine term shapes
+// through macro expansion (`resolve_quote`, lang/typecheck/macro_expand.mo,
+// leaves the `quote_` wrapper itself in place while resolving its inner
+// references) and `Similar.similar`/this function are used broadly enough
+// (structural test pinning, `term_matches_carrier`) that either side being
+// a top-level `quote_` or `var_macro` is plausible. `Term.ctx`, by
+// contrast, is PROVABLY unreachable here: the only caller is `Similar
+// Term`'s `similar`, which peels both sides with `term_peel` before ever
+// calling this function, and every recursive comparison below goes
+// through `Similar.similar` -- i.e. the same peeling wrapper -- rather
+// than calling `similar_term_go` directly on an unpeeled subterm. Its arm
+// is kept anyway, defensively `false`, because the checker cannot see
+// that invariant and `#[allow_incomplete_match]` would also exempt the
+// `quote_`/`var_macro` coverage this function genuinely needs.
 #[partial]
 def similar_term_go (a : Term) (b : Term) : Bool :=
         match a {
@@ -2702,7 +2789,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 lam _ _ _ => false, pi _ _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             // R2c: `d1`/`d2` are `Binder`s now, so this compares `info` and
             // NOT the name, where it compared names before -- the arm's text
@@ -2713,7 +2801,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 var _ _ => false, pi _ _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             // The two binders are compared, and the domain and codomain with
             // them. Comparing `b1`/`b2` is not decoration: it is what keeps a
@@ -2725,56 +2814,82 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 var _ _ => false, lam _ _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             app f1 a1 => match b {
                 app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             lit v1 => match b {
                 lit v2 => Similar.similar v1 v2,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, app _ _ => false, ntv _ => false,
                 con _ => false, hole => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             ntv n1 => match b {
                 ntv n2 => Similar.similar n1 n2,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 con _ => false, hole => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             con c1 => match b {
                 con c2 => Similar.similar c1 c2,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, hole => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             sort l1 => match b {
                 sort l2 => level_eq l1 l2,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, hole => false, cubical _ => false
+                ntv _ => false, con _ => false, hole => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             hole => match b {
                 hole => true,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false,
-                sort _ => false, cubical _ => false
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
             },
             cubical c1 => match b {
                 cubical c2 => similar_cubical c1 c2,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false, hole => false,
-                sort _ => false
-            }
+                sort _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+            },
+            quote_ i1 => match b {
+                quote_ i2 => Similar.similar i1 i2,
+                var _ _ => false, lam _ _ _ => false,
+                pi _ _ _ => false, app _ _ => false, lit _ => false,
+                ntv _ => false, con _ => false, hole => false,
+                sort _ => false, cubical _ => false,
+                var_macro _ _ => false, ctx _ _ => false
+            },
+            var_macro idx1 dbg1 => match b {
+                var_macro idx2 dbg2 => I64.beq idx1 idx2 && Similar.similar dbg1 dbg2,
+                var _ _ => false, lam _ _ _ => false,
+                pi _ _ _ => false, app _ _ => false, lit _ => false,
+                ntv _ => false, con _ => false, hole => false,
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, ctx _ _ => false
+            },
+            // Provably unreachable -- see this def's own doc comment above.
+            ctx _loc1 _inner1 => false,
         }
 
 /// Two cubical terms are similar when they name the same primitive and

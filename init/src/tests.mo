@@ -312,7 +312,8 @@ def test_struct_construct_and_match : Bool :=
 #[test]
 def test_eq_in_plain_match : Bool :=
     match List.cons 5 List.empty {
-        cons x _ => x == 5
+        cons x _ => x == 5,
+        empty => false,
     }
 
 #[test]
@@ -378,12 +379,21 @@ def test_nat_eq_false : Bool :=
 
 // Vec dependent type tests
 
+// `Vec`'s length index makes the OTHER constructor structurally
+// unconstructible at each of these call sites -- `nil : Vec Nat.zero A`,
+// `cons : A -> Vec len A -> Vec (Nat.succ len) A` -- but the checker does
+// no GADT/index refinement (`docs/dependent-types.md`: "a match does not
+// refine types... based on which constructor matched"), so
+// `match_coverage_gap` sees only the bare `Vec` inductive and reports the
+// sibling constructor as missing. Exempted rather than given a dead arm.
+#[allow_incomplete_match "Vec's static length index rules out the other constructor; checker has no GADT refinement"]
 #[test]
 def test_vec_nil_match : Bool :=
     match Vec.nil {
         nil => true
     }
 
+#[allow_incomplete_match "Vec's static length index rules out the other constructor; checker has no GADT refinement"]
 #[test]
 def test_vec_nil_type : Bool :=
     let v : Vec Nat.zero I64 := Vec.nil in
@@ -391,6 +401,7 @@ def test_vec_nil_type : Bool :=
         nil => true
     }
 
+#[allow_incomplete_match "Vec's static length index rules out the other constructor; checker has no GADT refinement"]
 #[test]
 def test_vec_cons_type : Bool :=
     let v : Vec (Nat.succ Nat.zero) I64 := Vec.cons 42 Vec.nil in
@@ -398,6 +409,7 @@ def test_vec_cons_type : Bool :=
         cons h t => h == 42
     }
 
+#[allow_incomplete_match "Vec's static length index rules out the other constructor; checker has no GADT refinement"]
 #[test]
 def test_vec_cons_pattern : Bool :=
     let v : Vec (Nat.succ Nat.zero) I64 := Vec.cons 42 Vec.nil in
@@ -405,12 +417,14 @@ def test_vec_cons_pattern : Bool :=
         cons h t => h == 42
     }
 
+#[allow_incomplete_match "Vec's static length index rules out the other constructor; checker has no GADT refinement"]
 #[test]
 def test_vec_cons_head : Bool :=
     match Vec.cons 42 Vec.nil {
         cons h t => h == 42
     }
 
+#[allow_incomplete_match "Vec's static length index rules out the other constructor; checker has no GADT refinement"]
 #[test]
 def test_vec_cons_tail_nil : Bool :=
     match Vec.cons 42 Vec.nil {

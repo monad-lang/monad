@@ -452,6 +452,12 @@ def show_operator (op : Operator) : String := match op {
     Operator.mk s => s,
 }
 
+// `is_arith_native_op` (below) gates every call site in
+// `compile_native_app_db`: the 4 non-arithmetic `NativeOp`s it excludes
+// never reach here. Keep the two matches' constructor lists in sync by
+// hand -- a new `true` case there without a new arm here would silently
+// reintroduce this as a REACHABLE gap.
+#[allow_incomplete_match "is_arith_native_op gates every call here; the other 4 NativeOps never reach it"]
 #[partial]
 def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLVMValue :=
     match op {
@@ -468,6 +474,8 @@ def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLV
 #[partial]
 def i64_ne (a : I64) (b : I64) : Bool := not (a == b)
 
+// Same gate as `compile_native_val` just above -- see its comment.
+#[allow_incomplete_match "is_arith_native_op gates every call here; the other 4 NativeOps never reach it"]
 #[partial]
 def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
     match op {
@@ -580,13 +588,14 @@ def compile_str_lit_ir (c : CodegenCtx) (s : String) : CompileResult :=
 /// fail fast on. The dummy `ok` arm exists only so the match
 /// typechecks and is never evaluated.
 ///
-/// The `allow_incomplete_match` attribute is used in exactly ONE place
-/// in the tree -- `grep -rn '^\s*#\[allow_incomplete_match'` returning a
-/// second site is a bug, and that is the whole point of it being an
-/// attribute with a mandatory reason rather than a blanket. Note that
+/// The `allow_incomplete_match` attribute is no longer a one-site
+/// idiom -- `strict-exhaustiveness.md` Phase 4's corpus sweep gave it
+/// several real sites, each naming its own durable, pipeline-level
+/// invariant (not a test fixture's incidental input). `grep -rn
+/// '^\s*#\[allow_incomplete_match'` is still the way to find them all;
 /// plain `grep -rn allow_incomplete_match` also matches the doc comments
 /// explaining it (`types.mo`, `module.mo`, `infer.mo`, and this one), so
-/// anchor the pattern to a line-leading `#[` to test the invariant.
+/// anchor the pattern to a line-leading `#[` when counting sites.
 /// Phase 2's runtime trap is not
 /// reachable from Monad source (`compile_match_ir` never sees this
 /// match: it is hand-written here), so rewriting the arm would trade one
@@ -2260,6 +2269,12 @@ def literal_int_of (lit : Literal) : Option I64 :=
         _ => Option.none,
     }
 
+// `Term.quote_`/`Term.var_macro` are rejected by `type_check` before
+// elaboration (its own doc comment, `lang/typecheck/infer.mo`), and codegen
+// only ever runs on a term that passed `type_check` -- a def that fails
+// stays un-elaborated for `elaborate_module_decls_reporting`'s best-effort
+// caller, so its original, unchecked term never reaches this function.
+#[allow_incomplete_match "quote_/var_macro are rejected by type_check before codegen ever runs"]
 #[partial]
 def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
     Term.lit val => compile_lit_ir c val,

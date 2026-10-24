@@ -183,9 +183,17 @@ def beta_reduce (body : Term) (arg : Term) : Term := term_subst 0 arg body
 // no pipeline wiring, no evaluation, purely exercising these two
 // primitives in isolation before anything calls them.
 
+// Private test-canary helpers: decode a hand-built `Term.var N`/
+// `Term.sort N` canary value after it has run through the transformation
+// under test. Any other shape has nothing to report, so each answers the
+// same free-variable sentinel `term_type_level`'s own `Option.none`
+// branch already establishes, not a guess.
 #[partial]
 def term_var_idx (t : Term) : I64 :=
-    match t { Term.var idx _ => idx }
+    match t {
+        Term.var idx _ => idx,
+        _ => sentinel,
+    }
 
 #[partial]
 def term_type_level (t : Term) : I64 :=
@@ -197,6 +205,7 @@ def term_type_level (t : Term) : I64 :=
             Option.some n => n,
             Option.none => sentinel,
         },
+        _ => sentinel,
     }
 
 #[test]

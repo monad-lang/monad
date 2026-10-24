@@ -180,6 +180,21 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     // A sort references no names.
     Term.sort _level => acc,
     Term.hole => acc,
+    // MUST recurse/reference, mirroring `free_names_of_term`'s `var_macro`/
+    // `quote_` arms just above in this file: `expand_term`'s own doc
+    // comment says an unresolved macro call is "passed through, expanded
+    // only structurally", not an error, so this walker's caller
+    // (`qtest_refs_of_decls`) can legitimately see either shape at a
+    // pipeline point independent of `type_check` success. A name
+    // referenced only inside a decl-gen macro template would otherwise be
+    // invisible to `filter_reachable_decls`, same failure shape as the
+    // `ctx`/`cubical` arms below.
+    Term.var_macro _idx dbg =>
+        match dbg {
+            DebugName.named id => List.cons (symbol_identifier id) acc,
+            DebugName.unnamed => acc,
+        },
+    Term.quote_ inner => collect_referenced_names inner acc,
     // MUST recurse. Missing this arm makes `filter_reachable_decls` blind
     // to everything under a located term: the def count silently drops and
     // the link fails later with `undefined @X`, far from the cause.

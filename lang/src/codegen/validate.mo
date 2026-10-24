@@ -535,8 +535,14 @@ def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List String) : 
             },
     }
 
-/// Total structural walk for a surviving `Literal.struct_lit`/
-/// `Literal.struct_update` anywhere inside `t`.
+/// Structural walk for a surviving `Literal.struct_lit`/
+/// `Literal.struct_update` anywhere inside `t`. This gate's whole reason
+/// for existing is that its caller runs on BEST-EFFORT decls -- a def
+/// `type_check` rejected is left un-elaborated and codegen proceeds on it
+/// anyway (see this file's own doc comment above on the SIGSEGV that
+/// shape caused) -- so, unlike a gate that only ever sees type-checked
+/// terms, this one is exactly where a leftover `Term.quote_`/`var_macro`
+/// is most likely to still be sitting; it must cover them for real.
 def term_has_struct_lit (t : Term) : Bool := match t {
     Term.var _idx _dbg => false,
     Term.lam _dbg typ body => term_has_struct_lit typ || term_has_struct_lit body,
@@ -550,6 +556,11 @@ def term_has_struct_lit (t : Term) : Bool := match t {
     // A sort carries no struct literal.
     Term.sort _level => false,
     Term.hole => false,
+    // A bare macro-template var carries no struct literal, same as `var`.
+    Term.var_macro _idx _dbg => false,
+    // Must recurse, mirroring the `ctx` arm below: a struct literal can sit
+    // under an unexpanded quote.
+    Term.quote_ inner => term_has_struct_lit inner,
     // Must recurse, or a struct literal under a located term passes the
     // gate and later compiles to a `void_val` placeholder.
     Term.ctx _loc inner => term_has_struct_lit inner,

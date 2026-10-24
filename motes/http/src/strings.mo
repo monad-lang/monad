@@ -23,13 +23,10 @@ def Strings.split_on_bytes (delim : List U8) (input : List U8) : List String :=
 def Strings.split_on_go (delim : List U8) (input : List U8) (acc : List U8) : List String :=
   match input {
     List.empty => List.singleton (String.from_list (List.reverse acc)),
-    List.cons _ _ =>
+    List.cons x rest =>
       if Strings.list_starts_with delim input
       then List.cons (String.from_list (List.reverse acc)) (Strings.split_on_go delim (Strings.list_drop_prefix delim input) List.empty)
-      else
-        match input {
-          List.cons x rest => Strings.split_on_go delim rest (List.cons x acc)
-        }
+      else Strings.split_on_go delim rest (List.cons x acc)
   }
 
 // ── list slicing ───────────────────────────────────────────────────────
