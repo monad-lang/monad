@@ -288,13 +288,21 @@ static int64_t apply_closure8_impl(void* clos, int64_t a0, int64_t a1, int64_t a
    Sound because a 0-field constructor has nothing to write --
    `monad_set_field` is never called at field_count 0 -- and Monad
    compares constructors by TAG, never by address. Tags above the cache
-   bound simply allocate as before. */
+   bound simply allocate as before.
+
+   Fibers are OS threads, so a slot is published with a release store and
+   read with an acquire load: a reader that sees the pointer also sees the
+   tag and field count written before it. Two threads filling the same
+   slot at once is harmless; both objects are valid and the later store
+   wins. The `__atomic` builtins rather than <stdatomic.h> because the web
+   profile is freestanding; on single-threaded wasm they are plain loads
+   and stores. */
 #define MONAD_NULLARY_CACHE 4096
 static Constructor* g_nullary[MONAD_NULLARY_CACHE];
 
 static rt_word alloc_constructor_impl(int64_t tag, int64_t field_count) {
     if (field_count == 0 && tag >= 0 && tag < MONAD_NULLARY_CACHE) {
-        Constructor* cached = g_nullary[tag];
+        Constructor* cached = __atomic_load_n(&g_nullary[tag], __ATOMIC_ACQUIRE);
         if (cached) return RT_WORD(cached);
     }
     size_t size = sizeof(Constructor) + (size_t)field_count * sizeof(rt_field);
@@ -304,7 +312,7 @@ static rt_word alloc_constructor_impl(int64_t tag, int64_t field_count) {
         c->tag = tag;
         c->field_count = field_count;
         if (field_count == 0 && tag >= 0 && tag < MONAD_NULLARY_CACHE) {
-            g_nullary[tag] = c;
+            __atomic_store_n(&g_nullary[tag], c, __ATOMIC_RELEASE);
         }
     }
     return RT_WORD(c);
