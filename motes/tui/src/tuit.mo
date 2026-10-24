@@ -108,48 +108,46 @@ pub def TuiT.run {M : Type -> Type} {I : Type} {J : Type} {A : Type} (ma : TuiT 
 pub def TuiT.pure [Monad M] {I : Type} {A : Type} (a : A) : TuiT M I I A :=
     TuiT.tui_t (fn (_ : Term M) => Monad.pure a)
 
-/// `bind` references `Monad.bind` DIRECTLY, in its own body -- the same
-/// rule the `StateT` instance body follows (see transformers.mo): a
-/// constrained def that reaches `Monad` only through ANOTHER constrained
-/// def resolves the inner call against abstract carriers, matches the
-/// variable-headed prelude bridge, and runs with the wrong dictionary.
-/// Qualifying directly means the dict parameter Phase 3 adds serves the
-/// reference via D5 forwarding.
-pub def TuiT.bind [Monad M] {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (ma : TuiT M I J A) (f : A -> TuiT M J K B) : TuiT M I K B :=
-    TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run ma t) (fn (a : A) => TuiT.run (f a) t))
+/// The bind step, extracted per the transformers.mo pattern: instance
+/// bodies stay single-line, and the step itself is a small def.
+def tui_apply [Monad M] {J : Type} {K : Type} {A : Type} {B : Type} (f : A -> TuiT M J K B) (a : A) (t : Term M) : M B :=
+    TuiT.run (f a) t
 
+/// `bind` reaches `Monad` through `tui_apply`; the see-through table
+/// (`qualifying_dict_constraints`, lang/src/scope.mo) marks this def and
+/// the call site forwards its own `[Monad M]` binding.
+pub def TuiT.bind [Monad M] {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (ma : TuiT M I J A) (f : A -> TuiT M J K B) : TuiT M I K B :=
+    TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run ma t) (fn (a : A) => tui_apply f a t))
+
+/// `TuiT.pure (f a)` would read naturally here, but a call to a
+/// constrained def nested inside another constrained call's lambda gets
+/// its forwarded dictionary as `Term.var 0` (`resolve_dict_arg`,
+/// lang/src/scope.mo) -- index 0 is the lambda's own binder, not the
+/// def's `__dict_Monad` -- so it must stay spelled inline until that
+/// insertion computes the enclosing call's real depth.
 pub def TuiT.map [Monad M] {I : Type} {J : Type} {A : Type} {B : Type} (f : A -> B) (ma : TuiT M I J A) : TuiT M I J B :=
-    TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run ma t) (fn (a : A) => Monad.pure (f a)))
+    TuiT.bind ma (fn (a : A) => TuiT.tui_t (fn (_ : Term M) => Monad.pure (f a)))
 
 pub def TuiT.and_then [Monad M] {I : Type} {J : Type} {K : Type} {A : Type} {B : Type} (first : TuiT M I J A) (second : TuiT M J K B) : TuiT M I K B :=
-    TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run first t) (fn (_ : A) => TuiT.run second t))
+    TuiT.bind first (fn (_ : A) => second)
 
 /// The full `IndexedMonad` structure, ALL five methods explicit -- an
 /// instance that silently inherits a class default passes checking and
 /// fails at runtime (the lesson the plan and agent-skills both record).
-/// Every method body references `Monad` DIRECTLY (the `TuiT.bind`
-/// comment above explains why no forwarding def may sit in between);
-/// the promoted method's own `[Monad M]` dict parameter serves each
-/// reference (D5 forwarding).
 pub instance [Monad M] IndexedMonad (TuiT M) {
-    def pure (a : A) : TuiT M I I A := TuiT.tui_t (fn (_ : Term M) => Monad.pure a)
-    def bind (ma : TuiT M I J A) (f : A -> TuiT M J K B) : TuiT M I K B :=
-        TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run ma t) (fn (a : A) => TuiT.run (f a) t))
-    def map (f : A -> B) (ma : TuiT M I J A) : TuiT M I J B :=
-        TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run ma t) (fn (a : A) => Monad.pure (f a)))
-    def and_then (first : TuiT M I J A) (second : TuiT M J K B) : TuiT M I K B :=
-        TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run first t) (fn (_ : A) => TuiT.run second t))
-    def lift (a : A) : TuiT M I I A := TuiT.tui_t (fn (_ : Term M) => Monad.pure a)
+    def pure (a : A) : TuiT M I I A := TuiT.pure a
+    def bind (ma : TuiT M I J A) (f : A -> TuiT M J K B) : TuiT M I K B := TuiT.bind ma f
+    def map (f : A -> B) (ma : TuiT M I J A) : TuiT M I J B := TuiT.map f ma
+    def and_then (first : TuiT M I J A) (second : TuiT M J K B) : TuiT M I K B := TuiT.and_then first second
+    def lift (a : A) : TuiT M I I A := TuiT.pure a
 }
 
 /// Do-notation at equal indices. Hand-written concrete instance -- the
 /// prelude's generic `{I} [IndexedMonad M] Monad (M I I)` bridge never
-/// dispatches (variable head), exactly the `Agent` precedent. Direct
-/// `Monad` references throughout, same as the IndexedMonad instance.
+/// dispatches (variable head), exactly the `Agent` precedent.
 pub instance [Monad M] Monad (TuiT M I I) {
-    def pure (a : A) : TuiT M I I A := TuiT.tui_t (fn (_ : Term M) => Monad.pure a)
-    def bind (ma : TuiT M I I A) (f : A -> TuiT M I I B) : TuiT M I I B :=
-        TuiT.tui_t (fn (t : Term M) => Monad.bind (TuiT.run ma t) (fn (a : A) => TuiT.run (f a) t))
+    def pure (a : A) : TuiT M I I A := TuiT.pure a
+    def bind (ma : TuiT M I I A) (f : A -> TuiT M I I B) : TuiT M I I B := TuiT.bind ma f
 }
 
 // ==================== TuiT: the terminal ops ====================
@@ -158,16 +156,19 @@ pub instance [Monad M] Monad (TuiT M I I) {
 pub def TuiT.lift [Monad M] {I : Type} {A : Type} (m : M A) : TuiT M I I A :=
     TuiT.tui_t (fn (_ : Term M) => m)
 
+/// Discard a capability's `Bool` payload (`set_mode` reports success;
+/// the type-level lifecycle is the record that matters).
+def tui_discard_bool [Monad M] (m : M Bool) : M Unit :=
+    Monad.bind m (fn (_ : Bool) => Monad.pure Unit.unit)
+
 /// Cooked -> Raw. The mode change itself is the transition; the
-/// return code is discarded (the index now says raw). Direct
-/// `Monad.bind` reference -- see the `TuiT.bind` comment for why no
-/// helper def may sit in between.
+/// return code is discarded (the index now says raw).
 pub def TuiT.enter_raw_mode [Monad M] : TuiT M Cooked Raw Unit :=
-    TuiT.tui_t (fn (t : Term M) => Monad.bind (Term.set_mode t true) (fn (_ : Bool) => Monad.pure Unit.unit))
+    TuiT.tui_t (fn (t : Term M) => tui_discard_bool (Term.set_mode t true))
 
 /// Raw -> Cooked: the inverse transition.
 pub def TuiT.enter_cooked_mode [Monad M] : TuiT M Raw Cooked Unit :=
-    TuiT.tui_t (fn (t : Term M) => Monad.bind (Term.set_mode t false) (fn (_ : Bool) => Monad.pure Unit.unit))
+    TuiT.tui_t (fn (t : Term M) => tui_discard_bool (Term.set_mode t false))
 
 /// The terminal size, inside the effect.
 pub def TuiT.size [Monad M] : TuiT M Raw Raw (Pair I64 I64) :=
@@ -194,7 +195,7 @@ pub def TuiT.draw [Monad M] (screen : Screen) : TuiT M Raw Raw Unit :=
 /// cursor back, and return to cooked mode. `Closed` is a one-way
 /// index -- nothing in this module runs after it.
 pub def TuiT.close [Monad M] : TuiT M Raw Closed Unit :=
-    TuiT.tui_t (fn (t : Term M) => Monad.bind (Term.write t tui_close_code) (fn (_ : Unit) => Monad.bind (Term.set_mode t false) (fn (_ : Bool) => Monad.pure Unit.unit)))
+    TuiT.tui_t (fn (t : Term M) => tui_close_go t)
 
 /// Outside the `Monad.bind` argument on purpose: a class-method call
 /// (`++` queues an `Append` dict-projection entry) inside another
@@ -206,3 +207,7 @@ pub def TuiT.close [Monad M] : TuiT M Raw Closed Unit :=
 /// with.
 def tui_close_code : String :=
     Terminal.leave_alt_screen_code ++ Terminal.cursor_show_code
+
+def tui_close_go [Monad M] (t : Term M) : M Unit :=
+    Monad.bind (Term.write t tui_close_code)
+        (fn (_ : Unit) => tui_discard_bool (Term.set_mode t false))
