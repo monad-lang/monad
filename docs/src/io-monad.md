@@ -226,7 +226,9 @@ so you never need a write loop.
   calls are still `tcp_connect`, `tcp_accept` and `Stream.read`; the timeout
   surface is `IO.tcp_connect_timeout`, `FdStream.set_timeout` (socket
   `SO_RCVTIMEO`/`SO_SNDTIMEO`, surfacing as `StreamErrorKind.timed_out`) and
-  `FdStream.poll` (readiness with a deadline). `motes/moose` uses all three:
+  `FdStream.poll` (readiness with a deadline). `IO.tcp_connect` is the
+  zero-deadline spelling of `IO.tcp_connect_timeout`, not a second native.
+  `motes/moose` uses all three:
   one deadline per non-streaming request, a per-read idle bound while
   streaming. The `moon` server still bounds a talking client with a request cap,
   and `close` shuts the listening socket down to wake a blocked `accept`;

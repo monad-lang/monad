@@ -579,20 +579,21 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "scope_new" then Option.some (NativeWrapKind.io_passthrough "monad_scope_new")
             else if String.beq target "scope_fork" then Option.some (NativeWrapKind.io_passthrough "monad_scope_fork")
             else if String.beq target "scope_drop" then Option.some (NativeWrapKind.io_passthrough "monad_scope_drop")
-            // The TCP family (`std/io.mo`'s four `#[native "tcp_*"]`
-            // defs, reached by `motes/moon`'s server and `motes/moose`'s
-            // client). All four are `RawIO` natives behind `.mo` wrappers,
-            // so `raw_io_passthrough`, like the `stream_*` family below
-            // that reads, writes and closes what they open. A connection
-            // or listener is an `FdStream`, whose runtime value is the
-            // file descriptor itself.
+            // The TCP family (`std/io.mo`'s `#[native "tcp_*"]` defs,
+            // reached by `motes/moon`'s server and `motes/moose`'s
+            // client). They are `RawIO` natives behind `.mo` wrappers, so
+            // `raw_io_passthrough`, like the `stream_*` family below that
+            // reads, writes and closes what they open. A connection or
+            // listener is an `FdStream`, whose runtime value is the file
+            // descriptor itself. `tcp_connect` is NOT here: it is the
+            // zero-deadline spelling of `tcp_connect_timeout`, composed
+            // in `std/io.mo`, so one native serves both contracts.
             //
             // There is no Rust-host half to mirror: the reference
             // deliberately does not implement TCP (its maintenance cost
             // was not worth a second implementation), so this backend is
             // TCP's only implementation and `runtime/src/runtime.c`'s
             // comments are its specification.
-            else if String.beq target "tcp_connect" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_connect")
             else if String.beq target "tcp_connect_timeout" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_connect_timeout")
             else if String.beq target "tcp_listen" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_listen")
             else if String.beq target "tcp_listen_on" then Option.some (NativeWrapKind.raw_io_passthrough "monad_tcp_listen_on")
@@ -854,12 +855,11 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // The TCP family (`runtime.c`). Same "no implicit declare"
     // requirement as every native above -- without these the call-target
     // gate (`gate_result`, `lang/codegen/emit.mo`) rejects the module
-    // with "call to undefined symbol(s): monad_tcp_connect". Every
-    // parameter and return is i64 under the CONVENTION at the head of
-    // this list: a String, an `FdStream` (the file descriptor) and a
+    // with "call to undefined symbol(s): monad_tcp_connect_timeout".
+    // Every parameter and return is i64 under the CONVENTION at the head
+    // of this list: a String, an `FdStream` (the file descriptor) and a
     // port are all i64 here.
-    let d65 := mk_decl "monad_tcp_connect" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
-    let d65a := mk_decl "monad_tcp_connect_timeout" ["i64", "i64", "i64"] "i64" in
+    let d65 := mk_decl "monad_tcp_connect_timeout" ["i64", "i64", "i64"] "i64" in
     let d66 := mk_decl "monad_tcp_listen" (List.cons "i64" List.empty) "i64" in
     let d66a := mk_decl "monad_tcp_listen_on" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d67 := mk_decl "monad_tcp_accept" (List.cons "i64" List.empty) "i64" in
@@ -962,7 +962,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
      d48, d49, d50, d51, d52, d53, d54, d55, d56,
      d57, d58, d59, d60, d61, d62, d63, d64,
-     d65, d65a, d66, d66a, d67, d72,
+     d65, d66, d66a, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
      d104, d105, d106, d107, d108, d109, d110, d111, d112]
@@ -983,7 +983,7 @@ pub type NativeAvailability {
 def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
     "scope_drop", "sleep_io", "exec_cmd", "process_id", "proc_spawn",
-    "proc_stream_fd", "proc_wait", "tcp_connect", "tcp_connect_timeout", "tcp_listen",
+    "proc_stream_fd", "proc_wait", "tcp_connect_timeout", "tcp_listen",
     "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "list_dir",
     "get_env", "stream_open", "stream_poll", "stream_set_timeout", "term_ctl",
 ]
@@ -1027,7 +1027,7 @@ def test_wasm_gates_posix_only_natives : Bool :=
             NativeAvailability.unavailable _ => true,
             NativeAvailability.available => false,
         }
-        && match native_target_availability TargetKind.wasi "tcp_connect" {
+        && match native_target_availability TargetKind.wasi "tcp_connect_timeout" {
             NativeAvailability.unavailable _ => true,
             NativeAvailability.available => false,
         }

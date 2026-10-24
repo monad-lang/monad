@@ -401,22 +401,29 @@ pub def IO.list_dir (path : Path) : IO (List Path) := do {
 }
 
 // ── TCP networking ──────────────────────────────────────────────────────
-// Four blocking `#[native "tcp_*"]` defs, implemented ONLY by the
-// self-hosted backend (`runtime/src/runtime.c`); the Rust evaluator
-// deliberately has no TCP implementation, so a second one cannot drift
-// away from this one.  These declarations are therefore the contract,
-// and `slow_tests/src/codegen_wired_natives_e2e_tests.mo` is what holds
-// the implementation to it:
+// One connect primitive and four listener/accept natives, implemented
+// ONLY by the self-hosted backend (`runtime/src/runtime.c`); the Rust
+// evaluator deliberately has no TCP implementation, so a second one
+// cannot drift away from this one.  These declarations are therefore
+// the contract, and
+// `slow_tests/src/codegen_wired_natives_e2e_tests.mo` is what holds the
+// implementation to it:
 //
-//   tcp_connect      blocking; the host is resolved with `getaddrinfo`
-//                    (so a name works, not just a literal address) and
-//                    each address it returns is tried in turn; a name
-//                    that does not resolve is `host_unresolved`
+//   tcp_connect_timeout
+//                    the ONE connect implementation; `timeout_ms <= 0`
+//                    blocks, a positive one is an absolute deadline.
+//                    The host is resolved with `getaddrinfo` (so a name
+//                    works, not just a literal address) and each
+//                    address it returns is tried in turn; a name that
+//                    does not resolve is `host_unresolved`
 //   tcp_listen       binds `0.0.0.0:port`; port `0u16` asks the OS for
 //                    one, read it back with `tcp_local_port`
 //   tcp_accept       blocking; the stream is a NEW connection
 //   tcp_local_port   the port the listener actually bound; a failure
 //                    returns 0 (the type has no `Result` channel)
+//
+// `IO.tcp_connect` is the blocking spelling of the same primitive, not a
+// second native.
 //
 // Connections AND listeners are `FdStream`s (std/stream.mo): read, write
 // and close them with `Stream.read`/`write`/`close` -- end of stream is
@@ -424,9 +431,6 @@ pub def IO.list_dir (path : Path) : IO (List Path) := do {
 // descriptor for an FFI call (`SSL_set_fd` in motes/tls) with
 // `FdStream.raw_fd`. Reading or writing a listener is a runtime
 // `invalid_input`, not a type error.
-
-#[native "tcp_connect"]
-priv def tcp_connect (host : String) (port : U16) : RawIO (Result (Pair I64 String) FdStream)
 
 #[native "tcp_connect_timeout"]
 priv def tcp_connect_timeout (host : String) (port : U16) (timeout_ms : I64) : RawIO (Result (Pair I64 String) FdStream)
@@ -443,17 +447,16 @@ priv def tcp_accept (listener : FdStream) : RawIO (Result (Pair I64 String) FdSt
 #[native "tcp_local_port"]
 priv def tcp_local_port (listener : FdStream) : RawIO U16
 
-pub def IO.tcp_connect (host : String) (port : U16) : IO (Result StreamError FdStream) := do {
-  let r <- IO.mk (tcp_connect host port);
-  return (stream_result r)
-}
-
 /// Connect with a deadline, including the per-address connect attempts.
 /// Name resolution (`getaddrinfo`) still has no timeout.
 pub def IO.tcp_connect_timeout (host : String) (port : U16) (timeout_ms : I64) : IO (Result StreamError FdStream) := do {
   let r <- IO.mk (tcp_connect_timeout host port timeout_ms);
   return (stream_result r)
 }
+
+/// Blocking connect: the zero-deadline spelling of `IO.tcp_connect_timeout`.
+pub def IO.tcp_connect (host : String) (port : U16) : IO (Result StreamError FdStream) :=
+  IO.tcp_connect_timeout host port 0i64
 
 pub def IO.tcp_listen (port : U16) : IO (Result StreamError FdStream) := do {
   let r <- IO.mk (tcp_listen port);

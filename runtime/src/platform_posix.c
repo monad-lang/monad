@@ -1049,15 +1049,44 @@ void* monad_get_env(char* name) {
        killed process.
 */
 
-/* `tcp_connect : String -> U16 -> RawIO (Result (Pair I64 String)
-   FdStream)` -- blocking connect. `getaddrinfo` resolves the host the
-   way the Rust version's `TcpStream::connect((host, port))` did, so
-   `"127.0.0.1"`, `"localhost"` and a real name all work, and each
-   address it returns is tried in turn (a v6 address that fails to
-   connect must not stop a working v4 one from being tried). A
-   resolution failure is kind 8, `host_unresolved`: EAI_* codes are not
-   errno values. */
-void* monad_tcp_connect(char* host, int64_t port) {
+/* Deadline helpers shared by the connect and `stream_poll` waits: one
+   absolute CLOCK_MONOTONIC deadline per wait, saturating instead of
+   wrapping (an absurd timeout must mean "very long", not "already
+   expired"). `timeout_ms <= 0` keeps its own meaning per caller (block
+   or poll-once); `remaining_ms` answers -1 for it. */
+static int64_t monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+}
+
+static int64_t deadline_after_ms(int64_t timeout_ms) {
+    if (timeout_ms <= 0) return 0;
+    int64_t now = monotonic_ms();
+    if (timeout_ms > INT64_MAX - now) return INT64_MAX;
+    return now + timeout_ms;
+}
+
+static int remaining_ms(int64_t deadline, int64_t timeout_ms) {
+    if (timeout_ms <= 0) return -1;
+    int64_t left = deadline - monotonic_ms();
+    if (left < 0) left = 0;
+    if (left > INT_MAX) left = INT_MAX;
+    return (int)left;
+}
+
+/* TCP connect's ONE implementation. `timeout_ms <= 0` blocks on each
+   address in turn -- the `IO.tcp_connect` contract; a positive one is an
+   absolute deadline spanning every address tried, each attempt
+   non-blocking and polled -- the `IO.tcp_connect_timeout` contract.
+   `getaddrinfo` resolves the host the way the Rust version's
+   `TcpStream::connect((host, port))` did, so `"127.0.0.1"`,
+   `"localhost"` and a real name all work, and each address it returns
+   is tried in turn (a v6 address that fails to connect must not stop a
+   working v4 one from being tried). A resolution failure is kind 8,
+   `host_unresolved`: EAI_* codes are not errno values. The DNS lookup
+   itself is unbounded either way. */
+static void* tcp_connect_deadline(char* host, int64_t port, int64_t timeout_ms) {
     struct addrinfo hints;
     struct addrinfo* res = NULL;
     char portbuf[16];
@@ -1068,66 +1097,20 @@ void* monad_tcp_connect(char* host, int64_t port) {
     snprintf(portbuf, sizeof(portbuf), "%u", (unsigned)(uint16_t)port);
     int rc = getaddrinfo(host ? host : "", portbuf, &hints, &res);
     if (rc != 0) return stream_err(8, "tcp_connect", gai_strerror(rc), 0);
-    int fd = -1;
-    int last_errno = 0;
-    for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) { last_errno = errno; continue; }
-        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
-        last_errno = errno;
-        close(fd);
-        fd = -1;
-    }
-    freeaddrinfo(res);
-    if (fd < 0) return stream_os_err("tcp_connect", last_errno);
-    return tcp_ok((void*)(int64_t)fd);
-}
-
-/* `tcp_connect_timeout : String -> U16 -> I64 -> RawIO (Result (Pair I64
-   String) FdStream)` -- `tcp_connect` with one deadline spanning every
-   address tried (the DNS lookup itself is unbounded). A zero or negative
-   timeout means "block", matching `tcp_connect`. */
-static int64_t connect_monotonic_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
-}
-
-/* The absolute deadline a timeout names, saturating instead of wrapping
-   (an absurd timeout must mean "very long", not "already expired"). */
-static int64_t connect_deadline_ms(int64_t timeout_ms) {
-    if (timeout_ms <= 0) return 0;
-    int64_t now = connect_monotonic_ms();
-    if (timeout_ms > INT64_MAX - now) return INT64_MAX;
-    return now + timeout_ms;
-}
-
-static int connect_remaining_ms(int64_t deadline, int64_t timeout_ms) {
-    if (timeout_ms <= 0) return -1;
-    int64_t left = deadline - connect_monotonic_ms();
-    if (left < 0) left = 0;
-    if (left > INT_MAX) left = INT_MAX;
-    return (int)left;
-}
-
-void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms) {
-    struct addrinfo hints;
-    struct addrinfo* res = NULL;
-    char portbuf[16];
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-    snprintf(portbuf, sizeof(portbuf), "%u", (unsigned)(uint16_t)port);
-    int rc = getaddrinfo(host ? host : "", portbuf, &hints, &res);
-    if (rc != 0) return stream_err(8, "tcp_connect_timeout", gai_strerror(rc), 0);
-    int64_t deadline = connect_deadline_ms(timeout_ms);
+    int64_t deadline = deadline_after_ms(timeout_ms);
     int fd = -1;
     int last_errno = 0;
     int last_flags = 0;
     for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) { last_errno = errno; continue; }
+        if (timeout_ms <= 0) {
+            if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+            last_errno = errno;
+            close(fd);
+            fd = -1;
+            continue;
+        }
         int flags = fcntl(fd, F_GETFL, 0);
         if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
             last_errno = errno;
@@ -1151,7 +1134,7 @@ void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms) {
         pfd.revents = 0;
         int ready;
         do {
-            ready = poll(&pfd, 1, connect_remaining_ms(deadline, timeout_ms));
+            ready = poll(&pfd, 1, remaining_ms(deadline, timeout_ms));
         } while (ready < 0 && errno == EINTR);
         if (ready == 0) {
             last_errno = ETIMEDOUT;
@@ -1177,9 +1160,16 @@ void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms) {
         fd = -1;
     }
     freeaddrinfo(res);
-    if (fd < 0) return stream_os_err("tcp_connect_timeout", last_errno);
-    fcntl(fd, F_SETFL, last_flags);
+    if (fd < 0) return stream_os_err("tcp_connect", last_errno);
+    if (timeout_ms > 0) fcntl(fd, F_SETFL, last_flags);
     return tcp_ok((void*)(int64_t)fd);
+}
+
+/* `tcp_connect_timeout : String -> U16 -> I64 -> RawIO (Result (Pair I64
+   String) FdStream)`. A zero or negative timeout blocks, which is how
+   `std/io.mo` spells `IO.tcp_connect` -- one native, two contracts. */
+void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms) {
+    return tcp_connect_deadline(host, port, timeout_ms);
 }
 
 /* `tcp_listen : U16 -> RawIO (Result (Pair I64 String) FdStream)` --
@@ -1685,11 +1675,11 @@ void* monad_stream_poll(int64_t fd, int64_t events, int64_t timeout_ms) {
     pfd.revents = 0;
     /* One deadline across EINTR retries, as the connect loop does: a
        signal must not hand the wait a fresh budget. */
-    int64_t deadline = connect_deadline_ms(timeout_ms);
+    int64_t deadline = deadline_after_ms(timeout_ms);
     int rc;
     do {
         int t;
-        if (timeout_ms > 0) t = connect_remaining_ms(deadline, timeout_ms);
+        if (timeout_ms > 0) t = remaining_ms(deadline, timeout_ms);
         else if (timeout_ms < 0) t = -1;
         else t = 0;
         rc = poll(&pfd, 1, t);
