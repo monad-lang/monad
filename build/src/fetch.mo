@@ -18,18 +18,18 @@
 // closure in `mote.lock` would be worse than no lock at all.
 
 use build::git {
-  Git.available, Git.checkout, Git.checkout_dir, Git.ensure_mirror, Git.fetch,
-  Git.missing_error, Git.resolve, Git.url_allowed, Git.url_error,
+  Git.available, Git.checkout, Git.checkout_dir, Git.db_dir, Git.ensure_mirror,
+  Git.fetch, Git.missing_error, Git.prune, Git.resolve, Git.url_allowed, Git.url_error,
 }
 use build::hash {
   Build.canonical_tree_checksum_with, Build.probe_digest_tool, DigestTool,
 }
 use build::store {Build.monad_home}
-use build::lock {
+use lang::lock {
   GitPin, Lock.pin_to_string, Lock.read, Lock.write, LockRead, LockedGit,
   LockedMote, Lockfile,
 }
-use lang::mote {Dependency, Mote.discover, MoteManifest}
+use lang::mote {Dependency, Mote.any_git_dep, Mote.discover, MoteManifest}
 use std::io {IO.println}
 use std::list {List.contains_by, List.filter, List.length}
 
@@ -48,6 +48,9 @@ pub type FetchMode {
 struct FetchState {
     home : String,
     mode : FetchMode,
+    /// `--offline`: never run a network git command. The mirror and the
+    /// checkout must already be there, or the verb fails naming the URL.
+    offline : Bool,
     tool : DigestTool,
     existing : List LockedMote,
     seen : List String,
@@ -91,11 +94,6 @@ def Build.subdir_is_safe (s : String) : Bool :=
         && Bool.not (String.ends_with s "/..")
         && Bool.not (String.beq s "..")
         && Bool.not (String.contains s "\\")
-
-/// The lock entry's name: the dependency's own `mote.toml` name, falling
-/// back to the manifest key when that manifest declares none.
-def Build.entry_name (key : String) (m : MoteManifest) : String :=
-    if String.is_empty m.name then key else m.name
 
 /// The commit an existing lock entry already pins for `url` under `pin`,
 /// if any. This is what makes a moved tag harmless: the lock names a
@@ -146,33 +144,37 @@ def Build.conflict_at (e : LockedMote) (url : String) (commit : String) : Option
 /// `monad fetch` / `monad update` for the mote containing `dir`. Answers
 /// the process exit status, and prints its own diagnostics.
 #[partial]
-pub def Build.fetch_run (dir : String) (mode : FetchMode) : IO I64 := do {
+pub def Build.fetch_run (dir : String) (mode : FetchMode) (offline : Bool) : IO I64 := do {
     let home <- Build.monad_home;
     match home {
         Option.none => do {
             IO.println "error: MONAD_HOME and HOME are unset; there is nowhere to cache git dependencies";
             return 1
         },
-        Option.some h => Build.fetch_run_with h dir mode
+        Option.some h => Build.fetch_run_with_opts h dir mode offline
     }
 }
 
 /// `fetch_run` with the cache root given, so a test can keep its cache in
 /// a fixture directory instead of the user's `~/.monad`.
 #[partial]
-pub def Build.fetch_run_with (home : String) (dir : String) (mode : FetchMode) : IO I64 := do {
+pub def Build.fetch_run_with (home : String) (dir : String) (mode : FetchMode) : IO I64 :=
+    Build.fetch_run_with_opts home dir mode false
+
+#[partial]
+pub def Build.fetch_run_with_opts (home : String) (dir : String) (mode : FetchMode) (offline : Bool) : IO I64 := do {
     let found <- Mote.discover dir;
     match found {
         Option.none => do {
             IO.println ("error: no `mote.toml` at or above `" ++ dir ++ "`: `monad fetch` resolves a mote's dependencies, so it needs one");
             return 1
         },
-        Option.some root => Build.fetch_with home root mode
+        Option.some root => Build.fetch_with home root mode offline
     }
 }
 
 #[partial]
-def Build.fetch_with (home : String) (root : MoteManifest) (mode : FetchMode) : IO I64 := do {
+def Build.fetch_with (home : String) (root : MoteManifest) (mode : FetchMode) (offline : Bool) : IO I64 := do {
     let ok <- Git.available;
     if Bool.not ok then do {
         IO.println ("error: " ++ Git.missing_error);
@@ -181,27 +183,28 @@ def Build.fetch_with (home : String) (root : MoteManifest) (mode : FetchMode) : 
         let tool <- Build.probe_digest_tool;
         match tool {
             Result.err m => do { IO.println ("error: " ++ m); return 1 },
-            Result.ok t => Build.fetch_locked home root mode t
+            Result.ok t => Build.fetch_locked home root mode offline t
         }
     }
 }
 
 #[partial]
-def Build.fetch_locked (home : String) (root : MoteManifest) (mode : FetchMode) (tool : DigestTool) : IO I64 := do {
+def Build.fetch_locked (home : String) (root : MoteManifest) (mode : FetchMode) (offline : Bool) (tool : DigestTool) : IO I64 := do {
     let lock_path : String := raw_path_join root.dir "mote.lock";
     let read <- Lock.read (Path.path lock_path);
     match read {
         Result.err m => do { IO.println ("error: " ++ m); return 1 },
-        Result.ok found => Build.fetch_start home root mode tool lock_path found
+        Result.ok found => Build.fetch_start home root mode offline tool lock_path found
     }
 }
 
 #[partial]
-def Build.fetch_start (home : String) (root : MoteManifest) (mode : FetchMode) (tool : DigestTool) (lock_path : String) (found : Option LockRead) : IO I64 := do {
+def Build.fetch_start (home : String) (root : MoteManifest) (mode : FetchMode) (offline : Bool) (tool : DigestTool) (lock_path : String) (found : Option LockRead) : IO I64 := do {
     let existing <- Build.existing_entries found;
     let st : FetchState := {
         home := home,
         mode := mode,
+        offline := offline,
         tool := tool,
         existing := existing,
         seen := List.empty,
@@ -319,12 +322,28 @@ def Build.planned_commit (existing : List LockedMote) (mode : FetchMode) (url : 
 
 #[partial]
 #[terminating]
-def Build.fetch_mirror (st : FetchState) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (locked : Option String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) := do {
-    let mirrored <- Git.ensure_mirror st.home url;
-    match mirrored {
-        Result.err e => return (Result.err e),
-        Result.ok db => Build.fetch_synced db st key url pin subdir locked rest
+def Build.fetch_mirror (st : FetchState) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (locked : Option String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) :=
+    if st.offline
+    then Build.fetch_offline st key url pin subdir locked rest
+    else do {
+        let mirrored <- Git.ensure_mirror st.home url;
+        match mirrored {
+            Result.err e => return (Result.err e),
+            Result.ok db => Build.fetch_synced db st key url pin subdir locked rest
+        }
     }
+
+/// `--offline`: use the mirror as it stands. No `init`, no `fetch` --
+/// resolution still runs `update-ref`/`cat-file`, which are local, so a
+/// missing mirror or ref is a named error rather than a silent network
+/// call.
+#[partial]
+def Build.fetch_offline (st : FetchState) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (locked : Option String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) := do {
+    let db : String := Git.db_dir st.home url;
+    let there <- IO.is_dir (Path.path db);
+    if Bool.not there
+    then return (Result.err ("--offline: `" ++ url ++ "` (for `" ++ key ++ "`) is not in the git cache; run `monad fetch` once with network access"))
+    else Build.fetch_pinned db st key url pin subdir locked rest
 }
 
 #[partial]
@@ -355,11 +374,61 @@ def Build.fetch_pinned (db : String) (st : FetchState) (key : String) (url : Str
 #[terminating]
 def Build.fetch_checkout (db : String) (st : FetchState) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (commit : String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) := do {
     let co : String := Git.checkout_dir st.home url commit;
+    let sound <- Build.checkout_is_sound st.tool st.existing key commit (Build.mote_dir_of co subdir);
+    let _repaired <- if sound then IO.pure (Result.ok Unit.unit) else Build.drop_checkout db co;
+    Build.fetch_checkout_at db st key url pin subdir co commit rest
+}
+
+#[partial]
+def Build.fetch_checkout_at (db : String) (st : FetchState) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (co : String) (commit : String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) := do {
     let checked <- Git.checkout db co commit;
     match checked {
         Result.err e => return (Result.err e),
         Result.ok _ => Build.fetch_dep_manifest st key url pin subdir co commit rest
     }
+}
+
+/// Whether a cached checkout still hashes to what the lock records for
+/// that same commit. `true` when the lock says nothing (a first fetch, or
+/// a different commit, whose checkout is a different path anyway).
+///
+/// This is what makes `monad fetch` REPAIR a corrupted cache instead of
+/// blessing it: without it the walk would hash the tampered tree and
+/// write that checksum into the lock, which is the one thing a lock must
+/// never do.
+#[partial]
+def Build.checkout_is_sound (tool : DigestTool) (existing : List LockedMote) (key : String) (commit : String) (dir : String) : IO Bool :=
+    match Build.recorded_sum existing key commit {
+        Option.none => return true,
+        Option.some want => do {
+            let sum <- Build.canonical_tree_checksum_with tool (Path.path dir);
+            match sum {
+                Result.err _ => return false,
+                Result.ok got => return (String.beq got want)
+            }
+        }
+    }
+
+/// The checksum the lock records for `key` at exactly `commit`.
+#[partial]
+def Build.recorded_sum (entries : List LockedMote) (key : String) (commit : String) : Option String :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest => match e.git {
+            Option.none => Build.recorded_sum rest key commit,
+            Option.some g =>
+                if String.beq e.name key && String.beq g.commit commit
+                then Option.some e.checksum
+                else Build.recorded_sum rest key commit
+        }
+    }
+
+/// Remove a bad checkout, and the mirror's `worktrees/` entry for it so
+/// `git worktree add` can take the path again.
+#[partial]
+def Build.drop_checkout (db : String) (co : String) : IO (Result String Unit) := do {
+    let _rm <- Proc.capture "rm" ["-rf", co];
+    Git.prune db
 }
 
 #[partial]
@@ -389,7 +458,10 @@ def Build.fetch_sum (st : FetchState) (key : String) (url : String) (pin : GitPi
 #[partial]
 #[terminating]
 def Build.fetch_record (st : FetchState) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (commit : String) (manifest : MoteManifest) (checksum : String) (rest : List (Pair String Dependency)) : IO (Result String FetchState) := do {
-    let name : String := Build.entry_name key manifest;
+    // The lock is looked up by the KEY the importer names in `use`,
+    // which is what resolution knows; the dependency's own manifest
+    // supplies only its version.
+    let name : String := key;
     let conflict : Option String := Build.entry_conflict st.entries name url commit;
     match conflict {
         Option.some m => return (Result.err m),
@@ -448,3 +520,151 @@ def Build.mentions (entries : List LockedMote) (name : String) : Bool :=
         List.empty => false,
         List.cons e rest => String.beq e.name name || Build.mentions rest name
     }
+
+// ─── Verifying the lock ───
+//
+// Run by `build`, `check` and `test` before they compile anything. The
+// build never rewrites a lock, so this is the only thing standing between
+// a dependency that changed under its pin and a binary built from it.
+
+/// Check `mote.lock` against the manifest in `dir`, for every git
+/// dependency it declares: an entry exists for the dependency's KEY and
+/// URL, the checkout is on disk, and its canonical tree checksum is the
+/// one the lock records.
+///
+/// `locked` adds one check -- the manifest's pin must still be what the
+/// lock records (`Build.pin_matches`) -- and changes the wording of a
+/// missing entry, because `--locked` says the lock is stale while the
+/// default advice is `monad fetch`. Nothing else differs, because there is
+/// no mode in which this tool silently rewrites a lock.
+
+/// Verify a manifest the caller already has -- the verb-side pre-flight
+/// resolves targets once and must not read every manifest twice.
+#[partial]
+pub def Build.verify_manifest (m : MoteManifest) (locked : Bool) : IO (Result String Unit) := do {
+    let home <- Build.monad_home;
+    match home {
+        Option.none => return (Result.err ("`" ++ m.name ++ "` declares git dependencies but MONAD_HOME and HOME are unset; there is no cache to verify against")),
+        Option.some h => Build.verify_manifest_at h m locked
+    }
+}
+
+/// `verify_manifest` with the cache root given -- the test suite's way in,
+/// for the reason `with_locked_dirs_at` gives.
+#[partial]
+pub def Build.verify_manifest_at (home : String) (m : MoteManifest) (locked : Bool) : IO (Result String Unit) :=
+    Build.verify_home home m locked
+
+#[partial]
+def Build.verify_home (home : String) (m : MoteManifest) (locked : Bool) : IO (Result String Unit) := do {
+    if Bool.not (Mote.any_git_dep m.deps_full)
+    then return (Result.ok Unit.unit)
+    else do {
+    let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
+    match read {
+        Result.err e => return (Result.err e),
+        Result.ok found => Build.verify_entries home locked found m.deps_full
+    }
+    }
+}
+
+#[partial]
+def Build.verify_entries (home : String) (locked : Bool) (found : Option LockRead) (deps : List (Pair String Dependency)) : IO (Result String Unit) := do {
+    let entries : List LockedMote := match found {
+        Option.none => List.empty,
+        Option.some r => match r {
+            LockRead.loaded l => l.motes,
+            LockRead.unsupported _ => List.empty
+        }
+    };
+    let tool <- Build.probe_digest_tool;
+    match tool {
+        Result.err e => return (Result.err e),
+        Result.ok t => Build.verify_deps home t entries locked deps
+    }
+}
+
+#[partial]
+def Build.verify_deps (home : String) (tool : DigestTool) (entries : List LockedMote) (locked : Bool) (deps : List (Pair String Dependency)) : IO (Result String Unit) :=
+    match deps {
+        List.empty => return (Result.ok Unit.unit),
+        List.cons d rest => match d {
+            Pair.pair key dep => Build.verify_dep home tool entries locked key dep rest
+        }
+    }
+
+#[partial]
+def Build.verify_dep (home : String) (tool : DigestTool) (entries : List LockedMote) (locked : Bool) (key : String) (dep : Dependency) (rest : List (Pair String Dependency)) : IO (Result String Unit) :=
+    match dep {
+        Dependency.git url tag branch rev subdir =>
+            Build.verify_git home tool entries locked key url (Build.pin_of_dep tag branch rev) subdir rest,
+        _ => Build.verify_deps home tool entries locked rest,
+    }
+
+#[partial]
+def Build.verify_git (home : String) (tool : DigestTool) (entries : List LockedMote) (locked : Bool) (key : String) (url : String) (pin : GitPin) (subdir : Option String) (rest : List (Pair String Dependency)) : IO (Result String Unit) :=
+    match Build.entry_for entries key url {
+        Option.none => return (Result.err (Build.missing_entry_error locked key url)),
+        Option.some e => match e.git {
+            Option.none => return (Result.err (Build.missing_entry_error locked key url)),
+            Option.some g =>
+                if locked && Bool.not (Build.pin_matches g pin subdir)
+                then return (Result.err (Build.stale_pin_error key pin g))
+                else Build.verify_checkout home tool entries locked key g.url g.commit g.subdir e.checksum rest
+        }
+    }
+
+/// `--locked`'s extra question: does the lock still pin what the manifest
+/// asks for? Without the flag a changed tag is ignored -- the lock is the
+/// authority -- which is the behaviour that makes a locked build stable.
+def Build.pin_matches (g : LockedGit) (pin : GitPin) (subdir : Option String) : Bool :=
+    String.beq (Lock.pin_to_string g.pin) (Lock.pin_to_string pin)
+        && String.beq (Build.subdir_name g.subdir) (Build.subdir_name subdir)
+
+def Build.stale_pin_error (key : String) (declared : GitPin) (g : LockedGit) : String :=
+    "`--locked`: mote.lock pins `" ++ key ++ "` at `" ++ Lock.pin_to_string g.pin
+        ++ "`, but the manifest asks for `" ++ Lock.pin_to_string declared ++ "`; run `monad fetch` to update it"
+
+#[partial]
+def Build.verify_checkout (home : String) (tool : DigestTool) (entries : List LockedMote) (locked : Bool) (key : String) (url : String) (commit : String) (subdir : Option String) (checksum : String) (rest : List (Pair String Dependency)) : IO (Result String Unit) := do {
+    let dir : String := raw_path_join (Git.checkout_dir home url commit) (Build.subdir_name subdir);
+    let there <- IO.is_dir (Path.path dir);
+    if Bool.not there
+    then return (Result.err ("the checkout of `" ++ key ++ "` is missing (`" ++ dir ++ "`); run `monad fetch`"))
+    else do {
+        let sum <- Build.canonical_tree_checksum_with tool (Path.path dir);
+        match sum {
+            Result.err e => return (Result.err e),
+            Result.ok actual => Build.verify_sum home tool entries locked key checksum actual rest
+        }
+    }
+}
+
+#[partial]
+def Build.verify_sum (home : String) (tool : DigestTool) (entries : List LockedMote) (locked : Bool) (key : String) (expected : String) (actual : String) (rest : List (Pair String Dependency)) : IO (Result String Unit) :=
+    if String.beq actual expected
+    then Build.verify_deps home tool entries locked rest
+    else return (Result.err ("`" ++ key ++ "` does not match mote.lock: the lock records `"
+        ++ expected ++ "`, the checkout hashes to `" ++ actual ++ "`. Run `monad fetch` to re-resolve it"))
+
+/// The lock entry named `key`, when it is a git entry for this URL.
+#[partial]
+def Build.entry_for (entries : List LockedMote) (key : String) (url : String) : Option LockedMote :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest => match e.git {
+            Option.none => Build.entry_for rest key url,
+            Option.some g =>
+                if String.beq e.name key && String.beq g.url url
+                then Option.some e
+                else Build.entry_for rest key url
+        }
+    }
+
+def Build.subdir_name (subdir : Option String) : String :=
+    match subdir { Option.some s => s, Option.none => "" }
+
+def Build.missing_entry_error (locked : Bool) (key : String) (url : String) : String :=
+    if locked
+    then "`--locked`: mote.lock has no entry for git dependency `" ++ key ++ "` (`" ++ url ++ "`); run `monad fetch` to update it"
+    else "git dependency `" ++ key ++ "` is not in mote.lock (`" ++ url ++ "`); run `monad fetch`"

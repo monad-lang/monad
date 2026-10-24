@@ -28,9 +28,6 @@ path = "../std"
 path = "../lang"
 [dependencies.parsec]
 path = "../motes/parsec"
-# `mote.lock` is TOML (`build/src/lock.mo`).
-[dependencies.toml]
-path = "../motes/toml"
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

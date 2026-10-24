@@ -24,7 +24,8 @@
 // deleted; the ref name carries our pid because the corpus runs sharded
 // and two runs sharing a name would resolve each other's pins.
 
-use build::lock {GitPin, Lock.is_commit}
+use lang::lock {GitPin, Lock.is_commit}
+use lang::mote {Mote.git_checkout_dir}
 use std::sha256 {Sha256.hash}
 use std::process {exec_cmd, process_id}
 
@@ -82,13 +83,13 @@ pub def Git.repo_key (url : String) : String := Sha256.hash url
 pub def Git.db_dir (home : String) (url : String) : String :=
     home ++ "/cache/git/db/" ++ Git.repo_key url
 
-/// Where every checkout of one repository lives. The commit is the leaf
-/// directory, so a moved tag cannot overwrite a pinned checkout.
-pub def Git.co_root (home : String) (url : String) : String :=
-    home ++ "/cache/git/checkouts/" ++ Git.repo_key url
-
+/// Where a checkout of one commit lives. The rule is `Mote.git_checkout_dir`'s
+/// -- the LOADER has to derive the same path to find a fetched dependency,
+/// and it cannot depend on this mote, so the one definition lives in
+/// `lang` and both callers read it. The commit is the leaf directory, so a
+/// moved tag cannot overwrite a pinned checkout.
 pub def Git.checkout_dir (home : String) (url : String) (commit : String) : String :=
-    Git.co_root home url ++ "/" ++ commit
+    Mote.git_checkout_dir home url commit
 
 /// Create the bare mirror if it is not there yet, and answer its path.
 #[partial]

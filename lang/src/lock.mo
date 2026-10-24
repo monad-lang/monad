@@ -1,4 +1,9 @@
-// build / lock -- `mote.lock`: read, validate and render it.
+// lang / lock -- `mote.lock`: read, validate and render it.
+//
+// It lives in `lang` and not `build` because the LOADER has to read it to
+// locate a git dependency, and `lang` cannot depend on `build`; the
+// writing side (`monad fetch`) reaches it from `build` as a dependency of
+// this one.
 //
 // The format is plans/packaging/package-system.md §2b. One `[[mote]]` entry
 // per resolved dependency; a git entry carries the STRUCTURED `git_*` keys,

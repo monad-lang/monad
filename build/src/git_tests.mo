@@ -15,7 +15,7 @@ use build::git {
   Git.available, Git.checkout, Git.checkout_dir, Git.ensure_mirror,
   Git.fetch, Git.prune, Git.repo_key, Git.resolve, Git.url_allowed,
 }
-use build::lock {GitPin}
+use lang::lock {GitPin}
 
 def Build.git_fixture_root (tag : String) : String :=
     "/tmp/monad_git_fix_" ++ I64.to_string process_id ++ "_" ++ tag

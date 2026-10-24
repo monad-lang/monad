@@ -16,6 +16,8 @@ use toml::toml {
   Toml.Value, Toml.parse, Toml.table_get, Toml.array_at, array, integer, string, table,
 }
 use lang::types {AffineMode, AttrArg, Attribute, id, show_identifier}
+use lang::lock {Lock.read, LockRead, Lockfile, LockedMote}
+use std::sha256 {Sha256.hash}
 use std::io {}
 use std::map {BTreeMap, BTreeMap.to_list}
 use std::process {exec_cmd, process_id}
@@ -241,7 +243,7 @@ def MoteManifest.src_root (m : MoteManifest) : String :=
 /// `Option.some ""` is a REAL answer here, unlike `dep_dir_in`'s: `dir` is
 /// `""` for the mote whose `mote.toml` sits in the working directory, and
 /// that is precisely the case this arm exists for.
-def MoteManifest.dep_dir_of (m : MoteManifest) (name : String) : Option String :=
+pub def MoteManifest.dep_dir_of (m : MoteManifest) (name : String) : Option String :=
     if String.beq m.name name
     then Option.some m.dir
     else dep_dir_in m.dep_dirs name
@@ -468,7 +470,7 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
             // A `mote.toml` with no `[mote]` is a virtual workspace
             // root: stop there rather than walking past it, since
             // nothing above a workspace root is part of this mote.
-            Option.some text => return (Mote.parse_manifest dir text),
+            Option.some text => Mote.discover_parsed (Mote.parse_manifest dir text),
             Option.none => Mote.discover_above dir depth
         }
     }
@@ -479,6 +481,19 @@ def Mote.discover_above (dir : String) (depth : I64) : IO (Option MoteManifest) 
     if String.beq dir "" || String.beq dir "/"
     then return Option.none
     else Mote.discover_go (parent_of dir) (depth - 1)
+
+/// `discover_go`'s tail: a parsed manifest with its git dependencies
+/// located from `mote.lock`. Split out so the walk-up path keeps its own
+/// shape and this IO step has one spelling.
+#[partial]
+def Mote.discover_parsed (parsed : Option MoteManifest) : IO (Option MoteManifest) :=
+    match parsed {
+        Option.none => return Option.none,
+        Option.some m => do {
+            let filled <- Mote.with_locked_dirs m;
+            return (Option.some filled)
+        }
+    }
 
 /// The manifest AT `dir`, with no walk -- unlike `Mote.discover`, whose
 /// walk is right for a file's own mote and wrong for a DECLARED dependency:
@@ -879,6 +894,157 @@ def Mote.dep_dirs_of (deps : List (Pair String Dependency)) : List (Pair String 
         List.empty => List.empty,
         List.cons e rest => match e {
             Pair.pair k d => List.cons (Pair.pair k (Dependency.located_dir d)) (Mote.dep_dirs_of rest)
+        }
+    }
+
+// ─── Git dependencies: where `mote.lock` says they are ──────────────
+//
+// A `path` dependency is located by the manifest alone. A GIT dependency
+// is not: `monad fetch` clones it into a content cache and records the
+// commit here, so resolution reads `mote.lock` and derives the checkout
+// directory. That is the whole of 3e's reader half -- the loader learns
+// where the tree is, and the rest of resolution is unchanged.
+
+/// `<home>/cache/git/checkouts/<sha256 url>/<commit>` -- the one
+/// definition of where a checkout lands, shared with `build::git`'s
+/// writer so a fetch and a resolution cannot disagree.
+pub def Mote.git_checkout_dir (home : String) (url : String) (commit : String) : String :=
+    home ++ "/cache/git/checkouts/" ++ Sha256.hash url ++ "/" ++ commit
+
+/// The cache root: `$MONAD_HOME`, else `$HOME/.monad`, else none. The same
+/// rule monadup and `monad install` use, via the helper they share.
+#[partial]
+def Mote.cache_home : IO (Option String) := do {
+    let monad_home <- IO.get_env "MONAD_HOME";
+    let home <- IO.get_env "HOME";
+    return (Mote.toolchain_home_of monad_home home)
+}
+
+/// `m`, with `dep_dirs` filled in for git dependencies from the
+/// `mote.lock` beside it.
+///
+/// Only motes that DECLARE a git dependency pay for the lock read, and a
+/// missing, unreadable or foreign-version lock leaves the manifest exactly
+/// as parsed -- resolution then has nothing to load, which is the honest
+/// answer. Saying so loudly is `monad fetch --locked`'s job, not the
+/// loader's: a `check` must not fail on a lockfile the build layer is
+/// responsible for.
+#[partial]
+def Mote.with_locked_dirs (m : MoteManifest) : IO MoteManifest := do {
+    if Bool.not (Mote.any_git_dep m.deps_full)
+    then return m
+    else do {
+        let home <- Mote.cache_home;
+        match home {
+            Option.none => return m,
+            Option.some h => Mote.with_locked_dirs_at h m
+        }
+    }
+}
+
+/// `with_locked_dirs` with the cache root given. The test suite needs it:
+/// a fixture fetches into its own directory, and nothing in a test may
+/// depend on the process's `$MONAD_HOME`.
+#[partial]
+pub def Mote.with_locked_dirs_at (home : String) (m : MoteManifest) : IO MoteManifest := do {
+    if Bool.not (Mote.any_git_dep m.deps_full)
+    then return m
+    else do {
+        let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
+        match read {
+            Result.err _ => return m,
+            Result.ok found => Mote.with_locked_lock home m found
+        }
+    }
+}
+
+#[partial]
+def Mote.with_locked_lock (home : String) (m : MoteManifest) (found : Option LockRead) : IO MoteManifest :=
+    match found {
+        Option.none => return m,
+        Option.some r => match r {
+            LockRead.unsupported _ => return m,
+            LockRead.loaded lock => return (Mote.fill_dep_dirs m lock home)
+        }
+    }
+
+def Mote.fill_dep_dirs (m : MoteManifest) (lock : Lockfile) (home : String) : MoteManifest :=
+    { m with dep_dirs := Mote.locked_dirs m.deps_full lock home }
+
+/// `dep_dirs` rebuilt with git sources located: a `path` keeps the
+/// manifest's own answer, a git source reads the lock, and a registry
+/// source stays `""` until a registry exists.
+#[partial]
+def Mote.locked_dirs (deps : List (Pair String Dependency)) (lock : Lockfile) (home : String) : List (Pair String String) :=
+    match deps {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k d =>
+                List.cons (Pair.pair k (Mote.locked_dir_of lock home k d))
+                    (Mote.locked_dirs rest lock home)
+        }
+    }
+
+def Mote.locked_dir_of (lock : Lockfile) (home : String) (key : String) (d : Dependency) : String :=
+    match d {
+        Dependency.path dir => dir,
+        Dependency.git url _tag _branch _rev subdir =>
+            match Mote.locked_checkout lock home key url subdir {
+                Option.some p => p,
+                Option.none => "",
+            },
+        Dependency.registry _req => "",
+    }
+
+/// The checkout directory of the lock entry named `key`, when that entry
+/// is a git entry for THIS url. A mismatched url is not located at all:
+/// resolving the wrong repository silently is the failure a lock exists to
+/// prevent.
+def Mote.locked_checkout (lock : Lockfile) (home : String) (key : String) (url : String) (subdir : Option String) : Option String :=
+    match Mote.locked_entry lock key {
+        Option.none => Option.none,
+        Option.some e => match e.git {
+            Option.none => Option.none,
+            Option.some g =>
+                if String.beq g.url url
+                then Option.some (raw_path_join (Mote.git_checkout_dir home g.url g.commit) (Mote.subdir_or g.subdir subdir))
+                else Option.none
+        }
+    }
+
+/// The lock's `subdir` wins; a manifest that declares one the lock omits
+/// still gets it (the lock is stale, and `--locked` is what says so).
+def Mote.subdir_or (locked : Option String) (declared : Option String) : String :=
+    match locked {
+        Option.some s => s,
+        Option.none => match declared {
+            Option.some d => d,
+            Option.none => "",
+        }
+    }
+
+#[partial]
+def Mote.locked_entry (lock : Lockfile) (name : String) : Option LockedMote :=
+    Mote.locked_entry_in lock.motes name
+
+#[partial]
+def Mote.locked_entry_in (entries : List LockedMote) (name : String) : Option LockedMote :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest => if String.beq e.name name then Option.some e else Mote.locked_entry_in rest name
+    }
+
+/// Whether any declared dependency is a git source -- the gate that keeps
+/// the lock read off every ordinary mote's resolution path.
+#[partial]
+pub def Mote.any_git_dep (deps : List (Pair String Dependency)) : Bool :=
+    match deps {
+        List.empty => false,
+        List.cons e rest => match e {
+            Pair.pair _k d => match d {
+                Dependency.git _ _ _ _ _ => true,
+                _ => Mote.any_git_dep rest,
+            }
         }
     }
 

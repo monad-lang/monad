@@ -140,7 +140,7 @@ def test_from_args_print_targets : Bool :=
 #[test]
 def test_from_args_build_target_flag : Bool :=
     match Command.from_args ["build", "a.mo", "--target", "aarch64-unknown-linux-gnu"] {
-        Command.build path out_name _bin _verbose _debug _no_cache target =>
+        Command.build path out_name _bin _verbose _debug _no_cache _locked target =>
             Path.to_string path == "a.mo"
                 && target == "aarch64-unknown-linux-gnu"
                 && Path.to_string out_name == "source",
@@ -189,7 +189,7 @@ def test_from_args_install_explicit_name_without_path : Bool :=
 #[test]
 def test_from_args_build_without_target_is_empty : Bool :=
     match Command.from_args ["build", "a.mo"] {
-        Command.build _path _out_name _bin _verbose _debug _no_cache target => target == "",
+        Command.build _path _out_name _bin _verbose _debug _no_cache _locked target => target == "",
         _ => false,
     }
 
@@ -304,15 +304,17 @@ def test_from_args_check_without_no_cache_is_false : Bool :=
         _ => false,
     }
 
-// `Command.test` carries `jobs` as its fourth field, so every match here
-// binds it positionally -- adding a field to the constructor and leaving
-// these at three binders compiles clean and then fails at runtime, the
-// exact hazard AGENTS.md records for positional struct matches (this file
-// shipped that way once: run 38147433273, five red tests).
+// `Command.test` carries `locked` and then `jobs`, and every match here
+// binds them positionally -- adding a field to the constructor and leaving
+// these at the old arity compiles SELF-HOSTED and then either fails at
+// runtime (the hazard AGENTS.md records: this file shipped that way once,
+// run 38147433273, five red tests) or, since 2026-10-24, silently
+// type-errors that only the Rust host reports
+// (`implementations/if-branch-type-check-divergence.md`).
 #[test]
 def test_from_args_test : Bool :=
     match Command.from_args ["test", "a.mo", "b.mo", "-v"] {
-        Command.test files verbose workspace jobs =>
+        Command.test files verbose workspace _locked jobs =>
             files == ["a.mo", "b.mo"] && verbose == true && workspace == false && jobs == 4,
         _ => false,
     }
@@ -320,7 +322,7 @@ def test_from_args_test : Bool :=
 #[test]
 def test_from_args_test_workspace_flag : Bool :=
     match Command.from_args ["test", "--workspace"] {
-        Command.test files verbose workspace jobs =>
+        Command.test files verbose workspace _locked jobs =>
             List.is_empty files && workspace == true && verbose == false && jobs == 4,
         _ => false,
     }
@@ -328,7 +330,7 @@ def test_from_args_test_workspace_flag : Bool :=
 #[test]
 def test_from_args_test_workspace_short_flag : Bool :=
     match Command.from_args ["test", "-w", "-v"] {
-        Command.test files verbose workspace jobs =>
+        Command.test files verbose workspace _locked jobs =>
             List.is_empty files && workspace == true && verbose == true && jobs == 4,
         _ => false,
     }
@@ -338,7 +340,7 @@ def test_from_args_test_workspace_short_flag : Bool :=
 #[test]
 def test_from_args_test_workspace_flag_not_a_path : Bool :=
     match Command.from_args ["test", "--workspace", "a.mo"] {
-        Command.test files verbose workspace jobs =>
+        Command.test files verbose workspace _locked jobs =>
             files == ["a.mo"] && workspace == true,
         _ => false,
     }
@@ -348,7 +350,7 @@ def test_from_args_test_workspace_flag_not_a_path : Bool :=
 #[test]
 def test_from_args_test_jobs_flag : Bool :=
     match Command.from_args ["test", "--jobs", "2", "a.mo"] {
-        Command.test files verbose workspace jobs =>
+        Command.test files verbose workspace _locked jobs =>
             files == ["a.mo"] && jobs == 2,
         _ => false,
     }
@@ -356,7 +358,7 @@ def test_from_args_test_jobs_flag : Bool :=
 #[test]
 def test_from_args_test_jobs_short_flag_clamps_below_one : Bool :=
     match Command.from_args ["test", "-j", "0", "a.mo"] {
-        Command.test files verbose workspace jobs =>
+        Command.test files verbose workspace _locked jobs =>
             files == ["a.mo"] && jobs == 1,
         _ => false,
     }
@@ -368,7 +370,7 @@ def test_from_args_test_jobs_short_flag_clamps_below_one : Bool :=
 #[test]
 def test_from_args_test_no_files_is_a_test_command : Bool :=
     match Command.from_args ["test"] {
-        Command.test files verbose workspace jobs =>
+        Command.test files verbose workspace _locked jobs =>
             List.is_empty files && workspace == false && verbose == false,
         _ => false,
     }

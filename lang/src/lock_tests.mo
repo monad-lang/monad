@@ -7,7 +7,7 @@
 /// The rest pin the strictness: every way an entry can be wrong is an error
 /// naming that entry, and only a foreign `version` is soft.
 
-use build::lock {
+use lang::lock {
   GitPin, LockRead, LockedGit, LockedMote, Lockfile,
   Lock.parse, Lock.pin_of, Lock.pin_to_string, Lock.read, Lock.render, Lock.source_of, Lock.write,
 }
