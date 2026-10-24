@@ -11,7 +11,7 @@
 /// pattern: own types, own glue over `Toml.parse`, no shared
 /// serialize/deserialize class machinery.
 
-use std::list {List.filter_map}
+use std::list {List.filter, List.filter_map, List.intercalate, List.length}
 use toml::toml {
   Toml.Value, Toml.parse, Toml.table_get, Toml.array_at, array, integer, string, table,
 }
@@ -31,13 +31,28 @@ pub struct MoteManifest {
     name : String,
     dir : String,
     deps : List String,
-    /// Where each declared dependency LIVES: `(name, dir)` pairs, `dir`
-    /// being the `path` from `[dependencies.<name>]`/`[dev-dependencies].
-    /// <name>]` joined onto this mote's own `dir`, so it is usable as a
-    /// path exactly as stored. A dependency whose manifest declares no
-    /// `path` gets `""`, which resolution reads as "declared, but not
-    /// located" -- the name still satisfies `declares` (so a `use` on it
-    /// is legal), it just has no directory to resolve into.
+    /// Where each declared dependency COMES FROM: the parsed source of
+    /// every `[dependencies]`/`[dev-dependencies]` entry that names one
+    /// (`path`, `git`, or a registry version). An entry naming none -- an
+    /// empty table, or `workspace = true` before inheritance resolves it
+    /// -- is declared but has no entry here; an entry that is malformed
+    /// has its error in `dep_errors` instead.
+    deps_full : List (Pair String Dependency),
+    /// `(name, message)` for each dependency entry that cannot be read as
+    /// a source: `path` and `git` together, more than one of `tag`/
+    /// `branch`/`rev`, a git-only key without `git`, or a non-string value.
+    /// The parse is pure and stays total, so the error is carried rather
+    /// than failing the whole manifest; `validate_module_deps`
+    /// (lang/module.mo) reports it when a `use` reaches that dependency.
+    dep_errors : List (Pair String String),
+    /// Where each declared dependency LIVES: `(name, dir)` pairs, computed
+    /// from `deps_full`. A `path` dependency's `dir` is its `path` joined
+    /// onto this mote's own `dir`, so it is usable as a path exactly as
+    /// stored. Any other source gets `""` -- a git dependency until its
+    /// checkout is resolved, a registry one until a registry exists --
+    /// which resolution reads as "declared, but not located": the name
+    /// still satisfies `declares` (so a `use` on it is legal), it just has
+    /// no directory to resolve into.
     ///
     /// Without this, a dependency resolved purely by the NAME convention
     /// (`mote_relative_file`: the mote's directory is its name, at the
@@ -111,6 +126,84 @@ pub struct BinTarget {
 pub def BinTarget.target_path (b : BinTarget) : String := b.path
 
 pub def BinTarget.target_name (b : BinTarget) : String := b.name
+
+/// Where a declared dependency comes from: the canonical model of
+/// `plans/packaging/package-system.md` §2a, which `mote.lock` shares.
+///
+/// `path`'s `dir` is already joined onto the declaring mote's `dir`, the
+/// way `dep_dirs` entries always were. `git`'s `tag`, `branch` and `rev`
+/// are mutually exclusive, and none of them means the remote's `HEAD`;
+/// `subdir` names the mote's directory inside a checkout that holds
+/// several. `registry` carries its version requirement verbatim -- nothing
+/// resolves one yet. `workspace = true` is never a constructor here:
+/// inheritance is resolved before a `Dependency` exists.
+pub type Dependency {
+    path (dir : String),
+    git (url : String) (tag : Option String) (branch : Option String) (rev : Option String) (subdir : Option String),
+    registry (req : String),
+}
+
+/// A one-line spelling of the source, in the lockfile's `source` style:
+/// `path+<dir>`, `git+<url>?tag=v1&subdir=motes/x`, `registry+<req>`.
+/// For display and diagnostics only; nothing parses it back.
+pub def Dependency.to_source (d : Dependency) : String :=
+    match d {
+        Dependency.path dir => String.concat "path+" dir,
+        Dependency.git url tag branch rev subdir =>
+            String.concat (String.concat "git+" url) (dep_query [
+                dep_param "tag" tag, dep_param "branch" branch,
+                dep_param "rev" rev, dep_param "subdir" subdir,
+            ]),
+        Dependency.registry req => String.concat "registry+" req,
+    }
+
+/// The directory a dependency's source puts it in, or `""` when that is
+/// not known from the manifest alone (see `MoteManifest.dep_dirs`).
+def Dependency.located_dir (d : Dependency) : String :=
+    match d {
+        Dependency.path dir => dir,
+        _ => "",
+    }
+
+def dep_param (key : String) (value : Option String) : List String :=
+    match value {
+        Option.none => List.empty,
+        Option.some v => [String.concat (String.concat key "=") v],
+    }
+
+def dep_query (params : List (List String)) : String :=
+    match List.flatten params {
+        List.empty => "",
+        List.cons p rest => String.concat "?" (List.intercalate "&" (List.cons p rest)),
+    }
+
+/// The dependency named `name`'s parsed source, if its entry named one.
+pub def MoteManifest.dependency_of (m : MoteManifest) (name : String) : Option Dependency :=
+    dependency_in m.deps_full name
+
+def dependency_in (entries : List (Pair String Dependency)) (name : String) : Option Dependency :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest => match e {
+            Pair.pair k d => if String.beq k name then Option.some d else dependency_in rest name
+        }
+    }
+
+/// The errors recorded against the dependency `name`; empty when its entry
+/// is well-formed or absent.
+pub def MoteManifest.dep_errors_for (m : MoteManifest) (name : String) : List String :=
+    dep_errors_in m.dep_errors name
+
+def dep_errors_in (entries : List (Pair String String)) (name : String) : List String :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k msg =>
+                if String.beq k name
+                then List.cons msg (dep_errors_in rest name)
+                else dep_errors_in rest name
+        }
+    }
 
 /// The mote's source root -- `<dir>/src`, always.
 ///
@@ -580,9 +673,10 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
             let deps := List.append
                 (Mote.table_keys (Toml.table_get "dependencies" root))
                 (Mote.table_keys (Toml.table_get "dev-dependencies" root)) in
-            let dep_dirs := List.append
-                (Mote.table_dep_dirs dir (Toml.table_get "dependencies" root))
-                (Mote.table_dep_dirs dir (Toml.table_get "dev-dependencies" root)) in
+            let entries := List.append
+                (Mote.table_dep_entries dir (Toml.table_get "dependencies" root))
+                (Mote.table_dep_entries dir (Toml.table_get "dev-dependencies" root)) in
+            let deps_full := Mote.found_deps entries in
             let libs := Mote.table_string_array (Toml.table_get "link" root) "libs" in
             let pkgs := Mote.table_string_array (Toml.table_get "link" root) "pkg-config" in
             let lib_path := Mote.lib_target_path dir root in
@@ -592,7 +686,9 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
                 name := name,
                 dir := dir,
                 deps := deps,
-                dep_dirs := dep_dirs,
+                deps_full := deps_full,
+                dep_errors := Mote.dep_entry_errors (mote_toml_in dir) entries,
+                dep_dirs := Mote.dep_dirs_of deps_full,
                 link_libs := libs,
                 link_pkgs := pkgs,
                 lib_path := lib_path,
@@ -602,43 +698,173 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
             Option.some m
     }
 
-/// `[dependencies]`/`[dev-dependencies]` as `(name, dir)` pairs: the
-/// KEY is the mote name (exactly as `table_keys` reads it), and the
-/// value is that entry's own `path`, joined onto `mote_dir`.
+/// One `[dependencies]`/`[dev-dependencies]` entry, read: a source, an
+/// error to report, or neither (an empty table, `workspace = true`).
+type ManifestDepEntry {
+    found (d : Dependency),
+    invalid (reason : String),
+    sourceless,
+}
+
+/// The string-valued keys a dependency table understands, read once so the
+/// classification below works on plain `Option String`s.
+struct DepKeys {
+    path : Option String,
+    git : Option String,
+    tag : Option String,
+    branch : Option String,
+    rev : Option String,
+    subdir : Option String,
+    version : Option String,
+}
+
+/// `[dependencies]`/`[dev-dependencies]` as `(name, entry)` pairs: the KEY
+/// is the mote name (exactly as `table_keys` reads it), the value its
+/// classified source.
 ///
-/// Written with sub-table headers (`[dependencies.std] path = "../std"`),
-/// not inline tables (`std = { path = "../std" }`) -- `lang/src/toml.mo`
-/// supports the former and not the latter, which is the spelling every
-/// manifest in this repo already uses (`mote.toml`'s own header says so).
-///
-/// `raw_path_join`, not `++`: an empty `mote_dir` (the working directory
-/// IS the mote root) must join to the bare `path` and not to `/path`, and
-/// that empty-component rule lives in exactly one place. (`raw_path_join`
-/// itself is used bare, un-imported, exactly as `lang/module.mo`'s own
-/// `path_join` and `cli/src/main.mo`'s walk already do -- an explicit
-/// `use std::path {...}` for it is what makes the checker warn that a
-/// package-private name is crossing a mote boundary.)
-///
-/// That empty-component rule is not the only one this join needs: an
-/// ABSOLUTE `path` must replace `mote_dir` outright rather than being
-/// appended to it, which is what an external mote declaring
-/// `path = "/home/me/monad/std"` needs, and what a bare `monad check`
-/// (where `mote_dir` is `"."`, not `""`) got wrong until
-/// `raw_path_join` grew the rule `Path.join` already had -- `".//home/me/…"`
-/// resolved to nothing and the dependency silently went missing.
-/// `Mote.bin_target_of` below joins `[[bin]] path` the same way and
-/// inherits the same fix.
-def Mote.table_dep_dirs (mote_dir : String) (found : Option Toml.Value) : List (Pair String String) :=
+/// Both TOML spellings arrive here as the same table:
+/// `[dependencies.std] path = "../std"` and `std = { path = "../std" }`.
+/// A bare string (`json = ">=0.2.0"`) is a registry requirement.
+def Mote.table_dep_entries (mote_dir : String) (found : Option Toml.Value) : List (Pair String ManifestDepEntry) :=
     match found {
         Option.none => List.empty,
         Option.some v => match v {
-            Toml.Value.table sub => dep_dir_entries mote_dir sub,
+            Toml.Value.table sub => Mote.dep_entries_go mote_dir (BTreeMap.to_list sub),
             _ => List.empty
         }
     }
 
-def dep_dir_entries (mote_dir : String) (sub : BTreeMap String Toml.Value) : List (Pair String String) :=
-    dep_dir_entries_go mote_dir (BTreeMap.to_list sub)
+def Mote.dep_entries_go (mote_dir : String) (entries : List (Pair String Toml.Value)) : List (Pair String ManifestDepEntry) :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k v => List.cons (Pair.pair k (Mote.dep_entry mote_dir v)) (Mote.dep_entries_go mote_dir rest)
+        }
+    }
+
+def Mote.dep_entry (mote_dir : String) (v : Toml.Value) : ManifestDepEntry :=
+    match v {
+        Toml.Value.string req => ManifestDepEntry.found (Dependency.registry req),
+        Toml.Value.table sub => Mote.dep_entry_of_table mote_dir sub,
+        _ => ManifestDepEntry.invalid "expected a version string or a table",
+    }
+
+/// A key that is present with a non-string value is an error, not an
+/// absent key: `tag = 1` quietly meaning "no tag" would follow the
+/// remote's `HEAD` instead of the pin the author wrote.
+def Mote.dep_entry_of_table (mote_dir : String) (sub : BTreeMap String Toml.Value) : ManifestDepEntry :=
+    match List.filter (fn (key : String) => Mote.dep_key_not_string sub key) dep_string_keys {
+        List.cons key _ => ManifestDepEntry.invalid (String.concat (String.concat "`" key) "` must be a string"),
+        List.empty => Mote.dep_entry_of_keys mote_dir (Mote.dep_keys sub),
+    }
+
+def dep_string_keys : List String := ["path", "git", "tag", "branch", "rev", "subdir", "version"]
+
+def Mote.dep_key_not_string (sub : BTreeMap String Toml.Value) (key : String) : Bool :=
+    match Toml.table_get key sub {
+        Option.none => false,
+        Option.some v => match v {
+            Toml.Value.string _ => false,
+            _ => true,
+        }
+    }
+
+def Mote.dep_keys (sub : BTreeMap String Toml.Value) : DepKeys :=
+    let k : DepKeys := {
+        path := Mote.string_value (Toml.table_get "path" sub),
+        git := Mote.string_value (Toml.table_get "git" sub),
+        tag := Mote.string_value (Toml.table_get "tag" sub),
+        branch := Mote.string_value (Toml.table_get "branch" sub),
+        rev := Mote.string_value (Toml.table_get "rev" sub),
+        subdir := Mote.string_value (Toml.table_get "subdir" sub),
+        version := Mote.string_value (Toml.table_get "version" sub),
+    } in
+    k
+
+def Mote.dep_entry_of_keys (mote_dir : String) (k : DepKeys) : ManifestDepEntry :=
+    match k.git {
+        Option.some url => Mote.git_dep_entry url k,
+        Option.none => Mote.non_git_dep_entry mote_dir k,
+    }
+
+/// `version` beside `git` (or beside `path`) is allowed and unused, the way
+/// Cargo reads it: it is what a later registry publish would require.
+def Mote.git_dep_entry (url : String) (k : DepKeys) : ManifestDepEntry :=
+    if option_present k.path
+    then ManifestDepEntry.invalid "`path` and `git` are both set; a dependency has exactly one source"
+    else if count_present [k.tag, k.branch, k.rev] > 1
+    then ManifestDepEntry.invalid "`tag`, `branch` and `rev` are mutually exclusive; set at most one"
+    else ManifestDepEntry.found (Dependency.git url k.tag k.branch k.rev k.subdir)
+
+/// `raw_path_join`, not `++`: an empty `mote_dir` (the working directory
+/// IS the mote root) must join to the bare `path` and not to `/path`, and
+/// an ABSOLUTE `path` must replace `mote_dir` outright (an external mote
+/// declaring `path = "/home/me/monad/std"`, or a bare `monad check` whose
+/// `mote_dir` is `"."`). Both rules live in `raw_path_join`, used bare
+/// and un-imported as `lang/module.mo`'s `path_join` does -- an explicit
+/// `use std::path {...}` for it makes the checker warn that a
+/// package-private name is crossing a mote boundary.
+///
+/// Only a `path` entry is joined. The join used to run for EVERY entry,
+/// so one with no `path` got `raw_path_join mote_dir ""` -- the declaring
+/// mote's OWN directory whenever that was non-empty -- and resolution
+/// then looked for the dependency inside the mote that declared it.
+def Mote.non_git_dep_entry (mote_dir : String) (k : DepKeys) : ManifestDepEntry :=
+    if count_present [k.tag, k.branch, k.rev, k.subdir] > 0
+    then ManifestDepEntry.invalid "`tag`, `branch`, `rev` and `subdir` only apply to a `git` dependency"
+    else match k.path {
+        Option.some p => ManifestDepEntry.found (Dependency.path (raw_path_join mote_dir p)),
+        Option.none => match k.version {
+            Option.some req => ManifestDepEntry.found (Dependency.registry req),
+            Option.none => ManifestDepEntry.sourceless,
+        }
+    }
+
+def option_present (o : Option String) : Bool :=
+    match o {
+        Option.none => false,
+        Option.some _ => true,
+    }
+
+def count_present (xs : List (Option String)) : I64 :=
+    List.length (List.filter option_present xs)
+
+def Mote.found_deps (entries : List (Pair String ManifestDepEntry)) : List (Pair String Dependency) :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k entry => match entry {
+                ManifestDepEntry.found d => List.cons (Pair.pair k d) (Mote.found_deps rest),
+                _ => Mote.found_deps rest,
+            }
+        }
+    }
+
+def Mote.dep_entry_errors (manifest : String) (entries : List (Pair String ManifestDepEntry)) : List (Pair String String) :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k entry => match entry {
+                ManifestDepEntry.invalid reason =>
+                    List.cons (Pair.pair k (Mote.dep_error_message manifest k reason))
+                        (Mote.dep_entry_errors manifest rest),
+                _ => Mote.dep_entry_errors manifest rest,
+            }
+        }
+    }
+
+def Mote.dep_error_message (manifest : String) (dep : String) (reason : String) : String :=
+    String.concat (String.concat (String.concat (String.concat
+        "error: invalid dependency `" dep) "` in ") manifest)
+        (String.concat ": " reason)
+
+def Mote.dep_dirs_of (deps : List (Pair String Dependency)) : List (Pair String String) :=
+    match deps {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k d => List.cons (Pair.pair k (Dependency.located_dir d)) (Mote.dep_dirs_of rest)
+        }
+    }
 
 /// `[lib] path`, joined onto the mote's own directory, or the conventional
 /// `src/lib.mo` when the table (or its `path`) is absent.
@@ -736,21 +962,6 @@ def Mote.joined_table_string (dir : String) (table : Option Toml.Value) (key : S
     match Mote.table_string table key {
         Option.none => Option.none,
         Option.some p => Option.some (raw_path_join dir p)
-    }
-
-def dep_dir_entries_go (mote_dir : String) (entries : List (Pair String Toml.Value)) : List (Pair String String) :=
-    match entries {
-        List.empty => List.empty,
-        List.cons e rest =>
-            match e {
-                Pair.pair k v =>
-                    let path := match Mote.table_string (Option.some v) "path" {
-                        Option.none => "",
-                        Option.some p => p
-                    } in
-                    List.cons (Pair.pair k (raw_path_join mote_dir path))
-                        (dep_dir_entries_go mote_dir rest)
-            }
     }
 
 /// A string-array field of a sub-table (`[link] libs = ["m", "pthread"]`),
@@ -1234,6 +1445,8 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
                 // the only directory it could name is the one it already
                 // is in, and `dep_dir_of`'s empty case is exactly that
                 // ("declared, resolved by convention").
+                deps_full := List.empty,
+                dep_errors := List.empty,
                 dep_dirs := List.empty,
                 link_libs := Mote.mote_attr_list attr "libs",
                 link_pkgs := Mote.mote_attr_list attr "pkg_config",
@@ -1500,6 +1713,132 @@ def test_manifest_without_dependencies_has_no_dep_dir : Bool :=
             Option.none => true,
             Option.some _ => false
         }
+    }
+
+// --- Dependency sources (D8 of plans/packaging/mote-build-deps-artifacts-targets.md)
+
+def dep_source_is (m : MoteManifest) (name : String) (want : String) : Bool :=
+    match MoteManifest.dependency_of m name {
+        Option.none => false,
+        Option.some d => String.beq (Dependency.to_source d) want
+    }
+
+def dep_has_no_source (m : MoteManifest) (name : String) : Bool :=
+    match MoteManifest.dependency_of m name {
+        Option.none => true,
+        Option.some _ => false
+    }
+
+def dep_dir_absent (m : MoteManifest) (name : String) : Bool :=
+    match MoteManifest.dep_dir_of m name {
+        Option.none => true,
+        Option.some _ => false
+    }
+
+def dep_dir_is (m : MoteManifest) (name : String) (want : String) : Bool :=
+    match MoteManifest.dep_dir_of m name {
+        Option.none => false,
+        Option.some d => String.beq d want
+    }
+
+/// Exactly one error is recorded against `name`, and it opens with the
+/// dependency and the manifest it is in.
+def dep_error_is_reported (m : MoteManifest) (name : String) (manifest : String) : Bool :=
+    match MoteManifest.dep_errors_for m name {
+        List.empty => false,
+        List.cons msg rest => match rest {
+            List.empty => String.starts_with (String.concat (String.concat (String.concat
+                "error: invalid dependency `" name) "` in ") manifest) msg,
+            List.cons _ _ => false
+        }
+    }
+
+def git_tag_manifest_fixture : String :=
+  "[mote]\nname = \"app\"\n\n[dependencies.http]\ngit = \"https://example.org/http\"\ntag = \"v0.1.0\"\n"
+
+/// A git dependency is declared and keeps its source, but is NOT located:
+/// its directory is the checkout `monad fetch` resolves, which the manifest
+/// alone cannot know.
+#[test]
+def test_git_dependency_is_declared_with_its_source : Bool :=
+    match Mote.parse_manifest "app" git_tag_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            MoteManifest.declares m "http"
+            && dep_source_is m "http" "git+https://example.org/http?tag=v0.1.0"
+            && dep_dir_absent m "http"
+            && List.length m.dep_errors == 0
+    }
+
+def inline_sources_manifest_fixture : String :=
+  "[mote]\nname = \"app\"\n\n[dependencies]\njson = \">=0.2.0\"\nmono = { git = \"https://example.org/mono\", branch = \"main\", subdir = \"motes/foo\" }\nmylib = { path = \"../mylib\" }\n"
+
+/// The inline-table and bare-string spellings of §2a read the same as the
+/// sub-table form: a registry requirement, a git branch with a `subdir`,
+/// and a path that is joined and located.
+#[test]
+def test_inline_dependency_spellings_read_their_sources : Bool :=
+    match Mote.parse_manifest "app" inline_sources_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            dep_source_is m "json" "registry+>=0.2.0"
+            && dep_dir_absent m "json"
+            && dep_source_is m "mono" "git+https://example.org/mono?branch=main&subdir=motes/foo"
+            && dep_source_is m "mylib" "path+app/../mylib"
+            && dep_dir_is m "mylib" "app/../mylib"
+    }
+
+/// A `version`-only entry is a registry requirement and has no directory --
+/// in a mote whose `dir` is NOT empty. The join used to run for every
+/// entry, so this one was "located" at `app` itself, the declaring mote's
+/// own directory; the `dir = ""` test above could not see that.
+#[test]
+def test_version_only_dependency_is_not_located_at_the_declaring_mote : Bool :=
+    match Mote.parse_manifest "app" no_path_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            MoteManifest.declares m "there"
+            && dep_source_is m "there" "registry+0.1.0"
+            && dep_dir_absent m "there"
+    }
+
+def sourceless_manifest_fixture : String :=
+  "[mote]\nname = \"app\"\n\n[dependencies.shared]\nworkspace = true\n"
+
+/// `workspace = true` names no source until inheritance resolves it, and
+/// that is not an error: declared, no source, nothing reported.
+#[test]
+def test_workspace_marker_is_declared_without_a_source : Bool :=
+    match Mote.parse_manifest "app" sourceless_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            MoteManifest.declares m "shared"
+            && dep_has_no_source m "shared"
+            && List.length m.dep_errors == 0
+    }
+
+def bad_deps_manifest_fixture : String :=
+  "[mote]\nname = \"app\"\n\n[dependencies]\nboth = { path = \"../x\", git = \"https://example.org/x\" }\npins = { git = \"https://example.org/y\", tag = \"v1\", rev = \"abc\" }\nstray = { path = \"../z\", tag = \"v1\" }\ntyped = { git = \"https://example.org/w\", tag = 1 }\nscalar = 3\nfine = { path = \"../ok\" }\n"
+
+/// Each malformed entry records one error naming it and the manifest, has
+/// no source (nothing is guessed), and stays DECLARED -- the error, not an
+/// undeclared-mote message, is what a `use` of it should surface. A
+/// well-formed sibling is unaffected.
+#[test]
+def test_malformed_dependencies_are_reported_not_guessed : Bool :=
+    match Mote.parse_manifest "app" bad_deps_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            dep_error_is_reported m "both" "app/mote.toml"
+            && dep_error_is_reported m "pins" "app/mote.toml"
+            && dep_error_is_reported m "stray" "app/mote.toml"
+            && dep_error_is_reported m "typed" "app/mote.toml"
+            && dep_error_is_reported m "scalar" "app/mote.toml"
+            && dep_has_no_source m "both"
+            && dep_has_no_source m "typed"
+            && MoteManifest.declares m "pins"
+            && List.length (MoteManifest.dep_errors_for m "fine") == 0
+            && dep_dir_is m "fine" "app/../ok"
     }
 
 /// The `[[bin]]` target, which is what `monad build <mote dir>` builds.

@@ -3,9 +3,9 @@
 # section 5a.
 #
 # Manifests in this repo are written with sub-table headers
-# ([dependencies.std]) rather than inline tables ({ path = "../std" }),
-# because the self-hosted reader (lang/src/toml.mo) supports headers and
-# not inline tables. Both spellings mean the same thing to the Rust host.
+# ([dependencies.std]). The inline spelling ({ path = "../std" }) means the
+# same thing to both readers -- the self-hosted one (lang/src/mote.mo, over
+# motes/toml) and the Rust host -- so this is a house style, not a limit.
 
 # Every member is NAMED, and `motes/*` is deliberately not used here even
 # though the glob is supported (`Mote.expand_one_member`, lang/src/mote.mo;

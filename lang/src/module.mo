@@ -28,6 +28,7 @@ use lang::mote {
   BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
   Mote.mote_attr_unknown_keys, Mote.parse_manifest, Mote.toolchain_candidates,
   Mote.toolchain_missing_hint, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
+  MoteManifest.dep_errors_for,
 }
 use lib::pretty {show_term, show_decls}
 use lib::typecheck::name_subst {close_named_vars}
@@ -4174,7 +4175,11 @@ def check_one_use_declared (m : MoteManifest) (info : ModuleInfo) (u : ModulePat
         Option.none => return List.empty,
         Option.some head =>
             if is_ambient_mote head then return List.empty
-            else if MoteManifest.declares m head then return List.empty
+            // Declared -- but an entry the manifest could not read as a
+            // source (`path` and `git` together, two pins, ...) is reported
+            // HERE, where a `use` first depends on it, rather than resolving
+            // against whatever half of the entry happened to win.
+            else if MoteManifest.declares m head then return (MoteManifest.dep_errors_for m head)
             else do {
                 // ...nor about a mote the toolchain provides: the install
                 // pins it, resolution finds it by name, and the hint below
@@ -4834,8 +4839,9 @@ def undeclared_mote_error (m : MoteManifest) (info : ModuleInfo) (u : ModulePath
         " to ", raw_path_join m.dir "mote.toml",
     ]
 
-/// Turn the first undeclared-mote error, if any, into the load's own
-/// failure. One error, not all of them: the loader's `Result` carries a
+/// Turn the first undeclared-mote error -- or invalid-dependency error, for
+/// a declared mote whose manifest entry names no readable source -- into
+/// the load's own failure. One error, not all of them: the loader's `Result` carries a
 /// single message, and the first one names a real manifest fix.
 #[partial]
 def gate_declared_deps (r : Result String LoadedModules) : IO (Result String LoadedModules) := do {
