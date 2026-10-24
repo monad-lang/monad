@@ -8,6 +8,16 @@
 /// output is already the sorted `(path, content hash)` pairs an input hash
 /// wants, so nothing is re-sorted in Monad, and the final combining hash
 /// IS Monad code, so it is unit-testable and identical on both runtimes.
+///
+/// Two different questions are answered here, and they are easy to
+/// confuse. `tree_digest` keys the CACHE: only what the compiler reads,
+/// filtered by extension, so an unrelated README edit does not invalidate
+/// anything. `canonical_tree_checksum` keys IDENTITY: the value
+/// `mote.lock` records and `monad fetch` verifies, where a git checkout
+/// and a registry tarball of the same source must agree
+/// (`plans/packaging/package-system.md` §2b). The second therefore pins
+/// its encoding instead of inheriting the tool's, which is why it has its
+/// own comment rather than sharing this one.
 
 use std::process {exec_cmd}
 use std::sha256 {Sha256.hash}
@@ -158,5 +168,156 @@ pub def Build.tree_digest (dir : String) : IO (Result String String) := do {
     match t {
         err m => return (err m),
         ok tool => Build.tree_digest_with tool dir
+    }
+}
+
+// ─── The canonical tree checksum (`mote.lock`) ───
+//
+// Unlike `tree_digest` above, this answer has to be the same on every
+// machine and in every producer: it is committed to `mote.lock`, and a
+// registry tarball's unpacked tree must hash like a git checkout of the
+// same source. So the encoding is pinned here rather than inherited from
+// whatever the digest tool prints:
+//
+//   <relative path>\n<mode>\n<byte length>\n<content>
+//
+// once per regular file, concatenated in `LC_ALL=C` byte order of the
+// relative path. Each choice removes something that is not the source:
+//
+//   * relative, `/`-separated, no leading `./` -- a checkout's LOCATION is
+//     not part of its identity, so two worktrees at the same commit agree.
+//   * git index modes, `100644` / `100755`, from the owner-execute bit
+//     alone -- umask, group and other bits, and the owner's identity never
+//     enter the stream, so the same tree written by two users agrees.
+//   * the length, which also makes the stream self-delimiting: content may
+//     contain newlines and NULs, and the next entry still starts where the
+//     length says.
+//
+// Directories are not entries (git does not track them either), and any
+// entry named `.git`, `target` or `mote.lock` is excluded at any depth.
+// A SYMLINK is refused by name: `find -type f` would silently drop it, and
+// following it could leave the tree. `package-system` §2b's security rules
+// put the same ban on loading through one.
+//
+// A file name containing a newline cannot be represented (the listing is
+// read line by line), and fails loudly rather than hashing ambiguously:
+// the second half of the name is read as its own path, and `wc`/`cat`
+// reject it.
+
+/// The pruning expression both `find` runs share. Applied to any entry
+/// type, so a `.git` FILE -- what a linked worktree has instead of a
+/// directory -- is excluded too, and `-prune` makes the whole `-o` branch
+/// false so it is never printed.
+def Build.checksum_prune : String :=
+    "\\( -name .git -o -name target -o -name mote.lock \\) -prune"
+
+/// The whole walk in one `sh`, so the tree is read once and the digest
+/// tool sees a single stream.
+///
+/// Every stage's status is checked (each step ends in `|| { cat "$e"; exit
+/// 1; }`), because a truncated stream still hashes to something and would
+/// otherwise pass for a valid checksum. Diagnostics go to a temp file and
+/// are replayed only on failure, so STDOUT IS EXACTLY the digest line --
+/// `Proc.capture` merges the two streams, and a stray `find` warning
+/// ahead of the hex would otherwise land in the parse.
+///
+/// Exit codes: 0 success, 2 symlink (stdout is its relative path), 1
+/// anything else.
+///
+/// `sort` is a middle pipeline stage, so its own failure would not fail
+/// the pipeline. That is acceptable: its only input is the temp file whose
+/// `mktemp` just created it, and `sort` reports no failure over a readable
+/// file.
+#[partial]
+def Build.checksum_script (tool : DigestTool) (dir : String) : String :=
+    String.concat_all [
+        "set -u\n",
+        "export LC_ALL=C\n",
+        "e=$(mktemp) || exit 1\n",
+        "l=$(mktemp) || exit 1\n",
+        "x=$(mktemp) || exit 1\n",
+        "s=$(mktemp) || exit 1\n",
+        "trap 'rm -f \"$e\" \"$l\" \"$x\" \"$s\"' EXIT\n",
+        "cd ", Proc.shell_quote (Build.digest_dir dir), " 2>\"$e\" || { cat \"$e\"; exit 1; }\n",
+        "find . ", Build.checksum_prune, " -o -type f -print > \"$l\" 2>\"$e\" || { cat \"$e\"; exit 1; }\n",
+        "find . ", Build.checksum_prune, " -o -type l -print > \"$x\" 2>\"$e\" || { cat \"$e\"; exit 1; }\n",
+        "if [ -s \"$x\" ]; then IFS= read -r first < \"$x\"; printf '%s' \"${first#./}\"; exit 2; fi\n",
+        "sort \"$l\" | {\n",
+        "while IFS= read -r f; do\n",
+        "if [ -x \"$f\" ]; then m=100755; else m=100644; fi\n",
+        "n=$(wc -c < \"$f\") || exit 1\n",
+        "n=${n##* }\n",
+        "printf '%s\\n%s\\n%s\\n' \"${f#./}\" \"$m\" \"$n\" || exit 1\n",
+        "cat \"$f\" || exit 1\n",
+        "done\n",
+        "} > \"$s\" 2>>\"$e\" || { cat \"$e\"; exit 1; }\n",
+        Build.tool_exec tool, " < \"$s\" 2>\"$e\" || { cat \"$e\"; exit 1; }\n",
+    ]
+
+/// A digest the tool printed, or an error. `sha256sum` and `shasum -a 256`
+/// both print `<hex>  -` when they read stdin, so the first 64 characters
+/// of the trimmed output are the digest; anything else means the tool did
+/// not do what this asked, which must not become a checksum.
+def Build.checksum_of_output (dir : String) (out : String) : Result String String :=
+    let hex : String := String.slice (String.trim out) 0 64 in
+    if Build.is_hex_64 hex
+    then ok (String.concat "sha256:" hex)
+    else err (Build.checksum_bad_output_error dir out)
+
+def Build.is_hex_64 (s : String) : Bool :=
+    String.length s == 64 && Build.is_hex_from s 0
+
+#[partial]
+def Build.is_hex_from (s : String) (i : I64) : Bool :=
+    if i == 64 then true
+    else String.contains "0123456789abcdef" (String.slice s i 1) && Build.is_hex_from s (i + 1)
+
+def Build.checksum_result (dir : String) (r : Pair I64 String) : Result String String :=
+    match r {
+        Pair.pair code out => Build.checksum_result_of dir code out
+    }
+
+/// Split out so `code` has a concrete `I64` type at each comparison: as a
+/// bare pattern binder it is still `A`, and an affine binder may not be
+/// read twice.
+def Build.checksum_result_of (dir : String) (code : I64) (out : String) : Result String String :=
+    if code == 2
+    then err (Build.symlink_error dir (String.trim out))
+    else if code == 0
+    then Build.checksum_of_output dir out
+    else err (Build.checksum_failed_error dir out)
+
+def Build.checksum_failed_error (dir : String) (out : String) : String :=
+    let detail : String := String.trim out in
+    if String.is_empty detail
+    then "could not checksum " ++ dir
+    else "could not checksum " ++ dir ++ ": " ++ detail
+
+def Build.checksum_bad_output_error (dir : String) (out : String) : String :=
+    "could not checksum " ++ dir ++ ": the digest tool printed no sha256 digest (" ++ String.trim out ++ ")"
+
+def Build.symlink_error (dir : String) (rel : String) : String :=
+    "cannot checksum " ++ dir ++ ": it contains a symbolic link (" ++ rel ++ "); a dependency tree must have no symlinks"
+
+/// The canonical checksum of the tree at `dir`, as `sha256:<64 hex>` --
+/// the value a `mote.lock` entry records.
+///
+/// `_with` takes an already-probed tool so a caller verifying a whole
+/// closure probes once, exactly like `tree_digest_with`.
+#[partial]
+pub def Build.canonical_tree_checksum_with (tool : DigestTool) (dir : Path) : IO (Result String String) := do {
+    let d : String := Path.to_string dir;
+    let r <- Proc.capture "sh" ["-c", Build.checksum_script tool d];
+    return (Build.checksum_result d r)
+}
+
+/// Probe, then checksum. For one tree; callers checksumming many should
+/// probe once themselves and use `Build.canonical_tree_checksum_with`.
+#[partial]
+pub def Build.canonical_tree_checksum (dir : Path) : IO (Result String String) := do {
+    let t <- Build.probe_digest_tool;
+    match t {
+        err m => return (err m),
+        ok tool => Build.canonical_tree_checksum_with tool dir
     }
 }
