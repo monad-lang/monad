@@ -371,6 +371,16 @@ jobs:
             -c scripts/check-wasm-target.sh \
               "$PWD/target-monad/ci-self-compile/monad"
 
+      # plans/implementations/async-runtime-thread-safety.md: the runtime's
+      # shared state (fd carry table, child registry, nullary cache) under
+      # concurrent threads, plain and under ThreadSanitizer. Builds the C
+      # runtime directly; no compiler involved.
+      - name: Runtime thread-safety stress (TSAN)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/check-runtime-threads.sh
+
   # The portable monadup binary and the distribution harness. `.#monadup`
   # builds the compiler's IR once and relinks it statically; this job also
   # grades the bootstrap stub, the fixture-driven install path, and
