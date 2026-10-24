@@ -77,22 +77,22 @@ def StateT.bind_step [Monad M] {S : Type} {A : Type} {B : Type} (f : A -> StateT
         Pair.pair s2 a => StateT.run (f a) s2
     }
 
-/// The instance body references `Monad.bind` DIRECTLY (through the
-/// single-line lambda `StateT.mk`'s field needs), not through an
-/// extracted helper: the promoted method's own `[Monad M]` dictionary
-/// parameter (Phase 3) is what serves that reference (D5 forwarding),
-/// and a helper call in between is resolved against the call's own
-/// argument carriers -- abstract inside an instance body, so the
-/// variable-headed prelude bridge matches and the helper runs with the
-/// WRONG dictionary (the `driver exited -1` this file's own test
-/// history records). The `ResultT`/`OptionT` instances below, whose
-/// bodies already reference `Monad.bind` directly, are the green
-/// precedent for exactly this shape.
+/// The state-threading bind step. Its body references `Monad.bind`, so
+/// `qualifying_dict_constraints` (lang/src/scope.mo) gives it a leading
+/// dictionary parameter; the instance body reaches `Monad` only through
+/// this call, and the checker's see-through table forwards the
+/// instance's own `[Monad M]` binding to it.
+def StateT.bind_go [Monad M] {S : Type} {A : Type} {B : Type} (ma : StateT S M A) (f : A -> StateT S M B) (s : S) : M (Pair S B) :=
+    Monad.bind (StateT.run ma s) (StateT.bind_step f)
+
+/// `bind` goes through `StateT.bind_go`, the same shape `ResultT`/`OptionT`
+/// use: the helper carries the dict parameter and the see-through table
+/// forwards it here, so the instance body itself names no class.
 pub instance [Monad M] Monad (StateT S M) {
     def pure (a : A) : StateT S M A :=
         StateT.mk (fn s => Monad.pure (Pair.pair s a))
     def bind (ma : StateT S M A) (f : A -> StateT S M B) : StateT S M B :=
-        StateT.mk (fn (s : S) => Monad.bind (StateT.run ma s) (StateT.bind_step f))
+        StateT.mk (StateT.bind_go ma f)
 }
 
 /// Reader transformer: `ReaderT R M A = R -> M A` threads a read-only
