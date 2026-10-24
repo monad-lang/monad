@@ -1341,6 +1341,13 @@ static void* stream_os_err(const char* op, int errnum) {
  * streams, and lookups happen once per call, never per byte. Entries are
  * cleared when their descriptor is closed (`stream_close`, `proc_wait`)
  * or reused (`stream_open`), so a new stream never inherits an old carry.
+ *
+ * THREADS: every fiber is an OS thread, so two fibers reading two
+ * different streams still share this table, and growing it `realloc`s
+ * every entry out from under the other reader. `stream_carry_lock` guards
+ * the table and the entries' bytes. Only `stream_carry_slot` hands out an
+ * entry pointer, and only to code holding the lock. The helpers below
+ * copy bytes in or out under it, and none holds it across a `read(2)`.
  */
 #define MONAD_LINE_CHUNK 4096
 
@@ -1354,7 +1361,10 @@ typedef struct {
 static StreamCarry* stream_carries;
 static size_t stream_carry_count;
 static size_t stream_carry_cap;
+static pthread_mutex_t stream_carry_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Caller holds `stream_carry_lock`; the entry is valid only until it is
+   released (the next slot creation may move the whole table). */
 static StreamCarry* stream_carry_slot(int fd, int create) {
     for (size_t i = 0; i < stream_carry_count; i++) {
         if (stream_carries[i].fd == fd) return &stream_carries[i];
@@ -1377,41 +1387,108 @@ static StreamCarry* stream_carry_slot(int fd, int create) {
 }
 
 static void stream_carry_clear(int fd) {
+    pthread_mutex_lock(&stream_carry_lock);
     StreamCarry* c = stream_carry_slot(fd, 0);
-    if (!c) return;
-    free(c->data);
-    c->data = NULL;
-    c->len = 0;
-    c->cap = 0;
+    if (c) {
+        free(c->data);
+        c->data = NULL;
+        c->len = 0;
+        c->cap = 0;
+    }
+    pthread_mutex_unlock(&stream_carry_lock);
 }
 
 static int stream_carry_push(int fd, const char* bytes, size_t n) {
     if (n == 0) return 1;
+    int ok = 0;
+    pthread_mutex_lock(&stream_carry_lock);
     StreamCarry* c = stream_carry_slot(fd, 1);
-    if (!c) return 0;
-    if (c->len + n > c->cap) {
+    if (c && c->len + n > c->cap) {
         size_t cap = c->cap ? c->cap : MONAD_LINE_CHUNK;
         while (cap < c->len + n) cap *= 2;
         char* grown = (char*)realloc(c->data, cap);
-        if (!grown) return 0;
-        c->data = grown;
-        c->cap = cap;
+        if (grown) {
+            c->data = grown;
+            c->cap = cap;
+        } else {
+            c = NULL;
+        }
     }
-    memcpy(c->data + c->len, bytes, n);
-    c->len += n;
-    return 1;
+    if (c) {
+        memcpy(c->data + c->len, bytes, n);
+        c->len += n;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&stream_carry_lock);
+    return ok;
 }
 
 /* Move at most `max` carried bytes into `out`, dropping them from the
    carry. `-1` when there is nothing carried. */
 static ssize_t stream_carry_take(int fd, char* out, size_t max) {
+    ssize_t taken = -1;
+    pthread_mutex_lock(&stream_carry_lock);
     StreamCarry* c = stream_carry_slot(fd, 0);
-    if (!c || c->len == 0) return -1;
-    size_t n = c->len < max ? c->len : max;
-    memcpy(out, c->data, n);
-    memmove(c->data, c->data + n, c->len - n);
-    c->len -= n;
-    return (ssize_t)n;
+    if (c && c->len > 0) {
+        size_t n = c->len < max ? c->len : max;
+        memcpy(out, c->data, n);
+        memmove(c->data, c->data + n, c->len - n);
+        c->len -= n;
+        taken = (ssize_t)n;
+    }
+    pthread_mutex_unlock(&stream_carry_lock);
+    return taken;
+}
+
+/* Move ALL carried bytes into the malloc'd `*acc` (growing it, and
+   `*cap`, to fit), setting `*len`. 0 only when that growth fails;
+   nothing carried leaves `*len` at 0 and succeeds. */
+static int stream_carry_take_all(int fd, char** acc, size_t* cap, size_t* len) {
+    int ok = 1;
+    *len = 0;
+    pthread_mutex_lock(&stream_carry_lock);
+    StreamCarry* c = stream_carry_slot(fd, 0);
+    if (c && c->len > 0) {
+        if (c->len + 1 > *cap) {
+            char* grown = (char*)realloc(*acc, c->len + 1);
+            if (grown) {
+                *acc = grown;
+                *cap = c->len + 1;
+            } else {
+                ok = 0;
+            }
+        }
+        if (ok) {
+            memcpy(*acc, c->data, c->len);
+            *len = c->len;
+            c->len = 0;
+        }
+    }
+    pthread_mutex_unlock(&stream_carry_lock);
+    return ok;
+}
+
+/* `stream_read`'s carry path: at most `max` carried bytes as a fresh
+   ByteBuf in `*out`. -1 nothing carried, 0 out of memory, 1 served. */
+static int stream_carry_take_buf(int fd, size_t max, BufObj** out) {
+    int served = -1;
+    pthread_mutex_lock(&stream_carry_lock);
+    StreamCarry* c = stream_carry_slot(fd, 0);
+    if (c && c->len > 0) {
+        size_t n = c->len < max ? c->len : max;
+        BufObj* obj = bytebuf_new((int64_t)n);
+        if (obj) {
+            memcpy(obj->payload, c->data, n);
+            memmove(c->data, c->data + n, c->len - n);
+            c->len -= n;
+            *out = obj;
+            served = 1;
+        } else {
+            served = 0;
+        }
+    }
+    pthread_mutex_unlock(&stream_carry_lock);
+    return served;
 }
 
 static void* stream_line_too_long(int64_t max_len) {
@@ -1493,17 +1570,9 @@ void* monad_stream_read_line(int64_t fd, int64_t max_len, int64_t discard) {
     char* acc = (char*)malloc(cap);
     if (!acc) return stream_err(9, "stream_read_line", "out of memory", 0);
 
-    StreamCarry* carry = stream_carry_slot((int)fd, 0);
-    if (carry && carry->len > 0) {
-        if (carry->len + 1 > cap) {
-            char* grown = (char*)realloc(acc, carry->len + 1);
-            if (!grown) { free(acc); return stream_err(9, "stream_read_line", "out of memory", 0); }
-            acc = grown;
-            cap = carry->len + 1;
-        }
-        memcpy(acc, carry->data, carry->len);
-        len = carry->len;
-        carry->len = 0;
+    if (!stream_carry_take_all((int)fd, &acc, &cap, &len)) {
+        free(acc);
+        return stream_err(9, "stream_read_line", "out of memory", 0);
     }
 
     size_t scanned = 0;
@@ -1578,16 +1647,10 @@ void* monad_stream_open(char* path, int64_t mode) {
    stream; `max_bytes <= 0` reads nothing and returns one too. */
 void* monad_stream_read(int64_t fd, int64_t max_bytes) {
     if (max_bytes <= 0) return tcp_ok(bytebuf_new(0));
-    StreamCarry* carry = stream_carry_slot((int)fd, 0);
-    if (carry && carry->len > 0) {
-        size_t n = carry->len < (size_t)max_bytes ? carry->len : (size_t)max_bytes;
-        BufObj* obj = bytebuf_new((int64_t)n);
-        if (!obj) return stream_err(9, "stream_read", "out of memory", 0);
-        memcpy(obj->payload, carry->data, n);
-        memmove(carry->data, carry->data + n, carry->len - n);
-        carry->len -= n;
-        return tcp_ok(obj);
-    }
+    BufObj* carried = NULL;
+    int served = stream_carry_take_buf((int)fd, (size_t)max_bytes, &carried);
+    if (served == 0) return stream_err(9, "stream_read", "out of memory", 0);
+    if (served == 1) return tcp_ok(carried);
     unsigned char small[4096];
     unsigned char* tmp = max_bytes <= (int64_t)sizeof(small)
         ? small : (unsigned char*)malloc((size_t)max_bytes);
