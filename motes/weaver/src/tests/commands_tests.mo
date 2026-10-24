@@ -29,7 +29,7 @@ use std::process {process_id}
 // ── The offline state (main.mo's shape, per-command parameterized) ──────
 
 def mock_config : ProviderConfig :=
-    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 /// The `stamp` tool of the e2e tests: write-cap, side-effect-free. Its
 /// point here is the capability tag `/tools` prints.
@@ -50,7 +50,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     run := run_of,
     mode := mode,
     provider := "mock",
-    budget := budget,
+    budget := budget, context_window := 128000, compact_at := 80,
     mcps := mcps,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,
@@ -390,26 +390,6 @@ def test_model_listed_in_the_cache_is_set_silently : IO Bool := do {
     })
 }
 
-/// `/models` asks the configured provider. The mock wire answers offline,
-/// so the whole command (fetch, cache, render, picker) is testable.
-#[test]
-def test_models_lists_the_mock_provider : IO Bool := do {
-    let r <- Commands.dispatch "/models" (state_of Mode.manual []);
-    return (match r {
-        Result.err _ => false,
-        Result.ok e =>
-            String.contains e.output "models (mock): 1"
-                && (match Catalog.lookup "mock" e.state.catalog {
-                    Option.some models => models == ["mock"],
-                    Option.none => false,
-                })
-                && (match e.picker {
-                    Option.some _ => true,
-                    Option.none => false,
-                }),
-    })
-}
-
 /// `/model` with no argument fetches (the cache is empty here) and lists.
 #[test]
 def test_model_with_no_argument_lists_and_offers_the_picker : IO Bool := do {
@@ -528,5 +508,83 @@ def check_resume_dir (base : WeaverState) (s0 : StoreState) (root : Path) : IO B
             Option.none => false,
             Option.some s2 => Path.to_string s2.dir == Path.to_string s0.dir,
         }),
+    }
+}
+
+// ── /thinking ────────────────────────────────────────────────────────────
+
+#[test]
+def test_thinking_status_reports_off_by_default : IO Bool := do {
+    let r <- Commands.dispatch "/thinking" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (e.output == "thinking: off"),
+    }
+}
+
+#[test]
+def test_thinking_command_toggles_the_config : IO Bool := do {
+    let r <- Commands.dispatch "/thinking on" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => do {
+            let on : Bool := e.state.run.session.config.thinking;
+            IO.pure (on && e.output == "thinking: on")
+        }
+    }
+}
+
+/// A `/provider` switch keeps the reasoning preference: the preset's
+/// own false is replaced by the session's choice.
+#[test]
+def test_provider_switch_inherits_thinking : IO Bool := do {
+    let r <- Commands.dispatch "/thinking on" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => do {
+            let r2 <- Commands.dispatch "/provider mistral mistral-small-latest" e.state;
+            match r2 {
+                Result.err _ => IO.pure false,
+                Result.ok e2 => do {
+                    let on : Bool := e2.state.run.session.config.thinking;
+                    IO.pure on
+                }
+            }
+        }
+    }
+}
+
+/// `/compact` is registered: the dispatch reaches the handler rather
+/// than the unknown-command hint (the provider call itself needs a
+/// script, so an error naming the wire is the expected outcome here).
+#[test]
+def test_compact_is_a_registered_command : IO Bool := do {
+    let r <- Commands.dispatch "/compact" (state_of Mode.manual []);
+    match r {
+        Result.ok e => IO.pure (Bool.not (String.contains e.output "unknown command")),
+        Result.err e => IO.pure (Bool.not (String.contains (WeaverError.show e) "unknown command")),
+    }
+}
+
+/// A `/provider` switch through a CACHED catalogue keeps the reasoning
+/// preference and the output budget too (the `provider_with` path).
+#[test]
+def test_cached_provider_switch_inherits_thinking : IO Bool := do {
+    let cat : BTreeMap String (List String) := Map.insert "mistral" ["mistral-small-latest", "mistral-large-latest"] BTreeMap.empty;
+    let base : WeaverState := state_of Mode.manual [];
+    let seeded : WeaverState := { base with catalog := cat };
+    let r <- Commands.dispatch "/thinking on" seeded;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => do {
+            let r2 <- Commands.dispatch "/provider mistral" e.state;
+            match r2 {
+                Result.err _ => IO.pure false,
+                Result.ok e2 => do {
+                    let on : Bool := e2.state.run.session.config.thinking;
+                    IO.pure on
+                }
+            }
+        }
     }
 }

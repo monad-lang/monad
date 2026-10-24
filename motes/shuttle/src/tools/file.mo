@@ -5,6 +5,7 @@
 /// silently clobbering a concurrent change.
 use init::transformers {ResultT}
 use shuttle::message_types {Content}
+use shuttle::context {Context.cap_text}
 use shuttle::tools::file_args {ReadArgs, WriteArgs, EditArgs}
 use json::json {Json}
 use std::io {IO.read_file, IO.write_file}
@@ -36,12 +37,33 @@ def read_content (id : String) (r : Result StreamError String) : Content :=
         Result.err e => tool_err id e.message
     }
 
+/// `read_content` with the size cap applied to the SUCCESS payload: the
+/// result from `IO.read_file` is a `Result`, so the cap belongs inside
+/// the match (passing the raw text where this function takes a Result
+/// type-checks in neither place -- it silently compiled and never
+/// truncated).
+def read_content_capped (id : String) (max : I64) (r : Result StreamError String) : Content :=
+    match r {
+        Result.ok text => tool_ok id (numbered_text (read_capped text max)),
+        Result.err e => tool_err id e.message
+    }
+
 /// A write's tool result: `done` on success, the failure as a tool error.
 def written_content (id : String) (done : String) (w : Result StreamError Unit) : Content :=
     match w {
         Result.ok _ => tool_ok id done,
         Result.err e => tool_err id e.message
     }
+
+/// The most bytes one read returns. A compiled binary or a giant log
+/// otherwise enters the history whole (measured live: a 4 MB read made
+/// the next request ~1M tokens and the provider rejected it with 400).
+def read_max_bytes : I64 := 262144
+
+/// `text` clipped to `max` bytes with a note (the shared cap: the loop
+/// applies the same one to every tool result).
+pub def read_capped (text : String) (max : I64) : String :=
+    Context.cap_text text max
 
 pub def read_run (id : String) (j : Json) : ResultT String IO Content :=
     match ReadArgs.deserialize_json j {
@@ -52,7 +74,11 @@ pub def read_run (id : String) (j : Json) : ResultT String IO Content :=
                     Result.err e => return (Result.ok (tool_err id e)),
                     Result.ok p => do {
                         let text <- IO.read_file p;
-                        return (Result.ok (read_content id text))
+                        // Bind the nullary def first: a qualified nullary
+                        // reference in argument position has been seen to
+                        // resolve to garbage in the compiled backend.
+                        let max : I64 := read_max_bytes;
+                        return (Result.ok (read_content_capped id max text))
                     }
                 }
             })

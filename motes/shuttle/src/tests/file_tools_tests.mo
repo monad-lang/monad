@@ -1,4 +1,4 @@
-use shuttle::tools::file {read_run, write_run, edit_run}
+use shuttle::tools::file {read_run, write_run, edit_run, read_capped}
 use shuttle::tools::file_tools {ReadTool.spec, WriteTool.spec, EditTool.spec}
 use shuttle::tool {ToolSpec}
 use shuttle::tools::file_args {ReadArgs, WriteArgs, EditArgs}
@@ -108,3 +108,44 @@ def test_tool_specs_declare_parameter_schemas : Bool :=
     String.contains read_s "\"path\"" &&
     String.contains write_s "\"content\"" &&
     String.contains edit_s "\"expected_content\""
+
+/// A read of a huge file is clipped with a note instead of entering the
+/// history whole: a 4 MB binary otherwise makes the next request ~1M
+/// tokens (a live provider 400).
+def read_big_verdict (c : Content) : Bool :=
+    match c {
+        Content.tool_result _ text is_error =>
+            Bool.not is_error && String.contains text "truncated:",
+
+        _ => false,
+    }
+
+#[test]
+def test_read_caps_a_huge_file : IO Bool := do {
+    // "x" then 2-byte chars: byte 262144 lands on a continuation byte,
+    // so the cut has to back off to a character boundary.
+    let big : String := String.concat "x" (String.repeat "é" 150000i64);
+    let args : WriteArgs := { path := scratch_path "big.txt", content := big };
+    let wr <- ResultT.run (write_run "w2" (WriteArgs.serialize_json args));
+    match wr {
+        Result.err _ => return false,
+        Result.ok _ => do {
+            let read_args : ReadArgs := { path := scratch_path "big.txt" };
+            let rr <- ResultT.run (read_run "r2" (ReadArgs.serialize_json read_args));
+            match rr {
+                Result.err _ => return false,
+                Result.ok c => return (read_big_verdict c),
+            }
+        },
+    }
+}
+
+/// The cut backs off to a character boundary: `String.slice` answers ""
+/// when its end offset is a UTF-8 continuation byte, which would return
+/// an empty payload for a large non-ASCII file.
+#[test]
+def test_read_cap_keeps_a_utf8_payload : Bool :=
+    let s : String := String.concat "x" (String.repeat "é" 10i64) in
+    // Byte 2 is a continuation byte (é = C3 A9), so a naive cut at 2 is "".
+    let out : String := read_capped s 2i64 in
+    String.contains out "x" && String.contains out "truncated:"

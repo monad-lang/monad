@@ -136,7 +136,7 @@ def test_decode_refusal_is_stop_reason_not_error : Bool :=
 #[test]
 def test_encode_folds_tool_results_into_one_user_message : Bool :=
     let tool_msg : Message := { role := Role.tool, content := [Content.tool_result "toolu_1" "out1" false, Content.tool_result "toolu_2" "out2" false] } in
-    let req := Anthropic.encode_request "claude-opus-5" 512 "sys" [] [tool_msg] in
+    let req := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [tool_msg] in
     match req {
         MessagesRequest.mk _ _ _ messages _ _ _ _ =>
             match messages {
@@ -157,7 +157,7 @@ def test_encode_folds_tool_results_into_one_user_message : Bool :=
 def test_encode_system_folds_top_level : Bool :=
     let sys_msg : Message := { role := Role.system_, content := [Content.text "extra rules"] } in
     let user_msg : Message := { role := Role.user, content := [Content.text "hi"] } in
-    let req := Anthropic.encode_request "claude-opus-5" 512 "base system" [] [sys_msg, user_msg] in
+    let req := Anthropic.encode_request "claude-opus-5" 512 false "base system" [] [sys_msg, user_msg] in
     match req {
         MessagesRequest.mk _ _ system messages _ _ _ _ =>
             List.length system == 2
@@ -175,7 +175,7 @@ def test_encode_system_folds_top_level : Bool :=
 def test_encode_marks_last_tool_cache_breakpoint : Bool :=
     let spec1 : ToolSpec := { name := "read", description := "read a file", schema := Json.make_object (Map.insert "type" (Json.make_str "object") BTreeMap.empty) } in
     let spec2 : ToolSpec := { name := "grep", description := "search", schema := Json.make_object (Map.insert "type" (Json.make_str "object") BTreeMap.empty) } in
-    let req := Anthropic.encode_request "claude-opus-5" 512 "sys" [spec1, spec2] [] in
+    let req := Anthropic.encode_request "claude-opus-5" 512 false "sys" [spec1, spec2] [] in
     let s := Json.to_string (MessagesRequest.serialize_json req) in
     String.contains s "cache_control"
         && String.contains s "input_schema"
@@ -188,7 +188,7 @@ def test_encode_marks_last_tool_cache_breakpoint : Bool :=
 def test_encode_assistant_tool_use_history : Bool :=
     let input : Json := Json.make_object (Map.insert "path" (Json.make_str "a.txt") BTreeMap.empty) in
     let asst : Message := { role := Role.assistant, content := [Content.tool_use "toolu_1" "read" input] } in
-    let req := Anthropic.encode_request "claude-opus-5" 512 "sys" [] [asst] in
+    let req := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [asst] in
     match req {
         MessagesRequest.mk _ _ _ messages _ _ _ _ =>
             match messages {
@@ -231,7 +231,7 @@ def test_thinking_signature_round_trips_the_adapter : Bool :=
                                                     match c {
                                                         Content.thinking _ signature =>
                                                             let asst : Message := { role := Role.assistant, content := [c] } in
-                                                            let req := Anthropic.encode_request "claude-opus-5" 512 "sys" [] [asst] in
+                                                            let req := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [asst] in
                                                             String.beq signature "sig_abc"
                                                                 && String.contains (Json.to_string (MessagesRequest.serialize_json req)) "\"signature\":\"sig_abc\"",
                                                         _ => false,

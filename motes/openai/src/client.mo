@@ -416,27 +416,45 @@ def openai_apply_delta_tools (acc : OpenaiAcc) (dobj : BTreeMap String Json) : O
             }
     }
 
-/// One `delta` object: appended text (reported back for `on_text`),
-/// then any tool-call fragments. `delta.reasoning*` and `delta.role`
-/// are ignored on purpose.
-def openai_apply_delta (acc : OpenaiAcc) (dobj : BTreeMap String Json) : Pair OpenaiAcc String :=
+/// The reserved tag reasoning fragments carry on `on_text`: the UI
+/// routes them to its dim "thinking" surface instead of the transcript.
+/// The leading control byte cannot occur in model text.
+def openai_reasoning_delta (frag : String) : String :=
+    String.concat "\u{1}thinking\u{2}" frag
+
+/// One `delta` object: appended text, then reasoning (tagged, when a
+/// server sends `reasoning_content`/`reasoning` -- several
+/// OpenAI-compatible servers do), then any tool-call fragments.
+def openai_apply_delta (acc : OpenaiAcc) (dobj : BTreeMap String Json) : Pair OpenaiAcc (List String) :=
     match openai_tc_field dobj "content" {
-        Option.none => Pair.pair (openai_apply_delta_tools acc dobj) "",
+        Option.none => openai_apply_reasoning (openai_apply_delta_tools acc dobj) dobj List.empty,
         Option.some s =>
             let acc2 : OpenaiAcc := { acc with text := String.concat acc.text s } in
-            Pair.pair (openai_apply_delta_tools acc2 dobj) s
+            openai_apply_reasoning (openai_apply_delta_tools acc2 dobj) dobj [s],
+    }
+
+/// The reasoning half of a delta: `reasoning_content` (vLLM/DeepSeek/
+/// Ollama style) or `reasoning`, appended as one tagged fragment.
+def openai_apply_reasoning (acc : OpenaiAcc) (dobj : BTreeMap String Json) (out : List String) : Pair OpenaiAcc (List String) :=
+    match openai_tc_field dobj "reasoning_content" {
+        Option.some s => Pair.pair acc (List.append out [openai_reasoning_delta s]),
+        Option.none =>
+            match openai_tc_field dobj "reasoning" {
+                Option.some s => Pair.pair acc (List.append out [openai_reasoning_delta s]),
+                Option.none => Pair.pair acc out,
+            },
     }
 
 /// The event's single choice: finish reason, then the delta. `usage`
 /// is a TOP-LEVEL field of the event object -- `openai_apply_event`
 /// applies it there; a choice object never carries one.
-def openai_apply_choice (acc : OpenaiAcc) (cobj : BTreeMap String Json) : Pair OpenaiAcc String :=
+def openai_apply_choice (acc : OpenaiAcc) (cobj : BTreeMap String Json) : Pair OpenaiAcc (List String) :=
     let acc1 : OpenaiAcc := openai_apply_finish acc cobj in
     match Json.object_get "delta" cobj {
-        Option.none => Pair.pair acc1 "",
+        Option.none => Pair.pair acc1 List.empty,
         Option.some dj =>
             match Json.get_object dj {
-                Result.err _ => Pair.pair acc1 "",
+                Result.err _ => Pair.pair acc1 List.empty,
                 Result.ok dobj => openai_apply_delta acc1 dobj
             }
     }
@@ -465,35 +483,35 @@ def openai_error_of (obj : BTreeMap String Json) : Option String :=
 /// are skipped -- the stream's terminator is the CHUNKED body's last
 /// chunk (see `http::wire`), not a sentinel event. An in-stream `error`
 /// payload is captured for `openai_finish`, never dropped.
-def openai_apply_event (acc : OpenaiAcc) (data : String) : Pair OpenaiAcc String :=
+def openai_apply_event (acc : OpenaiAcc) (data : String) : Pair OpenaiAcc (List String) :=
     if data == "[DONE]"
-    then Pair.pair acc ""
+    then Pair.pair acc List.empty
     else
         match Json.parse data {
-            Result.err _ => Pair.pair acc "",
+            Result.err _ => Pair.pair acc List.empty,
             Result.ok j =>
                 match Json.get_object j {
-                    Result.err _ => Pair.pair acc "",
+                    Result.err _ => Pair.pair acc List.empty,
                     Result.ok obj =>
                         match openai_error_of obj {
-                            Option.some e => Pair.pair { acc with error := Option.some e } "",
+                            Option.some e => Pair.pair { acc with error := Option.some e } List.empty,
                             Option.none => openai_apply_choices acc obj,
                         }
                 }
         }
 
-def openai_apply_choices (acc : OpenaiAcc) (obj : BTreeMap String Json) : Pair OpenaiAcc String :=
+def openai_apply_choices (acc : OpenaiAcc) (obj : BTreeMap String Json) : Pair OpenaiAcc (List String) :=
                         match Json.object_get "choices" obj {
-                            Option.none => Pair.pair (openai_apply_usage acc obj) "",
+                            Option.none => Pair.pair (openai_apply_usage acc obj) List.empty,
                             Option.some cj =>
                                 match Json.get_array cj {
-                                    Result.err _ => Pair.pair (openai_apply_usage acc obj) "",
+                                    Result.err _ => Pair.pair (openai_apply_usage acc obj) List.empty,
                                     Result.ok choices =>
                                         match choices {
-                                            List.empty => Pair.pair (openai_apply_usage acc obj) "",
+                                            List.empty => Pair.pair (openai_apply_usage acc obj) List.empty,
                                             List.cons first _ =>
                                                 match Json.get_object first {
-                                                    Result.err _ => Pair.pair (openai_apply_usage acc obj) "",
+                                                    Result.err _ => Pair.pair (openai_apply_usage acc obj) List.empty,
                                                     Result.ok cobj => openai_apply_choice (openai_apply_usage acc obj) cobj
                                                 }
                                         }
@@ -508,10 +526,11 @@ def openai_apply_events (acc : OpenaiAcc) (events : List SseEvent) (out : List S
         List.empty => Pair.pair acc (List.reverse out),
         List.cons ev rest =>
             match openai_apply_event acc ev.data {
-                Pair.pair acc2 delta =>
-                    if delta == ""
-                    then openai_apply_events acc2 rest out
-                    else openai_apply_events acc2 rest (List.cons delta out)
+                Pair.pair acc2 deltas =>
+                    match deltas {
+                        List.empty => openai_apply_events acc2 rest out,
+                        List.cons _ _ => openai_apply_events acc2 rest (List.append (List.reverse deltas) out),
+                    }
             }
     }
 

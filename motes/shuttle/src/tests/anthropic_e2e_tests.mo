@@ -42,7 +42,7 @@ def write_fixture : IO Unit := do {
 def e2e_registry : ToolRegistry := ToolRegistry.register ReadTool.impl ToolRegistry.empty
 
 def e2e_config (model : String) : ProviderConfig :=
-    { base_url := "https://api.anthropic.com", model := model, api_key_env := "ANTHROPIC_API_KEY", max_tokens := 512, wire := Wire.anthropic }
+    { base_url := "https://api.anthropic.com", model := model, api_key_env := "ANTHROPIC_API_KEY", max_tokens := 512, wire := Wire.anthropic, thinking := false }
 
 def e2e_task_message : Message :=
     { role := Role.user, content := [Content.text (String.concat "Use the read tool to read " fixture_path)] }

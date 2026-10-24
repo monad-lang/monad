@@ -66,9 +66,21 @@ pub type WeaverMsg {
     input_set (text : String),
     /// The Esc stop request's signal write completed; a no-op fold.
     stop_sent,
-    /// A pending tick's poll: the live usage (only every tenth frame)
-    /// and the dialog-ownership state (every frame).
-    polled (usage : Option Usage) (overlay : Option OverlayState),
+    /// A pending tick's poll: the live usage (only every tenth frame),
+    /// the dialog-ownership state (every frame), and -- every third
+    /// frame -- the streamed-text delta.
+    polled (usage : Option Usage) (overlay : Option OverlayState) (live : Option LiveDelta),
+}
+
+/// One live poll's streamed-text delta: the new assistant text and
+/// reasoning since the given offsets, the offsets after the read, and
+/// the tool currently dispatching (none when nothing is).
+pub struct LiveDelta {
+    text : String,
+    thinking : String,
+    text_seen : I64,
+    thinking_seen : I64,
+    activity : Option String,
 }
 
 /// `tui::App`'s `on_event : Event -> WeaverMsg` -- every raw event is a
@@ -91,9 +103,14 @@ pub struct RowsKey {
     banner : Bool,
     /// A pending turn spends one panel row on the live thinking row.
     pending : Bool,
+    /// Ctrl+O's detail-line filter.
+    details : Bool,
+    /// The streamed block's height: `body_height` shrinks as it grows,
+    /// so the cache must rebuild on that change.
+    stream : I64,
 }
 
-/// The `/models` picker: the fetched list, the session's current name,
+/// The model picker: the fetched list, the session's current name,
 /// and the selected row. Pure -- the TUI draws it in the transcript
 /// panel and routes keys to it while it is open; no dialog machinery.
 pub struct PickerState {
@@ -195,6 +212,10 @@ pub struct TuiModel {
     /// double-press exit; a pure update has no clock, so no timed
     /// window -- any other key or message resets the streak).
     ctrl_c_streak : I64 := 0,
+    /// The same streak for Ctrl+D. Kept apart from `ctrl_c_streak` so
+    /// each gesture arms only itself: Ctrl+C then Ctrl+D is two FIRST
+    /// presses, never an exit.
+    ctrl_d_streak : I64 := 0,
     /// WRAPPED DISPLAY ROWS above the pinned bottom; 0 = pinned to the
     /// latest output. A row unit (not a logical line) is what makes every
     /// row of a message taller than the panel reachable.
@@ -238,6 +259,17 @@ pub struct TuiModel {
     /// The submitted line opened a full-screen modal that owns the
     /// terminal: the main loop must not tick-redraw over it (interleaved
     /// writes corrupt the modal's paint).
+    /// The in-flight turn's streamed text and reasoning, painted below
+    /// the transcript and cleared at turn end; `live_seen`/
+    /// `live_thinking_seen` are byte offsets into the turn files.
+    live_text : String := "",
+    live_seen : I64 := 0,
+    live_thinking : String := "",
+    live_thinking_seen : I64 := 0,
+    /// The tool currently dispatching, from the activity feed.
+    live_activity : Option String := Option.none,
+    /// Ctrl+O: show detail lines (tool output, completed thinking).
+    show_details : Bool := false,
     modal : Bool := false,
     /// Esc asked the running turn to stop; the live row says so and the
     /// fiber ends at its next model/tool boundary.
@@ -251,7 +283,7 @@ pub struct TuiModel {
     overlay_open : Bool := false,
     /// The last dialog-close sequence folded into the model.
     dialog_seq : I64 := 0,
-    /// The model picker, while `/models` (or `/model` with no argument)
+    /// The model picker, while `/model` with no argument
     /// has one open. The app loop still owns stdin; keys route here.
     picker : Option PickerState := Option.none,
     /// The run's debug logger (none when WEAVER_LOG=off).
@@ -268,7 +300,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
@@ -723,10 +755,29 @@ pub def Model.loaded_window (t : Transcript) : LoadedWindow :=
     let lw : LoadedWindow := { start := start, lines := Transcript.slice t start (if n < 0 then 0 else n) } in
     lw
 
+/// The loaded window with detail lines hidden unless Ctrl+O asks for
+/// them. Detail lines still count in the transcript's total; hiding
+/// them only changes the rows and the scroll range.
+#[partial]
+def shown_lines (show : Bool) (ls : List TLine) : List TLine :=
+    if show then ls
+    else match ls {
+        List.empty => List.empty,
+        List.cons l rest =>
+            if l.detail then shown_lines show rest
+            else List.cons l (shown_lines show rest),
+    }
+
+pub def Model.loaded_shown (m : TuiModel) : LoadedWindow :=
+    let lw : LoadedWindow := Model.loaded_window m.transcript in
+    let lines : List TLine := shown_lines m.show_details lw.lines in
+    let lw2 : LoadedWindow := { start := lw.start, lines := lines } in
+    lw2
+
 /// The whole loaded window's row count, plus one row per placeholder line
 /// before it. This is the scroll clamp's `len`.
 pub def Model.row_total_of (m : TuiModel) : I64 :=
-    let lw : LoadedWindow := Model.loaded_window m.transcript in
+    let lw : LoadedWindow := Model.loaded_shown m in
     lw.start + rows_of_lines m.state.colors (Model.content_width m) lw.lines
 
 /// The logical line containing absolute display row `row`.
@@ -742,7 +793,7 @@ def first_line_at_row_go (colors : Bool) (width : I64) (lines : List TLine) (idx
     }
 
 pub def Model.first_line_at_row (m : TuiModel) (row : I64) : I64 :=
-    let lw : LoadedWindow := Model.loaded_window m.transcript in
+    let lw : LoadedWindow := Model.loaded_shown m in
     if row < lw.start
     then row
     else first_line_at_row_go m.state.colors (Model.content_width m) lw.lines lw.start 0 (row - lw.start)
@@ -778,7 +829,7 @@ def blank_rows (n : I64) (style : TextStyle) : List DisplayRow :=
 /// indicator row is prepended and spends one content row.
 pub def Model.visible_rows (m : TuiModel) : List DisplayRow :=
     let w : Window := Model.window m in
-    let lw : LoadedWindow := Model.loaded_window m.transcript in
+    let lw : LoadedWindow := Model.loaded_shown m in
     let colors : Bool := m.state.colors in
     let width : I64 := Model.content_width m in
     let gap_total : I64 := if w.start < lw.start then lw.start - w.start else 0 in
@@ -795,13 +846,14 @@ pub def Model.rows_key_of (m : TuiModel) : RowsKey :=
     let pstart : I64 := match m.transcript.page { Option.some p => p.start, Option.none => 0 - 1 } in
     let k : RowsKey := { total := m.transcript.total, tail_start := m.transcript.tail_start,
                          cols := m.cols, rows := m.rows, scroll := m.scroll, page_start := pstart,
-                         banner := m.banner, pending := m.turn_pending } in
+                         banner := m.banner, pending := m.turn_pending, details := m.show_details, stream := Model.live_stream_height m } in
     k
 
 def rows_key_eq (a : RowsKey) (b : RowsKey) : Bool :=
     a.total == b.total && a.tail_start == b.tail_start && a.cols == b.cols
         && a.rows == b.rows && a.scroll == b.scroll && a.page_start == b.page_start
-        && a.banner == b.banner && a.pending == b.pending
+        && a.banner == b.banner && a.pending == b.pending && a.details == b.details
+        && a.stream == b.stream
 
 /// Recompute the wrapped rows only when the transcript, the viewport or
 /// the scroll position actually moved.
@@ -874,7 +926,10 @@ def transcript_column (m : TuiModel) : Widget :=
     // The live row is painted AFTER the cached rows (it is not part of
     // them), so ticks update it without re-wrapping the transcript.
     if m.turn_pending
-    then Widget.column (List.append body [Model.display_row_widget (Model.live_row m)])
+    then
+        let stream : List SizedWidget :=
+            List.map (fn (r : DisplayRow) => Model.display_row_widget r) (Model.live_stream_rows m) in
+        Widget.column (List.append body (List.append stream [Model.display_row_widget (Model.live_row m)]))
     else Widget.column body
 
 /// The cumulative spend the live row shows: the on_usage snapshot when the
@@ -892,12 +947,22 @@ pub def Model.thinking_text (m : TuiModel) : String :=
     then String.concat (spinner_glyph m.spinner_frame) " stopping…"
     else
         let u : Usage := Model.thinking_spent m in
-        String.concat (spinner_glyph m.spinner_frame)
-            (String.concat " thinking "
-                (String.concat (format_elapsed m.spinner_frame)
-                    (String.concat " · ↑"
-                        (String.concat (format_tokens u.input_tokens)
-                            (String.concat " ↓" (format_tokens u.output_tokens))))))
+        let tail : String := String.concat (format_elapsed m.spinner_frame)
+            (String.concat " · ↑"
+                (String.concat (format_tokens u.input_tokens)
+                    (String.concat " ↓" (format_tokens u.output_tokens)))) in
+        let mid : String := String.concat (Model.live_phase m) (String.concat " " tail) in
+        String.concat (spinner_glyph m.spinner_frame) (String.concat " " mid)
+
+/// What the live line says the turn is doing: the dispatching tool,
+/// else "responding" once assistant text has streamed, else
+/// "thinking".
+pub def Model.live_phase (m : TuiModel) : String :=
+    match m.live_activity {
+        Option.some name => String.concat "running " name,
+        Option.none =>
+            if String.is_empty m.live_text then "thinking" else "responding",
+    }
 
 /// The thinking line under the last prompt, clipped to the content width.
 pub def Model.live_row (m : TuiModel) : DisplayRow :=
@@ -999,13 +1064,75 @@ pub def panel_height (m : TuiModel) : I64 :=
 /// The transcript body's height: while a turn is pending, one panel row is
 /// reserved for the live thinking row appended under the last prompt.
 pub def Model.body_height (m : TuiModel) : I64 :=
-    let live : I64 := if m.turn_pending then 1 else 0 in
+    let live : I64 := Model.live_rows_height m in
     let h : I64 := panel_height m - live in
     if h < 0 then 0 else h
 
+/// The rows the in-flight display owns below the transcript: the
+/// spinner row plus the streamed tail.
+pub def Model.live_rows_height (m : TuiModel) : I64 :=
+    if Bool.not m.turn_pending then 0 else 1 + Model.live_stream_height m
+
+/// The most streamed bytes painted: a bound on the per-tick wrap.
+pub def Model.live_stream_cap_bytes : I64 := 8192
+
+/// At most half the panel, so the transcript stays visible.
+pub def Model.live_stream_cap (m : TuiModel) : I64 :=
+    let p : I64 := panel_height m in
+    if p < 4 then 0 else p / 2
+
+/// A tail slice that never starts mid-UTF-8: `String.slice` can answer
+/// "" at a continuation boundary, so back off up to three bytes.
+#[partial]
+def tail_safe (text : String) (start : I64) (back : I64) : String :=
+    let n : I64 := String.length text in
+    if I64.gt back 3i64 then ""
+    else if I64.lt (n - start - back) 1i64 then ""
+    else
+        let s : String := String.slice text (start + back) (n - start - back) in
+        if String.is_empty s then tail_safe text start (back + 1i64) else s
+
+/// The streamed tail: reasoning first, then assistant text, with a
+/// caret. Empty when nothing has streamed.
+pub def Model.live_stream_source (m : TuiModel) : String :=
+    let with_text : String :=
+        if String.is_empty m.live_text then m.live_thinking
+        else if String.is_empty m.live_thinking then String.concat m.live_text "▌"
+        else String.concat m.live_thinking (String.concat "\n" (String.concat m.live_text "▌")) in
+    let n : I64 := String.length with_text in
+    if I64.gt n Model.live_stream_cap_bytes
+    then tail_safe with_text (n - Model.live_stream_cap_bytes) 0i64
+    else with_text
+
+#[partial]
+def rows_drop (n : I64) (rs : List DisplayRow) : List DisplayRow :=
+    if n < 1i64 then rs
+    else match rs {
+        List.empty => rs,
+        List.cons _ rest => rows_drop (n - 1i64) rest,
+    }
+
+/// The wrapped streamed rows, newest kept: dim, like the live line.
+pub def Model.live_stream_rows (m : TuiModel) : List DisplayRow :=
+    let src : String := Model.live_stream_source m in
+    if String.is_empty src then List.empty
+    else
+        let style : TextStyle := theme_running_style_with m.state.colors in
+        let width : I64 := Model.content_width m in
+        let all : List DisplayRow :=
+            List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style t) (wrap_text width part)) (theme_split_lines src)) in
+        let n : I64 := rows_len all in
+        let cap : I64 := Model.live_stream_cap m in
+        if I64.gt n cap then rows_drop (n - cap) all else all
+
+/// The streamed block's height, capped.
+pub def Model.live_stream_height (m : TuiModel) : I64 :=
+    rows_len (Model.live_stream_rows m)
+
 /// The scroll state machine: `scroll` counts WRAPPED ROWS above the
 /// pinned bottom. The delta moves the window (PageUp/Ctrl+U positive,
-/// i.e. older; PageDown/Ctrl+D negative), clamped at both ends.
+/// i.e. older; PageDown negative), clamped at both ends. Ctrl+D is the
+/// double-press exit gesture, not a scroll key.
 #[partial]
 pub def Model.scroll_step (m : TuiModel) (delta : I64) : TuiModel :=
     let m2 : TuiModel := { m with scroll := scroll_clamp (m.scroll + delta) m.row_total (Model.body_height m) } in
@@ -1026,7 +1153,8 @@ pub def Model.append_block (m : TuiModel) (lines : List TLine) : TuiModel :=
     let m2 : TuiModel :=
         if m.scroll > 0
         then
-            let added : I64 := rows_of_lines m.state.colors (Model.content_width m) block in
+            let shown : List TLine := shown_lines m.show_details block in
+            let added : I64 := rows_of_lines m.state.colors (Model.content_width m) shown in
             { m with transcript := tr2, scroll := m.scroll + added }
         else { m with transcript := tr2, scroll := 0 } in
     Model.refresh_rows m2

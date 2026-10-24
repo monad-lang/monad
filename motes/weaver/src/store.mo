@@ -33,11 +33,16 @@ use shuttle::message_types {Role, Content}
 /// classified by `theme.line_class`.
 pub struct TLine {
     text : String,
-    user : Bool
+    user : Bool,
+    /// Hidden unless Ctrl+O shows details: a tool result's full output
+    /// or a completed thinking block. Stored either way, so the toggle
+    /// is a display filter, not a re-render.
+    detail : Bool := false
 }
 
-pub def TLine.plain (s : String) : TLine := { text := s, user := false }
-pub def TLine.user_line (s : String) : TLine := { text := s, user := true }
+pub def TLine.plain (s : String) : TLine := { text := s, user := false, detail := false }
+pub def TLine.user_line (s : String) : TLine := { text := s, user := true, detail := false }
+pub def TLine.detail_line (s : String) : TLine := { text := s, user := false, detail := true }
 
 pub struct TranscriptPage {
     start : I64,
@@ -77,6 +82,10 @@ pub struct StoreMeta {
     created : I64,
     updated : I64,
     history_next : I64,
+    /// The first history block a resume replays. 1 for an ordinary
+    /// session; after a compaction it is the block holding the
+    /// rewritten history, and the older blocks stay on disk.
+    history_base : I64 := 1,
 }
 
 pub def Store.tail_lines : I64 := 512
@@ -217,7 +226,8 @@ pub def Store.pad12 (n : I64) : String :=
 def encode_line (l : TLine) : Json :=
     let body : BTreeMap String Json :=
         Map.insert "text" (Json.make_str l.text)
-        (Map.insert "user" (Json.make_bool l.user) BTreeMap.empty) in
+        (Map.insert "user" (Json.make_bool l.user)
+        (Map.insert "detail" (Json.make_bool l.detail) BTreeMap.empty)) in
     Json.make_object body
 
 pub def Store.encode_block (seq : I64) (start : I64) (lines : List TLine) : Json :=
@@ -247,8 +257,19 @@ def decode_line_user (obj : BTreeMap String Json) (text : String) : Result Strin
         Option.none => Result.ok (TLine.plain text),
         Option.some uj => match Json.get_bool uj {
             Result.err _ => Result.ok (TLine.plain text),
+            Result.ok b => decode_line_detail obj text b,
+        },
+    }
+
+/// `detail` is optional: a block written before the field existed
+/// decodes as a normal (shown) line.
+def decode_line_detail (obj : BTreeMap String Json) (text : String) (user : Bool) : Result String TLine :=
+    match Json.object_get "detail" obj {
+        Option.none => Result.ok ({ text := text, user := user, detail := false } : TLine),
+        Option.some dj => match Json.get_bool dj {
+            Result.err _ => Result.ok ({ text := text, user := user, detail := false } : TLine),
             Result.ok b =>
-                let l : TLine := { text := text, user := b } in
+                let l : TLine := { text := text, user := user, detail := b } in
                 Result.ok l,
         },
     }
@@ -443,7 +464,8 @@ pub def Store.encode_meta (m : StoreMeta) : Json :=
         (Map.insert "created" (Json.make_num_int m.created)
         (Map.insert "updated" (Json.make_num_int m.updated)
         (Map.insert "history_next" (Json.make_num_int m.history_next)
-        (Map.insert "session" (Session.serialize_json bare) BTreeMap.empty)))) in
+        (Map.insert "history_base" (Json.make_num_int m.history_base)
+        (Map.insert "session" (Session.serialize_json bare) BTreeMap.empty))))) in
     Json.make_object body
 
 pub def Store.decode_meta (j : Json) : Result String StoreMeta :=
@@ -467,20 +489,31 @@ def decode_meta_updated (obj : BTreeMap String Json) (created : I64) : Result St
 def decode_meta_next (obj : BTreeMap String Json) (created : I64) (updated : I64) : Result String StoreMeta :=
     match field_i64 obj "history_next" {
         Result.err e => Result.err e,
-        Result.ok next => decode_meta_session obj created updated next,
+        Result.ok next => decode_meta_base obj created updated next,
     }
 
-def decode_meta_session (obj : BTreeMap String Json) (created : I64) (updated : I64) (next : I64) : Result String StoreMeta :=
+/// `history_base` is optional: a session written before the field
+/// existed replays from block 1.
+def decode_meta_base (obj : BTreeMap String Json) (created : I64) (updated : I64) (next : I64) : Result String StoreMeta :=
+    match Json.object_get "history_base" obj {
+        Option.none => decode_meta_session obj created updated next 1i64,
+        Option.some bj => match Json.get_num_i64 (Json.get_num bj) {
+            Result.err _ => decode_meta_session obj created updated next 1i64,
+            Result.ok b => decode_meta_session obj created updated next b,
+        },
+    }
+
+def decode_meta_session (obj : BTreeMap String Json) (created : I64) (updated : I64) (next : I64) (base : I64) : Result String StoreMeta :=
     match obj_field obj "session" {
         Result.err e => Result.err e,
-        Result.ok sj => decode_meta_finish sj created updated next,
+        Result.ok sj => decode_meta_finish sj created updated next base,
     }
 
-def decode_meta_finish (sj : Json) (created : I64) (updated : I64) (next : I64) : Result String StoreMeta :=
+def decode_meta_finish (sj : Json) (created : I64) (updated : I64) (next : I64) (base : I64) : Result String StoreMeta :=
     match Session.deserialize_json sj {
         Result.err e => Result.err e,
         Result.ok s =>
-            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next } in
+            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := base } in
             Result.ok m,
     }
 
@@ -648,8 +681,57 @@ pub def Store.read_live (st : StoreState) : IO (Option String) := do {
     }
 }
 
-pub def Store.discard_live (st : StoreState) : IO Unit := do {
-    let _ <- exec_cmd "rm" ["-f", Path.to_string (Store.live_path st.dir)];
+/// Append a fragment to a named aux file (`thinking.txt`, ...): the
+/// same O(1) seam as `append_chunk`.
+pub def Store.append_named (st : StoreState) (name : String) (text : String) : IO Unit := do {
+    let opened <- FdStream.open_file (Store.child st.dir name) FdStream.append_mode;
+    write_chunk_to opened text
+}
+
+/// Replace a named aux file wholesale (`activity.txt` holds only the
+/// latest event).
+pub def Store.write_named (st : StoreState) (name : String) (text : String) : IO Unit := do {
+    let _ <- IO.write_file (Store.child st.dir name) text;
+    IO.pure unit
+}
+
+pub def Store.read_named (st : StoreState) (name : String) : IO (Option String) := do {
+    let r <- IO.read_file (Store.child st.dir name);
+    match r {
+        Result.err _ => IO.pure Option.none,
+        Result.ok text => if String.is_empty text then IO.pure Option.none else IO.pure (Option.some text),
+    }
+}
+
+/// The new suffix of a named file since `offset`, plus the new offset.
+/// A file shorter than `offset` was truncated for a new turn, so the
+/// whole content is the delta and the offset restarts there.
+pub def Store.read_named_from (st : StoreState) (name : String) (offset : I64) : IO (Pair String I64) := do {
+    let r <- IO.read_file (Store.child st.dir name);
+    match r {
+        Result.err _ => IO.pure (Pair.pair "" offset),
+        Result.ok text => do {
+            let len : I64 := String.length text;
+            if I64.gt offset len
+            then IO.pure (Pair.pair text len)
+            else do {
+                let n : I64 := len - offset;
+                let fresh : String := if n < 1i64 then "" else String.slice text offset n;
+                IO.pure (Pair.pair fresh len)
+            }
+        }
+    }
+}
+
+pub def Store.read_live_from (st : StoreState) (offset : I64) : IO (Pair String I64) :=
+    Store.read_named_from st "live.txt" offset
+
+pub def Store.discard_live (st : StoreState) : IO Unit :=
+    Store.discard_named st "live.txt"
+
+/// Remove one aux turn file (the live/thinking/activity feed).
+pub def Store.discard_named (st : StoreState) (name : String) : IO Unit := do {
+    let _ <- exec_cmd "rm" ["-f", Path.to_string (Store.child st.dir name)];
     return unit
 }
 
@@ -660,7 +742,7 @@ def history_path (dir : Path) (seq : I64) : Path :=
     Store.child (history_dir dir) (String.concat (Store.pad12 seq) ".json")
 
 def meta_of (s : Session) (created : I64) (updated : I64) (next : I64) : StoreMeta :=
-    let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next } in
+    let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := 1i64 } in
     m
 
 def state_of (root : Path) (dir : Path) (id : String) : StoreState :=
@@ -1049,7 +1131,8 @@ def load_session_meta (dir : Path) (m : StoreMeta) : IO (Result String Session) 
     if Bool.not there
     then IO.pure (Result.ok (session_with_history m.session List.empty))
     else do {
-        let hist_r <- load_history_seq hdir 1 m.history_next List.empty;
+        let start : I64 := if m.history_base < 1i64 then 1i64 else m.history_base;
+        let hist_r <- load_history_seq hdir start m.history_next List.empty;
         match hist_r {
             Result.err e => IO.pure (Result.err e),
             Result.ok ms => IO.pure (Result.ok (session_with_history m.session ms)),
@@ -1111,6 +1194,27 @@ def record_turn_meta (st : StoreState) (s : Session) (delta : List Message) (m :
         let m2 : StoreMeta := meta_next m s now (m.history_next + 1);
         let wok <- write_meta_at st.dir m2;
         if wok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the session meta")
+    }
+}
+
+/// Commit a compacted history: the rewritten list lands as ONE block at
+/// `history_next`, and the meta's `history_base` moves to it, so a resume
+/// replays only from here (the older blocks stay on disk, out of reach).
+pub def Store.record_compacted (st : StoreState) (s : Session) : IO (Result String Unit) := do {
+    let meta_r <- Store.read_meta st.dir;
+    match meta_r {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok m => do {
+            let p : Path := history_path st.dir m.history_next;
+            let ok <- write_verified p (Json.to_string (Session.messages_to_json s.history));
+            if Bool.not ok then IO.pure (Result.err "could not write the compacted history")
+            else do {
+                let now <- Bench.now;
+                let m2 : StoreMeta := { m with session := s, updated := now, history_next := m.history_next + 1i64, history_base := m.history_next };
+                let wok <- write_meta_at st.dir m2;
+                if wok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the session meta")
+            }
+        }
     }
 }
 

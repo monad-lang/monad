@@ -69,7 +69,7 @@ def echo_impl : ToolImpl := { spec := echo_spec, cap := Capability.read, run := 
 def mock_registry : ToolRegistry := ToolRegistry.register echo_impl ToolRegistry.empty
 
 def mock_config : ProviderConfig :=
-    { base_url := "mock", model := "mock", api_key_env := "SHUTTLE_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+    { base_url := "mock", model := "mock", api_key_env := "SHUTTLE_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def user_message : Message := { role := Role.user, content := [Content.text "please echo"] }
 
@@ -182,6 +182,13 @@ def tap_path : String :=
 def emit_tap (t : String) : IO Unit :=
     do { let _w <- Test.append_fixture (Path.path tap_path) t; return unit }
 
+/// The tap without the loop's out-of-band activity lines: those are UI
+/// status, not provider text, and this file pins the TEXT contract.
+def emit_text_tap (t : String) : IO Unit :=
+    if String.starts_with "\u{1}activity\u{2}" t
+    then IO.pure unit
+    else emit_tap t
+
 def reset_tap : IO Unit :=
     do { let _w <- Test.write_fixture (Path.path tap_path) ""; return unit }
 
@@ -191,15 +198,16 @@ def read_tap : IO String :=
 def turn_2_text : String := String.concat "the echo tool said: " sentinel
 
 /// The emission contract, end to end through the whole loop: the
-/// tool_use turn emits NOTHING (only text reaches `emit`), the final
-/// turn's text is emitted exactly once and whole, and nothing else.
-/// The mock wire's one-shot-per-turn emission makes "exactly once"
-/// checkable as plain string equality against the tap.
+/// tool_use turn emits no TEXT (its activity lines are the loop's own
+/// status channel, filtered by `emit_text_tap`), the final turn's text
+/// is emitted exactly once and whole, and nothing else. The mock
+/// wire's one-shot-per-turn emission makes "exactly once" checkable as
+/// plain string equality against the text tap.
 #[test]
 def test_mock_loop_emits_text_turn_only : IO Bool := do {
     write_script;
     reset_tap;
-    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_tap Gate.auto);
+    let r <- ResultT.run (Loop.run mock_config mock_registry "You are a test harness." [user_message] 6 emit_text_tap Gate.auto);
     match r {
         Result.err _ => return false,
         Result.ok _ => do {

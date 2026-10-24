@@ -31,6 +31,12 @@ def opt_i64_eq (a : Option I64) (b : Option I64) : Bool :=
         Option.none => match b { Option.some _ => false, Option.none => true },
     }
 
+def opt_bool_eq (a : Option Bool) (b : Option Bool) : Bool :=
+    match a {
+        Option.some x => match b { Option.some y => x == y, Option.none => false },
+        Option.none => match b { Option.some _ => false, Option.none => true },
+    }
+
 def opt_mode_eq (a : Option Mode) (b : Option Mode) : Bool :=
     match a {
         Option.some x => match b { Option.some y => mode_eq x y, Option.none => false },
@@ -63,7 +69,7 @@ def cap_eq (a : Capability) (b : Capability) : Bool :=
 
 /// A file exercising every knob at once.
 def full_toml : String :=
-    "mode = \"plan\"\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\nmax_turns = 20\n\n[mcp_caps]\nmcp-server-filesystem = \"read\"\nmy-server = \"net\"\n"
+    "mode = \"plan\"\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\nmax_turns = 20\nthinking = true\nmax_tokens = 8192\n\n[mcp_caps]\nmcp-server-filesystem = \"read\"\nmy-server = \"net\"\n"
 
 /// Every key of the file, parsed and pinned.
 #[test]
@@ -73,6 +79,8 @@ def test_parse_settings_full_file : Bool :=
         && opt_str_eq s.provider (Option.some "ollama")
         && opt_str_eq s.model (Option.some "qwen3:8b")
         && opt_i64_eq s.max_turns (Option.some 20)
+        && opt_bool_eq s.thinking (Option.some true)
+        && opt_i64_eq s.max_tokens (Option.some 8192)
         && opt_cap_eq (Settings.cap_of "mcp-server-filesystem" s) (Option.some Capability.read)
         && opt_cap_eq (Settings.cap_of "my-server" s) (Option.some Capability.net)
 
@@ -84,6 +92,8 @@ def test_parse_settings_partial_file : Bool :=
         && opt_str_eq s.provider Option.none
         && opt_str_eq s.model (Option.some "custom-model")
         && opt_i64_eq s.max_turns Option.none
+        && opt_bool_eq s.thinking Option.none
+        && opt_i64_eq s.max_tokens Option.none
         && opt_cap_eq (Settings.cap_of "anything" s) Option.none
 
 /// A parse failure is the empty settings, not a refused start.
@@ -94,6 +104,8 @@ def test_parse_settings_unparsable_is_empty : Bool :=
         && opt_str_eq s.provider Option.none
         && opt_str_eq s.model Option.none
         && opt_i64_eq s.max_turns Option.none
+        && opt_bool_eq s.thinking Option.none
+        && opt_i64_eq s.max_tokens Option.none
         && opt_cap_eq (Settings.cap_of "anything" s) Option.none
 
 // ── parse_warned: the same behavior, now visible (Phase 9) ──────────────
@@ -191,6 +203,10 @@ def global_settings : Settings := {
     provider := Option.some "ollama",
     model := Option.none,
     max_turns := Option.some 20,
+    thinking := Option.none,
+    max_tokens := Option.none,
+    context_window := Option.none,
+    compact_at := Option.none,
     caps := Map.insert "srv" Capability.read (Map.insert "keep" Capability.net BTreeMap.empty),
     api_keys := Map.insert "mistral" "sk-global-mistral" (Map.insert "shared" "sk-global-shared" BTreeMap.empty),
 }
@@ -202,6 +218,10 @@ def project_settings : Settings := {
     provider := Option.some "mistral",
     model := Option.some "qwen3:8b",
     max_turns := Option.none,
+    thinking := Option.none,
+    max_tokens := Option.none,
+    context_window := Option.none,
+    compact_at := Option.none,
     caps := Map.insert "srv" Capability.exec BTreeMap.empty,
     api_keys := Map.insert "mistral" "sk-project-mistral" BTreeMap.empty,
 }

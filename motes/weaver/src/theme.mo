@@ -26,8 +26,9 @@ pub type LineClass {
 }
 
 /// The role of a line, by prefix: diff marks, error/denial entries,
-/// running rows, the Ctrl+C hint -- everything else is the assistant's
-/// voice. The user's own role is data (`TLine.user`), not a prefix.
+/// running rows, the Ctrl+C/Ctrl+D exit hints -- everything else is the
+/// assistant's voice. The user's own role is data (`TLine.user`), not a
+/// prefix.
 #[terminating]
 pub def line_class (line : String) : LineClass :=
     if String.starts_with "+ " line then LineClass.diff_plus
@@ -37,7 +38,7 @@ pub def line_class (line : String) : LineClass :=
     else if String.starts_with "refused: " line then LineClass.error
     else if String.starts_with "[approve] " line then LineClass.running
     else if String.starts_with "[running " line then LineClass.running
-    else if String.starts_with "press Ctrl+C" line then LineClass.hint
+    else if String.starts_with "press Ctrl+" line then LineClass.hint
     else LineClass.assistant
 
 /// The TUI side: a class's `TextStyle`.

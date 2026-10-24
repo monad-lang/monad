@@ -96,10 +96,13 @@ def test_stream_thinking_and_signature : Bool :=
 /// Thinking fragments are SILENT: only `text_delta` ever reports to
 /// `on_text` -- the thinking accumulation must not emit.
 #[test]
-def test_stream_thinking_delta_reports_no_text : Bool :=
+def test_stream_thinking_delta_reports_a_tagged_fragment : Bool :=
     let a1 := fold_event stream_acc0 r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"# in
     match anthropic_apply_event a1 r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}"# {
-        Pair.pair _ delta => delta == ""
+        Pair.pair _ delta => match delta {
+            List.cons d rest => d == "\u{1}thinking\u{2}hmm" && (match rest { List.empty => true, _ => false }),
+            List.empty => false,
+        }
     }
 
 /// Tool use across TWO blocks (text at index 0, tool at index 1):
@@ -236,7 +239,7 @@ def test_stream_usage_output_zero_until_message_delta : Bool :=
 #[test]
 def test_stream_delta_for_unstarted_block_reports_no_text : Bool :=
     match anthropic_apply_event stream_acc0 r#"{"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"orphan"}}"# {
-        Pair.pair _ delta => delta == ""
+        Pair.pair _ delta => match delta { List.empty => true, _ => false }
     }
 
 /// The request half: `stream` is serialized ONLY when true -- the

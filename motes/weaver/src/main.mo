@@ -81,11 +81,22 @@ def write_errln (s : String) : IO Unit :=
 
 /// The single stdout sink: the prompt, the streamed model text and the
 /// command output all go through one flushed write, so piped runs see
-/// each fragment as it happens.
-def stdout_write (s : String) : IO Unit := do {
-    IO.write_stdout s;
-    IO.flush_stdout
-}
+/// each fragment as it happens. The reserved out-of-band tags the loop
+/// and providers ride `emit` with are handled here: activity status is
+/// dropped (the line UI has no live row) and reasoning is printed
+/// without its control bytes.
+def stdout_write (s : String) : IO Unit :=
+    if String.starts_with "\u{1}activity\u{2}" s
+    then IO.pure unit
+    else do {
+        let thinking_tag : String := "\u{1}thinking\u{2}";
+        let text : String :=
+            if String.starts_with thinking_tag s
+            then String.slice s (String.length thinking_tag) (String.length s - String.length thinking_tag)
+            else s;
+        IO.write_stdout text;
+        IO.flush_stdout
+    }
 
 /// How this run identifies itself to MCP servers in the `initialize`
 /// handshake.
@@ -116,6 +127,10 @@ struct Plan {
     mcps : List String,
     resume : String,
     cont : Bool,
+    /// Autocompact: the estimated-token threshold is
+    /// `context_window * compact_at / 100`; a zero window disables it.
+    context_window : I64,
+    compact_at : I64,
     /// Startup warnings the run should show, one per line: settings
     /// problems (unknown keys, parse failures), a configured model that
     /// did not belong to the provider, and the crash note.
@@ -228,7 +243,7 @@ def plan_of (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result Weaver
         // it is the provider's answer (/models asks), never a name table's.
         match Weaver.preset provider model s.api_keys {
             Result.err e => Result.err (WeaverError.config e),
-            Result.ok cfg => plan_turns s c provider cfg base,
+            Result.ok cfg => plan_turns s c provider (thinking_cfg s cfg) base,
         }
 
 /// Settings warnings as note lines, in order; `none` when there are
@@ -246,6 +261,19 @@ def warnings_note (ws : List WeaverError) : Option String :=
         List.cons _ _ => Option.some (List.intercalate "\n" (warning_lines ws List.empty)),
     }
 
+/// The settings' runtime knobs (reasoning channel, output budget)
+/// applied to a resolved config: one place, so startup and `/provider`
+/// agree on the defaults.
+def thinking_cfg (s : Settings) (cfg : ProviderConfig) : ProviderConfig :=
+    let cfg1 : ProviderConfig := match s.thinking {
+        Option.none => cfg,
+        Option.some b => { cfg with thinking := b },
+    } in
+    match s.max_tokens {
+        Option.none => cfg1,
+        Option.some n => { cfg1 with max_tokens := n },
+    }
+
 def resolve_provider (s : Settings) (flag : String) : String :=
     if String.is_empty flag
     then match s.provider { Option.some p => p, Option.none => "ollama" }
@@ -261,8 +289,17 @@ def resolve_model (s : Settings) (flag : String) : String :=
 def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) (note : Option String) : Result WeaverError Plan :=
     match resolve_max_turns s c.max_turns_str {
         Result.err e => Result.err (WeaverError.config e),
-        Result.ok n => plan_done provider cfg n c note,
+        Result.ok n => plan_done provider cfg n c note (resolve_window s) (resolve_compact_at s),
     }
+
+/// The context window the autocompact estimate is a fraction of. No
+/// provider API reports one, so this is a settings knob with a
+/// conservative default; 0 disables autocompact.
+def resolve_window (s : Settings) : I64 :=
+    match s.context_window { Option.some n => n, Option.none => 128000 }
+
+def resolve_compact_at (s : Settings) : I64 :=
+    match s.compact_at { Option.some n => n, Option.none => 80 }
 
 def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
     if String.is_empty flag
@@ -275,8 +312,8 @@ def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
 def turn_cap (n : I64) : Result String I64 :=
     if n < 1 then Result.err "--max-turns must be at least 1" else Result.ok n
 
-def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : CliArgs) (note : Option String) : Result WeaverError Plan :=
-    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := c.mcps, resume := c.resume, cont := c.cont, model_note := note } in
+def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : CliArgs) (note : Option String) (window : I64) (compact_at : I64) : Result WeaverError Plan :=
+    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := c.mcps, resume := c.resume, cont := c.cont, context_window := window, compact_at := compact_at, model_note := note } in
     Result.ok p
 
 // ── MCP mounting (shuttle main.mo's machinery, ported) ─────────────────
@@ -432,7 +469,7 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,

@@ -15,7 +15,7 @@
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.parse}
 use weaver::error {WeaverError}
-use toml::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.get_integer, Toml.get_table, Toml.table_get}
+use toml::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.get_integer, Toml.get_boolean, Toml.get_table, Toml.table_get}
 use std::io {IO.get_env, IO.read_file}
 use std::stream {StreamError, StreamError.is_not_found}
 use std::path {Path.of}
@@ -29,6 +29,10 @@ pub struct Settings {
     provider : Option String,
     model : Option String,
     max_turns : Option I64,
+    thinking : Option Bool,
+    max_tokens : Option I64,
+    context_window : Option I64,
+    compact_at : Option I64,
     caps : BTreeMap String Capability,
     api_keys : BTreeMap String String,
 }
@@ -38,6 +42,10 @@ pub def Settings.empty : Settings := {
     provider := Option.none,
     model := Option.none,
     max_turns := Option.none,
+    thinking := Option.none,
+    max_tokens := Option.none,
+    context_window := Option.none,
+    compact_at := Option.none,
     caps := BTreeMap.empty,
     api_keys := BTreeMap.empty,
 }
@@ -49,6 +57,10 @@ pub def Settings.merge (base : Settings) (over : Settings) : Settings := {
     provider := merge_opt base.provider over.provider,
     model := merge_opt base.model over.model,
     max_turns := merge_opt base.max_turns over.max_turns,
+    thinking := merge_opt base.thinking over.thinking,
+    max_tokens := merge_opt base.max_tokens over.max_tokens,
+    context_window := merge_opt base.context_window over.context_window,
+    compact_at := merge_opt base.compact_at over.compact_at,
     caps := merge_table base.caps (BTreeMap.to_list over.caps),
     api_keys := merge_table base.api_keys (BTreeMap.to_list over.api_keys),
 }
@@ -199,7 +211,7 @@ def parse_loaded (path : String) (root : BTreeMap String Toml.Value) : Loaded :=
 /// (`mcp_caps`, `api_keys`) hold user-named entries, so only the table
 /// names are checked -- their contents are free-form.
 pub def Settings.known_keys : List String :=
-    ["api_keys", "max_turns", "mcp_caps", "mode", "model", "provider"]
+    ["api_keys", "compact_at", "context_window", "max_tokens", "max_turns", "mcp_caps", "mode", "model", "provider", "thinking"]
 
 #[partial]
 def known_key (k : String) (ks : List String) : Bool :=
@@ -291,6 +303,10 @@ def settings_of (root : BTreeMap String Toml.Value) : Settings := {
     provider := str_at "provider" root,
     model := str_at "model" root,
     max_turns := int_at "max_turns" root,
+    thinking := bool_at "thinking" root,
+    max_tokens := int_at "max_tokens" root,
+    context_window := int_at "context_window" root,
+    compact_at := int_at "compact_at" root,
     caps := table_of (table_at "mcp_caps" root) parse_cap,
     api_keys := table_of (table_at "api_keys" root) key_value,
 }
@@ -328,6 +344,15 @@ def str_at (key : String) (root : BTreeMap String Toml.Value) : Option String :=
         Option.none => Option.none,
         Option.some v => match Toml.get_string v {
             Result.ok s => Option.some s,
+            Result.err _ => Option.none,
+        },
+    }
+
+def bool_at (key : String) (root : BTreeMap String Toml.Value) : Option Bool :=
+    match Toml.table_get key root {
+        Option.none => Option.none,
+        Option.some v => match Toml.get_boolean v {
+            Result.ok b => Option.some b,
             Result.err _ => Option.none,
         },
     }

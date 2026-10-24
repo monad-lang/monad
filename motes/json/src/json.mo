@@ -12,9 +12,9 @@ use parsec::core {ParseError, ParseResult, is_empty, parse_error_remaining}
 use parsec::char_preds {is_space}
 use parsec::combinators {
   alt, alt_fold, delimited_by, many0, map_parse, opt, separated_by, tag,
-  take_while, terminated_by, utf8_char_width,
+  take_while, take_while_byte, terminated_by, utf8_char_width,
 }
-use parsec::number {number}
+use parsec::number {number, parse_i64}
 
 open ParseResult {fail, success}
 open Json {
@@ -243,9 +243,138 @@ def Json.parse_false (input : String) : ParseResult Json :=
 def Json.parse_bool (input : String) : ParseResult Json :=
   alt Json.parse_true Json.parse_false input
 
-// ─── Parser: number (MVP: integers only) ───
+// ─── Parser: number ───
+//
+// Integers parse exactly. A fractional/exponent literal parses to its
+// integer truncation: there is no String -> F64 conversion in the
+// language (only `F64.bits_of_string`, which yields a bit pattern), so
+// the parser accepts the JSON grammar without inventing a value it
+// cannot represent. Every consumer of a float field today (model
+// metadata, temperatures) is display-only; `Json.Number.float` remains
+// constructible and serializable for callers that have an F64.
 
+def Json.number_to_json (n : I64) : Json.Number := Json.Number.int n
 
+def is_digit_byte (b : U8) : Bool :=
+  Bool.and (Bool.not (U8.lt b 48u8)) (Bool.not (U8.gt b 57u8))
+
+/// The bytes a JSON number literal may contain.
+def is_number_byte (b : U8) : Bool :=
+  Bool.or (is_digit_byte b)
+    (Bool.or (U8.beq b 46u8)
+      (Bool.or (U8.beq b 45u8)
+        (Bool.or (U8.beq b 43u8)
+          (Bool.or (U8.beq b 101u8) (U8.beq b 69u8)))))
+
+#[partial]
+def split_bytes_at (b : U8) (bs : List U8) (acc : List U8) : Option (Pair (List U8) (List U8)) :=
+  match bs {
+    List.empty => Option.none,
+    List.cons x rest =>
+      if U8.beq x b
+      then Option.some (Pair.pair (List.reverse acc) rest)
+      else split_bytes_at b rest (List.cons x acc),
+  }
+
+/// Split at 'e' or 'E'.
+#[partial]
+def split_exp_bytes (bs : List U8) (acc : List U8) : Option (Pair (List U8) (List U8)) :=
+  match bs {
+    List.empty => Option.none,
+    List.cons x rest =>
+      if Bool.or (U8.beq x 101u8) (U8.beq x 69u8)
+      then Option.some (Pair.pair (List.reverse acc) rest)
+      else split_exp_bytes rest (List.cons x acc),
+  }
+
+#[partial]
+def bytes_len (bs : List U8) : I64 :=
+  match bs {
+    List.empty => 0,
+    List.cons _ rest => 1 + bytes_len rest,
+  }
+
+#[terminating]
+def pow10 (n : I64) : I64 :=
+  if n < 1i64 then 1i64 else I64.mul 10i64 (pow10 (n - 1i64))
+
+/// A run of digits, or an empty run (0). An exponent's sign is applied
+/// here: `parse_i64` takes digits only.
+def digits_value (bs : List U8) : Option I64 :=
+  match bs {
+    List.empty => Option.some 0i64,
+    List.cons b rest =>
+      if U8.beq b 45u8
+      then match parse_i64 (String.from_list rest) {
+        Option.some n => Option.some (I64.neg n),
+        Option.none => Option.none,
+      }
+      else if U8.beq b 43u8
+      then parse_i64 (String.from_list rest)
+      else parse_i64 (String.from_list bs),
+  }
+
+/// Assemble the value from its parts. `scale` is the exponent minus the
+/// fraction's digit count, clamped so `pow10` stays finite.
+def number_from_parts (neg : Bool) (i : Option I64) (f : Option I64) (flen : I64) (e : Option I64) : Option Json.Number :=
+  match i {
+    Option.none => Option.none,
+    Option.some iv => match f {
+      Option.none => Option.none,
+      Option.some fv => match e {
+        Option.none => Option.none,
+        Option.some ev =>
+          let scale : I64 := ev - flen in
+          let clamped : I64 := if scale > 18i64 then 18i64 else if scale < (0i64 - 18i64) then 0i64 - 18i64 else scale in
+          let combined : I64 := I64.add (I64.mul iv (pow10 flen)) fv in
+          let value : I64 := if clamped < 0i64 then I64.div combined (pow10 (0i64 - clamped)) else I64.mul combined (pow10 clamped) in
+          let signed : I64 := if neg then I64.neg value else value in
+          Option.some (Json.Number.int signed),
+      },
+    },
+  }
+
+def number_value_of_token (tok : String) : Option Json.Number :=
+  match String.to_list tok {
+    List.empty => Option.none,
+    List.cons b rest =>
+      let neg : Bool := U8.beq b 45u8 in
+      let body : List U8 := if neg then rest else String.to_list tok in
+      let exp_split : Option (Pair (List U8) (List U8)) := split_exp_bytes body List.empty in
+      let mant : List U8 := match exp_split {
+        Option.none => body,
+        Option.some p => p.first,
+      } in
+      let expv : Option I64 := match exp_split {
+        Option.none => Option.some 0i64,
+        Option.some p => digits_value p.second,
+      } in
+      let dot : Option (Pair (List U8) (List U8)) := split_bytes_at 46u8 mant List.empty in
+      let intpart : List U8 := match dot {
+        Option.none => mant,
+        Option.some p => p.first,
+      } in
+      let fracpart : List U8 := match dot {
+        Option.none => List.empty,
+        Option.some p => p.second,
+      } in
+      number_from_parts neg (digits_value intpart) (digits_value fracpart) (bytes_len fracpart) expv,
+  }
+
+def parse_number_token (r : ParseResult String) : ParseResult Json.Number :=
+  match r {
+    fail e => fail e,
+    success rem tok => match number_value_of_token tok {
+      Option.none => fail (ParseError.custom "invalid number" rem),
+      Option.some n => success rem n,
+    },
+  }
+
+/// Parse a JSON number literal (integer, fraction and exponent).
+def Json.parse_number (input : String) : ParseResult Json.Number :=
+  parse_number_token (take_while_byte is_number_byte input)
+
+/// Signed integer only (kept for callers that require one).
 def parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
   match r {
     success rem n => success rem (I64.neg n),
@@ -259,15 +388,8 @@ def parse_integer_result (r : ParseResult String) (orig : String) : ParseResult 
     fail _ => number orig
   }
 
-/// Parse signed integer
 def Json.parse_integer (input : String) : ParseResult I64 :=
   parse_integer_result (tag "-" input) input
-
-def Json.number_to_json (n : I64) : Json.Number := Json.Number.int n
-
-/// Parse JSON number (currently only integers)
-def Json.parse_number (input : String) : ParseResult Json.Number :=
-  map_parse Json.number_to_json Json.parse_integer input
 
 // ─── Parser: string ───
 
@@ -306,9 +428,70 @@ def Json.take4 (input : String) : ParseResult String :=
   then success (String.drop 4 input) (String.slice input 0 4)
   else fail (ParseError.custom "expected 4 hex digits" input)
 
+/// One hex digit's value: a comparison chain, because there is no
+/// U8 -> I64 conversion in the language.
+def hex_nibble (b : U8) : Option I64 :=
+  if U8.beq b 48u8 then Option.some 0i64
+  else if U8.beq b 49u8 then Option.some 1i64
+  else if U8.beq b 50u8 then Option.some 2i64
+  else if U8.beq b 51u8 then Option.some 3i64
+  else if U8.beq b 52u8 then Option.some 4i64
+  else if U8.beq b 53u8 then Option.some 5i64
+  else if U8.beq b 54u8 then Option.some 6i64
+  else if U8.beq b 55u8 then Option.some 7i64
+  else if U8.beq b 56u8 then Option.some 8i64
+  else if U8.beq b 57u8 then Option.some 9i64
+  else if U8.beq b 97u8 then Option.some 10i64
+  else if U8.beq b 98u8 then Option.some 11i64
+  else if U8.beq b 99u8 then Option.some 12i64
+  else if U8.beq b 100u8 then Option.some 13i64
+  else if U8.beq b 101u8 then Option.some 14i64
+  else if U8.beq b 102u8 then Option.some 15i64
+  else if U8.beq b 65u8 then Option.some 10i64
+  else if U8.beq b 66u8 then Option.some 11i64
+  else if U8.beq b 67u8 then Option.some 12i64
+  else if U8.beq b 68u8 then Option.some 13i64
+  else if U8.beq b 69u8 then Option.some 14i64
+  else if U8.beq b 70u8 then Option.some 15i64
+  else Option.none
+
+#[partial]
+def hex_value_go (bs : List U8) (acc : I64) : Option I64 :=
+  match bs {
+    List.empty => Option.some acc,
+    List.cons b rest => match hex_nibble b {
+      Option.none => Option.none,
+      Option.some n => hex_value_go rest (I64.add (I64.mul acc 16i64) n),
+    },
+  }
+
+def hex_value (hex : String) : Option I64 :=
+  if I64.beq (String.length hex) 4i64 then hex_value_go (String.to_list hex) 0i64 else Option.none
+
+/// An I64 byte for `String.from_list` (there is no I64 -> U8).
+def byte_of (n : I64) : U8 :=
+  U32.to_u8 (I64.to_u32 n)
+
+/// A code point as its UTF-8 bytes. A surrogate half becomes U+FFFD:
+/// combining a `\uD83D\uDE00` pair is not implemented here.
+def utf8_of_codepoint (cp : I64) : String :=
+  let bad : Bool := Bool.and (Bool.not (I64.lt cp 55296i64)) (Bool.not (I64.gt cp 57343i64)) in
+  let c : I64 := if bad then 65533i64 else cp in
+  if I64.lt c 128i64
+  then String.from_list [byte_of c]
+  else if I64.lt c 2048i64
+  then String.from_list [byte_of (I64.add 192i64 (I64.div c 63i64)),
+                          byte_of (I64.add 128i64 (I64.sub c (I64.mul 64i64 (I64.div c 64i64))))]
+  else String.from_list [byte_of (I64.add 224i64 (I64.div c 4096i64)),
+                         byte_of (I64.add 128i64 (I64.sub (I64.div c 64i64) (I64.mul 64i64 (I64.div c 4096i64)))),
+                         byte_of (I64.add 128i64 (I64.sub c (I64.mul 64i64 (I64.div c 64i64))))]
+
 def parse_escape_u_result (r : ParseResult String) : ParseResult String :=
   match r {
-    success rem hex => success rem (String.concat "\\u" hex),
+    success rem hex => match hex_value hex {
+      Option.none => fail (ParseError.custom "invalid \\u escape" rem),
+      Option.some cp => success rem (utf8_of_codepoint cp),
+    },
     fail e => fail e
   }
 
@@ -319,8 +502,8 @@ def parse_escape_u_body (r : ParseResult String) (orig : String) : ParseResult S
     fail e => fail e
   }
 
-/// Parse a \uXXXX escape sequence. The 4 hex digits are NOT validated or decoded —
-/// they're stored as the literal 6-character sequence "\uXXXX" (simplification per plan).
+/// Parse a \uXXXX escape into its UTF-8 bytes (so a control byte the
+/// serializer escaped with `\u00XX` round-trips back to that byte).
 def Json.parse_escape_u (input : String) : ParseResult String :=
   parse_escape_u_body (tag "\\u" input) input
 
@@ -520,6 +703,18 @@ pub def Json.parse (s : String) : Result Json.ParseError Json :=
 
 // ─── Serializer: string escaping ───
 
+/// One hex digit (0-15) as a character.
+def hex_digit_char (n : U8) : U8 :=
+  if U8.lt n 10u8 then U8.add n 48u8 else U8.add n 87u8
+
+/// A raw control byte as `\u00XX`: JSON forbids unescaped characters
+/// below 0x20, and tool output (ANSI escapes, control bytes in files)
+/// reaches provider requests verbatim.
+def Json.control_escape (b : U8) : String :=
+  let hi : U8 := U8.div b 16u8 in
+  let lo : U8 := U8.sub b (U8.mul hi 16u8) in
+  String.concat "\\u00" (String.from_list [hex_digit_char hi, hex_digit_char lo])
+
 #[partial]
 def Json.escape_char (c : String) : String :=
   if String.beq "\"" c then "\\\""
@@ -529,11 +724,26 @@ def Json.escape_char (c : String) : String :=
   else if String.beq "\n" c then "\\n"
   else if String.beq "\r" c then "\\r"
   else if String.beq "\t" c then "\\t"
-  else c
+  else Json.escape_other c
 
-/// Escape special characters in a string for JSON output.
-/// NOTE: raw control characters (0x00-0x1F) other than \b \f \n \r \t are passed
-/// through unescaped rather than emitted as \u00XX — deferred, see plan notes.
+/// The catch-all: a single raw control byte becomes `\u00XX`; every
+/// other character (including all multi-byte UTF-8) passes through.
+def Json.escape_other (c : String) : String :=
+  match String.to_list c {
+    List.cons b rest => escape_other_byte b rest c,
+    List.empty => c,
+  }
+
+def escape_other_byte (b : U8) (rest : List U8) (c : String) : String :=
+  match rest {
+    List.empty => if U8.lt b 32u8 then Json.control_escape b else c,
+    List.cons _ _ => c,
+  }
+
+/// Escape special characters in a string for JSON output. Raw control
+/// bytes (0x00-0x1F) other than \b \f \n \r \t become \u00XX: a
+/// provider request carrying a raw ESC from tool output is invalid JSON
+/// (measured: Mistral answers HTTP 422 "Invalid control character").
 ///
 /// THE STEP IS `utf8_char_width`, for the reason `Json.parse_string_char` records: a one-byte
 /// step into a multi-byte character answered `""` for the character and then re-entered on a
@@ -1102,6 +1312,76 @@ def test_roundtrip_nested : Bool :=
 #[test]
 def test_escape_string : Bool :=
   Json.escape_string "a\"b\\c" == "a\\\"b\\\\c"
+
+/// The number grammar accepts fractions and exponents; there is no
+/// String -> F64 conversion in the language, so a fractional literal
+/// parses to its integer truncation (model metadata is display-only).
+def parsed_number (text : String) : Option I64 :=
+  match Json.parse text {
+    Result.err _ => Option.none,
+    Result.ok j => match Json.get_num_i64 (Json.get_num j) {
+      Result.ok n => Option.some n,
+      Result.err _ => Option.none,
+    },
+  }
+
+#[test]
+def test_parse_number_fraction_truncates : Bool :=
+  parsed_number "0.3" == Option.some 0i64
+    && parsed_number "1.9" == Option.some 1i64
+    && parsed_number "-2.5" == Option.some (0i64 - 2i64)
+
+#[test]
+def test_parse_number_exponent_scales : Bool :=
+  parsed_number "1.5e2" == Option.some 150i64
+    && parsed_number "2e3" == Option.some 2000i64
+    && parsed_number "5E-1" == Option.some 0i64
+
+/// A provider model entry as Mistral returns it: the float field is what
+/// made `/models` fail before the grammar was extended.
+#[test]
+def test_parse_provider_model_entry_with_a_float : Bool :=
+  match Json.parse r#"{"id":"m","created":1746057600,"default_model_temperature":0.3,"deprecation":null,"max_context_length":131072}"# {
+    Result.err _ => false,
+    Result.ok j => match Json.get_object j {
+      Result.err _ => false,
+      Result.ok o => match Json.object_get "id" o {
+        Option.none => false,
+        Option.some sj => match Json.get_str sj {
+          Result.ok id => id == "m",
+          Result.err _ => false,
+        },
+      },
+    },
+  }
+
+/// A `\uXXXX` escape decodes to its bytes, so the serializer's control
+/// escaping round-trips (an ESC comes back as the byte, not six chars).
+#[test]
+def test_parse_unicode_escape_decodes : Bool :=
+  match Json.parse "\"a\\u001bb\"" {
+    Result.err _ => false,
+    Result.ok j => match Json.get_str j {
+      Result.err _ => false,
+      Result.ok s => String.length s == 3i64,
+    },
+  }
+
+#[test]
+def test_parse_unicode_escape_bmp : Bool :=
+  match Json.parse "\"\\u00e9\"" {
+    Result.err _ => false,
+    Result.ok j => match Json.get_str j {
+      Result.err _ => false,
+      Result.ok s => Bool.and (String.length s == 2i64) (String.contains s "é"),
+    },
+  }
+
+/// A raw control byte (an ANSI ESC or a 0x01 from tool output) is escaped,
+/// not passed through: a provider request carrying one is invalid JSON.
+#[test]
+def test_escape_string_escapes_control_bytes : Bool :=
+  Json.escape_string (String.from_list [97u8, 1u8, 27u8, 98u8]) == "a\\u0001\\u001bb"
 
 #[test]
 def test_list_intercalate : Bool :=

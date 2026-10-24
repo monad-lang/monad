@@ -32,7 +32,7 @@ def test_provider_of_follows_the_config_not_the_flag : Bool :=
 
 #[test]
 def test_provider_of_keeps_an_unknown_config_name : Bool :=
-    let cfg : ProviderConfig := { base_url := "https://example.test", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.openai } in
+    let cfg : ProviderConfig := { base_url := "https://example.test", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.openai, thinking := false } in
     String.beq (Weaver.provider_of "ollama" cfg) "ollama"
 
 #[test]

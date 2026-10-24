@@ -202,6 +202,7 @@ def main():
     check("permission dialog appears with its options",
           "Permission required" in strip(out) and "Approve once" in strip(out)
           and "Deny" in strip(out), results)
+    check("the dialog names the file it will write", NOTE in strip(out), results)
     out += run_keys(master, [b"e", b"please keep it", b"\r", b"n"], 0.5)
     out += pump(master, 1.5)
     check("a denied pick carries the note to the model",

@@ -34,7 +34,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::agent {RunState, Agent, AgentIdle, AgentAnswered, AgentExecuting, AgentDone, silent_sleep, silent_usage, silent_stop}
-use shuttle::context {usage_zero, usage_add}
+use shuttle::context {usage_zero, usage_add, Context.cap_text, Context.tool_output_max}
 use shuttle::gate {Capability, Pick, Approval, Gate}
 use json::json {Json}
 
@@ -359,10 +359,77 @@ def retry_contains (s : String) (i : I64) (needle : String) : Bool :=
 pub def Loop.dispatch (turn : Turn) : Agent AgentAnswered AgentExecuting (List Content) :=
     Agent.agent (fn (s : RunState) => agent_dispatch_run turn s)
 
-def agent_dispatch_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunState (List Content)) := do {
-    let p <- dispatch_all s.reg s.gate s.always (turn_content turn.message);
-    ResultT.mk (return (Result.ok (Pair.pair (state_with_always s (allcache_of p)) (results_of p))))
-}
+/// Out-of-band activity lines ride the provider's `emit` sink with this
+/// prefix. The leading control byte means model text can never forge
+/// one; the UIs filter the prefix out of the transcript and route it to
+/// their own live-status surface.
+pub def activity_prefix : String := "\u{1}activity\u{2}"
+
+pub def activity_start (name : String) : String :=
+    String.concat activity_prefix (String.concat "start\u{2}" name)
+
+pub def activity_end (name : String) : String :=
+    String.concat activity_prefix (String.concat "end\u{2}" name)
+
+/// The `tool_use` names in order, skipping non-tool content.
+#[partial]
+def tool_names (cs : List Content) : List String :=
+    match cs {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                Content.tool_use _ name _ => List.cons name (tool_names rest),
+                _ => tool_names rest,
+            },
+    }
+
+/// Clamp one tool result's text to the shared cap, so any tool (read,
+/// grep, glob, an MCP proxy) can contribute at most one bounded result
+/// to the history.
+def cap_content (c : Content) : Content :=
+    match c {
+        Content.tool_result id output is_error => Content.tool_result id (Context.cap_text output Context.tool_output_max) is_error,
+        _ => c,
+    }
+
+#[partial]
+def cap_contents (cs : List Content) : List Content :=
+    match cs {
+        List.empty => List.empty,
+        List.cons c rest => List.cons (cap_content c) (cap_contents rest),
+    }
+
+#[partial]
+def emit_each (emit : String -> IO Unit) (lines : List String) : IO Unit :=
+    match lines {
+        List.empty => IO.pure unit,
+        List.cons l rest => do {
+            let _ <- emit l;
+            emit_each emit rest
+        },
+    }
+
+/// One start line per call, the whole dispatch (the gate may prompt in
+/// the middle), then one end line per call. IO and ResultT stay in
+/// separate do blocks: an `IO` bind inside a ResultT do does not
+/// typecheck, and `ResultT.lift` there is a recorded compiled-backend
+/// trap.
+def agent_dispatch_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunState (List Content)) :=
+    ResultT.mk (do {
+        let names : List String := tool_names (turn_content turn.message);
+        let starts : List String := List.map (fn (n : String) => activity_start n) names;
+        let _ <- emit_each s.emit starts;
+        let r <- ResultT.run (dispatch_all s.reg s.gate s.always (turn_content turn.message));
+        match r {
+            Result.err e => return (Result.err e),
+            Result.ok p => do {
+                let ends : List String := List.map (fn (n : String) => activity_end n) names;
+                let _ <- emit_each s.emit ends;
+                let capped : List Content := cap_contents (results_of p);
+                return (Result.ok (Pair.pair (state_with_always s (allcache_of p)) capped))
+            }
+        }
+    })
 
 def state_with_always (s : RunState) (cached : List Capability) : RunState :=
     let s2 : RunState := { s with always := cached } in

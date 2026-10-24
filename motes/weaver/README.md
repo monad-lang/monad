@@ -17,7 +17,7 @@ monad build motes/weaver/src/main.mo -o ./weaver
 usage: weaver [--provider <name>] [--model <name>] [--max-turns <n>] [--mcp <exe>]...
               [--resume <id|file>] [--continue] [--no-color]
   --provider ollama|mistral|openrouter|anthropic|mock  (default ollama)
-  --model <name>       (default: the provider's preferred model; /models
+  --model <name>       (default: the provider's preferred model; /model
                         lists what the API actually serves)
   --max-turns <n>      (default 40, total across a save/resume)
   --mcp <exe>          (repeatable; bare executable, no arguments yet)
@@ -87,7 +87,7 @@ native selection). A fresh session opens with a colorful launch banner
 submit. Tab cycles the
 approval mode
 (`manual -> plan -> allow_edit -> auto -> manual`), PageUp/PageDown
-scroll a screen and Ctrl+U/Ctrl+D half a screen (End re-pins, Home jumps
+scroll a screen and Ctrl+U half a screen (End re-pins, Home jumps
 to the top; new output auto-pins only when the window is already pinned
 and the scrolled-up window shows a `N lines above -- PgDn for latest`
 row instead). Scrolling is by wrapped DISPLAY ROW, so even a single
@@ -95,13 +95,18 @@ message taller than the panel is fully reachable. Enter submits a line;
 the turn runs on a fiber while the UI keeps folding keys and 100 ms
 ticks. A dim line under the last prompt shows the spinner, elapsed time
 and the session's token totals (`| thinking 3.4s · ↑1.2k ↓345`),
-refreshed by a 1 Hz read of the turn's usage file; it disappears when the
-result lands. Keys typed mid-turn land in the input box. Esc asks the
+which becomes `running <tool>` while a tool dispatches and `responding`
+once text streams; the streamed text itself appears under the
+transcript with a caret, dim, and is replaced by the real message when
+the turn lands. The token totals refresh at 1 Hz from the turn's usage
+file, and the row disappears when the result lands. Keys typed mid-turn
+land in the input box. Esc asks the
 turn to stop: the row says `stopping…`, the in-flight model call or
 foreground tool finishes, and the turn ends at the next boundary with a
 `[stopped]` line -- the partial session is kept. Background processes
-keep running, retry backoffs and a stalled provider read (no socket
-timeout) are not interrupted, so stop waits for the current call. While a
+keep running and retry backoffs are not interrupted, so stop waits for
+the current call; a stalled provider read is bounded by moose's request
+timeouts instead. While a
 dialog owns stdin the loop stops reading and drawing, and the dialog's
 close forces a clear+repaint, so a confirmed prompt never lingers. An approval prompt (`manual`/`allow_edit`'s `ask`
 cells) opens a centered dialog: the diff for a `write`/`edit` pick,
@@ -117,13 +122,17 @@ exit (the cache resets there), and plan mode's refusal is re-checked
 even for a cached capability. In plan mode `/plan` opens a `Plan ready`
 dialog over the last assistant message: approve to `allow_edit` or to
 `manual`, revise with a note (the note lands in the input box), or
-cancel. Two Ctrl+C presses in a row (no other key
-between) exit cleanly through the restore path -- cbreak now has ISIG
-off, so Ctrl+C arrives as a key rather than SIGINT; a single press just
-prints a hint. Both presses work while a turn runs (Esc is the stop
-gesture there); while a dialog is open, Ctrl+C cancels that dialog
-instead. A piped or scripted run
-(stdin not a tty) falls back to the line-based UI above automatically.
+cancel. Two Ctrl+C presses in a row, or two Ctrl+D presses in a row
+(no other key between), exit cleanly through the restore path -- cbreak
+has ISIG off, so Ctrl+C arrives as a key rather than SIGINT; a single
+press just prints a hint. Each gesture arms only itself: Ctrl+C
+followed by Ctrl+D does not exit. Ctrl+D is the exit gesture and no
+longer scrolls (PageUp/PageDown and Ctrl+U remain); while the model
+picker is open it is swallowed. Both presses work while a turn runs
+(Esc is the stop gesture there); while a dialog is open, Ctrl+C cancels
+that dialog instead. A piped or scripted run
+(stdin not a tty) falls back to the line-based UI above automatically;
+there a single Ctrl+D is EOF and exits.
 
 Long transcript lines wrap (word-wrap at the last fitting space) by
 terminal CELLS, not bytes: UTF-8 text (`æøå`, CJK, emoji, combining
@@ -162,7 +171,8 @@ warning flag shuttle's loop prints.
 ```
 /mode [manual|plan|allow_edit|auto]  show or set the approval mode
 /model [name]                        show/pick (TUI) or set the model
-/models                              ask the provider which models it serves
+/compact [instructions]              summarize the context, keep a recent tail
+/thinking [on|off]                   show or set the provider's reasoning channel
 /provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider
 /plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode
 /tools                               list tools with their capability tags
@@ -176,10 +186,11 @@ warning flag shuttle's loop prints.
 /quit (or /q)                        exit (MCP servers are disposed)
 ```
 
-The provider decides which models exist: `/models` fetches its
-`/v1/models` list (the mock wire answers `mock` offline), caches it for
-the session, and prints it; in the TUI it also opens a picker. `/model`
-with no argument does the same, and `/model <name>` sets a name as given
+The provider decides which models exist: `/model` with no argument
+fetches its `/v1/models` list (the mock wire answers `mock` offline),
+caches it for the session, and opens a picker in the TUI (the line UI
+prints the list); dismissing the picker leaves the transcript untouched.
+`/model <name>` sets a name as given
 -- when a fetched list does not contain it, the output says so but the
 name is still selectable (an API list can be partial). The settings
 `model` is used as-is; no built-in family table rewrites or refuses it.
@@ -245,8 +256,12 @@ Two TOML files, in resolution order GLOBAL -> PROJECT -> RUNTIME:
 ```toml
 mode = "plan"          # manual | plan | allow_edit | auto
 provider = "ollama"
-model = "qwen3:8b"     # used as-is; /models lists the API's catalogue
+model = "qwen3:8b"     # used as-is; /model lists the API's catalogue
 max_turns = 20
+thinking = false       # ask for the provider's reasoning channel
+max_tokens = 512       # per-response output budget (raise for reasoning models)
+context_window = 128000  # the window autocompact measures against
+compact_at = 80        # autocompact at this percentage of it (0 disables)
 
 [mcp_caps]             # per-server capability override, keyed by the
 my-server = "read"      # exact --mcp executable: read | write | exec | net
@@ -273,7 +288,7 @@ cyan block carrying its role as data -- no `you:`/`assistant:` text
 prefix -- separated from the reply by a blank line; the reply is plain.
 The remaining lines classify by semantic prefix: `[running]` rows dim
 cyan, `error:`/`denied:`/`refused:` lines and diff `-` rows red, diff
-`+` rows green, the Ctrl+C hint dim. Old sessions that stored the v1
+`+` rows green, the Ctrl+C/Ctrl+D hints dim. Old sessions that stored the v1
 `you:`/`assistant:` prefixes migrate on read. The status bar is dim
 terminal-default foreground in manual mode (the one place that reads as
 chrome, not content), dim YELLOW
@@ -337,3 +352,9 @@ plaintext, and a key that came from there prints one startup warning
 naming the providers. A saved session (`/save`) never contains key
 material -- the checkpoint keeps only the env var name, and a resumed
 session re-resolves its key from settings/env at startup.
+
+## Context management
+
+`/compact [instructions]` summarizes the conversation (one provider call through the same model) and replaces the MODEL history with that summary plus a recent tail; the visible transcript is untouched. Autocompact runs the same step automatically before a turn when the estimated context (`history + system prompt + tool schemas`) crosses `compact_at` percent of `context_window`; a zero `context_window` disables it. A failed summarization leaves the session intact and only notes it. The compacted history is persisted as a new history block and a resume replays only from there.
+
+Ctrl+O shows the detail lines hidden by default: tool output beyond its first three lines, and completed thinking blocks.

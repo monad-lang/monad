@@ -32,14 +32,14 @@ use shuttle::provider {ProviderConfig, Wire}
 /// bearer header goes along, which is Ollama's own optional-auth
 /// behaviour.
 pub def ProviderConfig.ollama (model : String) : ProviderConfig :=
-    { base_url := "http://localhost:11434", model := model, api_key_env := "OLLAMA_API_KEY", max_tokens := 512, wire := Wire.openai }
+    { base_url := "http://localhost:11434", model := model, api_key_env := "OLLAMA_API_KEY", max_tokens := 512, wire := Wire.openai, thinking := false }
 
 /// Mistral AI's hosted API -- OpenAI-compatible, key in
 /// `MISTRAL_API_KEY` (their own convention). `model` stays a
 /// parameter because model names churn faster than this file; the
 /// e2e default is `mistral-large-latest`.
 pub def ProviderConfig.mistral (model : String) : ProviderConfig :=
-    { base_url := "https://api.mistral.ai", model := model, api_key_env := "MISTRAL_API_KEY", max_tokens := 512, wire := Wire.openai }
+    { base_url := "https://api.mistral.ai", model := model, api_key_env := "MISTRAL_API_KEY", max_tokens := 512, wire := Wire.openai, thinking := false }
 
 /// OpenRouter -- one OpenAI-compatible gateway over many vendors, key
 /// in `OPENROUTER_API_KEY` (their own convention), and model names are
@@ -48,7 +48,7 @@ pub def ProviderConfig.mistral (model : String) : ProviderConfig :=
 /// be right. `base_url` ends at `/api` because `OpenAI.complete`
 /// appends `/v1/chat/completions` itself.
 pub def ProviderConfig.openrouter (model : String) : ProviderConfig :=
-    { base_url := "https://openrouter.ai/api", model := model, api_key_env := "OPENROUTER_API_KEY", max_tokens := 512, wire := Wire.openai }
+    { base_url := "https://openrouter.ai/api", model := model, api_key_env := "OPENROUTER_API_KEY", max_tokens := 512, wire := Wire.openai, thinking := false }
 
 /// Anthropic's hosted Messages API -- the one live preset on
 /// `Wire.anthropic`. Key in `ANTHROPIC_API_KEY` (their convention, and
@@ -56,4 +56,4 @@ pub def ProviderConfig.openrouter (model : String) : ProviderConfig :=
 /// churn; the CLI's default is `claude-opus-5`, the wire adapter's own
 /// documented default.
 pub def ProviderConfig.anthropic (model : String) : ProviderConfig :=
-    { base_url := "https://api.anthropic.com", model := model, api_key_env := "ANTHROPIC_API_KEY", max_tokens := 512, wire := Wire.anthropic }
+    { base_url := "https://api.anthropic.com", model := model, api_key_env := "ANTHROPIC_API_KEY", max_tokens := 512, wire := Wire.anthropic, thinking := false }

@@ -204,7 +204,7 @@ def stamp_impl : ToolImpl := { spec := stamp_spec, cap := Capability.write, run 
 def stamp_registry : ToolRegistry := ToolRegistry.register stamp_impl ToolRegistry.empty
 
 def mock_config : ProviderConfig :=
-    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 // ── The initial state (main.mo's shape, offline) ───────────────────────
 
@@ -217,7 +217,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     run := run_of reg,
     mode := Mode.manual,
     provider := "mock",
-    budget := budget,
+    budget := budget, context_window := 128000, compact_at := 80,
     mcps := List.empty,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,

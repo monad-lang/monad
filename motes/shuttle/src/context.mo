@@ -132,3 +132,32 @@ def tools_prefix (tools : List ToolSpec) : String :=
 /// last tool with `cache_control`).
 pub def cached_prefix (system : String) (tools : List ToolSpec) : String :=
     String.concat system (String.concat "\n" (tools_prefix tools))
+
+// ── Tool-output cap ────────────────────────────────────────────────────
+//
+// One tool result is the unit that can blow a context: a 4 MB binary
+// read measured ~1M tokens and the provider rejected the next request
+// with HTTP 400. The cap is applied where results ENTER the history
+// (the loop) and by the read tool before numbering.
+
+/// The most text one tool result contributes.
+pub def Context.tool_output_max : I64 := 262144
+
+/// A prefix no longer than `max`, ending on a UTF-8 boundary (the
+/// runtime's slice answers "" when its end offset is a continuation
+/// byte), with a note naming what was dropped.
+#[partial]
+def cap_slice (text : String) (max : I64) (back : I64) : String :=
+    if I64.gt back 3i64 then ""
+    else if I64.lt (max - back) 1i64 then ""
+    else
+        let s : String := String.slice text 0 (max - back) in
+        if String.is_empty s then cap_slice text max (back + 1i64) else s
+
+pub def Context.cap_text (text : String) (max : I64) : String :=
+    let n : I64 := String.length text in
+    if Bool.not (I64.gt n max) then text
+    else
+        let note : String := String.concat "\n[truncated: "
+            (String.concat (I64.to_string n) " bytes total]") in
+        String.concat (cap_slice text max 0i64) note

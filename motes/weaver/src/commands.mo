@@ -28,10 +28,11 @@ use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of}
 use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
+use weaver::compact {Compact.threshold, Compact.should_compact, Compact.compact, Compact.Outcome}
 use weaver::error {WeaverError, WeaverError.of_shuttle}
 use weaver::store {
     StoreState, Store.new_session, Store.latest_session, Store.load_session,
-    Store.import_session, Store.session_dir, Store.base_name,
+    Store.import_session, Store.session_dir, Store.base_name, Store.record_compacted,
 }
 use std::path {Path, Path.of, Path.parent}
 use std::io {IO.is_dir, IO.current_time_nano}
@@ -55,9 +56,13 @@ pub struct WeaverState {
     mode : Mode,
     provider : String,
     budget : I64,
+    /// Autocompact's estimate: `context_window * compact_at / 100`
+    /// estimated tokens; a zero window disables it.
+    context_window : I64,
+    compact_at : I64,
     mcps : List String,
     keys : BTreeMap String String,
-    /// The last model list fetched per provider (`/models`, `/model` with
+    /// The last model list fetched per provider (`/model` with
     /// no argument, a `/provider` choice). The API is the authority; this
     /// is only the session's cache of its answer.
     catalog : BTreeMap String (List String),
@@ -119,12 +124,12 @@ def respond (st : WeaverState) (output : String) : IO (Result WeaverError Effect
 /// final shape.
 pub def command_table : BTreeMap String SlashCommand :=
     Map.insert "/clear" (SlashCommand.mk cmd_clear)
+        (Map.insert "/compact" (SlashCommand.mk cmd_compact)
         (Map.insert "/h" (SlashCommand.mk cmd_help)
         (Map.insert "/help" (SlashCommand.mk cmd_help)
         (Map.insert "/mcp" (SlashCommand.mk cmd_mcp)
         (Map.insert "/mode" (SlashCommand.mk cmd_mode)
         (Map.insert "/model" (SlashCommand.mk cmd_model)
-        (Map.insert "/models" (SlashCommand.mk cmd_models)
         (Map.insert "/plan" (SlashCommand.mk cmd_plan)
         (Map.insert "/provider" (SlashCommand.mk cmd_provider)
         (Map.insert "/q" (SlashCommand.mk cmd_quit)
@@ -134,8 +139,9 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/log" (SlashCommand.mk cmd_log)
         (Map.insert "/processes" (SlashCommand.mk cmd_processes)
         (Map.insert "/procs" (SlashCommand.mk cmd_processes)
+        (Map.insert "/thinking" (SlashCommand.mk cmd_thinking)
         (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty))))))))))))))))
+            BTreeMap.empty)))))))))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -210,16 +216,6 @@ def cmd_model (arg : String) (st : WeaverState) : IO (Result WeaverError Effect)
         },
     }
 
-/// `/models`: always asks the provider (the explicit refresh; the TUI
-/// opens the picker from the effect).
-def cmd_models (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
-    let fresh <- Catalog.fetch st.run.session.config;
-    match fresh {
-        Result.err e => return (Result.err (WeaverError.of_shuttle e)),
-        Result.ok models => IO.pure (Result.ok (models_effect st st.provider models)),
-    }
-}
-
 /// The cached list when there is one, else one fetch; a provider that
 /// cannot be reached still leaves `/model` usable (the current name is
 /// shown with the reason the list is missing).
@@ -279,7 +275,7 @@ def provider_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effec
 def explicit_model (name : String) (model : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     match Weaver.config_for name model st.keys {
         Result.err e => respond st e,
-        Result.ok cfg => respond (set_config st cfg name) (provider_output name cfg),
+        Result.ok cfg => respond (set_config st (inherit_thinking st cfg) name) (provider_output name cfg),
     }
 
 /// No model argument: a cached list chooses; without one the preferred
@@ -294,7 +290,7 @@ def provider_no_model (name : String) (st : WeaverState) : IO (Result WeaverErro
         Option.none => match Weaver.preferred_model name {
             Result.ok p => match Weaver.config_for name p st.keys {
                 Result.err e => respond st e,
-                Result.ok cfg => respond (set_config st cfg name) (provider_output name cfg),
+                Result.ok cfg => respond (set_config st (inherit_thinking st cfg) name) (provider_output name cfg),
             },
             Result.err _ => provider_fetch name st,
         },
@@ -324,7 +320,7 @@ def provider_with (name : String) (chosen : String) (models : List String) (st :
         Result.ok cfg =>
             let cat : BTreeMap String (List String) := Catalog.remember name models st.catalog in
             let with_cat : WeaverState := { st with catalog := cat } in
-            let st2 : WeaverState := set_config with_cat cfg name in
+            let st2 : WeaverState := set_config with_cat (inherit_thinking st cfg) name in
             respond st2 (provider_output name cfg),
     }
 
@@ -657,6 +653,110 @@ def clear_with_store (st : WeaverState) (s : StoreState) (fresh : Session) : IO 
 
 /// `/quit`: the loop's exit flag. Disposal (MCP servers) is the
 /// entry's job -- the command only says stop.
+/// `/compact [instructions]`: summarize the context now. The summary
+/// replaces the model's history (a system message plus a recent tail);
+/// the visible transcript is untouched.
+def cmd_compact (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let threshold : I64 := Compact.threshold st.context_window st.compact_at;
+    let r <- Compact.compact st.run.session.config st.run.session threshold arg;
+    match r {
+        Result.err e => return (Result.err (WeaverError.of_shuttle e)),
+        Result.ok out => do {
+            let st2 : WeaverState := apply_compact st out;
+            let note <- record_compact st.store out;
+            return (Result.ok (Effect.ok st2 (compact_message out note)))
+        }
+    }
+}
+
+/// The compacted session as state (the same seam autocompact uses).
+def apply_compact (st : WeaverState) (out : Compact.Outcome) : WeaverState :=
+    // Bind the base first: a struct update on a field access (`{ st.run
+    // with ... }`) parses under the self-hosted compiler but not the
+    // Rust host, which the CI completeness step runs.
+    let base : RunState := st.run in
+    let run2 : RunState := { base with session := out.session } in
+    let st2 : WeaverState := { st with run := run2 } in
+    st2
+
+/// Persist a compacted history into the session store (a no-op without
+/// one); the error, when any, is reported but the compaction stands.
+def record_compact (store : Option StoreState) (out : Compact.Outcome) : IO (Option String) :=
+    match store {
+        Option.none => IO.pure Option.none,
+        Option.some s => do {
+            let r <- Store.record_compacted s out.session;
+            match r {
+                Result.err e => IO.pure (Option.some e),
+                Result.ok _ => IO.pure Option.none,
+            }
+        },
+    }
+
+def compact_message (out : Compact.Outcome) (note : Option String) : String :=
+    let base : String := String.concat "compacted: "
+        (String.concat (I64.to_string out.before) (String.concat " → "
+        (String.concat (I64.to_string out.after) (String.concat " messages (~"
+        (String.concat (I64.to_string out.tokens) " tokens)"))))) in
+    match note {
+        Option.none => base,
+        Option.some e => String.concat base (String.concat " (history not saved: " (String.concat e ")")),
+    }
+
+/// Autocompact: before a turn, when the estimate crosses the configured
+/// threshold, summarize and return the compacted state plus a note for
+/// the transcript. A failed summarization leaves the session untouched
+/// and only notes it -- a turn must still run.
+pub def Commands.autocompact (st : WeaverState) : IO (Pair WeaverState (Option String)) := do {
+    let threshold : I64 := Compact.threshold st.context_window st.compact_at;
+    if Bool.not (Compact.should_compact threshold st.run.session)
+    then return (Pair.pair st Option.none)
+    else do {
+        let r <- Compact.compact st.run.session.config st.run.session threshold "";
+        match r {
+            Result.err e => return (Pair.pair st (Option.some (String.concat "context compaction failed: " e))),
+            Result.ok out => do {
+                let st2 : WeaverState := apply_compact st out;
+                let note <- record_compact st.store out;
+                return (Pair.pair st2 (Option.some (compact_message out note)))
+            }
+        }
+    }
+}
+
+/// `/thinking [on|off]`: ask for the provider's reasoning channel
+/// (Anthropic extended thinking; an OpenAI-compatible server streams
+/// `reasoning_content` when it has one regardless). The flag rides the
+/// session config, so a `/provider` switch inherits it and a save keeps
+/// it.
+def cmd_thinking (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if String.is_empty arg
+    then respond st (thinking_state_text st)
+    else if String.beq arg "on" then respond (set_thinking st true) "thinking: on"
+    else if String.beq arg "off" then respond (set_thinking st false) "thinking: off"
+    else respond st "thinking: on | off"
+
+def thinking_state_text (st : WeaverState) : String :=
+    if st.run.session.config.thinking then "thinking: on" else "thinking: off"
+
+def set_thinking (st : WeaverState) (b : Bool) : WeaverState :=
+    let cfg : ProviderConfig := st.run.session.config in
+    let cfg2 : ProviderConfig := { cfg with thinking := b } in
+    let cur : Session := st.run.session in
+    let sess : Session := { cur with config := cfg2 } in
+    let base : RunState := st.run in
+    let run2 : RunState := { base with session := sess } in
+    let st2 : WeaverState := { st with run := run2 } in
+    st2
+
+/// A provider switch keeps the session's reasoning preference and output
+/// budget: the new preset's own values are replaced by the ones the user
+/// chose.
+def inherit_thinking (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
+    let cur : ProviderConfig := st.run.session.config in
+    let cfg2 : ProviderConfig := { cfg with thinking := cur.thinking, max_tokens := cur.max_tokens } in
+    cfg2
+
 def cmd_quit (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     let st2 : WeaverState := set_quit st in
     respond st2 "bye"
@@ -669,16 +769,17 @@ def help_text : String :=
     List.intercalate "\n" [
         "/mode [manual|plan|allow_edit|auto]  show or set the approval mode",
         "/model [name]                        show/pick or set the model",
-        "/models                              ask the provider which models it serves",
         "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
         "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
         "/tools                               list tools with their capability tags",
         "/processes [kill <id>]               list background tasks",
+        "/thinking [on|off]                   show or set the reasoning channel",
         "/log                                 the debug log path, tail and crash note",
         "/mcp                                 list mounted MCP servers",
         "/save <file>                         checkpoint the session as a JSON file",
         "/resume [<id|file>]                  continue a session (newest by default)",
         "/clear                               start a new session and reset the budget",
+        "/compact [instructions]              summarize the context and keep a recent tail",
         "/help (or /h)                        this table",
         "/quit (or /q)                        exit (MCP servers are disposed)",
     ]

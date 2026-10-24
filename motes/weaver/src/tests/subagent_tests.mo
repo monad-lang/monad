@@ -60,7 +60,7 @@ def test_read_only_ask_denies_non_reads : IO Bool := do {
 // ── a child loop against the scripted wire ─────────────────────────────
 
 def mock_cfg : ProviderConfig :=
-    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def script_path : String :=
     String.concat "/tmp/shuttle_mock_turns_" (String.concat (I64.to_string process_id) ".json")

@@ -15,7 +15,7 @@ use weaver::commands {WeaverState, Effect, TranscriptChange, set_fatal}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::model {
-    TuiModel, WeaverMsg, DisplayRow, init_tui_model, Model.append_block,
+    TuiModel, WeaverMsg, LiveDelta, DisplayRow, init_tui_model, Model.append_block,
     Model.scroll_step, Model.display_rows, Model.thinking_text,
     PickerState, Picker.count, Picker.selected_model, Picker.init, Picker.move,
     Picker.window_offset, Picker.visible,
@@ -32,7 +32,7 @@ use std::list {List.length}
 // ── The offline state (commands_tests.mo's shape) ───────────────────────
 
 def mock_config : ProviderConfig :=
-    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
@@ -41,7 +41,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false }
 
 def state_of (mode : Mode) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
     let m : TuiModel := init_tui_model Option.none (state_of mode) 24 80 in
@@ -185,6 +185,102 @@ def test_resize_resets_ctrl_c_streak : Bool :=
                         Pair.pair _ cmd => cmd_is_none cmd
                     }
             }
+    }
+
+// Ctrl+D is the second exit gesture: same streak rules as Ctrl+C, and
+// each gesture arms only itself.
+#[test]
+def test_single_ctrl_d_appends_hint_keeps_running : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "d")) {
+        Pair.pair m2 cmd =>
+            cmd_is_none cmd
+                && m2.ctrl_d_streak == 1
+                && m2.ctrl_c_streak == 0
+                && transcript_contains "press Ctrl+D again to exit (or /quit)" m2.transcript.tail
+    }
+
+#[test]
+def test_double_ctrl_d_quits : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "d")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.ctrl "d")) {
+                Pair.pair _ cmd => cmd_is_quit cmd
+            }
+    }
+
+#[test]
+def test_ctrl_c_then_ctrl_d_does_not_quit : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "c")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.ctrl "d")) {
+                Pair.pair m2 cmd => cmd_is_none cmd && m2.ctrl_d_streak == 1 && m2.ctrl_c_streak == 0
+            }
+    }
+
+#[test]
+def test_ctrl_d_then_ctrl_c_does_not_quit : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "d")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.ctrl "c")) {
+                Pair.pair m2 cmd => cmd_is_none cmd && m2.ctrl_c_streak == 1 && m2.ctrl_d_streak == 0
+            }
+    }
+
+#[test]
+def test_other_key_resets_ctrl_d_streak : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "d")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.char "x")) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg (Key.ctrl "d")) {
+                        Pair.pair m3 cmd => cmd_is_none cmd && m3.ctrl_d_streak == 1
+                    }
+            }
+    }
+
+#[test]
+def test_tick_does_not_reset_ctrl_d_streak : Bool :=
+    match TuiApp.update (model_of Mode.manual) (key_msg (Key.ctrl "d")) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (WeaverMsg.key_event Event.tick) {
+                Pair.pair m2 _ =>
+                    match TuiApp.update m2 (key_msg (Key.ctrl "d")) {
+                        Pair.pair _ cmd => cmd_is_quit cmd
+                    }
+            }
+    }
+
+// ── the live stream ──────────────────────────────────────────────────────
+
+#[test]
+def test_polled_live_delta_appends_streamed_text : Bool :=
+    let base0 : TuiModel := model_of Mode.manual in
+    let base : TuiModel := { base0 with turn_pending := true, live_seen := 4 } in
+    let d : LiveDelta := { text := "he", thinking := "hm", text_seen := 6, thinking_seen := 2, activity := Option.some "read" } in
+    match TuiApp.update base (WeaverMsg.polled Option.none Option.none (Option.some d)) {
+        Pair.pair m2 _ =>
+            m2.live_text == "he" && m2.live_thinking == "hm" && m2.live_seen == 6
+                && m2.live_thinking_seen == 2
+                && (match m2.live_activity {
+                    Option.some n => n == "read",
+                    Option.none => false,
+                })
+    }
+
+#[test]
+def test_polled_live_delta_ignored_when_idle : Bool :=
+    let d : LiveDelta := { text := "late", thinking := "", text_seen := 4, thinking_seen := 0, activity := Option.none } in
+    match TuiApp.update (model_of Mode.manual) (WeaverMsg.polled Option.none Option.none (Option.some d)) {
+        Pair.pair m2 _ => String.is_empty m2.live_text
+    }
+
+#[test]
+def test_turn_end_clears_the_live_stream : Bool :=
+    let st : WeaverState := state_of Mode.manual in
+    let base0 : TuiModel := model_of Mode.manual in
+    let base : TuiModel := { base0 with turn_pending := true, live_text := "partial", live_thinking := "why" } in
+    match TuiApp.update base (WeaverMsg.turn_result st.run [] []) {
+        Pair.pair m2 _ => String.is_empty m2.live_text && String.is_empty m2.live_thinking
     }
 
 // ── failures carry their class: the dumb failed_step contract mirrored ──
@@ -384,9 +480,9 @@ def test_tick_at_ten_polls_usage : Bool :=
 #[test]
 def test_live_usage_updates_only_while_pending : Bool :=
     let u : Usage := { input_tokens := 3, output_tokens := 4, cached_tokens := 0 } in
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled (Option.some u) Option.none) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled (Option.some u) Option.none Option.none) {
         Pair.pair m1 _ =>
-            match TuiApp.update (model_of Mode.manual) (WeaverMsg.polled (Option.some u) Option.none) {
+            match TuiApp.update (model_of Mode.manual) (WeaverMsg.polled (Option.some u) Option.none Option.none) {
                 Pair.pair idle _ =>
                     (match m1.live_spent { Option.some x => x.input_tokens == 3 && x.output_tokens == 4, Option.none => false })
                     && (match idle.live_spent { Option.none => true, Option.some _ => false }),
@@ -401,7 +497,7 @@ def cmd_is_inspect (c : Cmd WeaverMsg) : Bool :=
 #[test]
 def test_polled_open_marks_the_overlay : Bool :=
     let st : OverlayState := { want := true, ack := false, seq := 0 } in
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some st)) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some st) Option.none) {
         Pair.pair m2 cmd => m2.overlay_open && m2.modal && cmd_is_none cmd,
     }
 
@@ -411,9 +507,9 @@ def test_polled_open_marks_the_overlay : Bool :=
 def test_polled_close_repaints : Bool :=
     let opened : OverlayState := { want := true, ack := true, seq := 0 } in
     let finished : OverlayState := { want := false, ack := false, seq := 1 } in
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some opened)) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.polled Option.none (Option.some opened) Option.none) {
         Pair.pair m1 _ =>
-            match TuiApp.update m1 (WeaverMsg.polled Option.none (Option.some finished)) {
+            match TuiApp.update m1 (WeaverMsg.polled Option.none (Option.some finished) Option.none) {
                 Pair.pair m2 cmd =>
                     Bool.not m2.overlay_open && Bool.not m2.modal && m2.dialog_seq == 1 && cmd_is_perform_repaint cmd,
             },
@@ -601,7 +697,7 @@ def test_tick_advances_the_banner_sweep : Bool :=
 
 def picker_models : List String := ["alpha", "beta", "gamma"]
 
-/// A command result carrying a model list: the shape `/models` builds
+/// A command result carrying a model list: the shape `/model` builds
 /// (`command_keep` is what opens the picker).
 def picker_command (models : List String) : WeaverMsg :=
     let cat : BTreeMap String (List String) := Map.insert "mock" models BTreeMap.empty in
@@ -686,6 +782,23 @@ def test_picker_window_follows_the_selection : Bool :=
 def test_picker_init_misses_the_current_name_without_breaking : Bool :=
     let p : PickerState := Picker.init picker_models "not-listed" in
     Picker.count p == 3 && Picker.selected_model p == "alpha"
+
+#[test]
+def test_picker_swallows_ctrl_d : Bool :=
+    match TuiApp.update (model_of Mode.manual) (picker_command picker_models) {
+        Pair.pair m1 _ =>
+            match TuiApp.update m1 (key_msg (Key.ctrl "d")) {
+                Pair.pair m2 cmd1 =>
+                    match TuiApp.update m2 (key_msg (Key.ctrl "d")) {
+                        Pair.pair m3 cmd2 =>
+                            cmd_is_none cmd1 && cmd_is_none cmd2 && m3.ctrl_d_streak == 0
+                                && (match m3.picker {
+                                    Option.some _ => true,
+                                    Option.none => false,
+                                }),
+                    }
+            }
+    }
 
 #[test]
 def test_empty_model_list_opens_no_picker : Bool :=

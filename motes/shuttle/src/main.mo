@@ -422,11 +422,21 @@ def user_message (task : String) : Message :=
 
 /// One text fragment to stdout, flushed per fragment: a fragment is
 /// the unit the user watches for, and an unflushed buffer would
-/// batch them back into one silent lump.
-def stdout_emit (t : String) : IO Unit := do {
-    IO.write_stdout t;
-    IO.flush_stdout
-}
+/// batch them back into one silent lump. The loop's out-of-band tags
+/// are filtered here: activity lines are UI status (dropped), and a
+/// reasoning fragment prints without its control bytes.
+def stdout_emit (t : String) : IO Unit :=
+    if String.starts_with "\u{1}activity\u{2}" t
+    then IO.pure unit
+    else do {
+        let think : String := "\u{1}thinking\u{2}";
+        let text : String :=
+            if String.starts_with think t
+            then String.slice t (String.length think) (String.length t - String.length think)
+            else t;
+        IO.write_stdout text;
+        IO.flush_stdout
+    }
 
 /// The run's text sink. `--stream` prints fragments live (and the
 /// final answer is then NOT reprinted); without it the run stays

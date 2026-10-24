@@ -356,38 +356,58 @@ def anthropic_block_entry (bj : Json) : Option Block :=
         Result.ok ob => ob,
     }
 
-/// The text a delta reports to `on_text`: only `text_delta` ever
-/// reports (thinking and tool-input fragments accumulate silently),
-/// and only when the block it patches is a text block that really
-/// started -- the live output can never diverge from the assembled
-/// response.
-def anthropic_delta_text (blocks : List (Option Block)) (idx : I64) (dobj : BTreeMap String Json) : String :=
+/// The reserved tag thinking fragments carry on `on_text`: the UI
+/// routes them to its dim "thinking" surface. The leading control byte
+/// cannot occur in model text.
+def anthropic_reasoning_delta (frag : String) : String :=
+    String.concat "\u{1}thinking\u{2}" frag
+
+/// The fragments a delta reports to `on_text`: a `text_delta` of a
+/// text block, or a `thinking_delta` of a thinking block carrying the
+/// reserved tag (tool-input fragments still accumulate silently). Only
+/// blocks that really started report -- the live output can never
+/// diverge from the assembled response.
+def anthropic_delta_text (blocks : List (Option Block)) (idx : I64) (dobj : BTreeMap String Json) : List String :=
     match anthropic_block_at blocks idx {
         Option.some b => anthropic_delta_text_of b dobj,
-        Option.none => "",
+        Option.none => List.empty,
     }
 
-def anthropic_delta_text_of (b : Block) (dobj : BTreeMap String Json) : String :=
+def anthropic_delta_text_of (b : Block) (dobj : BTreeMap String Json) : List String :=
     match b {
         Block.text _ _ =>
             match anthropic_str_of "type" dobj {
                 Option.some tag =>
                     if tag == "text_delta"
-                    then match anthropic_str_of "text" dobj { Option.some s => s, Option.none => "" }
-                    else "",
-                Option.none => "",
+                    then match anthropic_str_of "text" dobj {
+                        Option.some s => [s],
+                        Option.none => List.empty,
+                    }
+                    else List.empty,
+                Option.none => List.empty,
             },
-        _ => "",
+        Block.thinking _ _ _ =>
+            match anthropic_str_of "type" dobj {
+                Option.some tag =>
+                    if tag == "thinking_delta"
+                    then match anthropic_str_of "thinking" dobj {
+                        Option.some s => [anthropic_reasoning_delta s],
+                        Option.none => List.empty,
+                    }
+                    else List.empty,
+                Option.none => List.empty,
+            },
+        _ => List.empty,
     }
 
 /// `content_block_delta`: patch the block at the wire's index.
-def anthropic_apply_block_delta_event (acc : AnthropicAcc) (obj : BTreeMap String Json) : Pair AnthropicAcc String :=
+def anthropic_apply_block_delta_event (acc : AnthropicAcc) (obj : BTreeMap String Json) : Pair AnthropicAcc (List String) :=
     let idx : I64 := anthropic_int_of "index" obj in
     match Json.object_get "delta" obj {
-        Option.none => Pair.pair acc "",
+        Option.none => Pair.pair acc List.empty,
         Option.some dj =>
             match Json.get_object dj {
-                Result.err _ => Pair.pair acc "",
+                Result.err _ => Pair.pair acc List.empty,
                 Result.ok dobj =>
                     Pair.pair { acc with blocks := anthropic_patch_at acc.blocks idx dobj }
                         (anthropic_delta_text acc.blocks idx dobj)
@@ -433,30 +453,30 @@ def anthropic_apply_message_delta (acc : AnthropicAcc) (obj : BTreeMap String Js
 /// `content_block_stop`, `message_stop`, and `ping` are consumed here;
 /// an unparseable payload is skipped -- the stream's terminator is the
 /// CHUNKED body's last chunk (see `http::wire`), not a sentinel event.
-def anthropic_apply_event (acc : AnthropicAcc) (data : String) : Pair AnthropicAcc String :=
+def anthropic_apply_event (acc : AnthropicAcc) (data : String) : Pair AnthropicAcc (List String) :=
     match Json.parse data {
-        Result.err _ => Pair.pair acc "",
+        Result.err _ => Pair.pair acc List.empty,
         Result.ok j =>
             match Json.get_object j {
-                Result.err _ => Pair.pair acc "",
+                Result.err _ => Pair.pair acc List.empty,
                 Result.ok obj =>
                     match anthropic_str_of "type" obj {
-                        Option.none => Pair.pair acc "",
+                        Option.none => Pair.pair acc List.empty,
                         Option.some tag => anthropic_apply_typed acc tag obj,
                     }
             }
     }
 
-def anthropic_apply_typed (acc : AnthropicAcc) (tag : String) (obj : BTreeMap String Json) : Pair AnthropicAcc String :=
+def anthropic_apply_typed (acc : AnthropicAcc) (tag : String) (obj : BTreeMap String Json) : Pair AnthropicAcc (List String) :=
     if tag == "message_start"
-    then Pair.pair (anthropic_apply_message_start acc obj) ""
+    then Pair.pair (anthropic_apply_message_start acc obj) List.empty
     else if tag == "content_block_start"
-    then Pair.pair (anthropic_apply_block_start acc obj) ""
+    then Pair.pair (anthropic_apply_block_start acc obj) List.empty
     else if tag == "content_block_delta"
     then anthropic_apply_block_delta_event acc obj
     else if tag == "message_delta"
-    then Pair.pair (anthropic_apply_message_delta acc obj) ""
-    else Pair.pair acc ""
+    then Pair.pair (anthropic_apply_message_delta acc obj) List.empty
+    else Pair.pair acc List.empty
 
 /// Fold every event a byte push completed, reporting each non-empty
 /// text delta in wire order -- the pure half of the moose callback.
@@ -466,10 +486,11 @@ def anthropic_apply_events (acc : AnthropicAcc) (events : List SseEvent) (out : 
         List.empty => Pair.pair acc (List.reverse out),
         List.cons ev rest =>
             match anthropic_apply_event acc ev.data {
-                Pair.pair acc2 delta =>
-                    if delta == ""
-                    then anthropic_apply_events acc2 rest out
-                    else anthropic_apply_events acc2 rest (List.cons delta out)
+                Pair.pair acc2 deltas =>
+                    match deltas {
+                        List.empty => anthropic_apply_events acc2 rest out,
+                        List.cons _ _ => anthropic_apply_events acc2 rest (List.append (List.reverse deltas) out),
+                    }
             }
     }
 

@@ -127,4 +127,4 @@ def test_presets_carry_no_direct_key : Bool :=
 
 def with_direct_key (c : ProviderConfig) : ProviderConfig := { c with api_key := Option.some "sk-direct-from-settings" }
 
-def plain_key_cfg : ProviderConfig := { base_url := "http://localhost:11434", model := "m", api_key_env := "SHUTTLE_KEY_TEST_UNSET", max_tokens := 64, wire := Wire.mock }
+def plain_key_cfg : ProviderConfig := { base_url := "http://localhost:11434", model := "m", api_key_env := "SHUTTLE_KEY_TEST_UNSET", max_tokens := 64, wire := Wire.mock, thinking := false }

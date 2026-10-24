@@ -23,6 +23,14 @@ def test_theme_error_is_red : Bool :=
     theme_line_style "error: provider: x" == ({ style_default with fg := some Color.red } : TextStyle)
 
 #[test]
+def test_theme_ctrl_d_hint_is_dim : Bool :=
+    theme_line_style "press Ctrl+D again to exit (or /quit)" == ({ style_default with dim := true } : TextStyle)
+
+#[test]
+def test_theme_ctrl_c_hint_is_dim : Bool :=
+    theme_line_style "press Ctrl+C again to exit (or /quit)" == ({ style_default with dim := true } : TextStyle)
+
+#[test]
 def test_theme_running_is_dim_cyan : Bool :=
     theme_line_style "[running read]" == ({ style_default with dim := true, fg := some Color.cyan } : TextStyle)
 

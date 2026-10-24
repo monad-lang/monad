@@ -63,7 +63,13 @@ pub def Tls.connect_timeout (host : String) (port : U16) (timeout_ms : I64) : IO
   let ssl <- IO.mk (SSL_new ctx);
   let conn_res <- IO.tcp_connect_timeout host port timeout_ms;
   match conn_res {
-    Result.err e => return (Result.err (String.concat "tls: " e.message)),
+    // No socket, but the ssl and its ctx are already allocated: release
+    // them on every failed connect (a refused port or a timeout used to
+    // leak both).
+    Result.err e => do {
+      Tls.abort_conn ssl ctx;
+      return (Result.err (String.concat "tls: " e.message))
+    },
     Result.ok sock => do {
       // The socket bound covers the handshake's blocking SSL_connect and
       // later SSL_read/SSL_write until a caller re-binds it with
@@ -86,7 +92,7 @@ def Tls.handshake (ssl : Ptr) (ctx : Ptr) (sock : FdStream) (host : String) (tim
   // The first int-returning step, and therefore where a NULL ctx or
   // ssl from the Ptr-returning steps above surfaces (ffi.mo).
   if Bool.not (I32.beq set_fd (I64.to_i32 1))
-  then return (Result.err "tls: SSL_set_fd failed (SSL_CTX_new or SSL_new returned NULL)")
+  then Tls.abort ssl ctx sock "tls: SSL_set_fd failed (SSL_CTX_new or SSL_new returned NULL)"
   else do {
     let _ <- IO.mk (SSL_set_verify ssl Ssl.verify_peer Ptr.null);
     let sni <- IO.mk (SSL_ctrl_host ssl Ssl.ctrl_set_tlsext_hostname 0 host);
@@ -143,6 +149,14 @@ pub def Tls.timed_out (started : I64) (timeout_ms : I64) : IO Bool := do {
     let elapsed_ms : I64 := (now - started) / 1000000;
     return (Bool.not (elapsed_ms < timeout_ms))
   }
+}
+
+/// Release the ssl and ctx when the connect failed before a socket
+/// existed (OpenSSL frees NULL handles safely).
+def Tls.abort_conn (ssl : Ptr) (ctx : Ptr) : IO Unit := do {
+  let _ <- IO.mk (SSL_free ssl);
+  let _ <- IO.mk (SSL_CTX_free ctx);
+  return unit
 }
 
 /// Release everything a failed handshake set up, then report the error.

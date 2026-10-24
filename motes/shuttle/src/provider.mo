@@ -16,7 +16,7 @@ use shuttle::tool {ToolSpec}
 use init::transformers {ResultT, ResultT.run}
 use json::json {
     Json, Json.make_object, Json.make_str, Json.make_num_int,
-    Json.get_object, Json.get_str, Json.get_num_i64, Json.object_get,
+    Json.get_object, Json.get_str, Json.get_num_i64, Json.object_get, Json.make_bool, Json.get_bool,
 }
 use std::map {Map, BTreeMap}
 use openai::client {OpenAI.complete_stream, OpenAI.list_models}
@@ -39,6 +39,9 @@ pub struct ProviderConfig {
     api_key : Option String := Option.none,
     max_tokens : I64,
     wire : Wire,
+    /// Ask the provider to expose its reasoning channel (Anthropic
+    /// extended thinking). Off by default: it costs tokens and latency.
+    thinking : Bool := false,
 }
 
 def wire_tag (w : Wire) : String :=
@@ -76,7 +79,8 @@ pub def ProviderConfig.serialize_json (c : ProviderConfig) : Json :=
         (Map.insert "api_key_env" (Json.make_str c.api_key_env)
         (Map.insert "max_tokens" (Json.make_num_int c.max_tokens)
         (Map.insert "wire" (Wire.serialize_json c.wire)
-        BTreeMap.empty)))))
+        (Map.insert "thinking" (Json.make_bool c.thinking)
+        BTreeMap.empty))))))
 
 def config_field (obj : BTreeMap String Json) (name : String) : Result String Json :=
     match Json.object_get name obj {
@@ -104,11 +108,25 @@ def config_wire_step (obj : BTreeMap String Json) (base_url : String) (model : S
         Result.err e => Result.err e,
         Result.ok wj => match Wire.deserialize_json wj {
             Result.err e => Result.err e,
-            Result.ok wire =>
-                let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, api_key := Option.none, max_tokens := max_tokens, wire := wire } in
-                Result.ok c,
+            Result.ok wire => config_thinking_step obj base_url model api_key_env max_tokens wire,
         },
     }
+
+/// `thinking` is OPTIONAL: a session saved before the field existed
+/// decodes as `false`, and a junk value falls back the same way (the
+/// safe default for a cost-increasing flag).
+def config_thinking_step (obj : BTreeMap String Json) (base_url : String) (model : String) (api_key_env : String) (max_tokens : I64) (wire : Wire) : Result String ProviderConfig :=
+    match Json.object_get "thinking" obj {
+        Option.none => config_mk base_url model api_key_env max_tokens wire false,
+        Option.some tj => match Json.get_bool tj {
+            Result.err _ => config_mk base_url model api_key_env max_tokens wire false,
+            Result.ok b => config_mk base_url model api_key_env max_tokens wire b,
+        },
+    }
+
+def config_mk (base_url : String) (model : String) (api_key_env : String) (max_tokens : I64) (wire : Wire) (thinking : Bool) : Result String ProviderConfig :=
+    let c : ProviderConfig := { base_url := base_url, model := model, api_key_env := api_key_env, api_key := Option.none, max_tokens := max_tokens, wire := wire, thinking := thinking } in
+    Result.ok c
 
 def config_max_step (obj : BTreeMap String Json) (base_url : String) (model : String) (api_key_env : String) : Result String ProviderConfig :=
     match config_int_field obj "max_tokens" {
@@ -175,7 +193,7 @@ def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : 
 
 def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (emit : String -> IO Unit) : ResultT String IO Turn := do {
     let key_opt <- ResultT.lift (ProviderConfig.effective_key cfg);
-    let req := Anthropic.encode_request cfg.model cfg.max_tokens system tools history;
+    let req := Anthropic.encode_request cfg.model cfg.max_tokens cfg.thinking system tools history;
     let resp <- anthropic_send_step cfg key_opt req emit;
     ResultT.mk (return (Anthropic.decode_response resp))
 }

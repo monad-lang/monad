@@ -169,7 +169,7 @@ def test_stream_usage_null_after_real_keeps_real : Bool :=
 #[test]
 def test_stream_tool_call_fragment_reports_no_text : Bool :=
     match openai_apply_event stream_acc0 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}"# {
-        Pair.pair _ delta => delta == ""
+        Pair.pair _ delta => match delta { List.empty => true, _ => false }
     }
 
 /// `usage: null` on every chunk (the live Ollama shape), a real usage
@@ -195,7 +195,10 @@ def test_stream_usage_and_lenient_skips : Bool :=
 def test_stream_empty_content_delta_reports_empty : Bool :=
     let a1 := fold_event stream_acc0 r#"{"choices":[{"index":0,"delta":{"content":""}}]}"# in
     match openai_apply_event a1 r#"{"choices":[{"index":0,"delta":{"content":"x"}}]}"# {
-        Pair.pair a2 delta => Bool.and (delta == "x") (a2.text == "x")
+        Pair.pair a2 delta => match delta {
+            List.cons d rest => d == "x" && (match rest { List.empty => true, _ => false }) && (a2.text == "x"),
+            List.empty => false,
+        }
     }
 
 /// The request half of streaming: `{ req with stream := true }` must

@@ -1,9 +1,10 @@
-# The `/models` picker repro -- the API-loaded model list, pinned in a
+# The model-picker repro -- the API-loaded model list, pinned in a
 # pty against the compiled `target-monad/release/weaver`. The mock wire
 # answers its catalogue (`["mock"]`) offline, so the whole command (fetch,
 # cache, render, picker) runs without a socket or a key.
 #
-# Checks: /models opens the picker with the current name marked, Enter
+# Checks: /model with no argument opens the picker with the current name
+# marked, Enter
 # selects and closes it -- the start model is deliberately not in the
 # list, so the echo AND the banner prove the selection was applied --
 # /model with no argument opens it too, and Esc closes it without a
@@ -150,9 +151,9 @@ master, pid = spawn()
 buf = bytearray()
 pump(master, 2.0, buf)                 # startup frame
 checks.append(("S0 the start model is the one asked for", GRID.find("mock/wv-not-mock") is not None))
-os.write(master, b"/models\n")         # fetch + render + picker
+os.write(master, b"/model\n")          # fetch + render + picker
 snap(master, 1.5, buf)
-checks.append(("S1 /models opens the picker", GRID.find("Select a model") is not None))
+checks.append(("S1 /model opens the picker", GRID.find("Select a model") is not None))
 checks.append(("S1 the picker marks the current name", GRID.find("current: wv-not-mock") is not None))
 if ROWS >= 10:
     checks.append(("S1 the API list is shown", GRID.find("   mock") is not None))

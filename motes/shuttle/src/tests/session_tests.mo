@@ -20,7 +20,7 @@ def missing_path : String :=
     String.concat "/tmp/shuttle_session_test_missing_" (String.concat (I64.to_string process_id) ".json")
 
 def test_config : ProviderConfig :=
-    { base_url := "http://localhost:11434", model := "test-model", api_key_env := "SHUTTLE_UNUSED_KEY", max_tokens := 64, wire := Wire.mock }
+    { base_url := "http://localhost:11434", model := "test-model", api_key_env := "SHUTTLE_UNUSED_KEY", max_tokens := 64, wire := Wire.mock, thinking := false }
 
 def echo_spec : ToolSpec := { name := "echo", description := "echoes its input", schema := Json.make_null }
 
@@ -110,7 +110,7 @@ def test_message_list_json_roundtrip : Bool :=
 /// `Session.save` file lands in /tmp and project dirs, so the key
 /// material must stay out of it -- save keeps only `api_key_env`, and
 /// a resumed session re-resolves its key from settings/env at startup.
-def keyed_config : ProviderConfig := { base_url := "http://localhost:11434", model := "keyed-model", api_key_env := "SHUTTLE_UNUSED_KEY", api_key := Option.some "sk-redacted-test-key-material", max_tokens := 64, wire := Wire.mock }
+def keyed_config : ProviderConfig := { base_url := "http://localhost:11434", model := "keyed-model", api_key_env := "SHUTTLE_UNUSED_KEY", api_key := Option.some "sk-redacted-test-key-material", max_tokens := 64, wire := Wire.mock, thinking := false }
 
 def keyed_session : Session := { test_session with config := keyed_config }
 

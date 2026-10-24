@@ -1,12 +1,13 @@
 /// IO tests for the session store. Every root is a fresh, pid-qualified
 /// /tmp directory -- never $HOME, and safe under the concurrent sweep.
 use weaver::store {
-    StoreState, TranscriptPage, TLine, TLine.plain, TLine.user_line,
+    StoreState, StoreMeta, TranscriptPage, TLine, TLine.plain, TLine.user_line, TLine.detail_line,
     Store.new_session, Store.import_session, Store.append_transcript,
-    Store.read_page, Store.record_turn, Store.load_session, Store.latest_session,
+    Store.read_page, Store.record_turn, Store.record_history, Store.load_session, Store.latest_session,
     Store.ensure_root, Store.startup_transcript, Store.tail_lines, Store.child,
-    Store.append_chunk, Store.read_live, Store.discard_live, Store.append_history_note, Store.update_meta,
-    Store.append_note,
+    Store.append_chunk, Store.read_live, Store.discard_live, Store.read_live_from,
+    Store.append_history_note, Store.update_meta,
+    Store.append_note, Store.record_compacted, Store.encode_meta, Store.decode_meta,
 }
 use shuttle::session {Session, Session.messages_to_json}
 use shuttle::provider {ProviderConfig, mock}
@@ -15,9 +16,10 @@ use shuttle::message_types {text, user, assistant}
 use std::path {Path, Path.of, Path.to_string}
 use std::process {process_id, exec_cmd}
 use std::list {List.length}
-use std::io {IO.write_file}
+use std::io {IO.write_file, IO.write_stderr}
 use std::concurrent::combine {sleepIO}
-use json::json {Json}
+use json::json {Json, Json.get_object, Json.make_object}
+use std::map {Map}
 
 #[partial]
 def lines_go (i : I64) (n : I64) : List TLine :=
@@ -34,7 +36,7 @@ def texts (ls : List TLine) : List String :=
     }
 
 def test_cfg : ProviderConfig :=
-    { base_url := "http://localhost:11434", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.mock }
+    { base_url := "http://localhost:11434", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def test_usage : Usage := { input_tokens := 1, output_tokens := 2, cached_tokens := 3 }
 
@@ -428,3 +430,105 @@ def check_note (st : StoreState) : IO Bool := do {
         }
     }
 }
+
+/// The streamed-file reader: the new suffix since an offset, an empty
+/// suffix when nothing arrived, and a restart from 0 after the file is
+/// discarded for a new turn.
+#[test]
+def test_read_live_from_tails_and_restarts : IO Bool := do {
+    let root : Path := root_for "live_from";
+    clean root;
+    let _ <- Store.ensure_root root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let _ <- Store.append_chunk st "hello ";
+            let first <- Store.read_live_from st 0i64;
+            let second <- Store.read_live_from st first.second;
+            let _ <- Store.append_chunk st "world";
+            let third <- Store.read_live_from st second.second;
+            let _ <- Store.discard_live st;
+            let _ <- Store.append_chunk st "fresh";
+            let fourth <- Store.read_live_from st third.second;
+            clean root;
+            IO.pure (first.first == "hello " && second.first == "" && third.first == "world" && fourth.first == "fresh")
+        }
+    }
+}
+
+/// A detail line survives the block codec: the Ctrl+O flag is stored,
+/// not recomputed.
+#[test]
+def test_detail_flag_round_trips : IO Bool := do {
+    let root : Path := root_for "detail";
+    clean root;
+    let _ <- Store.ensure_root root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let _ <- Store.append_transcript st.dir 0i64 [TLine.detail_line "full output"];
+            let tr <- Store.startup_transcript st.dir;
+            clean root;
+            match tr.tail {
+                List.cons l _ => IO.pure l.detail,
+                List.empty => IO.pure false,
+            }
+        }
+    }
+}
+
+/// A compaction writes the rewritten history as one new block and moves
+/// `history_base` to it, so a resume replays ONLY the compacted history
+/// (the older blocks are still on disk, out of reach).
+def compact_session_lit : Session :=
+    { config := test_cfg, system_prompt := "s", tools := List.empty, history := List.empty, turns := 0, spent := test_usage }
+
+def compact_resume_scenario (root : Path) : IO Bool := do {
+    let _ <- Store.ensure_root root;
+    let r <- Store.new_session root compact_session_lit;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => compact_resume_run root st,
+    }
+}
+
+def compact_resume_run (root : Path) (st : StoreState) : IO Bool := do {
+    let _ <- Store.record_history st compact_session_lit [user_msg "old turn"];
+    let compacted : Session := { compact_session_lit with history := [user_msg "summary of so far"] };
+    let w <- Store.record_compacted st compacted;
+    let loaded <- Store.load_session st.dir;
+    clean root;
+    IO.pure (compact_resume_ok w loaded)
+}
+
+#[test]
+def test_compacted_history_resumes_from_the_base : IO Bool := do {
+    let ok <- compact_resume_scenario (root_for "compact_base");
+    return ok
+}
+
+/// The verdict for the compaction-resume test, kept out of the do block:
+/// a nested match as a `do` arm's body is a compiled-backend hazard.
+def compact_resume_ok (w : Result String Unit) (loaded : Result String Session) : Bool :=
+    match w {
+        Result.err _ => false,
+        Result.ok _ => match loaded {
+            Result.err _ => false,
+            Result.ok s => List.length s.history == 1i64,
+        },
+    }
+
+/// A meta written before `history_base` existed decodes with base 1.
+#[test]
+def test_meta_without_history_base_defaults_to_one : Bool :=
+    let m : StoreMeta := { session := test_session, created := 1i64, updated := 2i64, history_next := 3i64, history_base := 1i64 } in
+    match Json.get_object (Store.encode_meta m) {
+        Result.err _ => false,
+        Result.ok obj => match Store.decode_meta (Json.make_object (Map.delete "history_base" obj)) {
+            Result.err _ => false,
+            Result.ok decoded => decoded.history_base == 1i64,
+        },
+    }
+

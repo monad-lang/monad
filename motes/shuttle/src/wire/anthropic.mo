@@ -111,11 +111,10 @@ def system_blocks_of (ms : List Message) : List Block :=
             },
     }
 
-/// `thinking`/`effort` stay off by default: the wire type carries them
-/// (`motes/anthropic`'s own tests pin the shapes), and surfacing them
-/// through `ProviderConfig` belongs to Phase 5's context management,
-/// not to this adapter.
-pub def Anthropic.encode_request (cfg_model : String) (max_tokens : I64) (system : String) (tools : List ToolSpec) (history : List Message) : MessagesRequest :=
+/// `effort` stays unset; `thinking` comes from the provider config
+/// (off by default -- it costs tokens and latency). The wire type
+/// carries both (`motes/anthropic`'s own tests pin the shapes).
+pub def Anthropic.encode_request (cfg_model : String) (max_tokens : I64) (thinking : Bool) (system : String) (tools : List ToolSpec) (history : List Message) : MessagesRequest :=
     let system_block : Block := Block.text system false in
     let system_blocks : List Block := List.cons system_block (system_blocks_of history) in
     let wire_tools : List AnthropicTool := mark_last_tool_cached (List.map (fn (spec : ToolSpec) => spec_to_tool spec) tools) in
@@ -126,7 +125,7 @@ pub def Anthropic.encode_request (cfg_model : String) (max_tokens : I64) (system
         system := system_blocks,
         messages := wire_messages,
         tools := wire_tools,
-        thinking := false,
+        thinking := thinking,
         effort := Option.none,
     }
 

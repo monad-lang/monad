@@ -4,7 +4,7 @@
 use shuttle::provider {Provider.list_models, ProviderConfig, Wire}
 
 def mock_cfg : ProviderConfig :=
-  { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+  { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 #[test]
 def test_mock_list_models_returns_mock : IO Bool := do {

@@ -19,7 +19,7 @@ use weaver::catalog {Catalog.contains}
 /// and the e2e tests. `base_url` is decorative -- the mock wire reads
 /// its script file -- and the key env names a var nothing sets.
 pub def Weaver.mock_config (model : String) : ProviderConfig :=
-    { base_url := "mock", model := model, api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 512, wire := Wire.mock }
+    { base_url := "mock", model := model, api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 512, wire := Wire.mock, thinking := false }
 
 /// The name to TRY when none is configured -- not an availability
 /// claim. OpenRouter has none: its names are vendor-qualified, so the
@@ -45,7 +45,7 @@ pub def Weaver.preset (provider : String) (model : String) (keys : BTreeMap Stri
     }
 
 /// A config for an explicit model name, with NO default substitution --
-/// the shape `/provider` and `/models` need before a model is chosen.
+/// the shape `/provider` and `/model` need before a model is chosen.
 pub def Weaver.config_for (provider : String) (model : String) (keys : BTreeMap String String) : Result String ProviderConfig :=
     if provider == "ollama" then Result.ok (with_key keys provider (ProviderConfig.ollama model))
     else if provider == "mistral" then Result.ok (with_key keys provider (ProviderConfig.mistral model))

@@ -1,5 +1,5 @@
 /// The provider's own model catalogue: fetched on demand, cached per
-/// provider in `WeaverState`, and rendered for `/models` and the TUI
+/// provider in `WeaverState`, and rendered for `/model` and the TUI
 /// picker. The API is the authority -- nothing here knows a model family
 /// or a naming convention.
 use std::map {Map, BTreeMap}
@@ -26,7 +26,7 @@ pub def Catalog.contains (model : String) (models : List String) : Bool :=
         List.cons m rest => if String.beq m model then true else Catalog.contains model rest,
     }
 
-/// The advisory line `/model` and `/models` print when the current name
+/// The advisory line `/model` prints when the current name
 /// is absent: still selectable, because API lists can be partial.
 pub def Catalog.note (provider : String) (models : List String) (model : String) : Option String :=
     if String.is_empty model then Option.none
@@ -53,7 +53,7 @@ def catalog_take (n : I64) (xs : List String) : List String :=
 
 def catalog_indent (s : String) : String := String.concat "  " s
 
-/// The `/models` output: the current model, the provider and count, the
+/// The `/model` listing: the current model, the provider and count, the
 /// names (capped), and the advisory note when the current one is absent.
 pub def Catalog.render (provider : String) (models : List String) (current : String) : String :=
     let total : I64 := catalog_count models in

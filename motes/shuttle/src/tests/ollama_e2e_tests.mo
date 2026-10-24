@@ -46,7 +46,7 @@ def e2e_registry : ToolRegistry := ToolRegistry.register ReadTool.impl ToolRegis
 /// against. Tool calling needs a model whose /api/tags entry lists
 /// the `tools` capability.
 def e2e_config (model : String) : ProviderConfig :=
-    { base_url := "http://localhost:11434", model := model, api_key_env := "SHUTTLE_UNUSED_API_KEY", max_tokens := 512, wire := Wire.openai }
+    { base_url := "http://localhost:11434", model := model, api_key_env := "SHUTTLE_UNUSED_API_KEY", max_tokens := 512, wire := Wire.openai, thinking := false }
 
 def e2e_task_message : Message :=
     { role := Role.user, content := [Content.text (String.concat "Use the read tool to read " fixture_path)] }

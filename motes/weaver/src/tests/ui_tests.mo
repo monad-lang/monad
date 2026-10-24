@@ -23,12 +23,13 @@ use weaver::model {
     Model.page_request, Model.visible_rows, scroll_indicator, panel_height,
     Model.display_rows, Model.content_width, DisplayRow,
     Model.display_line, Model.display_cap_bytes,
-    Model.body_height, Model.thinking_text, Model.live_row, status_line,
+    Model.body_height, Model.thinking_text, Model.live_stream_height, Model.live_row, status_line,
+    Model.row_total_of,
 }
-use weaver::store {TLine, TLine.plain, TranscriptPage, Transcript.with_page}
+use weaver::store {TLine, TLine.plain, TLine.detail_line, TranscriptPage, Transcript.with_page}
 
 def mock_config : ProviderConfig :=
-    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+    { base_url := "mock", model := "mock", api_key_env := "WEAVER_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def session_of : Session :=
     { config := mock_config, system_prompt := "test", tools := List.empty, history := List.empty, turns := 0, spent := usage_zero }
@@ -37,7 +38,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false }
 
 def state_of : WeaverState :=
-    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
+    { run := run_of, mode := Mode.manual, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of : TuiModel :=
     let m : TuiModel := init_tui_model Option.none state_of 24 80 in
@@ -254,6 +255,28 @@ def test_thinking_text_carries_time_and_tokens : Bool :=
 def test_thinking_text_says_stopping : Bool :=
     let m : TuiModel := { live_model with stop_requested := true } in
     String.contains (Model.thinking_text m) "stopping"
+
+#[test]
+def test_thinking_text_says_responding_after_streaming : Bool :=
+    let m : TuiModel := { live_model with live_text := "hello" } in
+    String.contains (Model.thinking_text m) "responding"
+
+#[test]
+def test_thinking_text_names_the_running_tool : Bool :=
+    let m : TuiModel := { live_model with live_activity := Option.some "read" } in
+    String.contains (Model.thinking_text m) "running read"
+
+#[test]
+def test_live_stream_reserves_rows : Bool :=
+    let m : TuiModel := { live_model with live_text := "streamed reply" } in
+    Model.body_height m == panel_height m - 1i64 - Model.live_stream_height m
+
+#[test]
+def test_detail_lines_are_hidden_until_ctrl_o : Bool :=
+    let base : TuiModel := Model.append_block model_of [TLine.plain "summary", TLine.detail_line "full output"] in
+    let hidden : TuiModel := { base with show_details := false } in
+    let opened : TuiModel := { base with show_details := true } in
+    Model.row_total_of opened == Model.row_total_of hidden + 1i64
 
 /// The status bar is static mid-turn; the spinner lives on the live row.
 #[test]

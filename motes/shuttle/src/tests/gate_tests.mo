@@ -61,7 +61,7 @@ def stamp_impl : ToolImpl := { spec := stamp_spec, cap := Capability.write, run 
 def gate_registry : ToolRegistry := ToolRegistry.register stamp_impl ToolRegistry.empty
 
 def mock_config : ProviderConfig :=
-    { base_url := "mock", model := "mock", api_key_env := "SHUTTLE_UNUSED_KEY", max_tokens := 8, wire := Wire.mock }
+    { base_url := "mock", model := "mock", api_key_env := "SHUTTLE_UNUSED_KEY", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def user_message : Message := { role := Role.user, content := [Content.text "please stamp"] }
 

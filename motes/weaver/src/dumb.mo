@@ -17,7 +17,7 @@ use shuttle::loop {Loop.iterate}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
-use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch}
+use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact}
 use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
@@ -140,14 +140,32 @@ def budget_step (write : String -> IO Unit) (st : WeaverState) : IO Step := do {
 }
 
 def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : IO Step := do {
-    let r <- ResultT.run (drive read write st text);
-    turn_result write st r
+    // Autocompact BEFORE the user message lands (the post-turn delta and
+    // the store's append-only blocks assume a stable base), and carry the
+    // compacted state through the failure path too: `record_compacted`
+    // already advanced the store's history_base, so reverting in memory
+    // would diverge from disk.
+    let ac <- Commands.autocompact st;
+    match ac {
+        Pair.pair st2 note => do {
+            let _ <- write_note write note;
+            let before : I64 := msg_len st2.run.session.history;
+            let r <- ResultT.run (drive read write st2 text);
+            turn_result write st2 before r
+        }
+    }
 }
 
-def turn_result (write : String -> IO Unit) (st : WeaverState) (r : Result WeaverError RunState) : IO Step :=
+def write_note (write : String -> IO Unit) (note : Option String) : IO Unit :=
+    match note {
+        Option.none => IO.pure unit,
+        Option.some line => write (String.concat line "\n"),
+    }
+
+def turn_result (write : String -> IO Unit) (st : WeaverState) (before : I64) (r : Result WeaverError RunState) : IO Step :=
     match r {
         Result.err e => failed_step write st e,
-        Result.ok run2 => turn_ok write st run2,
+        Result.ok run2 => turn_ok write st before run2,
     }
 
 /// One failure, classified through the one classification point: a
@@ -168,9 +186,9 @@ def failed_step (write : String -> IO Unit) (st : WeaverState) (e : WeaverError)
 /// advanced state.
 /// (The struct update lives in `advance_run`, not here: `{ x with
 /// .. }` parses only in a plain body, not inside a do-block.)
-def turn_ok (write : String -> IO Unit) (st : WeaverState) (run2 : RunState) : IO Step := do {
+def turn_ok (write : String -> IO Unit) (st : WeaverState) (before : I64) (run2 : RunState) : IO Step := do {
     let _ <- write "\n\n";
-    let warn <- persist_turn st run2;
+    let warn <- persist_turn st before run2;
     finish_turn write st run2 warn
 }
 
@@ -196,11 +214,10 @@ def disable_store (st : WeaverState) : WeaverState :=
 /// The history delta of a successful dumb-mode turn (dumb mode has no
 /// transcript block log -- the session file is the record). An error
 /// rides back to `turn_ok`, which disables persistence.
-def persist_turn (st : WeaverState) (run2 : RunState) : IO (Option String) :=
+def persist_turn (st : WeaverState) (before : I64) (run2 : RunState) : IO (Option String) :=
     match st.store {
         Option.none => IO.pure Option.none,
         Option.some s => do {
-            let before : I64 := msg_len st.run.session.history;
             let delta : List Message := drop_msgs before run2.session.history;
             let r <- Store.record_history s run2.session delta;
             IO.pure (match r { Result.err e => Option.some e, Result.ok _ => Option.none })
@@ -233,7 +250,10 @@ def advance_run (st : WeaverState) (run2 : RunState) : WeaverState :=
 /// drive seam is `ResultT WeaverError IO` -- shuttle's `String` errors
 /// cross the boundary through `WeaverError.of_shuttle` (the one wrap,
 /// provider-tagged: everything this seam produces is a wire failure).
-def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
+def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState :=
+    drive_ready read write st text
+
+def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
     let with_task : RunState := { base with reg := ToolRegistry.register (Subagent.task_tool base.session.config Option.none Option.none silent_stop) base.reg };
     let gated : RunState := gate_for st.mode read (theme_write write st.colors) with_task;

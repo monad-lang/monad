@@ -147,7 +147,7 @@ def test_index_json_roundtrip : Bool :=
     }
 
 def test_cfg : ProviderConfig :=
-    { base_url := "http://localhost:11434", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.mock }
+    { base_url := "http://localhost:11434", model := "m", api_key_env := "K", max_tokens := 8, wire := Wire.mock, thinking := false }
 
 def test_usage : Usage := { input_tokens := 1, output_tokens := 2, cached_tokens := 3 }
 
@@ -156,7 +156,7 @@ def test_session : Session :=
 
 #[test]
 def test_meta_json_roundtrip : Bool :=
-    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3 } in
+    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1 } in
     let j := Store.encode_meta m in
     match Json.parse (Json.to_string j) {
         Result.err _ => false,
