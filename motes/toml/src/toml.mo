@@ -126,7 +126,8 @@ pub type Toml.ParseError {
   generic String,
 }
 
-def Toml.ParseError.to_string (e : Toml.ParseError) : String :=
+/// The error as one line of text, for a caller's own diagnostic.
+pub def Toml.ParseError.to_string (e : Toml.ParseError) : String :=
   match e {
     expected e f => "expected: " ++ e ++ " found: " ++ f,
     generic s => s
@@ -1003,8 +1004,12 @@ def Toml.bool_to_string (b : Bool) : String :=
 /// This arm used to return `""` — a table value inside an array serialized to
 /// nothing at all, which is silent data loss and unparseable output. The parser
 /// gained `Toml.parse_array_element` in the same change so the two agree.
+///
+/// Public so a writer that owns its own key ORDER (build/src/lock.mo renders
+/// `mote.lock` name-first, where `Toml.to_string` walks keys sorted) still
+/// gets this module's escaping, and so reads back what it wrote.
 #[partial]
-def Toml.value_to_string (v : Toml.Value) : String :=
+pub def Toml.value_to_string (v : Toml.Value) : String :=
   match v {
     string s => Toml.string_to_string s,
     integer n => I64.to_string n,
