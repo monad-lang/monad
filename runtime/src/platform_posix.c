@@ -596,9 +596,10 @@ static void* tcp_unit(void) {
  * Three natives: spawn, wait, and `monad_proc_stream_fd`, which hands
  * out a pipe descriptor so `std/stream.mo`'s read/write do the rest.
  *
- * No lock: this registry is only ever touched from the one thread that
- * drives the interpreter loop, the same assumption `monad_exec_cmd`'s
- * own fork already makes. */
+ * Locked: every fiber is an OS thread, so two fibers may spawn or reap
+ * at once. `proc_registry_lock` covers claiming and releasing a slot and
+ * reading its fields. It is never held across `fork`, `read` or
+ * `waitpid`. */
 #define MONAD_PROC_MAX 64
 
 typedef struct {
@@ -610,7 +611,9 @@ typedef struct {
 } ProcChild;
 
 static ProcChild proc_registry[MONAD_PROC_MAX];
+static pthread_mutex_t proc_registry_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Caller holds `proc_registry_lock`. */
 static ProcChild* proc_slot(int64_t handle) {
     if (handle < 1 || handle > MONAD_PROC_MAX) return NULL;
     ProcChild* pc = &proc_registry[handle - 1];
@@ -733,9 +736,18 @@ void* monad_proc_spawn(char* cmd, void* args) {
     }
 
     int slot = -1;
+    pthread_mutex_lock(&proc_registry_lock);
     for (int k = 0; k < MONAD_PROC_MAX; k++) {
         if (!proc_registry[k].live) { slot = k; break; }
     }
+    if (slot >= 0) {
+        proc_registry[slot].pid = pid;
+        proc_registry[slot].in_fd = in_pipe[1];
+        proc_registry[slot].out_fd = out_pipe[0];
+        proc_registry[slot].err_fd = err_pipe[0];
+        proc_registry[slot].live = 1;
+    }
+    pthread_mutex_unlock(&proc_registry_lock);
     if (slot < 0) {
         /* Refuse rather than hand back a child nobody could ever reap:
          * the registry's size is the bound on leaked children, and a
@@ -745,11 +757,6 @@ void* monad_proc_spawn(char* cmd, void* args) {
         waitpid(pid, NULL, 0);
         return stream_err(9, "proc_spawn", "child registry full", 0);
     }
-    proc_registry[slot].pid = pid;
-    proc_registry[slot].in_fd = in_pipe[1];
-    proc_registry[slot].out_fd = out_pipe[0];
-    proc_registry[slot].err_fd = err_pipe[0];
-    proc_registry[slot].live = 1;
     return tcp_ok((void*)(int64_t)(slot + 1));
 }
 
@@ -768,12 +775,16 @@ void* monad_proc_spawn(char* cmd, void* args) {
  * pipe, and `monad_proc_wait` closes all three itself. `proc_stream_fd`
  * is private to `std/process.mo`, which never closes a view. */
 int64_t monad_proc_stream_fd(int64_t handle, int64_t which) {
+    int64_t fd = -1;
+    pthread_mutex_lock(&proc_registry_lock);
     ProcChild* pc = proc_slot(handle);
-    if (!pc) return -1;
-    if (which == 0) return pc->in_fd;
-    if (which == 1) return pc->out_fd;
-    if (which == 2) return pc->err_fd;
-    return -1;
+    if (pc) {
+        if (which == 0) fd = pc->in_fd;
+        else if (which == 1) fd = pc->out_fd;
+        else if (which == 2) fd = pc->err_fd;
+    }
+    pthread_mutex_unlock(&proc_registry_lock);
+    return fd;
 }
 
 /* `proc_wait : Child -> I64 -> RawIO I64` -- close the pipes, free the
@@ -788,17 +799,27 @@ int64_t monad_proc_stream_fd(int64_t handle, int64_t which) {
  * be idempotent -- and the child is reaped before the slot is freed, so
  * the pid cannot have been recycled. */
 int64_t monad_proc_wait(int64_t handle, int64_t kill_first) {
+    /* Copy the entry out and free the slot under the lock, so a racing
+       second `wait` on the same handle sees it dead instead of closing
+       the descriptors twice. The child is still unreaped here, so its
+       pid cannot have been recycled before the `kill` below. */
+    pthread_mutex_lock(&proc_registry_lock);
     ProcChild* pc = proc_slot(handle);
+    ProcChild child;
+    if (pc) {
+        child = *pc;
+        pc->live = 0;
+    }
+    pthread_mutex_unlock(&proc_registry_lock);
     if (!pc) return -1;
-    if (kill_first) kill(pc->pid, SIGKILL);
-    stream_carry_clear(pc->in_fd);
-    stream_carry_clear(pc->out_fd);
-    stream_carry_clear(pc->err_fd);
-    close(pc->in_fd);
-    close(pc->out_fd);
-    close(pc->err_fd);
-    pc->live = 0;
-    pid_t pid = pc->pid;
+    if (kill_first) kill(child.pid, SIGKILL);
+    stream_carry_clear(child.in_fd);
+    stream_carry_clear(child.out_fd);
+    stream_carry_clear(child.err_fd);
+    close(child.in_fd);
+    close(child.out_fd);
+    close(child.err_fd);
+    pid_t pid = child.pid;
     int status = 0;
     if (waitpid(pid, &status, 0) < 0) return -1;
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
