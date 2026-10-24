@@ -986,6 +986,7 @@ def show_lower_error (e : LowerError) : String :=
         LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
         LowerError.le_float_literal_unsupported => "float literals are not supported by `monad eval` (the eval IR cannot carry one yet); `monad test` and `monad build` compile them correctly",
         LowerError.le_unresolved_macro_artifact => "an unresolved macro-template variable or quote reached lowering",
+        LowerError.le_elim_not_lowered => "a dependent match/if reached meta-eval lowering with no lowering rule yet",
         LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
     }
 

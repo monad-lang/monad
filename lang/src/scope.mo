@@ -2414,6 +2414,22 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
         Term.cubical c =>
             let rewritten : List Term := resolve_open_alias_terms_scoped names bound c.args in
             Term.cubical { c with args := rewritten },
+        // `params`/`motive`/`minors`/`scrutinee` are all rewritten under
+        // the SAME `bound` -- none of them is where a new name enters
+        // scope relative to this walk (a minor's own binders are `Term.lam`
+        // nodes inside it, already handled by the `lam` arm above when
+        // this recurses in).
+        Term.elim e =>
+            let rewritten_params : List Term := resolve_open_alias_terms_scoped names bound e.params in
+            let rewritten_motive : Term := resolve_open_alias_term_scoped names bound e.motive in
+            let rewritten_minors : List Term := resolve_open_alias_terms_scoped names bound e.minors in
+            let rewritten_scrutinee : Term := resolve_open_alias_term_scoped names bound e.scrutinee in
+            Term.elim
+                { e with
+                  params := rewritten_params,
+                  motive := rewritten_motive,
+                  minors := rewritten_minors,
+                  scrutinee := rewritten_scrutinee },
     }
 
 #[partial]
@@ -3357,6 +3373,17 @@ def def_references_class (constrained_def_classes : HashMap String (List String)
                     else calls_constrained_def_for_class constrained_def_classes cls_str spelled,
                 DebugName.unnamed => false,
             },
+        // Must check all four term-bearing fields: a class method can
+        // appear in a dependent `motive` or in one of the inductive's own
+        // `params` just as readily as in `scrutinee`/`minors`, and a
+        // missed reference here is the same accepted risk as everywhere
+        // else in this best-effort scan (a clean link-time failure, not a
+        // silent miscompile).
+        Term.elim e =>
+            terms_reference_class constrained_def_classes cls_str e.params
+                || def_references_class constrained_def_classes cls_str e.motive
+                || terms_reference_class constrained_def_classes cls_str e.minors
+                || def_references_class constrained_def_classes cls_str e.scrutinee,
     }
 
 #[partial]
@@ -7370,6 +7397,14 @@ def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : Li
     // module's own doc comment above on that rewrite), so it carries no
     // new information.
     Term.var_macro _idx _dbg => acc,
+    // Must recurse into all four term-bearing fields: an unresolved class
+    // call under a dependent `motive`, one of the inductive's own
+    // `params`, a minor, or the scrutinee is still unresolved.
+    Term.elim e =>
+        find_unresolved_class_calls_term classes e.scrutinee
+            (find_unresolved_class_calls_terms classes e.minors
+                (find_unresolved_class_calls_term classes e.motive
+                    (find_unresolved_class_calls_terms classes e.params acc))),
 }
 
 #[partial]

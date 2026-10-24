@@ -177,6 +177,16 @@ pub type LowerError {
   /// rather than reused, following `le_struct_lit_survived`'s own
   /// precedent -- this used to be a bare missing arm too.
   le_unresolved_macro_artifact,
+  /// A `Term.elim` reached lowering. Unlike `cubical`, this is NOT a
+  /// type-level term -- `if`/`match` are genuine runtime eliminators, and
+  /// `core-term-simplification.md` R3a adds the `Term.elim` variant with
+  /// no production site and no lowering yet; iota reduction over it is
+  /// R5's job (`whnf.mo`), and this meta-eval interpreter -- a separate
+  /// evaluator from the compiled backend's -- needs its own lowering rule
+  /// once something constructs one. Named for the same reason
+  /// `le_unresolved_macro_artifact` is: a bare missing arm here is a
+  /// crash with no cause named.
+  le_elim_not_lowered,
 }
 
 /// Accumulates whole-program global discovery + lowering. See this
@@ -930,6 +940,9 @@ def lower_term (ctx : LowerCtx) (t : Term) (acc : LowerAcc) : Pair (Result Lower
     // be here mid-macro-expansion.
     Term.quote_ _inner => lower_err LowerError.le_unresolved_macro_artifact acc,
     Term.var_macro _idx _dbg => lower_err LowerError.le_unresolved_macro_artifact acc,
+    // See `le_elim_not_lowered`'s own doc comment: R3a is additive only,
+    // nothing constructs a `Term.elim` yet, so this is unreachable today.
+    Term.elim _e => lower_err LowerError.le_elim_not_lowered acc,
   }
 
 // ─── Whole-program global table: the worklist pass ──────────────────

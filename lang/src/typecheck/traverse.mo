@@ -15,7 +15,7 @@
 /// makes that explicit and gives the substitution walkers
 /// ([[lang/typecheck/name_subst.mo]], [[lang/typecheck/subst.mo]]) a
 /// home to build on rather than re-deriving the same ~10 helpers each.
-use lib::types {Con, Cubical, Literal, MatchCase, Native, StructLitField, Term}
+use lib::types {Con, Cubical, Elim, Literal, MatchCase, Native, StructLitField, Term}
 use std::list {List.length}
 
 // ─── Generic structural recursion ──────────────────────────────────
@@ -54,7 +54,26 @@ def term_map_children (f : Term -> Term) (t : Term) : Term :=
         // child at this node's own depth -- which is why the depth-aware
         // sibling below can pass 0 for all of them.
         Term.cubical c => Term.cubical (cubical_map_children f c),
+        // `elim` binds nothing at its own node (unlike `MatchCase`'s
+        // simultaneous multi-binder, which is exactly what this
+        // representation retires): `params`/`motive`/`scrutinee` are
+        // ordinary children, and so are `minors` -- each one is its own
+        // `Term.lam` chain, so the binder it introduces is crossed only
+        // when `f` recurses INTO that chain, not here. Unlike the affine
+        // analyses in usage.mo (which skip `motive`/`params` because they
+        // are erased before run time), this walker is substitution's own
+        // plumbing and must reach every subterm, type positions included,
+        // or a substituted variable's occurrence inside a motive would be
+        // silently missed.
+        Term.elim e => Term.elim (elim_map_children f e),
     }
+
+def elim_map_children (f : Term -> Term) (e : Elim) : Elim :=
+    { e with
+      params := terms_map_children f e.params,
+      motive := f e.motive,
+      minors := terms_map_children f e.minors,
+      scrutinee := f e.scrutinee }
 
 /// `args` is positional and its length is the primitive's arity, so this
 /// maps in place and never reshapes the list.
@@ -175,7 +194,20 @@ def term_map_children_at_depth (f : I64 -> Term -> Term) (t : Term) : Term :=
         // dimension variables are counted by the `lam` arm above like any
         // other de Bruijn binder.
         Term.cubical c => Term.cubical (cubical_map_children (f 0) c),
+        // Depth 0 for every field, same reasoning as `cubical` just
+        // above: `elim` itself binds nothing, so nothing here sits deeper
+        // than the node's own depth. A minor's OWN `Term.lam` chain bumps
+        // the depth when `f` recurses into it, exactly like a cubical
+        // argument that happens to contain a `lam`.
+        Term.elim e => Term.elim (elim_map_children_at_depth f e),
     }
+
+def elim_map_children_at_depth (f : I64 -> Term -> Term) (e : Elim) : Elim :=
+    { e with
+      params := terms_map_children (f 0) e.params,
+      motive := f 0 e.motive,
+      minors := terms_map_children (f 0) e.minors,
+      scrutinee := f 0 e.scrutinee }
 
 #[partial]
 def literal_map_children_at_depth (f : I64 -> Term -> Term) (l : Literal) : Literal :=
@@ -228,9 +260,17 @@ pub def term_children (t : Term) : List Term :=
         Term.quote_ inner => [inner],
         Term.ctx _loc inner => [inner],
         Term.cubical c => cubical_children c,
+        Term.elim e => elim_children e,
     }
 
 def cubical_children (c : Cubical) : List Term := c.args
+
+/// Same order as `literal_children`'s `match_` arm: scrutinee first, then
+/// the arm/minor bodies -- plus `params`/`motive`, which `MatchCase` had
+/// no counterpart for (an un-elaborated `match` carries no explicit
+/// motive or inductive parameters yet; `Elim` does).
+def elim_children (e : Elim) : List Term :=
+    List.append e.params (List.cons e.motive (List.append e.minors (List.singleton e.scrutinee)))
 
 def literal_children (l : Literal) : List Term :=
     match l {

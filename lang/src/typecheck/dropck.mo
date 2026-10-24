@@ -234,6 +234,14 @@ def collect_drop_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         // function's own doc comment above -- a cubical argument is an
         // ordinary runtime term that can reference a bound variable.
         Term.cubical c => match c { { prim := _, args := args } => collect_drop_terms ctors borrows args acc },
+        // Mirrors `usage.mo`'s `collect_uses_term` `elim` arm: visit the
+        // scrutinee and every minor (a collector visits all of them);
+        // `motive`/`params` are type positions, same skip as `pi`'s domain.
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                    collect_drop_terms ctors borrows minors (collect_drop_term ctors borrows scrutinee acc),
+            },
     }
 
 /// Plain-`List Term` walk for `Term.cubical`'s `args` -- `Con`/`Native`

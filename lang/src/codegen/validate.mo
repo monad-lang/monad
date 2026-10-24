@@ -568,6 +568,23 @@ def term_has_struct_lit (t : Term) : Bool := match t {
     // sit under one, and this gate is what keeps it from reaching the
     // `void_val` placeholder.
     Term.cubical c => match c { { prim := _, args := args } => terms_have_struct_lit args },
+    // Must recurse into all four term-bearing fields, same reason as
+    // `ctx`/`cubical` above. Destructured, not projected through `e.`,
+    // like the `cubical` arm just above -- the termination checker's
+    // structural-decrease proof needs the pattern-bound form.
+    Term.elim e =>
+        match e {
+            { inductive := _,
+              levels := _,
+              params := params,
+              motive := motive,
+              minors := minors,
+              scrutinee := scrutinee } =>
+                terms_have_struct_lit params
+                    || term_has_struct_lit motive
+                    || terms_have_struct_lit minors
+                    || term_has_struct_lit scrutinee,
+        },
 }
 
 def terms_have_struct_lit (ts : List Term) : Bool := match ts {

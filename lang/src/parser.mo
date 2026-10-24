@@ -8404,7 +8404,8 @@ def test_t_var_bound : Bool :=
 				Term.lit _ => false, Term.ntv _ => false,
 				Term.con _ => false, Term.sort _ => false, Term.hole => false,
 				Term.cubical _ => false,
-				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false
+				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
+				Term.elim _ => false
 			},
 		fail _ => false
 	}
@@ -8421,7 +8422,8 @@ def test_t_var_unbound : Bool :=
 				Term.lit _ => false, Term.ntv _ => false,
 				Term.con _ => false, Term.sort _ => false, Term.hole => false,
 				Term.cubical _ => false,
-				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false
+				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
+				Term.elim _ => false
 			},
 		fail _ => false
 	}
@@ -8442,7 +8444,8 @@ def test_t_var_shadow : Bool :=
 				Term.lit _ => false, Term.ntv _ => false,
 				Term.con _ => false, Term.sort _ => false, Term.hole => false,
 				Term.cubical _ => false,
-				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false
+				Term.quote_ _ => false, Term.var_macro _ _ => false, Term.ctx _ _ => false,
+				Term.elim _ => false
 			},
 		fail _ => false
 	}

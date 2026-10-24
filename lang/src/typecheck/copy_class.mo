@@ -159,6 +159,9 @@ def carrier_is_resolvable (t : Term) : Bool :=
             match c {
                 { prim := p, args := as } => cubical_prim_eq p CubicalPrim.interval && List.is_empty as,
             },
+        // A dependent match/if's RESULT is an ordinary runtime value, never
+        // itself a type -- same as `app`/`lam`/`lit` above.
+        Term.elim _e => false,
     }
 
 /// Kept for `instance_admissible` below to fall back on — every

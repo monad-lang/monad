@@ -140,6 +140,13 @@ pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_t
         // `PathP`/`transp`/`hcomp` get their own module
         // (`lang/typecheck/cubical.mo`) when they land.
         Term.cubical c => type_check_cubical c expected_type scope local_types locals,
+        // `core-term-simplification.md` R3a adds the `Term.elim` variant
+        // with no production site yet; R4 is the explicit-motive typing
+        // rule that makes this a real dependent-elimination check. Until
+        // then this mirrors `quote_`/`var_macro` just above: a clean
+        // `TypeError` rather than a raw crash for a shape nothing in the
+        // tree can build.
+        Term.elim _e => err (TypeError.custom "Term.elim has no typing rule yet (core-term-simplification.md R4)"),
     }
 
 /// Re-wrap a located term's checked result. Split out because the rewrap

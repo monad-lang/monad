@@ -105,6 +105,25 @@ def uses_of (target : I64) (t : Term) : I64 :=
         // A cubical primitive's arguments all run, so they SUM -- same
         // rule as `uses_of_con`/`uses_of_native`'s `Option Term` args.
         Term.cubical c => match c { { prim := _, args := args } => uses_of_terms target args },
+        // The scrutinee always runs (SUM, like `Literal.match_`'s own
+        // scrutinee); exactly one minor fires, picked by the scrutinee's
+        // constructor (MAX, Rule 1, like `uses_of_cases`). `motive`/
+        // `params` are type positions -- not walked, same as a `pi`
+        // domain.
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                    uses_of target scrutinee + uses_of_minors target minors,
+            },
+    }
+
+/// Max over minors, not sum -- same Rule 1 as `uses_of_cases`: exactly one
+/// minor fires at runtime, the one the scrutinee's constructor picks.
+#[partial]
+def uses_of_minors (target : I64) (ts : List Term) : I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest => i64_max (uses_of target t) (uses_of_minors target rest),
     }
 
 /// Plain-`List Term` SUM for `Term.cubical`'s `args` -- `Con`/`Native`
@@ -503,6 +522,25 @@ def borrow_aware_at (borrows : HashMap String Bool) (borrowed_here : Bool) (targ
         // Same treatment as `borrow_aware_opt_args`: no cubical primitive
         // argument position is documented as a borrow site.
         Term.cubical c => match c { { prim := _, args := args } => borrow_aware_terms borrows target args },
+        // Same split as `if_`/`match_` above: the scrutinee decides (not
+        // borrowed), the minor that fires IS the borrowed value (inherits
+        // `borrowed_here`), and exactly one does, so MAX across them.
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                    borrow_aware_at borrows false target scrutinee
+                        + borrow_aware_minors borrows borrowed_here target minors,
+            },
+    }
+
+/// Max over minors, mirroring `borrow_aware_cases`: exactly one fires.
+#[partial]
+def borrow_aware_minors (borrows : HashMap String Bool) (borrowed_here : Bool) (target : I64) (ts : List Term) : I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest =>
+            i64_max (borrow_aware_at borrows borrowed_here target t)
+                (borrow_aware_minors borrows borrowed_here target rest),
     }
 
 /// Plain-`List Term` SUM for `Term.cubical`'s `args` -- `borrow_aware_opt_args`
@@ -626,6 +664,31 @@ def owning_at (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx
         // stores -- same treatment as `Term.ntv` just above.
         Term.cubical c =>
             match c { { prim := _, args := args } => owning_at_terms ctors borrows UsePos.up_app_arg target args },
+        // Mirrors `owning_at_literal`'s `match_` arm: the scrutinee is
+        // inspected, not owned; the minor that fires inherits `ctx`
+        // (whatever position the whole `elim` occupies), and exactly one
+        // does, so MAX across them.
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                    owning_at ctors borrows UsePos.up_scrutinee target scrutinee
+                        + owning_at_minors ctors borrows ctx target minors,
+            },
+    }
+
+/// Max over minors, mirroring `owning_at_cases`: exactly one fires.
+#[partial]
+def owning_at_minors
+    (ctors : HashMap String Bool)
+    (borrows : HashMap String Bool)
+    (ctx : UsePos)
+    (target : I64)
+    (ts : List Term) :
+    I64 :=
+    match ts {
+        List.empty => 0,
+        List.cons t rest =>
+            i64_max (owning_at ctors borrows ctx target t) (owning_at_minors ctors borrows ctx target rest),
     }
 
 /// Plain-`List Term` SUM for `Term.cubical`'s `args` -- `owning_at_opt_args`
@@ -849,6 +912,16 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         // Recurse, mirroring `collect_uses_con`/`collect_uses_native`:
         // a cubical argument can itself contain a binder reference.
         Term.cubical c => match c { { prim := _, args := args } => collect_uses_terms ctors borrows args acc },
+        // Mirrors `collect_uses_literal`'s `match_` arm: visit the
+        // scrutinee, then every minor -- a collector visits all of them
+        // (unlike the counters above, there is no single arm "firing" to
+        // pick between). `collect_uses_terms` already walks a plain
+        // `List Term`, which `minors` is.
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                    collect_uses_terms ctors borrows minors (collect_uses_term ctors borrows scrutinee acc),
+            },
     }
 
 /// Plain-`List Term` walk for `Term.cubical`'s `args` -- `collect_uses_opt_args`

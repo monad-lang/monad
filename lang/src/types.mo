@@ -1479,6 +1479,36 @@ pub def binder_name (b : Binder) : DebugName :=
 // De Bruijn convention: index 0 = most recently bound variable.
 // Free variables use sentinel index (I64.max) and are resolved
 // by the type checker or module resolver.
+/// The one elimination form -- `core-term-simplification.md` R3. `if c t e`
+/// is an `Elim` on `Bool` with a constant `motive` and `minors := [t, e]`;
+/// `match` is an `Elim` whose `minors` are the arm bodies as lambda chains
+/// (one per constructor, binding its fields left to right), which is why
+/// `MatchCase`'s simultaneous multi-level substitution has no counterpart
+/// here -- a lambda chain binds one level at a time, so `beta_reduce`/
+/// `term_shift` need no special case for it. `motive : P : … -> T … -> Sort
+/// l` is what makes an arm's expected type `motive (K args)` by
+/// construction, which is what delivers dependent elimination (R4);
+/// elaboration without an expected type falls back to a constant motive,
+/// reproducing today's non-dependent behaviour exactly.
+///
+/// `levels`/`params` are the inductive's own universe/type arguments (so a
+/// polymorphic `List`'s `Elim` carries which `A` this one eliminates
+/// over); `levels : List SortLevel` needs no `Term`-walking of its own --
+/// `SortLevel` is closed over `I64`/`Identifier`/itself, never `Term`.
+///
+/// R3a is purely additive: nothing in the tree constructs one yet (that is
+/// R3b/R3c), so every walker's new `Term.elim` arm below is unreachable in
+/// any program today and is verified by the corpus check/sweep reporting
+/// the SAME counts as before this step, not by any behaviour change.
+pub struct Elim {
+    inductive : NamePath,
+    levels : List SortLevel,
+    params : List Term,
+    motive : Term,
+    minors : List Term,
+    scrutinee : Term,
+}
+
 pub type Term {
     var (idx: I64) (dbg: DebugName),
     /// The lambda, and the ONLY binder over a term. Its binder is an
@@ -1599,6 +1629,9 @@ pub type Term {
     /// there: `similar_term_go` is a hand-expanded cross product over this
     /// type's variants and nothing checks it for exhaustiveness.
     cubical (c: Cubical),
+    /// The one eliminator -- see `Elim` above. R3a: purely additive, no
+    /// production site yet.
+    elim (e: Elim),
 }
 
 /// Strip location wrappers, exposing the term a shape test wants.
@@ -2789,7 +2822,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 app _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             // R2c: `d1`/`d2` are `Binder`s now, so this compares `info` and
             // NOT the name, where it compared names before -- the arm's text
@@ -2801,7 +2835,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 app _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             // The two binders are compared, and the domain and codomain with
             // them. Comparing `b1`/`b2` is not decoration: it is what keeps a
@@ -2814,7 +2849,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 app _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             app f1 a1 => match b {
                 app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
@@ -2822,7 +2858,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, lit _ => false, ntv _ => false,
                 con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             lit v1 => match b {
                 lit v2 => Similar.similar v1 v2,
@@ -2830,7 +2867,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, app _ _ => false, ntv _ => false,
                 con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             ntv n1 => match b {
                 ntv n2 => Similar.similar n1 n2,
@@ -2838,7 +2876,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             con c1 => match b {
                 con c2 => Similar.similar c1 c2,
@@ -2846,14 +2885,16 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             sort l1 => match b {
                 sort l2 => level_eq l1 l2,
                 var _ _ => false, lam _ _ _ => false,
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false, hole => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             hole => match b {
                 hole => true,
@@ -2861,7 +2902,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             cubical c1 => match b {
                 cubical c2 => similar_cubical c1 c2,
@@ -2869,7 +2911,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false, hole => false,
                 sort _ => false,
-                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             quote_ i1 => match b {
                 quote_ i2 => Similar.similar i1 i2,
@@ -2877,7 +2920,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                var_macro _ _ => false, ctx _ _ => false
+                var_macro _ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             var_macro idx1 dbg1 => match b {
                 var_macro idx2 dbg2 => I64.beq idx1 idx2 && Similar.similar dbg1 dbg2,
@@ -2885,11 +2929,43 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 pi _ _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false, hole => false,
                 sort _ => false, cubical _ => false,
-                quote_ _ => false, ctx _ _ => false
+                quote_ _ => false, ctx _ _ => false,
+                elim _ => false
             },
             // Provably unreachable -- see this def's own doc comment above.
             ctx _loc1 _inner1 => false,
+            // `motive`/`params`/`minors` compare pointwise, `inductive`
+            // compares by `Similar NamePath`, `levels` by `level_eq`
+            // (documented there as "for `Similar`") -- same componentwise
+            // discipline as every other multi-field arm above.
+            elim e1 => match b {
+                elim e2 => similar_elim e1 e2,
+                var _ _ => false, lam _ _ _ => false,
+                pi _ _ _ => false, app _ _ => false, lit _ => false,
+                ntv _ => false, con _ => false, hole => false,
+                sort _ => false, cubical _ => false,
+                quote_ _ => false, var_macro _ _ => false, ctx _ _ => false
+            },
         }
+
+/// Componentwise `Elim` comparison -- see `similar_term_go`'s `elim` arm.
+def similar_elim (a : Elim) (b : Elim) : Bool :=
+    Similar.similar a.inductive b.inductive
+        && levels_similar a.levels b.levels
+        && similar_terms_pointwise a.params b.params
+        && Similar.similar a.motive b.motive
+        && similar_terms_pointwise a.minors b.minors
+        && Similar.similar a.scrutinee b.scrutinee
+
+#[partial]
+def levels_similar (xs : List SortLevel) (ys : List SortLevel) : Bool := match xs {
+    List.empty => List.is_empty ys,
+    List.cons x xrest => match ys {
+        List.empty => false,
+        List.cons y yrest =>
+            if level_eq x y then levels_similar xrest yrest else false,
+    },
+}
 
 /// Two cubical terms are similar when they name the same primitive and
 /// their argument lists are pointwise similar. `args` carries the arity, so

@@ -774,6 +774,14 @@ def collect_term (t : Term) (refs : Refs) : Refs :=
         // (its walk has no arm for either).
         Term.sort _level => refs,
         Term.cubical _c => refs,
+        // Unlike `cubical`'s bare interval terms, `elim`'s fields are
+        // ordinary ambient terms that can reference module declarations
+        // (a constructor in a minor, a class method in a dependent
+        // motive, ...) -- same treatment as `Literal.if_`/`match_` just
+        // below, generalized to a plain list of minors instead of
+        // `MatchCase`s.
+        Term.elim e =>
+            collect_terms e.minors (collect_term e.motive (collect_terms e.params (collect_term e.scrutinee refs))),
     }
 
 #[partial]

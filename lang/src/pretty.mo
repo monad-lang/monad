@@ -131,6 +131,14 @@ pub def show_term (t : Term) : String := match t {
     // hover). Printed as their own surface syntax, round-tripping.
     quote_ term => String.concat "quote { " (String.concat (show_term term) " }"),
     var_macro idx dbg => String.concat (show_debug_name dbg) "!",
+    // `Elim` has no decided surface spelling of its own -- `match`/`if`
+    // elaborate INTO it, nothing prints one back into either -- so this is
+    // a synthetic, debug-only rendering naming the scrutinee, not a
+    // round-trip. The minors' own constructor names are not part of this
+    // representation (lost to a lambda chain by the time elaboration
+    // builds one), so printing them meaningfully needs more than `Elim`
+    // alone carries.
+    elim e => String.concat "elim { " (String.concat (show_term e.scrutinee) " }"),
     ntv native => show_native native,
     con c => show_con c,
     sort level => show_sort_level level,

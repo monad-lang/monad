@@ -141,6 +141,7 @@ def type_head_name (t : Term) : String :=
         Term.var_macro _idx _dbg => "?",
         // Same "no printable name" treatment as hole/lit above.
         Term.cubical _c => "?",
+        Term.elim _e => "?",
     }
 
 /// Was the scalar approximation of `Copy`; is now the real gate.
