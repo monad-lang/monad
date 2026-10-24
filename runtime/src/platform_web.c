@@ -4,7 +4,8 @@
  * allocator over the linker's `__heap_base`, grown with
  * `memory.grow`; codegen never emits monad_release, so leaking is the same
  * discipline the native build already has. Console I/O is four JS imports
- * (module "monad"), and `monad_main` is the exported entry a direct
+ * (module "monad"), plus `f64_to_string` for a program that formats a
+ * float (`F64.to_string`), and `monad_main` is the exported entry a direct
  * `WebAssembly.instantiate` loader calls.
  *
  * Phase 3 (the REPL bridge and `#[export "c"]`) builds on these exports;
@@ -129,6 +130,16 @@ extern int64_t monad_js_read_stdin(int64_t ptr, int64_t max);
 
 __attribute__((import_module("monad"), import_name("now_ms")))
 extern int64_t monad_js_now_ms(void);
+
+/* `F64.to_string`. The freestanding web profile has no libc float
+   formatting, so the host renders the number: JS's shortest round-trip
+   decimal, expanded to the positional spelling `runtime_libc.c` produces
+   with snprintf/strtod. The host writes UTF-8 into the caller's buffer
+   and returns the byte count (negative on failure). Declared here rather
+   than beside `web_unsigned_to_string` so every JS import stays in one
+   block; the wrapper below is its only user. */
+__attribute__((import_module("monad"), import_name("f64_to_string")))
+extern int64_t monad_js_f64_to_string(int64_t bits, int64_t ptr, int64_t max);
 
 /* `monad_main` is only emitted for a program with a `def main`. An
    exports-only SPA (`#[export "c"]` defs and no main) is legitimate, so the
@@ -521,6 +532,26 @@ rt_str monad_u16_to_string(int64_t n) {
 
 rt_str monad_u64_to_string(int64_t n) {
     return web_unsigned_to_string((uint64_t)n, 0);
+}
+
+rt_str monad_f64_to_string(int64_t v) {
+    char scratch[400];
+    int64_t n = monad_js_f64_to_string(v, (int64_t)(intptr_t)scratch,
+                                      (int64_t)sizeof(scratch));
+    if (n < 0 || n >= (int64_t)sizeof(scratch)) {
+        /* A host that cannot render a number still owes the caller a
+           String. "NaN" is the one spelling every target shares for a
+           value we could not format. */
+        scratch[0] = 'N';
+        scratch[1] = 'a';
+        scratch[2] = 'N';
+        n = 3;
+    }
+    char* out = (char*)RT_PTR(monad_alloc_atomic((rt_size)(n + 1)));
+    if (!out) return 0;
+    for (int64_t i = 0; i < n; i++) out[i] = scratch[i];
+    out[n] = '\0';
+    return RT_WORD(out);
 }
 
 /* ── entry point ────────────────────────────────────────────────────── */

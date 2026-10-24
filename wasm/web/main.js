@@ -1,6 +1,6 @@
 // Direct WebAssembly loader for a compiled Monad module.
 //
-// No wasm-bindgen, no Rust glue: the module is instantiated with the four
+// No wasm-bindgen, no Rust glue: the module is instantiated with the
 // imports its runtime declares (module "monad"), and JS calls the exported
 // `monad_main` entry. The Phase 3 workbench REPL replaces this page with a
 // session-aware loader over the same ABI.
@@ -15,6 +15,8 @@
 //   ?render=1   put the program's stdout (a full HTML document) into the
 //               iframe's srcdoc, so a page-generating program is rendered
 //               rather than shown as text.
+
+import { f64ToRustString } from './float_format.js';
 
 const params = new URLSearchParams(window.location.search);
 const wasmUrl = params.get('wasm') || './app.wasm';
@@ -63,6 +65,14 @@ function importObject(memoryRef) {
       },
       now_ms() {
         return BigInt(Date.now());
+      },
+      f64_to_string(bits, ptr, max) {
+        const view = new DataView(new ArrayBuffer(8));
+        view.setBigUint64(0, BigInt.asUintN(64, BigInt(bits)), true);
+        const bytes = new TextEncoder().encode(f64ToRustString(view.getFloat64(0, true)));
+        const n = Math.min(bytes.length, Number(max));
+        memoryBytes(memoryRef(), ptr, n).set(bytes.subarray(0, n));
+        return BigInt(n);
       },
     },
   };

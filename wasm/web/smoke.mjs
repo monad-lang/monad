@@ -2,11 +2,12 @@
 // Node smoke test for the web profile. Usage:
 //   node wasm/web/smoke.mjs <module.wasm> [expected-stdout]
 //
-// Asserts the module instantiates with the four "monad" imports, exports
-// monad_main/memory, runs `monad_main(0n)`, returns 0, and prints the
-// expected text (default "hello") followed by a newline.
+// Asserts the module instantiates with the `monad` imports it declares,
+// exports monad_main/memory, runs `monad_main(0n)`, returns 0, and prints
+// the expected text (default "hello") followed by a newline.
 
 import { readFile } from 'node:fs/promises';
+import { f64ToRustString } from './float_format.js';
 
 const path = process.argv[2];
 const expected = process.argv[3] ?? 'hello';
@@ -40,6 +41,14 @@ const imports = {
     },
     now_ms() {
       return BigInt(Date.now());
+    },
+    f64_to_string(bits, ptr, max) {
+      const view = new DataView(new ArrayBuffer(8));
+      view.setBigUint64(0, BigInt.asUintN(64, BigInt(bits)), true);
+      const bytes = new TextEncoder().encode(f64ToRustString(view.getFloat64(0, true)));
+      const n = Math.min(bytes.length, Number(max));
+      new Uint8Array(memory.buffer, Number(ptr), n).set(bytes.subarray(0, n));
+      return BigInt(n);
     },
   },
 };

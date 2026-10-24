@@ -208,7 +208,7 @@ Two profiles ride the same LLVM backend:
 | Profile | Triple | Runtime | Host |
 |---|---|---|---|
 | wasi | `wasm32-unknown-wasip1` | wasi-libc, wasm32-unknown-wasip1 | wasmtime, Node |
-| web | `wasm32-unknown-unknown` | freestanding, four JS imports | `WebAssembly.instantiate` |
+| web | `wasm32-unknown-unknown` | freestanding, JS imports (`monad` module) | `WebAssembly.instantiate` |
 
 ```bash
 monad build --target wasm32-unknown-wasip1 fixtures/wasm/fib.mo -o fib.wasm

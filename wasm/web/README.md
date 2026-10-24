@@ -8,7 +8,8 @@ The `wasm32-unknown-unknown` ("web") profile produces a freestanding
 | File | What it is |
 |---|---|
 | `web.js` | **Generated** by `examples/gen_web_js.mo` from `WebAbi` (`motes/web_wasm/src/web_abi.mo`). It builds the import object and exports `start(url, selector)`. Do not edit: `motes/web_wasm`'s drift test compares the committed file with the generator's output. |
-| `web_runtime.js` | The hand-written host behind those imports: DOM node table, fetch, storage, console/stdin, the `Keep` state slot and the `requestAnimationFrame` tick loop. |
+| `web_runtime.js` | The hand-written host behind those imports: DOM node table, fetch, storage, console/stdin, `F64.to_string` (the freestanding profile's float formatter), the `Keep` state slot and the `requestAnimationFrame` tick loop. |
+| `float_format.js` | The `F64.to_string` spelling (shortest round-trip decimal, positional, Rust-compatible), shared by `web_runtime.js`, `main.js` and `smoke.mjs`. |
 | `main.js` | The older direct loader for a plain program (`monad_main`); still used by `?autorun=1&render=1` browser proofs. |
 | `smoke.mjs` | Node smoke test for `monad_main` (hello/wide-value fixtures). |
 | `export_smoke.mjs` | Node test for `#[export "c"]`: exports, eager `IO`, the exports-only module, and the `Keep` slot. |

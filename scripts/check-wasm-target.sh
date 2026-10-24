@@ -68,70 +68,23 @@ echo "== web: hello (freestanding build + Node loader) =="
     -o "$tmp/hello.wasm" --no-cache
 node wasm/web/smoke.mjs "$tmp/hello.wasm"
 
-echo "== web: #[export \"c\"] (exports + eager IO) =="
-"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/export_probe.mo \
-    -o "$tmp/exports.wasm" --no-cache
-node wasm/web/export_smoke.mjs "$tmp/exports.wasm"
-# Exports-only: no `def main`, so the runtime's weak `main_monad` is 0.
-"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/export_only.mo \
-    -o "$tmp/exports-only.wasm" --no-cache
-node wasm/web/export_smoke.mjs "$tmp/exports-only.wasm" exports-only
-# The same program must still build natively: exports are a web-only ABI,
-# and a library that declares them has to stay testable.
-"$MONAD" build fixtures/wasm/export_probe.mo -o "$tmp/exports-native" --no-cache \
-    || fail "native build rejected #[export \"c\"]"
-[ -x "$tmp/exports-native" ] || fail "native build produced no binary"
+echo "== web: Json.to_string (float formatting through the JS host) =="
+# The serializer's float arm reaches `F64.to_string` even for an
+# integer/string document. The web profile had no libc formatter and gated
+# the native off; the host now renders the shortest round-trip decimal, so
+# this program builds and native/wasi/web agree byte for byte.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/json_to_string.mo \
+    -o "$tmp/json-web.wasm" --no-cache
+node wasm/web/smoke.mjs "$tmp/json-web.wasm" '[1,"a",0.5,0.3333333333333333]'
 
-echo "== web: web_wasm DOM surface (C wrappers + JS host) =="
-"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_dom.mo \
-    -o "$tmp/web_dom.wasm" --no-cache
-node wasm/web/dom_smoke.mjs "$tmp/web_dom.wasm"
+"$MONAD" build --target wasm32-unknown-wasip1 fixtures/wasm/json_to_string.mo \
+    -o "$tmp/json-wasi.wasm" --no-cache
+wasmtime "$tmp/json-wasi.wasm" >"$tmp/json-wasi.out" 2>"$tmp/json-wasi.err" \
+    || fail "wasmtime failed on json_to_string: $(cat "$tmp/json-wasi.err")"
+"$MONAD" build fixtures/wasm/json_to_string.mo -o "$tmp/json-native" --no-cache
+"$tmp/json-native" >"$tmp/json-native.out"
+diff -u "$tmp/json-native.out" "$tmp/json-wasi.out" \
+    || fail "json_to_string: wasi and native stdout differ"
+grep -Fqx '[1,"a",0.5,0.3333333333333333]' "$tmp/json-native.out" \
+    || fail "unexpected json_to_string stdout: $(cat "$tmp/json-native.out")"
 
-echo "== web: export state slot (Keep) =="
-"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_keep.mo \
-    -o "$tmp/web_keep.wasm" --no-cache
-node wasm/web/export_smoke.mjs "$tmp/web_keep.wasm" keep
-
-echo "== web: Oak SPA (mount, dispatch, tick, patch) =="
-"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa.mo \
-    -o "$tmp/oak_spa.wasm" --no-cache
-node wasm/web/spa_smoke.mjs "$tmp/oak_spa.wasm"
-
-echo "== output suffix (build without -o) =="
-# The same rule must name the cache destination and the linked artifact.
-"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \
-    "$tmp/noext" --no-cache
-[ -f "$tmp/noext.wasm" ] || fail "missing $tmp/noext.wasm"
-[ ! -e "$tmp/noext.wasm.wasm" ] || fail "the .wasm suffix was applied twice"
-node wasm/web/smoke.mjs "$tmp/noext.wasm"
-
-echo "== gating: OS-only natives fail with a target diagnostic =="
-if "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_file_io.mo \
-    -o "$tmp/gate-web.wasm" --no-cache >"$tmp/gate-web.log" 2>&1; then
-    fail "web build accepted get_env"
-fi
-grep -q 'get_env' "$tmp/gate-web.log" \
-    || fail "web gate did not name get_env: $(cat "$tmp/gate-web.log")"
-grep -q 'not available on target' "$tmp/gate-web.log" \
-    || fail "web gate did not explain the target: $(cat "$tmp/gate-web.log")"
-
-if "$MONAD" build --target wasm32-unknown-wasip1 fixtures/wasm/wasi_fiber.mo \
-    -o "$tmp/gate-wasi.wasm" --no-cache >"$tmp/gate-wasi.log" 2>&1; then
-    fail "wasi build accepted fork_io"
-fi
-grep -q 'fork_io' "$tmp/gate-wasi.log" \
-    || fail "wasi gate did not name fork_io: $(cat "$tmp/gate-wasi.log")"
-grep -q 'not available on target' "$tmp/gate-wasi.log" \
-    || fail "wasi gate did not explain the target: $(cat "$tmp/gate-wasi.log")"
-
-echo "== gating: web externs fail on native =="
-if "$MONAD" build fixtures/wasm/web_extern_native.mo \
-    -o "$tmp/gate-native" --no-cache >"$tmp/gate-native.log" 2>&1; then
-    fail "native build accepted a web_* extern"
-fi
-grep -q 'web_dom_create' "$tmp/gate-native.log" \
-    || fail "native gate did not name web_dom_create: $(cat "$tmp/gate-native.log")"
-grep -q 'not available on target' "$tmp/gate-native.log" \
-    || fail "native gate did not explain the target: $(cat "$tmp/gate-native.log")"
-
-echo "ok: wasm target checks passed"

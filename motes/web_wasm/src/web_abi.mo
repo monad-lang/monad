@@ -115,6 +115,16 @@ def WebImport.write_stderr : WebImport :=
 def WebImport.read_stdin : WebImport :=
   { module := "monad", name := "read_stdin", params := ["i64", "i64"], result := "i64" }
 
+/// `F64.to_string` on the freestanding web profile: the host owns the
+/// float -> decimal formatting the profile's missing libc would do. The
+/// runtime passes the double's bit pattern, a caller-supplied UTF-8 buffer
+/// and its capacity; the host returns the byte count. A program whose
+/// reachable code never formats a float does not import it (wasm-ld drops
+/// the unreachable runtime function), and every loader may provide it
+/// harmlessly.
+def WebImport.f64_to_string : WebImport :=
+  { module := "monad", name := "f64_to_string", params := ["i64", "i64", "i64"], result := "i64" }
+
 def WebExport.oak_mount : WebExport := { name := "oak_mount" }
 def WebExport.oak_dispatch_event : WebExport := { name := "oak_dispatch_event" }
 def WebExport.oak_tick : WebExport := { name := "oak_tick" }
@@ -132,7 +142,8 @@ pub def WebAbi.default : WebAbi :=
         WebImport.fetch_read, WebImport.now_ms, WebImport.storage_get_raw,
         WebImport.storage_set, WebImport.console_log,
         WebImport.keep_set, WebImport.keep_get,
-        WebImport.write_stdout, WebImport.write_stderr, WebImport.read_stdin
+        WebImport.write_stdout, WebImport.write_stderr, WebImport.read_stdin,
+        WebImport.f64_to_string
       ],
       exports := [
         WebExport.oak_mount, WebExport.oak_dispatch_event, WebExport.oak_tick

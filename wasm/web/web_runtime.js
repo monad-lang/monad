@@ -19,6 +19,8 @@
 // call the exported `oak_dispatch_event` through the bound instance, and
 // `oak_tick` is driven from requestAnimationFrame.
 
+import { f64ToRustString } from './float_format.js';
+
 let instance = null;
 let memory = null;
 let rootSelector = 'body';
@@ -368,5 +370,13 @@ export const host = {
 
   read_stdin() {
     return 0n; // interactive stdin is not part of the SPA ABI
+  },
+
+  // `F64.to_string` on the freestanding web profile: the host owns the
+  // float -> decimal formatting the profile's missing libc would do.
+  f64_to_string(bits, ptr, max) {
+    const view = new DataView(new ArrayBuffer(8));
+    view.setBigUint64(0, BigInt.asUintN(64, BigInt(bits)), true);
+    return writeBytes(ptr, encoder.encode(f64ToRustString(view.getFloat64(0, true))), max);
   },
 };

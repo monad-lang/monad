@@ -982,9 +982,10 @@ def wasm_os_only_natives : List String := [
     "get_env", "stream_open", "term_ctl",
 ]
 
-/// Natives whose C implementation needs `snprintf`/`strtod`; the web
-/// profile is freestanding, wasi-libc has them.
-def web_only_natives : List String := ["f64_to_string", "f64_of_string"]
+/// Natives whose C implementation needs `strtod`; the web profile is
+/// freestanding, wasi-libc has it. (`f64_to_string` is NOT here: the web
+/// profile implements it through the JS host, `platform_web.c`.)
+def web_only_natives : List String := ["f64_of_string"]
 
 #[terminating]
 def name_in (name : String) (names : List String) : Bool := match names {
@@ -1046,10 +1047,16 @@ def test_wasm_keeps_console_and_arithmetic : Bool :=
 
 #[test]
 def test_web_gates_float_formatting : Bool :=
+    // The web profile formats floats through the JS host (platform_web.c),
+    // so only the decimal PARSER (`f64_of_string`, strtod) stays gated there.
     match native_target_availability TargetKind.web "f64_to_string" {
-        NativeAvailability.unavailable _ => true,
-        NativeAvailability.available => false,
+        NativeAvailability.available => true,
+        NativeAvailability.unavailable _ => false,
     }
+        && match native_target_availability TargetKind.web "f64_of_string" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
         && match native_target_availability TargetKind.wasi "f64_to_string" {
             NativeAvailability.available => true,
             NativeAvailability.unavailable _ => false,
