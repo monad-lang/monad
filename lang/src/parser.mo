@@ -3817,10 +3817,11 @@ def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : 
 
 // ─── `with Dotted.Name { ... }` — a flat name-prefixing decl block ──────
 //
-// The block's ONLY semantics is name prefixing: each inner decl's name
-// comes out `Dotted.Name.<own name>` (applied at lowering, not here --
-// see `ParseDeclKind.with_d`'s own doc in `lang/types.mo` and the
-// prefix helpers in `lang/parser/lower_parse.mo`). The inner decl list
+// The block prefixes each inner decl's name (`Dotted.Name.<own name>`)
+// and is OPEN inside its own body -- a bare sibling reference lowers to
+// the prefixed name. Both are applied at lowering, not here (see
+// `ParseDeclKind.with_d`'s own doc in `lang/types.mo` and
+// `lang/parser/lower_parse.mo`). The inner decl list
 // is parsed by the SAME `decls_skip` truncate-on-fail loop the module
 // level uses -- the closing `}` is simply the first thing that fails
 // `decl_parser`, exactly how `defmacro`'s `decls { ... }` block works
@@ -4033,6 +4034,198 @@ def test_with_keyword_requires_word_boundary : Bool :=
 	match decls_parser_strict "withdraw" {
 		success _ _ => false,
 		fail e => Bool.not (String.contains (render_parse_error "withdraw" Option.none e) "close with block"),
+	}
+
+// ─── `with` opens its own names (Item 7) ────────────────────────────────
+//
+// Inside a block, a bare reference that names no local binder but does
+// name a sibling declaration lowers to the sibling's prefixed spelling --
+// the same `Term.var sentinel (DebugName.named "Ns.a")` a written
+// `Ns.a` produces. Binder lookup comes FIRST: the corpus has sibling
+// names that collide with match/parameter binders (`SqlError.message`),
+// and an opened-first order would rebind them.
+
+#[partial]
+def test_with_def_body (nm : String) (ds : List Decl) : Option Term :=
+	match ds {
+		List.empty => Option.none,
+		List.cons d rest =>
+			match d {
+				Decl.def_d def_ =>
+					if String.beq (show_name_path def_.name) nm
+					then Option.some def_.term
+					else test_with_def_body nm rest,
+				_ => test_with_def_body nm rest,
+			},
+	}
+
+#[partial]
+def test_with_def_typ (nm : String) (ds : List Decl) : Option Term :=
+	match ds {
+		List.empty => Option.none,
+		List.cons d rest =>
+			match d {
+				Decl.def_d def_ =>
+					if String.beq (show_name_path def_.name) nm
+					then Option.some def_.typ
+					else test_with_def_typ nm rest,
+				_ => test_with_def_typ nm rest,
+			},
+	}
+
+#[partial]
+def test_term_is_global (t : Term) (nm : String) : Bool :=
+	match t {
+		Term.var idx dbg =>
+			I64.beq idx sentinel
+				&& match dbg {
+					DebugName.named id => String.beq (show_identifier id) nm,
+					DebugName.unnamed => false,
+				},
+		_ => false,
+	}
+
+#[partial]
+def test_body_is_global (def_name : String) (global_name : String) (ds : List Decl) : Bool :=
+	match test_with_def_body def_name ds {
+		Option.some body => test_term_is_global body global_name,
+		Option.none => false,
+	}
+
+#[test]
+def test_with_block_opens_a_bare_sibling : Bool :=
+	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := a }" {
+		success rem ds => String.beq rem "" && test_body_is_global "Ns.b" "Ns.a" ds,
+		fail _ => false
+	}
+
+#[test]
+def test_with_block_opens_a_type_annotation : Bool :=
+	match decls_parser "with Ns { def T : Type := I64\ndef v : T := 1 }" {
+		success rem ds =>
+			String.beq rem ""
+				&& match test_with_def_typ "Ns.v" ds {
+					Option.some typ => test_term_is_global typ "Ns.T",
+					Option.none => false,
+				},
+		fail _ => false
+	}
+
+/// A local binder always wins: `fn (a : I64) => a` binds `a`, so the
+/// inner reference is de Bruijn 0, not the sibling `Ns.a`.
+#[test]
+def test_with_block_binder_shadows_the_sibling : Bool :=
+	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := fn (a : I64) => a }" {
+		success rem ds =>
+			String.beq rem ""
+				&& match test_with_def_body "Ns.b" ds {
+					Option.some body =>
+						match body {
+							Term.lam _ _ inner =>
+								match inner {
+									Term.var idx _ => I64.beq idx 0,
+									_ => false,
+								},
+							_ => false,
+						},
+					Option.none => false,
+				},
+		fail _ => false
+	}
+
+/// A nested block's names are its own, composed with the outer prefix.
+#[test]
+def test_nested_with_block_opens_its_sibling : Bool :=
+	match decls_parser "with A { with B { def c : I64 := 1\ndef d : I64 := c } }" {
+		success rem ds => String.beq rem "" && test_body_is_global "A.B.d" "A.B.c" ds,
+		fail _ => false
+	}
+
+/// The outer block's names stay visible inside the nested one.
+#[test]
+def test_nested_with_block_sees_the_outer_names : Bool :=
+	match decls_parser "with A { def e : I64 := 1\nwith B { def f : I64 := e } }" {
+		success rem ds => String.beq rem "" && test_body_is_global "A.B.f" "A.e" ds,
+		fail _ => false
+	}
+
+/// An inner declaration shadows the outer spelling of the same name.
+#[test]
+def test_nested_with_block_shadows_the_outer_name : Bool :=
+	match decls_parser "with A { def x : I64 := 1\nwith B { def x : I64 := 2\ndef y : I64 := x } }" {
+		success rem ds => String.beq rem "" && test_body_is_global "A.B.y" "A.B.x" ds,
+		fail _ => false
+	}
+
+#[test]
+def test_with_block_leaves_an_undeclared_name_bare : Bool :=
+	match decls_parser "with Ns { def a : I64 := z }" {
+		success rem ds => String.beq rem "" && test_body_is_global "Ns.a" "z" ds,
+		fail _ => false
+	}
+
+/// A written qualified name is a name PATH, not a bare identifier, and
+/// lowering leaves paths alone.
+#[test]
+def test_with_block_leaves_a_qualified_reference_alone : Bool :=
+	match decls_parser "with Ns { def a : I64 := 1\ndef b : I64 := Other.a }" {
+		success rem ds => String.beq rem "" && test_body_is_global "Ns.b" "Other.a" ds,
+		fail _ => false
+	}
+
+/// The open stops at the closing brace.
+#[test]
+def test_with_block_does_not_leak_past_its_brace : Bool :=
+	match decls_parser "with Ns { def a : I64 := 1 }\ndef b : I64 := a" {
+		success rem ds => String.beq rem "" && test_body_is_global "b" "a" ds,
+		fail _ => false
+	}
+
+/// A term-position macro reference resolves in the macro namespace by
+/// its bare spelling, so an opened one carries the block's prefix too.
+#[test]
+def test_with_block_opens_a_term_macro_reference : Bool :=
+	match decls_parser "with A { defmacro m := 1\ndef b : I64 := m! }" {
+		success rem ds =>
+			String.beq rem ""
+				&& match test_with_def_body "A.b" ds {
+					Option.some body =>
+						match body {
+							Term.var_macro _ dbg =>
+								match dbg {
+									DebugName.named id => String.beq (show_identifier id) "A.m",
+									DebugName.unnamed => false,
+								},
+							_ => false,
+						},
+					Option.none => false,
+				},
+		fail _ => false
+	}
+
+/// A declaration-position macro call keys the registry on its bare
+/// spelling too.
+#[partial]
+def test_first_macro_call (ds : List Decl) : Option Identifier :=
+	match ds {
+		List.empty => Option.none,
+		List.cons d rest =>
+			match d {
+				Decl.macro_call_d nm _ => Option.some nm,
+				_ => test_first_macro_call rest,
+			},
+	}
+
+#[test]
+def test_with_block_opens_a_decl_macro_call : Bool :=
+	match decls_parser "with A { m! 1\ndef m : I64 := 1 }" {
+		success rem ds =>
+			String.beq rem ""
+				&& match test_first_macro_call ds {
+					Option.some nm => String.beq (show_identifier nm) "A.m",
+					Option.none => false,
+				},
+		fail _ => false
 	}
 
 // ─── Declaration-position `name! args...` ───────────────────────────────
@@ -8200,7 +8393,7 @@ def parse_nref_named (nref : NameRef) (expected : String) : Bool :=
 
 #[test]
 def test_t_var_bound : Bool :=
-	let ctx : ParseLowerCtx := { binders := List.cons (Identifier.id "x") List.empty, locs := Option.none } in
+	let ctx : ParseLowerCtx := { binders := List.cons (Identifier.id "x") List.empty, opened := List.empty, locs := Option.none } in
 	match expression "x" {
 		success rem out =>
 			match (lower_parse_term ctx out) {
@@ -8238,7 +8431,7 @@ def test_t_var_shadow : Bool :=
 	// In [x, y, x] (outer x first), the inner x should be index 0
 	let x : Identifier := Identifier.id "x" in
 	let y : Identifier := Identifier.id "y" in
-	let ctx : ParseLowerCtx := { binders := List.cons y (List.cons x (List.cons x List.empty)), locs := Option.none } in
+	let ctx : ParseLowerCtx := { binders := List.cons y (List.cons x (List.cons x List.empty)), opened := List.empty, locs := Option.none } in
 	match expression "x" {
 		success rem out =>
 			match (lower_parse_term ctx out) {
@@ -8899,7 +9092,7 @@ def test_if_nested : Bool :=
 #[test]
 def test_if_bound_var : Bool :=
     let x : Identifier := Identifier.id "x" in
-    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, locs := Option.none } in
+    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, opened := List.empty, locs := Option.none } in
     match if_parser "if x then 1 else x" {
         success rem out =>
             match out.kind {
@@ -9100,7 +9293,7 @@ def test_struct_lit_as_application_argument : Bool :=
 #[test]
 def test_struct_update_basic : Bool :=
     let x : Identifier := Identifier.id "p1" in
-    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, locs := Option.none } in
+    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, opened := List.empty, locs := Option.none } in
     match expression "{ p1 with x := 10 }" {
         success rem out =>
             String.beq rem "" &&
@@ -9142,7 +9335,7 @@ def test_struct_update_backtrack_to_plain_literal : Bool :=
 /// the two must not drift on which spellings exist.
 #[test]
 def test_struct_update_paren_base : Bool :=
-    let ctx : ParseLowerCtx := { binders := List.empty, locs := Option.none } in
+    let ctx : ParseLowerCtx := { binders := List.empty, opened := List.empty, locs := Option.none } in
     match expression "{ (p1) with x := 10 }" {
         success rem out =>
             String.beq rem "" &&
@@ -9161,7 +9354,7 @@ def test_struct_update_paren_base : Bool :=
 #[test]
 def test_struct_update_call_base : Bool :=
     let msg : Identifier := Identifier.id "msg" in
-    let ctx : ParseLowerCtx := { binders := List.cons msg List.empty, locs := Option.none } in
+    let ctx : ParseLowerCtx := { binders := List.cons msg List.empty, opened := List.empty, locs := Option.none } in
     match expression "{ (Response.ok_text msg) with status := 2 }" {
         success rem out =>
             String.beq rem "" &&
@@ -9600,7 +9793,7 @@ def test_quote_term_basic : Bool :=
 #[test]
 def test_quote_term_application_body : Bool :=
     let f_id : Identifier := Identifier.id "f" in
-    let ctx : ParseLowerCtx := { binders := List.cons f_id List.empty, locs := Option.none } in
+    let ctx : ParseLowerCtx := { binders := List.cons f_id List.empty, opened := List.empty, locs := Option.none } in
     match expression "quote { f 1 }" {
         success rem out =>
             String.beq rem "" &&
@@ -9669,7 +9862,7 @@ def test_macro_call_term_with_args : Bool :=
 #[test]
 def test_macro_call_term_absent_falls_through_to_variable : Bool :=
     let x_id : Identifier := Identifier.id "x" in
-    let ctx : ParseLowerCtx := { binders := List.cons x_id List.empty, locs := Option.none } in
+    let ctx : ParseLowerCtx := { binders := List.cons x_id List.empty, opened := List.empty, locs := Option.none } in
     match expression "x" {
         success rem out =>
             String.beq rem "" &&
@@ -10023,7 +10216,7 @@ def test_def_param_multi_name_group_with_attribute : Bool :=
 #[test]
 def test_match_bound_var : Bool :=
     let x : Identifier := Identifier.id "x" in
-    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, locs := Option.none } in
+    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, opened := List.empty, locs := Option.none } in
     match match_parser "match x { none => 0 }" {
         success rem out =>
             match out.kind {

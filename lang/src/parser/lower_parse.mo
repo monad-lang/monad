@@ -81,6 +81,12 @@ use std::map {HashMap}
 /// 27), so the gate is structural rather than a matter of discipline.
 pub struct ParseLowerCtx {
     binders : List Identifier,
+    /// `with Dotted.Name { ... }` is open inside its own body: a bare
+    /// reference that names no local binder but does name a sibling
+    /// declaration lowers to that sibling's prefixed name. Innermost
+    /// block first, so an inner block shadows an outer one. Consulted
+    /// only AFTER `binders` -- a local always shadows an opened name.
+    opened : List (Pair Identifier Identifier),
     /// Absolute start offset (as a decimal string, since there is no
     /// `Hashable I64`) -> resolved position. Built once per file by
     /// `resolve_offsets_in_file` (`lang/parser/position.mo`).
@@ -97,21 +103,57 @@ pub struct ParseLowerCtx {
 /// lookups.
 #[partial]
 pub def lower_ctx_locating (table : HashMap String Location) : ParseLowerCtx :=
-    { binders := List.empty, locs := Option.some table }
+    { binders := List.empty, opened := List.empty, locs := Option.some table }
 
 /// A context that records no positions -- what every non-debug caller uses.
 #[partial]
-pub def lower_ctx_bare : ParseLowerCtx := { binders := List.empty, locs := Option.none }
+pub def lower_ctx_bare : ParseLowerCtx := { binders := List.empty, opened := List.empty, locs := Option.none }
 
 /// Bind one name, innermost-first (de Bruijn index 0 at the head).
 #[partial]
 def lower_ctx_bind (name : Identifier) (ctx : ParseLowerCtx) : ParseLowerCtx :=
-    { binders := List.cons name ctx.binders, locs := ctx.locs }
+    { binders := List.cons name ctx.binders, opened := ctx.opened, locs := ctx.locs }
 
 /// Bind a group, in order, so the LAST-declared name ends up innermost.
 #[partial]
 def lower_ctx_bind_all (names : List Identifier) (ctx : ParseLowerCtx) : ParseLowerCtx :=
-    { binders := extend_ctx names ctx.binders, locs := ctx.locs }
+    { binders := extend_ctx names ctx.binders, opened := ctx.opened, locs := ctx.locs }
+
+/// Enter a `with` block: its own names go in front of any enclosing
+/// block's, so an inner name shadows an outer spelling.
+#[partial]
+def lower_ctx_open (pairs : List (Pair Identifier Identifier)) (ctx : ParseLowerCtx) : ParseLowerCtx :=
+    { binders := ctx.binders, opened := List.append pairs ctx.opened, locs := ctx.locs }
+
+/// `defmacro` templates substitute their parameters BY NAME
+/// (`macro_apply.mo`/`name_subst.mo`), so an opened sibling that shares
+/// a parameter's spelling would be rewritten before substitution and
+/// silently survive as a free name. Clearing makes that shape fail
+/// loudly (an unresolved name) instead.
+#[partial]
+def lower_ctx_clear_opened (ctx : ParseLowerCtx) : ParseLowerCtx :=
+    { binders := ctx.binders, opened := List.empty, locs := ctx.locs }
+
+/// The `with`-block name `id` stands for, if any.
+#[partial]
+def find_opened (id : Identifier) (opened : List (Pair Identifier Identifier)) : Option Identifier :=
+    match opened {
+        List.empty => Option.none,
+        List.cons p rest =>
+            match p {
+                Pair.pair bare qualified =>
+                    if String.beq (show_identifier id) (show_identifier bare)
+                    then Option.some qualified
+                    else find_opened id rest,
+            },
+    }
+
+#[partial]
+def opened_identifier (ctx : ParseLowerCtx) (id : Identifier) : Identifier :=
+    match find_opened id ctx.opened {
+        Option.some qualified => qualified,
+        Option.none => id,
+    }
 
 
 /// The `Binder` a `ParseTermKind.pi` lowers to: named when the source (or
@@ -171,9 +213,19 @@ def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Term :=
         // a `String` to re-wrap it as an `Identifier` immediately -- and
         // that round trip is what tripped whole-corpus resolution.
         NameRef.nid id =>
+            // Binder FIRST: the corpus has sibling names that collide
+            // with match/parameter binders (`SqlError.message`,
+            // oak's `title`/`head`/`body`), and an opened-first order
+            // would rewrite those binders into global references.
             match find_index id ctx.binders 0 {
                 Option.some idx => Term.var idx (DebugName.named id),
-                Option.none => Term.var sentinel (DebugName.named id),
+                Option.none =>
+                    match find_opened id ctx.opened {
+                        // The spelling an opened name lowers to is exactly
+                        // the one a written `Cubical.I` gets.
+                        Option.some qualified => Term.var sentinel (DebugName.named qualified),
+                        Option.none => Term.var sentinel (DebugName.named id),
+                    },
             },
         NameRef.nnp np => lower_path ctx np nref,
         NameRef.nqn _ => lower_name_global nref,
@@ -584,7 +636,7 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         ParseTermKind.var_macro nref =>
             match name_ref_to_string nref {
                 Option.some qualified =>
-                    Term.var_macro sentinel (DebugName.named (Identifier.id qualified)),
+                    Term.var_macro sentinel (DebugName.named (opened_identifier ctx (Identifier.id qualified))),
                 Option.none => Term.var_macro sentinel DebugName.unnamed,
             },
         // `lam`/`forall`/`pi` bind over their BODY only, never over their
@@ -1042,9 +1094,12 @@ def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
         ParseDeclKind.def_macro_d d => Decl.def_macro_d (lower_parse_def ctx d),
         ParseDeclKind.decl_gen_d name params decl_list attrs =>
             Decl.decl_gen_d name (lower_parse_params ctx params)
-                            (lower_parse_decls ctx decl_list) attrs,
+                            (lower_parse_decls (lower_ctx_clear_opened ctx) decl_list) attrs,
+        // A declaration-position `m!` resolves in the macro namespace by
+        // the bare spelling (`macro_queue.mo` keys on it), so an opened
+        // sibling has to be spelled out here too.
         ParseDeclKind.macro_call_d name args =>
-            Decl.macro_call_d name (lower_parse_terms ctx args),
+            Decl.macro_call_d (opened_identifier ctx name) (lower_parse_terms ctx args),
         // Pass-through, not a lowering: both ASTs spell this as the same
         // `Attribute`, and an `Attribute` contains no `ParseTerm` to
         // de-Bruijn.
@@ -1052,16 +1107,16 @@ def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
     }
 
 
-/// `with Dotted.Name { ... }`'s whole semantics, applied here rather
+/// `with Dotted.Name { ... }`'s name prefixing, applied here rather
 /// than in the grammar: prepend `Dotted.Name.` to each inner decl's own
-/// name. Nothing else changes -- no implicit open, no namespace: a
-/// reference inside the block writes the same prefixed spelling
-/// (`Cubical.I`) a reference outside would, and the prefixed names are
-/// exactly what the equivalent hand-written `def Cubical.i0 : ...` list
-/// would produce (one identifier with embedded dots, the
-/// `dotted_def_name`/`join_dotted_identifiers` convention,
-/// `lang/parser.mo`). Unnamed forms (`use`/`open`/macro call/mote attr)
-/// pass through unchanged: they name no declaration to prefix.
+/// name, giving exactly what the equivalent hand-written
+/// `def Cubical.i0 : ...` list would produce (one identifier with
+/// embedded dots, the `dotted_def_name`/`join_dotted_identifiers`
+/// convention, `lang/parser.mo`). Unnamed forms (`use`/`open`/macro
+/// call/mote attr) pass through unchanged: they name no declaration to
+/// prefix. The block ALSO opens its own names -- see
+/// `lower_ctx_open`/`collect_block_names`; that is a separate step at
+/// `lower_parse_decls`, not part of the prefixing.
 #[partial]
 def prefix_parse_decl (prefix : Identifier) (d : ParseDecl) : ParseDecl :=
     { d with kind := prefix_parse_decl_kind prefix d.kind }
@@ -1120,8 +1175,66 @@ pub def lower_parse_decls (ctx : ParseLowerCtx) (ds : List ParseDecl) : List Dec
         List.cons d rest =>
             match d.kind {
                 ParseDeclKind.with_d prefix inner =>
-                    List.append (lower_parse_decls ctx (List.map (prefix_parse_decl prefix) inner))
+                    List.append (lower_with_block ctx prefix inner)
                                 (lower_parse_decls ctx rest),
                 _ => List.cons (lower_parse_decl ctx d) (lower_parse_decls ctx rest),
+            },
+    }
+
+
+/// A `with` block's body: its decls prefixed, lowered under a context
+/// that also opens the block's own names. `rest` is NOT lowered here --
+/// the block's names stop at its closing brace.
+#[partial]
+def lower_with_block (ctx : ParseLowerCtx) (prefix : Identifier) (inner : List ParseDecl) : List Decl :=
+    let opened : List (Pair Identifier Identifier) := collect_block_names prefix inner in
+    lower_parse_decls (lower_ctx_open opened ctx) (List.map (prefix_parse_decl prefix) inner)
+
+
+/// The names a `with` block itself declares, bare -> prefixed, at THIS
+/// level: a nested block's names belong to the nested block, which opens
+/// them itself when it is lowered (with this block's names already in
+/// scope).
+#[partial]
+def collect_block_names (prefix : Identifier) (ds : List ParseDecl) : List (Pair Identifier Identifier) :=
+    match ds {
+        List.empty => List.empty,
+        List.cons d rest =>
+            List.append (block_decl_name prefix d.kind) (collect_block_names prefix rest),
+    }
+
+#[partial]
+def block_decl_name (prefix : Identifier) (k : ParseDeclKind) : List (Pair Identifier Identifier) :=
+    match k {
+        ParseDeclKind.def_d d => opened_npath_pair prefix d.name,
+        ParseDeclKind.def_macro_d d => opened_npath_pair prefix d.name,
+        ParseDeclKind.inductive_d i => opened_npath_pair prefix i.name,
+        ParseDeclKind.struct_d s =>
+            List.cons (Pair.pair s.name (prefix_ident prefix s.name)) List.empty,
+        ParseDeclKind.class_d c =>
+            List.cons (Pair.pair c.name (prefix_ident prefix c.name)) List.empty,
+        ParseDeclKind.decl_gen_d n _ ds _ =>
+            List.append (opened_npath_pair prefix n) (collect_block_names prefix ds),
+        ParseDeclKind.scoped_open_d _ _ inner => block_decl_name prefix inner.kind,
+        // `with_d`: a nested block, not a declared name. `use`/`open`
+        // name modules, `infix_d` names a function path (an operator
+        // reference bypasses `ctx`), `instance_d` names nothing a
+        // reference can reach, `macro_call_d` declares nothing.
+        _ => List.empty,
+    }
+
+/// Only a single-segment declared name opens: a dotted one is referenced
+/// as a path, and paths are left alone.
+#[partial]
+def opened_npath_pair (prefix : Identifier) (np : NamePath) : List (Pair Identifier Identifier) :=
+    match np {
+        NamePath.mk ids =>
+            match ids {
+                List.cons only rest =>
+                    match rest {
+                        List.empty => List.cons (Pair.pair only (prefix_ident prefix only)) List.empty,
+                        _ => List.empty,
+                    },
+                List.empty => List.empty,
             },
     }
