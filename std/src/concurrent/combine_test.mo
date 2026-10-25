@@ -7,7 +7,9 @@
 // host's. See that test's own comment for the numbers and the reason.
 
 use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
-use lib::concurrent::combine {FiberScope, all, race, scope_fork, scoped, sleepIO}
+use lib::concurrent::combine {
+  Duration, FiberScope, Timeout, all, race, scope_fork, scoped, sleepIO, timeout,
+}
 use lib::io {}
 use lib::list {List.length}
 open IO {current_time_nano}
@@ -226,4 +228,37 @@ def test_sleepIO_fibers_run_concurrently : IO Bool {
   let _r4 <- await_fiber f4;
   let finish <- current_time_nano;
   return (I64.lt (I64.sub finish start) 1200000000)
+}
+
+/// The waiter is first in the race list, so the lazy host runs it and
+/// reports `finished`; the compiled backend races it against the timer and
+/// the work finishes first either way.
+#[test]
+def test_timeout_finished_before_expiry : IO Bool := do {
+  let f <- forkIO (fn (_ : Unit) => do { sleepIO 10; return 7i64 });
+  let d : Duration := { millis := 300 };
+  let r <- timeout d f;
+  return (match r {
+    Result.ok t => match t {
+      Timeout.finished inner => ok_is inner 7,
+      Timeout.expired => false
+    },
+    Result.err _ => false
+  })
+}
+
+/// Compiled-only: the host's poll runs the waiter to completion, so it can
+/// never observe the timer winning.
+#[test]
+def test_timeout_expires : IO Bool := do {
+  let f <- forkIO (fn (_ : Unit) => do { sleepIO 300; return 7i64 });
+  let d : Duration := { millis := 20 };
+  let r <- timeout d f;
+  return (match r {
+    Result.ok t => match t {
+      Timeout.finished _ => false,
+      Timeout.expired => true
+    },
+    Result.err _ => false
+  })
 }

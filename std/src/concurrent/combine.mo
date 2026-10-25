@@ -1,8 +1,9 @@
-// Structured concurrency combinators: all, race, scoped, sleepIO, Duration.
+// Structured concurrency combinators: all, race, timeout, scoped, sleepIO,
+// Duration.
 // Builds on forkIO/await_fiber/cancel_fiber from std.concurrent.fiber.
 
 use init::borrow {Borrow, Borrow.get}
-use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, pollFiber}
+use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO, pollFiber}
 
 struct Duration {
     millis : I64,
@@ -93,6 +94,34 @@ def race_loop (fibers : Borrow (List (Fiber A))) : IO (Result FiberError A) :=
 #[partial]
 pub def race (fibers : List (Fiber A)) : IO (Result FiberError A) :=
   race_loop (Borrow.of fibers)
+
+/// The outcome of a bounded wait: the fiber finished (with its own result),
+/// or the duration expired first.
+pub type Timeout A {
+    finished (result : Result FiberError A),
+    expired
+}
+
+/// Wait at most `duration` for `f`, racing a sleeper against a fiber that
+/// awaits it. The waiter is listed first so the lazy host -- where a poll
+/// runs the deferred action -- degrades to `await_fiber`, its only honest
+/// behaviour; the compiled backend races them for real.
+///
+/// `expired` cancels `f` cooperatively (it stops at its next IO bind) and
+/// cancels the waiter, which may itself stay blocked in `await_fiber f`
+/// until `f` finishes; nothing waits for either, and `timeout` returns as
+/// soon as the timer wins.
+pub def timeout {A : Type} (duration : Duration) (f : Fiber A) : IO (Result FiberError (Timeout A)) := do {
+    let waiter <- forkIO (fn (_ : Unit) => do {
+        let r <- await_fiber f;
+        return (Timeout.finished r)
+    });
+    let timer <- forkIO (fn (_ : Unit) => do {
+        sleepIO duration.millis;
+        return Timeout.expired
+    });
+    race [waiter, timer]
+}
 
 // Scoped: run f with a scope; all fibers forked via scope_fork
 // are cancelled when the scope exits.
