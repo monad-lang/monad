@@ -3146,7 +3146,10 @@ fn fork_io(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
   io_wrap(natives, handle_value(id))
 }
 
-/// `await_fiber (f : Fiber A) : IO A` — the one fiber/scope native that
+/// `await_fiber : Fiber A -> RawIO (Result I64 A)` — the raw native
+/// behind `std/concurrent/fiber.mo`'s `await_fiber`, which maps the error
+/// code to `FiberError` (1 is `cancelled`; the compiled runtime's 2,
+/// `never_started`, cannot happen here). The one fiber/scope native that
 /// needs the full evaluator (`globals`/`cache`), not just `exec_native`'s
 /// ordinary `(name, args, natives)` shape: running the fiber's deferred
 /// action means applying its stored closure to `unit` via
@@ -3165,27 +3168,44 @@ pub fn await_fiber(
   let id = extract_handle_id(f)?;
   let handle = crate::runtime::global::take::<FiberHandle>(id)
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber handle {id} not found")))?;
+  raw_io_wrap(natives, run_fiber(id, handle, globals, natives, cache)?)
+}
+
+/// What await and poll answer for a taken fiber handle, as the raw
+/// `Result I64 A`: `err 1` if it was cancelled before it ran, else the
+/// deferred action is run now and its value is `ok`. A handle that was
+/// already consumed is still an eval error: that is misuse, not a fiber
+/// outcome (the compiled runtime re-reads its stored answer instead).
+fn run_fiber(
+  id: u64,
+  handle: FiberHandle,
+  globals: &crate::core_value::GlobalTable,
+  natives: &NativeTable,
+  cache: &mut crate::core_value::GlobalCache,
+) -> Result<Value, CoreEvalError> {
   if handle.fiber.is_done() && handle.fiber.state() == crate::runtime::fiber::FiberState::Cancelled
   {
-    return Err(CoreEvalError::NativeArgError(format!(
-      "fiber {id} was cancelled"
-    )));
+    let err = require_ctor(natives.well_known.result_err, "Result.err")?;
+    return Ok(Value::Con {
+      tag: err.tag,
+      args: std::sync::Arc::new(vec![Value::Lit(IrLit::Num(1, NumSuffix::I64))].into()),
+    });
   }
   let action = handle
     .action
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber {id} already awaited")))?;
-  let result = crate::core_eval::apply(action, unit_value(), globals, natives, cache)?;
-  handle.fiber.set_result(result.clone());
+  let io_box = crate::core_eval::apply(action, unit_value(), globals, natives, cache)?;
+  handle.fiber.set_result(io_box.clone());
   handle
     .fiber
     .set_state(crate::runtime::fiber::FiberState::Completed);
-  Ok(result)
+  make_result_ok(natives, peel_io_box(natives, io_box)?)
 }
 
 /// Peel `a` out of the action's own result. The action is typed
 /// `IO (IO A)`-shaped `IO A`, so its value is the two-layer
 /// `IO.mk (RawIO.io a)` box; one peel of exactly this box was the
-/// compiled await's past bug (runtime.c's `monad_await_fiber` comment).
+/// compiled await's past bug (runtime.c's `fiber_answer` comment).
 /// Both tags verified against `well_known`, erroring loudly on anything
 /// else rather than guessing a field count.
 fn peel_io_box(natives: &NativeTable, v: Value) -> Result<Value, CoreEvalError> {
@@ -3196,7 +3216,7 @@ fn peel_io_box(natives: &NativeTable, v: Value) -> Result<Value, CoreEvalError> 
     }
     other => {
       return Err(CoreEvalError::NativeArgError(format!(
-        "poll_fiber: expected the action's IO box, got {other:?}"
+        "fiber: expected the action's IO box, got {other:?}"
       )));
     }
   };
@@ -3206,17 +3226,18 @@ fn peel_io_box(natives: &NativeTable, v: Value) -> Result<Value, CoreEvalError> 
       Ok(args.first().cloned().unwrap())
     }
     other => Err(CoreEvalError::NativeArgError(format!(
-      "poll_fiber: expected RawIO.io inside the IO box, got {other:?}"
+      "fiber: expected RawIO.io inside the IO box, got {other:?}"
     ))),
   }
 }
 
-/// `pollFiber (f : Fiber A) : IO (Option A)` — `await_fiber`'s
-/// non-blocking sibling (`std/concurrent/fiber.mo`). The Rust host has
-/// the honest degradation the async-threading plan pins: there are no
-/// real threads here (`fork_io` defers) so asking IS doing — poll runs
-/// the deferred action to completion and always returns `some` of the
-/// result, never `none`. Dispatched from `fire_or_accumulate` like
+/// `poll_fiber : Fiber A -> RawIO (Option (Result I64 A))` — the raw
+/// native behind `pollFiber`, `await_fiber`'s non-blocking sibling
+/// (`std/concurrent/fiber.mo`). The Rust host has the honest degradation
+/// the async-threading plan pins: there are no real threads here
+/// (`fork_io` defers) so asking IS doing — poll runs the deferred action
+/// to completion and always returns `some` of await's answer, never
+/// `none`. Dispatched from `fire_or_accumulate` like
 /// `await_fiber`, for the same reason: running the action needs the
 /// full evaluator. Mirrors `runtime.c`'s `monad_poll_fiber`.
 pub fn poll_fiber(
@@ -3231,24 +3252,8 @@ pub fn poll_fiber(
   let id = extract_handle_id(f)?;
   let handle = crate::runtime::global::take::<FiberHandle>(id)
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber handle {id} not found")))?;
-  if handle.fiber.is_done() && handle.fiber.state() == crate::runtime::fiber::FiberState::Cancelled
-  {
-    return Err(CoreEvalError::NativeArgError(format!(
-      "fiber {id} was cancelled"
-    )));
-  }
-  let action = handle
-    .action
-    .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber {id} already awaited")))?;
-  let io_box = crate::core_eval::apply(action, unit_value(), globals, natives, cache)?;
-  handle.fiber.set_result(io_box.clone());
-  handle
-    .fiber
-    .set_state(crate::runtime::fiber::FiberState::Completed);
-  io_wrap(
-    natives,
-    make_option(natives, Some(peel_io_box(natives, io_box)?))?,
-  )
+  let answer = run_fiber(id, handle, globals, natives, cache)?;
+  raw_io_wrap(natives, make_option(natives, Some(answer))?)
 }
 
 /// `cancel_fiber (f : Fiber A) : IO Unit` — marks the fiber cancelled
@@ -3666,23 +3671,15 @@ mod tests {
     let id = handle_id_of(fh);
 
     // The degraded contract: there is no `none` here — asking IS doing
-    // on the lazy host. The answer is `some` of the peeled payload
-    // inside the standard two-layer wrap: IO.mk (RawIO.io (some 42)).
+    // on the lazy host. The answer is `some (ok 42)` inside the one
+    // `RawIO.io` layer a raw native returns.
     let polled = poll_fiber(&[handle_value(id)], &globals, &natives, &mut cache).unwrap();
-    let some = natives.well_known.option_some.unwrap();
-    let Value::Con { ref args, .. } = polled else {
-      panic!("expected the IO.mk wrapper, got {polled:?}")
+    let answer = some_answer(&natives, polled);
+    let ok = natives.well_known.result_ok.unwrap();
+    let Value::Con { tag, ref args } = answer else {
+      panic!("expected the Result wrapper, got {answer:?}")
     };
-    let raw = args.first().cloned().unwrap();
-    let Value::Con { ref args, .. } = raw else {
-      panic!("expected the RawIO.io wrapper")
-    };
-    let opt = args.first().cloned().unwrap();
-    let Value::Con { tag, ref args } = opt else {
-      panic!("expected the Option wrapper, got {opt:?}")
-    };
-    assert_eq!(tag, some.tag);
-    assert_eq!(args.len(), 1);
+    assert_eq!(tag, ok.tag);
     let payload = args.first().cloned().unwrap();
     assert!(matches!(payload, Value::Lit(IrLit::Num(42, _))));
 
@@ -3705,19 +3702,39 @@ mod tests {
     );
   }
 
+  /// Peel `RawIO.io (some x)`, checking both tags, and return `x`.
+  fn some_answer(natives: &NativeTable, v: Value) -> Value {
+    let raw = natives.well_known.raw_io_io.unwrap();
+    let some = natives.well_known.option_some.unwrap();
+    let Value::Con { tag, ref args } = v else {
+      panic!("expected the RawIO.io wrapper, got {v:?}")
+    };
+    assert_eq!(tag, raw.tag);
+    let opt = args.first().cloned().unwrap();
+    let Value::Con { tag, ref args } = opt else {
+      panic!("expected the Option wrapper, got {opt:?}")
+    };
+    assert_eq!(tag, some.tag);
+    args.first().cloned().unwrap()
+  }
+
   #[test]
-  fn test_poll_after_cancel_errors() {
+  fn test_poll_after_cancel_answers_err_cancelled() {
     let natives = test_natives();
     let globals = crate::core_value::GlobalTable::new(vec![]);
     let mut cache = crate::core_value::GlobalCache::new(0);
     let fh = fork_io(&[io_box_action()], &natives).unwrap();
     let id = handle_id_of(fh);
     // cancel keeps the handle registered (`with`, not `take`), so the
-    // poll reaches it and raises the same eval error await would.
+    // poll reaches it and answers `some (err 1)`, as await would.
     cancel_fiber(&[handle_value(id)], &natives).unwrap();
-    let err = poll_fiber(&[handle_value(id)], &globals, &natives, &mut cache).unwrap_err();
-    assert!(
-      matches!(err, CoreEvalError::NativeArgError(msg) if msg.contains(&format!("fiber {id} was cancelled")))
-    );
+    let polled = poll_fiber(&[handle_value(id)], &globals, &natives, &mut cache).unwrap();
+    let answer = some_answer(&natives, polled);
+    let err = natives.well_known.result_err.unwrap();
+    let Value::Con { tag, ref args } = answer else {
+      panic!("expected the Result wrapper, got {answer:?}")
+    };
+    assert_eq!(tag, err.tag);
+    assert!(matches!(args.first(), Some(Value::Lit(IrLit::Num(1, _)))));
   }
 }

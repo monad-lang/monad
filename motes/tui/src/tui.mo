@@ -33,7 +33,7 @@
 // over `IO.read_line`.
 //
 // v3, same reasoning in the other direction: `pollFiber` (async-threading
-// 7a.5) landed, and `Cmd.perform_async (action : Unit -> IO M)` is its
+// 7a.5) landed, and `Cmd.perform_async action on_error` is its
 // adoption. The action FORKS (`forkIO`); the result folds back whenever the
 // loop's `poll_turns` sees the fiber complete -- a frame boundary the
 // action's own turn never blocks (weaver's model turn runs on it, and a
@@ -92,7 +92,7 @@ use lib::terminal {
     Terminal.enter_alt_screen, Terminal.enter_raw_mode, Terminal.leave_alt_screen,
     Terminal.leave_raw_mode, Terminal.size
 }
-use std::concurrent::fiber {Fiber, forkIO, pollFiber}
+use std::concurrent::fiber {Fiber, FiberError, forkIO, pollFiber}
 use std::io { IO.flush_stdout, IO.write_stdout }
 use std::list { List.length }
 
@@ -121,8 +121,10 @@ pub type Cmd (M : Type) {
     /// happen only there, so the fiber is consumed exactly once. While a
     /// turn this command started is pending, the loop keeps reading
     /// stdin unless the app's `reads_input` yields it to a modal dialog
-    /// (see the header).
-    perform_async (action : Unit -> IO M)
+    /// (see the header). If the fiber has no result -- in practice, the
+    /// runtime could not create its thread -- `on_error` turns the reason
+    /// into the message folded in instead.
+    perform_async (action : Unit -> IO M) (on_error : FiberError -> M)
 }
 
 /// An Elm-architecture app: the initial model, how a raw terminal `Event`
@@ -236,7 +238,7 @@ pub def App.has_tick (evs : List Event) : Bool :=
 /// `#[terminating]`: the loop's progress is the reader's stream, not a
 /// structural argument.
 #[terminating]
-def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
+def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) : IO Unit :=
     match a {
         // Explicit `Monad.bind` on the poll (the do-block form's binder
         // is untyped on the self-hosted side, and a
@@ -249,8 +251,8 @@ def loop_app {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (reader : 
     }
 
 #[terminating]
-def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reads : S -> IO Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) : IO Unit :=
-    Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (Fiber M))) => do {
+def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : Event -> M) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (tick_ms : I64) (reads : S -> IO Bool) (reader : InputReader) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) : IO Unit :=
+    Monad.bind (poll_turns turns) (fn (polled : Pair (List M) (List (PendingTurn M))) => do {
         match polled {
             Pair.pair tmsgs turns2 => do {
                 // Polling comes BEFORE the produce: with `tick_ms < 0`
@@ -272,13 +274,31 @@ def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : 
 /// `produce_poll_only` -- the frame clock and resizes keep flowing, and
 /// the fiber's dialog is the only stdin reader (a second reader would
 /// race it and, on a lost wake, block the UI in a blocking read).
-def produce_for {S : Type} {M : Type} (turns : List (Fiber M)) (reader : InputReader) (timeout_ms : I64) (model : S) (reads : S -> IO Bool) : IO (Pair (List Event) InputReader) :=
+def produce_for {S : Type} {M : Type} (turns : List (PendingTurn M)) (reader : InputReader) (timeout_ms : I64) (model : S) (reads : S -> IO Bool) : IO (Pair (List Event) InputReader) :=
     match turns {
         List.empty => Input.produce reader timeout_ms,
         List.cons _ _ => do {
             let may <- reads model;
             if may then Input.produce reader timeout_ms else Input.produce_poll_only reader timeout_ms
         }
+    }
+
+/// A pending `perform_async`: its fiber and the handler for a fiber
+/// error. A one-constructor `type` rather than a `struct` because it is
+/// generic over the message type.
+type PendingTurn (M : Type) {
+    waiting (fiber : Fiber M) (on_error : FiberError -> M)
+}
+
+def PendingTurn.fiber {M : Type} (t : PendingTurn M) : Fiber M :=
+    match t { PendingTurn.waiting f _ => f }
+
+/// The message a finished turn folds in: its result, or `on_error` of
+/// why there is none.
+def PendingTurn.message {M : Type} (t : PendingTurn M) (r : Result FiberError M) : M :=
+    match r {
+        Result.ok m => m,
+        Result.err e => match t { PendingTurn.waiting _ on_error => on_error e }
     }
 
 /// Every pending turn fiber, polled once. A fiber that has completed
@@ -290,28 +310,28 @@ def produce_for {S : Type} {M : Type} (turns : List (Fiber M)) (reader : InputRe
 /// structurally unreachable. `#[terminating]`: recursion on the list
 /// tail; a `pollFiber` never waits.
 #[terminating]
-def poll_turns {M : Type} (turns : List (Fiber M)) : IO (Pair (List M) (List (Fiber M))) :=
+def poll_turns {M : Type} (turns : List (PendingTurn M)) : IO (Pair (List M) (List (PendingTurn M))) :=
     match turns {
         List.empty => IO.pure (Pair.pair List.empty List.empty),
-        List.cons f rest =>
+        List.cons t rest =>
             // Explicit `Monad.bind`, NOT a do-block: this file's binds
             // dispatch `Monad` over the (polymorphic-native) result the
             // self-hosted checker resolves wrongly here -- mock.mo
             // recorded the same failure and the same cure.
-            Monad.bind (pollFiber f) (fn (head : Option M) =>
-                Monad.bind (poll_turns rest) (fn (tail : Pair (List M) (List (Fiber M))) =>
-                    IO.pure (split_head head f tail)))
+            Monad.bind (pollFiber (PendingTurn.fiber t)) (fn (head : Option (Result FiberError M)) =>
+                Monad.bind (poll_turns rest) (fn (tail : Pair (List M) (List (PendingTurn M))) =>
+                    IO.pure (split_head head t tail)))
     }
 
 /// `poll_turns`'s fold: a completed fiber's message conses in FRONT of
 /// the rest's messages (fork order preserved); a running one stays.
 #[partial]
-def split_head {M : Type} (head : Option M) (f : Fiber M) (tail : Pair (List M) (List (Fiber M))) : Pair (List M) (List (Fiber M)) :=
+def split_head {M : Type} (head : Option (Result FiberError M)) (t : PendingTurn M) (tail : Pair (List M) (List (PendingTurn M))) : Pair (List M) (List (PendingTurn M)) :=
     match tail {
         Pair.pair tmsgs tturns =>
             match head {
-                Option.none => Pair.pair tmsgs (List.cons f tturns),
-                Option.some m => Pair.pair (List.cons m tmsgs) tturns
+                Option.none => Pair.pair tmsgs (List.cons t tturns),
+                Option.some r => Pair.pair (List.cons (PendingTurn.message t r) tmsgs) tturns
             }
     }
 
@@ -319,7 +339,7 @@ def split_head {M : Type} (head : Option M) (f : Fiber M) (tail : Pair (List M) 
 /// (a piped script's last keystrokes still count) and then stops -- a
 /// controlled exit, `run_with_size` restores after us.
 #[terminating]
-def after_produce {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (Fiber M)) (out : Pair (List Event) InputReader) : IO Unit :=
+def after_produce {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (on_ev : Event -> M) (model : S) (prev : Screen) (pending : List M) (turns : List (PendingTurn M)) (out : Pair (List Event) InputReader) : IO Unit :=
     match out {
         Pair.pair evs reader2 =>
             let msgs : List M := List.map on_ev evs in
@@ -356,7 +376,7 @@ def final_draw {S : Type} {M : Type} (vw : S -> Widget) (reader : InputReader) (
 /// The batch `step_loop` folds: `pending` (last frame's
 /// dispatched/performed messages) in front of the freshly produced ones.
 #[terminating]
-def step_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (Fiber M)) (pending : List M) (msgs : List M) (dirty : Bool) : IO Unit :=
+def step_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S -> M -> Pair S (Cmd M)) (vw : S -> Widget) (reader : InputReader) (model : S) (prev : Screen) (turns : List (PendingTurn M)) (pending : List M) (msgs : List M) (dirty : Bool) : IO Unit :=
     let batch : List M := List.append pending msgs in
     do {
         let stepped <- step_batch upd model batch;
@@ -367,18 +387,18 @@ def step_loop {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (upd : S 
 /// the frame (when the batch was nonempty, or `perform` forced a
 /// repaint) and recurses with the queued `dispatch`/`perform` messages.
 #[terminating]
-def after_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) (dirty : Bool) : IO Unit :=
+def after_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (stepped : Pair (Pair S (Cmd M)) (Pair (List M) Bool)) (dirty : Bool) : IO Unit :=
     match stepped {
         Pair.pair inner tail => continue_step a redraw vw reader prev turns batch inner tail dirty
     }
 
 #[terminating]
-def continue_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (Fiber M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) (dirty : Bool) : IO Unit :=
+def continue_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw : S -> Widget) (reader : InputReader) (prev : Screen) (turns : List (PendingTurn M)) (batch : List M) (inner : Pair S (Cmd M)) (tail : Pair (List M) Bool) (dirty : Bool) : IO Unit :=
     match inner {
         Pair.pair model2 cmd =>
             match cmd {
                 Cmd.quit => do { return Unit.unit },
-                Cmd.perform_async action =>
+                Cmd.perform_async action on_error =>
                     match tail {
                         Pair.pair pending2 forced => do {
                             // The fork IS this frame's delivery: the
@@ -389,7 +409,7 @@ def continue_step {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (vw :
                             // it dies.
                             let f <- forkIO action;
                             let frame <- draw_frame vw model2 reader prev dirty forced;
-                            loop_app a redraw reader model2 frame pending2 (List.cons f turns)
+                            loop_app a redraw reader model2 frame pending2 (List.cons (PendingTurn.waiting f on_error) turns)
                         }
                     },
                 _ => match tail {
@@ -442,8 +462,8 @@ def step_cmd {S : Type} {M : Type} (upd : S -> M -> Pair S (Cmd M)) (model : S) 
         // `rest` re-queues as the next frame's pending, so a SECOND
         // perform_async in the same batch forks, in order, one iteration
         // later.
-        Cmd.perform_async action =>
-            return (Pair.pair (Pair.pair model (Cmd.perform_async action)) (Pair.pair rest false)),
+        Cmd.perform_async action on_error =>
+            return (Pair.pair (Pair.pair model (Cmd.perform_async action on_error)) (Pair.pair rest false)),
         Cmd.none => step_batch upd model rest
     }
 

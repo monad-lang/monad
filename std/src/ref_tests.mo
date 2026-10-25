@@ -4,7 +4,8 @@
 use std::ref {
   Ref, Ref.new, Ref.get, Ref.set, Ref.update, Ref.add_i64, Ref.modify,
 }
-use std::concurrent::fiber {Fiber, await_fiber, forkIO}
+use std::concurrent::fiber {forkIO}
+use std::concurrent::combine {all}
 
 #[test]
 def test_ref_roundtrip : IO Bool := do {
@@ -88,15 +89,6 @@ def inc_times (r : Ref I64) (n : I64) : IO Unit :=
     (fn (_ : Unit) => fn (_ : Unit) => Ref.modify r (fn (x : I64) => I64.add x 1))
     (units n))
 
-def await_all (fibers : List (Fiber Unit)) : IO Unit :=
-  match fibers {
-    List.empty => IO.pure unit,
-    List.cons f rest => do {
-      let _ <- await_fiber f;
-      await_all rest
-    }
-  }
-
 /// Eight fibers (OS threads, compiled) race their updates; none is lost.
 #[test]
 def test_ref_update_concurrent_counter : IO Bool := do {
@@ -109,7 +101,7 @@ def test_ref_update_concurrent_counter : IO Bool := do {
   let f <- forkIO (fn (_ : Unit) => inc_times r 500);
   let g <- forkIO (fn (_ : Unit) => inc_times r 500);
   let h <- forkIO (fn (_ : Unit) => inc_times r 500);
-  await_all [a, b, c, d, e, f, g, h];
+  let done <- all [a, b, c, d, e, f, g, h];
   let v <- Ref.get r;
-  return (v == 4000)
+  return (Result.is_ok done && v == 4000)
 }

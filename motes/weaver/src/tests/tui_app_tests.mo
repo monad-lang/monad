@@ -24,7 +24,8 @@ use weaver::overlay {OverlayState}
 use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage}
 use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
-use weaver::tui_app {TuiApp.update}
+use weaver::tui_app {TuiApp.update, turn_never_ran}
+use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
 use std::list {List.length}
@@ -56,7 +57,7 @@ def mode_eq (a : Mode) (b : Mode) : Bool :=
     }
 
 def cmd_is_perform (c : Cmd WeaverMsg) : Bool :=
-    match c { Cmd.perform_async _ => true, _ => false }
+    match c { Cmd.perform_async _ _ => true, _ => false }
 
 def cmd_is_none (c : Cmd WeaverMsg) : Bool :=
     match c { Cmd.none => true, _ => false }
@@ -304,6 +305,21 @@ def test_fatal_turn_ends_the_tui : Bool :=
         Pair.pair m2 cmd => cmd_is_quit cmd && fatal_is_some2 m2
     }
 
+// A turn whose fiber never ran (no thread could be created) is a
+// recoverable failure: the error line lands, the spinner stops, and the
+// TUI keeps running so the user can submit again.
+#[test]
+def test_turn_that_never_ran_is_recoverable : Bool :=
+    let base0 : TuiModel := model_of Mode.manual in
+    let base : TuiModel := { base0 with turn_pending := true } in
+    match TuiApp.update base (turn_never_ran run_of FiberError.never_started) {
+        Pair.pair m2 cmd =>
+            cmd_is_perform_repaint cmd
+                && Bool.not m2.turn_pending
+                && Bool.not (fatal_is_some2 m2)
+                && transcript_contains "error: io: fiber never started (no thread could be created)" m2.transcript.tail
+    }
+
 def fatal_is_some2 (m : TuiModel) : Bool :=
     match m.state.fatal { Option.some _ => true, Option.none => false }
 
@@ -392,7 +408,7 @@ def test_up_with_text_is_not_history : Bool :=
 def cmd_be (a : Cmd WeaverMsg) (b : Cmd WeaverMsg) : Bool :=
     match a {
         Cmd.none => match b { Cmd.none => true, _ => false },
-        Cmd.perform_async _ => match b { Cmd.perform_async _ => true, _ => false },
+        Cmd.perform_async _ _ => match b { Cmd.perform_async _ _ => true, _ => false },
         _ => false,
     }
 
@@ -402,7 +418,7 @@ def test_enter_forks_the_turn : Bool :=
         Pair.pair m1 _ =>
             match TuiApp.update m1 (key_msg Key.enter) {
                 Pair.pair m2 cmd =>
-                    cmd_be cmd (Cmd.perform_async (fn (_ : Unit) => IO.pure unused_placeholder))
+                    cmd_be cmd (Cmd.perform_async (fn (_ : Unit) => IO.pure unused_placeholder) (turn_never_ran run_of))
                         && m2.turn_pending
             }
     }

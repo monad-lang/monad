@@ -13,7 +13,8 @@ work. Both implementations accept the same programs; they differ in what a
 
 `forkIO` starts a thread. It creates a `pthread` running the action, returns an
 opaque handle immediately, and the thread proceeds on its own. `await_fiber`
-joins that thread and yields its result.
+waits for that thread to finish and yields its result, or a `FiberError` saying
+why there is none.
 
 ```monad,ignore
 let f <- forkIO action;
@@ -35,9 +36,10 @@ replace the handle's atomic refcount with the ownership discipline in
 
 `cancel_fiber` **records** the cancellation; it does not preempt. `pthread_cancel`
 would leave Boehm's allocator lock held and the thread unregistered, so the
-cancellation is a flag that `await_fiber` refuses to hand a result for — the same
-observable behaviour as the host, which can only cancel a fiber it has never
-started. A `scope_drop` likewise cancels the fibers forked through that scope
+cancellation is a flag, and `await_fiber` answers a cancelled fiber with
+`Result.err FiberError.cancelled` — the same answer as the host, which can only
+cancel a fiber it has never started. The other error, `never_started`, means
+the runtime could not create the fiber's thread. A `scope_drop` likewise cancels the fibers forked through that scope
 rather than waiting on them.
 
 The host's model, for contrast: `forkIO` captures the action and returns, and
@@ -71,10 +73,17 @@ type Fiber (A : Type) {
   fiber
 }
 
-#[native fork_io]    def forkIO (action : Unit -> IO A) : IO (Fiber A)
-#[native await_fiber] def await_fiber (f : Fiber A) : IO A
-#[native cancel_fiber] def cancel_fiber (f : Fiber A) : IO Unit
+type FiberError { cancelled, never_started }
+
+def forkIO (action : Unit -> IO A) : IO (Fiber A)
+def await_fiber (f : Fiber A) : IO (Result FiberError A)
+def pollFiber (f : Fiber A) : IO (Option (Result FiberError A))
+def cancel_fiber (f : Fiber A) : IO Unit
 ```
+
+`pollFiber` is the non-blocking `await_fiber`: `none` while the fiber runs,
+then `some` of the same answer. On the host it runs the deferred action and is
+always `some`.
 
 Fiber handles are opaque runtime objects — do not pattern match on them.
 
@@ -87,7 +96,10 @@ def answer (_ : Unit) : IO I64 := IO.pure 42
 def test_fork_and_await : IO Bool {
     let f <- forkIO answer;
     let result <- await_fiber f;
-    return (result == 42)
+    return (match result {
+        Result.ok v => v == 42,
+        Result.err _ => false
+    })
 }
 ```
 
@@ -97,8 +109,8 @@ def test_fork_and_await : IO Bool {
 
 | Function | Type | Behaviour |
 |----------|------|-----------|
-| `all` | `List (Fiber A) -> IO (List A)` | awaits every fiber, collecting results |
-| `race` | `List (Fiber A) -> IO A` | cancels all but the first, awaits the first |
+| `all` | `List (Fiber A) -> IO (Result FiberError (List A))` | awaits every fiber in order, collecting results; stops at the first error |
+| `race` | `List (Fiber A) -> IO (Result FiberError A)` | the answer of whichever fiber stops first; cancels the rest |
 | `scoped` | `(Scope -> IO A) -> IO A` | runs an action with a scope, cancelling its fibers on exit |
 | `cancel_all` | `List (Fiber A) -> IO Unit` | cancels each fiber |
 | `sleepIO` | `I64 -> IO Unit` | sleeps for that many milliseconds |
@@ -107,12 +119,9 @@ def test_fork_and_await : IO Bool {
 `sleepIO` is a real blocking sleep (`nanosleep`), so it costs a whole thread
 while it runs.
 
-`race` "wins" by taking the head of the list, not by observing which fiber
-finishes first. It is therefore deterministic, and it is the right primitive
-only when every fiber computes the same thing — `race` is a cancellation
-shorthand, not a scheduler. That is a choice in `combine.mo` and not a limit of
-the runtime: the threads really do race, this function simply does not look at
-who won.
+`race` polls its contestants every millisecond, so it sees a win at most about
+a millisecond late. On the host, polling runs a fiber to completion, so the
+first fiber in the list always wins there.
 
 ```monad
 use std::concurrent::fiber {Fiber, forkIO}
@@ -126,7 +135,10 @@ def test_all : IO Bool {
     let f1 <- forkIO answer;
     let f2 <- forkIO answer;
     let results <- all [f1, f2];
-    return (List.length results == 2)
+    return (match results {
+        Result.ok xs => List.length xs == 2,
+        Result.err _ => false
+    })
 }
 ```
 
@@ -142,9 +154,9 @@ refcount in that header is what keeps a `Scope`'s fibers alive, and it is the
 retain/release calls for ordinary values, because deterministic freeing is
 blocked on [linear types](./linear-types.md).
 
-A fiber nobody ever awaits or cancels keeps its thread entry until the process
-exits: a few hundred bytes each. Reclaiming it would mean joining threads whose
-result nobody wants, so `scope_drop` does not.
+Fiber threads are detached: a fiber that is cancelled, loses a `race` or is
+dropped with its scope gives its stack back as soon as its body returns, without
+anyone awaiting it.
 
 ## What Does Not Exist
 
@@ -165,13 +177,15 @@ Rust code as groundwork for a future runtime, not as something you can use today
 
 ## Summary
 
-- Compiled `forkIO` starts a real thread; `await_fiber` joins it. That is
+- Compiled `forkIO` starts a real thread; `await_fiber` waits for it. That is
   parallelism.
 - The host is the lazy one: it defers to the first `await`, so nothing there
   interleaves
 - Cancellation is recorded, never preemptive
+- `await_fiber`, `pollFiber`, `all` and `race` return a `Result`: a cancelled
+  fiber is an error, never a made-up value
 - `all`, `race`, `scoped`, and `cancel_all` are combinators over either model;
-  `race` takes the head rather than observing a winner
+  `race` returns whichever fiber stops first
 - `sleepIO` genuinely sleeps, and holds a thread while it does
 - `std/src/concurrent/combine_test.mo` carries the one test that distinguishes
   the two backends

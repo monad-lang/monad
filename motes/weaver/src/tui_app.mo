@@ -56,6 +56,7 @@ use shuttle::session {Session}
 use weaver::theme {theme_split_lines, theme_line_style_with, theme_border_style_with}
 use weaver::store {TLine, TLine.plain, TLine.user_line}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
+use std::concurrent::fiber {FiberError, FiberError.message}
 use tui::types {Event, Key, MouseEvent, MouseButton, LayoutSize, TextStyle, Rect, Cell, Screen}
 use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_multiline_key, insert_text}
@@ -960,7 +961,8 @@ def cycle_mode (m : TuiModel) : TuiModel :=
 /// keeps folding ticks (the spinner) while the turn runs on its fiber,
 /// and `turn_pending` rides along so a second submit is refused until
 /// the result folds back (turns are serial: one pending handle, one
-/// consumer).
+/// consumer). A turn whose fiber never ran folds back as `turn_failed`,
+/// so `turn_pending` clears the same way a failed turn's does.
 def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let text : String := String.trim m.input.value in
     if Bool.or (String.is_empty text) m.turn_pending
@@ -982,10 +984,19 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
                      stop_requested := false, turn_gen := gen,
                      modal := Bool.or (plan_dialog_wanted st text)
                          (Bool.or (text == "/processes") (text == "/procs")) } in
-        Pair.pair m2 (Cmd.perform_async (fn (_ : Unit) => do {
-            let _ <- write_echo store start block;
-            run_submitted_line m.log gen st text
-        }))
+        Pair.pair m2 (Cmd.perform_async
+            (fn (_ : Unit) => do {
+                let _ <- write_echo store start block;
+                run_submitted_line m.log gen st text
+            })
+            (turn_never_ran st.run))
+
+/// `enter_key`'s fiber-error message: the turn never ran, so it fails
+/// against the run state it started from. Classed `io`, which is
+/// recoverable: a thread that could not be created is resource
+/// exhaustion, and the next submit may well succeed.
+def turn_never_ran (run : RunState) (e : FiberError) : WeaverMsg :=
+    WeaverMsg.turn_failed run (WeaverError.io (FiberError.message e))
 
 /// The submitted line's echo block is durable before the turn starts (it
 /// rides the async action -- a pure update cannot write).

@@ -32,7 +32,7 @@
 /// not a silent one. A real fix means a socket read deadline, which the IO
 /// layer does not expose yet.
 
-use std::concurrent::fiber {Fiber, await_fiber, forkIO}
+use std::concurrent::fiber {Fiber, FiberError, FiberError.message, await_fiber, forkIO}
 use std::list {List.length}
 use std::stream {Stream, FdStream}
 use http::types {
@@ -488,7 +488,9 @@ pub def Server.start (cfg : ServerConfig) (handler : Request -> IO Response) : I
   }
 }
 
-pub def Server.wait (h : ServerHandle) : IO Unit := await_fiber h.fiber
+/// Wait for the server's accept loop to stop. An `err` means the loop's
+/// fiber never ran (no thread could be created) or was cancelled.
+pub def Server.wait (h : ServerHandle) : IO (Result FiberError Unit) := await_fiber h.fiber
 
 pub def Server.shutdown (h : ServerHandle) : IO Unit := Stream.close h.listener
 
@@ -543,15 +545,26 @@ def Server.handle_connection_fiber (handler : Request -> IO Response) (sock : Fd
 def Server.serve_connection_fiber (handler : Request -> IO Response) (sock : FdStream) : IO (Fiber Unit) :=
   forkIO (fn _ => Server.serve_connection handler sock List.empty 1)
 
-/// Await all pending fibers in order.
+/// Await all pending fibers in order. A connection's own failures are
+/// handled inside `serve_connection`; a fiber error here means the
+/// connection was never served, which is reported on stderr because the
+/// accept loop has no caller to return it to.
 #[terminating]
 def Server.drain_fibers (fibers : List (Fiber Unit)) : IO Unit :=
   match fibers {
     List.empty => return unit,
     List.cons f rest => do {
-      await_fiber f;
+      let r <- await_fiber f;
+      Server.report_fiber_error r;
       Server.drain_fibers rest
     }
+  }
+
+def Server.report_fiber_error (r : Result FiberError Unit) : IO Unit :=
+  match r {
+    Result.ok _ => return unit,
+    Result.err e => IO.write_stderr (String.concat "moon: connection not served: "
+      (String.concat (FiberError.message e) "\n"))
   }
 
 /// Listen on `port` and serve connections with fiber-per-request dispatch.

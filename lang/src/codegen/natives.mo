@@ -551,13 +551,11 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // that.
             else if String.beq target "get_env" then Option.some (NativeWrapKind.io_passthrough "monad_get_env")
             // The async runtime (`std/concurrent/{fiber,combine}.mo`).
-            // Seven of the eight are `IO`-returning the same way: call the
+            // Six of the eight are `IO`-returning the same way: call the
             // runtime, wrap the raw result in `IO.mk (RawIO.io _)`.
-            // `await_fiber` is the exception -- what it hands back IS the
-            // action's own result, already a complete `IO A`, so it is a
-            // plain `passthrough` (the kind `io_pure`/`io_bind` use) and
-            // the backend adds no second layer. See `monad_await_fiber`'s
-            // own comment in runtime.c.
+            // `await_fiber` and `poll_fiber` are `RawIO` natives behind
+            // `.mo` wrappers: runtime.c builds the raw `Result I64 A`
+            // (poll: `Option` of it) and the backend adds one `RawIO.io`.
             //
             // The handles themselves are opaque: `Fiber`/`Scope` values
             // are raw runtime pointers, never constructors, which is why
@@ -565,16 +563,12 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `Fiber`'s own module says so ("Fiber handles are opaque
             // runtime objects; do not pattern match on them").
             else if String.beq target "fork_io" then Option.some (NativeWrapKind.io_passthrough "monad_fork_io")
-            else if String.beq target "await_fiber" then Option.some (NativeWrapKind.passthrough "monad_await_fiber")
+            else if String.beq target "await_fiber" then Option.some (NativeWrapKind.raw_io_passthrough "monad_await_fiber")
             else if String.beq target "cancel_fiber" then Option.some (NativeWrapKind.io_passthrough "monad_cancel_fiber")
-            // `pollFiber` (std/concurrent/fiber.mo) -- `Fiber A ->
-            // IO (Option A)`: await's non-blocking sibling. The raw
-            // result is a real `Option` Constructor built in runtime.c
-            // (some=4/none=3), so `io_passthrough` like `get_env` --
-            // not `await_fiber`'s plain `passthrough`. The async
-            // event-loop primitive tui's `Cmd.perform_async` and
-            // weaver's turn loop poll every tick (weaver.md Phase 12).
-            else if String.beq target "poll_fiber" then Option.some (NativeWrapKind.io_passthrough "monad_poll_fiber")
+            // `pollFiber`'s raw native, await's non-blocking sibling:
+            // the async event-loop primitive tui's `Cmd.perform_async`
+            // and weaver's turn loop poll every tick (weaver.md Phase 12).
+            else if String.beq target "poll_fiber" then Option.some (NativeWrapKind.raw_io_passthrough "monad_poll_fiber")
             else if String.beq target "sleep_io" then Option.some (NativeWrapKind.io_passthrough "monad_sleep_io")
             else if String.beq target "scope_new" then Option.some (NativeWrapKind.io_passthrough "monad_scope_new")
             else if String.beq target "scope_fork" then Option.some (NativeWrapKind.io_passthrough "monad_scope_fork")

@@ -7,7 +7,7 @@ use std::stream {StreamError}
 // compiled runtime; deferred to the await under the Rust host), and the
 // loop awaits the fibers FIFO. Same-mote `combine.mo` builds `Scope` on
 // the same primitives.
-use std::concurrent::fiber {Fiber, await_fiber, forkIO}
+use std::concurrent::fiber {Fiber, FiberError, FiberError.message, await_fiber, forkIO}
 // `--jobs`' value is argv text; `parse_i64` is the corpus's tested
 // string-to-int (the same one the driver result file goes through).
 use parsec::number {parse_i64}
@@ -1781,6 +1781,13 @@ def fold_outcome (f : String) (o : TestFileOutcome) (acc : TestFold) : IO TestFo
     }
 }
 
+/// A tail fiber's outcome; a fiber with no result fails its file.
+def fiber_outcome (r : Result FiberError TestFileOutcome) : TestFileOutcome :=
+    match r {
+        Result.ok o => o,
+        Result.err e => TestFileOutcome.fail_outcome (FiberError.message e),
+    }
+
 /// Await the OLDEST pending tail and fold its outcome. The `--jobs` window
 /// is held open by calling this before the next fork; the drain at the end
 /// of the file list is the same call in a loop.
@@ -1788,8 +1795,8 @@ def fold_outcome (f : String) (o : TestFileOutcome) (acc : TestFold) : IO TestFo
 def await_head (pending : List PendingTestFile) (acc : TestFold) : IO FoldAndRest := do {
     match pending {
         List.cons p rest => do {
-            let o <- await_fiber p.fiber;
-            let acc2 <- fold_outcome p.file o acc;
+            let r <- await_fiber p.fiber;
+            let acc2 <- fold_outcome p.file (fiber_outcome r) acc;
             let out : FoldAndRest := { fold := acc2, rest := rest };
             return out
         },

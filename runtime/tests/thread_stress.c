@@ -18,7 +18,10 @@
  *     must still wait out its full timeout;
  *   * abandoned fibers (Linux only: it reads /proc) -- fibers that are
  *     cancelled or dropped with their scope and never awaited must give
- *     their thread stacks back once they finish.
+ *     their thread stacks back once they finish;
+ *   * fiber answers -- await and poll of a cancelled fiber are `err 1`,
+ *     and a fiber whose thread could not be created is `err 2` (forced
+ *     with a zero RLIMIT_NPROC, which root ignores; then it is skipped).
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -28,6 +31,7 @@
 #include <gc.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -52,6 +56,8 @@ void* monad_cancel_fiber(void* handle);
 void* monad_scope_new(void);
 void* monad_scope_fork(void* handle, void* closure);
 void* monad_scope_drop(void* handle);
+void* monad_await_fiber(void* handle);
+void* monad_poll_fiber(void* handle);
 
 /* The runtime references codegen's entry point; nothing calls it here. */
 void* main_monad(void* args) {
@@ -72,6 +78,7 @@ typedef struct {
 #define TAG_NONE 3
 #define TAG_SOME 4
 #define TAG_OK 10
+#define TAG_ERR 11
 
 #define PIPE_THREADS 16
 #define PIPE_ITERS 300
@@ -314,6 +321,73 @@ static void check_abandoned_fibers(void) {
 }
 #endif
 
+/* Whether `r` is `Result.err code`, the raw fiber answer. */
+static int is_err_code(void* r, int64_t code) {
+    Con* c = (Con*)r;
+    return c && c->tag == TAG_ERR && (int64_t)(intptr_t)c->fields[0] == code;
+}
+
+static int64_t nap_100_body(int64_t closure, int64_t unit) {
+    (void)closure;
+    (void)unit;
+    struct timespec nap = {0, 100 * 1000000};
+    nanosleep(&nap, NULL);
+    return 0;
+}
+
+/* Cancelled: await says `err 1`; poll says `none` while the body still
+   sleeps, then `some (err 1)`. Never started: with no thread allowed,
+   both answer `err 2` at once instead of a NULL payload. */
+static void check_fiber_answers(void) {
+    void* body = alloc_closure((void*)nap_100_body, 1, 0);
+    void* f = monad_fork_io(body);
+    monad_cancel_fiber(f);
+    Con* running = (Con*)monad_poll_fiber(f);
+    if (!running || running->tag != TAG_NONE) {
+        fprintf(stderr, "thread_stress: poll of a running cancelled fiber was not none\n");
+        fail();
+    }
+    if (!is_err_code(monad_await_fiber(f), 1)) {
+        fprintf(stderr, "thread_stress: await of a cancelled fiber was not err 1\n");
+        fail();
+    }
+    Con* polled = (Con*)monad_poll_fiber(f);
+    if (!polled || polled->tag != TAG_SOME || !is_err_code(polled->fields[0], 1)) {
+        fprintf(stderr, "thread_stress: poll of a stopped cancelled fiber was not some (err 1)\n");
+        fail();
+    }
+
+    /* A NULL handle (fork_io could not allocate one) never started:
+       await is `err 2`, and poll is `some (err 2)`, never `none`
+       forever. */
+    if (!is_err_code(monad_await_fiber(NULL), 2)) {
+        fprintf(stderr, "thread_stress: await of a NULL fiber was not err 2\n");
+        fail();
+    }
+    Con* null_poll = (Con*)monad_poll_fiber(NULL);
+    if (!null_poll || null_poll->tag != TAG_SOME || !is_err_code(null_poll->fields[0], 2)) {
+        fprintf(stderr, "thread_stress: poll of a NULL fiber was not some (err 2)\n");
+        fail();
+    }
+
+    struct rlimit saved;
+    if (getrlimit(RLIMIT_NPROC, &saved) != 0) return;
+    struct rlimit none = saved;
+    none.rlim_cur = 0;
+    if (setrlimit(RLIMIT_NPROC, &none) != 0) return;
+    void* g = monad_fork_io(body);
+    setrlimit(RLIMIT_NPROC, &saved);
+    Con* answer = (Con*)monad_await_fiber(g);
+    if (answer && answer->tag == TAG_OK) {
+        printf("thread_stress: RLIMIT_NPROC not enforced here (root?); never-started check skipped\n");
+        return;
+    }
+    if (!is_err_code(answer, 2)) {
+        fprintf(stderr, "thread_stress: await of a never-started fiber was not err 2\n");
+        fail();
+    }
+}
+
 static void run(void* (*worker)(void*), int threads) {
     pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
@@ -343,6 +417,7 @@ int main(void) {
 #if defined(__linux__)
     check_abandoned_fibers();
 #endif
+    check_fiber_answers();
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }

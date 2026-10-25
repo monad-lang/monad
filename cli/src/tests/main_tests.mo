@@ -9,6 +9,7 @@
 /// argv-parsing from everything downstream is still the more precise
 /// unit of test coverage, real end-to-end runs notwithstanding).
 use lib::main {*}
+use std::concurrent::fiber {FiberError.message, cancelled}
 
 #[test]
 def test_from_args_build_positional_name : Bool :=
@@ -499,3 +500,12 @@ def test_resolve_ir_path_fallback_replaces_an_absolute_output : Bool :=
     String.beq
         (Path.to_string (resolve_ir_path Option.none (Path.path "out") (Path.path "/tmp/x/hello")))
         "/tmp/x/hello.ll"
+
+// `--jobs`: a test tail whose fiber has no result fails its file with
+// the reason, rather than folding a made-up outcome.
+#[test]
+def test_fiber_error_fails_the_file : Bool :=
+    match fiber_outcome (Result.err FiberError.cancelled) {
+        TestFileOutcome.fail_outcome reason => String.beq reason (FiberError.message FiberError.cancelled),
+        _ => false,
+    }

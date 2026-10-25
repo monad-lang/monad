@@ -6,9 +6,10 @@
 // purpose; this file runs under the compiled backend's runner, not the
 // host's. See that test's own comment for the numbers and the reason.
 
-use lib::concurrent::fiber {Fiber, await_fiber, cancel_fiber, forkIO}
-use lib::concurrent::combine {FiberScope, race, scope_fork, scoped, sleepIO}
+use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
+use lib::concurrent::combine {FiberScope, all, race, scope_fork, scoped, sleepIO}
 use lib::io {}
+use lib::list {List.length}
 open IO {current_time_nano}
 
 // Helper thunks
@@ -21,16 +22,17 @@ def io_30_action (_ : Unit) : IO I64 := IO.pure 30
 
 def io_42_action (_ : Unit) : IO I64 := IO.pure 42
 
-// all: concrete specialized
+def ok_is (r : Result FiberError I64) (v : I64) : Bool :=
+  match r {
+    Result.ok x => x == v,
+    Result.err _ => false
+  }
 
-def all_i64 (fibers : List (Fiber I64)) : IO (List I64) :=
-  match fibers {
-    List.empty => IO.pure (List.empty : List I64),
-    List.cons f rest => do {
-      let head <- await_fiber f;
-      let tail <- all_i64 rest;
-      return (List.cons head tail)
-    }
+// `all` collects in reverse await order; only the count is checked.
+def ok_count (r : Result FiberError (List I64)) (n : I64) : Bool :=
+  match r {
+    Result.ok xs => List.length xs == n,
+    Result.err _ => false
   }
 
 // race: concrete specialized
@@ -50,8 +52,8 @@ def cancel_i64 (fibers : List (Fiber I64)) : IO Unit :=
 def test_all_single : IO Bool {
   let f <- forkIO io_42_action;
   let fibers := List.cons f List.empty;
-  let results <- all_i64 fibers;
-  return true
+  let results <- all fibers;
+  return (ok_count results 1)
 }
 
 #[test]
@@ -59,8 +61,8 @@ def test_all_two : IO Bool {
   let f1 <- forkIO io_10_action;
   let f2 <- forkIO io_20_action;
   let fibers := List.cons f1 (List.cons f2 List.empty);
-  let results <- all_i64 fibers;
-  return true
+  let results <- all fibers;
+  return (ok_count results 2)
 }
 
 #[test]
@@ -69,21 +71,46 @@ def test_all_three : IO Bool {
   let f2 <- forkIO io_20_action;
   let f3 <- forkIO io_30_action;
   let fibers := List.cons f1 (List.cons f2 (List.cons f3 List.empty));
-  let results <- all_i64 fibers;
-  return true
+  let results <- all fibers;
+  return (ok_count results 3)
 }
-
-def is_empty (xs : List I64) : Bool :=
-  match xs {
-    List.empty => true,
-    List.cons _ _ => false
-  }
 
 #[test]
 def test_all_empty : IO Bool {
   let fibers := (List.empty : List (Fiber I64));
-  let results <- all_i64 fibers;
-  return (is_empty results)
+  let results <- all fibers;
+  return (ok_count results 0)
+}
+
+def err_is_cancelled (r : Result FiberError A) : Bool :=
+  match r {
+    Result.ok _ => false,
+    Result.err e => match e {
+      FiberError.cancelled => true,
+      FiberError.never_started => false
+    }
+  }
+
+/// `all` stops at the first fiber with no result and reports why, rather
+/// than handing back a list with a made-up element. Both backends: the
+/// cancelled fiber is still sleeping (compiled) or never ran (host).
+#[test]
+def test_all_reports_a_cancelled_fiber : IO Bool {
+  let f1 <- forkIO io_10_action;
+  let f2 <- forkIO slow_10_action;
+  cancel_fiber f2;
+  let results <- all [f1, f2];
+  return (err_is_cancelled results)
+}
+
+/// A race whose only contestant was cancelled answers `err cancelled`
+/// once that fiber stops, instead of a value it never produced.
+#[test]
+def test_race_of_a_cancelled_fiber_is_err : IO Bool {
+  let f <- forkIO slow_10_action;
+  cancel_fiber f;
+  let result <- race [f];
+  return (err_is_cancelled result)
 }
 
 def slow_10_action (_ : Unit) : IO I64 := do {
@@ -103,7 +130,7 @@ def test_race_first_to_finish : IO Bool {
   let result <- race [slow, fast];
   let stop <- current_time_nano;
   let elapsed_ms := I64.div (I64.sub stop start) 1000000;
-  return (result == 20 && elapsed_ms < 300)
+  return (ok_is result 20 && elapsed_ms < 300)
 }
 
 #[test]
@@ -111,7 +138,7 @@ def test_race_single : IO Bool {
   let f1 <- forkIO io_30_action;
   let fibers := List.cons f1 List.empty;
   let result <- race fibers;
-  return (result == 30)
+  return (ok_is result 30)
 }
 
 #[test]
@@ -127,7 +154,7 @@ def test_cancel_all_smoke : IO Bool {
 
 def fork_io_42_scoped (s : FiberScope) : IO (Fiber I64) := scope_fork s io_42_action
 
-def scoped_fork_await_42 (s : FiberScope) : IO I64 := do {
+def scoped_fork_await_42 (s : FiberScope) : IO (Result FiberError I64) := do {
   let f <- fork_io_42_scoped s;
   await_fiber f
 }
@@ -135,7 +162,7 @@ def scoped_fork_await_42 (s : FiberScope) : IO I64 := do {
 #[test]
 def test_scoped_runs_action : IO Bool {
   let result <- scoped scoped_fork_await_42;
-  return (result == 42)
+  return (ok_is result 42)
 }
 
 // scoped: auto-cancels on exit (callback returns without awaiting)

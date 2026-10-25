@@ -73,8 +73,8 @@ void monad_release(void* ptr) {
    * Cancellation cannot abort a running thread. `pthread_cancel` would
      leave Boehm's allocator lock held and the thread unregistered, so
      `monad_cancel_fiber` records the cancellation instead (which
-     `await_fiber` then refuses to hand a result for, matching the host's
-     error) and does not preempt the body. The host can only ever cancel
+     `await_fiber` then answers `err cancelled` for, as the host does)
+     and does not preempt the body. The host can only ever cancel
      a fiber it has NOT started, so this is the same observable behaviour
      on everything the language can currently express.
 
@@ -220,119 +220,82 @@ void* monad_fork_io(void* closure) {
         pthread_attr_destroy(&attr);
     }
     if (rc != 0) {
-        /* No thread at all. Publish an already-finished state rather than
-           leaving a handle that can never become ready: a hang is
-           strictly worse than a NULL payload, because nothing in this
-           backend can raise an error out of a native. */
+        /* No thread at all. Publish an already-finished state with no
+           result rather than a handle that can never become ready: await
+           and poll answer it `err never_started` (fiber_answer). */
         f->state = 1;
         f->io_box = 0;
     }
     return f;
 }
 
-void* monad_await_fiber(void* handle) {
-    Fiber* f = (Fiber*)handle;
-    if (!f) return NULL;
-    pthread_mutex_lock(&f->lock);
-    while (!f->state) pthread_cond_wait(&f->finished, &f->lock);
-    int64_t cancelled = f->cancelled;
-    int64_t box = f->io_box;
-    int release = !f->released;
-    f->released = 1;
-    pthread_mutex_unlock(&f->lock);
-    /* A second `await` on the same handle reads the stored result again.
-       The worker's reference is released exactly once, by whichever of
-       await/cancel consumes the handle first: releasing once per await
-       would drive the count negative on a repeated await, which is
-       precisely the ownership the count exists to hand to M4. */
-    if (release) monad_release(f);
-    if (cancelled) {
-        /* The host's `await_fiber` is an eval ERROR here ("fiber {id} was
-           cancelled"). This backend has no error channel out of a native,
-           so the closest honest thing is a diagnostic plus a well-formed
-           box around a NULL payload: the value is wrong, and it is wrong
-           out loud. Nothing in the corpus can reach it -- `race` cancels
-           every fiber it does NOT then await. The box is built out in full
-           here rather than left to the codegen, because this native is
-           `passthrough` now (see below) and the backend adds no layer. */
-        fprintf(stderr, "monad: await_fiber on a cancelled fiber\n");
-        void* raw_io = alloc_constructor_impl(7, 1);
-        monad_set_field_impl(raw_io, 0, NULL);
-        void* io_mk = alloc_constructor_impl(MONAD_IO_MK_TAG, 1);
-        monad_set_field_impl(io_mk, 0, raw_io);
-        return io_mk;
+/* What await and poll answer for a fiber that has stopped, as the raw
+   `Result I64 A` payload `std/src/concurrent/fiber.mo` maps to
+   `Result FiberError A`: `err 1` cancelled, `err 2` never started (fork
+   failure leaves `io_box` 0), else `ok a`. Both natives are
+   `raw_io_passthrough` in natives.mo, so the backend adds the `RawIO.io`
+   layer. Takes the handle's answer under its lock and releases the
+   worker's reference exactly once, by whichever of await/poll/cancel
+   consumes the handle first: releasing once per call would drive the
+   count negative on a repeated await, which is precisely the ownership
+   the count exists to hand to M4. A repeated await or poll answers the
+   same again. A NULL handle -- `monad_fork_io` could not allocate one --
+   is a fiber that never started. */
+static void* fiber_answer(Fiber* f) {
+    if (!f) {
+        Constructor* err = (Constructor*)alloc_constructor_impl(11, 1);
+        err->fields[0] = (void*)(intptr_t)2;
+        return err;
     }
-    /* `f->io_box` holds the ACTION's own result, which is typed `IO A`
-       (`std/src/concurrent/fiber.mo`) and is therefore already a complete
-       `IO.mk (RawIO.io _)` box -- see that field's own comment. Return it
-       unchanged: this native is `NativeWrapKind.passthrough` in
-       `lang/src/codegen/natives.mo`, so the backend wraps nothing, exactly
-       like the Rust host's `await_fiber` (`core/src/core_native.rs`).
-       Peeling field 0 here was right for the single-layer
-       `type IO A { io A }` and became wrong the moment `IO` gained its
-       `RawIO` wrapper: one peel of a two-layer box left the inner
-       `RawIO.io A` and, once the wrapper re-wrapped it, made this return
-       `IO (RawIO A)`. */
-    return (void*)(intptr_t)box;
-}
-
-/* `#[native "poll_fiber"]` (std/concurrent/fiber.mo's pollFiber) --
-   `Fiber A -> IO (Option A)`, await's non-blocking sibling: `none` while
-   the fiber still runs, `some a` exactly once once it has stopped, wired
-   `io_passthrough` in natives.mo like `monad_get_env` (the raw result is
-   already a valid backend value -- a real `Option` Constructor,
-   some=4/none=3 -- so the emitted wrapper only IO.io-wraps it).
-
-   The state check comes FIRST, before the cancelled flag: cancellation
-   cannot preempt (`fiber_mark_cancelled`'s comment), so a cancelled
-   fiber may still be RUNNING -- and poll's contract for a running fiber
-   is `none`, not await's tail. The loud cancellation answer comes when
-   the fiber has actually stopped -- the same point await answers, so a
-   poll loop on an abandoned fiber still terminates. A fork-failure
-   fiber (`state = 1, io_box = 0`, monad_fork_io's refusal path) is answerable the same way: loud, never silent.
-
-   Everything after the lock/unlock is monad_await_fiber's tail verbatim:
-   state is 1 at this point (checked under this same lock), so the
-   condvar wait await needs is deliberately absent. */
-void* monad_poll_fiber(void* handle) {
-    Fiber* f = (Fiber*)handle;
-    if (!f) return (void*)alloc_constructor_impl(3, 0);     /* Option.none */
     pthread_mutex_lock(&f->lock);
-    if (!f->state) {
-        pthread_mutex_unlock(&f->lock);
-        return (void*)alloc_constructor_impl(3, 0);         /* Option.none */
-    }
     int64_t cancelled = f->cancelled;
     int64_t box = f->io_box;
     int release = !f->released;
     f->released = 1;
     pthread_mutex_unlock(&f->lock);
     if (release) monad_release(f);
-    /* await's cancelled branch, mirrored: no error channel out of a
-       native, so the honest thing is the diagnostic plus a well-formed
-       `some` around a payload that is NOT a real value. Destructuring it
-       reads a NULL field; nothing in the corpus does (the host's
-       `poll_fiber` raises the eval error this cannot). */
-    if (cancelled) {
-        fprintf(stderr, "monad: poll_fiber on a cancelled fiber\n");
-        Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
-        some->fields[0] = NULL;
-        return some;
-    }
-    if (!box) {
-        fprintf(stderr, "monad: poll_fiber on a fiber that never started (fork failure)\n");
-        Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
-        some->fields[0] = NULL;
-        return some;
+    if (cancelled || !box) {
+        Constructor* err = (Constructor*)alloc_constructor_impl(11, 1);
+        err->fields[0] = (void*)(intptr_t)(cancelled ? 1 : 2);
+        return err;
     }
     /* `box` is the action's own result, typed `IO A` -- a complete
-       `IO.mk (RawIO.io a)` box. Peeling ONE layer of exactly this box
-       was await's past bug (its own comment): the result would have read
-       as `IO (RawIO A)`. poll's contract is `Option A`, so peel BOTH
-       layers here to reach `a` before wrapping it in `Option.some`. */
+       `IO.mk (RawIO.io a)` box. Peel BOTH layers to reach `a`: peeling one
+       was await's past bug, which made it return `IO (RawIO A)`. */
     void* inner = monad_get_field_impl(monad_get_field_impl((void*)(intptr_t)box, 0), 0);
+    Constructor* ok = (Constructor*)alloc_constructor_impl(10, 1);
+    ok->fields[0] = inner;
+    return ok;
+}
+
+/* `#[native "await_fiber"]` -- `Fiber A -> RawIO (Result I64 A)`: block
+   on the condvar until the fiber stops, then its answer. */
+void* monad_await_fiber(void* handle) {
+    Fiber* f = (Fiber*)handle;
+    if (!f) return fiber_answer(NULL);
+    pthread_mutex_lock(&f->lock);
+    while (!f->state) pthread_cond_wait(&f->finished, &f->lock);
+    pthread_mutex_unlock(&f->lock);
+    return fiber_answer(f);
+}
+
+/* `#[native "poll_fiber"]` -- `Fiber A -> RawIO (Option (Result I64 A))`,
+   await's non-blocking sibling: `none` while the fiber still runs, then
+   `some` of await's answer. Cancellation cannot preempt
+   (`fiber_mark_cancelled`'s comment), so a cancelled fiber may still be
+   running, and that is `none` too; `some (err 1)` comes once it stops,
+   so a poll loop on an abandoned fiber ends. */
+void* monad_poll_fiber(void* handle) {
+    Fiber* f = (Fiber*)handle;
+    int64_t done = 1;
+    if (f) {
+        pthread_mutex_lock(&f->lock);
+        done = f->state;
+        pthread_mutex_unlock(&f->lock);
+    }
+    if (!done) return (void*)alloc_constructor_impl(3, 0);  /* Option.none */
     Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
-    some->fields[0] = inner;
+    some->fields[0] = fiber_answer(f);
     return some;
 }
 
