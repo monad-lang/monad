@@ -18,7 +18,7 @@ use lang::codegen::emit {validate_reachable_elaborated}
 use lang::lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
 use lang::core_ir {CoreIr}
 use lang::core_eval {eval, basic_native_table}
-use lang::core_value {GlobalTable, env_nil, global_cache_new, global_table_len}
+use lang::core_value {GlobalTable, Env, global_cache_new, global_table_len}
 use lang::typecheck::meta_eval {show_value_debug, show_core_eval_error_debug}
 use std::list {List.intercalate}
 
@@ -105,7 +105,7 @@ pub def EvalRun.lower_dispatched (dispatched : List Decl) : IO (Result String St
 
 #[partial]
 pub def EvalRun.eval_lowered (ir : CoreIr) (globals : GlobalTable) : IO (Result String String) :=
-    match eval ir env_nil globals basic_native_table (global_cache_new (global_table_len globals)) {
+    match eval ir Env.env_nil globals basic_native_table (global_cache_new (global_table_len globals)) {
         Pair.pair r _ =>
             match r {
                 Result.ok v => IO.pure (Result.ok (String.concat "Eval result " (show_value_debug v))),
