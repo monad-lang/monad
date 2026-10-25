@@ -86,9 +86,8 @@ def race_loop (fibers : Borrow (List (Fiber A))) : IO (Result FiberError A) :=
 /// one is cancelled. Waits by polling the contestants every millisecond, so a
 /// win is seen at most about 1 ms late. On the Rust host polling runs a
 /// fiber to completion, so the first fiber in the list always wins there.
-/// A cancelled loser keeps running until its body returns (cancellation
-/// cannot preempt), but nothing waits for it.
-///
+/// A cancelled loser stops at its next IO bind (cancellation is
+/// cooperative), so nothing waits for it and no later side effect runs.
 /// Racing zero fibers never returns: there is no value of `A` to hand
 /// back. Callers pass at least one fiber.
 #[partial]

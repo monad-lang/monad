@@ -12,9 +12,9 @@ pub type Fiber (A : Type) {
 /// Why a fiber has no result to hand back.
 pub type FiberError {
   /// `cancel_fiber` (or a dropped scope, or a lost `race`) reached the
-  /// fiber before it finished. Cancellation cannot preempt a running
-  /// body, so the body may still have run to the end; its result is
-  /// discarded either way.
+  /// fiber before it finished. Cancellation is cooperative: the body
+  /// stops at its next IO bind (a native or pure computation already in
+  /// progress finishes), and its result is discarded either way.
   cancelled,
   /// The runtime could not create the fiber's thread (a thread-count or
   /// address-space limit), so the action never ran.

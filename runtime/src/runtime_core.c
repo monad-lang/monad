@@ -463,10 +463,34 @@ static rt_word monad_io_pure_impl(int64_t a) {
     return c;
 }
 
+/* Cooperative cancellation: the fiber trampoline points this at the
+   running fiber's `cancelled` word (platform_posix.c's fiber_main) and
+   clears it on the way out. NULL on main and on the wasm profiles, where
+   there are no fibers to cancel. Reads are atomic because the cancel
+   lands on another thread; see MONAD_CANCELLED_SENTINEL in
+   runtime_abi.h for the protocol. */
+static _Thread_local int64_t* monad_cancel_flag;
+
+void monad_set_cancel_flag(int64_t* flag) {
+    monad_cancel_flag = flag;
+}
+
+static int monad_io_cancelled(void) {
+    int64_t* flag = monad_cancel_flag;
+    return flag != NULL && __atomic_load_n(flag, __ATOMIC_ACQUIRE) != 0;
+}
+
 /* monad_io_bind: RawIO.bind (a : RawIO A) (f : A -> RawIO B) : RawIO B --
    unwraps the RawIO.io constructor (field 0) and calls f on the inner
-   value via apply_closure1. */
+   value via apply_closure1.
+
+   This is the cancellation point: a set flag, or a sentinel already
+   propagated from an inner bind, short-circuits the continuation. The
+   check comes BEFORE the field read, so the sentinel is never treated as
+   a RawIO. */
 static int64_t monad_io_bind_impl(int64_t io_val, int64_t f) {
+    if (io_val == MONAD_CANCELLED_SENTINEL || monad_io_cancelled())
+        return MONAD_CANCELLED_SENTINEL;
     rt_field inner = monad_get_field_impl(RT_FIELD(io_val), 0);
     return apply_closure1_impl(RT_PTR(f), RT_VALUE(inner));
 }

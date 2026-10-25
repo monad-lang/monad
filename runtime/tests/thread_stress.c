@@ -21,7 +21,9 @@
  *     their thread stacks back once they finish;
  *   * fiber answers -- await and poll of a cancelled fiber are `err 1`,
  *     and a fiber whose thread could not be created is `err 2` (forced
- *     with a zero RLIMIT_NPROC, which root ignores; then it is skipped).
+ *     with a zero RLIMIT_NPROC, which root ignores; then it is skipped);
+ *   * cooperative cancellation -- a fiber cancelled while it sleeps must
+ *     not run the continuation bound after the sleep.
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -58,6 +60,8 @@ void* monad_scope_fork(void* handle, void* closure);
 void* monad_scope_drop(void* handle);
 void* monad_await_fiber(void* handle);
 void* monad_poll_fiber(void* handle);
+void* monad_io_pure(int64_t a);
+int64_t monad_io_bind(int64_t io_val, int64_t f);
 
 /* The runtime references codegen's entry point; nothing calls it here. */
 void* main_monad(void* args) {
@@ -388,6 +392,48 @@ static void check_fiber_answers(void) {
     }
 }
 
+/* Cooperative cancellation: a fiber body that sleeps and then binds a
+   continuation must not run that continuation once the cancel has
+   landed. Emitted code sequences a do-block through monad_io_bind, so
+   the bind after the sleep is where the flag is observed. */
+static int64_t cancel_side_effect;
+
+static int64_t mark_side_effect(int64_t closure, int64_t unit) {
+    (void)closure;
+    (void)unit;
+    __atomic_store_n(&cancel_side_effect, 1, __ATOMIC_RELEASE);
+    return 0;
+}
+
+static int64_t sleep_then_bind_body(int64_t closure, int64_t unit) {
+    (void)closure;
+    (void)unit;
+    struct timespec nap = {0, 100 * 1000000};
+    nanosleep(&nap, NULL);
+    /* The RawIO box the first action would have produced, then the
+       continuation that would run the rest of the do-block. */
+    void* sleep_box = monad_io_pure(0);
+    void* continuation = alloc_closure((void*)mark_side_effect, 1, 0);
+    return monad_io_bind((int64_t)(intptr_t)sleep_box,
+                         (int64_t)(intptr_t)continuation);
+}
+
+static void check_cooperative_cancel(void) {
+    __atomic_store_n(&cancel_side_effect, 0, __ATOMIC_RELEASE);
+    void* f = monad_fork_io(alloc_closure((void*)sleep_then_bind_body, 1, 0));
+    struct timespec nap = {0, 10 * 1000000};
+    nanosleep(&nap, NULL);
+    monad_cancel_fiber(f);
+    if (!is_err_code(monad_await_fiber(f), 1)) {
+        fprintf(stderr, "thread_stress: await of a cooperatively cancelled fiber was not err 1\n");
+        fail();
+    }
+    if (__atomic_load_n(&cancel_side_effect, __ATOMIC_ACQUIRE) != 0) {
+        fprintf(stderr, "thread_stress: a cancelled fiber ran the bind after the cancel\n");
+        fail();
+    }
+}
+
 static void run(void* (*worker)(void*), int threads) {
     pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
@@ -418,6 +464,7 @@ int main(void) {
     check_abandoned_fibers();
 #endif
     check_fiber_answers();
+    check_cooperative_cancel();
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }

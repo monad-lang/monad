@@ -70,13 +70,17 @@ void monad_release(void* ptr) {
      waits for it. The corpus is indifferent to the difference -- every
      `forkIO` in it is awaited, or cancelled-and-discarded -- but a test
      that *requires* interleaving can only pass here.
-   * Cancellation cannot abort a running thread. `pthread_cancel` would
-     leave Boehm's allocator lock held and the thread unregistered, so
-     `monad_cancel_fiber` records the cancellation instead (which
-     `await_fiber` then answers `err cancelled` for, as the host does)
-     and does not preempt the body. The host can only ever cancel
-     a fiber it has NOT started, so this is the same observable behaviour
-     on everything the language can currently express.
+   * Cancellation is COOPERATIVE, observed at the next IO bind.
+     `pthread_cancel` would leave Boehm's allocator lock held and the
+     thread unregistered, so `monad_cancel_fiber` sets the flag and
+     `monad_io_bind` short-circuits with MONAD_CANCELLED_SENTINEL once it
+     is set; the rest of the do-block, side effects included, does not
+     run. Native calls and pure code already in progress finish, so a
+     fiber stuck in a long pure computation still runs to its end. The
+     host can only ever cancel a fiber it has NOT started, which is the
+     same observable behaviour for every cancellation point the language
+     currently expresses. This bind check is also the yield point S3
+     (M:N) needs, so it must not be moved into the compiler.
 
    HANDLES ARE NOT CONSTRUCTORS, deliberately. A `Fiber`/`Scope` value is
    the raw struct pointer, marked `MONAD_FIBER_TAG`/`MONAD_SCOPE_TAG` in
@@ -121,8 +125,10 @@ typedef struct {
     Header header;
     void* action;      /* the `Unit -> IO A` closure, until the thread runs */
     int64_t state;     /* 0 while the thread runs, 1 once it has stopped */
-    int64_t cancelled; /* set by monad_cancel_fiber; see this section's own
-                          doc comment for why it cannot preempt */
+    int64_t cancelled; /* set by monad_cancel_fiber, read by monad_io_bind
+                          through the thread-local pointer; every access is
+                          an `__atomic` builtin (the canceling thread is not
+                          the fiber) */
     int64_t io_box;    /* the action's own result: an `IO A`, i.e. a complete
                           `IO.mk (RawIO.io _)` box */
     int64_t released;  /* 1 once the WORKER's retain (monad_fork_io) has been
@@ -162,7 +168,7 @@ static void fiber_mark_cancelled(Fiber* f) {
        already in hand. `state` is published under this same lock by
        fiber_main, so the test cannot race the completion it is testing
        for. */
-    if (!f->state) f->cancelled = 1;
+    if (!f->state) __atomic_store_n(&f->cancelled, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&f->lock);
 }
 
@@ -175,7 +181,13 @@ static void* fiber_main(void* arg) {
        (lang/src/codegen/ctors.mo) pins it, and it is the same value
        monad_array_set_in_place returns for its own `IO Unit`. */
     void* unit = alloc_constructor_impl(0, 0);
+    /* Publish this fiber's cancel word for monad_io_bind. The body runs
+       with it set, so a cancel that lands while it sleeps or blocks is
+       observed at its next bind; the clear is for the thread's later
+       life, should anything else run on it. */
+    monad_set_cancel_flag(&f->cancelled);
     int64_t box = apply_closure1_impl(f->action, (int64_t)(intptr_t)unit);
+    monad_set_cancel_flag(NULL);
     pthread_mutex_lock(&f->lock);
     f->io_box = box;
     f->state = 1;
@@ -190,7 +202,7 @@ void* monad_fork_io(void* closure) {
     f->header.tag = MONAD_FIBER_TAG;
     f->action = closure;
     f->state = 0;
-    f->cancelled = 0;
+    __atomic_store_n(&f->cancelled, 0, __ATOMIC_RELAXED);
     f->io_box = 0;
     f->released = 0;
     pthread_mutex_init(&f->lock, NULL);
@@ -248,7 +260,7 @@ static void* fiber_answer(Fiber* f) {
         return err;
     }
     pthread_mutex_lock(&f->lock);
-    int64_t cancelled = f->cancelled;
+    int64_t cancelled = __atomic_load_n(&f->cancelled, __ATOMIC_ACQUIRE);
     int64_t box = f->io_box;
     int release = !f->released;
     f->released = 1;

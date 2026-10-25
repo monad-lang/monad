@@ -82,6 +82,23 @@ rt_word monad_alloc_atomic(rt_size size);
 void monad_retain(rt_word ptr);
 void monad_release(rt_word ptr);
 
+/* Cooperative cancellation (async-threading S1).
+ *
+ * Every IO bind is a potential cancellation point: `monad_io_bind` checks
+ * the running fiber's `cancelled` flag and, when it is set, returns
+ * MONAD_CANCELLED_SENTINEL without applying the continuation. Enclosing
+ * binds propagate the sentinel unchanged, so the rest of the do-block
+ * (side effects included) never runs. Only fiber answers interpret it:
+ * the flag that caused it is also what makes await/poll say `err
+ * cancelled`, so the sentinel never escapes to user code.
+ *
+ * The sentinel is a word no pointer and no constructor can have (it is
+ * INT64_MIN); the fiber trampoline publishes the flag's address here. A
+ * NULL flag means "not on a fiber" (main, the wasm profiles), where no
+ * cancellation exists. */
+#define MONAD_CANCELLED_SENTINEL INT64_MIN
+void monad_set_cancel_flag(int64_t* flag);
+
 /* Codegen's entry point: `main` is renamed at emit time and takes one i64
    argument (the List String). */
 rt_word main_monad(rt_word args);

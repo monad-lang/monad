@@ -974,6 +974,13 @@ fn io_pure(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
 /// evaluator (like `await_fiber`) because applying `f` means calling
 /// `core_eval::apply`. Dispatched from `fire_or_accumulate`, not
 /// `exec_native`.
+///
+/// Unlike the compiled `monad_io_bind`, this is NOT a cancellation point.
+/// Host fibers are lazy (forkIO defers the action, await runs it), so the
+/// only possible cancellation is before the fiber starts; there is no
+/// running body to interrupt. The compiled backend's bind check
+/// (`runtime/src/runtime_core.c`, async-threading S1) is where a started
+/// fiber observes the cancel.
 pub fn io_bind(
   args: &[Value],
   globals: &crate::core_value::GlobalTable,

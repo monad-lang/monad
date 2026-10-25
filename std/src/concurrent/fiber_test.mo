@@ -5,6 +5,7 @@ use lib::concurrent::fiber {
     FiberError, FiberError.message, FiberError.of_code, await_fiber, cancel_fiber, forkIO,
 }
 use lib::concurrent::combine {sleepIO}
+use std::ref {Ref.get, Ref.new, Ref.set}
 
 def io_42_action (_ : Unit) : IO I64 := IO.pure 42
 
@@ -24,6 +25,12 @@ def is_cancelled (e : FiberError) : Bool :=
     }
 
 def err_is_cancelled (r : Result FiberError I64) : Bool :=
+    match r {
+        Result.ok _ => false,
+        Result.err e => is_cancelled e
+    }
+
+def unit_err_is_cancelled (r : Result FiberError Unit) : Bool :=
     match r {
         Result.ok _ => false,
         Result.err e => is_cancelled e
@@ -84,4 +91,22 @@ def test_await_cancelled_is_err : IO Bool {
     cancel_fiber f;
     let r <- await_fiber f;
     return (err_is_cancelled r)
+}
+
+/// Cancellation is cooperative: it is observed at the next IO bind, so the
+/// bind that follows the sleep never runs its continuation. The fiber sleeps
+/// long enough that the cancel lands first, and the host never starts a
+/// fibre cancelled before its await, so the same assertions hold there.
+#[test]
+def test_cancel_stops_before_the_next_bind : IO Bool := do {
+    let ran <- Ref.new false;
+    let f <- forkIO (fn (_ : Unit) => do {
+        sleepIO 100;
+        Ref.set ran true
+    });
+    sleepIO 10;
+    cancel_fiber f;
+    let r <- await_fiber f;
+    let side_effect <- Ref.get ran;
+    return (unit_err_is_cancelled r && Bool.not side_effect)
 }
