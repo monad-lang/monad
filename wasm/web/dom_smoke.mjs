@@ -12,6 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { imports } from './web.js';
 import { host } from './web_runtime.js';
+import { body, installDocument, fail } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
@@ -19,89 +20,7 @@ if (!path) {
   process.exit(2);
 }
 
-class FakeNode {
-  constructor(nodeType, tagName) {
-    this.nodeType = nodeType;
-    this.tagName = tagName;
-    this.childNodes = [];
-    this.attrs = {};
-    this.parentNode = null;
-    this._text = '';
-  }
-
-  appendChild(child) {
-    child.parentNode = this;
-    this.childNodes.push(child);
-    return child;
-  }
-
-  insertBefore(child, before) {
-    const at = before ? this.childNodes.indexOf(before) : -1;
-    child.parentNode = this;
-    if (at < 0) this.childNodes.push(child);
-    else this.childNodes.splice(at, 0, child);
-    return child;
-  }
-
-  removeChild(child) {
-    const at = this.childNodes.indexOf(child);
-    if (at >= 0) this.childNodes.splice(at, 1);
-    child.parentNode = null;
-    return child;
-  }
-
-  replaceChild(next, old) {
-    const at = this.childNodes.indexOf(old);
-    if (at >= 0) this.childNodes[at] = next;
-    next.parentNode = this;
-    old.parentNode = null;
-    return old;
-  }
-
-  setAttribute(name, value) {
-    this.attrs[name] = value;
-  }
-
-  removeAttribute(name) {
-    delete this.attrs[name];
-  }
-
-  addEventListener() {}
-
-  get textContent() {
-    if (this.nodeType === 3) return this._text;
-    return this.childNodes.map((c) => c.textContent).join('');
-  }
-
-  set textContent(value) {
-    this.childNodes = [];
-    this._text = value;
-  }
-
-  get nodeValue() {
-    return this._text;
-  }
-
-  set nodeValue(value) {
-    this._text = value;
-  }
-}
-
-const body = new FakeNode(1, 'BODY');
-globalThis.document = {
-  body,
-  querySelector(selector) {
-    return selector === 'body' || selector === '#app' ? body : null;
-  },
-  createElement(tag) {
-    return new FakeNode(1, tag.toUpperCase());
-  },
-  createTextNode(text) {
-    const n = new FakeNode(3, '#text');
-    n.nodeValue = text;
-    return n;
-  },
-};
+installDocument();
 
 const bytes = await readFile(path);
 const { instance } = await WebAssembly.instantiate(bytes, imports);

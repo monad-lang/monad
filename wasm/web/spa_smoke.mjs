@@ -16,6 +16,7 @@
 import { readFile } from 'node:fs/promises';
 import { imports } from './web.js';
 import { host } from './web_runtime.js';
+import { FakeNode, body, installDocument, fail, stub } from './stub_dom.mjs';
 
 const path = process.argv[2];
 if (!path) {
@@ -23,121 +24,14 @@ if (!path) {
   process.exit(2);
 }
 
-class FakeNode {
-  constructor(nodeType, tagName) {
-    this.nodeType = nodeType;
-    this.tagName = tagName;
-    this.childNodes = [];
-    this.attrs = {};
-    this.listeners = {};
-    this.parentNode = null;
-    this._text = '';
-  }
-
-  appendChild(child) {
-    child.parentNode = this;
-    this.childNodes.push(child);
-    return child;
-  }
-
-  insertBefore(child, before) {
-    const at = before ? this.childNodes.indexOf(before) : -1;
-    child.parentNode = this;
-    if (at < 0) this.childNodes.push(child);
-    else this.childNodes.splice(at, 0, child);
-    return child;
-  }
-
-  removeChild(child) {
-    const at = this.childNodes.indexOf(child);
-    if (at >= 0) this.childNodes.splice(at, 1);
-    child.parentNode = null;
-    return child;
-  }
-
-  replaceChild(next, old) {
-    const at = this.childNodes.indexOf(old);
-    if (at >= 0) this.childNodes[at] = next;
-    next.parentNode = this;
-    old.parentNode = null;
-    return old;
-  }
-
-  setAttribute(name, value) {
-    this.attrs[name] = value;
-  }
-
-  removeAttribute(name) {
-    delete this.attrs[name];
-  }
-
-  addEventListener(event, handler) {
-    (this.listeners[event] ||= []).push(handler);
-  }
-
-  removeEventListener(event, handler) {
-    const handlers = this.listeners[event] || [];
-    this.listeners[event] = handlers.filter((h) => h !== handler);
-  }
-
-  fire(event) {
-    for (const handler of this.listeners[event] || []) handler();
-  }
-
-  get textContent() {
-    if (this.nodeType === 3) return this._text;
-    return this.childNodes.map((c) => c.textContent).join('');
-  }
-
-  set textContent(value) {
-    this.childNodes = [];
-    this._text = value;
-  }
-
-  get nodeValue() {
-    return this._text;
-  }
-
-  set nodeValue(value) {
-    this._text = value;
-  }
-}
-
-// `createElement` records the last node it made, so the direct-runtime
-// section below can fire a listener on the node its id names.
-let lastCreated = null;
-
-const body = new FakeNode(1, 'BODY');
-// A stand-in for a server-rendered page: `oak_mount` must clear the
-// container before mounting (v1 hydration replaces, it does not adopt).
-const stale = new FakeNode(1, 'DIV');
+// A stand-in for a server-rendered page: `oak_mount` must not keep this
+// node. It is deliberately a SPAN -- a different tag from the view root --
+// so the root-mismatch fallback (clear + mount) is the path under test;
+// the hydration-adoption path is covered by the matching-tree cases.
+const stale = new FakeNode(1, 'SPAN');
 stale.setAttribute('id', 'server-rendered');
 body.appendChild(stale);
-globalThis.document = {
-  body,
-  querySelector(selector) {
-    return selector === 'body' || selector === '#app' ? body : null;
-  },
-  createElement(tag) {
-    lastCreated = new FakeNode(1, tag.toUpperCase());
-    return lastCreated;
-  },
-  createTextNode(text) {
-    lastCreated = new FakeNode(3, '#text');
-    lastCreated.nodeValue = text;
-    return lastCreated;
-  },
-  createComment(text) {
-    lastCreated = new FakeNode(8, '#comment');
-    lastCreated.nodeValue = text;
-    return lastCreated;
-  },
-};
-
-function fail(message) {
-  console.error(message);
-  process.exit(1);
-}
+installDocument();
 
 const bytes = await readFile(path);
 const { instance } = await WebAssembly.instantiate(bytes, imports);
@@ -208,9 +102,9 @@ function write(text, at) {
 }
 
 // Create through the host so the node gets an id, then fire on the node it
-// made (`lastCreated` is recorded by the stub `createElement`).
+// made (`stub.lastCreated` is recorded by the stub `createElement`).
 const buttonId = host.dom_create('button');
-const hostButton = lastCreated;
+const hostButton = stub.lastCreated;
 const [kp, kl] = write('data-oak-on-click', 0);
 const [v7p, v7l] = write('7', 256);
 const [v8p, v8l] = write('8', 288);
@@ -229,7 +123,7 @@ if (calls.join(',') !== '7,8') {
 }
 
 const commentId = host.dom_create_comment(...write('note', 384));
-if (commentId === 0n || !lastCreated || lastCreated.nodeType !== 8) {
+if (commentId === 0n || !stub.lastCreated || stub.lastCreated.nodeType !== 8) {
   fail('dom_create_comment did not create a comment node');
 }
 

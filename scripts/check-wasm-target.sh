@@ -131,6 +131,14 @@ echo "== web: Oak SPA (mount, dispatch, tick, patch) =="
     -o "$tmp/oak_spa.wasm" --no-cache
 node wasm/web/spa_smoke.mjs "$tmp/oak_spa.wasm"
 
+echo "== web: nested dynamic list (Patch.drop_last regression) =="
+# The list sits at patch path [0, 0, 1]: a wholesale replace one wrapper
+# deep. The old drop_last resolved the parent to the root div and replaced
+# the footer instead, so the list never updated and the footer disappeared.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_nested.mo \
+    -o "$tmp/oak_spa_nested.wasm" --no-cache
+node wasm/web/nested_spa_smoke.mjs "$tmp/oak_spa_nested.wasm"
+
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \

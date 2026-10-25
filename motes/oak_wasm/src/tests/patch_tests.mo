@@ -15,6 +15,18 @@ def first_patch (patches : List Patch) : Option Patch :=
         List.cons p _ => Option.some p,
     }
 
+/// Element-wise path equality: generic `BEq` on lists is unreliable.
+def same_path (a : List I64) (b : List I64) : Bool := match a {
+    List.empty => match b {
+        List.empty => true,
+        List.cons _ _ => false,
+    },
+    List.cons x xs => match b {
+        List.empty => false,
+        List.cons y ys => I64.beq x y && same_path xs ys,
+    },
+}
+
 #[test]
 def test_identical_trees_produce_no_patches : Bool :=
     let n := element "div" [Html.Attr.attr "id" "a"] [text "x"] in
@@ -104,6 +116,53 @@ def test_nested_element_diffs_use_the_child_path : Bool :=
         Option.none => false,
         Option.some p => match p {
             Patch.set_text path _content => List.length path == 3,
+            _ => false,
+        },
+    }
+
+// ─── drop_last: the parent path of a replace ────────────────
+//
+// Regression for `2026-10-25-oak-wasm-patch-drop-last-corrupts-nested-paths`:
+// the old two-at-a-time walk was only correct for paths of length <= 2.
+
+#[test]
+def test_drop_last_empty : Bool := List.is_empty (Patch.drop_last List.empty)
+
+#[test]
+def test_drop_last_one : Bool := List.is_empty (Patch.drop_last [0i64])
+
+#[test]
+def test_drop_last_two : Bool := same_path (Patch.drop_last [0i64, 2i64]) [0i64]
+
+#[test]
+def test_drop_last_three : Bool :=
+    same_path (Patch.drop_last [0i64, 1i64, 1i64]) [0i64, 1i64]
+
+#[test]
+def test_drop_last_four : Bool :=
+    same_path (Patch.drop_last [0i64, 1i64, 2i64, 3i64]) [0i64, 1i64, 2i64]
+
+#[test]
+def test_drop_last_five : Bool :=
+    same_path
+        (Patch.drop_last [5i64, 4i64, 3i64, 2i64, 1i64])
+        [5i64, 4i64, 3i64, 2i64]
+
+/// The nested child-count change the e2e fixture exercises: the `ul` sits at
+/// [0, 0, 1] (container -> root div -> section -> ul), so the apply half
+/// must resolve [0, 0] as its parent.
+#[test]
+def test_nested_child_count_change_patches_at_depth_three : Bool :=
+    let old := element "div" List.empty
+        [ element "section" List.empty
+            [element "p" List.empty [text "x"], element "ul" List.empty List.empty] ] in
+    let new := element "div" List.empty
+        [ element "section" List.empty
+            [element "p" List.empty [text "x"], element "ul" List.empty [text "a", text "b"]] ] in
+    match first_patch (Patch.diff old new) {
+        Option.none => false,
+        Option.some p => match p {
+            Patch.replace path _node => same_path path [0i64, 0i64, 1i64],
             _ => false,
         },
     }

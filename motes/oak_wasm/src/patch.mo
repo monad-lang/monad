@@ -226,17 +226,7 @@ pub def Patch.resolve (root : Node) (path : List I64) : IO Node := match path {
 /// Everything but the last index.
 #[terminating]
 def Patch.drop_last (path : List I64) : List I64 :=
-    Patch.drop_last_go (List.reverse path) List.empty
-
-#[terminating]
-def Patch.drop_last_go (rev : List I64) (acc : List I64) : List I64 := match rev {
-    List.empty => List.reverse acc,
-    List.cons _index rest =>
-        match rest {
-            List.empty => List.reverse acc,
-            List.cons index tail => Patch.drop_last_go tail (List.cons index acc),
-        },
-}
+    List.reverse (List.tail (List.reverse path))
 
 #[terminating]
 def Patch.last_or_zero (path : List I64) : I64 := match path {
