@@ -1,7 +1,7 @@
 use lang::types {
-  DebugName, Identifier, Literal, LocalScope, LocalVar, Location, MatchCase,
-  ModulePath, Scope, ScopeData, Similar, Term, binder_anon, binder_explicit, cub_i0,
-  cub_i1, cub_ijoin,
+  DebugName, Elim, Identifier, Literal, LocalScope, LocalVar, Location, MatchCase,
+  ModulePath, NamePath, Scope, ScopeData, Similar, Term, binder_anon, binder_explicit,
+  cub_i0, cub_i1, cub_ijoin,
   cub_imeet, cub_ineg, many, sentinel, sort_n,
   cub, imeet, ineg,
 }
@@ -547,3 +547,100 @@ def test_whnf_a_malformed_arity_does_not_reduce : Bool :=
         && Similar.similar
         (whnf lattice_scope empty_locals (cub CubicalPrim.imeet [cub_i0]))
         (cub CubicalPrim.imeet [cub_i0])
+
+// ─── Iota on `Elim` (core-term-simplification.md R5) ──────────────────
+//
+// `Elim.minors` are POSITIONAL (R3b's `build_elim_minors` walks the
+// inductive's own declared constructor order), not named like a
+// `MatchCase` list -- so these pins reuse `iota_scope`/`two_full` from
+// the `match` iota section above, but build `Elim`s directly rather
+// than `MatchCase` lists. `levels`/`params`/`motive` are never read by
+// `whnf`'s reduction rule (only `type_check_elim` cares about them), so
+// they are left as placeholders (`List.empty`/`Term.hole`) throughout.
+
+/// `Term.elim` over `inductive_name`, with `minors` in the inductive's
+/// own declared constructor order.
+def elim_mk (inductive_name : String) (minors : List Term) (scrutinee : Term) : Term :=
+    Term.elim (Elim.mk
+        (NamePath.mk (List.cons (Identifier.id inductive_name) List.empty))
+        List.empty List.empty Term.hole minors scrutinee)
+
+#[test]
+def test_whnf_elim_iota_fires_first_minor : Bool :=
+    // `P { p0, p1 }`'s minors in declared order; `P.p0` must select the
+    // FIRST one, not scan by name (there are no names to scan -- this is
+    // the one behavioural difference from `match`'s own dispatch).
+    let e : Term := elim_mk "P" (List.cons (free_var "Q") (List.cons (free_var "P") List.empty)) (free_var "P.p0") in
+    Similar.similar (whnf iota_scope empty_locals e) (free_var "Q")
+
+#[test]
+def test_whnf_elim_iota_fires_second_minor : Bool :=
+    // The scan must not stop at the first constructor just because it
+    // exists: `P.p1` selects the SECOND minor.
+    let e : Term := elim_mk "P" (List.cons (free_var "Q") (List.cons (free_var "P") List.empty)) (free_var "P.p1") in
+    Similar.similar (whnf iota_scope empty_locals e) (free_var "P")
+
+#[test]
+def test_whnf_elim_iota_stuck_on_variable_scrutinee : Bool :=
+    // A bound-variable scrutinee has no constructor to dispatch on --
+    // must come back as a (reduced-scrutinee) `Term.elim`, not collapse
+    // to one minor by accident.
+    let e : Term := elim_mk "P" (List.cons (free_var "Q") (List.cons (free_var "P") List.empty)) (Term.var 0 dbg_x) in
+    match whnf iota_scope empty_locals e {
+        Term.elim _ => true,
+        _ => false,
+    }
+
+#[test]
+def test_whnf_elim_iota_substitutes_first_field : Bool :=
+    // `Two2.mk2 P.p0 Q.q0`'s single minor is a two-binder lambda chain;
+    // the FIRST field is the OUTERMOST binder (de Bruijn 1 inside the
+    // body), the same order convention `whnf_subst_case_fields` already
+    // enforces for `match`.
+    let minor : Term :=
+        Term.lam binder_anon Term.hole (Term.lam binder_anon Term.hole (Term.var 1 (DebugName.named id_a))) in
+    let e : Term := elim_mk "Two2" (List.cons minor List.empty) two_full in
+    Similar.similar (whnf iota_scope empty_locals e) (free_var "P.p0")
+
+#[test]
+def test_whnf_elim_iota_substitutes_second_field : Bool :=
+    // The other half: the SECOND field is the INNERMOST binder (de
+    // Bruijn 0). A chain peeled or substituted in the wrong order lands
+    // `P.p0` here instead of `Q.q0`.
+    let minor : Term :=
+        Term.lam binder_anon Term.hole (Term.lam binder_anon Term.hole (Term.var 0 (DebugName.named id_b))) in
+    let e : Term := elim_mk "Two2" (List.cons minor List.empty) two_full in
+    Similar.similar (whnf iota_scope empty_locals e) (free_var "Q.q0")
+
+#[test]
+def test_whnf_elim_iota_stuck_on_minor_count_mismatch : Bool :=
+    // `P` has two constructors but only one minor is supplied -- an
+    // ill-shaped `Elim` a sound checker never produces. `P.p1` (the
+    // SECOND constructor) has no corresponding minor at that position
+    // and must leave the term stuck rather than firing the one minor
+    // that exists for the wrong constructor.
+    let e : Term := elim_mk "P" (List.cons (free_var "Q") List.empty) (free_var "P.p1") in
+    match whnf iota_scope empty_locals e {
+        Term.elim _ => true,
+        _ => false,
+    }
+
+#[test]
+def test_whnf_elim_iota_stuck_on_unknown_inductive : Bool :=
+    // `e.inductive` names nothing in scope -- reduction must not crash
+    // on a lookup failure, just stay stuck exactly as `whnf_iota_case`
+    // does on a non-constructor scrutinee.
+    let e : Term := elim_mk "NoSuchInductive" (List.cons (free_var "Q") List.empty) (free_var "P.p0") in
+    match whnf iota_scope empty_locals e {
+        Term.elim _ => true,
+        _ => false,
+    }
+
+#[test]
+def test_whnf_elim_iota_reduces_scrutinee_first : Bool :=
+    // The scrutinee must be REDUCED (here: delta-unfolded) before
+    // dispatch, not matched syntactically against its as-written form.
+    let s : Scope := scope_of "type P { p0 }\ndef konst (x : Type) : Type := P.p0" in
+    let scrut : Term := Term.app (free_var "konst") (sort_n 1) in
+    let e : Term := elim_mk "P" (List.cons (free_var "Q") List.empty) scrut in
+    Similar.similar (whnf s empty_locals e) (free_var "Q")

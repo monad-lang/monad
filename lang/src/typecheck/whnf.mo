@@ -1,12 +1,12 @@
 use std::list {List.length}
 use lib::types {
-  Con, Cubical, CubicalPrim, DebugName, Identifier, Literal, LocalScope, MatchCase,
-  NamePath, NameRef, Scope, Similar, Term,
+  Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor, Literal,
+  LocalScope, MatchCase, NamePath, NameRef, Scope, Similar, Term,
   cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cubical_prim_eq, id_eq,
   show_identifier, sentinel, term_peel,
 }
 use lib::scope {
-  flatten_call_spine, last_dot_index, scope_find_def_body,
+  flatten_call_spine, last_dot_index, scope_find_def_body, scope_find_inductive,
   scope_find_inductive_by_constructor, scope_find_local, scope_resolve_name,
 }
 use lib::typecheck::faces {face_decide}
@@ -153,6 +153,18 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
             // cubical head is reducible, not rigid -- see the section
             // below this def.
             Term.cubical c => whnf_cubical (fuel - 1) scope locals c,
+            // Iota on `Elim` (`core-term-simplification.md` R5): reduce
+            // the scrutinee, then fire whichever minor its constructor
+            // selects -- see the `whnf_elim_iota` section below. The
+            // reduced scrutinee is kept in the stuck case, same
+            // discipline as `Literal.match_`/`if_` above.
+            Term.elim e =>
+                let scrut_r : Term := whnf_go (fuel - 1) scope locals e.scrutinee in
+                match whnf_elim_iota e scrut_r scope {
+                    Option.some body => whnf_go (fuel - 1) scope locals body,
+                    Option.none =>
+                        Term.elim (Elim.mk e.inductive e.levels e.params e.motive e.minors scrut_r),
+                },
             // Rigid heads: `pi`, `forall`, `type_`, `sort`, `ntv`, `con`,
             // `hole`, and the two macro-only forms. Already in WHNF.
             //
@@ -783,6 +795,100 @@ def whnf_subst_case_fields (body : Term) (args : List Term) (k : I64) : Term :=
         List.empty => body,
         List.cons a rest =>
             whnf_subst_case_fields (term_subst (k - 1) (term_shift (k - 1) a) body) rest (k - 1),
+    }
+
+// ─── Iota on `Elim` (core-term-simplification.md R5) ──────────────────
+//
+// `Elim.minors` are POSITIONAL (R3b's `build_elim_minors` walks an
+// inductive's own declared constructor order), not named like
+// `MatchCase` -- so dispatch is a lockstep walk of `ind`'s constructors
+// against `e.minors`, not a name scan. Each minor is a plain `Term.lam`
+// chain over one constructor's fields (`build_named_lambda_chain`/
+// `build_anon_lambda_chain`, R3b), so "firing" one is: peel exactly as
+// many lambdas as the constructor has fields, then substitute with
+// `whnf_subst_case_fields` -- the SAME many-at-once substitution
+// `Literal.match_`'s iota already uses, since a lambda chain and a
+// `MatchCase`'s simultaneous binders share the identical convention
+// (first-declared field OUTERMOST).
+
+/// The minor paired with `con_name`, found by walking `ctors` and
+/// `minors` together -- the position where `ctors`' name matches IS
+/// `minors`' corresponding entry, by construction (`build_elim_minors`).
+/// `Option.none` on a length mismatch (an ill-shaped `Elim` reaching
+/// reduction) or when no constructor matches; reduction only ever widens
+/// what a sound checker accepts, so this stays stuck rather than guessing.
+def whnf_elim_minor_for_ctor (ctors : List InductConstructor) (minors : List Term)
+    (con_name : Identifier) : Option Term :=
+    match ctors {
+        List.empty => Option.none,
+        List.cons ctor crest =>
+            match minors {
+                List.empty => Option.none,
+                List.cons minor mrest =>
+                    if id_eq (whnf_simple_name (whnf_constructor_bare_name ctor.name)) con_name
+                    then Option.some minor
+                    else whnf_elim_minor_for_ctor crest mrest con_name,
+            },
+    }
+
+/// A constructor's own simple name, read off its (qualified) `NamePath`.
+/// Local twin of `constructor_bare_name` (`lang/typecheck/infer.mo`) --
+/// the same cannot be imported from there for the reason `whnf_simple_
+/// name`'s own doc comment already gives: `infer.mo` depends on this
+/// module, not the other way around.
+def whnf_constructor_bare_name (np : NamePath) : Identifier :=
+    match np {
+        NamePath.mk ids =>
+            match List.last ids {
+                Option.some last_id => last_id,
+                Option.none => Identifier.id "",
+            },
+    }
+
+/// Peel exactly `n` `Term.lam` layers off `t`, returning the body
+/// underneath. `Option.none` when `t` has fewer than `n` lambdas -- an
+/// arity mismatch between a minor and its constructor, which a sound
+/// checker never produces, but reduction must not crash on regardless.
+#[partial]
+def whnf_peel_lambda_n (t : Term) (n : I64) : Option Term :=
+    if I64.lt n 1 then Option.some t
+    else
+        match term_peel t {
+            Term.lam _b _typ body => whnf_peel_lambda_n body (n - 1),
+            _ => Option.none,
+        }
+
+/// Fire one minor: peel its `List.length field_args` lambdas, then
+/// substitute the constructor's fields for the same-many pattern
+/// binders -- `whnf_subst_case_fields` needs no new logic here, since a
+/// lambda chain's binders are bound OUTERMOST-first exactly like a
+/// `MatchCase`'s `whnf_subst_case_fields` already assumes.
+def whnf_elim_fire_minor (minor : Term) (field_args : List Term) : Option Term :=
+    let n : I64 := List.length field_args in
+    match whnf_peel_lambda_n minor n {
+        Option.some body => Option.some (whnf_subst_case_fields body field_args n),
+        Option.none => Option.none,
+    }
+
+/// Dispatch: reduce `Term.elim e` when `scrut_r` (the already-reduced
+/// scrutinee) is a known constructor application. `Option.none` = stuck
+/// -- not a constructor, an unresolvable `e.inductive`, or no matching
+/// minor -- mirroring `whnf_iota_case`'s own contract for `match`.
+def whnf_elim_iota (e : Elim) (scrut_r : Term) (scope : Scope) : Option Term :=
+    match whnf_con_head scrut_r scope {
+        Option.none => Option.none,
+        Option.some p =>
+            match p {
+                Pair.pair con_name field_args =>
+                    match scope_find_inductive e.inductive scope {
+                        err _ => Option.none,
+                        ok ind =>
+                            match whnf_elim_minor_for_ctor ind.constructors e.minors con_name {
+                                Option.some minor => whnf_elim_fire_minor minor field_args,
+                                Option.none => Option.none,
+                            },
+                    },
+            },
     }
 
 /// `Option.some b` when `cond` has reduced to `Bool`'s constructor
