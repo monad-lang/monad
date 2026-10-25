@@ -162,6 +162,54 @@ def term_subst_go (j : I64) (s : Term) (depth : I64) (t : Term) : Term :=
     }
 
 
+// ─── Abstraction (core-term-simplification.md R4b) ────────────────────
+//
+// `term_abstract_var j t` is `term_subst`'s dual: instead of replacing a
+// bound occurrence with a term, it closes one OVER a fresh outer binder --
+// what `type_check_elim_motive` (R4) needs a CALLER to hand it when the
+// motive isn't given explicitly but must be derived from a dependent
+// expected type that mentions the scrutinee as an ordinary bound variable
+// (`core-term-simplification.md`'s R4b: `Sigma.snd`'s declared
+// `B (Sigma.fst p)` needs `fn q => B (Sigma.fst q)`, i.e. `p` -- a plain
+// `Term.var` -- abstracted out and rebound to the motive's own fresh
+// argument). Every occurrence of `Term.var (j + depth)` (the variable
+// being abstracted, re-targeted at the walk's current depth the same way
+// `term_subst_go`'s `target` does) becomes `Term.var depth` (a reference
+// to the brand-new OUTERMOST binder, at whatever depth the walk has
+// reached); every occurrence with a STRICTLY GREATER index is shifted up
+// by 1 (opening the gap the new binder needs, the mirror image of
+// `term_subst`'s closing one); anything smaller is untouched, since it is
+// bound more tightly than the thing being abstracted and the new binder
+// sits outside that. The caller wraps the result in one `Term.lam`/
+// `Term.pi` (`derive_motive`, `infer.mo`) -- this function only produces
+// the body.
+//
+// Deliberately scoped to a single BOUND-VARIABLE scrutinee, not an
+// arbitrary subterm: finding every occurrence of a general term (rather
+// than one de Bruijn index) is a different, harder operation (structural
+// matching under binders, since the target term's own free variables
+// shift as the walk descends) that no caller needs yet -- `Sigma.snd`'s
+// own scrutinee `p` is exactly a bound variable, the common shape for
+// "the thing being eliminated is a `match`'s own operand or a def's own
+// parameter." Recorded in `core-term-simplification.md`'s R4b detail as
+// the scope line, not silently assumed to generalize.
+def term_abstract_var (j : I64) (t : Term) : Term := term_abstract_var_go j 0 t
+
+#[partial]
+def term_abstract_var_go (j : I64) (depth : I64) (t : Term) : Term :=
+    let target : I64 := j + depth in
+    match t {
+        Term.var idx dbg =>
+            if I64.beq idx target then Term.var depth dbg
+            else if I64.gt idx target then Term.var (idx + 1) dbg
+            else Term.var idx dbg,
+        Term.var_macro idx dbg =>
+            if I64.beq idx target then Term.var_macro depth dbg
+            else if I64.gt idx target then Term.var_macro (idx + 1) dbg
+            else Term.var_macro idx dbg,
+        _ => term_map_children_at_depth (fn (under : I64) => fn (child : Term) => term_abstract_var_go j (depth + under) child) t,
+    }
+
 // ─── Beta-reduction ──────────────────────────────────────────────────
 
 /// Beta-reduce `Term.app (Term.lam _ _ body) arg` — substitute `arg`
@@ -441,3 +489,57 @@ def test_term_shift_cubical_under_lam_respects_the_binder : Bool :=
         },
         _ => false,
     }
+
+// ─── Abstraction (core-term-simplification.md R4b) ────────────────────
+
+#[test]
+def test_term_abstract_var_replaces_target_with_new_binder_ref : Bool :=
+    // `Term.app (Term.var 0) (Term.var 1)`, abstracting index 0 (the
+    // `app`'s own left arm, playing `Sigma.snd`'s own scrutinee `p`):
+    // the target occurrence becomes `Term.var 0` (the brand-new OUTER
+    // binder, at depth 0 since there's no intervening binder here), and
+    // the OTHER reference (index 1, something outside the thing being
+    // abstracted) shifts up by 1 to stay pointed at the same binding now
+    // that a new binder sits in front of it.
+    let t : Term := Term.app (Term.var 0 DebugName.unnamed) (Term.var 1 DebugName.unnamed) in
+    match term_abstract_var 0 t {
+        Term.app a b => I64.beq (term_var_idx a) 0 && I64.beq (term_var_idx b) 2,
+        _ => false,
+    }
+
+#[test]
+def test_term_abstract_var_leaves_inner_binder_untouched : Bool :=
+    // Under a `lam`, `Term.var 0` refers to THAT lambda's own binder, not
+    // the thing being abstracted from outside it -- it must stay exactly
+    // `Term.var 0`, the same "idx < target" untouched case `term_subst_go`
+    // has for the variable below the one it's substituting.
+    let t : Term := Term.lam binder_anon Term.hole (Term.var 0 DebugName.unnamed) in
+    match term_abstract_var 0 t {
+        Term.lam _ _ body => I64.beq (term_var_idx body) 0,
+        _ => false,
+    }
+
+#[test]
+def test_term_abstract_var_targets_correct_depth_under_binder : Bool :=
+    // Under one `lam`, `Term.var 1` refers OUTSIDE it -- to the same
+    // external variable (index 0 at depth 0) being abstracted. The walk's
+    // `depth` (1, from crossing the `lam`) is what the occurrence must
+    // retarget to: the new outer binder, seen from one level inside the
+    // intervening `lam`, is `Term.var 1`, not `Term.var 0` (which would
+    // wrongly claim the `lam`'s OWN binder instead).
+    let t : Term := Term.lam binder_anon Term.hole (Term.var 1 DebugName.unnamed) in
+    match term_abstract_var 0 t {
+        Term.lam _ _ body => I64.beq (term_var_idx body) 1,
+        _ => false,
+    }
+
+#[test]
+def test_term_abstract_var_then_subst_back_recovers_the_original : Bool :=
+    // Round-trip: abstracting index 0 out and then substituting the SAME
+    // reference back in for the new binder must reproduce the original
+    // free-variable reference exactly -- `derive_motive`'s whole point is
+    // that `Term.app motive scrutinee` type-checks against the ORIGINAL
+    // expected type, which only holds if this round-trip holds.
+    let outer_ref : Term := Term.var 1 DebugName.unnamed in
+    let abstracted : Term := term_abstract_var 0 outer_ref in
+    I64.beq (term_var_idx (term_subst 0 (Term.var 0 DebugName.unnamed) abstracted)) 1

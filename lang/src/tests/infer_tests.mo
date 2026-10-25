@@ -8,10 +8,11 @@ use lang::types {
   cub_interval, if_, many, match_, package_private, sentinel, sort_n,
   cub,
 }
+use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::typecheck::diagnostic {type_error_message}
 use lib::typecheck::infer {
-  CalleeDomain, TypedTerm, elaborate_if_to_elim, elaborate_match_to_elim,
+  CalleeDomain, TypedTerm, derive_motive, elaborate_if_to_elim, elaborate_match_to_elim,
   empty_local_types, empty_locals,
   is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
   type_check_elim, type_check_match_case
@@ -1954,3 +1955,103 @@ def test_type_check_elim_accepts_a_real_dependent_motive : Bool :=
         scrutinee in
     elim_result_ok (type_check_elim e Term.hole shape_scope_for_elim_tests
         dependent_local_types_for_elim_tests empty_locals)
+
+// ─── R4b: motive derivation (core-term-simplification.md) ───────────────
+//
+// `Sigma.snd`'s own shape (`sigma-types.md`): a scrutinee `p` whose
+// DECLARED expected type (`B (Sigma.fst p)`) mentions `p` through a real,
+// resolvable projection -- unlike the `Shape`/`tag` pin above, which is
+// handed an already-correct motive by hand, this one calls `derive_motive`
+// itself and then proves the result actually lets `type_check_elim` accept
+// the one minor Sigma.snd's real body has (`fn a b => b`). `MySigma.fst`
+// needs a REAL body (not a bare free reference) for this to mean anything:
+// checking the minor's inferred type (`B a`) against the motive applied to
+// the constructor (`B (MySigma.fst (dpair a b))`) only converts to the same
+// term once `MySigma.fst` delta/iota-unfolds -- exactly the `Sigma.fst`
+// reduction `sigma-types.md` names as the OTHER prerequisite `Sigma.snd`
+// needs, already real and unrelated to this step. Built from real parsed
+// source (`try_parse_decls`/`build_scope_from_decls`, `elim_props.mo`'s own
+// technique) rather than hand-built `Inductive`/`Param`, so the dependent
+// field (`snd : B fst`) and `MySigma.fst`'s `match`-iota both go through
+// the real parser/checker instead of a hand-derived de Bruijn guess.
+//
+// `MySigma`'s own two type ARGUMENTS (as opposed to its declared params)
+// must be REAL, resolvable names -- `P`/`Fam` below, not bare free-
+// dangling stand-ins the way `pair_scrutinee_typ` gets away with "T"/"U".
+// `pair_scrutinee_typ` is only ever UNIFIED against (structural comparison
+// alone), never independently type-checked as a term; this pin's motive
+// wraps `my_sigma_scrutinee_typ` as a `Term.lam`'s DOMAIN, which
+// `type_check_elim_motive` DOES infer/check as a real type -- confirmed by
+// running it: an unresolved "A"/"B" fails there with `unknown_var`, caught
+// before trusting this pin at all.
+def my_sigma_mod_path : ModulePath := ModulePath.mk [Identifier.id "my_sigma_r4b"]
+
+def my_sigma_scope : Scope :=
+    let source : String :=
+        "type P { p0 }\ndef Fam (x : P) : Type := P\ntype MySigma (A : Type) (B : A -> Type) { dpair (fst : A) (snd : B fst) }\ndef MySigma.fst {A : Type} {B : A -> Type} (p : MySigma A B) : A := match p { dpair a _ => a }" in
+    let sd : ScopeData := match try_parse_decls source {
+        Option.some decl_list => build_scope_from_decls my_sigma_mod_path decl_list,
+        Option.none => build_scope_from_decls my_sigma_mod_path List.empty,
+    } in
+    {
+        module_id := my_sigma_mod_path,
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    }
+
+/// `MySigma P Fam` -- `P` a real nullary type, `Fam` a real (constant)
+/// type family over it, both declared in `my_sigma_scope`'s own source.
+def my_sigma_scrutinee_typ : Term :=
+    Term.app (Term.app (named_free_var "MySigma") (named_free_var "P")) (named_free_var "Fam")
+
+def my_sigma_local_types : List Term := List.cons my_sigma_scrutinee_typ List.empty
+
+/// `p`, the scrutinee -- the def's own (only) bound parameter, index 0.
+def my_sigma_p : Term := Term.var 0 DebugName.unnamed
+
+/// `Fam (MySigma.fst p)` -- `Sigma.snd`'s own declared return type,
+/// verbatim shape (`B (Sigma.fst p)` with `B := Fam`).
+def my_sigma_expected_type : Term :=
+    Term.app (named_free_var "Fam") (Term.app (named_free_var "MySigma.fst") my_sigma_p)
+
+/// `[P, Fam]` -- `MySigma`'s own two type arguments, read off the
+/// scrutinee type's application spine the same way `Elim.params` always
+/// does (R3b/R4's own convention).
+def my_sigma_params : List Term :=
+    List.cons (named_free_var "P") (List.cons (named_free_var "Fam") List.empty)
+
+/// `fn a b => b` -- `Sigma.snd`'s own body (`match p { dpair a b => b }`),
+/// curried the way `type_check_elim_minor`'s own Pi-chain expects a minor
+/// (one `Term.lam` per field, outermost-first).
+def my_sigma_snd_minor : Term :=
+    Term.lam binder_anon Term.hole (Term.lam binder_anon Term.hole (Term.var 0 DebugName.unnamed))
+
+#[test]
+def test_derive_motive_lets_sigma_snd_shaped_elim_check : Bool :=
+    let motive : Term := derive_motive 0 my_sigma_scrutinee_typ my_sigma_expected_type in
+    let e : Elim := Elim.mk (NamePath.mk [Identifier.id "MySigma"]) List.empty my_sigma_params
+        motive (List.cons my_sigma_snd_minor List.empty) my_sigma_p in
+    elim_result_ok (type_check_elim e Term.hole my_sigma_scope my_sigma_local_types empty_locals)
+
+/// No swapped/wrong-motive mutation control here -- confirmed directly,
+/// and worth recording rather than silently dropping: a motive that does
+/// NOT abstract `p` at all (`Term.lam binder_anon my_sigma_scrutinee_typ
+/// (term_shift 1 my_sigma_expected_type)`, verbatim-wrapping the original
+/// expected type under a binder it never references) is STILL ACCEPTED
+/// here. Root cause is the same class of gap `test_type_check_elim_
+/// accepts_a_real_dependent_motive`'s own doc comment already names for
+/// an application-shaped minor body, now confirmed for a bound-variable
+/// one too: `type_check_bound_var` (`infer.mo`) returns `local_types`'s
+/// entry for the variable and NEVER consults (let alone `unify`s against)
+/// the `expected_type` it is handed -- `Sigma.snd`'s own real body
+/// (`match p { dpair a b => b }`) is EXACTLY a minor whose tail is a bare
+/// bound variable (`b`), so this is not an edge case for R4b, it is the
+/// motivating one. `derive_motive`'s own correctness is instead
+/// mutation-verified one level down, directly on `term_abstract_var`
+/// (`subst.mo`'s own pins) -- those DO catch a wrong abstraction, since
+/// they inspect the produced term's shape directly rather than routing it
+/// through this unchecked path. Recorded here, not fixed: widening
+/// `type_check_bound_var`/`type_check_app` to a real bidirectional check
+/// is its own, separately-scoped change with its own blast radius across
+/// the whole checker, not something R4b's own scope covers.

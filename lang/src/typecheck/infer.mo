@@ -39,7 +39,7 @@ use lang::scope {
   type_mentions_any, validate_dict_hints,
 }
 use lib::typecheck::name_subst {name_subst_term}
-use lib::typecheck::subst {term_permute, term_subst, term_shift}
+use lib::typecheck::subst {term_abstract_var, term_permute, term_subst, term_shift}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
 use lib::typecheck::traverse {term_children}
 use lib::typecheck::cubical {
@@ -1136,6 +1136,40 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
 /// target)))`) for turning a resolved name into a term.
 def free_var_ref (np : NamePath) : Term :=
     Term.var sentinel (DebugName.named (Identifier.id (show_name_path np)))
+
+// ─── R4b: motive derivation (core-term-simplification.md) ───────────────
+//
+// `type_check_elim`'s motive is checked, never derived -- it is the
+// CALLER's job to build one when a `match`/`if` is elaborated against a
+// dependent expected type that mentions the scrutinee (`sigma-types.md`'s
+// `Sigma.snd : B (Sigma.fst p) := match p { dpair a b => b }` is the
+// motivating case: the expected type `B (Sigma.fst p)` must become the
+// motive `fn q => B (Sigma.fst q)` for `type_check_elim_motive` to accept
+// a minor whose own inferred type is `B a`, not `B (Sigma.fst p)`
+// syntactically). `derive_motive` is that builder: wrap `term_abstract_var`
+// (`subst.mo`, this step's own new primitive) in exactly the one `Term.lam`
+// `type_check_elim_motive` expects to peel.
+//
+// NOT wired into `type_check_if`/`type_check_match` -- that would mean
+// giving `type_check_match` a real `Term.elim`-producing fallback path,
+// which is `R3c`'s job, and R3c's own reconnaissance
+// (`core-term-simplification.md`) found that blocked on `emit.mo`/
+// `lower_core_ir.mo` gaining real `Term.elim` support first. So a real
+// source-level `def Sigma.snd := match p { dpair a b => b }` still cannot
+// be *written and compiled* after this step -- what this step delivers is
+// the derivation RULE itself, pinned directly against `type_check_elim`
+// the same way R4's own dependent-motive pin exercises the CHECKING rule
+// without going through real `match` syntax.
+//
+// Scoped to a scrutinee that is itself an ordinary BOUND VARIABLE
+// (`scrutinee_idx`), matching `term_abstract_var`'s own documented scope --
+// not an arbitrary compound scrutinee expression, and not an INDEXED
+// family's extra index arguments (`Eq A a b`'s `b`, needed for `Eq.rec`/
+// `T.rec` -- recorded as a separate, not-yet-scoped follow-on, R4c, since
+// it needs `Elim` itself to grow an indices field, a `Term`-shape change
+// on the order of R3a, not just a new substitution primitive).
+def derive_motive (scrutinee_idx : I64) (scrutinee_typ : Term) (expected_type : Term) : Term :=
+    Term.lam binder_anon scrutinee_typ (term_abstract_var scrutinee_idx expected_type)
 
 /// The `Elim` typing rule. Resolves `inductive`, checks the scrutinee
 /// against it applied to `params`, then hands off to the motive check.
