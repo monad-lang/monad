@@ -953,15 +953,14 @@ static int64_t term_ctl_size(void) {
  * tick. poll(2)'s own convention: a negative timeout blocks
  * indefinitely -- that is how an app opts out of ticks. Positive
  * waits are clamped into poll(2)'s int range, matching the Rust host. */
+static int poll_one(struct pollfd* pfd, int64_t timeout_ms);
+
 static int64_t term_ctl_poll(int64_t timeout_ms) {
     struct pollfd pfd;
     pfd.fd = STDIN_FILENO;
     pfd.events = POLLIN;
-    int t;
-    if (timeout_ms < 0) t = -1;
-    else if (timeout_ms > INT_MAX) t = INT_MAX;
-    else t = (int)timeout_ms;
-    int rc = poll(&pfd, 1, t);
+    pfd.revents = 0;
+    int rc = poll_one(&pfd, timeout_ms);
     if (rc < 0) return -1;
     return rc == 0 ? 0 : 1;
 }
@@ -1153,6 +1152,24 @@ static int remaining_ms(int64_t deadline, int64_t timeout_ms) {
     if (left < 0) left = 0;
     if (left > INT_MAX) left = INT_MAX;
     return (int)left;
+}
+
+/* poll(2) on one descriptor: a positive timeout is a deadline, zero
+   polls once, negative blocks. EINTR retries against the same deadline:
+   a signal must not hand the wait a fresh budget, nor end it early --
+   Boehm's stop-the-world signals interrupt every blocked thread
+   whenever another one collects, which used to cut TUI ticks short. */
+static int poll_one(struct pollfd* pfd, int64_t timeout_ms) {
+    int64_t deadline = deadline_after_ms(timeout_ms);
+    int rc;
+    do {
+        int t;
+        if (timeout_ms > 0) t = remaining_ms(deadline, timeout_ms);
+        else if (timeout_ms < 0) t = -1;
+        else t = 0;
+        rc = poll(pfd, 1, t);
+    } while (rc < 0 && errno == EINTR);
+    return rc;
 }
 
 /* TCP connect's ONE implementation. `timeout_ms <= 0` blocks on each
@@ -1816,17 +1833,7 @@ void* monad_stream_poll(int64_t fd, int64_t events, int64_t timeout_ms) {
     if (events & 1) pfd.events |= POLLIN;
     if (events & 2) pfd.events |= POLLOUT;
     pfd.revents = 0;
-    /* One deadline across EINTR retries, as the connect loop does: a
-       signal must not hand the wait a fresh budget. */
-    int64_t deadline = deadline_after_ms(timeout_ms);
-    int rc;
-    do {
-        int t;
-        if (timeout_ms > 0) t = remaining_ms(deadline, timeout_ms);
-        else if (timeout_ms < 0) t = -1;
-        else t = 0;
-        rc = poll(&pfd, 1, t);
-    } while (rc < 0 && errno == EINTR);
+    int rc = poll_one(&pfd, timeout_ms);
     if (rc < 0) return stream_os_err("stream_poll", errno);
     return tcp_ok((void*)(int64_t)(rc > 0 ? 1 : 0));
 }

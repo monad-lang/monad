@@ -12,7 +12,10 @@
  *   * descriptor inheritance (Linux only: it reads /proc) -- with a
  *     listener, a connection and its accepted end held open, concurrent
  *     spawns of `ls /proc/self/fd` must each see only their own 0/1/2
- *     and ls's directory handle, never a sibling's pipe or a socket.
+ *     and ls's directory handle, never a sibling's pipe or a socket;
+ *   * a timed stdin poll (`term_ctl` op 3) under a stream of signals --
+ *     the way Boehm's stop-the-world signals hit a TUI's frame clock --
+ *     must still wait out its full timeout.
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -21,9 +24,11 @@
 #define GC_THREADS
 #include <gc.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -37,6 +42,7 @@ void* monad_tcp_listen(int64_t port);
 int64_t monad_tcp_local_port(int64_t listener);
 void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms);
 void* monad_tcp_accept(int64_t listener);
+int64_t monad_term_ctl(int64_t op, int64_t arg);
 
 /* The runtime references codegen's entry point; nothing calls it here. */
 void* main_monad(void* args) {
@@ -66,6 +72,7 @@ typedef struct {
 #define PROC_LINES 40
 #define FD_THREADS 8
 #define FD_ITERS 40
+#define POLL_MS 300
 
 static int failures;
 
@@ -197,6 +204,61 @@ static void* fd_worker(void* arg) {
 }
 #endif
 
+static int64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static void on_signal(int sig) {
+    (void)sig;
+}
+
+static int poll_done;
+static int64_t poll_rc;
+
+static void* poll_worker(void* arg) {
+    (void)arg;
+    poll_rc = monad_term_ctl(3, POLL_MS);
+    __atomic_store_n(&poll_done, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+
+/* stdin becomes an empty pipe nobody writes, so the poll can only time
+   out; SIGUSR1 interrupts it every 20 ms until it returns. */
+static void check_poll_eintr(void) {
+    int p[2];
+    if (pipe(p) < 0) {
+        fail();
+        return;
+    }
+    int saved = dup(0);
+    dup2(p[0], 0);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_signal;
+    sigaction(SIGUSR1, &sa, NULL);
+    int64_t start = now_ms();
+    pthread_t t;
+    pthread_create(&t, NULL, poll_worker, NULL);
+    struct timespec tick = {0, 20 * 1000000};
+    while (!__atomic_load_n(&poll_done, __ATOMIC_ACQUIRE)) {
+        nanosleep(&tick, NULL);
+        pthread_kill(t, SIGUSR1);
+    }
+    pthread_join(t, NULL);
+    int64_t took = now_ms() - start;
+    if (poll_rc != 0 || took < POLL_MS - 10) {
+        fprintf(stderr, "thread_stress: poll returned %lld after %lld ms\n",
+                (long long)poll_rc, (long long)took);
+        fail();
+    }
+    dup2(saved, 0);
+    close(saved);
+    close(p[0]);
+    close(p[1]);
+}
+
 static void run(void* (*worker)(void*), int threads) {
     pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
@@ -222,6 +284,7 @@ int main(void) {
     monad_stream_close(client);
     monad_stream_close(listener);
 #endif
+    check_poll_eintr();
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }
