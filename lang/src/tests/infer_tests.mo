@@ -1,6 +1,6 @@
 use std::list {List.length}
 use lang::types {
-  Attribute, Binder, BinderInfo, DebugName, Decl, Def, FieldPattern, FieldPatternEntry,
+  Attribute, Binder, BinderInfo, DebugName, Decl, Def, Elim, FieldPattern, FieldPatternEntry,
   Identifier, CubicalPrim, InductConstructor, Inductive, MatchCase, ModulePath,
   NamePath, Param, Scope, ScopeClassDef, ScopeData, Similar, SortLevel, Term, TypeError,
   binder_anon, binder_binder, binder_explicit, binder_named, char, cub_i0, cub_i1, cub_ijoin,
@@ -14,7 +14,7 @@ use lib::typecheck::infer {
   CalleeDomain, TypedTerm, elaborate_if_to_elim, elaborate_match_to_elim,
   empty_local_types, empty_locals,
   is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
-  type_check_match_case
+  type_check_elim, type_check_match_case
 }
 use lib::typecheck::subst {term_shift}
 
@@ -1798,3 +1798,159 @@ def test_elaborate_match_to_elim_params_and_field_types_from_scrutinee_spine : B
                         (Term.lam (binder_named (Identifier.id "second")) (named_free_var "U") body)),
         _ => false,
     }
+
+// ─── R4: the `Elim` typing rule (core-term-simplification.md) ───────────
+//
+// Every pin here calls `type_check_elim` directly on a HAND-BUILT `Elim`
+// -- nothing in the live pipeline constructs one yet (R3c, gated on this
+// very rule). `Term.hole` stands in for an ordinary minor value wherever
+// a pin only needs to exercise the RULE's own plumbing (inductive
+// resolution, the scrutinee/params check, the motive's sort check, the
+// lockstep ctor/minor walk): `type_check`'s own `Term.hole` arm echoes
+// back whatever `expected_type` it is handed, so it type-checks against
+// ANY expected type without needing any name in scope to resolve -- the
+// same reason `local_types` entries below are themselves bare, otherwise-
+// unresolvable free-var references rather than real registered types:
+// `type_check_bound_var` returns a local's stored type verbatim, with no
+// resolution step, so a bound scrutinee's type only has to match
+// `rebuild_call`'s rebuilt expected type STRUCTURALLY.
+
+def bool_scope_for_elim_tests : Scope :=
+    let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
+    let sd : ScopeData := build_scope_from_decls mod_path
+        (List.cons (Decl.inductive_d bool_ind_for_elim_tests) List.empty) in
+    {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    }
+
+def shape_scope_for_elim_tests : Scope :=
+    let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
+    let sd : ScopeData := build_scope_from_decls mod_path
+        (List.cons (Decl.inductive_d shape_ind_for_elim_tests) List.empty) in
+    {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    }
+
+/// A degenerate but well-formed constant motive (`fn _ => Prop`, domain
+/// a hole) over two nullary minors -- the happy path for the whole rule's
+/// plumbing: inductive resolution, the scrutinee-vs-params check, the
+/// motive's sort check, and the lockstep walk over `Bool`'s two
+/// constructors.
+def elim_result_ok (r : Result TypeError TypedTerm) : Bool :=
+    match r { ok _ => true, err _ => false }
+
+def elim_result_err (r : Result TypeError TypedTerm) : Bool :=
+    match r { ok _ => false, err _ => true }
+
+#[test]
+def test_type_check_elim_bool_constant_motive_checks : Bool :=
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
+    let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+    elim_result_ok (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
+
+#[test]
+def test_type_check_elim_rejects_unknown_inductive : Bool :=
+    let bad_name : NamePath := NamePath.mk (List.cons (Identifier.id "NoSuchInductive") List.empty) in
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
+    let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
+    let e : Elim := Elim.mk bad_name List.empty List.empty motive
+        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+    elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
+
+/// The scrutinee's own LOCAL type is `NotBool`, not `Bool` -- `e.inductive`
+/// says `Bool`, so the rebuilt expected scrutinee type and the scrutinee's
+/// real inferred type structurally disagree and `unify` must reject it.
+#[test]
+def test_type_check_elim_rejects_scrutinee_type_mismatch : Bool :=
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let local_types : List Term := List.cons (named_free_var "NotBool") List.empty in
+    let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+    elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
+
+/// The motive's body is `Term.hole`, whose own inferred type is `Term.hole`
+/// -- not a `Term.sort` -- so `sort_level_of` must fail the motive's
+/// codomain check, same as a `PathP` line that isn't a line into a sort.
+#[test]
+def test_type_check_elim_rejects_non_sort_motive : Bool :=
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
+    let motive : Term := Term.lam binder_anon Term.hole Term.hole in
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+    elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
+
+/// `Bool` declares two constructors; one minor is one short.
+#[test]
+def test_type_check_elim_rejects_too_few_minors : Bool :=
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
+    let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+        (List.cons Term.hole List.empty) scrutinee in
+    elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
+
+/// Three minors for `Bool`'s two constructors -- one too many.
+#[test]
+def test_type_check_elim_rejects_too_many_minors : Bool :=
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
+    let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+        (List.cons Term.hole (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
+    elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
+
+/// A genuinely NON-CONSTANT motive: `fn (s : Shape) => tag (Term.var 2)`,
+/// where `tag` is itself a bound function value (`Shape -> Sort 1`, kept
+/// deliberately OPAQUE/unresolved beyond that declared type). Each
+/// minor's own body applies `tag` to ITS OWN constructor -- `circle`'s
+/// minor says `tag (circle r)`, `square`'s says `tag (square r)` -- which
+/// only BUILDS at all if `type_check_elim_minor` threads the correctly
+/// `term_shift`ed motive through each one. `local_types` is
+/// `[Shape, Shape -> Sort 1]` (index 0 the scrutinee's own slot, index 1
+/// `tag`'s).
+///
+/// No swapped-minor mutation control: `type_check_lam_explicit`
+/// (`infer.mo`) does not itself `unify` an application-shaped body
+/// against the Pi's codomain it is checked against -- `type_check_app`
+/// is pure inference, and the explicit-binder arm keeps `expected_type`
+/// verbatim as the lambda's type whenever `ret_typ` isn't a hole, with no
+/// comparison against what `body` actually inferred to. Confirmed
+/// directly: swapping which minor goes with which constructor here still
+/// returns `ok`. This is a pre-existing, orthogonal gap (not introduced
+/// by this rule, and not fixed by it -- recorded in
+/// `core-term-simplification.md`'s R4 section as a flag for R4b, since a
+/// derived non-constant motive's minors will usually be application-
+/// shaped too) rather than something this pin can catch.
+def tag_fn_typ : Term := Term.pi binder_anon Term.hole (sort_n 1)
+def dependent_motive_for_elim_tests : Term :=
+    Term.lam binder_anon Term.hole (Term.app (Term.var 2 DebugName.unnamed) (Term.var 0 DebugName.unnamed))
+def dependent_local_types_for_elim_tests : List Term :=
+    List.cons (named_free_var "Shape") (List.cons tag_fn_typ List.empty)
+def circle_minor_for_elim_tests : Term :=
+    Term.lam binder_anon Term.hole
+        (Term.app (Term.var 2 DebugName.unnamed) (Term.app (named_free_var "circle") (Term.var 0 DebugName.unnamed)))
+def square_minor_for_elim_tests : Term :=
+    Term.lam binder_anon Term.hole
+        (Term.app (Term.var 2 DebugName.unnamed) (Term.app (named_free_var "square") (Term.var 0 DebugName.unnamed)))
+
+#[test]
+def test_type_check_elim_accepts_a_real_dependent_motive : Bool :=
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let e : Elim := Elim.mk shape_name_for_elim_tests List.empty List.empty
+        dependent_motive_for_elim_tests
+        (List.cons circle_minor_for_elim_tests (List.cons square_minor_for_elim_tests List.empty))
+        scrutinee in
+    elim_result_ok (type_check_elim e Term.hole shape_scope_for_elim_tests
+        dependent_local_types_for_elim_tests empty_locals)

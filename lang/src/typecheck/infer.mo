@@ -1,6 +1,6 @@
 use std::map {HashMap.to_list}
 use lang::types {
-  Binder, Class, Con, Cubical, CubicalPrim, DebugName, Def, FieldPattern,
+  Binder, Class, Con, Cubical, CubicalPrim, DebugName, Def, Elim, FieldPattern,
   FieldPatternEntry, Identifier, InductConstructor, Inductive, Instance, Literal,
   LocalScope, LocalVar, Location, MatchCase, ModulePath, NamePath, NameRef,
   Native, NumSuffix, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
@@ -141,13 +141,9 @@ pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_t
         // `PathP`/`transp`/`hcomp` get their own module
         // (`lang/typecheck/cubical.mo`) when they land.
         Term.cubical c => type_check_cubical c expected_type scope local_types locals,
-        // `core-term-simplification.md` R3a adds the `Term.elim` variant
-        // with no production site yet; R4 is the explicit-motive typing
-        // rule that makes this a real dependent-elimination check. Until
-        // then this mirrors `quote_`/`var_macro` just above: a clean
-        // `TypeError` rather than a raw crash for a shape nothing in the
-        // tree can build.
-        Term.elim _e => err (TypeError.custom "Term.elim has no typing rule yet (core-term-simplification.md R4)"),
+        // `core-term-simplification.md` R4: the explicit-motive typing
+        // rule for dependent elimination. See `type_check_elim` below.
+        Term.elim e => type_check_elim e expected_type scope local_types locals,
     }
 
 /// Re-wrap a located term's checked result. Split out because the rewrap
@@ -1112,6 +1108,234 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                 ok maybe_ind => type_check_cases cases sc_term sc_typ maybe_ind expected_type scope local_types locals,
             },
         err e => err e,
+    }
+
+// ─── R4: the `Elim` typing rule (core-term-simplification.md) ───────────
+//
+// Dependent elimination with an explicit motive. Per the R4 reconnaissance
+// recorded in the plan doc, every primitive this rule needs already
+// exists: `scope_find_inductive` resolves `e.inductive`; `rebuild_call`/
+// `free_var_ref` rebuild the scrutinee's expected type from `e.inductive`
+// applied to `e.params`, checked by ordinary `unify` (mirrors
+// `validate_match_constructors`'s own scrutinee handling);
+// `substitute_inductive_type_params` (R3b) instantiates each
+// constructor's field types; the `type_check_pathp_go`/
+// `type_check_hcomp_go` pattern (infer motive, peel to `Term.pi`, require
+// the codomain to satisfy `sort_level_of`) checks the motive is a
+// function into a sort; and `Term.app motive scrutinee` -- an
+// UNREDUCED application, the same device `extract_path_app` already uses
+// for `p i`'s type -- is both a minor's expected result type (applied to
+// that constructor) and the elim's own overall type, with no new
+// substitution primitive needed. No motive DERIVATION happens here (that
+// is R4b, not yet scoped) -- this rule only checks a motive it is given.
+
+/// A free reference to a resolved name, by its full qualified path --
+/// `named_type_ref` generalized from a bare `String` to a `NamePath`,
+/// matching the established idiom at `lang/scope.mo:1923`
+/// (`Term.var idx (DebugName.named (Identifier.id (show_name_path
+/// target)))`) for turning a resolved name into a term.
+def free_var_ref (np : NamePath) : Term :=
+    Term.var sentinel (DebugName.named (Identifier.id (show_name_path np)))
+
+/// The `Elim` typing rule. Resolves `inductive`, checks the scrutinee
+/// against it applied to `params`, then hands off to the motive check.
+/// `e` is destructured by NAMED field (not `Elim.mk a b c d e f`
+/// positionally, which the style ratchet's `wide_positional_pattern_
+/// violation` counter flags, and not `e.scrutinee` by projection, which
+/// breaks the termination checker's structural-decrease proof for the
+/// call into `type_check` below) -- the same idiom `term_has_struct_
+/// lit`'s own `elim` arm (R3a, `lang/codegen/validate.mo`) already uses
+/// for exactly this reason.
+///
+/// `#[terminating]`: the call into `type_check_elim_motive` below carries
+/// `ind`/`sc_tt.term`/`sc_tt.typ` alongside `e`, which throws off the
+/// automatic positional decrease check once the two calls' arities
+/// differ -- the same reason `type_check_cases_accum`'s own accumulator
+/// parameters need this. The real decrease is still `scrutinee`/`motive`/
+/// each minor being genuine subterms of `e`, as the call into plain
+/// `type_check` just above proves on its own (same arity, decrease found
+/// automatically, no annotation needed there).
+#[terminating]
+def type_check_elim (e : Elim) (expected_type : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match e {
+        { inductive := inductive, levels := _, params := params, motive := _,
+          minors := _, scrutinee := scrutinee } =>
+            match scope_find_inductive inductive scope {
+                err _ => err (TypeError.custom
+                    (String.concat "Term.elim: unknown inductive " (show_name_path inductive))),
+                ok ind =>
+                    match type_check scrutinee Term.hole scope local_types locals {
+                        err err_ => err err_,
+                        ok sc_tt =>
+                            let expected_scrutinee_typ : Term := rebuild_call (free_var_ref inductive) params in
+                            match unify sc_tt.typ expected_scrutinee_typ scope locals {
+                                err err_ => err err_,
+                                ok _ =>
+                                    type_check_elim_motive e ind sc_tt.term sc_tt.typ
+                                        expected_type scope local_types locals,
+                            },
+                    },
+            },
+    }
+
+/// Checks `e`'s motive infers to a function into a sort, its domain
+/// agreeing with the scrutinee's real type -- the
+/// `type_check_pathp_go`/`type_check_hcomp_go` pattern, generalized from
+/// the interval/a type to an arbitrary inductive's instantiated type.
+/// Destructured for the same reason `type_check_elim` above is.
+///
+/// `#[terminating]`: same reason as `type_check_elim`'s own annotation --
+/// the call into `type_check_elim_minors` carries extra accumulated
+/// arguments (`motive_tt.term`, `sc_term`, `sc_typ`) that break the
+/// automatic positional check, even though `motive` is a genuine subterm
+/// of `e` (the plain `type_check motive ...` call just above finds that
+/// decrease automatically, same arity, no annotation needed there).
+#[terminating]
+def type_check_elim_motive (e : Elim) (ind : Inductive) (sc_term : Term) (sc_typ : Term)
+    (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope)
+    : Result TypeError TypedTerm :=
+    match e {
+        { inductive := _, levels := _, params := _, motive := motive,
+          minors := _, scrutinee := _ } =>
+            match type_check motive Term.hole scope local_types locals {
+                err err_ => err err_,
+                ok motive_tt =>
+                    match term_peel motive_tt.typ {
+                        Term.pi _b dom cod =>
+                            match unify sc_typ dom scope locals {
+                                err err_ => err err_,
+                                ok _ =>
+                                    match sort_level_of cod {
+                                        Option.none => err (TypeError.custom
+                                            "Term.elim's motive must be a function into a sort"),
+                                        Option.some _l =>
+                                            type_check_elim_minors e ind motive_tt.term sc_term
+                                                sc_typ expected_type scope local_types locals,
+                                    },
+                            },
+                        _ => err (TypeError.custom "Term.elim's motive must be a function"),
+                    },
+            },
+    }
+
+/// Checks every minor against its own constructor applied to the
+/// motive, then computes the elim's own type as the motive applied to
+/// the (real, checked) scrutinee -- unified against `expected_type`
+/// exactly as every other `type_check_*` rule in this file does at its
+/// own exit.
+///
+/// `#[terminating]`: same reason as `type_check_elim`'s own annotation --
+/// the call into `type_check_elim_minors_go` reorders/adds arguments
+/// (`inductive_constructors ind`, `e.minors` ahead of `ind`/`sc_typ`/
+/// `motive_term`) relative to this def's own parameter list, breaking the
+/// automatic positional check even though the actual recursion
+/// (`type_check_elim_minors_go` itself, then `type_check_elim_minor`) is
+/// plain list-structural recursion needing no annotation of its own.
+#[terminating]
+def type_check_elim_minors (e : Elim) (ind : Inductive) (motive_term : Term) (sc_term : Term)
+    (sc_typ : Term) (expected_type : Term) (scope : Scope) (local_types : List Term)
+    (locals : LocalScope) : Result TypeError TypedTerm :=
+    match type_check_elim_minors_go (inductive_constructors ind) e.minors ind sc_typ
+        motive_term scope local_types locals {
+        err err_ => err err_,
+        ok checked_minors =>
+            let elim_typ : Term := Term.app motive_term sc_term in
+            match unify elim_typ expected_type scope locals {
+                err err_ => err err_,
+                ok unified =>
+                    ok (mk_typed
+                        (Term.elim (Elim.mk e.inductive e.levels e.params motive_term checked_minors sc_term))
+                        unified),
+            },
+    }
+
+/// Walks `ind`'s constructors and `e.minors` in lockstep -- both
+/// positional in the inductive's declared order, the same invariant
+/// `build_elim_minors` (R3b) already relies on to CONSTRUCT an `Elim`'s
+/// minors. A length mismatch either way is a real arity error, not a
+/// partial-information fallback: unlike `arg_types_for_case`'s `Option
+/// Inductive`, `ind` here is always resolved (R4's caller already erred
+/// out if it wasn't).
+def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Term) (ind : Inductive)
+    (sc_typ : Term) (motive_term : Term) (scope : Scope) (local_types : List Term)
+    (locals : LocalScope) : Result TypeError (List Term) :=
+    match ctors {
+        List.empty =>
+            match minors {
+                List.empty => ok List.empty,
+                List.cons _ _ => err (TypeError.custom
+                    "Term.elim has more minors than its inductive has constructors"),
+            },
+        List.cons ctor crest =>
+            match minors {
+                List.empty => err (TypeError.custom
+                    "Term.elim is missing a minor for a constructor"),
+                List.cons minor mrest =>
+                    match type_check_elim_minor ctor minor ind sc_typ motive_term scope
+                        local_types locals {
+                        err err_ => err err_,
+                        ok checked_minor =>
+                            match type_check_elim_minors_go crest mrest ind sc_typ motive_term
+                                scope local_types locals {
+                                err err_ => err err_,
+                                ok checked_rest => ok (List.cons checked_minor checked_rest),
+                            },
+                    },
+            },
+    }
+
+/// One minor's expected type is a Pi-chain over its constructor's own
+/// (instantiated) field types, ending in the motive applied to that
+/// constructor applied to those same fields -- `motive (K x1 ... xn)`.
+/// `motive_term` is shifted by the field count ONCE before use, the same
+/// discipline `elim_minor_for_ctor`'s wildcard case (R3b) already
+/// documents: it is moving under `n` new binders it does not itself
+/// reference. Checking the written `minor` (a lambda chain,
+/// `build_named_lambda_chain`/`build_anon_lambda_chain`'s own output
+/// shape) against this Pi-chain reuses `type_check_lam`'s existing
+/// bidirectional rule at every level -- no new per-field logic.
+///
+/// `#[terminating]`: same reason as `type_check_elim`'s own annotation --
+/// `minor` is this def's SECOND parameter, not its first, so the call
+/// into `type_check minor expected_minor_typ ...` passes `minor` at a
+/// different position than this def's own params are checked against,
+/// which the automatic positional decrease check cannot see past (it is
+/// not reordering `type_check`'s call, only misaligning it against this
+/// def's own signature).
+#[terminating]
+def type_check_elim_minor (ctor : InductConstructor) (minor : Term) (ind : Inductive) (sc_typ : Term)
+    (motive_term : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope)
+    : Result TypeError Term :=
+    let field_types : List Term := substitute_inductive_type_params ind sc_typ (types_from_params ctor.params) in
+    let n : I64 := List.length field_types in
+    let ctor_app : Term := rebuild_call (free_var_ref ctor.name) (elim_field_vars field_types (n - 1)) in
+    let shifted_motive : Term := term_shift n motive_term in
+    let expected_minor_typ : Term := build_elim_minor_pi_chain field_types (Term.app shifted_motive ctor_app) in
+    match type_check minor expected_minor_typ scope local_types locals {
+        err err_ => err err_,
+        ok minor_tt => ok minor_tt.term,
+    }
+
+/// `[var(n-1), var(n-2), ..., var(0)]` for `n = List.length field_types`
+/// -- declared-field order, OUTERMOST binder first, matching
+/// `whnf_subst_case_fields`'s documented convention (R3b's own doc
+/// comment cites it). Recurses on `field_types` itself (not a raw `I64`
+/// countdown) so the termination checker sees the same structural
+/// decrease `build_anon_lambda_chain` already relies on.
+def elim_field_vars (field_types : List Term) (idx : I64) : List Term :=
+    match field_types {
+        List.empty => List.empty,
+        List.cons _ trest => List.cons (Term.var idx DebugName.unnamed) (elim_field_vars trest (idx - 1)),
+    }
+
+/// One `Term.pi` per field type, OUTERMOST first, ending in `body` --
+/// the Pi-chain counterpart to `build_anon_lambda_chain` (R3b), used to
+/// state a minor's EXPECTED type rather than construct one.
+def build_elim_minor_pi_chain (field_types : List Term) (body : Term) : Term :=
+    match field_types {
+        List.empty => body,
+        List.cons t trest => Term.pi binder_anon t (build_elim_minor_pi_chain trest body),
     }
 
 // ─── R3b: elaboration into `Elim` (core-term-simplification.md) ──────────
