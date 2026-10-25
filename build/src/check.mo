@@ -106,9 +106,14 @@ pub def Build.mote_root_of (src : String) : IO String := do {
 pub def Build.check_worth_caching (count : I64) : Bool :=
     I64.gt count 1
 
-/// Everything one `check` invocation needs to decide, per file, whether to
-/// consult the store -- computed once up front, then read-only.
-pub type CheckPlan {
+/// Everything one cache-using invocation needs to decide, per file,
+/// whether to consult the store -- computed once up front, then read-only.
+///
+/// Shared by `check` and `test`: the two caches differ in the key
+/// composition and in which entry kind they live under, but the decision
+/// ("is the cache on, and what key does this file get") is one shape and
+/// one set of accessors.
+pub type CachePlan {
     /// On: the store may be both consulted and written.
     active (entry_root : String) (keys : List (Pair String String)),
     /// Off. `reason` is `""` when the cache was simply not asked for --
@@ -121,36 +126,36 @@ pub type CheckPlan {
 }
 
 /// The store root for `check` entries, or `""` when the plan is inactive.
-pub def Build.check_plan_root (p : CheckPlan) : String :=
+pub def Build.cache_plan_root (p : CachePlan) : String :=
     match p {
-        CheckPlan.active root _keys => root,
-        CheckPlan.inactive _reason => "",
+        CachePlan.active root _keys => root,
+        CachePlan.inactive _reason => "",
     }
 
-pub def Build.check_plan_active (p : CheckPlan) : Bool :=
+pub def Build.cache_plan_active (p : CachePlan) : Bool :=
     match p {
-        CheckPlan.active _root _keys => true,
-        CheckPlan.inactive _reason => false,
+        CachePlan.active _root _keys => true,
+        CachePlan.inactive _reason => false,
     }
 
 /// The reason to report, or `""` when there is nothing to report.
-pub def Build.check_plan_reason (p : CheckPlan) : String :=
+pub def Build.cache_plan_reason (p : CachePlan) : String :=
     match p {
-        CheckPlan.active _root _keys => "",
-        CheckPlan.inactive reason => reason,
+        CachePlan.active _root _keys => "",
+        CachePlan.inactive reason => reason,
     }
 
 /// The key for `file`, or `none` when no key could be computed for it --
 /// its digest failed, or its mote's did. A file with no key is checked
 /// normally and not recorded, which is the safe direction.
-pub def Build.check_plan_key (p : CheckPlan) (file : String) : Option String :=
+pub def Build.cache_plan_key (p : CachePlan) (file : String) : Option String :=
     match p {
-        CheckPlan.active _root keys => Build.key_lookup file keys,
-        CheckPlan.inactive _reason => Option.none,
+        CachePlan.active _root keys => Build.key_lookup file keys,
+        CachePlan.inactive _reason => Option.none,
     }
 
 #[partial]
-def Build.key_lookup (file : String) (keys : List (Pair String String)) : Option String :=
+pub def Build.key_lookup (file : String) (keys : List (Pair String String)) : Option String :=
     match keys {
         List.empty => Option.none,
         List.cons e rest =>
@@ -170,11 +175,11 @@ def Build.key_lookup (file : String) (keys : List (Pair String String)) : Option
 /// a key that would serve stale answers the first time the compiler
 /// changed.
 #[partial]
-pub def Build.check_plan (files : List String) (target_dir : String) (requested : Bool) : IO CheckPlan :=
+pub def Build.check_plan (files : List String) (target_dir : String) (requested : Bool) : IO CachePlan :=
     if Bool.not requested
-    then return (CheckPlan.inactive "")
+    then return (CachePlan.inactive "")
     else if Bool.not (Build.check_worth_caching (List.length files))
-    then return (CheckPlan.inactive "")
+    then return (CachePlan.inactive "")
     else Build.check_plan_all files target_dir
 
 /// The plan with **neither caller half** consulted: no `requested` and no
@@ -196,18 +201,18 @@ pub def Build.check_plan (files : List String) (target_dir : String) (requested 
 /// reclaim from a run that named two or more files. `Build.gc_run` calls
 /// this directly.
 #[partial]
-pub def Build.check_plan_all (files : List String) (target_dir : String) : IO CheckPlan := do {
+pub def Build.check_plan_all (files : List String) (target_dir : String) : IO CachePlan := do {
     let t <- Build.probe_digest_tool;
     match t {
-        err m => return (CheckPlan.inactive m),
+        err m => return (CachePlan.inactive m),
         ok tool => do {
             let c <- Build.compiler_digest_with tool;
             match c {
-                err m => return (CheckPlan.inactive m),
+                err m => return (CachePlan.inactive m),
                 ok compiler => do {
                     let roots <- Build.plan_roots tool files List.empty List.empty;
-                    let keys <- Build.plan_keys tool compiler files roots List.empty;
-                    return (CheckPlan.active (Build.entry_root_dir target_dir Entry.check) keys)
+                    let keys <- Build.plan_keys Build.check_key tool compiler files roots List.empty;
+                    return (CachePlan.active (Build.entry_root_dir target_dir Entry.check) keys)
                 }
             }
         }
@@ -258,7 +263,7 @@ pub def Build.check_plan_all (files : List String) (target_dir : String) : IO Ch
 /// list is a lookup table rather than a key ingredient -- nothing hashes
 /// it, so its order does not matter.
 #[partial]
-def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List String) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
+pub def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List String) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
     match files {
         List.empty => return acc,
         List.cons f rest => do {
@@ -285,19 +290,19 @@ def Build.plan_roots (tool : DigestTool) (files : List String) (seen : List Stri
 /// the key's coverage readable off the key itself rather than off an
 /// argument about a directory walk.
 #[partial]
-def Build.plan_keys (tool : DigestTool) (compiler : String) (files : List String) (roots : List (Pair String String)) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
+def Build.plan_keys (key_of : String -> String -> String -> String) (tool : DigestTool) (compiler : String) (files : List String) (roots : List (Pair String String)) (acc : List (Pair String String)) : IO (List (Pair String String)) :=
     match files {
         List.empty => return acc,
         List.cons f rest => do {
             let root <- Build.mote_root_of f;
             match Build.root_find root roots {
-                Option.none => Build.plan_keys tool compiler rest roots acc,
+                Option.none => Build.plan_keys key_of tool compiler rest roots acc,
                 Option.some c => do {
                     let fd <- Build.file_digest_with tool f;
                     match fd {
-                        err _m => Build.plan_keys tool compiler rest roots acc,
-                        ok fh => Build.plan_keys tool compiler rest roots
-                            (List.append acc [Pair.pair f (Build.check_key fh c compiler)])
+                        err _m => Build.plan_keys key_of tool compiler rest roots acc,
+                        ok fh => Build.plan_keys key_of tool compiler rest roots
+                            (List.append acc [Pair.pair f (key_of fh c compiler)])
                     }
                 }
             }
@@ -463,8 +468,8 @@ pub def Build.check_entry_write (root : String) (key : String) (errors : I64) (w
 /// Record a result when the plan gives the file a key, and do nothing when
 /// it does not -- the one place the loop has to know about either.
 #[partial]
-pub def Build.check_maybe_write (p : CheckPlan) (key : Option String) (errors : I64) (warnings : I64) (block : String) : IO I64 :=
+pub def Build.check_maybe_write (p : CachePlan) (key : Option String) (errors : I64) (warnings : I64) (block : String) : IO I64 :=
     match key {
         Option.none => return 0,
-        Option.some k => Build.check_entry_write (Build.check_plan_root p) k errors warnings block
+        Option.some k => Build.check_entry_write (Build.cache_plan_root p) k errors warnings block
     }

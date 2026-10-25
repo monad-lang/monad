@@ -17,5 +17,5 @@ pub use lib::hash {DigestTool}
 pub use lib::identity {}
 pub use lib::closure {}
 pub use lib::store {Entry}
-pub use lib::check {CheckPlan}
+pub use lib::check {CachePlan}
 pub use lib::manage {}

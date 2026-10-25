@@ -8,8 +8,9 @@
 /// not the path.
 
 use build::store {
-  Build.artifact_ir_path, Build.resolve_target_dir, Build.store_path, artifact,
-  check, test,
+  Build.artifact_ir_path, Build.entry_root_named, Build.resolve_target_dir,
+  Build.store_path, artifact,
+  check,
 }
 use build::identity {Build.compiler_digest, Build.compiler_exe_path}
 
@@ -58,10 +59,17 @@ def test_target_dir_of_dot_root_is_relative : Bool :=
 // ─── store paths ───
 
 #[test]
-def test_store_path_separates_the_three_kinds : Bool :=
+def test_store_path_separates_the_two_entry_kinds : Bool :=
     String.beq (Build.store_path "t" Entry.artifact "abc" "cli-0.1.0") "t/store/abc-cli-0.1.0" &&
-    String.beq (Build.store_path "t" Entry.check "abc" "") "t/check/abc" &&
-    String.beq (Build.store_path "t" Entry.test "abc" "") "t/test/abc"
+    String.beq (Build.store_path "t" Entry.check "abc" "") "t/check/abc"
+
+/// The `test` kind is a NAME, not an `Entry` constructor -- adding a third
+/// constructor changed the nullary tags enough that `Entry.check` started
+/// dispatching to `test` in the self-hosted compiler (2026-10-25). The
+/// named root is the whole surface that kind needs.
+#[test]
+def test_entry_root_named_spells_the_test_kind : Bool :=
+    String.beq (Build.entry_root_named "t" "test") "t/test"
 
 /// The hash leads, so the directory sorts by key; the slug is a human
 /// convenience and is allowed to be absent.

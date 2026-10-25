@@ -34,13 +34,18 @@ use build::store {
 }
 use build::check {
   Build.check_block, Build.check_entry_read, Build.check_maybe_write,
-  Build.check_plan, Build.check_plan_active, Build.check_plan_key,
-  Build.check_plan_reason, Build.check_plan_root, Build.mote_root_of, CheckPlan,
+  Build.check_plan, Build.cache_plan_active, Build.cache_plan_key,
+  Build.cache_plan_reason, Build.cache_plan_root, Build.mote_root_of, CachePlan,
 }
 use build::manage {
   Build.clean_run, Build.gc_run, Build.store_ls, Build.store_verify,
 }
 use build::fetch {Build.fetch_run, Build.verify_manifest, FetchMode}
+use build::test_cache {
+  Build.test_cached_ready, Build.test_entry_bin, Build.test_entry_dir,
+  Build.test_entry_count_read, Build.test_entry_count_write, Build.test_entry_prepare,
+  Build.test_entry_report, Build.test_plan,
+}
 use std::list {List.contains_by}
 use std::map {}
 use lang::pretty {show_decls}
@@ -1179,7 +1184,7 @@ struct CheckOptions {
 /// checked, nothing is recorded, and the output is byte-identical to what
 /// this command printed before any cache existed.
 #[partial]
-def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CheckPlan) : IO I64 :=
+def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) : IO I64 :=
     match files {
         List.empty => do {
             let summary : String := I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)";
@@ -1204,12 +1209,12 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
             return (if I64.gt errors 0 then 1 else 0)
         },
         List.cons f rest => do {
-            match Build.check_plan_key plan f {
+            match Build.cache_plan_key plan f {
                 // No key for this file (the plan is inactive, or its
                 // digest failed): check it, and record nothing.
                 Option.none => run_check_file cache f rest checked errors warns opts plan Option.none,
                 Option.some key => do {
-                    let stored <- Build.check_entry_read (Build.check_plan_root plan) key;
+                    let stored <- Build.check_entry_read (Build.cache_plan_root plan) key;
                     match stored {
                         // A hit: replay what was recorded, verbatim, and
                         // count it exactly as the original run counted
@@ -1244,7 +1249,7 @@ def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I6
 /// other mote fails). See `lang/module.mo`'s
 /// `check_file_cached`/`check_module_with_scope_classified`.
 #[partial]
-def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CheckPlan) (key : Option String) : IO I64 := do {
+def run_check_file (cache : ModuleInfoCache) (f : String) (rest : List String) (checked : I64) (errors : I64) (warns : I64) (opts : CheckOptions) (plan : CachePlan) (key : Option String) : IO I64 := do {
     let checked_and_cache <- check_file_cached cache f opts.verbose;
     match checked_and_cache {
         FileCheckAndCache.mk result updated_cache =>
@@ -1452,9 +1457,9 @@ def cache_enabled (no_cache : Bool) : IO Bool := do {
 
 /// Make the store directory, if there is one to make.
 #[partial]
-def check_store_ready (plan : CheckPlan) : IO I64 := do {
-    if Build.check_plan_active plan
-    then Build.ensure_dir (Build.check_plan_root plan)
+def check_store_ready (plan : CachePlan) : IO I64 := do {
+    if Build.cache_plan_active plan
+    then Build.ensure_dir (Build.cache_plan_root plan)
     else return 0
 }
 
@@ -1469,8 +1474,8 @@ def check_store_ready (plan : CheckPlan) : IO I64 := do {
 /// disabled cache on the machine that needed it is the one outcome worth
 /// a line.
 #[partial]
-def announce_check_cache (plan : CheckPlan) : IO I64 := do {
-    let reason : String := Build.check_plan_reason plan;
+def announce_check_cache (plan : CachePlan) : IO I64 := do {
+    let reason : String := Build.cache_plan_reason plan;
     if String.is_empty reason
     then check_store_ready plan
     else do {
@@ -1705,7 +1710,7 @@ def run_store (sub : String) (target_dir_flag : String) : IO I64 := do {
 /// in flight at once (see `run_test_loop`'s window). `1` is the serial
 /// runner; the default comes from `Command.from_args`.
 #[partial]
-def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (verbose : Bool) (jobs : I64) : IO I64 := do {
+def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (verbose : Bool) (jobs : I64) (target_dir_flag : String) (no_cache : Bool) : IO I64 := do {
     let targets <- resolve_target_paths "Testing" "test" files workspace;
     match targets {
         // Empty only from `--workspace` with no workspace manifest --
@@ -1714,7 +1719,7 @@ def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (
         // "No tests found": same exit code, without a second line
         // saying the same thing.
         Option.some ts => if List.is_empty ts then return 1
-        else run_test ts out_dir verbose jobs,
+        else run_test ts out_dir verbose jobs target_dir_flag no_cache,
         // Nothing named, inside no mote: say why, and fail -- see
         // `no_target_diagnostic`.
         Option.none => no_target_diagnostic "test"
@@ -1740,10 +1745,40 @@ def find_workspace_members (dir : String) (depth : I64) : IO (List String) := do
 }
 
 #[partial]
-def run_test (files : List String) (out_dir : String) (verbose : Bool) (jobs : I64) : IO I64 := do {
+def run_test (files : List String) (out_dir : String) (verbose : Bool) (jobs : I64) (target_dir_flag : String) (no_cache : Bool) : IO I64 := do {
     let expanded : List String <- expand_check_paths files;
     let total_files : I64 := List.length expanded;
-    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, tests_passed := 0, tests_failed := 0, files_failed := 0, skipped := 0, file_idx := 0, total_files := total_files, verbose := verbose, jobs := jobs, cache := module_info_cache_empty, pending := List.empty }
+    // The driver cache (Phase 2c). `--verbose` disables it for the same
+    // reason it disables the check cache: the trace is a record of what
+    // the run DID, and a hit skips the compile stages it would print.
+    let requested <- cache_enabled no_cache;
+    let native <- TargetSpec.native;
+    // RESOLVED, exactly as `run_check_body` resolves its own: the flag
+    // arrives EMPTY when `--target-dir` was not given, and an empty root
+    // is not "no store" -- `Build.entry_root_named "" "test"` is the
+    // ABSOLUTE `/test`, which on a read-only root (CI's) fails every entry
+    // write and on any other root writes outside the checkout. Measured:
+    // `monad test motes/clap motes/monadup` in CI, `mkdir: cannot create
+    // directory '/test': Read-only file system`.
+    let target_dir <- target_dir_flagged target_dir_flag;
+    let plan <- Build.test_plan expanded target_dir native.triple (requested && Bool.not verbose);
+    let _announced <- announce_test_cache plan;
+    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, tests_passed := 0, tests_failed := 0, files_failed := 0, skipped := 0, file_idx := 0, total_files := total_files, verbose := verbose, jobs := jobs, cache := module_info_cache_empty, pending := List.empty, plan := plan }
+}
+
+/// Say why the driver cache is off, when it is off for a reason the user
+/// did not ask for -- the same rule `announce_check_cache` applies, and
+/// the reason `run_test` now prints one: an inactive plan is otherwise
+/// invisible, and "no entries were written" is not a diagnosis.
+#[partial]
+def announce_test_cache (plan : CachePlan) : IO I64 := do {
+    let reason : String := Build.cache_plan_reason plan;
+    if String.is_empty reason
+    then return 0
+    else do {
+        println ("test cache: " ++ reason);
+        return 0
+    }
 }
 
 // --- The `--jobs` parallel test runner --------------------------------------
@@ -1900,9 +1935,57 @@ def await_pending (pending : List PendingTestFile) (acc : TestFold) : IO TestFol
 /// pid-unique, so a driver that dies before writing leaves either no file
 /// or its OWN missing one -- never a sibling's count.
 #[partial]
-def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) (bin_idx : I64) (verbose : Bool) : IO TestFileOutcome := do {
+def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) (bin_idx : I64) (verbose : Bool) (plan : CachePlan) : IO TestFileOutcome := do {
+    let key : Option String := Build.cache_plan_key plan f;
+    let root : String := Build.cache_plan_root plan;
+    let cached <- Build.test_cached_ready root key;
+    if cached
+    then Build.test_tail_cached root key
+    else Build.test_tail_build f loaded out_dir bin_idx verbose plan
+}
+
+/// A HIT: run the driver the store already holds.
+///
+/// The store's binary is the whole saving -- codegen, `llc` and the three
+/// clang invocations are skipped -- but it is RUN, not replayed. Its
+/// report path is compiled in and key-derived
+/// (`Build.test_entry_report`), so it writes where this run reads.
+#[partial]
+def Build.test_tail_cached (root : String) (key : Option String) : IO TestFileOutcome :=
+    match key {
+        Option.none => return (TestFileOutcome.fail_outcome "test cache: no key"),
+        Option.some k => do {
+            let total <- Build.test_entry_count_read root k;
+            match total {
+                // Unreachable in practice -- readiness reads the same leaf
+                // -- but a count that vanished between the two reads is a
+                // miss, not a wrong denominator.
+                Option.none => return (TestFileOutcome.fail_outcome "test cache: no count"),
+                Option.some n => do {
+                    let bin_path : String := Build.test_entry_bin root k;
+                    let exit_code <- exec_cmd bin_path [];
+                    let report : Result StreamError String <- read_file (Path.path (Build.test_entry_report root k));
+                    Build.test_tail_report n exit_code report
+                }
+            }
+        }
+    }
+
+/// A MISS: compile, link and run, storing the binary when the plan gave
+/// this file a key.
+///
+/// With a key the link target IS the entry directory, so a successful run
+/// leaves the entry in place for the next invocation; without one it is
+/// the pid-scoped scratch directory, exactly as before this cache existed.
+#[partial]
+def Build.test_tail_build (f : String) (loaded : LoadedModules) (out_dir : String) (bin_idx : I64) (verbose : Bool) (plan : CachePlan) : IO TestFileOutcome := do {
     let native <- TargetSpec.native;
-    let result_path : String := out_dir ++ "/monad_test_result_" ++ I64.to_string bin_idx ++ ".txt";
+    let key : Option String := Build.cache_plan_key plan f;
+    let root : String := Build.cache_plan_root plan;
+    let dir : String := Build.test_tail_dir out_dir root key;
+    let name : String := Build.test_tail_bin_name bin_idx key;
+    let result_path : String := Build.test_tail_report_path out_dir root bin_idx key;
+    let _prepared <- Build.test_tail_prepare root key;
     let t_ir : I64 <- Bench.now;
     let ir_res <- compile_loaded_modules_to_test_ir loaded result_path native.triple;
     if verbose then do {
@@ -1925,7 +2008,6 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
                 Bench.report_since "test: emit" t_emit;
                 return unit
             } else return unit;
-            let bin_name := "monad_test_bin_" ++ I64.to_string bin_idx;
             // The mote's `[link] libs` travel with the loaded set exactly
             // as on the compile path: the set holds the TEST file's own
             // module, so `collect_link_libs` discovers this file's mote
@@ -1939,16 +2021,21 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
             // spans under `--verbose`, so the tail does not re-time them.
             let link_result <- link_ir { runtime_c := runtime_src,
                 ir_text := ir_text,
-                ir_path := resolve_ir_path Option.none (Path.path out_dir) (Path.path bin_name),
-                output_dir := (Path.path out_dir),
-                output_name := (Path.path bin_name),
+                ir_path := resolve_ir_path Option.none (Path.path dir) (Path.path name),
+                output_dir := (Path.path dir),
+                output_name := (Path.path name),
                 link_libs := link_libs, link_pkgs := link_pkgs,
                 export_syms := List.empty,
                 compiler_commit := build_commit,
                 verbose := verbose, spec := native };
             if not (link_result == 0) then do { return (TestFileOutcome.fail_outcome "compilation failed") }
             else do {
-                let bin_path := out_dir ++ "/" ++ bin_name;
+                let _recorded <- Build.test_tail_record_count root key total;
+                // The link's intermediates (`<name>.o`, `<name>_runtime.o`)
+                // are not part of the entry: `bin` and `bin.ll` are what a
+                // hit runs and what `store verify` checks.
+                let _clean <- Build.test_tail_drop_objects dir name;
+                let bin_path := dir ++ "/" ++ name;
                 let t_run : I64 <- Bench.now;
                 let exit_code <- exec_cmd bin_path [];
                 if verbose then do {
@@ -1956,32 +2043,86 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
                     return unit
                 } else return unit;
                 let report : Result StreamError String <- read_file (Path.path result_path);
-                let parsed : Option I64 := driver_report_parsed report;
-                // Bad = the driver died before writing a usable report:
-                // a signal death reaches `exec_cmd` as -1 (never forgiven
-                // by a parseable file -- the out dir is pid-unique, but a
-                // pid-collision reuse could otherwise resurrect a stale
-                // marker), a normal exit with a missing or unparseable
-                // file skipped the write, and a count above the file's
-                // own total can only be garbage.
-                let unusable : Bool := match parsed {
-                    Option.some failed => I64.gt failed total,
-                    Option.none => true,
-                };
-                let bad : Bool := I64.lt exit_code 0 || unusable;
-                if bad then do { return (TestFileOutcome.fail_outcome ("driver exited " ++ I64.to_string exit_code ++ driver_report_note report)) }
-                else do {
-                    // `bad` is false, so `parsed` is `Option.some failed`
-                    // with 0 <= failed <= total -- the `Option.none` arm is
-                    // present only so the match has a total type.
-                    let failed : I64 := match parsed {
-                        Option.some failed2 => failed2,
-                        Option.none => 0,
-                    };
-                    return (TestFileOutcome.tests_outcome total failed)
-                }
+                Build.test_tail_report total exit_code report
             }
         }
+    }
+}
+
+/// Where a driver is linked: the entry directory when the file has a key,
+/// the caller's scratch directory when it does not.
+def Build.test_tail_dir (out_dir : String) (root : String) (key : Option String) : String :=
+    match key {
+        Option.none => out_dir,
+        Option.some k => Build.test_entry_dir root k
+    }
+
+/// The driver's file name. Keyed entries use one fixed name because the
+/// directory is already unique; the scratch path keeps `bin_idx` so
+/// concurrent tails cannot collide.
+def Build.test_tail_bin_name (bin_idx : I64) (key : Option String) : String :=
+    match key {
+        Option.none => "monad_test_bin_" ++ I64.to_string bin_idx,
+        Option.some _ => "bin"
+    }
+
+def Build.test_tail_report_path (out_dir : String) (root : String) (bin_idx : I64) (key : Option String) : String :=
+    match key {
+        Option.none => out_dir ++ "/monad_test_result_" ++ I64.to_string bin_idx ++ ".txt",
+        Option.some k => Build.test_entry_report root k
+    }
+
+/// Remove the link's object files from the entry directory.
+#[partial]
+def Build.test_tail_drop_objects (dir : String) (name : String) : IO I64 :=
+    exec_cmd "rm" ["-f", dir ++ "/" ++ name ++ ".o", dir ++ "/" ++ name ++ "_runtime.o"]
+
+/// Record the file's test count in its entry, so a later hit knows the
+/// denominator its driver's report cannot supply.
+#[partial]
+def Build.test_tail_record_count (root : String) (key : Option String) (total : I64) : IO I64 :=
+    match key {
+        Option.none => IO.pure 0,
+        Option.some k => Build.test_entry_count_write root k total
+    }
+
+#[partial]
+def Build.test_tail_prepare (root : String) (key : Option String) : IO I64 :=
+    match key {
+        Option.none => IO.pure 0,
+        Option.some k => Build.test_entry_prepare root k
+    }
+
+/// The verdict both paths share, once the driver has run and its report
+/// has been read.
+///
+/// `total` is the file's own test count, and both paths have one: a miss
+/// counts it out of the IR it just compiled, and a hit reads the `count`
+/// leaf the miss recorded (`Build.test_entry_count_read`) -- that leaf
+/// exists because the driver's report carries only the FAILED count.
+///
+/// The `total = 0` arm is a fallback, unreachable while every test file has
+/// at least one test (a file with none is refused earlier): with no
+/// denominator to bound `failed` against, it trusts the parse and the exit
+/// status rather than declaring every non-empty report garbage. A cached
+/// driver that reports a failure therefore still fails, which is the
+/// property that matters: the cache stores the BINARY, never a verdict.
+#[partial]
+def Build.test_tail_report (total : I64) (exit_code : I64) (report : Result StreamError String) : IO TestFileOutcome := do {
+    let parsed : Option I64 := driver_report_parsed report;
+    let usable : Bool := match parsed {
+        Option.some failed => if I64.beq total 0 then true else Bool.not (I64.gt failed total),
+        Option.none => false,
+    };
+    let bad : Bool := I64.lt exit_code 0 || Bool.not usable;
+    if bad then do { return (TestFileOutcome.fail_outcome ("driver exited " ++ I64.to_string exit_code ++ driver_report_note report)) }
+    else do {
+        let failed : I64 := match parsed {
+            Option.some f2 => f2,
+            Option.none => 0,
+        };
+        let count : I64 := if I64.beq total 0 then failed else total;
+        return (TestFileOutcome.tests_outcome count failed)
     }
 }
 
@@ -2015,7 +2156,7 @@ def run_test_file_tail (f : String) (loaded : LoadedModules) (out_dir : String) 
 /// opened by awaiting the OLDEST tail before the next file's gate runs, so
 /// verdict lines come out in file order at every `jobs`.
 #[partial]
-def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (jobs : I64) (cache : ModuleInfoCache) (pending : List PendingTestFile) : IO I64 :=
+def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (jobs : I64) (cache : ModuleInfoCache) (pending : List PendingTestFile) (plan : CachePlan) : IO I64 :=
     match files {
         List.empty => do {
             // Drain whatever is still in flight, oldest first, so the last
@@ -2071,7 +2212,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                 // here.
                 let acc : TestFold := { tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped };
                 let fr <- await_head pending acc;
-                run_test_loop { files := files, out_dir := out_dir, bin_idx := bin_idx, tests_passed := fr.fold.tests_passed, tests_failed := fr.fold.tests_failed, files_failed := fr.fold.files_failed, skipped := fr.fold.skipped, file_idx := file_idx, total_files := total_files, verbose := verbose, jobs := jobs, cache := cache, pending := fr.rest }
+                run_test_loop { files := files, out_dir := out_dir, bin_idx := bin_idx, tests_passed := fr.fold.tests_passed, tests_failed := fr.fold.tests_failed, files_failed := fr.fold.files_failed, skipped := fr.fold.skipped, file_idx := file_idx, total_files := total_files, verbose := verbose, jobs := jobs, cache := cache, pending := fr.rest, plan := plan }
             } else do {
                 // The per-file header goes out BEFORE the typecheck gate,
                 // so a file that ends up skipped still shows which file it
@@ -2101,7 +2242,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                         // it as `skipped` (which affects no exit code) is
                         // what let broken files pass CI silently.
                         println (test_fail_line f e);
-                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, jobs := jobs, cache := out_cache, pending := pending }
+                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, jobs := jobs, cache := out_cache, pending := pending, plan := plan }
                     },
                     Result.ok em =>
                         do {
@@ -2122,7 +2263,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                                     // and a file whose tests cannot even
                                     // be type-checked has run nothing.
                                     println (test_fail_line f "does not typecheck");
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, jobs := jobs, cache := out_cache, pending := pending }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, jobs := jobs, cache := out_cache, pending := pending, plan := plan }
                                 },
                                 List.empty => do {
                                     // The gate passed: fork the tail on its
@@ -2132,11 +2273,11 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
                                     // is exactly the serial order; on the
                                     // compiled runtime the tail overlaps the
                                     // next file's gate up to `jobs` deep.
-                                    let act : Unit -> IO TestFileOutcome := fn (_ : Unit) => run_test_file_tail f em.loaded out_dir bin_idx verbose;
+                                    let act : Unit -> IO TestFileOutcome := fn (_ : Unit) => run_test_file_tail f em.loaded out_dir bin_idx verbose plan;
                                     let fiber <- forkIO act;
                                     let entry : PendingTestFile := { fiber := fiber, file := f };
                                     let pending2 : List PendingTestFile := List.append pending (List.cons entry List.empty);
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, jobs := jobs, cache := out_cache, pending := pending2 }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, jobs := jobs, cache := out_cache, pending := pending2, plan := plan }
                                 },
                             }
                         },
@@ -2168,7 +2309,7 @@ type Command {
     eval (file: Path) (verbose: Bool),
     pretty (file: String),
     check (files: List String) (opts: CheckOptions),
-    test (files: List String) (verbose: Bool) (workspace: Bool) (locked: Bool) (jobs: I64),
+    test (files: List String) (verbose: Bool) (workspace: Bool) (locked: Bool) (no_cache: Bool) (target_dir: String) (jobs: I64),
     /// `monad clean [--all] [--target-dir <dir>]`. Removes the output
     /// directories under `<target-dir>` -- the profile directories -- and
     /// leaves the store; `--all` is the other verb, `<target-dir>` itself.
@@ -2487,15 +2628,21 @@ def Command.from_args (args : List String) : Command :=
                                 // reading beats a help screen.
                                 match Cli.take_flag "locked" "" rest2 {
                                     Cli.FlagResult.flag_result locked rest2a =>
-                                match Cli.take_opt "jobs" "j" "4" rest2a {
+                                match Cli.take_flag "no-cache" "" rest2a {
+                                    Cli.FlagResult.flag_result no_cache rest2b =>
+                                match Cli.take_opt "target-dir" "" "" rest2b {
+                                    Cli.OptResult.opt_result target_dir rest2c =>
+                                match Cli.take_opt "jobs" "j" "4" rest2c {
                                     Cli.OptResult.opt_result jobs_str rest3 =>
                                         match parse_i64 jobs_str {
                                             Option.some n =>
                                                 if I64.lt n 1
-                                                then Command.test rest3 verbose workspace locked 1
-                                                else Command.test rest3 verbose workspace locked n,
+                                                then Command.test rest3 verbose workspace locked no_cache target_dir 1
+                                                else Command.test rest3 verbose workspace locked no_cache target_dir n,
                                             Option.none => Command.help,
                                         },
+                                },
+                                },
                                 },
                                 },
                         },
@@ -2644,11 +2791,11 @@ def main (args : List String) : IO I64 {
         check files opts => do {
             run_check files opts
         },
-        test files verbose workspace locked jobs => do {
+        test files verbose workspace locked no_cache target_dir jobs => do {
             let locks <- check_locks files locked;
             match locks {
                 Option.some e => do { println ("error: " ++ e); return 1 },
-                Option.none => run_test_paths files workspace (Path.to_string default_output_dir) verbose jobs
+                Option.none => run_test_paths files workspace (Path.to_string default_output_dir) verbose jobs target_dir no_cache
             }
         },
         clean all target_dir => do {

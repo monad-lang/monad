@@ -314,7 +314,7 @@ def test_from_args_check_without_no_cache_is_false : Bool :=
 #[test]
 def test_from_args_test : Bool :=
     match Command.from_args ["test", "a.mo", "b.mo", "-v"] {
-        Command.test files verbose workspace _locked jobs =>
+        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
             files == ["a.mo", "b.mo"] && verbose == true && workspace == false && jobs == 4,
         _ => false,
     }
@@ -322,7 +322,7 @@ def test_from_args_test : Bool :=
 #[test]
 def test_from_args_test_workspace_flag : Bool :=
     match Command.from_args ["test", "--workspace"] {
-        Command.test files verbose workspace _locked jobs =>
+        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
             List.is_empty files && workspace == true && verbose == false && jobs == 4,
         _ => false,
     }
@@ -330,7 +330,7 @@ def test_from_args_test_workspace_flag : Bool :=
 #[test]
 def test_from_args_test_workspace_short_flag : Bool :=
     match Command.from_args ["test", "-w", "-v"] {
-        Command.test files verbose workspace _locked jobs =>
+        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
             List.is_empty files && workspace == true && verbose == true && jobs == 4,
         _ => false,
     }
@@ -340,7 +340,7 @@ def test_from_args_test_workspace_short_flag : Bool :=
 #[test]
 def test_from_args_test_workspace_flag_not_a_path : Bool :=
     match Command.from_args ["test", "--workspace", "a.mo"] {
-        Command.test files verbose workspace _locked jobs =>
+        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
             files == ["a.mo"] && workspace == true,
         _ => false,
     }
@@ -350,7 +350,7 @@ def test_from_args_test_workspace_flag_not_a_path : Bool :=
 #[test]
 def test_from_args_test_jobs_flag : Bool :=
     match Command.from_args ["test", "--jobs", "2", "a.mo"] {
-        Command.test files verbose workspace _locked jobs =>
+        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
             files == ["a.mo"] && jobs == 2,
         _ => false,
     }
@@ -358,7 +358,7 @@ def test_from_args_test_jobs_flag : Bool :=
 #[test]
 def test_from_args_test_jobs_short_flag_clamps_below_one : Bool :=
     match Command.from_args ["test", "-j", "0", "a.mo"] {
-        Command.test files verbose workspace _locked jobs =>
+        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
             files == ["a.mo"] && jobs == 1,
         _ => false,
     }
@@ -370,7 +370,7 @@ def test_from_args_test_jobs_short_flag_clamps_below_one : Bool :=
 #[test]
 def test_from_args_test_no_files_is_a_test_command : Bool :=
     match Command.from_args ["test"] {
-        Command.test files verbose workspace _locked jobs =>
+        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
             List.is_empty files && workspace == false && verbose == false,
         _ => false,
     }

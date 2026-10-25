@@ -23,25 +23,28 @@ pub type Entry {
     /// `print_diagnostics` (cli/src/main.mo) just prints -- no spans are
     /// re-derived at print time, so a replay is byte-exact.
     check,
-    /// A `test` result: the `<failed>/<total>` pair AND the driver's
-    /// stdout. The stdout is not optional -- the per-test PASS/FAIL lines
-    /// are printed by the driver BINARY
-    /// (lang/src/codegen/test_driver.mo), and the CLI only ever sees the
-    /// aggregate count from the `__MONAD_TEST__` marker file. Without the
-    /// stdout a cached hit could report "11/11 passed" and not name one
-    /// of them, which would make hits strictly less informative than
-    /// misses.
-    test,
 }
 
-open Entry {artifact, check, test}
+open Entry {artifact, check}
 
 def Build.entry_dir (e : Entry) : String :=
     match e {
         artifact => "store",
         check => "check",
-        test => "test",
     }
+
+/// `<target-dir>/<kind>`, for a kind spelled as a NAME rather than an
+/// `Entry`.
+///
+/// The `test` cache uses this and not an `Entry` constructor, deliberately:
+/// `Entry` has exactly two constructors and adding a third changed the
+/// nullary tags enough that `entry_dir Entry.check` started answering
+/// `"test"` in the self-hosted compiler (measured 2026-10-25, the compiler
+/// binary itself: `dir_check=test dir_test=test dir_artifact=store`), which
+/// silently moved every check entry into `test/`. A kind that is only ever
+/// a directory name does not need a constructor to carry it.
+pub def Build.entry_root_named (target_dir : String) (kind : String) : String :=
+    String.concat target_dir (String.concat "/" kind)
 
 /// Where artifacts go. Highest precedence first:
 ///
@@ -124,7 +127,7 @@ pub def Build.target_dir_for (src : String) : IO String :=
 /// callers that make a directory PER ENTRY rather than per kind (the
 /// `check` and `test` caches, whose entries are two files each).
 pub def Build.entry_root_dir (target_dir : String) (e : Entry) : String :=
-    String.concat target_dir (String.concat "/" (Build.entry_dir e))
+    Build.entry_root_named target_dir (Build.entry_dir e)
 
 /// The name of one store entry: `<kind>/<hash>-<slug>`.
 ///

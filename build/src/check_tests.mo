@@ -16,8 +16,8 @@ use std::process {process_id}
 use build::check {
   Build.check_block, Build.check_entry_dir, Build.check_entry_read,
   Build.check_entry_write, Build.check_key, Build.check_plan,
-  Build.check_plan_active, Build.check_plan_key, Build.check_plan_reason,
-  Build.check_plan_root, Build.check_worth_caching, Build.mote_root_of, CheckPlan,
+  Build.cache_plan_active, Build.cache_plan_key, Build.cache_plan_reason,
+  Build.cache_plan_root, Build.check_worth_caching, Build.mote_root_of, CachePlan,
 }
 use build::store {Build.ensure_dir, Build.write_leaf}
 
@@ -69,16 +69,16 @@ def Build.check_fresh_dep_fixture (tag : String) : IO String := do {
 /// A key as a plain string, `""` for "no key" -- so a test can compare
 /// two keys directly, and a separate test asserts that a key happens at
 /// all.
-def Build.key_or_empty (p : CheckPlan) (f : String) : String :=
-    match Build.check_plan_key p f {
+def Build.key_or_empty (p : CachePlan) (f : String) : String :=
+    match Build.cache_plan_key p f {
         Option.none => "",
         Option.some k => k,
     }
 
 /// A hand-built active plan, so the key-comparison tests need no
 /// filesystem and no compiler binary.
-def Build.plan_over (keys : List (Pair String String)) : CheckPlan :=
-    CheckPlan.active "/somewhere/check" keys
+def Build.plan_over (keys : List (Pair String String)) : CachePlan :=
+    CachePlan.active "/somewhere/check" keys
 
 // ─── check_block: what a hit replays, byte for byte ───
 
@@ -131,11 +131,11 @@ def test_worth_caching_is_true_for_two_files : Bool :=
 
 #[test]
 def test_inactive_plan_has_no_root : Bool :=
-    String.is_empty (Build.check_plan_root (CheckPlan.inactive ""))
+    String.is_empty (Build.cache_plan_root (CachePlan.inactive ""))
 
 #[test]
 def test_inactive_plan_has_no_keys : Bool :=
-    match Build.check_plan_key (CheckPlan.inactive "") "a.mo" {
+    match Build.cache_plan_key (CachePlan.inactive "") "a.mo" {
         Option.none => true,
         Option.some _k => false,
     }
@@ -145,30 +145,30 @@ def test_inactive_plan_has_no_keys : Bool :=
 /// land here, and the user who asked for those knows why.
 #[test]
 def test_inactive_plan_by_request_reports_nothing : Bool :=
-    String.is_empty (Build.check_plan_reason (CheckPlan.inactive ""))
+    String.is_empty (Build.cache_plan_reason (CachePlan.inactive ""))
 
 /// A non-empty reason means the cache wanted to run and could not. That
 /// is the one case worth a line, because a silently disabled cache on
 /// the machine that needed it is invisible otherwise.
 #[test]
 def test_inactive_plan_with_a_reason_reports_it : Bool :=
-    String.beq (Build.check_plan_reason (CheckPlan.inactive "no digest tool")) "no digest tool"
+    String.beq (Build.cache_plan_reason (CachePlan.inactive "no digest tool")) "no digest tool"
 
 #[test]
 def test_active_plan_has_nothing_to_report : Bool :=
-    String.is_empty (Build.check_plan_reason (Build.plan_over List.empty))
+    String.is_empty (Build.cache_plan_reason (Build.plan_over List.empty))
 
 #[test]
 def test_active_plan_is_active : Bool :=
-    Build.check_plan_active (Build.plan_over List.empty)
+    Build.cache_plan_active (Build.plan_over List.empty)
 
 #[test]
 def test_inactive_plan_is_not_active : Bool :=
-    Bool.not (Build.check_plan_active (CheckPlan.inactive ""))
+    Bool.not (Build.cache_plan_active (CachePlan.inactive ""))
 
 #[test]
 def test_active_plan_has_its_root : Bool :=
-    String.beq (Build.check_plan_root (Build.plan_over List.empty)) "/somewhere/check"
+    String.beq (Build.cache_plan_root (Build.plan_over List.empty)) "/somewhere/check"
 
 // ─── key lookup ───
 
@@ -393,13 +393,13 @@ def test_entry_read_does_not_prefix_match : IO Bool := do {
 #[test]
 def test_check_plan_off_when_not_requested : IO Bool := do {
     let p <- Build.check_plan ["a.mo", "b.mo"] "target" false;
-    return (Bool.not (Build.check_plan_active p)) && String.is_empty (Build.check_plan_reason p)
+    return (Bool.not (Build.cache_plan_active p)) && String.is_empty (Build.cache_plan_reason p)
 }
 
 #[test]
 def test_check_plan_off_for_a_single_file : IO Bool := do {
     let p <- Build.check_plan ["a.mo"] "target" true;
-    return (Bool.not (Build.check_plan_active p)) && String.is_empty (Build.check_plan_reason p)
+    return (Bool.not (Build.cache_plan_active p)) && String.is_empty (Build.cache_plan_reason p)
 }
 
 /// The one test that runs the whole plan for real: two files in a
@@ -426,9 +426,9 @@ def test_check_plan_keys_every_file_and_is_stable : IO Bool := do {
     let kb1 : String := Build.key_or_empty p1 fb;
     let ka2 : String := Build.key_or_empty p2 fa;
     let _c <- Build.check_drop_fixture d;
-    return Build.check_plan_active p1
-        && Build.check_plan_active p2
-        && String.beq (Build.check_plan_root p1) (String.concat d "/target/check")
+    return Build.cache_plan_active p1
+        && Build.cache_plan_active p2
+        && String.beq (Build.cache_plan_root p1) (String.concat d "/target/check")
         && Bool.not (String.is_empty ka1)
         && Bool.not (String.is_empty kb1)
         && Bool.not (String.beq ka1 kb1)

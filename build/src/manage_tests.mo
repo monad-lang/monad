@@ -28,8 +28,8 @@ use std::list {List.filter, List.intercalate, List.length}
 use std::process {process_id}
 use lang::module {extract_directory}
 use build::check {
-  Build.check_plan, Build.check_plan_active, Build.check_plan_all,
-  Build.check_plan_key, Build.mote_root_of, CheckPlan,
+  Build.check_plan, Build.cache_plan_active, Build.check_plan_all,
+  Build.cache_plan_key, Build.mote_root_of, CachePlan,
 }
 use build::closure {Build.artifact_key, Build.input_hash}
 use build::store {
@@ -126,8 +126,8 @@ def Build.manage_hash (r : Result String String) : String :=
 /// The key a plan gives one file, as a String. `""` when the plan is
 /// inactive -- which the caller must treat as "no key", not as a key of
 /// length zero, since a fixture named `check/` is not a thing.
-def Build.manage_key_or_empty (p : CheckPlan) (file : String) : String :=
-    match Build.check_plan_key p file {
+def Build.manage_key_or_empty (p : CachePlan) (file : String) : String :=
+    match Build.cache_plan_key p file {
         Option.none => "",
         Option.some k => k
     }
@@ -628,7 +628,7 @@ def test_gc_plans_a_single_named_file : IO Bool := do {
     let rc <- Build.gc_run files target [Build.manage_triple] true;
     let kept <- Build.manage_is_dir dir;
     let _x <- Build.manage_drop_fixture d;
-    return (Build.check_plan_active plan)
+    return (Build.cache_plan_active plan)
         && Build.is_key live
         && I64.beq rc 0
         && kept

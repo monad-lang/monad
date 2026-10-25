@@ -10,7 +10,7 @@
 ///
 /// **The layout respected here is what exists, not what the plan
 /// sketched.** The fuller layout (`db/<hash>.json`, `.gc-roots/`,
-/// symlinked profiles) has no writer yet. Two entry kinds are populated
+/// symlinked profiles) has no writer yet. Three entry kinds are populated
 /// today:
 ///
 ///   * `<target-dir>/store/<hash>` and `<hash>.ll` -- an artifact as a
@@ -18,12 +18,13 @@
 ///     actually pointed at, so dropping one of the two is a bug and both
 ///     verbs below treat the pair as one entry.
 ///   * `<target-dir>/check/<hash>/{out,errors}` -- a check result.
+///   * `<target-dir>/test/<hash>/{bin,bin.ll,count,monad_test_result.txt}`
+///     -- a compiled test DRIVER, which is run, never replayed.
 ///
-/// `<target-dir>/test/` and `db/` are empty (2c is unimplemented, and
-/// `db/` has no writer), which is why `store ls` cannot source a
-/// human-readable name from `db/<hash>.json` and `verify` checks two kinds
-/// rather than three. Saying that out loud is part of the job: a column
-/// that is always empty is worse than a sentence that says why.
+/// `db/` is the one empty kind (`db/` has no writer), which is why `store
+/// ls` cannot source a human-readable name from `db/<hash>.json`. Saying
+/// that out loud is part of the job: a column that is always empty is
+/// worse than a sentence that says why.
 ///
 /// **A management verb may fall back to doing LESS; it must never fall
 /// back to a weaker decision.** A cache may respond to an uncomputable key
@@ -38,15 +39,19 @@ use build::hash {Build.file_digest_with, Build.probe_digest_tool, DigestTool}
 use build::identity {Build.compiler_key_with}
 use build::closure {Build.artifact_key, Build.closure_digest_with}
 use build::check {
-  Build.check_entry_leaf, Build.check_plan_active, Build.check_plan_all,
-  Build.check_plan_key, Build.check_plan_reason, Build.mote_root_of,
-  Build.root_find, CheckPlan,
+  Build.check_entry_leaf, Build.cache_plan_active, Build.check_plan_all,
+  Build.cache_plan_key, Build.cache_plan_reason, Build.mote_root_of,
+  Build.root_find, CachePlan,
 }
 use build::store {
-  Build.artifact_ir_path, Build.entry_root_dir, Build.read_leaf, Build.store_path, Entry,
+  Build.artifact_ir_path, Build.entry_root_dir, Build.entry_root_named,
+  Build.read_leaf, Build.store_path, Entry,
+}
+use build::test_cache {
+  Build.test_entry_bin, Build.test_entry_ir, Build.test_plan_all,
 }
 
-open Entry {artifact, check, test}
+open Entry {artifact, check}
 
 // --- what an entry is called ---
 
@@ -153,7 +158,7 @@ pub def Build.profile_names : List String := ["debug", "release"]
 /// reclaimable and the second is not a problem, but a user told only the
 /// first will go looking for a bug.
 pub type Reach {
-    known (artifacts : List String) (checks : List String) (compiler : String),
+    known (artifacts : List String) (checks : List String) (tests : List String) (compiler : String),
     refused (reason : String),
 }
 
@@ -165,10 +170,10 @@ pub type Reach {
 /// would refuse with a blank space after the colon. `gc` passes
 /// `requested := true` and a whole file list, so this should never be
 /// reached -- but "should never" is not a reason to print nothing.
-pub def Build.inactive_reason (p : CheckPlan) : String :=
-    if String.is_empty (Build.check_plan_reason p)
+pub def Build.inactive_reason (p : CachePlan) : String :=
+    if String.is_empty (Build.cache_plan_reason p)
     then "the check plan came back inactive with no reason"
-    else Build.check_plan_reason p
+    else Build.cache_plan_reason p
 
 #[partial]
 def Build.refuse (m : String) : IO Reach :=
@@ -185,7 +190,7 @@ def Build.refuse (m : String) : IO Reach :=
 ///
 ///   * an unprobeable digest tool or an uncomputable compiler digest
 ///     collapses `Build.check_plan` to `inactive` with no error channel at all,
-///     and `Build.check_plan_key` then answers `none` for EVERY file;
+///     and `Build.cache_plan_key` then answers `none` for EVERY file;
 ///   * a per-file digest failure is absorbed by the plan -- the file
 ///     simply gets no key, which is the safe direction for a cache -- so
 ///     it is caught here structurally, by requiring one key per file
@@ -211,28 +216,28 @@ pub def Build.reach_of (files : List String) (target_dir : String) (triples : Li
 #[partial]
 def Build.reach_planned (files : List String) (target_dir : String) (triples : List String) : IO Reach := do {
     let plan <- Build.check_plan_all files target_dir;
-    if Bool.not (Build.check_plan_active plan)
+    if Bool.not (Build.cache_plan_active plan)
     then Build.refuse (Build.inactive_reason plan)
     else do {
         let ks <- Build.collect_check_keys plan files List.empty;
         match ks {
             err f => Build.refuse ("no key could be derived for " ++ f),
-            ok checks => Build.reach_keyed files triples checks
+            ok checks => Build.reach_keyed files target_dir triples checks
         }
     }
 }
 
 #[partial]
-def Build.reach_keyed (files : List String) (triples : List String) (checks : List String) : IO Reach := do {
+def Build.reach_keyed (files : List String) (target_dir : String) (triples : List String) (checks : List String) : IO Reach := do {
     let t <- Build.probe_digest_tool;
     match t {
         err m => Build.refuse m,
-        ok tool => Build.reach_digested tool files triples checks
+        ok tool => Build.reach_digested tool files target_dir triples checks
     }
 }
 
 #[partial]
-def Build.reach_digested (tool : DigestTool) (files : List String) (triples : List String) (checks : List String) : IO Reach := do {
+def Build.reach_digested (tool : DigestTool) (files : List String) (target_dir : String) (triples : List String) (checks : List String) : IO Reach := do {
     let c <- Build.compiler_key_with tool;
     match c {
         err m => Build.refuse m,
@@ -245,7 +250,13 @@ def Build.reach_digested (tool : DigestTool) (files : List String) (triples : Li
                         files := files, roots := memo, triples := triples, acc := List.empty };
                     match arts {
                         err m => Build.refuse m,
-                        ok artifacts => return (Reach.known artifacts checks compiler)
+                        ok artifacts => do {
+                            let tk <- Build.collect_test_keys files target_dir triples List.empty;
+                            match tk {
+                                err m => Build.refuse m,
+                                ok tests => return (Reach.known artifacts checks tests compiler)
+                            }
+                        }
                     }
                 }
             }
@@ -260,11 +271,11 @@ def Build.reach_digested (tool : DigestTool) (files : List String) (triples : Li
 /// error, so "every file named came back with a key" is the only reading
 /// of success available from outside it.
 #[partial]
-def Build.collect_check_keys (plan : CheckPlan) (files : List String) (acc : List String) : IO (Result String (List String)) :=
+def Build.collect_check_keys (plan : CachePlan) (files : List String) (acc : List String) : IO (Result String (List String)) :=
     match files {
         List.empty => return (ok acc),
         List.cons f rest => do {
-            let k := Build.check_plan_key plan f;
+            let k := Build.cache_plan_key plan f;
             match k {
                 Option.none => return (err f),
                 Option.some key => Build.collect_check_keys plan rest (List.append acc [key])
@@ -456,24 +467,24 @@ def Build.size_of (out : String) : I64 :=
 /// would go missing is `test`, exactly the kind whose removal rules are
 /// not decided yet.
 #[partial]
-pub def Build.remove_entry (target_dir : String) (e : Entry) (key : String) : IO I64 := do {
-    match e {
-        artifact => do {
-            let _a <- exec_cmd "rm" ["-f", Build.store_path target_dir artifact key ""];
-            exec_cmd "rm" ["-f", Build.artifact_ir_path target_dir key]
-        },
-        check => exec_cmd "rm" ["-rf", Build.entry_root_dir target_dir check ++ "/" ++ key],
-        test => return 0
+pub def Build.remove_entry (target_dir : String) (kind : String) (key : String) : IO I64 := do {
+    if String.beq kind "store"
+    then do {
+        let _a <- exec_cmd "rm" ["-f", Build.store_path target_dir artifact key ""];
+        exec_cmd "rm" ["-f", Build.artifact_ir_path target_dir key]
     }
+    else if String.beq kind "check" then exec_cmd "rm" ["-rf", Build.entry_root_named target_dir "check" ++ "/" ++ key]
+    else if String.beq kind "test" then exec_cmd "rm" ["-rf", Build.entry_root_named target_dir "test" ++ "/" ++ key]
+    else return 0
 }
 
 #[partial]
-def Build.remove_entries (target_dir : String) (e : Entry) (keys : List String) (n : I64) : IO I64 :=
+def Build.remove_entries (target_dir : String) (kind : String) (keys : List String) (n : I64) : IO I64 :=
     match keys {
         List.empty => return n,
         List.cons k rest => do {
-            let _rc <- Build.remove_entry target_dir e k;
-            Build.remove_entries target_dir e rest (n + 1)
+            let _rc <- Build.remove_entry target_dir kind k;
+            Build.remove_entries target_dir kind rest (n + 1)
         }
     }
 
@@ -591,11 +602,52 @@ def Build.errors_parse (path : String) : IO Bool := do {
 /// column for them.
 #[partial]
 pub def Build.entry_views (target_dir : String) : IO (List EntryView) := do {
-    let names_a <- Build.dir_names (Build.entry_root_dir target_dir artifact);
-    let names_c <- Build.dir_names (Build.entry_root_dir target_dir check);
+    let names_a <- Build.dir_names (Build.entry_root_named target_dir "store");
+    let names_c <- Build.dir_names (Build.entry_root_named target_dir "check");
+    let names_t <- Build.dir_names (Build.entry_root_named target_dir "test");
     let arts <- Build.artifact_views target_dir names_a List.empty List.empty;
-    let chks <- Build.check_views (Build.entry_root_dir target_dir check) names_c List.empty;
-    return (List.append arts chks)
+    let chks <- Build.check_views (Build.entry_root_named target_dir "check") names_c List.empty;
+    let tsts <- Build.driver_views (Build.entry_root_named target_dir "test") names_t List.empty;
+    return (List.append arts (List.append chks tsts))
+}
+
+/// A `test` entry is complete when its driver AND the IR it was linked
+/// from are both there -- the same structural rule `artifact_state`
+/// applies to an artifact, which is why it is reused rather than restated.
+#[partial]
+def Build.driver_views (root : String) (names : List String) (seen : List String) : IO (List EntryView) :=
+    match names {
+        List.empty => return List.empty,
+        List.cons name rest => do {
+            let k := Build.key_of name;
+            match k {
+                Option.none => Build.driver_views root rest seen,
+                Option.some key => Build.driver_seen root rest seen key
+            }
+        }
+    }
+
+#[partial]
+def Build.driver_seen (root : String) (names : List String) (seen : List String) (key : String) : IO (List EntryView) := do {
+    if List.contains_by String.beq key seen
+    then Build.driver_views root names seen
+    else do {
+        let v <- Build.driver_view root key;
+        let rest <- Build.driver_views root names (List.append seen [key]);
+        return (List.append [v] rest)
+    }
+}
+
+#[partial]
+def Build.driver_view (root : String) (key : String) : IO EntryView := do {
+    let bin : String := Build.test_entry_bin root key;
+    let ir : String := Build.test_entry_ir root key;
+    let has_bin <- IO.file_exists (Path.path bin);
+    let has_ir <- IO.file_exists (Path.path ir);
+    let size <- Build.present_size [bin, ir];
+    match Build.artifact_state has_bin has_ir size {
+        Pair.pair ok detail => return (EntryView.entry_view "test" key size ok detail)
+    }
 }
 
 #[partial]
@@ -765,7 +817,7 @@ def Build.print_if_bad (v : EntryView) : IO I64 := do {
 /// here yet.
 #[partial]
 def Build.print_kind_note (target_dir : String) : IO I64 := do {
-    IO.println ("  (" ++ target_dir ++ "/test and db have no writer yet, so nothing in them is listed)");
+    IO.println ("  (" ++ target_dir ++ "/db has no writer yet, so nothing in it is listed)");
     return 0
 }
 
@@ -774,11 +826,17 @@ def Build.print_kind_note (target_dir : String) : IO I64 := do {
 def Build.print_tally (verb : String) (views : List EntryView) : IO I64 := do {
     let arts : I64 := List.length (List.filter Build.view_is_artifact views);
     let chks : I64 := List.length (List.filter Build.view_is_check views);
+    let tsts : I64 := List.length (List.filter Build.view_is_test views);
     let bad : I64 := List.length (List.filter Build.view_not_ok views);
     IO.println (verb ++ ": " ++ I64.to_string arts ++ " artifact(s), " ++ I64.to_string chks
-        ++ " check entry(ies), " ++ I64.to_string bad ++ " incomplete");
+        ++ " check entry(ies), " ++ I64.to_string tsts ++ " test entry(ies), "
+        ++ I64.to_string bad ++ " incomplete");
     return bad
 }
+
+/// Whether one view is a test driver.
+pub def Build.view_is_test (v : EntryView) : Bool :=
+    String.beq (Build.view_kind v) "test"
 
 /// `monad store ls`: one line per entry, then a summary.
 #[partial]
@@ -906,32 +964,65 @@ pub def Build.gc_run (files : List String) (target_dir : String) (triples : List
             IO.println ("gc: nothing was removed, " ++ target_dir ++ " is untouched");
             return 1
         },
-        Reach.known artifacts checks compiler => do {
-            let names_a <- Build.dir_names (Build.entry_root_dir target_dir artifact);
-            let names_c <- Build.dir_names (Build.entry_root_dir target_dir check);
+        Reach.known artifacts checks tests compiler => do {
+            let names_a <- Build.dir_names (Build.entry_root_named target_dir "store");
+            let names_c <- Build.dir_names (Build.entry_root_named target_dir "check");
+            let names_t <- Build.dir_names (Build.entry_root_named target_dir "test");
             let have_a <- Build.droppable_names names_a List.empty;
             let have_c <- Build.droppable_names names_c List.empty;
+            let have_t <- Build.droppable_names names_t List.empty;
             let drop_a : List String := Build.unreachable artifacts have_a;
             let drop_c : List String := Build.unreachable checks have_c;
+            let drop_t : List String := Build.unreachable tests have_t;
             let _n <- Build.print_kind_note target_dir;
             IO.println ("gc: keyed with compiler " ++ Build.short_key compiler
                 ++ " -- an entry is unreachable when this compiler, or the named files' closure, differs from what wrote it");
             IO.println ("gc: " ++ I64.to_string (List.length files) ++ " file(s) named -> "
                 ++ I64.to_string (List.length artifacts) ++ " artifact key(s) and "
-                ++ I64.to_string (List.length checks) ++ " check key(s) reachable");
+                ++ I64.to_string (List.length checks) ++ " check key(s) and "
+                ++ I64.to_string (List.length tests) ++ " test key(s) reachable");
             IO.println ("gc: unreachable here: " ++ I64.to_string (List.length drop_a) ++ " artifact(s) of "
                 ++ I64.to_string (List.length have_a) ++ " present, " ++ I64.to_string (List.length drop_c)
-                ++ " check entry(ies) of " ++ I64.to_string (List.length have_c) ++ " present");
+                ++ " check entry(ies) of " ++ I64.to_string (List.length have_c) ++ " present, "
+                ++ I64.to_string (List.length drop_t) ++ " test entry(ies) of "
+                ++ I64.to_string (List.length have_t) ++ " present");
             if Bool.not apply then do {
                 IO.println "gc: dry run -- nothing was removed; re-run with --apply to remove them";
                 return 0
             }
             else do {
-                let na <- Build.remove_entries target_dir artifact drop_a 0;
-                let nc <- Build.remove_entries target_dir check drop_c 0;
-                IO.println ("gc: removed " ++ I64.to_string (na + nc) ++ " entry(ies) from " ++ target_dir);
+                let na <- Build.remove_entries target_dir "store" drop_a 0;
+                let nc <- Build.remove_entries target_dir "check" drop_c 0;
+                let nt <- Build.remove_entries target_dir "test" drop_t 0;
+                IO.println ("gc: removed " ++ I64.to_string (na + nc + nt) ++ " entry(ies) from " ++ target_dir);
                 return 0
             }
         }
     }
 }
+
+/// Every test key the current tree would produce, over every triple a
+/// build could be keyed under -- a superset of what `monad test` writes
+/// (it only ever uses the native triple), which is the safe direction for
+/// `gc`: it keeps an entry rather than deleting one.
+///
+/// A plan that comes back inactive, or a file that gets no key, is a
+/// REFUSAL for the reason `Build.collect_check_keys` gives: an incomplete
+/// reachable set is a store-wiping bug in the direction `gc` moves.
+#[partial]
+def Build.collect_test_keys (files : List String) (target_dir : String) (triples : List String) (acc : List String) : IO (Result String (List String)) :=
+    match triples {
+        List.empty => return (ok acc),
+        List.cons t rest => do {
+            let plan <- Build.test_plan_all files target_dir t;
+            if Bool.not (Build.cache_plan_active plan)
+            then return (err (Build.inactive_reason plan))
+            else do {
+                let ks <- Build.collect_check_keys plan files List.empty;
+                match ks {
+                    err f => return (err ("no test key could be derived for " ++ f)),
+                    ok keys => Build.collect_test_keys files target_dir rest (List.append acc keys)
+                }
+            }
+        }
+    }
