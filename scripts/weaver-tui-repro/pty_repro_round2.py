@@ -1,7 +1,10 @@
 import os, pty, time, select, fcntl, termios, struct, re
 
-REPO = "/home/anderscs/src/monad-weaver"
-BIN = REPO + "/target-monad/release/weaver"
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BIN = os.environ.get("WV_BIN", REPO + "/target-monad/release/weaver")
+TURNS = os.environ.get(
+    "WV_TURNS_LONG",
+    os.path.join(REPO, "scripts", "weaver-tui-repro", "turns_long.json"))
 def strip(s): return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", s)
 def tight(s): return re.sub(r"\s", "", strip(s))
 
@@ -15,7 +18,7 @@ if pid == 0:
     os.close(master)
     os.chdir(REPO)
     os.execve(BIN, [BIN, "--provider", "mock", "--model", "mock"],
-              dict(os.environ, SHUTTLE_MOCK_TURNS="/tmp/wv_repro/turns_long.json"))
+              dict(os.environ, SHUTTLE_MOCK_TURNS=TURNS))
 
 buf = bytearray()
 def pump(sec):

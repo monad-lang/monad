@@ -6,7 +6,12 @@ def strip(s):
 def striptight(s):
     return _re.sub(r"\s", "", strip(s))
 
-REPO = "/home/anderscs/src/monad-weaver"
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The runner stages a single-read turn; default to the first turn of the
+# checked-in two-read fixture so the driver works without /tmp/wv_repro.
+TURNS = os.environ.get(
+    "WV_TURNS",
+    os.path.join(REPO, "scripts", "weaver-tui-repro", "turns_two_reads.json"))
 BIN = os.environ.get("WV_BIN", REPO + "/target-monad/release/weaver")
 
 master, slave = pty.openpty()
@@ -19,7 +24,7 @@ if pid == 0:
     os.close(master)
     os.chdir(REPO)
     os.execve(BIN, [BIN, "--provider", "mock", "--model", "mock"],
-              dict(os.environ, SHUTTLE_MOCK_TURNS="/tmp/wv_repro/turns.json", NO_COLOR="1"))
+              dict(os.environ, SHUTTLE_MOCK_TURNS=TURNS, NO_COLOR="1"))
 
 buf = bytearray()
 def pump(sec):

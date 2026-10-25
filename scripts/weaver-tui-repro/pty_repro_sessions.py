@@ -53,6 +53,21 @@ def pump(master, sec, buf):
             if not d: return
             buf.extend(d)
 
+def painted(master, needle, sec, buf):
+    """Pump until `needle` is in the raw output, or `sec` elapses.
+
+    S6's huge session wraps 512 lines of 900 characters on the compiled
+    backend; that outruns a fixed window on a loaded runner. The RSS probe
+    is about memory, so it must not race the renderer.
+    """
+    want = needle.encode()
+    end = time.time() + sec
+    while time.time() < end:
+        pump(master, 0.2, buf)
+        if want in buf:
+            return True
+    return False
+
 def wait_nohang(pid):
     """True once `pid` is reaped (or was already)."""
     try:
@@ -277,10 +292,10 @@ def main():
     master, pid = spawn(common + ["--resume", d], env)
     buf = bytearray(); pump(master, 1.8, buf)
     r1 = rss_kb(pid)
-    # Wrapping the 512-line tail (900-char lines) is the first frame's
-    # cost on the compiled backend (~5 s); the probe is about RSS, so
-    # allow it to finish before requiring the painted text.
-    pump(master, 8.0, buf)
+    # Wrapping the 512-line tail (900-char lines) is the first frame's cost
+    # on the compiled backend and varies with runner load; wait for the
+    # paint on a deadline rather than assuming it fits a fixed window.
+    painted(master, "z", 30.0, buf)
     r2 = rss_kb(pid)
     frames6 = strip(buf.decode("utf-8", "replace"))
     finish(master, pid)

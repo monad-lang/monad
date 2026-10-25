@@ -359,6 +359,19 @@ jobs:
                  motes/oak_wasm motes/oak \
                  std/src/ref_tests.mo
 
+      # The raw-mode loop's only automated coverage: the 13 Python pty drivers
+      # in scripts/weaver-tui-repro/, against the release weaver built from
+      # THIS commit's self-compiled compiler. The wrapper classifies from the
+      # drivers' OUTPUT, not their exit codes -- three of them print a failure
+      # and exit 0 (plans/implementations/2026-10-25-weaver-pty-ci-stopgap.md).
+      # ~2 min to build weaver natively, ~4 min for the drivers.
+      - name: Weaver pty repros
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
+                 scripts/ci-weaver-pty.sh
+
       # Phase 0-2 of plans/bootstrapping/wasm-target.md: the wasi fib
       # differential, the web loader smoke test, and clean target-gating
       # errors. Reuses the binary the step above just self-compiled, so it
