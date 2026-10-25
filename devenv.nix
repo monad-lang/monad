@@ -22,13 +22,6 @@
   # services.postgres.enable = true;
 
   # https://devenv.sh/scripts/
-  scripts.web-repl.exec = ''
-    cd wasm/web
-    wasm-pack build --target web || exit
-    cd ../pkg
-    npx serve . 
-  '';
-
   scripts.docs-serve.exec = ''
     mdbook build ${config.devenv.root}/docs
     ${config.devenv.root}/scripts/sync-install.sh

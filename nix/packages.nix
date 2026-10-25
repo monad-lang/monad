@@ -59,7 +59,6 @@ in
   # breaking every native build. It is reachable only as $WASI_SDK_PATH.
   packages = with pkgs; [
     shellcheck
-    wasm-pack
     wasmtime
     nodejs
     lld

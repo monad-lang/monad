@@ -2236,19 +2236,12 @@ fn mote_named_at(name: &str) -> Option<std::path::PathBuf> {
 /// resolution answers a toolchain-provided name from the install, so the
 /// guard must not demand a declaration nothing could supply. Same probe as
 /// `is_installed_mote` (lang/src/module.mo).
-#[cfg(not(feature = "embed-stdlib"))]
 fn is_installed_mote(name: &str) -> bool {
   stdlib_dir()
     .parent()
     .and_then(|p| p.parent())
     .map(|root| root.join(name).join("mote.toml").is_file())
     .unwrap_or(false)
-}
-
-/// Nothing is installed when the stdlib is compiled in.
-#[cfg(feature = "embed-stdlib")]
-fn is_installed_mote(_name: &str) -> bool {
-  false
 }
 
 /// Whether a bare name is a MOTE -- the only thing a one-segment `use` may
@@ -3556,7 +3549,6 @@ pub fn load_module_from_text_typed_at(
 /// the filesystem — `init/src`, not `init`, since every mote keeps its modules
 /// under `src/` (`plans/packaging/package-system.md` §5a). `MONAD_STDLIB`
 /// overrides it and is likewise expected to name the *source* directory.
-#[cfg(not(feature = "embed-stdlib"))]
 fn stdlib_dir() -> std::path::PathBuf {
   if let Ok(dir) = std::env::var("MONAD_STDLIB") {
     return std::path::PathBuf::from(dir);
@@ -3575,7 +3567,6 @@ fn stdlib_dir() -> std::path::PathBuf {
 /// motes are expected to live side by side in any real deployment layout
 /// (default or `MONAD_STDLIB`-relocated alike). Two levels up, because
 /// `stdlib_dir()` now points inside `init/src`.
-#[cfg(not(feature = "embed-stdlib"))]
 fn std_dir() -> std::path::PathBuf {
   stdlib_dir()
     .parent()
@@ -3595,10 +3586,8 @@ fn std_dir() -> std::path::PathBuf {
 /// hub — depends on `std.path`/`std.io`/`std.process`) — the same order
 /// `init_module` below loads them in, factored out so a caller that needs
 /// the raw `Decl`s (not just an already-checked `Module`) can get them
-/// without hand-duplicating this path/order list. Respects `embed-stdlib`
-/// exactly like `init_module` does: compiled-in text when that feature is
-/// on, read from disk at runtime (via `stdlib_dir()`/`std_dir()`)
-/// otherwise.
+/// without hand-duplicating this path/order list. Sources are read from
+/// disk at runtime (via `stdlib_dir()`/`std_dir()`).
 ///
 /// Every entry is a full two-segment `<mote>.<module>` path, and that is
 /// load-bearing rather than tidiness: a `use` must name a mote or `lib`
@@ -3613,109 +3602,6 @@ fn std_dir() -> std::path::PathBuf {
 /// one exception is `'prelude`, which is deliberately not nameable at all.
 /// See AGENTS.md's "init vs std" section.
 pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, LoadingError> {
-  #[cfg(feature = "embed-stdlib")]
-  {
-    // The path each entry was baked in FROM. Carried even though nothing
-    // reads it off disk here: it is how the loader knows which mote a
-    // default module belongs to, which `use lib::x` inside init/ and std/
-    // depends on. ABSOLUTE, via CARGO_MANIFEST_DIR -- a repo-relative path
-    // resolves against the CWD, and a test binary's CWD is its own package
-    // directory, where `init/mote.toml` is not.
-    let entries: [(ModulePath, &str, &str); 15] = [
-      (
-        mpt("'prelude"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/prelude.mo"),
-        include_str!("../../../init/src/prelude.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("init"), id("id")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/id.mo"),
-        include_str!("../../../init/src/id.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("init"), id("io")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/io.mo"),
-        include_str!("../../../init/src/io.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("init"), id("number")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/number.mo"),
-        include_str!("../../../init/src/number.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("init"), id("math")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/math.mo"),
-        include_str!("../../../init/src/math.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("init"), id("string")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/string.mo"),
-        include_str!("../../../init/src/string.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("init"), id("list")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/list.mo"),
-        include_str!("../../../init/src/list.mo"),
-      ),
-      // `copy.mo` joined the default set when `init/src/lib.mo` began
-      // re-exporting it: the hub's `pub use lib::copy {*}` makes
-      // `init.copy` a use of the ALWAYS-LOADED hub, so a `loaded` set
-      // without it panicked `load_modules` ("uses unloaded module:
-      // init.copy") the moment any meta-eval built a scope over the
-      // hub's uses. The default set IS the hub plus what it re-exports
-      // -- keep the two in lockstep when the hub changes.
-      (
-        ModulePath::new(vec![id("init"), id("copy")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/copy.mo"),
-        include_str!("../../../init/src/copy.mo"),
-      ),
-      (
-        mpt("init"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/lib.mo"),
-        include_str!("../../../init/src/lib.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("std"), id("path")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/path.mo"),
-        include_str!("../../../std/src/path.mo"),
-      ),
-      // `std.io` uses `std.stream` (TCP's `FdStream`/`StreamError`), which
-      // uses `std.bytebuf`, so both load ahead of it.
-      (
-        ModulePath::new(vec![id("std"), id("bytebuf")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/bytebuf.mo"),
-        include_str!("../../../std/src/bytebuf.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("std"), id("stream")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/stream.mo"),
-        include_str!("../../../std/src/stream.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("std"), id("io")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/io.mo"),
-        include_str!("../../../std/src/io.mo"),
-      ),
-      (
-        ModulePath::new(vec![id("std"), id("process")]),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/process.mo"),
-        include_str!("../../../std/src/process.mo"),
-      ),
-      (
-        mpt("std"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/lib.mo"),
-        include_str!("../../../std/src/lib.mo"),
-      ),
-    ];
-    return Ok(
-      entries
-        .into_iter()
-        .map(|(path, file, text)| (path, PathBuf::from(file), text.to_string()))
-        .collect(),
-    );
-  }
-
-  #[cfg(not(feature = "embed-stdlib"))]
   {
     let init_dir = stdlib_dir();
     let std_dir = std_dir();
@@ -3802,9 +3688,8 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
 /// name with a default module (e.g. `lang/parser/number.mo` vs the
 /// top-level `number` default module).
 ///
-/// Not feature-gated: the `init/src` directory is part of the repo regardless
-/// of whether `embed-stdlib` baked its contents into the binary at compile
-/// time, so the same path list is valid for both build configurations.
+/// Not feature-gated: the `init/src` directory is part of the repo, so the
+/// same path list is valid for the sources read at run time.
 pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
   let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
   let root = manifest_dir

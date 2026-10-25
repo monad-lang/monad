@@ -14,12 +14,10 @@ serde.workspace = true
 serde_json.workspace = true
 im.workspace = true
 clap = { version = "4", features = ["derive"], optional = true }
-console_error_panic_hook = { version = "0.1", optional = true }
 rustyline = { version = "17.0.2", optional = true }
 
 [features]
 default = []
-embed-stdlib = []
 # Marker feature gating `core_eval_bench` only -- the `CoreTerm`-closure
 # evaluator (`core_check_module`, `lower_core_ir`, `core_value`,
 # `core_eval`, `core_native`) is the crate's only evaluator/checker (the
@@ -29,7 +27,6 @@ embed-stdlib = []
 # feature exists purely so `cargo bench` doesn't run the (expensive)
 # core-eval benchmark by default.
 core-eval = []
-console_error_panic_hook = ["dep:console_error_panic_hook"]
 repl = ["dep:rustyline"]
 cli = ["dep:clap"]
 
