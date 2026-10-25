@@ -33,6 +33,10 @@ def test_reload_emits_reload_event : IO Bool := do {
   }
 }
 
+/// Compiled-only: `Live.watch` forks a watcher and this test waits on the
+/// `Ref` that fiber bumps. The Rust host starts fibers lazily (at
+/// await/poll), so the watcher never runs and both waits exhaust their
+/// retries.
 #[test]
 def test_watch_bumps_version : IO Bool := do {
   let name := String.concat "moon_live_watch_" (String.concat (I64.to_string process_id) ".txt");

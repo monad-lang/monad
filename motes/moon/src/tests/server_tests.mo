@@ -658,6 +658,10 @@ def test_start_and_shutdown : IO Bool := do {
 
 /// Poll a fiber until it stops or `tries` 10 ms sleeps elapse. `pollFiber`
 /// is the non-blocking sibling of `await_fiber`.
+///
+/// The RUNNING case is compiled-only: the lazy host's `pollFiber` runs the
+/// deferred action to completion, so its first poll answers `some` even
+/// for a fiber that is still running on the compiled backend.
 #[partial]
 def wait_fiber (f : Fiber Unit) (tries : I64) : IO Bool := do {
   let r <- pollFiber f;

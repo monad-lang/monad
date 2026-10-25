@@ -32,16 +32,15 @@
 /// source it synthesizes — the same end semantics reached from the
 /// only place a source-synthesizing runner can reach it.)
 ///
-/// **TODO -- async runtime gap**: tests whose bodies reach the
-/// concurrency natives (`fork_io`, `await_fiber`, `cancel_fiber`,
-/// `sleep_io`, `scope_new`, `scope_fork`, `scope_drop`) cannot run
-/// here at all: those natives are unwired in the native backend, so
-/// `validate_no_unwired_natives` (called below, deliberately) fails the
-/// driver compile fast. `cli/src/main.mo` recognizes that failure and
-/// reports it as a SKIP rather than a test failure. The two affected
-/// files are `std/src/concurrent/fiber_test.mo` and
-/// `std/src/concurrent/combine_test.mo`; they stay deferred until a
-/// self-hosted async runtime exists.
+/// **Unwired-native gate**: every native a test reaches must be wired in
+/// the native backend. `validate_no_unwired_natives` (called below,
+/// deliberately) fails the driver compile fast otherwise, and
+/// `cli/src/main.mo` reports that particular failure as a SKIP rather
+/// than a test failure. The concurrency natives (`fork_io`,
+/// `await_fiber`, `poll_fiber`, `cancel_fiber`, `sleep_io`, and the
+/// `scope_*` family) are wired now, so
+/// `std/src/concurrent/{fiber,combine,poll}_test.mo` run through this
+/// driver; the gate remains the guard for any future unwired native.
 use lang::codegen::decls {filter_reachable_decls}
 use lang::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang::types {
@@ -705,12 +704,12 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                             // The same fail-fast gate the real compile
                             // path runs (`compile_loaded_modules_to_ir`).
                             // This path skipped it, which is how a test
-                            // reaching an unwired native -- every async
-                            // test, today -- produced a binary that
-                            // SIGSEGVs on a "return Unit" stub instead of
-                            // a clear message. `cli/src/main.mo` turns
-                            // this particular error into a SKIP; see the
-                            // async TODO in this file's header.
+                            // reaching an unwired native produced a
+                            // binary that SIGSEGVs on a "return Unit"
+                            // stub instead of a clear message.
+                            // `cli/src/main.mo` turns this particular
+                            // error into a SKIP; see the gate note in
+                            // this file's header.
                             match validate_no_unwired_natives reachable {
                                 Result.err e => return (Result.err e),
                                 Result.ok _ => do {

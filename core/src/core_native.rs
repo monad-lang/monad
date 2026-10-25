@@ -3266,6 +3266,13 @@ pub fn poll_fiber(
 /// `cancel_fiber (f : Fiber A) : IO Unit` — marks the fiber cancelled
 /// without running it (a no-op if it's already running/done, same as
 /// `Fiber::cancel`'s own guard). Mirrors `eval::native::cancel_fiber`.
+///
+/// The handle is deliberately LEFT in the table: a later `await_fiber`
+/// must still be able to take it and answer `err cancelled` (the compiled
+/// runtime re-reads its stored answer the same way). That await releases
+/// the slot; a cancel the program never follows with an await leaves it,
+/// exactly as an abandoned `forkIO` does. Removing it here would turn the
+/// documented `err cancelled` answer into "handle not found".
 fn cancel_fiber(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let f = args
     .first()
