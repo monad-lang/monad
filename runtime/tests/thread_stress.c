@@ -15,7 +15,10 @@
  *     and ls's directory handle, never a sibling's pipe or a socket;
  *   * a timed stdin poll (`term_ctl` op 3) under a stream of signals --
  *     the way Boehm's stop-the-world signals hit a TUI's frame clock --
- *     must still wait out its full timeout.
+ *     must still wait out its full timeout;
+ *   * abandoned fibers (Linux only: it reads /proc) -- fibers that are
+ *     cancelled or dropped with their scope and never awaited must give
+ *     their thread stacks back once they finish.
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -43,6 +46,12 @@ int64_t monad_tcp_local_port(int64_t listener);
 void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms);
 void* monad_tcp_accept(int64_t listener);
 int64_t monad_term_ctl(int64_t op, int64_t arg);
+void* alloc_closure(void* entry, int64_t arity, int64_t env_size);
+void* monad_fork_io(void* closure);
+void* monad_cancel_fiber(void* handle);
+void* monad_scope_new(void);
+void* monad_scope_fork(void* handle, void* closure);
+void* monad_scope_drop(void* handle);
 
 /* The runtime references codegen's entry point; nothing calls it here. */
 void* main_monad(void* args) {
@@ -73,6 +82,7 @@ typedef struct {
 #define FD_THREADS 8
 #define FD_ITERS 40
 #define POLL_MS 300
+#define LEAK_FIBERS 200
 
 static int failures;
 
@@ -259,6 +269,51 @@ static void check_poll_eintr(void) {
     close(p[1]);
 }
 
+#if defined(__linux__)
+/* A fiber body: `Unit -> IO A` called through the closure ABI. It
+   outlives its abandonment by a couple of milliseconds; the result is
+   never read. */
+static int64_t nap_body(int64_t closure, int64_t unit) {
+    (void)closure;
+    (void)unit;
+    struct timespec nap = {0, 2 * 1000000};
+    nanosleep(&nap, NULL);
+    return 0;
+}
+
+static int64_t vm_size_kb(void) {
+    FILE* f = fopen("/proc/self/status", "r");
+    if (!f) return -1;
+    char line[256];
+    long long kb = -1;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "VmSize: %lld kB", &kb) == 1) break;
+    fclose(f);
+    return kb;
+}
+
+/* Abandon LEAK_FIBERS fibers, half cancelled and half dropped with their
+   scope, let them finish, and compare the address space with before.
+   A joinable thread that is never joined keeps its 128 MB stack
+   reservation, so the old runtime grew by about 25 GB here. */
+static void check_abandoned_fibers(void) {
+    void* body = alloc_closure((void*)nap_body, 1, 0);
+    int64_t before = vm_size_kb();
+    for (int i = 0; i < LEAK_FIBERS / 2; i++) monad_cancel_fiber(monad_fork_io(body));
+    void* scope = monad_scope_new();
+    for (int i = 0; i < LEAK_FIBERS / 2; i++) monad_scope_fork(scope, body);
+    monad_scope_drop(scope);
+    struct timespec settle = {0, 300 * 1000000};
+    nanosleep(&settle, NULL);
+    int64_t grew_mb = (vm_size_kb() - before) / 1024;
+    if (before < 0 || grew_mb > 1024) {
+        fprintf(stderr, "thread_stress: %d abandoned fibers grew VmSize by %lld MB\n",
+                LEAK_FIBERS, (long long)grew_mb);
+        fail();
+    }
+}
+#endif
+
 static void run(void* (*worker)(void*), int threads) {
     pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
@@ -285,6 +340,9 @@ int main(void) {
     monad_stream_close(listener);
 #endif
     check_poll_eintr();
+#if defined(__linux__)
+    check_abandoned_fibers();
+#endif
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }

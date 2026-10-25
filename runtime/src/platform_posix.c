@@ -95,13 +95,15 @@ void monad_release(void* ptr) {
 
    THREADS AND BOEHM: see the GC_THREADS comment at the head of this
    file. Every thread here is created via `pthread_create`, which under
-   GC_THREADS IS `GC_pthread_create`, and is joined exactly once by
-   whoever reaps it (`GC_pthread_join`, which also drops the collector's
-   per-thread bookkeeping). A fiber nobody ever awaits or cancels keeps
-   its thread entry until the process exits; that is a few hundred bytes
-   per abandoned fiber, and reclaiming it would mean joining threads
-   whose result nobody wants, i.e. blocking `scope_drop` on work the
-   program has explicitly walked away from. */
+   GC_THREADS IS `GC_pthread_create`, and is created DETACHED: nobody
+   joins a fiber. `await`/`poll` learn the result from the handle's
+   condvar, never from a join, so a join would only have reclaimed the
+   thread -- and a fiber that was cancelled, lost a `race` or was dropped
+   with its scope is never awaited at all. Joinable, each of those kept
+   its whole stack mapping (the 128 MB reservation below plus every page
+   it touched) until the process exited. Detached, the thread gives its
+   stack back the moment it returns, and Boehm unregisters it on the way
+   out. */
 
 /* MONAD_FIBER_TAG / MONAD_SCOPE_TAG are defined with the other `Header.tag`
    kind values at the head of this file; `monad_get_tag` needs them before
@@ -111,8 +113,8 @@ void monad_release(void* ptr) {
    exactly as deeply as `main` can, so the plan doc's original 8 KB
    ucontext stack would overflow on the first recursive helper. The
    reservation is ADDRESS space, committed on demand, so a thread that
-   does not recurse deeply never pays for it in RSS -- and an awaited
-   fiber's stack is unmapped again by the join. */
+   does not recurse deeply never pays for it in RSS -- and the stack is
+   unmapped again when the (detached) thread exits. */
 #define MONAD_DEEP_STACK_BYTES ((size_t)128 * 1024 * 1024)
 
 typedef struct {
@@ -123,20 +125,11 @@ typedef struct {
                           doc comment for why it cannot preempt */
     int64_t io_box;    /* the action's own result: an `IO A`, i.e. a complete
                           `IO.mk (RawIO.io _)` box */
-    int64_t reaped;    /* 1 once the thread has been joined */
-    int64_t started;   /* 1 once a thread exists TO join: a refused
-                          pthread_create leaves `thread` unwritten, and
-                          pthread_join faults on that value, so the join is
-                          guarded on this rather than on the handle being
-                          non-NULL */
     int64_t released;  /* 1 once the WORKER's retain (monad_fork_io) has been
-                          released. Held apart from `reaped` on purpose:
-                          monad_cancel_fiber consumes the reference without
-                          reaping, and a later `await` must still join the
-                          thread the cancel left running. The scope's own
+                          released, by whichever of await/poll/cancel
+                          consumes the handle first. The scope's own
                           reference (monad_scope_fork) is a different one,
                           released unconditionally by monad_scope_drop. */
-    pthread_t thread;
     pthread_mutex_t lock;
     pthread_cond_t finished;
 } Fiber;
@@ -174,7 +167,8 @@ static void fiber_mark_cancelled(Fiber* f) {
 }
 
 /* Runs the fiber's action, then publishes its result. `arg` is the fiber
-   itself. Not detached: monad_await_fiber is what joins it. */
+   itself. The thread is detached; the unlock below is its last touch of
+   the handle. */
 static void* fiber_main(void* arg) {
     Fiber* f = (Fiber*)arg;
     /* Unit.unit is tag 0, arity 0 -- `builtin_ctor_tags`
@@ -198,8 +192,6 @@ void* monad_fork_io(void* closure) {
     f->state = 0;
     f->cancelled = 0;
     f->io_box = 0;
-    f->reaped = 0;
-    f->started = 0;
     f->released = 0;
     pthread_mutex_init(&f->lock, NULL);
     pthread_cond_init(&f->finished, NULL);
@@ -209,18 +201,21 @@ void* monad_fork_io(void* closure) {
        so this is the ownership handoff M4's linear `Fiber` needs, not a
        liveness guard. */
     monad_retain(f);
+    pthread_t thread;
     pthread_attr_t attr;
     int rc = pthread_attr_init(&attr);
     if (rc == 0) {
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
         pthread_attr_setstacksize(&attr, MONAD_DEEP_STACK_BYTES);
-        rc = pthread_create(&f->thread, &attr, fiber_main, f);
+        rc = pthread_create(&thread, &attr, fiber_main, f);
         if (rc != 0) {
             /* The 128 MB reservation can be refused (thread-count or
                address-space limits). Retry on the default stack: a fiber
                on a small stack beats no fiber. */
             pthread_attr_destroy(&attr);
             pthread_attr_init(&attr);
-            rc = pthread_create(&f->thread, &attr, fiber_main, f);
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            rc = pthread_create(&thread, &attr, fiber_main, f);
         }
         pthread_attr_destroy(&attr);
     }
@@ -228,15 +223,9 @@ void* monad_fork_io(void* closure) {
         /* No thread at all. Publish an already-finished state rather than
            leaving a handle that can never become ready: a hang is
            strictly worse than a NULL payload, because nothing in this
-           backend can raise an error out of a native. `started` stays 0,
-           so the await does not try to join the thread that was never
-           created -- pthread_join faults on that value (it dereferences
-           the thread descriptor), which would turn this deliberately
-           degraded path into a crash of the whole process instead. */
+           backend can raise an error out of a native. */
         f->state = 1;
         f->io_box = 0;
-    } else {
-        f->started = 1;
     }
     return f;
 }
@@ -248,17 +237,11 @@ void* monad_await_fiber(void* handle) {
     while (!f->state) pthread_cond_wait(&f->finished, &f->lock);
     int64_t cancelled = f->cancelled;
     int64_t box = f->io_box;
-    int reap = !f->reaped;
-    f->reaped = 1;
     int release = !f->released;
     f->released = 1;
     pthread_mutex_unlock(&f->lock);
-    /* Exactly one awaiter joins, and only when fork_io actually created a
-       thread. A second `await` on the same handle still reads the stored
-       result rather than joining an already-joined thread (pthread_join
-       twice is undefined). */
-    if (reap && f->started) pthread_join(f->thread, NULL);
-    /* The worker's reference is released exactly once, by whichever of
+    /* A second `await` on the same handle reads the stored result again.
+       The worker's reference is released exactly once, by whichever of
        await/cancel consumes the handle first: releasing once per await
        would drive the count negative on a repeated await, which is
        precisely the ownership the count exists to hand to M4. */
@@ -303,18 +286,14 @@ void* monad_await_fiber(void* handle) {
    The state check comes FIRST, before the cancelled flag: cancellation
    cannot preempt (`fiber_mark_cancelled`'s comment), so a cancelled
    fiber may still be RUNNING -- and poll's contract for a running fiber
-   is `none`, not await's tail (running the tail here would pthread_join
-   a live thread, which blocks). The loud cancellation answer comes when
+   is `none`, not await's tail. The loud cancellation answer comes when
    the fiber has actually stopped -- the same point await answers, so a
    poll loop on an abandoned fiber still terminates. A fork-failure
-   fiber (`state = 1, io_box = 0, started = 0`, monad_fork_io's refusal
-   path) is answerable the same way: loud, never silent.
+   fiber (`state = 1, io_box = 0`, monad_fork_io's refusal path) is answerable the same way: loud, never silent.
 
    Everything after the lock/unlock is monad_await_fiber's tail verbatim:
    state is 1 at this point (checked under this same lock), so the
-   condvar wait await needs is deliberately absent and the
-   pthread_join -- guarded on `started` exactly as there -- is
-   unconditionally safe. */
+   condvar wait await needs is deliberately absent. */
 void* monad_poll_fiber(void* handle) {
     Fiber* f = (Fiber*)handle;
     if (!f) return (void*)alloc_constructor_impl(3, 0);     /* Option.none */
@@ -325,12 +304,9 @@ void* monad_poll_fiber(void* handle) {
     }
     int64_t cancelled = f->cancelled;
     int64_t box = f->io_box;
-    int reap = !f->reaped;
-    f->reaped = 1;
     int release = !f->released;
     f->released = 1;
     pthread_mutex_unlock(&f->lock);
-    if (reap && f->started) pthread_join(f->thread, NULL);
     if (release) monad_release(f);
     /* await's cancelled branch, mirrored: no error channel out of a
        native, so the honest thing is the diagnostic plus a well-formed
@@ -428,7 +404,8 @@ void* monad_scope_drop(void* handle) {
         /* Cancels, but does NOT wait: the host's `scope_drop` cancels
            outstanding fibers and returns, so a `scoped` block that walks
            away from a long-running fiber must not block here either. The
-           fibers keep running to completion in the background; only the
+           fibers keep running to completion in the background, and being
+           detached, give their threads back when they finish; only the
            scope's claim on them is given up. */
         while (node) {
             ScopeNode* next = node->next;
