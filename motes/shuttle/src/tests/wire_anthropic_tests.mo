@@ -243,3 +243,29 @@ def test_thinking_signature_round_trips_the_adapter : Bool :=
                     },
             },
     }
+
+/// Anthropic reports cache reads and cache WRITES separately from
+/// `input_tokens`; the wire normalizes to the whole prompt
+/// (10 non-cached + 3 written + 5 read = 18), with the read slice kept
+/// as `cached_tokens`.
+#[test]
+def test_decode_normalizes_cached_prompt_tokens : Bool :=
+    let body := r#"{"content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":5,"cache_creation_input_tokens":3}}"# in
+    match Json.parse body {
+        Result.err _ => false,
+        Result.ok j =>
+            match MessagesResponse.deserialize_json j {
+                Result.err _ => false,
+                Result.ok resp =>
+                    match Anthropic.decode_response resp {
+                        Result.err _ => false,
+                        Result.ok turn =>
+                            match turn {
+                                Turn.mk _ usage _ =>
+                                    match usage {
+                                        Usage.mk in_t out_t cached => in_t == 18 && out_t == 5 && cached == 5,
+                                    },
+                            },
+                    },
+            },
+    }

@@ -18,7 +18,7 @@ use std::process {process_id}
 /// The accumulator every fold starts from -- the same zero state
 /// `OpenAI.complete_stream` hands moose.
 def stream_acc0 : OpenaiAcc :=
-    { sse := Sse.init, text := "", tools := [], finish := "", usage := ApiUsage.mk 0 0, error := Option.none }
+    { sse := Sse.init, text := "", tools := [], finish := "", usage := ApiUsage.mk 0 0 0, error := Option.none }
 
 /// Fold one event payload, keeping the accumulator (the delta it
 /// reported is asserted separately where it matters).
@@ -160,7 +160,7 @@ def test_stream_usage_null_after_real_keeps_real : Bool :=
     match openai_assemble a2 {
         ChatResponse.mk _ usage =>
             match usage {
-                ApiUsage.mk pt ct => Bool.and (pt == 7) (ct == 3)
+                ApiUsage.mk pt ct _ => Bool.and (pt == 7) (ct == 3)
             }
     }
 
@@ -184,7 +184,7 @@ def test_stream_usage_and_lenient_skips : Bool :=
     match openai_assemble a4 {
         ChatResponse.mk _ usage =>
             match usage {
-                ApiUsage.mk pt ct => Bool.and (pt == 7) (Bool.and (ct == 3) (a4.text == "ok"))
+                ApiUsage.mk pt ct _ => Bool.and (pt == 7) (Bool.and (ct == 3) (a4.text == "ok"))
             }
     }
 
@@ -308,4 +308,17 @@ def test_a_normal_stream_still_finishes_ok : Bool :=
             },
             List.empty => false,
         },
+    }
+
+/// The streaming usage object's `prompt_tokens_details.cached_tokens`
+/// is read (leniently) into `ApiUsage.cached_tokens`; the prompt size
+/// itself already includes it.
+#[test]
+def test_stream_usage_reads_cached_details : Bool :=
+    let a1 := fold_event stream_acc0 r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":5}}}"# in
+    match openai_assemble a1 {
+        ChatResponse.mk _ usage =>
+            match usage {
+                ApiUsage.mk _ _ cached => cached == 5,
+            }
     }

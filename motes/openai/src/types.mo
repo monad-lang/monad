@@ -52,6 +52,9 @@ derive_json_deserialize! ChatRequest
 pub struct ApiUsage {
     prompt_tokens : I64,
     completion_tokens : I64,
+    /// `prompt_tokens_details.cached_tokens` when the server sends it
+    /// (OpenAI's `prompt_tokens` already includes cached tokens), else 0.
+    cached_tokens : I64 := 0,
 }
 
 derive_json_serialize! ApiUsage

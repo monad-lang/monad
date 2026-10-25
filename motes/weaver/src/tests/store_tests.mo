@@ -156,7 +156,7 @@ def test_session : Session :=
 
 #[test]
 def test_meta_json_roundtrip : Bool :=
-    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1 } in
+    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.none } in
     let j := Store.encode_meta m in
     match Json.parse (Json.to_string j) {
         Result.err _ => false,
@@ -207,4 +207,18 @@ def test_empty_override_is_unset : Bool :=
     match Store.root_of (Option.some "") (Option.some "/home/u") {
         Option.some p => Path.to_string p == "/home/u/.weaver/sessions",
         Option.none => false,
+    }
+
+/// The plan is part of the meta: an encoded plan decodes back exactly,
+/// and an absent key (an older session) decodes as none.
+#[test]
+def test_meta_plan_roundtrip : Bool :=
+    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.some "PLAN: 1) read" } in
+    match Store.decode_meta (Store.encode_meta m) {
+        Result.err _ => false,
+        Result.ok m2 =>
+            match m2.plan {
+                Option.some p => String.beq p "PLAN: 1) read",
+                Option.none => false,
+            },
     }

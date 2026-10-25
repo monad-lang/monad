@@ -159,7 +159,11 @@ pub def Anthropic.decode_response (resp : MessagesResponse) : Result String Turn
                 AnthropicUsage.mk input_tokens output_tokens cache_read =>
                     let decoded_content : List Content := List.map (fn (b : Block) => block_to_content b) blocks in
                     let decoded_message : Message := { role := Role.assistant, content := decoded_content } in
-                    let real_usage : Usage := { input_tokens := input_tokens, output_tokens := output_tokens, cached_tokens := cache_read } in
+                    // Anthropic reports cache reads SEPARATELY from
+                    // `input_tokens`; normalize so `Usage.input_tokens` is
+                    // the whole prompt on every wire (OpenAI's
+                    // `prompt_tokens` already includes cached tokens).
+                    let real_usage : Usage := { input_tokens := input_tokens + cache_read, output_tokens := output_tokens, cached_tokens := cache_read } in
                     let decoded_turn : Turn := { message := decoded_message, usage := real_usage, stop := stop_reason_of stop_reason } in
                     Result.ok decoded_turn,
             },

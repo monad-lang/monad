@@ -8,6 +8,7 @@ use weaver::store {
     Store.append_chunk, Store.read_live, Store.discard_live, Store.read_live_from,
     Store.append_history_note, Store.update_meta,
     Store.append_note, Store.record_compacted, Store.encode_meta, Store.decode_meta,
+    Store.read_plan, Store.write_plan,
 }
 use shuttle::session {Session, Session.messages_to_json}
 use shuttle::provider {ProviderConfig, mock}
@@ -523,7 +524,7 @@ def compact_resume_ok (w : Result String Unit) (loaded : Result String Session) 
 /// A meta written before `history_base` existed decodes with base 1.
 #[test]
 def test_meta_without_history_base_defaults_to_one : Bool :=
-    let m : StoreMeta := { session := test_session, created := 1i64, updated := 2i64, history_next := 3i64, history_base := 1i64 } in
+    let m : StoreMeta := { session := test_session, created := 1i64, updated := 2i64, history_next := 3i64, history_base := 1i64, plan := Option.none } in
     match Json.get_object (Store.encode_meta m) {
         Result.err _ => false,
         Result.ok obj => match Store.decode_meta (Json.make_object (Map.delete "history_base" obj)) {
@@ -532,3 +533,27 @@ def test_meta_without_history_base_defaults_to_one : Bool :=
         },
     }
 
+
+/// The plan rides the meta: absent before any capture, then the exact
+/// text after `write_plan`, and `read_plan` on a deleted session is none.
+#[test]
+def test_plan_rides_the_session_meta : IO Bool := do {
+    let root : Path := root_for "plan";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let before <- Store.read_plan st.dir;
+            let w <- Store.write_plan st.dir "PLAN: read, write, run";
+            let after <- Store.read_plan st.dir;
+            let empty_before : Bool := match before { Option.none => true, Option.some _ => false };
+            let wrote : Bool := match w { Result.ok _ => true, Result.err _ => false };
+            let kept : Bool := match after {
+                Option.some t => String.beq t "PLAN: read, write, run",
+                Option.none => false,
+            };
+            IO.pure (empty_before && wrote && kept)
+        },
+    }
+}

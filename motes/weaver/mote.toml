@@ -39,6 +39,21 @@ path = "../mcp_client"
 [dependencies.parsec]
 path = "../parsec"
 
+# The Monad-aware tools (`monad_check`, `monad_eval`) run the compiler's
+# checker and interpreter in-process, so the whole `lang` engine is a
+# dependency. `llvm` and `runtime` are declared for the same reason
+# `motes/lsp/mote.toml` declares them: `lang::module`'s graph reaches
+# codegen and the IR type names, and without them the module graph fails
+# with `module not found: llvm.strmap`.
+[dependencies.lang]
+path = "../../lang"
+
+[dependencies.llvm]
+path = "../../llvm"
+
+[dependencies.runtime]
+path = "../../runtime"
+
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default
 # (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.

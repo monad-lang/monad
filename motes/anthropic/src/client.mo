@@ -196,12 +196,18 @@ def anthropic_int_of (key : String) (obj : BTreeMap String Json) : I64 :=
     }
 
 /// The `message_start` usage object: the input half of the turn's
-/// accounting (plus the cache counter when the server sends one).
+/// accounting (plus the cache counters when the server sends them).
+/// `input_tokens` here is the NON-cached prompt; cache writes are
+/// folded in so the wire adapter only has to add cache reads back.
 def anthropic_usage_of (j : Json) : AnthropicUsage :=
     match Json.get_object j {
         Result.err _ => AnthropicUsage.mk 0 0 0,
         Result.ok obj =>
-            AnthropicUsage.mk (anthropic_int_of "input_tokens" obj) (anthropic_int_of "output_tokens" obj) (anthropic_int_of "cache_read_input_tokens" obj),
+            let base : I64 := anthropic_int_of "input_tokens" obj in
+            let creation : I64 := anthropic_int_of "cache_creation_input_tokens" obj in
+            AnthropicUsage.mk (base + creation)
+                (anthropic_int_of "output_tokens" obj)
+                (anthropic_int_of "cache_read_input_tokens" obj),
     }
 
 /// The accumulated `input_json_delta` partial so far -- `""` before

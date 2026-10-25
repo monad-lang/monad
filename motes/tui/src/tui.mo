@@ -274,14 +274,15 @@ def loop_body {S : Type} {M : Type} (a : App S M) (redraw : S -> Bool) (on_ev : 
 /// `produce_poll_only` -- the frame clock and resizes keep flowing, and
 /// the fiber's dialog is the only stdin reader (a second reader would
 /// race it and, on a lost wake, block the UI in a blocking read).
-def produce_for {S : Type} {M : Type} (turns : List (PendingTurn M)) (reader : InputReader) (timeout_ms : I64) (model : S) (reads : S -> IO Bool) : IO (Pair (List Event) InputReader) :=
-    match turns {
-        List.empty => Input.produce reader timeout_ms,
-        List.cons _ _ => do {
-            let may <- reads model;
-            if may then Input.produce reader timeout_ms else Input.produce_poll_only reader timeout_ms
-        }
-    }
+def produce_for {S : Type} {M : Type} (turns : List (PendingTurn M)) (reader : InputReader) (timeout_ms : I64) (model : S) (reads : S -> IO Bool) : IO (Pair (List Event) InputReader) := do {
+    // The app's read gate is consulted on EVERY iteration, not only
+    // while a fiber is pending. A modal dialog opened by a fiber must
+    // own stdin even on a loop whose pending-turn bookkeeping is stale
+    // (a poll-only cycle keeps the frame clock and resizes flowing
+    // without racing the dialog for bytes).
+    let may <- reads model;
+    if may then Input.produce reader timeout_ms else Input.produce_poll_only reader timeout_ms
+}
 
 /// A pending `perform_async`: its fiber and the handler for a fiber
 /// error. A one-constructor `type` rather than a `struct` because it is

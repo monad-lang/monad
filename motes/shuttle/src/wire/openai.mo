@@ -11,7 +11,7 @@ use shuttle::message {Message, Usage, Turn}
 use shuttle::tool {ToolSpec}
 use openai::types {ChatMessage, ChatRequest, ChatResponse, Choice}
 use openai::tool {ToolCall, ToolDef}
-use openai::client {ApiUsage.tokens}
+use openai::client {ApiUsage.tokens, ApiUsage.cached}
 use json::json {Json, Json.ParseError.to_string}
 
 def role_tag (r : Role) : String :=
@@ -168,14 +168,14 @@ pub def choice_content (msg : ChatMessage) : Result String (List Content) :=
 /// on its own, but passing it into a second function that re-matches
 /// `Turn.mk` fails at run time with `expected 2 constructor fields,
 /// got 0`. One-shot construction sidesteps it entirely.)
-pub def decode_choice (c : Choice) (prompt_tokens : I64) (completion_tokens : I64) : Result String Turn :=
+pub def decode_choice (c : Choice) (prompt_tokens : I64) (completion_tokens : I64) (cached_tokens : I64) : Result String Turn :=
     match c {
         Choice.mk msg finish_reason =>
             match choice_content msg {
                 Result.err e => Result.err e,
                 Result.ok decoded_content =>
                     let decoded_message : Message := { role := Role.assistant, content := decoded_content } in
-                    let real_usage : Usage := { input_tokens := prompt_tokens, output_tokens := completion_tokens, cached_tokens := 0 } in
+                    let real_usage : Usage := { input_tokens := prompt_tokens, output_tokens := completion_tokens, cached_tokens := cached_tokens } in
                     let decoded_turn : Turn := { message := decoded_message, usage := real_usage, stop := finish_reason_to_stop finish_reason } in
                     Result.ok decoded_turn,
             }
@@ -194,7 +194,7 @@ pub def OpenAI.decode_response (resp : ChatResponse) : Result String Turn :=
                 Option.none => Result.err "OpenAI response had no choices",
                 Option.some resp_choice =>
                     match ApiUsage.tokens resp_usage {
-                        Pair.pair p_tok c_tok => decode_choice resp_choice p_tok c_tok
+                        Pair.pair p_tok c_tok => decode_choice resp_choice p_tok c_tok (ApiUsage.cached resp_usage)
                     },
             }
     }

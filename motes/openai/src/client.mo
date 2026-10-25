@@ -31,7 +31,10 @@ use std::map {Map, BTreeMap}
 /// (`expected 2 constructor fields, got 0` at run time, not a compile
 /// error). A distinct name sidesteps the collision at its root.
 pub def ApiUsage.tokens (u : ApiUsage) : Pair I64 I64 :=
-    match u { ApiUsage.mk prompt_tokens completion_tokens => Pair.pair prompt_tokens completion_tokens }
+    match u { ApiUsage.mk prompt_tokens completion_tokens _ => Pair.pair prompt_tokens completion_tokens }
+
+pub def ApiUsage.cached (u : ApiUsage) : I64 :=
+    match u { ApiUsage.mk _ _ cached_tokens => cached_tokens }
 
 def openai_headers (api_key : Option String) : Headers :=
     let base := Headers.set "Content-Type" "application/json" Headers.empty in
@@ -262,24 +265,46 @@ struct OpenaiAcc {
 /// an otherwise complete stream.
 def openai_usage_of (j : Json) : ApiUsage :=
     match Json.get_object j {
-        Result.err _ => ApiUsage.mk 0 0,
+        Result.err _ => ApiUsage.mk 0 0 0,
         Result.ok obj =>
+            let cached : I64 := openai_cached_of obj in
             match Json.object_get "prompt_tokens" obj {
-                Option.none => ApiUsage.mk 0 0,
+                Option.none => ApiUsage.mk 0 0 0,
                 Option.some pj =>
                     match Json.get_num_i64 (Json.get_num pj) {
-                        Result.err _ => ApiUsage.mk 0 0,
+                        Result.err _ => ApiUsage.mk 0 0 0,
                         Result.ok pt =>
                             match Json.object_get "completion_tokens" obj {
-                                Option.none => ApiUsage.mk pt 0,
+                                Option.none => ApiUsage.mk pt 0 cached,
                                 Option.some cj =>
                                     match Json.get_num_i64 (Json.get_num cj) {
-                                        Result.err _ => ApiUsage.mk pt 0,
-                                        Result.ok ct => ApiUsage.mk pt ct,
+                                        Result.err _ => ApiUsage.mk pt 0 cached,
+                                        Result.ok ct => ApiUsage.mk pt ct cached,
                                     }
                             }
                     }
             }
+    }
+
+/// `prompt_tokens_details.cached_tokens`, leniently: absent or malformed
+/// is 0. OpenAI's `prompt_tokens` already includes these, so this field
+/// is display/accounting only -- never added to the prompt size.
+def openai_cached_of (obj : BTreeMap String Json) : I64 :=
+    match Json.object_get "prompt_tokens_details" obj {
+        Option.none => 0,
+        Option.some dj =>
+            match Json.get_object dj {
+                Result.err _ => 0,
+                Result.ok dobj =>
+                    match Json.object_get "cached_tokens" dobj {
+                        Option.none => 0,
+                        Option.some cj =>
+                            match Json.get_num_i64 (Json.get_num cj) {
+                                Result.err _ => 0,
+                                Result.ok c => c,
+                            },
+                    },
+            },
     }
 
 /// A string field read leniently: absent or non-string is none, never
@@ -601,7 +626,7 @@ def openai_finish (acc : OpenaiAcc) : Result String ChatResponse :=
     }
 
 def openai_stream_io (u : Uri) (headers : Headers) (body_str : String) (on_text : String -> IO Unit) : IO (Result String ChatResponse) := do {
-    let init : OpenaiAcc := { sse := Sse.init, text := "", tools := List.empty, finish := "", usage := ApiUsage.mk 0 0, error := Option.none };
+    let init : OpenaiAcc := { sse := Sse.init, text := "", tools := List.empty, finish := "", usage := ApiUsage.mk 0 0 0, error := Option.none };
     let res <- Client.post_stream_timeout u headers (Body.from_text body_str) Client.default_stream_idle_ms init (fn st bytes => openai_stream_bytes on_text st bytes);
     return (match res {
         Result.err e => Result.err e,

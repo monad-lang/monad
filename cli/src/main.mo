@@ -19,9 +19,9 @@ use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir, mkdir_parent}
 use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
-use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, validate_reachable_elaborated}
-use lang::codegen::decls {collect_all_decls_from_modules, export_names, filter_reachable_decls}
-use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, best_effort_decls, elaborate_module_decls_reporting, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
+use lang::codegen::decls {collect_all_decls_from_modules, export_names}
+use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
   Mote.discover, Mote.workspace_members, MoteManifest, BinTarget,
@@ -54,7 +54,7 @@ use clap::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`std/src/log.mo` -- its own header documents the gating rules).
 use std::log {fail_line, ok_line, stage}
-use lang::lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
+use lang::eval_run {EvalRun.run_file}
 use lang::core_ir {CoreIr}
 use lang::core_eval {eval, basic_native_table}
 use lang::core_value {GlobalTable, env_nil, global_cache_new, global_table_len}
@@ -863,155 +863,23 @@ def run_file (path : String) (verbose : Bool) (debug : Bool) (program_args : Lis
     }
 }
 
-/// Evaluate a source file using the self-hosted interpreter (lower to
-/// CoreIr + evaluate via `lang.core_eval`), without compiling to a
-/// native binary. Mirrors the Rust host's `monad-rs run <file>` for
-/// pure programs — loads the file's dependencies, elaborates, type-
-/// checks the target, lowers to CoreIr, and evaluates `main`. Only the
-/// 8 natives in `basic_native_table` are available (no IO/println);
-/// programs using other natives fail with `ce_unknown_native`.
-#[partial]
-def eval_file (file_path : String) (verbose : Bool) : IO I64 {
-    stage verbose "load + elaborate modules";
-    let elaborated_result <- elaborate_loaded_modules file_path false verbose;
-    match elaborated_result {
-        Result.err e => do {
-            fail_line ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
+/// Evaluate a source file using the self-hosted interpreter. The
+/// pipeline lives in `lang::eval_run`, shared with weaver's
+/// `monad_eval` tool -- one loader/checker/lowering/evaluator, one
+/// error vocabulary. Pure programs only (`basic_native_table`).
+def eval_file (file_path : String) (verbose : Bool) : IO I64 := do {
+    let r <- EvalRun.run_file file_path verbose;
+    match r {
+        Result.ok text => do {
+            println text;
+            return 0
+        },
+        Result.err text => do {
+            fail_line text;
             return 1
         },
-        Result.ok em => do {
-            let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-            stage verbose "typecheck target";
-            let checked <- check_module_with_scope_path em.scope em.target_decls empty_locs file_path verbose;
-            let _shown <- print_diagnostics (CheckDiagnostics.warnings checked);
-            let diags : List String := CheckDiagnostics.errors checked;
-            match diags {
-                List.cons _ _ => do {
-                    fail_line "FAILED at stage: typecheck (target file did not typecheck cleanly)";
-                    print_diagnostics diags;
-                    return 1
-                },
-                List.empty => do {
-                    let eval_result <- eval_file_typechecked em verbose;
-                    return eval_result
-                },
-            }
-        },
     }
 }
-
-/// The `-- eval` pipeline after the typecheck gate passes: lower the
-/// target's elaborated decls to CoreIr rooted at `main`, then hand the
-/// result to `eval_file_lowered`. Split out of `eval_file` so its own
-/// match/do nesting stays at the self-hosted parser's known-good depth
-/// (same shape as `compile_file` delegating to `compile_file_codegen`)
-/// -- the 4-deep bare-match chain this used to inline in one do-block
-/// arm is exactly the shape `lang/parser.mo` fails to parse.
-#[partial]
-def eval_file_typechecked (em : ElaboratedModules) (verbose : Bool) : IO I64 {
-    stage verbose "lower";
-    // Prepare the whole graph for real execution before lowering --
-    // the same "elaborate + dispatch" recipe the codegen pipeline and
-    // `meta_eval_invoke`'s callers use (`compile_loaded_modules_to_ir_`
-    // with_debug`/`expand_decls_graph`). `em.elaborated_decls` is the
-    // raw elaborated graph: its class-method calls (`*` on I64 is
-    // `HMul.mul` underneath) are still syntactic, and lowering them
-    // failed with `le_unresolved_name` before this.
-    //
-    // `_reporting`, not `_best_effort`: the reachable decls are about to be
-    // LOWERED and evaluated, so a decl that failed to elaborate must not be
-    // silently kept -- the same hard gate the compile and test-driver
-    // pipelines run (2026-10-25, standing Item 11). The reachable closure is
-    // rooted at the bare "main" the lowerer itself uses below.
-    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-    let elab_report := elaborate_module_decls_reporting em.scope em.elaborated_decls empty_locs;
-    let dispatched : List Decl := best_effort_decls elab_report;
-    let reachable : List Decl := filter_reachable_decls ["main"] dispatched;
-    match validate_reachable_elaborated elab_report reachable {
-        Result.err e => do {
-            fail_line ("FAILED at stage: elaborate (" ++ e ++ ")");
-            return 1
-        },
-        Result.ok _ => eval_lower_and_run dispatched verbose,
-    }
-}
-
-/// `eval_file_typechecked`'s lowering tail, split out so the gate just above
-/// adds one match level without deepening this match/do nest (the reason
-/// this function was split from `eval_file` in the first place).
-#[partial]
-def eval_lower_and_run (dispatched : List Decl) (verbose : Bool) : IO I64 {
-    // `lower_root` roots at a DEF name, not a module name: the target
-    // file's `main` def. The graph above is from BEFORE codegen's
-    // `qualify_modules` stage, so def names are still bare -- rooting
-    // at `[module_name]` failed lower with "unresolved module path
-    // <module>".
-    // Two shapes of the same root, because the two calls want
-    // different ones: `lower_ctx_from_decls` carries a module identity
-    // (`ModulePath`), `lower_root` roots at a DEF name (`NamePath`).
-    // Both are the one-segment "main".
-    let root_mp : ModulePath := ModulePath.mk [Identifier.id "main"];
-    let root_np : NamePath := NamePath.mk [Identifier.id "main"];
-    let ctx := lower_ctx_from_decls root_mp dispatched;
-    match lower_root ctx root_np {
-        Result.err e => do {
-            fail_line ("FAILED at stage: lower (" ++ show_lower_error e ++ ")");
-            return 1
-        },
-        Result.ok pr => do {
-            match pr {
-                Pair.pair ir globals => do {
-                    let eval_result <- eval_file_lowered ir globals;
-                    return eval_result
-                },
-            }
-        },
-    }
-}
-
-/// The tail of the `-- eval` pipeline: run the interpreter on lowered
-/// CoreIr + globals and print the result. `eval` threads a memoized
-/// global cache alongside the result; once the root value exists every
-/// global it forced is already in it, so the cache is simply discarded.
-#[partial]
-def eval_file_lowered (ir : CoreIr) (globals : GlobalTable) : IO I64 {
-    match eval ir Env.env_nil globals basic_native_table (global_cache_new (global_table_len globals)) {
-        Pair.pair r _ => do {
-            match r {
-                Result.ok v => do {
-                    println ("Eval result " ++ show_value_debug v);
-                    return 0
-                },
-                Result.err e => do {
-                    fail_line ("FAILED at stage: eval (" ++ show_core_eval_error_debug e ++ ")");
-                    return 1
-                },
-            }
-        },
-    }
-}
-
-/// Render a `LowerError` for the eval command's error output. Covers
-/// every variant: this is a `#[partial]` def, so a missing arm is not a
-/// compile error but a runtime "non-exhaustive match" crash exactly
-/// when the eval command needs its diagnosis most (that crash was the
-/// first bug the eval smoke test hit -- `le_unresolved_name`).
-#[partial]
-def show_lower_error (e : LowerError) : String :=
-    match e {
-        LowerError.le_unresolved_name name => String.concat "unresolved name " (show_identifier name),
-        LowerError.le_unresolved_module_path path => String.concat "unresolved module path " (module_path_to_string_colon path),
-        LowerError.le_unknown_inductive path => String.concat "unknown inductive " (show_module_path path),
-        LowerError.le_unknown_constructor path => String.concat "unknown constructor " (show_module_path path),
-        LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
-        LowerError.le_type_level_term => "type-level term reached lowering",
-        LowerError.le_con_hole_before_filled_arg => "constructor hole before a filled arg",
-        LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
-        LowerError.le_float_literal_unsupported => "float literals are not supported by `monad eval` (the eval IR cannot carry one yet); `monad test` and `monad build` compile them correctly",
-        LowerError.le_unresolved_macro_artifact => "an unresolved macro-template variable or quote reached lowering",
-        LowerError.le_elim_not_lowered => "a dependent match/if reached meta-eval lowering with no lowering rule yet",
-        LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
-    }
 
 /// The original `compile_file` body, unchanged -- codegen's own loading
 /// + compile pipeline, run only once the gate above has confirmed the

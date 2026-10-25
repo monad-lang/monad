@@ -12,6 +12,8 @@
 /// single-selection menu's highlight, not a scrolling transcript).
 use shuttle::agent {RunState}
 use shuttle::message {Message, Usage}
+use shuttle::context {usage_zero}
+use weaver::usage {Usage.delta}
 use weaver::commands {WeaverState, Effect}
 use weaver::overlay {OverlayState}
 use weaver::format {format_tokens, format_elapsed}
@@ -51,7 +53,11 @@ pub type WeaverMsg {
     key_event (e : Event),
     /// `delta` is the turn's FULL history delta (the user message
     /// included); `lines` is the rendered display block.
-    turn_result (run : RunState) (lines : List TLine) (delta : List Message),
+    /// `last_context` is the real prompt size of the turn's last model
+    /// call; `plan` is the assistant text captured while the turn ran in
+    /// plan mode (none otherwise).
+    turn_result (run : RunState) (lines : List TLine) (delta : List Message)
+                (last_context : I64) (plan : Option String),
     turn_failed (run : RunState) (e : WeaverError),
     command_result (effect : Effect),
     command_failed (e : WeaverError),
@@ -247,7 +253,7 @@ pub struct TuiModel {
     rows_key : Option RowsKey := Option.none,
     /// The mouse selection over DISPLAY rows (cleared whenever the rows
     /// cache is rebuilt: scroll, append, page load, resize).
-    sel : Option Selection := Option.none,
+    sel : Option TextSelection := Option.none,
     /// The launch banner shows until the first submit.
     banner : Bool := true,
     /// The one-time shuttle sweep's tick counter (stops at 12).
@@ -256,6 +262,9 @@ pub struct TuiModel {
     /// session in `state.run` is the PRE-turn snapshot, so this is the
     /// live token count the thinking row shows.
     live_spent : Option Usage := Option.none,
+    /// The cumulative spend at submit: `live_spent` minus this is the
+    /// TURN's delta (the file carries cumulative billing).
+    live_base : Option Usage := Option.none,
     /// The submitted line opened a full-screen modal that owns the
     /// terminal: the main loop must not tick-redraw over it (interleaved
     /// writes corrupt the modal's paint).
@@ -300,7 +309,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
@@ -528,7 +537,7 @@ pub def Model.input_release (m : TuiModel) (row : I64) (col : I64) : Pair TuiMod
         Pair.pair input2 text => Pair.pair { dragged with input := input2 } text,
     }
 
-pub struct Selection {
+pub struct TextSelection {
     anchor_row : I64,
     anchor_col : I64,
     focus_row : I64,
@@ -565,7 +574,7 @@ pub def Model.begin_selection (m : TuiModel) (row : I64) (col : I64) : TuiModel 
         Option.none => { m with sel := Option.none },
         Option.some pr => match pr {
             Pair.pair r c =>
-                let s : Selection := { anchor_row := r, anchor_col := c, focus_row := r, focus_col := c, moved := false } in
+                let s : TextSelection := { anchor_row := r, anchor_col := c, focus_row := r, focus_col := c, moved := false } in
                 { m with sel := Option.some s },
         },
     }
@@ -579,7 +588,7 @@ pub def Model.drag_selection (m : TuiModel) (row : I64) (col : I64) : TuiModel :
                 Pair.pair r c =>
                     let moved : Bool := Bool.or s.moved
                         (Bool.or (Bool.not (r == s.anchor_row)) (Bool.not (c == s.anchor_col))) in
-                    let s2 : Selection := { s with focus_row := r, focus_col := c, moved := moved } in
+                    let s2 : TextSelection := { s with focus_row := r, focus_col := c, moved := moved } in
                     { m with sel := Option.some s2 },
             },
         },
@@ -603,7 +612,7 @@ struct SelSpan {
     right : I64
 }
 
-def sel_span (s : Selection) : SelSpan :=
+def sel_span (s : TextSelection) : SelSpan :=
     let forward : Bool := Bool.or (s.anchor_row < s.focus_row)
         (Bool.and (s.anchor_row == s.focus_row) (Bool.not (s.focus_col < s.anchor_col))) in
     let top : I64 := if forward then s.anchor_row else s.focus_row in
@@ -932,12 +941,16 @@ def transcript_column (m : TuiModel) : Widget :=
         Widget.column (List.append body (List.append stream [Model.display_row_widget (Model.live_row m)]))
     else Widget.column body
 
-/// The cumulative spend the live row shows: the on_usage snapshot when the
-/// turn has reported one, else the session's pre-turn total.
+/// The TURN's spend the live row shows: the cumulative report from
+/// `on_usage` minus the submit-time baseline. Zero until the first model
+/// call reports.
 pub def Model.thinking_spent (m : TuiModel) : Usage :=
     match m.live_spent {
-        Option.some u => u,
-        Option.none => m.state.run.session.spent,
+        Option.some u => match m.live_base {
+            Option.some base => Usage.delta u base,
+            Option.none => u,
+        },
+        Option.none => usage_zero,
     }
 
 /// `| thinking 3.4s · ↑1.2k ↓345`, or `| stopping…` once Esc asked the

@@ -15,4 +15,7 @@
 //
 // No `{*}` globs.
 
-pub use lib::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.table_get, Toml.array_at}
+pub use lib::toml {
+    Toml.Value, Toml.ParseError, Toml.parse, Toml.table_get, Toml.array_at,
+    Toml.to_string,
+}

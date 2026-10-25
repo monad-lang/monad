@@ -14,19 +14,25 @@
 /// scripted pair, and the gate answers through the same seams.
 use shuttle::agent {Agent, Agent.exec, RunState, silent_stop}
 use shuttle::loop {Loop.iterate}
-use shuttle::message {Message}
+use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
-use weaver::commands {WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact}
+use weaver::commands {
+    WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact,
+    Commands.plan_after_turn, Commands.set_plan,
+}
 use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable, WeaverError.of_shuttle}
-use weaver::store {StoreState, Store.record_history}
+use weaver::store {StoreState, Store.record_history, Store.write_plan}
 use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
 use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool}
+use weaver::usage {Usage.delta}
+use weaver::format {format_tokens}
 use init::transformers {ResultT}
+use std::ref {Ref}
 use tui::terminal {Terminal.poll}
 
 /// The interactive sleep: `Terminal.poll`'s timeout IS a timed wait --
@@ -135,7 +141,7 @@ def model_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
     if st.run.turns_left < 1 then budget_step write st else drive_turn read write st text
 
 def budget_step (write : String -> IO Unit) (st : WeaverState) : IO Step := do {
-    let _ <- write "turn budget spent -- /clear or restart with --max-turns\n";
+    let _ <- write "turn budget spent -- raise it with /budget <n>, or /clear\n";
     IO.pure (mk_step st true)
 }
 
@@ -151,10 +157,44 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
             let _ <- write_note write note;
             let before : I64 := msg_len st2.run.session.history;
             let r <- ResultT.run (drive read write st2 text);
-            turn_result write st2 before r
+            let st3 : WeaverState := set_last_context_from st2 r;
+            // A plan-mode turn's text is captured and persisted; other
+            // turns leave the stored plan untouched.
+            let plan : Option String := Commands.plan_after_turn st2 r;
+            let _ <- persist_plan st2.store plan;
+            let st4 : WeaverState := match plan {
+                Option.none => st3,
+                Option.some p => Commands.set_plan st3 (Option.some p),
+            };
+            turn_result write st4 before r
         }
     }
 }
+
+/// The turn's billed input delta, an upper bound on the next request's
+/// prompt size (the status line takes max(this, Compact.estimate)).
+def set_last_context_from (st : WeaverState) (r : Result WeaverError RunState) : WeaverState :=
+    match r {
+        Result.err _ => st,
+        Result.ok run2 =>
+            let d : Usage := Usage.delta run2.session.spent st.run.session.spent in
+            let st2 : WeaverState := { st with last_context := d.input_tokens } in
+            st2,
+    }
+
+/// Persist a plan-mode turn's text for later `/plan` displays. Silent
+/// on failure: the in-memory plan and the history remain the fallback.
+def persist_plan (store : Option StoreState) (p : Option String) : IO Unit :=
+    match p {
+        Option.none => IO.pure unit,
+        Option.some text => match store {
+            Option.none => IO.pure unit,
+            Option.some s => do {
+                let _ <- Store.write_plan s.dir text;
+                IO.pure unit
+            },
+        },
+    }
 
 def write_note (write : String -> IO Unit) (note : Option String) : IO Unit :=
     match note {
@@ -256,7 +296,7 @@ def drive (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : 
 def drive_ready (read : Unit -> IO (Option String)) (write : String -> IO Unit) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let base : RunState := st.run;
     let with_task : RunState := { base with reg := ToolRegistry.register (Subagent.task_tool base.session.config Option.none Option.none silent_stop) base.reg };
-    let gated : RunState := gate_for st.mode read (theme_write write st.colors) with_task;
+    let gated : RunState := gate_for st read (theme_write write st.colors) with_task;
     let ready : RunState := append_user gated text;
     drive_loop ready
 }
@@ -285,8 +325,8 @@ def shuttle_result (r : Result String (Pair RunState Unit)) : Result WeaverError
 def run_of_pair (p : Pair RunState Unit) : RunState :=
     match p { Pair.pair r _ => r }
 
-def gate_for (mode : Mode) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (run : RunState) : RunState :=
-    let r2 : RunState := { run with gate := Gate.weaver mode read write } in
+def gate_for (st : WeaverState) (read : Unit -> IO (Option String)) (write : String -> IO Unit) (run : RunState) : RunState :=
+    let r2 : RunState := { run with gate := Gate.weaver st.mode st.grants st.workspace_root read write } in
     r2
 
 def append_user (run : RunState) (text : String) : RunState :=
@@ -316,7 +356,13 @@ def prompt_line (st : WeaverState) : String :=
 
 /// Everything `prompt_line` shows except the trailing `"> "` prompt.
 pub def Dumb.status_fields (st : WeaverState) : String :=
-    auto_warning st.mode
+    let spent : Usage := st.run.session.spent in
+    let turns : String := I64.to_string st.run.session.turns in
+    let budget_text : String := I64.to_string st.budget in
+    let in_text : String := format_tokens spent.input_tokens in
+    let out_text : String := format_tokens spent.output_tokens in
+    let cached_text : String := format_tokens spent.cached_tokens in
+    let head : String := auto_warning st.mode
         ++ "["
         ++ Mode.show st.mode
         ++ "] "
@@ -324,15 +370,25 @@ pub def Dumb.status_fields (st : WeaverState) : String :=
         ++ "/"
         ++ st.run.session.config.model
         ++ " | turns "
-        ++ I64.to_string st.run.session.turns
+        ++ turns
         ++ "/"
-        ++ I64.to_string st.budget
-        ++ " | tokens in "
-        ++ I64.to_string st.run.session.spent.input_tokens
-        ++ ", out "
-        ++ I64.to_string st.run.session.spent.output_tokens
-        ++ ", cached "
-        ++ I64.to_string st.run.session.spent.cached_tokens
+        ++ budget_text
+        ++ " | ctx "
+        ++ ctx_text st in
+    head ++ " | spent in " ++ in_text ++ ", out " ++ out_text ++ ", cached " ++ cached_text
+
+/// `12.3k/128k (10%)`, or just the count when autocompact is disabled
+/// by a zero window (a percentage of zero is meaningless).
+def ctx_text (st : WeaverState) : String :=
+    let used : I64 := Commands.context_used st in
+    let window : I64 := st.context_window in
+    if I64.lt window 1
+    then format_tokens used
+    else
+        let pct : I64 := Commands.context_percent st in
+        String.concat (format_tokens used) (String.concat "/"
+            (String.concat (format_tokens window)
+                (String.concat " (" (String.concat (I64.to_string pct) "%)"))))
 
 /// `auto` mode is a trust setting, not a sandbox -- say so while it
 /// is on.

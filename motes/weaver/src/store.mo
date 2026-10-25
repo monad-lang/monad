@@ -86,6 +86,10 @@ pub struct StoreMeta {
     /// session; after a compaction it is the block holding the
     /// rewritten history, and the older blocks stay on disk.
     history_base : I64 := 1,
+    /// The last plan-mode assistant text, so `/plan` still shows the
+    /// plan after approval, after later turns, and after a resume.
+    /// Absent in sessions written before the field existed.
+    plan : Option String := Option.none,
 }
 
 pub def Store.tail_lines : I64 := 512
@@ -456,6 +460,12 @@ def decode_index_finish (total : I64) (next_seq : I64) (js : List Json) : Result
             Result.ok i,
     }
 
+def plan_json (p : Option String) : Json :=
+    match p {
+        Option.none => Json.make_null,
+        Option.some s => Json.make_str s,
+    }
+
 pub def Store.encode_meta (m : StoreMeta) : Json :=
     let inner : Session := m.session in
     let bare : Session := { inner with history := List.empty } in
@@ -465,7 +475,8 @@ pub def Store.encode_meta (m : StoreMeta) : Json :=
         (Map.insert "updated" (Json.make_num_int m.updated)
         (Map.insert "history_next" (Json.make_num_int m.history_next)
         (Map.insert "history_base" (Json.make_num_int m.history_base)
-        (Map.insert "session" (Session.serialize_json bare) BTreeMap.empty))))) in
+        (Map.insert "plan" (plan_json m.plan)
+        (Map.insert "session" (Session.serialize_json bare) BTreeMap.empty)))))) in
     Json.make_object body
 
 pub def Store.decode_meta (j : Json) : Result String StoreMeta :=
@@ -506,14 +517,27 @@ def decode_meta_base (obj : BTreeMap String Json) (created : I64) (updated : I64
 def decode_meta_session (obj : BTreeMap String Json) (created : I64) (updated : I64) (next : I64) (base : I64) : Result String StoreMeta :=
     match obj_field obj "session" {
         Result.err e => Result.err e,
-        Result.ok sj => decode_meta_finish sj created updated next base,
+        Result.ok sj => decode_meta_finish obj sj created updated next base,
     }
 
-def decode_meta_finish (sj : Json) (created : I64) (updated : I64) (next : I64) (base : I64) : Result String StoreMeta :=
+/// Optional `plan`: anything but a string (absent, null, malformed)
+/// decodes as none -- a plan is display state, never load-bearing.
+def decode_meta_plan (obj : BTreeMap String Json) : Option String :=
+    match Json.object_get "plan" obj {
+        Option.none => Option.none,
+        Option.some pj =>
+            match Json.get_str pj {
+                Result.ok s => if String.is_empty s then Option.none else Option.some s,
+                Result.err _ => Option.none,
+            },
+    }
+
+def decode_meta_finish (obj : BTreeMap String Json) (sj : Json) (created : I64) (updated : I64) (next : I64) (base : I64) : Result String StoreMeta :=
     match Session.deserialize_json sj {
         Result.err e => Result.err e,
         Result.ok s =>
-            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := base } in
+            let plan : Option String := decode_meta_plan obj in
+            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := base, plan := plan } in
             Result.ok m,
     }
 
@@ -742,7 +766,7 @@ def history_path (dir : Path) (seq : I64) : Path :=
     Store.child (history_dir dir) (String.concat (Store.pad12 seq) ".json")
 
 def meta_of (s : Session) (created : I64) (updated : I64) (next : I64) : StoreMeta :=
-    let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := 1i64 } in
+    let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := 1i64, plan := Option.none } in
     m
 
 def state_of (root : Path) (dir : Path) (id : String) : StoreState :=
@@ -765,6 +789,31 @@ def meta_from_text (text : String) : Result String StoreMeta :=
         Result.err _ => Result.err "session meta is not valid JSON",
         Result.ok j => Store.decode_meta j,
     }
+
+/// The plan last captured for this session (none when there is none or
+/// the meta cannot be read -- `/plan` simply falls back to history).
+pub def Store.read_plan (dir : Path) : IO (Option String) := do {
+    let r <- Store.read_meta dir;
+    match r {
+        Result.err _ => IO.pure Option.none,
+        Result.ok m => IO.pure m.plan,
+    }
+}
+
+/// Persist the plan-mode assistant text. A failure is reported to the
+/// caller but never blocks the turn: the plan is display state.
+pub def Store.write_plan (dir : Path) (p : String) : IO (Result String Unit) := do {
+    let meta_r <- Store.read_meta dir;
+    match meta_r {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok m => do {
+            let now <- Bench.now;
+            let m2 : StoreMeta := { m with plan := Option.some p, updated := now };
+            let ok <- write_meta_at dir m2;
+            if ok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the session meta")
+        }
+    }
+}
 
 /// A session's two child directories must exist before anything is
 /// written: `mkdir` failures are otherwise silent, leaving a directory

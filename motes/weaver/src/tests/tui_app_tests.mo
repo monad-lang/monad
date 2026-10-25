@@ -42,7 +42,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false }
 
 def state_of (mode : Mode) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none,  mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, store := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
     let m : TuiModel := init_tui_model Option.none (state_of mode) 24 80 in
@@ -280,7 +280,7 @@ def test_turn_end_clears_the_live_stream : Bool :=
     let st : WeaverState := state_of Mode.manual in
     let base0 : TuiModel := model_of Mode.manual in
     let base : TuiModel := { base0 with turn_pending := true, live_text := "partial", live_thinking := "why" } in
-    match TuiApp.update base (WeaverMsg.turn_result st.run [] []) {
+    match TuiApp.update base (WeaverMsg.turn_result st.run [] [] 0 Option.none) {
         Pair.pair m2 _ => String.is_empty m2.live_text && String.is_empty m2.live_thinking
     }
 
@@ -468,7 +468,7 @@ def enter_pending (m : TuiModel) : TuiModel :=
 // (the progress fragment's cleanup); a run rides back into the state.
 #[test]
 def test_turn_result_ends_the_turn : Bool :=
-    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.turn_result run_of [TLine.plain "done"] List.empty) {
+    match TuiApp.update (enter_pending (model_of Mode.manual)) (WeaverMsg.turn_result run_of [TLine.plain "done"] List.empty 0 Option.none) {
         Pair.pair m2 cmd =>
             cmd_is_perform_repaint cmd
                 && Bool.not m2.turn_pending
@@ -481,7 +481,7 @@ def test_turn_result_ends_the_turn : Bool :=
 def test_enter_resets_the_live_clock : Bool :=
     let m : TuiModel := enter_pending (model_of Mode.manual) in
     m.spinner_frame == 0 && m.scroll == 0
-        && (match m.live_spent { Option.some _ => true, Option.none => false })
+        && (match m.live_base { Option.some _ => true, Option.none => false })
 
 // The tenth frame arms the 1 Hz usage poll (an inspect, not a repaint).
 #[test]
@@ -565,7 +565,7 @@ def test_stopped_turn_appends_the_line : Bool :=
     let base : RunState := run_of in
     let stopped_run : RunState := { base with stopped := true } in
     match TuiApp.update (enter_pending (model_of Mode.manual))
-            (WeaverMsg.turn_result stopped_run [TLine.plain "partial answer"] List.empty) {
+            (WeaverMsg.turn_result stopped_run [TLine.plain "partial answer"] List.empty 0 Option.none) {
         Pair.pair m2 _ =>
             transcript_contains "[stopped]" m2.transcript.tail
                 && Bool.not m2.turn_pending

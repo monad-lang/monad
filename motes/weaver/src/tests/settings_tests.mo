@@ -10,6 +10,7 @@ use std::test {Test.write_fixture}
 use weaver::settings {
     Settings, Settings.empty, Settings.merge, Settings.load_of_path,
     Settings.cap_of, Settings.key_of, Loaded, parse_settings, parse_warned, parse_cap,
+    SettingsUpdate, Settings.render_update,
 }
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::policy {Mode}
@@ -311,3 +312,49 @@ def test_merge_api_keys_project_wins_per_key : Bool :=
     opt_str_eq (Settings.key_of "mistral" m) (Option.some "sk-project-mistral")
         && opt_str_eq (Settings.key_of "shared" m) (Option.some "sk-global-shared")
         && opt_str_eq (Settings.key_of "anthropic" m) Option.none
+
+// ── Saving (the /settings dialog's explicit targets) ───────────────────
+
+def sample_update : SettingsUpdate := {
+    mode := Option.some "plan",
+    provider := Option.none,
+    model := Option.none,
+    max_turns := Option.some 100,
+    thinking := Option.some true,
+    max_tokens := Option.some 4096,
+    context_window := Option.none,
+    compact_at := Option.none,
+}
+
+/// An absent file renders a fresh document with only the named keys.
+#[test]
+def test_render_update_from_scratch : Bool :=
+    match Settings.render_update "" sample_update {
+        Result.err _ => false,
+        Result.ok out =>
+            String.contains out "mode = \"plan\""
+                && String.contains out "max_tokens = 4096"
+                && String.contains out "max_turns = 100"
+                && String.contains out "thinking = true",
+    }
+
+/// Re-rendering preserves unknown keys and other tables -- the save
+/// never silently drops a user's config.
+#[test]
+def test_render_update_preserves_unknown_keys : Bool :=
+    let existing := "custom_key = 7\n\n[mcp_caps]\nserver = \"read\"\n" in
+    match Settings.render_update existing sample_update {
+        Result.err _ => false,
+        Result.ok out =>
+            String.contains out "custom_key = 7"
+                && String.contains out "[mcp_caps]"
+                && String.contains out "mode = \"plan\"",
+    }
+
+/// A file that fails to parse is refused, never overwritten.
+#[test]
+def test_render_update_refuses_unparsable_input : Bool :=
+    match Settings.render_update "this is not toml =" sample_update {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }

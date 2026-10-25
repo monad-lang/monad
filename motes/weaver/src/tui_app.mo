@@ -19,11 +19,19 @@ use shuttle::agent {RunState}
 use shuttle::registry {ToolRegistry}
 use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
+use shuttle::context {usage_zero}
 use shuttle::message_types {Role, Content}
-use weaver::commands {WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model, Commands.autocompact}
+use weaver::usage {Usage.delta}
+use std::ref {Ref}
+use weaver::commands {
+    WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
+    Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
+    Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, SettingRow,
+}
 use log::logger {Logger}
-use weaver::policy {Mode, Mode.cycle, Policy.decide, Decision}
-use weaver::gate {pick_header, pick_target, cap_name, capped_diff}
+use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Decision}
+use weaver::gate {pick_header, pick_target, cap_name, capped_diff, PickAnswer, record_answer, answer_approval}
+use weaver::permissions {PermGrant, Permissions.get, Permissions.matches, Permissions.pick_in_repo, Permissions.render}
 use weaver::diff {Diff.for_input, Diff.lines}
 use weaver::dumb {append_user, drive_loop}
 use weaver::model {
@@ -44,7 +52,7 @@ use weaver::store {
     Transcript.empty, Transcript.with_page, Transcript.next_block, Transcript.append,
     Store.read_page, Store.append_transcript, Store.record_turn, Store.record_output,
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
-    Store.append_history_note, Store.child, Store.append_named, Store.write_named,
+    Store.append_history_note, Store.child, Store.append_named, Store.write_named, Store.write_plan,
     Store.read_named, Store.read_named_from, Store.read_live_from, Store.discard_named,
 }
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
@@ -136,10 +144,25 @@ pub def tick_redraw (m : TuiModel) : Bool :=
 /// The loop's read gate: while a dialog is open, ack its ownership (only
 /// now -- the poll has already marked the overlay open and this model's
 /// last frame has drawn) and decline the read. Otherwise read normally.
-def reads_input (m : TuiModel) : IO Bool :=
-    if m.overlay_open
+pub def TuiApp.enter_key_probe (m : TuiModel) (text : String) : TuiModel :=
+    match enter_key m text {
+        Pair.pair m2 _ => m2,
+    }
+
+def reads_input (m : TuiModel) : IO Bool := do {
+    // Read the handshake FILE, not just the polled `overlay_open`: the
+    // poll is a tick message, and a dialog must own stdin even on a loop
+    // whose tick state is stale (the frame clock is not the authority on
+    // who reads). Acking here is what `Overlay.begin` waits for.
+    let ov <- Overlay.read m.state.store;
+    let want : Bool := match ov {
+        Option.some s => s.want,
+        Option.none => m.overlay_open,
+    };
+    if want
     then do { Overlay.ack m.state.store; IO.pure false }
     else IO.pure true
+}
 
 // ── update ───────────────────────────────────────────────────────────────
 
@@ -155,7 +178,7 @@ pub def TuiApp.update (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd Weav
 def update_msg (m : TuiModel) (msg : WeaverMsg) : Pair TuiModel (Cmd WeaverMsg) :=
     match msg {
         WeaverMsg.key_event e => update_event m e,
-        WeaverMsg.turn_result run lines delta => turn_result_step m run lines delta,
+        WeaverMsg.turn_result run lines delta last_context plan => turn_result_step m run lines delta last_context plan,
         WeaverMsg.turn_failed run e => failure_step m run e,
         WeaverMsg.command_result effect => command_result_step m effect,
         WeaverMsg.command_failed e => failure_step m m.state.run e,
@@ -258,13 +281,20 @@ def persist_output_cmd (fallback : Cmd WeaverMsg) (store : Option StoreState) (s
         Option.some s => Cmd.perform (fn (_ : Unit) => persist_output_action s sess start block),
     }
 
-def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta : List Message) : Pair TuiModel (Cmd WeaverMsg) :=
+def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta : List Message) (last_context : I64) (plan : Option String) : Pair TuiModel (Cmd WeaverMsg) :=
     // A stopped turn keeps its partial block and carries one marker line.
     // It is display output, not history: the session's messages are the
     // ones the loop kept.
     let shown : List TLine :=
         if run.stopped then List.append lines [TLine.plain "[stopped]"] else lines in
-    let with_run : TuiModel := set_run m run in
+    let st1 : WeaverState := { (m.state) with run := run, last_context := last_context } in
+    let st2 : WeaverState := match plan {
+        Option.none => st1,
+        Option.some p =>
+            let st_plan : WeaverState := { st1 with plan := Option.some p } in
+            st_plan,
+    } in
+    let with_run : TuiModel := set_state m st2 in
     let pair := append_block_at with_run shown in
     match pair {
         Pair.pair m2 at => match at {
@@ -389,7 +419,7 @@ def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd We
 /// A turn's or command's completion: the fold `f` runs, the streak
 /// resets, and `turn_pending` clears -- the spinner stops.
 def with_turn_end (f : TuiModel -> TuiModel) (m : TuiModel) : TuiModel :=
-    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none,
+    { (with_streak_reset f m) with turn_pending := false, live_spent := Option.none, live_base := Option.none,
         live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
         live_activity := Option.none, modal := false, stop_requested := false, overlay_open := false }
 
@@ -443,7 +473,8 @@ def read_usage (store : Option StoreState) : IO (Option Usage) := do {
     }
 }
 
-/// `on_usage`: persist the cumulative spend (and the logger, once wired).
+/// `on_usage`: persist the CUMULATIVE spend for the 1 Hz live row; the
+/// row subtracts the submit-time baseline (`live_base`) to show the turn.
 def usage_live (log : Option Logger) (store : Option StoreState) (u : Usage) : IO Unit := do {
     write_usage store u;
     Logs.debug log (String.concat "ev=model_usage in=" (String.concat (I64.to_string u.input_tokens)
@@ -651,9 +682,10 @@ def update_event (m : TuiModel) (e : Event) : Pair TuiModel (Cmd WeaverMsg) :=
             // Every pending tick polls the dialog handshake (and, every
             // tenth frame, the live usage). `Cmd.inspect` folds the
             // result without forcing a repaint.
-            if m2.turn_pending
-            then Pair.pair m2 (Cmd.inspect (poll_action m2.state.store m2.spinner_frame m2.live_seen m2.live_thinking_seen))
-            else Pair.pair m2 Cmd.none,
+            // The handshake poll runs on EVERY tick, not only while a
+            // turn is pending: a dialog opened by a fiber must be seen
+            // and acked even if the model's own pending flag is stale.
+            Pair.pair m2 (Cmd.inspect (poll_action m2.state.store m2.spinner_frame m2.live_seen m2.live_thinking_seen)),
         _ => Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none,
     }
 
@@ -978,12 +1010,14 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
             { (with_streak_reset
                 (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
                 with turn_pending := true, banner := false, spinner_frame := 0,
-                     live_spent := Option.some m.state.run.session.spent,
+                     live_spent := Option.none, live_base := Option.some m.state.run.session.spent,
                      live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
                      live_activity := Option.none, scroll := 0,
                      stop_requested := false, turn_gen := gen,
                      modal := Bool.or (plan_dialog_wanted st text)
-                         (Bool.or (text == "/processes") (text == "/procs")) } in
+                         (Bool.or (text == "/processes")
+                             (Bool.or (text == "/procs")
+                                 (Bool.or (text == "/settings") (text == "/permissions")))) } in
         Pair.pair m2 (Cmd.perform_async
             (fn (_ : Unit) => do {
                 let _ <- write_echo store start block;
@@ -1068,7 +1102,7 @@ pub def run_submitted_line (log : Option Logger) (gen : I64) (st : WeaverState) 
 
 def outcome_of (msg : WeaverMsg) : String :=
     match msg {
-        WeaverMsg.turn_result run _ _ =>
+        WeaverMsg.turn_result run _ _ _ _ =>
             String.concat "ev=turn_end turns=" (String.concat (I64.to_string run.session.turns)
                 (String.concat " in=" (String.concat (I64.to_string run.session.spent.input_tokens)
                 (String.concat " out=" (I64.to_string run.session.spent.output_tokens))))) ,
@@ -1078,8 +1112,116 @@ def outcome_of (msg : WeaverMsg) : String :=
         _ => "ev=submit_other",
     }
 
+/// `/permissions` in the TUI: the current grants and one row per revoke
+/// action. Revoking is a normal command dispatch, so dumb mode and the
+/// dialog share every semantic.
+def permissions_dialog_step (st : WeaverState) : IO WeaverMsg := do {
+    let gs <- Permissions.get st.grants;
+    let o0 : DialogOption := { label := "Revoke all grants", hint := "", key := "" };
+    let o1 : DialogOption := { label := "Revoke read grants", hint := "", key := "" };
+    let o2 : DialogOption := { label := "Revoke write grants", hint := "", key := "" };
+    let o3 : DialogOption := { label := "Revoke exec grants", hint := "", key := "" };
+    let o4 : DialogOption := { label := "Revoke net grants", hint := "", key := "" };
+    let o5 : DialogOption := { label := "Close", hint := "Esc", key := "" };
+    let text : String := Permissions.render st.workspace_root (Mode.show st.mode) gs;
+    let body : List String := theme_split_lines text;
+    let opts : List DialogOption := List.cons o0 (List.cons o1 (List.cons o2 (List.cons o3 (List.cons o4 (List.cons o5 List.empty)))));
+    let d : Dialog := Dialog.make "Permissions" "session grants (cleared on /clear and /resume)" body opts;
+    let pr <- dialog_run st.colors st.store d;
+    let step : DialogStep := match pr { Pair.pair _ s => s };
+    permissions_step_msg st step
+}
+
+def permissions_step_msg (st : WeaverState) (step : DialogStep) : IO WeaverMsg :=
+    match step {
+        DialogStep.choose i => permissions_choose i st,
+        _ => IO.pure (WeaverMsg.command_result (Effect.ok st "permissions closed")),
+    }
+
+def permissions_choose (i : I64) (st : WeaverState) : IO WeaverMsg := do {
+    let line : String :=
+        if i == 0 then "/permissions revoke all"
+        else if i == 1 then "/permissions revoke read"
+        else if i == 2 then "/permissions revoke write"
+        else if i == 3 then "/permissions revoke exec"
+        else if i == 4 then "/permissions revoke net"
+        else "";
+    if String.is_empty line
+    then return (WeaverMsg.command_result (Effect.ok st "permissions closed"))
+    else do {
+        let r <- Commands.dispatch line st;
+        return (command_msg st r)
+    }
+}
+
+/// `/settings` in the TUI: one row per editable setting (Enter cycles
+/// it), then Model/Provider and the two explicit save targets. Free-form
+/// values are `/settings <key> <value>`.
+def settings_dialog_step (st : WeaverState) : IO WeaverMsg := do {
+    let rows : List SettingRow := Commands.setting_rows st;
+    let row_opts : List DialogOption := List.map (fn (r : SettingRow) =>
+        { label := String.concat r.label (String.concat ": " r.value), hint := "Enter", key := "" }) rows;
+    let a_model : DialogOption := { label := "Model... (opens the picker)", hint := "", key := "" };
+    let a_provider : DialogOption := { label := "Provider (use /provider <name>)", hint := "", key := "" };
+    let a_save_p : DialogOption := { label := "Save to project (.weaver/config.toml)", hint := "", key := "" };
+    let a_save_g : DialogOption := { label := "Save to global (~/.weaver/config.toml)", hint := "", key := "" };
+    let a_close : DialogOption := { label := "Close", hint := "Esc", key := "" };
+    let actions : List DialogOption := [a_model, a_provider, a_save_p, a_save_g, a_close];
+    let opts : List DialogOption := List.append row_opts actions;
+    let body : List String := List.map (fn (r : SettingRow) =>
+        String.concat "  " (String.concat r.label (String.concat ": " r.value))) rows;
+    let d : Dialog := Dialog.make "Settings" "Enter cycles or applies -- Esc closes" body opts;
+    let pr <- dialog_run st.colors st.store d;
+    let step : DialogStep := match pr { Pair.pair _ s => s };
+    settings_step_msg st (List.length rows) step
+}
+
+def settings_step_msg (st : WeaverState) (nrows : I64) (step : DialogStep) : IO WeaverMsg :=
+    match step {
+        DialogStep.choose i =>
+            if I64.lt i nrows
+            then settings_choose_row i st
+            else settings_choose_action (i - nrows) st,
+        _ => IO.pure (WeaverMsg.command_result (Effect.ok st "settings closed")),
+    }
+
+#[partial]
+def row_key_at (i : I64) (rows : List SettingRow) : String :=
+    match rows {
+        List.empty => "",
+        List.cons r rest => if I64.lt i 1 then r.key else row_key_at (i - 1) rest,
+    }
+
+def settings_choose_row (i : I64) (st : WeaverState) : IO WeaverMsg :=
+    let key : String := row_key_at i (Commands.setting_rows st) in
+    match Commands.cycle_setting st key {
+        Result.err e => IO.pure (WeaverMsg.command_result (Effect.ok st e)),
+        Result.ok pr => match pr {
+            Pair.pair st2 out => IO.pure (WeaverMsg.command_result (Effect.ok st2 out)),
+        },
+    }
+
+def settings_choose_action (i : I64) (st : WeaverState) : IO WeaverMsg := do {
+    let line : String :=
+        if i == 0 then "/model"
+        else if i == 1 then "/provider"
+        else if i == 2 then "/settings save project"
+        else if i == 3 then "/settings save global"
+        else "";
+    if String.is_empty line
+    then return (WeaverMsg.command_result (Effect.ok st "settings closed"))
+    else do {
+        let r <- Commands.dispatch line st;
+        return (command_msg st r)
+    }
+}
+
 def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
-    if plan_dialog_wanted st text
+    if text == "/settings"
+    then settings_dialog_step st
+    else if text == "/permissions"
+    then permissions_dialog_step st
+    else if plan_dialog_wanted st text
     then plan_dialog_step st text
     else if String.starts_with "/" text
     then command_step_tui st text
@@ -1088,11 +1230,11 @@ def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (tex
 def mode_is_plan (m : Mode) : Bool :=
     match m { Mode.plan => true, _ => false }
 
-/// In plan mode `/plan` (and `/plan approve …`) opens the review dialog
-/// instead of printing the status line.
+/// `/plan` opens the review dialog in plan mode and a read-only view
+/// outside it. `/plan approve …` stays a plain command (a deliberate
+/// direct path); only the exact command is intercepted.
 def plan_dialog_wanted (st : WeaverState) (text : String) : Bool :=
-    Bool.and (mode_is_plan st.mode)
-        (Bool.or (text == "/plan") (String.starts_with "/plan approve" text))
+    text == "/plan"
 
 def command_step_tui (st : WeaverState) (line : String) : IO WeaverMsg := do {
     let r <- Commands.dispatch line st;
@@ -1111,7 +1253,7 @@ def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :
 
 def model_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if st.run.turns_left < 1
-    then IO.pure (WeaverMsg.turn_result st.run [TLine.plain "turn budget spent -- /clear or restart with --max-turns"] List.empty)
+    then IO.pure (WeaverMsg.turn_result st.run [TLine.plain "turn budget spent -- raise it with /budget <n>, or /clear"] List.empty st.last_context Option.none)
     else drive_turn_tui log gen st text
 
 def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg := do {
@@ -1121,8 +1263,8 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
     match ac {
         Pair.pair st2 note => do {
             let before : I64 := list_msg_length st2.run.session.history;
-            // The live-usage baseline is an IO action; write it out here
-            // rather than binding IO inside the ResultT do-block.
+            // The live row's baseline: the file carries cumulative spend,
+            // and `live_base` is the submit-time total.
             write_usage st2.store st2.run.session.spent;
             let r <- ResultT.run (drive_tui log gen st2 text);
             return (turn_result_of st2 before note r)
@@ -1130,10 +1272,14 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
     }
 }
 
-def turn_result_of (st : WeaverState) (before : I64) (note : Option String) (r : Result WeaverError RunState) : WeaverMsg :=
+def turn_result_of (st : WeaverState) (before : I64) (note : Option String) (r : Result WeaverError RunState) (plan : Option String) : WeaverMsg :=
     match r {
         Result.err e => WeaverMsg.turn_failed st.run e,
         Result.ok run2 =>
+            // The turn's billed delta bounds the next request's size; the
+            // status line takes max(this, Compact.estimate).
+            let turn_usage : Usage := Usage.delta run2.session.spent st.run.session.spent in
+            let last_context : I64 := turn_usage.input_tokens in
             let delta : List Message := drop_n_messages before run2.session.history in
             let render : List Message := drop_n_messages 1 delta in
             let lines : List TLine := transcript_lines_of_messages render in
@@ -1141,7 +1287,7 @@ def turn_result_of (st : WeaverState) (before : I64) (note : Option String) (r :
                 Option.none => lines,
                 Option.some text => List.append (plain_lines (theme_split_lines text)) lines,
             } in
-            WeaverMsg.turn_result run2 with_note delta,
+            WeaverMsg.turn_result run2 with_note delta last_context plan,
     }
 
 /// The transcript's error entry: the one render point does the prose,
@@ -1158,7 +1304,7 @@ def error_line (e : WeaverError) : TLine :=
 def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg };
-    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store,
+    let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store st.grants st.workspace_root,
         emit := progress_live log st.store, on_usage := usage_live log st.store,
         should_stop := stop, stopped := false };
     let ready : RunState := append_user gated text;
@@ -1290,19 +1436,28 @@ def list_msg_length (xs : List Message) : I64 :=
 /// read for `y`/`n`/`a`. `mode` is the only parameter -- same shape as
 /// `Gate.weaver`, minus the read/write seams dumb mode needs and this
 /// does not (it owns its own screen and its own stdin read).
-pub def Gate.weaver_tui (mode : Mode) (colors : Bool) (store : Option StoreState) : Gate :=
-    { ask := weaver_tui_ask mode colors store, precheck := weaver_tui_precheck mode }
-
-def weaver_tui_precheck (mode : Mode) (p : Pick) : IO (Option Approval) :=
-    match Policy.decide p.cap mode {
-        Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
-        _ => IO.pure Option.none,
+pub def Gate.weaver_tui (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option String) : Gate :=
+    {
+        ask := weaver_tui_ask mode colors store grants root,
+        precheck := weaver_tui_precheck mode grants root,
     }
 
-def weaver_tui_ask (mode : Mode) (colors : Bool) (store : Option StoreState) (p : Pick) : IO Approval :=
+def weaver_tui_precheck (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO (Option Approval) :=
+    match Policy.decide p.cap mode {
+        Decision.refuse reason => IO.pure (Option.some (Approval.deny reason)),
+        Decision.ask => do {
+            let gs <- Permissions.get grants;
+            if Permissions.matches root gs p.cap (pick_target p)
+            then IO.pure (Option.some Approval.once)
+            else IO.pure Option.none
+        },
+        Decision.allow => IO.pure Option.none,
+    }
+
+def weaver_tui_ask (mode : Mode) (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO Approval :=
     match Policy.decide p.cap mode {
         Decision.allow => IO.pure Approval.once,
-        Decision.ask => prompt_overlay colors store p,
+        Decision.ask => prompt_overlay colors store grants root p,
         Decision.refuse reason => IO.pure (Approval.deny reason),
     }
 
@@ -1321,7 +1476,7 @@ def list_length_rows (rs : List DisplayRow) : I64 :=
         List.cons _ rest => 1 + list_length_rows rest,
     }
 
-def prompt_overlay (colors : Bool) (store : Option StoreState) (p : Pick) : IO Approval := do {
+def prompt_overlay (colors : Bool) (store : Option StoreState) (grants : Option (Ref (List PermGrant))) (root : Option String) (p : Pick) : IO Approval := do {
     let diff_pair <- Diff.for_input p.name p.input;
     // The header names the target path; repeat it as its own line so a
     // long path stays visible above the diff.
@@ -1330,64 +1485,63 @@ def prompt_overlay (colors : Bool) (store : Option StoreState) (p : Pick) : IO A
         Option.some path => List.cons (String.concat "file: " path) List.empty,
     };
     let body : List String := List.append (List.append [pick_header p] target) (diff_lines_of diff_pair);
-    let o0 : DialogOption := { label := "Approve once", hint := "y", key := "y" };
-    let o1 : DialogOption := { label := String.concat "Always allow all " (String.concat (cap_name p.cap) "s this session"), hint := "a", key := "a" };
-    let o2 : DialogOption := { label := "Deny", hint := "n", key := "n" };
+    let repo_ok : Bool := Permissions.pick_in_repo root (pick_target p);
+    let opts : List DialogOption := perm_options p.cap repo_ok;
     let subtitle : String := String.concat (cap_name p.cap) (String.concat " " p.name);
-    let d : Dialog := Dialog.make "Permission required" subtitle body [o0, o1, o2];
-    let default_idx : I64 := if cap_is_read p.cap then 0 else 2;
+    let d : Dialog := Dialog.make "Permission required" subtitle body opts;
+    let default_idx : I64 := perm_default_index p.cap repo_ok;
     let pr <- dialog_run colors store (Dialog.with_default d default_idx);
     match pr {
         Pair.pair final step => match step {
-            DialogStep.choose i => IO.pure (approval_with_note i (Dialog.note_text final)),
+            DialogStep.choose i => do {
+                let ans : PickAnswer := perm_answer_at repo_ok i;
+                let note : String := Dialog.note_text final;
+                let _ <- record_answer grants p ans;
+                IO.pure (answer_approval ans note)
+            },
             _ => IO.pure (Approval.deny "declined by user"),
         },
     }
 }
 
+/// The approval rows. `r` (repo scope) is offered only when the pick's
+/// target is a path inside the workspace root -- a shell command or an
+/// outside path has nothing to confine it to.
+def perm_options (cap : Capability) (repo_ok : Bool) : List DialogOption :=
+    let once : DialogOption := { label := "Approve once", hint := "y", key := "y" } in
+    let here : DialogOption := { label := String.concat "Always allow all " (String.concat (cap_name cap) "s in this repo"), hint := "r", key := "r" } in
+    let any : DialogOption := { label := String.concat "Always allow all " (String.concat (cap_name cap) "s this session (anywhere)"), hint := "a", key := "a" } in
+    let deny : DialogOption := { label := "Deny", hint := "n", key := "n" } in
+    if repo_ok then [once, here, any, deny] else [once, any, deny]
+
+def perm_default_index (cap : Capability) (repo_ok : Bool) : I64 :=
+    if cap_is_read cap then 0
+    else if repo_ok then 3
+    else 2
+
+/// An option index to its answer; the list shape follows `repo_ok`.
+def perm_answer_at (repo_ok : Bool) (i : I64) : PickAnswer :=
+    if repo_ok
+    then
+        if i == 0 then PickAnswer.pick_once
+        else if i == 1 then PickAnswer.pick_here
+        else if i == 2 then PickAnswer.pick_any
+        else PickAnswer.pick_deny "declined by user"
+    else
+        if i == 0 then PickAnswer.pick_once
+        else if i == 1 then PickAnswer.pick_any
+        else PickAnswer.pick_deny "declined by user"
+
 def cap_is_read (c : Capability) : Bool :=
     match c { Capability.read => true, _ => false }
 
-/// The first option approves once, the second approves for the whole
-/// session, the third denies; a non-empty note rides the answer (on an
-/// approval the model sees it on the tool result, on a denial it is the
-/// reason).
-def approval_with_note (i : I64) (note : String) : Approval :=
-    let has : Bool := Bool.not (String.is_empty note) in
-    if i == 1
-    then (if has then Approval.always_note note else Approval.always)
-    else if i == 2
-    then Approval.deny (if has then note else "declined by user")
-    else (if has then Approval.once_note note else Approval.once)
-
 // ── the plan dialog ────────────────────────────────────────────────────
 
-#[partial]
-def content_text (c : Content) : String :=
-    match c {
-        Content.text s => s,
-        _ => "",
-    }
-
-def message_text (m : Message) : String :=
-    List.intercalate "\n" (List.map content_text m.content)
-
-#[partial]
-def last_assistant_go (ms : List Message) : Option String :=
-    match ms {
-        List.empty => Option.none,
-        List.cons m rest =>
-            match m.role {
-                Role.assistant => Option.some (message_text m),
-                _ => last_assistant_go rest,
-            },
-    }
-
 /// Display bounds for a plan preview. The full text stays in the session
-/// transcript/history; the dialog only ever wraps this prefix, so a huge
-/// plan cannot stall the UI.
-def plan_preview_bytes : I64 := 65536
-def plan_preview_lines : I64 := 400
+/// transcript/history; the dialog scrolls, so the cap only bounds the
+/// wrap cost for an absurdly large plan.
+def plan_preview_bytes : I64 := 262144
+def plan_preview_lines : I64 := 2000
 
 #[partial]
 def take_lines (n : I64) (ls : List String) : List String :=
@@ -1407,8 +1561,8 @@ def plan_body_of (content : String) : List String :=
     else lines
 
 def plan_body (st : WeaverState) : List String :=
-    match last_assistant_go (List.reverse st.run.session.history) {
-        Option.none => ["(no plan message found -- keep planning, then /plan again)"],
+    match Commands.current_plan st {
+        Option.none => ["(no plan yet -- switch to plan mode with /mode plan, then ask for a plan)"],
         Option.some content => plan_body_of content,
     }
 
@@ -1432,12 +1586,45 @@ def persist_note (st : WeaverState) (note : String) : IO Unit :=
         },
     }
 
-def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg := do {
+/// Persist a plan-mode turn's text for later `/plan` displays. A store
+/// failure is silent here: the plan still lives in `WeaverState`, and
+/// the transcript/history remains the fallback.
+def persist_plan (store : Option StoreState) (p : Option String) : IO Unit :=
+    match p {
+        Option.none => IO.pure unit,
+        Option.some text => match store {
+            Option.none => IO.pure unit,
+            Option.some s => do {
+                let _ <- Store.write_plan s.dir text;
+                IO.pure unit
+            },
+        },
+    }
+
+def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
+    if mode_is_plan st.mode
+    then plan_approval_step st
+    else plan_view_step st
+
+/// Outside plan mode `/plan` is a read-only view: the plan the mode
+/// produced, still available after approval and later turns.
+def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
+    let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
+    let d0 : Dialog := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
+    let d : Dialog := { d0 with footer := "PageUp/PageDown scroll -- Enter/Esc close" };
+    let pr <- dialog_run st.colors st.store d;
+    match pr {
+        Pair.pair _ _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan closed")),
+    }
+}
+
+def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     let o0 : DialogOption := { label := "Approve and execute (allow_edit)", hint := "a", key := "a" };
     let o1 : DialogOption := { label := "Approve to manual", hint := "m", key := "m" };
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
-    let d : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
+    let d0 : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
+    let d : Dialog := { d0 with footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {

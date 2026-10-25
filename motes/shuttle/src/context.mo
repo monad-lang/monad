@@ -26,9 +26,12 @@ pub def usage_add (a : Usage) (b : Usage) : Usage :=
     } in
     out
 
-/// Total tokens actually billed for a `Usage`: input plus output.
-/// `cached_tokens` is a subset of `input_tokens` (what the provider
-/// charged less for), not an extra line item, so it is not added.
+/// Total prompt + output tokens for a `Usage`. The wires normalize
+/// `input_tokens` to the WHOLE prompt (Anthropic's cache reads and
+/// cache writes are folded in by `wire/anthropic.mo`; OpenAI's
+/// `prompt_tokens` already includes cached), so `cached_tokens` is a
+/// subset and is not added again -- it is the cheaper slice, not an
+/// extra line item.
 pub def usage_total (u : Usage) : I64 :=
     u.input_tokens + u.output_tokens
 

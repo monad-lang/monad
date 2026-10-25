@@ -15,10 +15,14 @@
 use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.parse}
 use weaver::error {WeaverError}
-use toml::toml {Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.get_integer, Toml.get_boolean, Toml.get_table, Toml.table_get}
-use std::io {IO.get_env, IO.read_file}
+use toml::toml {
+    Toml.Value, Toml.ParseError, Toml.parse, Toml.get_string, Toml.get_integer,
+    Toml.get_boolean, Toml.get_table, Toml.table_get, Toml.make_string, Toml.make_integer,
+    Toml.make_boolean, Toml.to_string,
+}
+use std::io {IO.get_env, IO.read_file, IO.write_file, IO.file_exists}
 use std::stream {StreamError, StreamError.is_not_found}
-use std::path {Path.of}
+use std::path {Path, Path.of}
 use std::map {Map, BTreeMap, BTreeMap.to_list}
 use std::list {List.intercalate}
 
@@ -406,3 +410,118 @@ pub def Settings.cap_of (server : String) (s : Settings) : Option Capability :=
 /// the more deliberate act).
 pub def Settings.key_of (provider : String) (s : Settings) : Option String :=
     Map.lookup provider s.api_keys
+
+// ── Saving (the /settings dialog's explicit targets) ───────────────────
+// Only the NAMED values are written; everything else in the target file
+// (unknown keys, [mcp_caps], an [api_keys] table already there) survives
+// because the parsed document is re-rendered rather than replaced. A
+// file that fails to parse is never overwritten -- losing a user's config
+// to a typo is worse than refusing the save.
+
+pub struct SettingsUpdate {
+    mode : Option String,
+    provider : Option String,
+    model : Option String,
+    max_turns : Option I64,
+    thinking : Option Bool,
+    max_tokens : Option I64,
+    context_window : Option I64,
+    compact_at : Option I64,
+}
+
+pub def Settings.project_file : String := ".weaver/config.toml"
+
+pub def Settings.target_file (target : String) : IO (Result String String) := do {
+    if target == "global"
+    then do {
+        let home <- IO.get_env "HOME";
+        match home {
+            Option.none => IO.pure (Result.err "HOME is unset; cannot find the global config"),
+            Option.some h => IO.pure (Result.ok (String.concat h "/.weaver/config.toml")),
+        }
+    }
+    else if target == "project"
+    then IO.pure (Result.ok Settings.project_file)
+    else IO.pure (Result.err "unknown settings target: project | global")
+}
+
+/// The pure half of a save: parse the existing document (if any),
+/// apply the update, render it back. An unparsable file is REFUSED, not
+/// replaced -- losing a config to a typo is worse than a failed save.
+pub def Settings.render_update (existing : String) (u : SettingsUpdate) : Result String String :=
+    if String.is_empty existing
+    then Result.ok (Toml.to_string (apply_update u BTreeMap.empty))
+    else match Toml.parse existing {
+        Result.err _ => Result.err "the existing config is not valid TOML; refusing to overwrite it",
+        Result.ok root => Result.ok (Toml.to_string (apply_update u root)),
+    }
+
+pub def Settings.save (target : String) (u : SettingsUpdate) : IO (Result String String) := do {
+    let tf <- Settings.target_file target;
+    match tf {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok path => do {
+            let text_r <- read_text path;
+            match text_r {
+                Result.err e => IO.pure (Result.err e),
+                Result.ok existing =>
+                    match Settings.render_update existing u {
+                        Result.err e => IO.pure (Result.err e),
+                        Result.ok out => write_update path target out,
+                    },
+            }
+        }
+    }
+}
+
+def read_text (path : String) : IO (Result String String) := do {
+    let p : Path := Path.path path;
+    let exists <- IO.file_exists p;
+    if Bool.not exists
+    then IO.pure (Result.ok "")
+    else do {
+        let r <- IO.read_file p;
+        match r {
+            Result.err _ => IO.pure (Result.err (String.concat "could not read " path)),
+            Result.ok text => IO.pure (Result.ok text),
+        }
+    }
+}
+
+def put_string (key : String) (v : Option String) (root : BTreeMap String Toml.Value) : BTreeMap String Toml.Value :=
+    match v {
+        Option.none => root,
+        Option.some s => Map.insert key (Toml.make_string s) root,
+    }
+
+def put_integer (key : String) (v : Option I64) (root : BTreeMap String Toml.Value) : BTreeMap String Toml.Value :=
+    match v {
+        Option.none => root,
+        Option.some n => Map.insert key (Toml.make_integer n) root,
+    }
+
+def put_boolean (key : String) (v : Option Bool) (root : BTreeMap String Toml.Value) : BTreeMap String Toml.Value :=
+    match v {
+        Option.none => root,
+        Option.some b => Map.insert key (Toml.make_boolean b) root,
+    }
+
+def apply_update (u : SettingsUpdate) (root : BTreeMap String Toml.Value) : BTreeMap String Toml.Value :=
+    let r1 : BTreeMap String Toml.Value := put_string "mode" u.mode root in
+    let r2 : BTreeMap String Toml.Value := put_string "provider" u.provider r1 in
+    let r3 : BTreeMap String Toml.Value := put_string "model" u.model r2 in
+    let r4 : BTreeMap String Toml.Value := put_integer "max_turns" u.max_turns r3 in
+    let r5 : BTreeMap String Toml.Value := put_boolean "thinking" u.thinking r4 in
+    let r6 : BTreeMap String Toml.Value := put_integer "max_tokens" u.max_tokens r5 in
+    let r7 : BTreeMap String Toml.Value := put_integer "context_window" u.context_window r6 in
+    put_integer "compact_at" u.compact_at r7
+
+def write_update (path : String) (target : String) (out : String) : IO (Result String String) := do {
+    let r <- IO.write_file (Path.path path) out;
+    match r {
+        Result.err _ => IO.pure (Result.err (String.concat "could not write "
+            (String.concat path " (does its directory exist?)"))),
+        Result.ok _ => IO.pure (Result.ok (String.concat "settings saved to "
+            (String.concat target (String.concat ": " path)))),
+    }
+}

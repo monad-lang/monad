@@ -26,19 +26,27 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
-use weaver::commands {WeaverState}
+use weaver::commands {WeaverState, Commands.set_plan}
+use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
+use lang::module {ModuleInfoCache, module_info_cache_empty}
 use weaver::store {
     StoreState, TLine, TLine.plain, TLine.user_line, Transcript,
     Store.sessions_root, Store.ensure_root, Store.new_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.latest_session, Store.startup_transcript,
     Store.base_name, Store.append_transcript, Store.append_note, Store.read_live, Store.discard_live,
+    Store.read_plan,
     Transcript.empty, Transcript.append, Transcript.next_block,
 }
 use weaver::theme {theme_split_lines}
 use weaver::dumb {Dumb.run, Dumb.poll_sleep}
 use weaver::policy {Mode}
-use weaver::providers {Weaver.preset, Weaver.provider_of}
+use weaver::providers {
+    Weaver.preset, Weaver.provider_of, Weaver.default_max_tokens,
+    Weaver.default_max_turns, Weaver.default_window,
+}
 use std::map {BTreeMap}
+use std::ref {Ref, Ref.new}
+use weaver::permissions {PermGrant}
 use weaver::settings {Settings, Settings.load, Settings.cap_of}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
@@ -56,23 +64,28 @@ use std::path {Path, Path.of}
 use std::list {List.intercalate, List.length}
 use std::map {Map}
 
-/// The registry Weaver ships: all six built-ins (a coding agent's
-/// whole point is the write/edit pair; shuttle's own CLI ships only
-/// the read-side four) plus every `--mcp` mount's proxies.
-def weaver_registry : ToolRegistry :=
-    ToolRegistry.register StartProcessTool.impl
-        (ToolRegistry.register ReadProcessTool.impl
-            (ToolRegistry.register KillProcessTool.impl
-                (ToolRegistry.register ListProcessesTool.impl
-                    (ToolRegistry.register ShellTool.impl
-                        (ToolRegistry.register EditTool.impl
-                            (ToolRegistry.register WriteTool.impl
-                                (ToolRegistry.register GlobTool.impl
-                                    (ToolRegistry.register GrepTool.impl
-                                        (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))))))))
+/// The registry Weaver ships: all six built-ins (a coding agent's whole
+/// point is the write/edit pair; shuttle's own CLI ships only the
+/// read-side four) plus the Monad-aware tools and every `--mcp` mount's
+/// proxies. The checker cache and eval buffer are per-session Refs
+/// (created in `run_plan`), so one session's checks warm each other and
+/// `monad_eval` definitions accumulate.
+def weaver_registry (check_cache : Ref ModuleInfoCache) (eval_buf : Ref (List String)) (root : Option String) : ToolRegistry :=
+    ToolRegistry.register (MonadEval.tool eval_buf check_cache root)
+        (ToolRegistry.register (MonadCheck.tool check_cache root)
+            (ToolRegistry.register StartProcessTool.impl
+                (ToolRegistry.register ReadProcessTool.impl
+                    (ToolRegistry.register KillProcessTool.impl
+                        (ToolRegistry.register ListProcessesTool.impl
+                            (ToolRegistry.register ShellTool.impl
+                                (ToolRegistry.register EditTool.impl
+                                    (ToolRegistry.register WriteTool.impl
+                                        (ToolRegistry.register GlobTool.impl
+                                            (ToolRegistry.register GrepTool.impl
+                                                (ToolRegistry.register ReadTool.impl ToolRegistry.empty)))))))))))
 
 def system_prompt : String :=
-    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it."
+    "You are Weaver, an interactive coding assistant. Inspect the workspace with read, grep and glob before changing anything; prefer edit over write for existing files; explain what you are about to do before doing it. For Monad code, use monad_check to type-check a file or snippet and monad_eval to try expressions in the self-hosted interpreter (pure programs only)."
 
 /// `IO.write_stderr` does not append a newline; every one-line
 /// diagnostic this entry prints goes through here.
@@ -224,7 +237,8 @@ def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
 
 /// The start plan, resolved RUNTIME -> PROJECT -> GLOBAL -> default:
 /// a flag always wins over a settings file, a settings file over the
-/// built-in floor (ollama / the provider's default model / 40 turns).
+/// built-in floor (ollama / the provider's default model / the
+/// provider-aware turn and window defaults).
 /// Phase 9: a bad plan is a `config` error -- the run was misshapen
 /// before it started, and `main` exits 1 on it.
 def plan_of (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result WeaverError Plan :=
@@ -243,7 +257,7 @@ def plan_of (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result Weaver
         // it is the provider's answer (/models asks), never a name table's.
         match Weaver.preset provider model s.api_keys {
             Result.err e => Result.err (WeaverError.config e),
-            Result.ok cfg => plan_turns s c provider (thinking_cfg s cfg) base,
+            Result.ok cfg => plan_turns s c provider (effective_cfg s cfg) base,
         }
 
 /// Settings warnings as note lines, in order; `none` when there are
@@ -263,14 +277,16 @@ def warnings_note (ws : List WeaverError) : Option String :=
 
 /// The settings' runtime knobs (reasoning channel, output budget)
 /// applied to a resolved config: one place, so startup and `/provider`
-/// agree on the defaults.
-def thinking_cfg (s : Settings) (cfg : ProviderConfig) : ProviderConfig :=
+/// agree on the defaults. The output budget floors at weaver's own
+/// default, not the preset's 512 -- `/provider` preserves it through
+/// `inherit_thinking`, and `/settings` changes it live.
+def effective_cfg (s : Settings) (cfg : ProviderConfig) : ProviderConfig :=
     let cfg1 : ProviderConfig := match s.thinking {
         Option.none => cfg,
         Option.some b => { cfg with thinking := b },
     } in
     match s.max_tokens {
-        Option.none => cfg1,
+        Option.none => { cfg1 with max_tokens := Weaver.default_max_tokens },
         Option.some n => { cfg1 with max_tokens := n },
     }
 
@@ -289,21 +305,24 @@ def resolve_model (s : Settings) (flag : String) : String :=
 def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) (note : Option String) : Result WeaverError Plan :=
     match resolve_max_turns s c.max_turns_str {
         Result.err e => Result.err (WeaverError.config e),
-        Result.ok n => plan_done provider cfg n c note (resolve_window s) (resolve_compact_at s),
+        Result.ok n => plan_done provider cfg n c note (resolve_window s provider) (resolve_compact_at s),
     }
 
 /// The context window the autocompact estimate is a fraction of. No
-/// provider API reports one, so this is a settings knob with a
-/// conservative default; 0 disables autocompact.
-def resolve_window (s : Settings) : I64 :=
-    match s.context_window { Option.some n => n, Option.none => 128000 }
+/// provider API reports one, so an explicit setting wins and the
+/// provider's own default is the floor; 0 disables autocompact.
+def resolve_window (s : Settings) (provider : String) : I64 :=
+    match s.context_window {
+        Option.some n => n,
+        Option.none => Weaver.default_window provider,
+    }
 
 def resolve_compact_at (s : Settings) : I64 :=
     match s.compact_at { Option.some n => n, Option.none => 80 }
 
 def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
     if String.is_empty flag
-    then turn_cap (match s.max_turns { Option.some n => n, Option.none => 40 })
+    then turn_cap (match s.max_turns { Option.some n => n, Option.none => Weaver.default_max_turns })
     else match parse_i64 flag {
         Option.some n => turn_cap n,
         Option.none => Result.err "--max-turns must be a number",
@@ -465,11 +484,11 @@ def rekey_loaded (p : Plan) (s : Settings) (sess : Session) : Pair Session (Opti
 /// budget, the settings' mode (manual is the safe default; `/mode`
 /// changes it), and a gate rebuilt from the mode before every turn --
 /// `Gate.auto` here is never consulted.
-def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) : WeaverState :=
+def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool) (store : Option StoreState) (session : Session) (grants : Option (Ref (List PermGrant))) (root : Option String) : WeaverState :=
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, stopped := false } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
+    let st : WeaverState := { run := run, mode := initial_mode s, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, plan := Option.none, last_context := 0, grants := grants, workspace_root := root, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, store := store } in
     st
 
 /// The mode the session starts in: the settings' `mode` key when it parses,
@@ -539,7 +558,11 @@ def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List Weave
     }
 
 def run_plan (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) : IO I64 := do {
-    let r <- mount_all client_info p.mcps s weaver_registry [];
+    let cache <- Ref.new module_info_cache_empty;
+    let empty_buf : List String := List.empty;
+    let eval_buf <- Ref.new empty_buf;
+    let root <- workspace_root_probe;
+    let r <- mount_all client_info p.mcps s (weaver_registry cache eval_buf root) [];
     mounted_plan setup colors p s r
 }
 
@@ -600,9 +623,32 @@ def fail_started (servers : List McpServer) (e : WeaverError) : IO I64 := do {
     return 1
 }
 
+/// The workspace root a `repo` grant is scoped to, from `PWD` (there is
+/// no cwd/realpath native). Unset means repo scope is not offered.
+def workspace_root_probe : IO (Option String) := do {
+    let pwd <- IO.get_env "PWD";
+    match pwd {
+        Option.none => IO.pure Option.none,
+        Option.some p =>
+            if String.is_empty p then IO.pure Option.none else IO.pure (Option.some p),
+    }
+}
+
+/// The plan a resumed session last captured, when persistence is on.
+def stored_plan (store : Option StoreState) : IO (Option String) :=
+    match store {
+        Option.none => IO.pure Option.none,
+        Option.some s => Store.read_plan s.dir,
+    }
+
 def run_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) (reg : ToolRegistry) (servers : List McpServer) (o : OpenedSession) : IO I64 := do {
     let _ <- announce_crash setup.crash;
-    let st : WeaverState := initial_state p reg s colors o.store o.session;
+    let empty_grants : List PermGrant := List.empty;
+    let grants <- Ref.new empty_grants;
+    let root <- workspace_root_probe;
+    let plan <- stored_plan o.store;
+    let st0 : WeaverState := initial_state p reg s colors o.store o.session (Option.some grants) root;
+    let st : WeaverState := Commands.set_plan st0 plan;
     let _ <- Logs.info setup.log (String.concat "ev=session_open session=" (session_label o));
     let tr0 <- startup_transcript o;
     let ran_tui <- Tui.run_resumed setup.log st tr0;

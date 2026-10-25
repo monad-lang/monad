@@ -1,7 +1,10 @@
 /// Provider presets, preferred defaults, and the catalogue-driven model
 /// choice: the API list is the authority, so the only pinned names are
 /// the PREFERENCES used when no list is available.
-use weaver::providers {Weaver.preferred_model, Weaver.config_for, Weaver.model_for, Weaver.provider_of}
+use weaver::providers {
+    Weaver.preferred_model, Weaver.config_for, Weaver.model_for, Weaver.provider_of,
+    Weaver.default_max_tokens, Weaver.default_max_turns, Weaver.default_window,
+}
 use weaver::catalog {Catalog.contains, Catalog.note, Catalog.render, Catalog.max_shown}
 use shuttle::provider {ProviderConfig, Wire}
 use std::map {BTreeMap}
@@ -126,3 +129,28 @@ def test_render_caps_a_long_list : Bool :=
     String.contains out "  ... and 5 more"
         && String.contains out "models (mistral): 205"
         && Bool.not (String.contains out "  m204")
+
+// ── Weaver's own budget/window defaults ───────────────────────────────
+
+/// The interactive agent floors the output budget well above shuttle's
+/// 512 preset: a truncated tool call or compaction summary is a failure,
+/// not a saving.
+#[test]
+def test_default_output_budget_is_interactive : Bool :=
+    Weaver.default_max_tokens == 4096i64
+
+/// A turn is one model call; 40 was only a handful of user inputs.
+#[test]
+def test_default_turn_budget_is_interactive : Bool :=
+    Weaver.default_max_turns == 100i64
+
+/// Ollama serves smaller windows than the hosted vendors; a too-large
+/// default means autocompact never fires before the provider truncates.
+#[test]
+def test_default_window_is_provider_aware : Bool :=
+    Weaver.default_window "ollama" == 32768i64
+        && Weaver.default_window "anthropic" == 200000i64
+        && Weaver.default_window "mistral" == 128000i64
+        && Weaver.default_window "openrouter" == 128000i64
+        && Weaver.default_window "mock" == 128000i64
+        && Weaver.default_window "unknown" == 128000i64

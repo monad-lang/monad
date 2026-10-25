@@ -1172,7 +1172,7 @@ def Toml.render_one_table_value (path : List String) (v : Toml.Value) : String :
 
 /// Serialize a root table to a full TOML document.
 #[partial]
-def Toml.to_string (root : BTreeMap String Toml.Value) : String :=
+pub def Toml.to_string (root : BTreeMap String Toml.Value) : String :=
   Toml.render_table List.empty root
 
 // ─── Show instance ───

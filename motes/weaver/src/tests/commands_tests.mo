@@ -10,15 +10,21 @@ use init::transformers {ResultT}
 use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero}
 use shuttle::gate {Capability, Gate}
-use shuttle::message_types {Content}
+use shuttle::message {Message}
+use shuttle::message_types {Content, Role}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
-use weaver::commands {WeaverState, Effect, Commands.dispatch}
+use weaver::commands {
+    WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
+    Commands.set_plan, Commands.plan_after_turn,
+}
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
+use weaver::permissions {PermGrant}
+use std::ref {Ref}
 use weaver::store {StoreState, TLine, TLine.user_line, Store.new_session, Store.append_transcript}
 use std::path {Path, Path.of, Path.to_string}
 use std::process {exec_cmd}
@@ -50,7 +56,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     run := run_of,
     mode := mode,
     provider := "mock",
-    budget := budget, context_window := 128000, compact_at := 80,
+    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none, 
     mcps := mcps,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,
@@ -586,5 +592,242 @@ def test_cached_provider_switch_inherits_thinking : IO Bool := do {
                 }
             }
         }
+    }
+}
+
+// ── /budget ────────────────────────────────────────────────────────────
+
+/// No argument prints used/total/left; the fresh state's total is the
+/// test session's 6 and nothing has been spent.
+#[test]
+def test_budget_shows_the_session_total : IO Bool := do {
+    let r <- Commands.dispatch "/budget" (state_of Mode.manual []);
+    return (effect_is r Mode.manual "budget: 0/6 turns used (6 left)")
+}
+
+/// Raising the total recomputes the remaining turns from the spent
+/// count: 4 spent, total 10 -> 6 left.
+#[test]
+def test_budget_raises_the_total_and_the_remainder : IO Bool := do {
+    let st : WeaverState := with_turns (state_of Mode.manual []) 4;
+    let r <- Commands.dispatch "/budget 10" st;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (e.state.budget == 10i64 && e.state.run.turns_left == 6i64),
+    }
+}
+
+/// A total below the turns already spent is refused outright -- clamping
+/// it to zero would hide the mistake and strand the session.
+#[test]
+def test_budget_below_spent_is_refused : IO Bool := do {
+    let st : WeaverState := with_turns (state_of Mode.manual []) 4;
+    let r <- Commands.dispatch "/budget 2" st;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => do {
+            let out : String := e.output;
+            let b : I64 := e.state.budget;
+            IO.pure (b == 6i64 && String.contains out "below the 4 turns already spent")
+        }
+    }
+}
+
+/// A non-number keeps the session and says how to use the command.
+#[test]
+def test_budget_rejects_a_non_number : IO Bool := do {
+    let r <- Commands.dispatch "/budget nope" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (String.contains e.output "not a number"
+            && e.state.budget == 6i64),
+    }
+}
+
+// ── Context gauge ─────────────────────────────────────────────────────
+
+/// The real size of the last request wins over the byte heuristic when
+/// it is larger; the heuristic is a floor, not an override.
+#[test]
+def test_context_used_prefers_the_real_request_size : IO Bool := do {
+    let st0 : WeaverState := state_of Mode.manual [];
+    let st : WeaverState := { st0 with last_context := 90000 };
+    return (Commands.context_used st == 90000)
+}
+
+/// Percentage of the configured window (128000 in the test state).
+#[test]
+def test_context_percent_uses_the_window : IO Bool := do {
+    let st0 : WeaverState := state_of Mode.manual [];
+    let st : WeaverState := { st0 with last_context := 64000 };
+    return (Commands.context_percent st == 50)
+}
+
+/// A zero window disables autocompact, so the percentage is reported as
+/// 0 rather than dividing by zero.
+#[test]
+def test_context_percent_zero_window_is_zero : IO Bool := do {
+    let st0 : WeaverState := state_of Mode.manual [];
+    let st : WeaverState := { st0 with last_context := 64000, context_window := 0 };
+    return (Commands.context_percent st == 0)
+}
+
+// ── /plan display and capture ─────────────────────────────────────────
+
+/// A captured plan is printed under the status line -- the plan stays
+/// available after approval and later turns.
+#[test]
+def test_plan_shows_the_captured_text : IO Bool := do {
+    let st0 : WeaverState := state_of Mode.manual [];
+    let st : WeaverState := Commands.set_plan st0 (Option.some "PLAN: 1) read the file");
+    let r <- Commands.dispatch "/plan" st;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (String.contains e.output "PLAN: 1) read the file"
+            && String.contains e.output "not in plan mode"),
+    }
+}
+
+def run_with_history (hist : List Message) : RunState :=
+    let s : Session := { session_of with history := hist } in
+    let r : RunState := { run_of with session := s } in
+    r
+
+/// A plan-mode turn's last assistant text is the plan.
+#[test]
+def test_plan_after_turn_captures_plan_mode_text : IO Bool := do {
+    let msg : Message := { role := Role.assistant, content := [Content.text "PLAN: 1) read the file"] };
+    let run : RunState := run_with_history [msg];
+    let r : Result WeaverError RunState := Result.ok run;
+    let st : WeaverState := state_of Mode.plan [];
+    let got : Option String := Commands.plan_after_turn st r;
+    match got {
+        Option.some t => IO.pure (String.contains t "PLAN: 1) read the file"),
+        Option.none => IO.pure false,
+    }
+}
+
+/// Outside plan mode there is no plan to capture.
+#[test]
+def test_plan_after_turn_ignores_other_modes : IO Bool := do {
+    let msg : Message := { role := Role.assistant, content := [Content.text "done"] };
+    let run : RunState := run_with_history [msg];
+    let r : Result WeaverError RunState := Result.ok run;
+    let st : WeaverState := state_of Mode.manual [];
+    let got : Option String := Commands.plan_after_turn st r;
+    match got { Option.none => IO.pure true, Option.some _ => IO.pure false }
+}
+
+// ── /permissions ──────────────────────────────────────────────────────
+
+def with_grants (st : WeaverState) : IO (Pair WeaverState (Ref (List PermGrant))) := do {
+    let empty : List PermGrant := List.empty;
+    let r <- Ref.new empty;
+    let st2 : WeaverState := { st with grants := Option.some r };
+    return (Pair.pair st2 r)
+}
+
+#[test]
+def test_permissions_lists_none_by_default : IO Bool := do {
+    let r <- Commands.dispatch "/permissions" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (String.contains e.output "grants: none"
+            && String.contains e.output "mode manual"),
+    }
+}
+
+/// `allow write here` adds a repo-scoped grant and reports the scope;
+/// a following `/permissions` lists it.
+#[test]
+def test_permissions_allow_here : IO Bool := do {
+    let seeded <- with_grants (state_of Mode.manual []);
+    match seeded {
+        Pair.pair st _ => do {
+            let r <- Commands.dispatch "/permissions allow write here" st;
+            match r {
+                Result.err _ => IO.pure false,
+                Result.ok e => do {
+                    let r2 <- Commands.dispatch "/permissions" e.state;
+                    match r2 {
+                        Result.err _ => IO.pure false,
+                        Result.ok e2 => IO.pure (String.contains e.output "write (repo)"
+                            && String.contains e2.output "write (repo)"),
+                    }
+                },
+            }
+        },
+    }
+}
+
+#[test]
+def test_permissions_revoke_all : IO Bool := do {
+    let seeded <- with_grants (state_of Mode.manual []);
+    match seeded {
+        Pair.pair st _ => do {
+            let _ <- Commands.dispatch "/permissions allow read any" st;
+            let r <- Commands.dispatch "/permissions revoke all" st;
+            match r {
+                Result.err _ => IO.pure false,
+                Result.ok e => do {
+                    let r2 <- Commands.dispatch "/permissions" e.state;
+                    match r2 {
+                        Result.err _ => IO.pure false,
+                        Result.ok e2 => IO.pure (String.contains e2.output "grants: none"),
+                    }
+                },
+            }
+        },
+    }
+}
+
+// ── /settings ─────────────────────────────────────────────────────────
+
+#[test]
+def test_settings_lists_the_rows : IO Bool := do {
+    let r <- Commands.dispatch "/settings" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (String.contains e.output "Approval mode: manual"
+            && String.contains e.output "Output budget: 8"
+            && String.contains e.output "/settings <key> <value>"),
+    }
+}
+
+#[test]
+def test_settings_sets_max_tokens : IO Bool := do {
+    let r <- Commands.dispatch "/settings max_tokens 4096" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (e.state.run.session.config.max_tokens == 4096
+            && String.contains e.output "max_tokens: 4096"),
+    }
+}
+
+#[test]
+def test_settings_sets_mode : IO Bool := do {
+    let r <- Commands.dispatch "/settings mode plan" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (mode_eq e.state.mode Mode.plan && String.contains e.output "mode: plan"),
+    }
+}
+
+#[test]
+def test_settings_toggles_thinking : IO Bool := do {
+    let r <- Commands.dispatch "/settings thinking on" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (e.state.run.session.config.thinking
+            && String.contains e.output "thinking: on"),
+    }
+}
+
+#[test]
+def test_settings_rejects_an_unknown_key : IO Bool := do {
+    let r <- Commands.dispatch "/settings nope 1" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (String.contains e.output "unknown setting: nope"),
     }
 }

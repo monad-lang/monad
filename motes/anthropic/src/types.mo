@@ -384,7 +384,8 @@ pub def AnthropicUsage.deserialize_json (j : Json) : Result String AnthropicUsag
                     match obj_int_field "output_tokens" obj {
                         Result.err e => Result.err e,
                         Result.ok output_tokens =>
-                            Result.ok (AnthropicUsage.mk input_tokens output_tokens (obj_int_or_zero "cache_read_input_tokens" obj)),
+                            let creation : I64 := obj_int_or_zero "cache_creation_input_tokens" obj in
+                            Result.ok (AnthropicUsage.mk (input_tokens + creation) output_tokens (obj_int_or_zero "cache_read_input_tokens" obj)),
                     },
             },
     }

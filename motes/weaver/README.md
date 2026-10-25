@@ -38,12 +38,19 @@ policy.mo          Capability x Mode -> Decision (allow | ask | refuse),
 gate.mo            Gate.weaver: the mode + policy + approval prompt as
                    one Gate for shuttle's loop; approvals ride the SAME
                    read seam as the input (scriptable without a tty)
+permissions.mo     session grants: {capability, repo|anywhere}, lexical
+                   path containment, and the Ref the gate consults
 settings.mo        ~/.weaver/config.toml under .weaver/config.toml,
-                   merged field by field (project wins), caps unioned
+                   merged field by field (project wins), caps unioned;
+                   /settings saves the named keys back (unknown keys kept)
 store.mo           the session store: transcript blocks, per-turn model
                    history, paged scrollback, ~/.weaver/sessions
 commands.mo        the slash-command table (BTreeMap) and the
                    interactive State it advances
+usage.mo           per-turn usage: last request (context) and turn delta
+                   from shuttle's cumulative spend
+monad_tools.mo     monad_check (compiler checker) and monad_eval (a
+                   REPL-style scratch module on the self-hosted interpreter)
 diff.mo            old -> new rendering for write/edit approvals,
                    picked out of the tool input
 dumb.mo            the line loop: read -> command-or-model -> print,
@@ -94,12 +101,15 @@ row instead). Scrolling is by wrapped DISPLAY ROW, so even a single
 message taller than the panel is fully reachable. Enter submits a line;
 the turn runs on a fiber while the UI keeps folding keys and 100 ms
 ticks. A dim line under the last prompt shows the spinner, elapsed time
-and the session's token totals (`| thinking 3.4s · ↑1.2k ↓345`),
+and THIS TURN's token delta (`| thinking 3.4s · ↑1.2k ↓345`),
 which becomes `running <tool>` while a tool dispatches and `responding`
 once text streams; the streamed text itself appears under the
 transcript with a caret, dim, and is replaced by the real message when
-the turn lands. The token totals refresh at 1 Hz from the turn's usage
-file, and the row disappears when the result lands. Keys typed mid-turn
+the turn lands. The row refreshes at 1 Hz from the turn's usage file
+and disappears when the result lands. The status bar separately shows
+the CONTEXT (`ctx 12.3k/128k (10%)`, from the last request's real
+prompt size) and cumulative `spent` — they are different quantities:
+cumulative input sums the whole prompt of every model call. Keys typed mid-turn
 land in the input box. Esc asks the
 turn to stop: the row says `stopping…`, the in-flight model call or
 foreground tool finishes, and the turn ends at the next boundary with a
@@ -110,16 +120,18 @@ timeouts instead. While a
 dialog owns stdin the loop stops reading and drawing, and the dialog's
 close forces a clear+repaint, so a confirmed prompt never lingers. An approval prompt (`manual`/`allow_edit`'s `ask`
 cells) opens a centered dialog: the diff for a `write`/`edit` pick,
-then `Approve once` / `Always allow all <cap>s this session` / `Deny`
-with the safe option highlighted. Arrows (or j/k) select, Enter
-confirms, `y`/`a`/`n` are shortcuts, `e` opens an optional note, Esc
-cancels, and a bracketed paste edits only the note -- it can never
-answer the prompt. A note on `Deny` becomes the denial reason the model
-reads; a note on an approval is appended to the tool result. `a`
-approves every pick of that capability for the rest of the SESSION --
-one `a` on a read is repo-wide read access until `/clear`, `/resume`, or
-exit (the cache resets there), and plan mode's refusal is re-checked
-even for a cached capability. In plan mode `/plan` opens a `Plan ready`
+then `Approve once` / `Always allow all <cap>s in this repo` /
+`Always allow all <cap>s this session (anywhere)` / `Deny` with the safe
+option highlighted. Arrows (or j/k) select, Enter confirms, `y`/`r`/`a`/
+`n` are shortcuts, `e` opens an optional note, Esc cancels, and a
+bracketed paste edits only the note -- it can never answer the prompt. A
+note on `Deny` becomes the denial reason the model reads; a note on an
+approval is appended to the tool result. `r` grants the capability for
+path-bearing picks INSIDE the workspace root (lexical containment, not a
+sandbox); `a` grants it anywhere for the rest of the session. The grants
+live in weaver (not shuttle's per-capability cache), are cleared on
+`/clear` and `/resume`, and `/permissions` lists or revokes them; plan
+mode's refusal is re-checked before every pick, even a granted one. In plan mode `/plan` opens a `Plan ready`
 dialog over the last assistant message: approve to `allow_edit` or to
 `manual`, revise with a note (the note lands in the input box), or
 cancel. Two Ctrl+C presses in a row, or two Ctrl+D presses in a row
@@ -170,11 +182,14 @@ warning flag shuttle's loop prints.
 
 ```
 /mode [manual|plan|allow_edit|auto]  show or set the approval mode
+/budget [n]                          show or raise the model-call budget
 /model [name]                        show/pick (TUI) or set the model
 /compact [instructions]              summarize the context, keep a recent tail
 /thinking [on|off]                   show or set the provider's reasoning channel
 /provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider
-/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode
+/plan [approve manual|allow_edit]    show the current plan; approve leaves plan mode
+/permissions [allow|revoke ...]      list or manage session approval grants
+/settings [<key> <value>|save project|global]  change or save settings
 /tools                               list tools with their capability tags
 /processes [kill <id>]               list background tasks (a snapshot)
 /log                                 the debug log path, tail and crash note
@@ -185,6 +200,14 @@ warning flag shuttle's loop prints.
 /help (or /h)                        this table
 /quit (or /q)                        exit (MCP servers are disposed)
 ```
+
+Two Monad-aware tools are registered for the model: `monad_check`
+type-checks a file (`path`) or an in-memory buffer (`source`) with the
+compiler's own checker, and `monad_eval` runs a REPL-style scratch
+module on the self-hosted interpreter -- `def` snippets accumulate for
+the session, bare expressions get a typed `main`, and a snippet with
+`def main` runs whole. Eval is pure (I64/String natives, no IO) and
+tagged `exec`, so `allow_edit`/`manual` ask before it runs.
 
 The provider decides which models exist: `/model` with no argument
 fetches its `/v1/models` list (the mock wire answers `mock` offline),
@@ -257,10 +280,12 @@ Two TOML files, in resolution order GLOBAL -> PROJECT -> RUNTIME:
 mode = "plan"          # manual | plan | allow_edit | auto
 provider = "ollama"
 model = "qwen3:8b"     # used as-is; /model lists the API's catalogue
-max_turns = 20
+max_turns = 100        # model calls per session (raise with /budget)
 thinking = false       # ask for the provider's reasoning channel
-max_tokens = 512       # per-response output budget (raise for reasoning models)
-context_window = 128000  # the window autocompact measures against
+max_tokens = 4096      # per-response output budget (weaver's default; 512 cuts off tool calls)
+context_window = 128000  # the window autocompact measures against; when unset,
+                       # the provider's own default is used (Ollama 32k,
+                       # Mistral/OpenRouter 128k, Anthropic 200k)
 compact_at = 80        # autocompact at this percentage of it (0 disables)
 
 [mcp_caps]             # per-server capability override, keyed by the
@@ -276,8 +301,15 @@ reported in the startup warnings (the TUI's first transcript block, or
 stderr in the line-based UI), with a near-miss hint -- `[api_key]`
 instead of `[api_keys]` would otherwise be silently dead. The entries
 inside `[mcp_caps]` and `[api_keys]` are free-form and never warn. The
-built-in floor is ollama / the provider's default model / 40 turns /
-manual mode.
+built-in floor is ollama / the provider's default model / 100 turns /
+the provider's window / manual mode.
+
+`/settings` opens a dialog (TUI) or prints the rows (line UI): Enter
+cycles a curated value, `/settings <key> <value>` sets one exactly, and
+`save project` / `save global` write the current values back to the
+named file. A save preserves unknown keys and other tables; it refuses
+to overwrite a file that does not parse. API key values are never
+displayed.
 
 ### Colors
 

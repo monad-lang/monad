@@ -1,6 +1,6 @@
 use shuttle::wire::openai {OpenAI.encode_request, OpenAI.decode_response}
 use shuttle::message_types {Role, Content, StopReason}
-use shuttle::message {Message, Turn}
+use shuttle::message {Message, Turn, Usage}
 use shuttle::tool {ToolSpec}
 use openai::types {ChatRequest, ChatMessage, ChatResponse, Choice, ApiUsage}
 use openai::tool {ToolCall}
@@ -96,4 +96,24 @@ def test_construct_and_match_chat_response_directly : Bool :=
     let resp : ChatResponse := { choices := [choice], usage := usage } in
     match resp {
         ChatResponse.mk choices u => List.length choices == 1
+    }
+
+/// `prompt_tokens_details.cached_tokens` rides through to the
+/// normalized `Usage.cached_tokens` (OpenAI's `prompt_tokens` already
+/// includes them, so the prompt size is unchanged).
+#[test]
+def test_decode_response_passes_cached_tokens_through : Bool :=
+    let msg : ChatMessage := { role := "assistant", content := Option.some "hi", tool_calls := [], tool_call_id := Option.none, name := Option.none } in
+    let choice : Choice := { message := msg, finish_reason := "stop" } in
+    let usage : ApiUsage := { prompt_tokens := 10, completion_tokens := 2, cached_tokens := 7 } in
+    let resp : ChatResponse := { choices := [choice], usage := usage } in
+    match OpenAI.decode_response resp {
+        Result.ok turn =>
+            match turn {
+                Turn.mk _ raw_usage _ =>
+                    match raw_usage {
+                        Usage.mk in_t out_t cached => in_t == 10 && out_t == 2 && cached == 7,
+                    },
+            },
+        Result.err _ => false,
     }

@@ -10,7 +10,8 @@ use lib::types { Event, Key }
 use lib::core { mk_screen }
 use lib::tui { App, Cmd, PendingTurn, poll_turns, step_batch, frame_plan }
 use std::concurrent::combine {sleepIO}
-use std::concurrent::fiber {Fiber, FiberError, cancel_fiber, forkIO}
+use std::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
+use std::ref {Ref, Ref.get, Ref.new, Ref.set}
 use std::list { List.length }
 
 def cmds_be {M : Type} (a : Cmd M) (b : Cmd M) : Bool :=
@@ -306,3 +307,34 @@ def test_frame_plan_forced_same_size_does_not_clear : Bool :=
     match frame_plan (mk_screen 1 2) (mk_screen 1 2) true {
         Pair.pair clear _ => clear == false,
     }
+
+// ── fiber result delivery (regression) ───────────────────────────────
+// The compiled backend once answered a COMPLETED fiber with a garbage
+// `err cancelled` (or segfaulted in `monad_get_tag` while matching the
+// native Result). These pin the primitive the TUI's async turns build on.
+
+#[test]
+def test_await_fiber_returns_the_action_result : IO Bool := do {
+    let f <- forkIO (fn (_ : Unit) => IO.pure 7i64);
+    let r <- await_fiber f;
+    match r {
+        Result.ok n => IO.pure (n == 7i64),
+        Result.err _ => IO.pure false,
+    }
+}
+
+/// A `Ref` created and used INSIDE a fiber (the usage tracker's original
+/// shape) must round-trip through the fiber's result.
+#[test]
+def test_ref_round_trip_inside_a_fiber : IO Bool := do {
+    let f <- forkIO (fn (_ : Unit) => do {
+        let r <- Ref.new 1i64;
+        let _ <- Ref.set r 2i64;
+        Ref.get r
+    });
+    let res <- await_fiber f;
+    match res {
+        Result.ok v => IO.pure (v == 2i64),
+        Result.err _ => IO.pure false,
+    }
+}

@@ -22,7 +22,8 @@ use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
-use shuttle::tools::file_tools {EditTool.impl}
+use shuttle::tools::file_tools {EditTool.impl, WriteTool.impl}
+use shuttle::tools::shell_tools {ShellTool.impl}
 use weaver::commands {WeaverState}
 use weaver::dumb {Dumb.run}
 use weaver::policy {Mode}
@@ -31,7 +32,7 @@ use parsec::number {parse_i64}
 use std::map {Map, BTreeMap}
 use std::io {IO.file_exists}
 use std::path {Path.of}
-use std::process {process_id}
+use std::process {process_id, exec_cmd}
 
 // ── The PID-qualified file set ─────────────────────────────────────────
 // Same contract as shuttle's mock tests: a test process cannot set its
@@ -217,7 +218,7 @@ def state_of (reg : ToolRegistry) : WeaverState := {
     run := run_of reg,
     mode := Mode.manual,
     provider := "mock",
-    budget := budget, context_window := 128000, compact_at := 80,
+    budget := budget, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, workspace_root := Option.none, 
     mcps := List.empty,
     keys := BTreeMap.empty,
     catalog := BTreeMap.empty,
@@ -437,4 +438,87 @@ def test_dumb_e2e_provider_typo_refuses_keeps_session : IO Bool := do {
     return (fatal_is_none st
         && String.contains tap "unknown provider: bogus"
         && history_mentions "done one" st.run.session.history)
+}
+
+// ── The plan -> approve -> implement -> run device test ────────────────
+// The acceptance flow on a Monad coding task: plan mode produces a plan,
+// the user reads it with `/plan` and approves, the agent writes a real
+// .mo file, and a shell turn runs it. Offline (the mock wire), so it is
+// deterministic and CI-safe; the live variant is a manual run.
+
+def plan_exec_target : String :=
+    String.concat "/tmp/weaver_plan_exec_" (String.concat pid ".mo")
+
+def plan_exec_text : String := "PLAN: 1) write the file 2) run it"
+
+def plan_exec_write_input : Json :=
+    Json.make_object
+        (Map.insert "path" (Json.make_str plan_exec_target)
+        (Map.insert "content" (Json.make_str "def main : I64 := 7 * 6\n") BTreeMap.empty))
+
+def plan_exec_shell_input : Json :=
+    Json.make_object (Map.insert "command" (Json.make_str (String.concat "cat " plan_exec_target)) BTreeMap.empty)
+
+def tool_turn_named (id : String) (name : String) (input : Json) (n : I64) : Turn :=
+    { message := { role := Role.assistant, content := [Content.tool_use id name input] }, usage := usage_n n, stop := StopReason.tool_use_stop }
+
+def write_plan_exec_script : IO Unit :=
+    write_text script_path (Json.to_string (Json.make_array [
+        Turn.serialize_json (text_turn plan_exec_text 1),
+        Turn.serialize_json (tool_turn_named "call_w" "write" plan_exec_write_input 2),
+        Turn.serialize_json (text_turn "wrote the file" 3),
+        Turn.serialize_json (tool_turn_named "call_s" "shell" plan_exec_shell_input 4),
+        Turn.serialize_json (text_turn "ran it" 5),
+    ]))
+
+def plan_exec_inputs : List String := [
+    "/mode plan", "make a plan", "/plan", "/plan approve allow_edit",
+    "implement it", "run it", "y",
+]
+
+def write_plan_exec_inputs : IO Unit :=
+    write_text inputs_path
+        (Json.to_string (Json.make_array (List.map (fn (s : String) => Json.make_str s) plan_exec_inputs)))
+
+def plan_exec_registry : ToolRegistry :=
+    ToolRegistry.register ShellTool.impl (ToolRegistry.register WriteTool.impl ToolRegistry.empty)
+
+def mode_is_allow_edit (m : Mode) : Bool :=
+    match m { Mode.allow_edit => true, _ => false }
+
+def plan_captured (p : Option String) : Bool :=
+    match p {
+        Option.some text => String.contains text "PLAN:",
+        Option.none => false,
+    }
+
+/// The whole flow: plan read, approved to allow_edit, the write landed
+/// (no write prompt in that mode), the shell ask consumed the `y`, the
+/// run's output is in the history, and the plan is still captured.
+def plan_exec_ok (st : WeaverState) (cursor : I64) (tap : String) (file : String) : Bool :=
+    mode_is_allow_edit st.mode
+        && Bool.not st.quit
+        && st.run.session.turns == 5
+        && cursor == 7
+        && file == "def main : I64 := 7 * 6\n"
+        && history_mentions "wrote the file" st.run.session.history
+        && history_mentions "ran it" st.run.session.history
+        && history_mentions "7 * 6" st.run.session.history
+        && plan_captured st.plan
+        && String.contains tap "PLAN: 1) write the file 2) run it"
+        && String.contains tap "mode: allow_edit"
+
+#[test]
+def test_dumb_e2e_plan_then_execute : IO Bool := do {
+    let _ <- exec_cmd "rm" ["-f", plan_exec_target];
+    let _ <- write_plan_exec_script;
+    let _ <- write_plan_exec_inputs;
+    let _ <- write_text cursor_path "0";
+    let _ <- write_text tap_path "";
+    let st <- Dumb.run Option.none scripted_read tap_write (state_of plan_exec_registry);
+    let cursor <- read_cursor;
+    let tap <- read_tap;
+    let file <- read_target plan_exec_target;
+    let _ <- exec_cmd "rm" ["-f", plan_exec_target];
+    return (plan_exec_ok st cursor tap file)
 }

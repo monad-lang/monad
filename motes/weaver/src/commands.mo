@@ -21,23 +21,34 @@
 use shuttle::provider {ProviderConfig}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session, Session.save, Session.load}
+use shuttle::message {Message}
+use shuttle::message_types {Role, Content}
 use shuttle::agent {RunState}
 use shuttle::context {usage_zero}
 use shuttle::tool {ToolSpec}
+use shuttle::gate {Capability}
 use weaver::policy {Mode, Mode.show, Mode.parse, Mode.approve_plan}
 use weaver::gate {cap_name}
 use weaver::providers {Weaver.preset, Weaver.config_for, Weaver.preferred_model, Weaver.model_for, Weaver.provider_of}
 use weaver::catalog {Catalog.fetch, Catalog.lookup, Catalog.remember, Catalog.render, Catalog.note}
-use weaver::compact {Compact.threshold, Compact.should_compact, Compact.compact, Compact.Outcome}
+use weaver::compact {Compact.threshold, Compact.should_compact, Compact.estimate, Compact.compact, Compact.Outcome}
 use weaver::error {WeaverError, WeaverError.of_shuttle}
 use weaver::store {
     StoreState, Store.new_session, Store.latest_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.base_name, Store.record_compacted,
+    Store.read_plan, Store.write_plan,
 }
 use std::path {Path, Path.of, Path.parent}
 use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {Map, BTreeMap}
 use std::list {List.intercalate}
+use std::ref {Ref}
+use parsec::number {parse_i64}
+use weaver::permissions {
+    PermGrant, PermScope, Permissions.get, Permissions.add, Permissions.revoke,
+    Permissions.revoke_cap, Permissions.clear, PermGrant.describe, Permissions.render,
+}
+use weaver::settings {SettingsUpdate, Settings.save}
 use weaver::procs {ProcEntry, ProcEntry.line, Procs.list, Procs.kill}
 use weaver::logs {Logs.latest_path, Logs.tail, Logs.detect_crash}
 
@@ -60,6 +71,20 @@ pub struct WeaverState {
     /// estimated tokens; a zero window disables it.
     context_window : I64,
     compact_at : I64,
+    /// The last plan-mode assistant text (`/plan`'s display, persisted
+    /// in the session store's meta).
+    plan : Option String := Option.none,
+    /// The real prompt size of the last model call -- `Usage.input_tokens`
+    /// of that request, cached tokens included. The status line and
+    /// autocompact prefer it over the byte estimate.
+    last_context : I64 := 0,
+    /// Session approval grants: weaver owns them (shuttle's per-capability
+    /// `always` cache stays empty), so `/permissions` can inspect and
+    /// clear them. None in tests/headless states.
+    grants : Option (Ref (List PermGrant)) := Option.none,
+    /// The directory a `repo` grant is scoped to (`PWD` at startup).
+    /// Lexical scope, not a sandbox.
+    workspace_root : Option String := Option.none,
     mcps : List String,
     keys : BTreeMap String String,
     /// The last model list fetched per provider (`/model` with
@@ -123,13 +148,16 @@ def respond (st : WeaverState) (output : String) : IO (Result WeaverError Effect
 /// The command table -- the whole `/`-surface, weaver.md Phase 6's
 /// final shape.
 pub def command_table : BTreeMap String SlashCommand :=
-    Map.insert "/clear" (SlashCommand.mk cmd_clear)
+    Map.insert "/budget" (SlashCommand.mk cmd_budget)
+        (Map.insert "/clear" (SlashCommand.mk cmd_clear)
         (Map.insert "/compact" (SlashCommand.mk cmd_compact)
         (Map.insert "/h" (SlashCommand.mk cmd_help)
         (Map.insert "/help" (SlashCommand.mk cmd_help)
         (Map.insert "/mcp" (SlashCommand.mk cmd_mcp)
         (Map.insert "/mode" (SlashCommand.mk cmd_mode)
         (Map.insert "/model" (SlashCommand.mk cmd_model)
+        (Map.insert "/permissions" (SlashCommand.mk cmd_permissions)
+        (Map.insert "/settings" (SlashCommand.mk cmd_settings)
         (Map.insert "/plan" (SlashCommand.mk cmd_plan)
         (Map.insert "/provider" (SlashCommand.mk cmd_provider)
         (Map.insert "/q" (SlashCommand.mk cmd_quit)
@@ -141,7 +169,7 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/procs" (SlashCommand.mk cmd_processes)
         (Map.insert "/thinking" (SlashCommand.mk cmd_thinking)
         (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty)))))))))))))))))
+            BTreeMap.empty))))))))))))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -199,6 +227,106 @@ def mode_of (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :
             let st2 : WeaverState := set_mode st m in
             respond st2 (String.concat "mode: " (Mode.show m)),
     }
+
+/// `/budget [n]` -- the session's total MODEL-CALL budget. A turn is
+/// one model call, so a tool-using turn spends several; the total spans
+/// a save/resume. Raising it mid-session is the way out of a spent
+/// budget without `/clear` losing the conversation.
+def cmd_budget (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if String.is_empty arg
+    then respond st (budget_line st)
+    else match parse_i64 arg {
+        Option.none => respond st (String.concat "budget: "
+            (String.concat arg " is not a number (usage: /budget <n>)")),
+        Option.some n =>
+            let used : I64 := st.run.session.turns in
+            if n < used
+            then
+                let used_text : String := I64.to_string used in
+                let msg : String := String.concat "budget: "
+                    (String.concat arg (String.concat " is below the "
+                        (String.concat used_text " turns already spent"))) in
+                respond st msg
+            else
+                let st2 : WeaverState := set_budget st n in
+                respond st2 (budget_line st2),
+    }
+
+// ── Plan capture ───────────────────────────────────────────────────────
+// `/plan` shows the plan-mode turn's text even after the mode dropped, so
+// the text is captured when the turn lands instead of re-derived later.
+
+#[partial]
+def content_text (cs : List Content) (acc : String) : String :=
+    match cs {
+        List.empty => acc,
+        List.cons c rest =>
+            match c {
+                Content.text s => content_text rest (String.concat acc s),
+                _ => content_text rest acc,
+            },
+    }
+
+def assistant_text (m : Message) : Option String :=
+    match m.role {
+        Role.assistant =>
+            let t : String := String.trim (content_text m.content "") in
+            if String.is_empty t then Option.none else Option.some t,
+        _ => Option.none,
+    }
+
+#[partial]
+def last_assistant_go (ms : List Message) : Option String :=
+    match ms {
+        List.empty => Option.none,
+        List.cons m rest =>
+            match last_assistant_go rest {
+                Option.some t => Option.some t,
+                Option.none => assistant_text m,
+            },
+    }
+
+/// The last non-empty assistant text in a history (the plan a plan-mode
+/// turn produced).
+pub def Commands.last_assistant_text (history : List Message) : Option String :=
+    last_assistant_go history
+
+pub def Commands.set_plan (st : WeaverState) (p : Option String) : WeaverState :=
+    let st2 : WeaverState := { st with plan := p } in
+    st2
+
+/// The assistant text a plan-mode turn produced, if any. The mode is
+/// read from the PRE-turn state (a turn cannot change it).
+pub def Commands.plan_after_turn (st : WeaverState) (r : Result WeaverError RunState) : Option String :=
+    match st.mode {
+        Mode.plan => match r {
+            Result.err _ => Option.none,
+            Result.ok run2 => Commands.last_assistant_text run2.session.history,
+        },
+        _ => Option.none,
+    }
+
+/// The next request's likely prompt size: the larger of the byte
+/// heuristic and the real size of the last model call. The heuristic
+/// sees tool schemas the per-message estimate misses; the real number
+/// catches a provider whose tokenizer differs from bytes/4.
+pub def Commands.context_used (st : WeaverState) : I64 :=
+    let est : I64 := Compact.estimate st.run.session in
+    if I64.gt st.last_context est then st.last_context else est
+
+pub def Commands.context_percent (st : WeaverState) : I64 :=
+    let window : I64 := st.context_window in
+    if I64.lt window 1 then 0 else (Commands.context_used st) * 100 / window
+
+/// `budget: 7/100 turns used (93 left)` -- used/total/left in one line,
+/// so the status bar and `/budget` agree.
+def budget_line (st : WeaverState) : String :=
+    String.concat "budget: "
+        (String.concat (I64.to_string st.run.session.turns)
+            (String.concat "/"
+                (String.concat (I64.to_string st.budget)
+                    (String.concat " turns used ("
+                        (String.concat (I64.to_string st.run.turns_left) " left)")))))
 
 /// `/model` with no argument lists what the provider serves (and opens
 /// the TUI picker); with a name, it swaps the session config's model
@@ -437,8 +565,27 @@ def strings_empty (xs : List String) : Bool :=
 /// approving user names, and any other mode has no plan to approve.
 def cmd_plan (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then respond st (plan_status st.mode)
+    then respond st (plan_show st)
     else plan_arg arg st
+
+/// The plan to display: the captured text, else the last assistant
+/// message (a plan-mode turn that has not landed, or a session written
+/// before the plan was persisted).
+pub def Commands.current_plan (st : WeaverState) : Option String :=
+    match st.plan {
+        Option.some p => Option.some p,
+        Option.none => Commands.last_assistant_text st.run.session.history,
+    }
+
+/// Plan-mode status, then the plan itself when there is one. The status
+/// line stays first so the existing contract (and its tests) hold when
+/// no plan exists.
+def plan_show (st : WeaverState) : String :=
+    let status : String := plan_status st.mode in
+    match Commands.current_plan st {
+        Option.none => status,
+        Option.some p => String.concat status (String.concat "\n\nplan:\n" p),
+    }
 
 def plan_status (m : Mode) : String :=
     match m {
@@ -552,7 +699,16 @@ def resume_dir (st : WeaverState) (p : Path) (label : String) : IO (Result Weave
     let r <- Store.load_session p;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok s => IO.pure (Result.ok (resume_effect st s (store_for_dir p st) label)),
+        Result.ok s => do {
+            // A session switch starts with no grants; the captured plan
+            // travels with the session directory.
+            let _ <- Permissions.clear st.grants;
+            let plan <- Store.read_plan p;
+            let e0 : Effect := resume_effect st s (store_for_dir p st) label;
+            let st1 : WeaverState := Commands.set_plan e0.state plan;
+            let e1 : Effect := { e0 with state := st1 };
+            IO.pure (Result.ok e1)
+        }
     }
 }
 
@@ -564,17 +720,30 @@ def resume_file (st : WeaverState) (label : String) : IO (Result WeaverError Eff
     }
 }
 
+/// A checkpoint file never carries a weaver plan (it is shuttle's
+/// session format), so the resumed state starts with none.
 def resume_import (st : WeaverState) (s : Session) (label : String) : IO (Result WeaverError Effect) :=
     match st.store {
-        Option.none => IO.pure (Result.ok (resume_effect st s Option.none label)),
+        Option.none => do {
+            let _ <- Permissions.clear st.grants;
+            IO.pure (Result.ok (plan_cleared (resume_effect st s Option.none label)))
+        },
         Option.some old => resume_import_into st s old label,
     }
+
+def plan_cleared (e : Effect) : Effect :=
+    let st1 : WeaverState := Commands.set_plan e.state Option.none in
+    let e1 : Effect := { e with state := st1 } in
+    e1
 
 def resume_import_into (st : WeaverState) (s : Session) (old : StoreState) (label : String) : IO (Result WeaverError Effect) := do {
     let r <- Store.import_session old.root s;
     match r {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
-        Result.ok ns => IO.pure (Result.ok (resume_effect st s (Option.some ns) label)),
+        Result.ok ns => do {
+            let _ <- Permissions.clear st.grants;
+            IO.pure (Result.ok (plan_cleared (resume_effect st s (Option.some ns) label)))
+        },
     }
 }
 
@@ -630,14 +799,18 @@ def rekey_config (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
 /// and the tools. The turn budget resets to the full amount. With a
 /// store, a NEW session directory starts and the old one stays
 /// resumable.
-def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
-    let base : Session := st.run.session in
-    let fresh : Session := clear_session base in
-    let st2 : WeaverState := set_session st fresh st.budget in
+def cmd_clear (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let base : Session := st.run.session;
+    let fresh : Session := clear_session base;
+    // A new session has no plan: the old one belongs to the session that
+    // produced it (and its store directory, when persistence is on).
+    let st2 : WeaverState := Commands.set_plan (set_session st fresh st.budget) Option.none;
+    let _ <- Permissions.clear st.grants;
     match st.store {
         Option.none => IO.pure (Result.ok (Effect.reset st2 "cleared")),
         Option.some s => clear_with_store st2 s fresh,
     }
+}
 
 def clear_session (s : Session) : Session :=
     let s2 : Session := { s with history := List.empty, turns := 0, spent := usage_zero } in
@@ -676,7 +849,10 @@ def apply_compact (st : WeaverState) (out : Compact.Outcome) : WeaverState :=
     // Rust host, which the CI completeness step runs.
     let base : RunState := st.run in
     let run2 : RunState := { base with session := out.session } in
-    let st2 : WeaverState := { st with run := run2 } in
+    // The compacted context is the new baseline; the pre-compaction
+    // request size would keep the status line (and the next autocompact
+    // check) at the old, too-large number.
+    let st2 : WeaverState := { st with run := run2, last_context := out.tokens } in
     st2
 
 /// Persist a compacted history into the session store (a no-op without
@@ -709,7 +885,10 @@ def compact_message (out : Compact.Outcome) (note : Option String) : String :=
 /// and only notes it -- a turn must still run.
 pub def Commands.autocompact (st : WeaverState) : IO (Pair WeaverState (Option String)) := do {
     let threshold : I64 := Compact.threshold st.context_window st.compact_at;
-    if Bool.not (Compact.should_compact threshold st.run.session)
+    // The REAL last request size wins when it is larger than the byte
+    // heuristic: a provider's tokenizer is the authority on how close the
+    // next send is to the window.
+    if I64.lt threshold 1 || I64.lt (Commands.context_used st) threshold
     then return (Pair.pair st Option.none)
     else do {
         let r <- Compact.compact st.run.session.config st.run.session threshold "";
@@ -749,6 +928,266 @@ def set_thinking (st : WeaverState) (b : Bool) : WeaverState :=
     let st2 : WeaverState := { st with run := run2 } in
     st2
 
+// ── /settings ──────────────────────────────────────────────────────────
+
+pub type SettingKind {
+    setting_cycle,
+    setting_toggle,
+    setting_number,
+}
+
+pub struct SettingRow {
+    key : String,
+    label : String,
+    value : String,
+    kind : SettingKind,
+}
+
+/// The editable settings, in display order. Provider/model are NOT here:
+/// they already have `/provider` and `/model` (the model row opens the
+/// picker); saving still writes their current values.
+pub def Commands.setting_rows (st : WeaverState) : List SettingRow :=
+    let cfg : ProviderConfig := st.run.session.config in
+    let think_text : String := if cfg.thinking then "on" else "off" in
+    let r0 : SettingRow := { key := "mode", label := "Approval mode", value := Mode.show st.mode, kind := SettingKind.setting_cycle } in
+    let r1 : SettingRow := { key := "thinking", label := "Reasoning channel", value := think_text, kind := SettingKind.setting_toggle } in
+    let r2 : SettingRow := { key := "max_tokens", label := "Output budget", value := I64.to_string cfg.max_tokens, kind := SettingKind.setting_number } in
+    let r3 : SettingRow := { key := "max_turns", label := "Turn budget", value := I64.to_string st.budget, kind := SettingKind.setting_number } in
+    let r4 : SettingRow := { key := "context_window", label := "Context window", value := I64.to_string st.context_window, kind := SettingKind.setting_number } in
+    let r5 : SettingRow := { key := "compact_at", label := "Autocompact at (%)", value := I64.to_string st.compact_at, kind := SettingKind.setting_number } in
+    [r0, r1, r2, r3, r4, r5]
+
+/// Apply one setting by name. A value the knob rejects is an ordinary
+/// command-output error (the session stays as it was).
+pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String) : Result String (Pair WeaverState String) :=
+    if key == "mode"
+    then match Mode.parse (String.trim value) {
+        Option.none => Result.err (String.concat "unknown mode: " value),
+        Option.some m => Result.ok (Pair.pair (set_mode st m) (String.concat "mode: " (Mode.show m))),
+    }
+    else if key == "thinking"
+    then if Bool.or (value == "on") (value == "true")
+        then Result.ok (Pair.pair (set_thinking st true) "thinking: on")
+        else if Bool.or (value == "off") (value == "false")
+        then Result.ok (Pair.pair (set_thinking st false) "thinking: off")
+        else Result.err "thinking: on | off"
+    else if key == "max_tokens"
+    then match parse_i64 value {
+        Option.none => Result.err "max_tokens must be a number",
+        Option.some n =>
+            if I64.lt n 16 then Result.err "max_tokens must be at least 16"
+            else Result.ok (Pair.pair (set_max_tokens st n) (String.concat "max_tokens: " (I64.to_string n))),
+    }
+    else if key == "max_turns"
+    then match parse_i64 value {
+        Option.none => Result.err "max_turns must be a number",
+        Option.some n =>
+            if I64.lt n st.run.session.turns
+            then Result.err "max_turns cannot be below the turns already spent"
+            else Result.ok (Pair.pair (set_budget st n) (budget_line (set_budget st n))),
+    }
+    else if key == "context_window"
+    then match parse_i64 value {
+        Option.none => Result.err "context_window must be a number (0 disables autocompact)",
+        Option.some n =>
+            if I64.lt n 0 then Result.err "context_window cannot be negative"
+            else Result.ok (Pair.pair (set_window st n) (String.concat "context_window: " (I64.to_string n))),
+    }
+    else if key == "compact_at"
+    then match parse_i64 value {
+        Option.none => Result.err "compact_at must be a percentage",
+        Option.some n =>
+            if Bool.or (I64.lt n 0) (I64.gt n 100) then Result.err "compact_at must be 0..100"
+            else Result.ok (Pair.pair (set_compact_at st n) (String.concat "compact_at: " (String.concat (I64.to_string n) "%"))),
+    }
+    else Result.err (String.concat "unknown setting: "
+        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at)"))
+
+#[partial]
+def next_above (cur : I64) (ladder : List I64) : Option I64 :=
+    match ladder {
+        List.empty => Option.none,
+        List.cons x rest => if I64.gt x cur then Option.some x else next_above cur rest,
+    }
+
+def ladder_next (cur : I64) (ladder : List I64) : I64 :=
+    match next_above cur ladder {
+        Option.some x => x,
+        Option.none => match ladder {
+            List.empty => cur,
+            List.cons first _ => first,
+        },
+    }
+
+/// Step a setting to its next curated value (the dialog's Enter). A
+/// numeric ladder wraps to its lowest rung; free text is `/settings
+/// <key> <value>`.
+pub def Commands.cycle_setting (st : WeaverState) (key : String) : Result String (Pair WeaverState String) :=
+    let cfg : ProviderConfig := st.run.session.config in
+    if key == "mode"
+    then Commands.apply_setting st key (Mode.show (Mode.cycle st.mode))
+    else if key == "thinking"
+    then Commands.apply_setting st key (if cfg.thinking then "off" else "on")
+    else if key == "max_tokens"
+    then Commands.apply_setting st key (I64.to_string (ladder_next cfg.max_tokens [1024, 2048, 4096, 8192, 16384]))
+    else if key == "max_turns"
+    then Commands.apply_setting st key (I64.to_string (ladder_next st.budget [20, 40, 100, 200, 500]))
+    else if key == "context_window"
+    then Commands.apply_setting st key (I64.to_string (ladder_next st.context_window [32768, 65536, 128000, 200000, 1000000]))
+    else if key == "compact_at"
+    then Commands.apply_setting st key (I64.to_string (ladder_next st.compact_at [50, 60, 70, 80, 90]))
+    else Result.err (String.concat "unknown setting: " key)
+
+def settings_update (st : WeaverState) : SettingsUpdate :=
+    let cfg : ProviderConfig := st.run.session.config in
+    let u : SettingsUpdate := {
+        mode := Option.some (Mode.show st.mode),
+        provider := Option.some st.provider,
+        model := Option.some cfg.model,
+        max_turns := Option.some st.budget,
+        thinking := Option.some cfg.thinking,
+        max_tokens := Option.some cfg.max_tokens,
+        context_window := Option.some st.context_window,
+        compact_at := Option.some st.compact_at,
+    } in
+    u
+
+def settings_text (st : WeaverState) : String :=
+    let rows : List String := List.map (fn (r : SettingRow) => String.concat "  " (String.concat r.label (String.concat ": " r.value))) (Commands.setting_rows st) in
+    let cfg : ProviderConfig := st.run.session.config in
+    let head : String := String.concat "settings: " (String.concat st.provider (String.concat "/" cfg.model)) in
+    let body : String := String.concat head (String.concat "\n" (List.intercalate "\n" rows)) in
+    String.concat body "\n  /settings <key> <value> | save project|global"
+
+def cmd_settings (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let trimmed : String := String.trim arg;
+    if String.is_empty trimmed
+    then respond st (settings_text st)
+    else match split_command trimmed {
+        Pair.pair word rest =>
+            if word == "save"
+            then settings_save (String.trim rest) st
+            else match Commands.apply_setting st word (String.trim rest) {
+                Result.err e => respond st e,
+                Result.ok pr => match pr { Pair.pair st2 out => respond st2 out },
+            },
+    }
+}
+
+def settings_save (target : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let r <- Settings.save target (settings_update st);
+    match r {
+        Result.ok msg => respond st msg,
+        Result.err e => respond st e,
+    }
+}
+
+// ── /permissions ───────────────────────────────────────────────────────
+
+def cap_parse (s : String) : Option Capability :=
+    if s == "read" then Option.some Capability.read
+    else if s == "write" then Option.some Capability.write
+    else if s == "exec" then Option.some Capability.exec
+    else if s == "net" then Option.some Capability.net
+    else Option.none
+
+/// `here`/`repo` is the scoped grant; `any`/`anywhere` is the whole
+/// session; omitted defaults to `here` (the safer one).
+def scope_parse (s : String) : Option PermScope :=
+    if Bool.or (s == "here") (s == "repo") then Option.some PermScope.repo
+    else if Bool.or (s == "any") (s == "anywhere") then Option.some PermScope.anywhere
+    else if String.is_empty s then Option.some PermScope.repo
+    else Option.none
+
+/// `/permissions` -- list, pre-grant, or revoke the session's approval
+/// grants. The grants are weaver's own (shuttle's `always` cache stays
+/// empty), so this command is the whole management surface.
+def cmd_permissions (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let trimmed : String := String.trim arg;
+    if String.is_empty trimmed
+    then do {
+        let gs <- Permissions.get st.grants;
+        respond st (permissions_text st gs)
+    }
+    else permissions_arg trimmed st
+}
+
+def permissions_arg (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match split_command arg {
+        Pair.pair word rest =>
+            if word == "revoke"
+            then permissions_revoke (String.trim rest) st
+            else if word == "allow"
+            then permissions_allow (String.trim rest) st
+            else respond st "usage: /permissions | allow <cap> [here|any] | revoke <cap|all> [here|any]",
+    }
+
+def permissions_allow (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match split_command arg {
+        Pair.pair cap_s scope_s =>
+            match cap_parse cap_s {
+                Option.none => respond st (String.concat "unknown capability: " (String.concat cap_s " (read | write | exec | net)")),
+                Option.some cap =>
+                    match scope_parse scope_s {
+                        Option.none => respond st "unknown scope: here | any",
+                        Option.some scope => do {
+                            let g : PermGrant := { cap := cap, scope := scope };
+                            let _ <- Permissions.add st.grants g;
+                            respond st (String.concat "permissions: added " (PermGrant.describe g))
+                        },
+                    },
+            },
+    }
+
+def permissions_revoke (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    if arg == "all"
+    then do {
+        let _ <- Permissions.clear st.grants;
+        respond st "permissions: all grants revoked"
+    }
+    else match split_command arg {
+        Pair.pair cap_s scope_s =>
+            match cap_parse cap_s {
+                Option.none => respond st (String.concat "unknown capability: " (String.concat cap_s " (read | write | exec | net)")),
+                Option.some cap =>
+                    if String.is_empty scope_s
+                    then do {
+                        // No scope named: both of this capability's grants.
+                        let _ <- Permissions.revoke_cap st.grants cap;
+                        respond st (String.concat "permissions: revoked all " (String.concat (cap_name cap) ""))
+                    }
+                    else match scope_parse scope_s {
+                        Option.none => respond st "unknown scope: here | any",
+                        Option.some scope => do {
+                            let _ <- Permissions.revoke st.grants cap scope;
+                            let g : PermGrant := { cap := cap, scope := scope };
+                            respond st (String.concat "permissions: revoked " (PermGrant.describe g))
+                        },
+                    },
+            },
+    }
+
+pub def permissions_text (st : WeaverState) (gs : List PermGrant) : String :=
+    Permissions.render st.workspace_root (Mode.show st.mode) gs
+
+def set_max_tokens (st : WeaverState) (n : I64) : WeaverState :=
+    let cfg : ProviderConfig := st.run.session.config in
+    let cfg2 : ProviderConfig := { cfg with max_tokens := n } in
+    let cur : Session := st.run.session in
+    let sess : Session := { cur with config := cfg2 } in
+    let base : RunState := st.run in
+    let run2 : RunState := { base with session := sess } in
+    let st2 : WeaverState := { st with run := run2 } in
+    st2
+
+def set_window (st : WeaverState) (n : I64) : WeaverState :=
+    let st2 : WeaverState := { st with context_window := n } in
+    st2
+
+def set_compact_at (st : WeaverState) (n : I64) : WeaverState :=
+    let st2 : WeaverState := { st with compact_at := n } in
+    st2
+
 /// A provider switch keeps the session's reasoning preference and output
 /// budget: the new preset's own values are replaced by the ones the user
 /// chose.
@@ -768,9 +1207,12 @@ def cmd_help (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) 
 def help_text : String :=
     List.intercalate "\n" [
         "/mode [manual|plan|allow_edit|auto]  show or set the approval mode",
+        "/budget [n]                          show or raise the model-call budget",
         "/model [name]                        show/pick or set the model",
         "/provider [ollama|mistral|openrouter|anthropic|mock] [model]  show or set the provider",
-        "/plan [approve manual|allow_edit]    plan-mode status; approve drops plan mode",
+        "/plan [approve manual|allow_edit]    show the current plan; approve drops plan mode",
+        "/permissions [allow|revoke ...]      list or manage session approval grants",
+        "/settings [<key> <value>|save project|global]  change or save settings",
         "/tools                               list tools with their capability tags",
         "/processes [kill <id>]               list background tasks",
         "/thinking [on|off]                   show or set the reasoning channel",
@@ -794,6 +1236,14 @@ def unknown_effect (cmd : String) (st : WeaverState) : IO (Result WeaverError Ef
 
 def set_mode (st : WeaverState) (m : Mode) : WeaverState :=
     let st2 : WeaverState := { st with mode := m } in
+    st2
+
+/// Raise the total budget and recompute the remaining turns from it --
+/// the same `max 0 (total - spent)` rule `/resume` uses.
+def set_budget (st : WeaverState) (n : I64) : WeaverState :=
+    let remaining : I64 := if n - st.run.session.turns < 0 then 0 else n - st.run.session.turns in
+    let run2 : RunState := { (st.run) with turns_left := remaining } in
+    let st2 : WeaverState := { st with budget := n, run := run2 } in
     st2
 
 def set_quit (st : WeaverState) : WeaverState :=
