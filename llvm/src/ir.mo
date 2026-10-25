@@ -11,6 +11,10 @@ pub type LLVMType {
     i8_,
     i32_,
     i64_,
+    /// The machine word: a pointer, a `String`, or an SSA value. Renders as
+    /// `i64` on every LP64 target and `i32` on wasm32 -- the single place
+    /// pointer width enters the IR.
+    word,
     f32_,
     f64_,
     ptr (inner : LLVMType),
@@ -259,7 +263,7 @@ pub type LLVMModule {
        (debug_files : List (Pair String String)),
 }
 
-open LLVMType {fn_, f32_, f64_, i1_, i32_, i64_, i8_, ptr, struct_, void}
+open LLVMType {fn_, f32_, f64_, i1_, i32_, i64_, i8_, ptr, struct_, void, word}
 open LLVMValue {
   add, alloc_closure, alloc_constructor, and_, bitcast, bool_, call, fn_ref,
   gep, global_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_,
@@ -276,17 +280,31 @@ def show_bool (b : Bool) : String := match b {
     false => "false",
 }
 
+/// The public spelling: a type at the host's pointer width.
+///
+/// Every existing caller and every existing target is LP64, so this is the
+/// 64-bit rendering and the WASI work is what calls `show_llvm_type_bits`
+/// with 32 instead. Kept as its own def so the ~30 call sites that do not
+/// care about width did not have to grow a parameter.
+#[terminating]
+pub def show_llvm_type (ty : LLVMType) : String := show_llvm_type_bits 64 ty
+
+/// A type at `bits` pointer width. `word` is the one type whose rendering
+/// depends on it -- `i64` on every LP64 target, `i32` on wasm32 -- which is
+/// what lets the runtime declarations and the SSA value convention be
+/// written once instead of per target.
 #[partial]
-pub def show_llvm_type (ty : LLVMType) : String := match ty {
+pub def show_llvm_type_bits (bits : I64) (ty : LLVMType) : String := match ty {
     void => "void",
     i1_ => "i1",
     i8_ => "i8",
     i32_ => "i32",
     i64_ => "i64",
+    word => if I64.beq bits 32 then "i32" else "i64",
     f32_ => "float",
     f64_ => "double",
-    ptr inner => String.concat (show_llvm_type inner) "*",
-    fn_ params ret => show_llvm_type_fn params ret,
+    ptr inner => String.concat (show_llvm_type_bits bits inner) "*",
+    fn_ params ret => show_llvm_type_fn bits params ret,
     struct_ name => String.concat "%" name,
 }
 
@@ -304,13 +322,13 @@ def llvm_pointee (ty : LLVMType) : LLVMType := match ty {
 }
 
 #[partial]
-def show_llvm_type_fn (params : List LLVMType) (ret : LLVMType) : String :=
-    let params_str := join_types params in
-    String.concat (show_llvm_type ret) (String.concat " (" (String.concat params_str ")"))
+def show_llvm_type_fn (bits : I64) (params : List LLVMType) (ret : LLVMType) : String :=
+    let params_str := join_types bits params in
+    String.concat (show_llvm_type_bits bits ret) (String.concat " (" (String.concat params_str ")"))
 
 #[partial]
-def join_types (types : List LLVMType) : String :=
-    List.intercalate ", " (List.map show_llvm_type types)
+def join_types (bits : I64) (types : List LLVMType) : String :=
+    List.intercalate ", " (List.map (fn (t : LLVMType) => show_llvm_type_bits bits t) types)
 
 #[partial]
 def show_args_typed (args : List LLVMValue) : String :=
@@ -1277,6 +1295,23 @@ pub def emit_module (module_ : LLVMModule) : String := match module_ {
 #[test]
 def test_type_i64_display : Bool :=
     String.beq (show_llvm_type i64_) "i64"
+
+/// `word` is the one type whose text depends on the pointer width: `i64`
+/// on every LP64 target (so this is byte-identical to the i64_ it
+/// replaces) and `i32` on wasm32.
+#[test]
+def test_type_word_display : Bool :=
+    String.beq (show_llvm_type word) "i64"
+        && String.beq (show_llvm_type_bits 64 word) "i64"
+        && String.beq (show_llvm_type_bits 32 word) "i32"
+
+/// ... and the width reaches a word nested inside a pointer and a
+/// function signature, which is where the runtime declarations put it.
+#[test]
+def test_type_word_nested_renders_per_width : Bool :=
+    String.beq (show_llvm_type_bits 32 (ptr word)) "i32*"
+        && String.beq (show_llvm_type_bits 64 (ptr word)) "i64*"
+        && String.beq (show_llvm_type_bits 32 (fn_ [word, word] word)) "i32 (i32, i32)"
 
 #[test]
 def test_type_void_display : Bool :=
