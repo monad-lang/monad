@@ -8,7 +8,11 @@
  *   * line reads on many pipes at once -- the per-descriptor carry table
  *     (`stream_carry_*`) grows by `realloc` while other threads use it;
  *   * concurrent spawn/read/reap of child processes -- the
- *     `proc_registry` slot table.
+ *     `proc_registry` slot table;
+ *   * descriptor inheritance (Linux only: it reads /proc) -- with a
+ *     listener, a connection and its accepted end held open, concurrent
+ *     spawns of `ls /proc/self/fd` must each see only their own 0/1/2
+ *     and ls's directory handle, never a sibling's pipe or a socket.
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -20,6 +24,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 void* monad_stream_read_line(int64_t fd, int64_t max_len, int64_t discard);
@@ -28,6 +33,10 @@ void* monad_proc_spawn(char* cmd, void* args);
 int64_t monad_proc_stream_fd(int64_t handle, int64_t which);
 int64_t monad_proc_wait(int64_t handle, int64_t kill_first);
 void* monad_build_args(int argc, char** argv);
+void* monad_tcp_listen(int64_t port);
+int64_t monad_tcp_local_port(int64_t listener);
+void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms);
+void* monad_tcp_accept(int64_t listener);
 
 /* The runtime references codegen's entry point; nothing calls it here. */
 void* main_monad(void* args) {
@@ -55,6 +64,8 @@ typedef struct {
 #define PROC_THREADS 8
 #define PROC_ITERS 40
 #define PROC_LINES 40
+#define FD_THREADS 8
+#define FD_ITERS 40
 
 static int failures;
 
@@ -134,8 +145,60 @@ static void* proc_worker(void* arg) {
     return NULL;
 }
 
+/* The fd in an ok `Result` from a stream or tcp native, or -1. */
+static int64_t ok_fd(void* r) {
+    Con* c = (Con*)r;
+    return c && c->tag == TAG_OK ? (int64_t)(intptr_t)c->fields[0] : -1;
+}
+
+#if defined(__linux__)
+/* Mark every descriptor this process inherited (fd >= 3) close-on-exec,
+   so the fd phase sees only what the runtime itself creates: a CI runner
+   or shell that leaks a descriptor into the harness would otherwise show
+   up in every child and fail the gate for nothing the runtime did. */
+static void cloexec_inherited(void) {
+    for (int fd = 3; fd < 1024; fd++) {
+        int flags = fcntl(fd, F_GETFD);
+        if (flags >= 0 && !(flags & FD_CLOEXEC)) fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+    }
+}
+
+/* Each thread spawns `ls /proc/self/fd` and checks the listing. A child
+   that inherited nothing has 0, 1 and 2 plus the directory ls opened,
+   which takes the lowest free number, 3. Anything else was inherited. */
+static void* fd_worker(void* arg) {
+    (void)arg;
+    char* argv[] = {"/proc/self/fd"};
+    for (int it = 0; it < FD_ITERS; it++) {
+        Con* r = (Con*)monad_proc_spawn("ls", monad_build_args(1, argv));
+        if (!r || r->tag != TAG_OK) {
+            fail();
+            continue;
+        }
+        int64_t child = (int64_t)(intptr_t)r->fields[0];
+        int64_t out = monad_proc_stream_fd(child, 1);
+        for (;;) {
+            Con* ok = (Con*)monad_stream_read_line(out, 0, 0);
+            if (!ok || ok->tag != TAG_OK) {
+                fail();
+                break;
+            }
+            Con* opt = (Con*)ok->fields[0];
+            if (opt->tag == TAG_NONE) break;
+            const char* name = (const char*)opt->fields[0];
+            if (strlen(name) != 1 || name[0] < '0' || name[0] > '3') {
+                fprintf(stderr, "thread_stress: child inherited fd %s\n", name);
+                fail();
+            }
+        }
+        if (monad_proc_wait(child, 0) != 0) fail();
+    }
+    return NULL;
+}
+#endif
+
 static void run(void* (*worker)(void*), int threads) {
-    pthread_t t[PIPE_THREADS > PROC_THREADS ? PIPE_THREADS : PROC_THREADS];
+    pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
         pthread_create(&t[i], NULL, worker, (void*)(intptr_t)i);
     for (int i = 0; i < threads; i++) pthread_join(t[i], NULL);
@@ -143,8 +206,22 @@ static void run(void* (*worker)(void*), int threads) {
 
 int main(void) {
     GC_INIT();
+#if defined(__linux__)
+    cloexec_inherited();
+#endif
     run(pipe_worker, PIPE_THREADS);
     run(proc_worker, PROC_THREADS);
+#if defined(__linux__)
+    int64_t listener = ok_fd(monad_tcp_listen(0));
+    int64_t client = ok_fd(monad_tcp_connect_timeout(
+        "127.0.0.1", monad_tcp_local_port(listener), 0));
+    int64_t conn = ok_fd(monad_tcp_accept(listener));
+    if (listener < 0 || client < 0 || conn < 0) fail();
+    run(fd_worker, FD_THREADS);
+    monad_stream_close(conn);
+    monad_stream_close(client);
+    monad_stream_close(listener);
+#endif
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }

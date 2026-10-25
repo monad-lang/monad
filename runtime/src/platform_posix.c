@@ -524,6 +524,71 @@ static char** monad_build_argv(char* cmd, void* args) {
     return argv;
 }
 
+/* ── Descriptor inheritance ───────────────────────────────────────────
+ * Every descriptor the runtime creates is close-on-exec: a child gets
+ * its dup2'd 0/1/2 and nothing else. Without that, a child spawned by
+ * one fiber holds the pipes and sockets of every other fiber's work,
+ * and the peer never sees EOF while that child lives.
+ *
+ * Setting FD_CLOEXEC after the fact leaves a window in which another
+ * thread can fork and exec with the descriptor still inheritable. This
+ * file defines no _GNU_SOURCE, so pipe2(2) is not declared; instead
+ * creation and the fcntl happen under `fork_lock` held shared, and every
+ * fork holds it exclusively (the shape of Go's syscall.ForkLock). The
+ * lock is never held across a blocking call, so a fork waits at most
+ * for one pipe() or socket() and its fcntl. accept(2) blocks, so it
+ * cannot take the lock: on Linux it is accept4(SOCK_CLOEXEC), and
+ * elsewhere a narrow window remains. `monad_stream_open` passes
+ * O_CLOEXEC to open(2) itself. */
+static pthread_rwlock_t fork_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+static void set_cloexec(int fd) {
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+}
+
+static int cloexec_pipe(int p[2]) {
+    pthread_rwlock_rdlock(&fork_lock);
+    int rc = pipe(p);
+    if (rc == 0) {
+        set_cloexec(p[0]);
+        set_cloexec(p[1]);
+    }
+    pthread_rwlock_unlock(&fork_lock);
+    return rc;
+}
+
+static int cloexec_socket(int domain, int type, int protocol) {
+    pthread_rwlock_rdlock(&fork_lock);
+    int fd = socket(domain, type, protocol);
+    if (fd >= 0) set_cloexec(fd);
+    pthread_rwlock_unlock(&fork_lock);
+    return fd;
+}
+
+#if defined(__linux__)
+/* Exported by glibc and musl alike; declared only under _GNU_SOURCE. */
+int accept4(int fd, struct sockaddr* addr, socklen_t* len, int flags);
+#endif
+
+static int cloexec_accept(int listener) {
+#if defined(__linux__)
+    return accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+#else
+    int fd = accept(listener, NULL, NULL);
+    if (fd >= 0) set_cloexec(fd);
+    return fd;
+#endif
+}
+
+/* fork(2) with no descriptor half-created. The child must not touch the
+   lock again: it execs or _exits. */
+static pid_t fork_excl(void) {
+    pthread_rwlock_wrlock(&fork_lock);
+    pid_t pid = fork();
+    if (pid != 0) pthread_rwlock_unlock(&fork_lock);
+    return pid;
+}
+
 /* `#[native "exec_cmd"]` (std/process.mo, `exec_cmd : String -> List
    String -> IO I64`). THE load-bearing native for the bootstrap ladder:
    lang/codegen/link.mo shells out to `llc` and `clang` through this, so
@@ -549,7 +614,7 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
        order the writes were made in. */
     fflush(NULL);
 
-    pid_t pid = fork();
+    pid_t pid = fork_excl();
     if (pid < 0) { free(argv); return -1; }
     if (pid == 0) {
         sigpipe_default(); /* see `main`: SIG_IGN would survive exec */
@@ -658,38 +723,32 @@ void* monad_proc_spawn(char* cmd, void* args) {
     if (!argv) return stream_err(9, "proc_spawn", "out of memory", 0);
 
     int in_pipe[2], out_pipe[2], err_pipe[2];
-    if (pipe(in_pipe) < 0) {
+    if (cloexec_pipe(in_pipe) < 0) {
         free(argv);
         return stream_os_err("proc_spawn", errno);
     }
-    if (pipe(out_pipe) < 0) {
+    if (cloexec_pipe(out_pipe) < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         free(argv);
         return stream_os_err("proc_spawn", errno);
     }
-    if (pipe(err_pipe) < 0) {
+    if (cloexec_pipe(err_pipe) < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
         free(argv);
         return stream_os_err("proc_spawn", errno);
     }
     int status_pipe[2];
-    if (pipe(status_pipe) < 0) {
+    if (cloexec_pipe(status_pipe) < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
         free(argv);
         return stream_os_err("proc_spawn", errno);
     }
-    /* FD_CLOEXEC by hand rather than pipe2(2): this file defines no
-     * _GNU_SOURCE, and both ends must close on a successful exec for
-     * the one-read handshake below to work. */
-    fcntl(status_pipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC);
-
     fflush(NULL); /* same ordering concern as `monad_exec_cmd` */
 
-    pid_t pid = fork();
+    pid_t pid = fork_excl();
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -1123,7 +1182,7 @@ static void* tcp_connect_deadline(char* host, int64_t port, int64_t timeout_ms) 
     int last_errno = 0;
     int last_flags = 0;
     for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        fd = cloexec_socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) { last_errno = errno; continue; }
         if (timeout_ms <= 0) {
             if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
@@ -1200,7 +1259,7 @@ void* monad_tcp_connect_timeout(char* host, int64_t port, int64_t timeout_ms) {
    second bind steal a port a lingering connection still owns. Backlog
    128 is Rust's own default for `TcpListener::bind`. */
 void* monad_tcp_listen(int64_t port) {
-    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int fd = cloexec_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (fd < 0) return stream_os_err("tcp_listen", errno);
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -1243,7 +1302,7 @@ void* monad_tcp_listen_on(char* host, int64_t port) {
     int fd = -1;
     int last_errno = 0;
     for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        fd = cloexec_socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) { last_errno = errno; continue; }
         if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0
             && listen(fd, 128) == 0) {
@@ -1265,7 +1324,7 @@ void* monad_tcp_listen_on(char* host, int64_t port) {
 void* monad_tcp_accept(int64_t listener) {
     int fd;
     do {
-        fd = accept((int)listener, NULL, NULL);
+        fd = cloexec_accept((int)listener);
     } while (fd < 0 && errno == EINTR);
     if (fd < 0) return stream_os_err("tcp_accept", errno);
     return tcp_ok((void*)(int64_t)fd);
