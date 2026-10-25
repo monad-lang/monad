@@ -2,12 +2,12 @@
 /// Split into modules for maintainability.
 use lang::types {
   Similar,
-  AttrArg, Attribute, Decl, DebugName, DoStmt, FieldPattern, FieldPatternEntry, Identifier,
-  InductConstructor, LocatedSpan, Location, ModulePath, Multiplicity, NamePath,
+  AttrArg, Attribute, Decl, DebugName, Def, DoStmt, FieldPattern, FieldPatternEntry, Identifier,
+  InductConstructor, Inductive, LocatedSpan, Location, ModulePath, Multiplicity, NamePath,
   NameRef, OpenFilter, Param, ParseClass, ParseClassDef, ParseDecl, ParseDef,
   ParseInductConstructor, ParseInstance, ParseMatchCase, ParseParam, ParseSpan,
   ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParsedParam,
-  QualifiedName, SourceRange, Term, TypeConstraint, UseFilter, UseItem, Visibility,
+  QualifiedName, SortLevel, SourceRange, Term, TypeConstraint, UseFilter, UseItem, Visibility,
   affine, app, char, char_to_string, concrete, destructured, f32, f64, flt, group,
   has_attr, i64, id_eq, ident, if_, linear, list_reverse, many, match_, named, num, package_private, parse_param_many, parse_param_with_mult,
   pd_at, pd_class_d, pd_decl_gen_d, pd_def_d, pd_def_macro_d, pd_inductive_d,
@@ -1438,6 +1438,99 @@ def type_params_try_bare (r : ParseResult String) (orig : String) (name : Identi
 def type_params_try_paren (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem _ => type_params_paren_name (identifier (skip_spaces rem)) name params vis,
+		fail _ => type_params_try_universe (tag "{" (skip_spaces orig)) orig name params vis
+	}
+
+/// A universe-level parameter clause on a `type` head: `{u}` or
+/// `{u : Universe}`, the `type` analogue of the `def` grammar's `{…}`
+/// clause (which `def_implicit_close` also drops — see its comment).
+/// Accepted only so the declaration can be SPELLED; the level variables
+/// survive by name in the params' types and the kind, and nothing
+/// generalizes or checks an inductive's kind (`check_inductive_with_scope`
+/// ignores `_typ`).
+///
+/// The brace is also the constructor body, and `type Unit { unit }` is an
+/// ordinary single-nullary-constructor declaration, so every failure in
+/// this chain FALLS BACK to `type_kind_or_brace orig`, letting
+/// `type_brace` re-read the brace as the body. A clause is only accepted
+/// when what follows its `}` can begin another param, the `: Kind`, or the
+/// body — see `type_params_universe_continue`.
+#[partial]
+def type_params_try_universe (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => type_params_universe_name (identifier (skip_spaces rem)) orig name params vis,
+		fail _ => type_kind_or_brace orig name params vis
+	}
+
+#[partial]
+def type_params_universe_name (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => type_params_universe_colon (tag ":" (skip_spaces rem)) rem orig name params vis,
+		fail _ => type_kind_or_brace orig name params vis
+	}
+
+#[partial]
+def type_params_universe_colon (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem2 _ => type_params_universe_annotation (tag_keyword "Universe" (skip_spaces rem2)) orig name params vis,
+		fail _ => type_params_universe_close (tag "}" (skip_spaces rem)) orig name params vis
+	}
+
+/// The annotation is required to be `Universe`: a body constructor that
+/// happens to be followed by `:` (`{ refl : Eq A a a }`) must not be
+/// mistaken for a clause, so any other annotation backtracks to the body.
+#[partial]
+def type_params_universe_annotation (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => type_params_universe_close (tag "}" (skip_spaces rem)) orig name params vis,
+		fail _ => type_kind_or_brace orig name params vis
+	}
+
+#[partial]
+def type_params_universe_close (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success rem _ => type_params_universe_continue rem orig name params vis,
+		fail _ => type_kind_or_brace orig name params vis
+	}
+
+/// After a `}`-closed universe clause, continue only if the next token can
+/// begin another param (`(`/`{`/a bare identifier) or the kind (`:`).
+/// Anything else — EOF, a following declaration's keyword, a constructor
+/// body's `,` — means the brace was the BODY, so re-read it as one.
+///
+/// Comments are skipped before the check; they are also what gets handed
+/// to `type_params_loop`, since that loop's own `skip_spaces` does not
+/// consume them.
+#[partial]
+def type_params_universe_continue (input : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	let rem : String := skip_docstrings (skip_spaces input) in
+	type_params_universe_continue_try (tag "(" rem) rem orig name params vis
+
+#[partial]
+def type_params_universe_continue_try (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success _ _ => type_params_loop rem name params vis,
+		fail _ => type_params_universe_continue_brace (tag "{" rem) rem orig name params vis
+	}
+
+#[partial]
+def type_params_universe_continue_brace (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success _ _ => type_params_loop rem name params vis,
+		fail _ => type_params_universe_continue_kind (tag ":" rem) rem orig name params vis
+	}
+
+#[partial]
+def type_params_universe_continue_kind (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success _ _ => type_kind_or_brace rem name params vis,
+		fail _ => type_params_universe_continue_bare (identifier rem) rem orig name params vis
+	}
+
+#[partial]
+def type_params_universe_continue_bare (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+	match r {
+		success _ _ => type_params_loop rem name params vis,
 		fail _ => type_kind_or_brace orig name params vis
 	}
 
@@ -2186,6 +2279,13 @@ def def_implicit_type (r : ParseResult ParseTerm) (brace_rem : String) (rem : St
 /// to *parse* correctly (as documentation/DX, and so the def's remaining
 /// signature/body are found at the right offset) even though its content
 /// doesn't need to survive into the parsed `Param` list.
+///
+/// `{u : Universe}` is the LEVEL analogue and is dropped the same way: `u`
+/// becomes a `BinderInfo.level` binder because a `Sort u` in the SURVIVING
+/// signature puts it in `free_level_vars`, which `elaborate_type`
+/// (`lang/elaborate.mo`) wraps with `wrap_level_forall`. A clause in a def
+/// whose signature never mentions `Sort u` therefore binds nothing.
+///
 /// `plans/implementations/named-field-construction.md`'s Phase 7: on
 /// failure (a `,` where `}` was expected — the one point a comma-
 /// separated def-param brace block, `{x : T, y : T2}`, first diverges
@@ -5710,13 +5810,14 @@ def sort_form_sort_kw (r : ParseResult String) : ParseResult ParseTerm :=
 		fail e => fail e
 	}
 
-/// `Sort` takes either a NUMERAL (`Sort 2`) or a level VARIABLE
-/// (`Sort u`). The numeral is tried first so every existing `Sort N` in
-/// the corpus takes exactly the path it always took; only input that is
-/// not a numeral can reach the variable arm.
+/// `Sort` takes a NUMERAL (`Sort 2`), a level VARIABLE (`Sort u`), or a
+/// parenthesized level EXPRESSION (`Sort (max u v)`). The numeral is
+/// tried first so every existing `Sort N` in the corpus takes exactly the
+/// path it always took; only input that is not a numeral can reach the
+/// other two arms.
 ///
 /// A bare `Sort` with neither still falls through to the ordinary
-/// variable path, because both arms fail and `variable_try_sort_alt`
+/// variable path, because every arm fails and `variable_try_sort_alt`
 /// discards this error -- that is what keeps the hole-typed `Sort`
 /// global working as it did before any of this.
 #[partial]
@@ -5727,7 +5828,110 @@ def sort_form_sort_level (rem : String) : ParseResult ParseTerm :=
 def sort_form_sort_num (r : ParseResult I64) (rem : String) : ParseResult ParseTerm :=
 	match r {
 		success rest n => success rest (pt_sort (SortLevel.concrete n)),
+		fail _ => sort_form_sort_paren (tag "(" rem) rem
+	}
+
+/// `Sort (…)`. The parenthesis is only consumed when its content is a
+/// well-formed LEVEL expression and the `)` closes it; any other shape
+/// leaves the whole sort form failing, so `Sort (anything else)` keeps
+/// parsing exactly as it did before this arm existed (an application of
+/// the `Sort` global), with no separate fallback needed.
+#[partial]
+def sort_form_sort_paren (r : ParseResult String) (rem : String) : ParseResult ParseTerm :=
+	match r {
+		success rest _ => sort_form_sort_paren_level (sort_level_expr (skip_spaces rest)),
 		fail _ => sort_form_sort_var (identifier rem)
+	}
+
+#[partial]
+def sort_form_sort_paren_level (r : ParseResult SortLevel) : ParseResult ParseTerm :=
+	match r {
+		success rest l => sort_form_sort_paren_close (tag ")" (skip_spaces rest)) l,
+		fail e => fail e
+	}
+
+#[partial]
+def sort_form_sort_paren_close (r : ParseResult String) (l : SortLevel) : ParseResult ParseTerm :=
+	match r {
+		success rest _ => success rest (pt_sort l),
+		fail e => fail e
+	}
+
+/// One level expression: `max <atom> <atom>` or a bare atom.
+///
+/// `max` is matched with `tag_keyword`, so `Sort (maxish u v)` is not a
+/// level expression at all and keeps the pre-existing application
+/// reading. The operands are ATOMS, and an atom may itself be a
+/// parenthesized level expression, which is what makes
+/// `Sort (max (max u v) w)` parse.
+///
+/// `Sort (u + 1)` has no production here; `SortLevel.succ` stays
+/// internally synthesized (`type_check_sort_full`) for now.
+#[partial]
+def sort_level_expr (input : String) : ParseResult SortLevel :=
+	sort_level_try_max (tag_keyword "max" input) input
+
+#[partial]
+def sort_level_try_max (r : ParseResult String) (orig : String) : ParseResult SortLevel :=
+	match r {
+		success rem _ => sort_level_max_left (sort_level_atom (skip_spaces rem)) (skip_spaces rem),
+		fail _ => sort_level_atom orig
+	}
+
+#[partial]
+def sort_level_max_left (r : ParseResult SortLevel) (after_max : String) : ParseResult SortLevel :=
+	match r {
+		success rem left => sort_level_max_right left (sort_level_atom (skip_spaces rem)),
+		fail e => fail e
+	}
+
+/// A `max` whose left operand is missing is not a level expression; the
+/// `max` reading has already been committed to, so this fails rather than
+/// re-reading the text as a bare atom.
+#[partial]
+def sort_level_max_right (left : SortLevel) (r : ParseResult SortLevel) : ParseResult SortLevel :=
+	match r {
+		success rem right => success rem (SortLevel.max left right),
+		fail e => fail e
+	}
+
+#[partial]
+def sort_level_atom (input : String) : ParseResult SortLevel :=
+	sort_level_atom_paren (tag "(" input) input
+
+#[partial]
+def sort_level_atom_paren (r : ParseResult String) (orig : String) : ParseResult SortLevel :=
+	match r {
+		success rem _ => sort_level_atom_inner (sort_level_expr (skip_spaces rem)),
+		fail _ => sort_level_atom_num (number orig) orig
+	}
+
+#[partial]
+def sort_level_atom_inner (r : ParseResult SortLevel) : ParseResult SortLevel :=
+	match r {
+		success rest l => sort_level_atom_close (tag ")" (skip_spaces rest)) l,
+		fail e => fail e
+	}
+
+#[partial]
+def sort_level_atom_close (r : ParseResult String) (l : SortLevel) : ParseResult SortLevel :=
+	match r {
+		success rest _ => success rest l,
+		fail e => fail e
+	}
+
+#[partial]
+def sort_level_atom_num (r : ParseResult I64) (orig : String) : ParseResult SortLevel :=
+	match r {
+		success rest n => success rest (SortLevel.concrete n),
+		fail _ => sort_level_atom_var (identifier orig)
+	}
+
+#[partial]
+def sort_level_atom_var (r : ParseResult String) : ParseResult SortLevel :=
+	match r {
+		success rest name => success rest (SortLevel.var (Identifier.id name)),
+		fail e => fail e
 	}
 
 /// The level-variable arm. `identifier` already rejects reserved
@@ -7776,6 +7980,266 @@ def test_type_implicit_params : Bool :=
 		fail _ => false
 	}
 
+// ─── `type` universe clauses (W1.4 grammar) ───────────────────────────
+//
+// `{u}` / `{u : Universe}` on a `type` head. These tests all go through
+// `decls_parser` (lowered `Decl`s) because the shape that matters is the
+// declaration that FOLLOWS the type: before this arm, `{u}` was read as
+// the constructor body and everything after it was never parsed.
+
+#[test]
+def test_type_universe_params_and_max_kind : Bool :=
+	match decls_parser "type Sigma {u} {v} (A : Sort u) (B : A -> Sort v) : Sort (max u v) { dpair (fst : A) (snd : B fst) }\ndef after : Type := Bool" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					I64.beq (decl_param_count first) 2 &&
+					decl_inductive_has_constructor first "dpair" &&
+					decl_kind_is_max_u_v first &&
+					match rest {
+						List.cons second rest2 =>
+							match second {
+								Decl.def_d _ => I64.beq (List.length rest2) 0,
+								_ => false,
+							},
+						List.empty => false,
+					},
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// `{ unit }` is a single-nullary-constructor BODY, not a universe clause:
+/// the clause arm only continues when a param, the kind, or the body can
+/// follow its `}`.
+#[test]
+def test_type_brace_body_is_not_a_universe_clause : Bool :=
+	match decls_parser "type Unit { unit }\ndef after : Type := Bool" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					I64.beq (decl_param_count first) 0 &&
+					decl_inductive_has_constructor first "unit" &&
+					I64.beq (List.length rest) 1,
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// `{a, b}` is a two-constructor body; the comma cannot start a clause.
+#[test]
+def test_type_comma_body_is_not_a_universe_clause : Bool :=
+	match decls_parser "type Two { a, b }" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					decl_inductive_has_constructor first "a" &&
+					decl_inductive_has_constructor first "b" &&
+					I64.beq (List.length rest) 0,
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// The annotated `{u : Universe}` spelling, followed by a real term param.
+#[test]
+def test_type_universe_clause_annotation_form : Bool :=
+	match decls_parser "type Box {u : Universe} (A : Sort u) : Sort u { mk (a : A) }" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					I64.beq (decl_param_count first) 1 &&
+					decl_inductive_has_constructor first "mk" &&
+					I64.beq (List.length rest) 0,
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// A GADT-style body whose constructor is followed by `:` must NOT be
+/// taken for a clause: the annotation is required to be `Universe`, and
+/// anything else backtracks to the body. `init/src/prelude.mo`'s own `Eq`
+/// is exactly this shape.
+#[test]
+def test_type_gadt_body_is_not_a_universe_clause : Bool :=
+	match decls_parser "type Eq2 (A : Sort 1) (a : A) (b : A) : Prop { refl : Eq2 A a a }\ndef after : Type := Bool" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					decl_inductive_has_constructor first "refl" &&
+					I64.beq (List.length rest) 1,
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// A clause directly followed by the `: Kind`, with no term param in
+/// between: the continuation may also be the kind.
+#[test]
+def test_type_universe_clause_before_the_kind : Bool :=
+	match decls_parser "type Box {u} : Sort u { mk }" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					decl_kind_level_is_var first "u" &&
+					decl_inductive_has_constructor first "mk" &&
+					I64.beq (List.length rest) 0,
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// A comment between the clause and the next param must not defeat the
+/// continuation check, and must be consumed before `type_params_loop`
+/// (whose own `skip_spaces` leaves comments alone).
+#[test]
+def test_type_universe_clause_before_a_comment : Bool :=
+	match decls_parser "type Box {u}\n// between\n(A : Sort u) : Sort u { mk (a : A) }" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					I64.beq (decl_param_count first) 1 &&
+					decl_inductive_has_constructor first "mk" &&
+					I64.beq (List.length rest) 0,
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+/// `max` over numerals as well as variables.
+#[test]
+def test_sort_max_of_numerals_parses : Bool :=
+	match expression "Sort (max 1 2)" {
+		success rem out =>
+			String.beq rem "" &&
+			match out.kind {
+				ParseTermKind.sort level => match level {
+					SortLevel.max left right =>
+						match left {
+							SortLevel.concrete a => I64.beq a 1,
+							_ => false,
+						} &&
+						match right {
+							SortLevel.concrete b => I64.beq b 2,
+							_ => false,
+						},
+					_ => false,
+				},
+				_ => false,
+			},
+		fail _ => false
+	}
+
+/// `{u : Universe}` on a `def` is DOCUMENTATION, exactly like
+/// `{A : Type}`: the clause is dropped and `u` survives only through the
+/// `(A : Sort u)` parameter, whose sort `wrap_level_forall` generalizes.
+#[test]
+def test_def_universe_clause_is_dropped : Bool :=
+	match decls_parser "def id {u : Universe} (A : Sort u) (x : A) : A := x" {
+		success rem decl_list =>
+			String.beq (skip_spaces rem) "" &&
+			match decl_list {
+				List.cons first rest =>
+					I64.beq (decl_param_count first) 2 &&
+					def_first_domain_is_level_var first "u" &&
+					I64.beq (List.length rest) 0,
+				List.empty => false,
+			},
+		fail _ => false
+	}
+
+#[partial]
+def decl_param_count (d : Decl) : I64 :=
+	match d {
+		Decl.inductive_d ind => match ind {
+			Inductive.mk _name params _typ _cons _attrs _vis => List.length params,
+		},
+		Decl.def_d df => match df {
+			Def.mk {
+				name := _n, typ := _t, term := _tm, constraints := _c,
+				attrs := _a, vis := _v, params := ps,
+			} => List.length ps,
+		},
+		_ => 0,
+	}
+
+#[partial]
+def decl_inductive_kind_level (d : Decl) : Option SortLevel :=
+	match d {
+		Decl.inductive_d ind => match ind {
+			Inductive.mk _name _params typ _cons _attrs _vis =>
+				match typ {
+					Term.sort level => Option.some level,
+					_ => Option.none,
+				},
+		},
+		_ => Option.none,
+	}
+
+#[partial]
+def decl_kind_is_max_u_v (d : Decl) : Bool :=
+	match decl_inductive_kind_level d {
+		Option.some level => level_is_max_u_v level,
+		Option.none => false,
+	}
+
+#[partial]
+def decl_kind_level_is_var (d : Decl) (want : String) : Bool :=
+	match decl_inductive_kind_level d {
+		Option.some level => match level {
+			SortLevel.var n => Similar.similar n (Identifier.id want),
+			_ => false,
+		},
+		Option.none => false,
+	}
+
+#[partial]
+def decl_inductive_has_constructor (d : Decl) (want : String) : Bool :=
+	match d {
+		Decl.inductive_d ind => match ind {
+			Inductive.mk _name _params _typ cons _attrs _vis => ctor_named cons want,
+		},
+		_ => false,
+	}
+
+#[partial]
+def ctor_named (cons : List InductConstructor) (want : String) : Bool :=
+	match cons {
+		List.empty => false,
+		List.cons c rest =>
+			match c {
+				InductConstructor.mk n _params _typ => String.beq (show_name_path n) want,
+			} || ctor_named rest want,
+	}
+
+#[partial]
+def def_first_domain_is_level_var (d : Decl) (want : String) : Bool :=
+	match d {
+		Decl.def_d df => match df {
+			Def.mk {
+				name := _n, typ, term := _tm, constraints := _c,
+				attrs := _a, vis := _v, params := _p,
+			} => match typ {
+				Term.pi _b dom _cod => match dom {
+					Term.sort level => match level {
+						SortLevel.var name => Similar.similar name (Identifier.id want),
+						_ => false,
+					},
+					_ => false,
+				},
+				_ => false,
+			},
+		},
+		_ => false,
+	}
+
 /// Regression test for `type_cons_group_more_names`: multiple
 /// constructor-field names sharing one type in a single group
 /// (`buckets (b0 b1 b2 : I64)`) — real usage: `std/map.mo`'s
@@ -8502,6 +8966,73 @@ def test_bare_sort_is_still_an_ordinary_variable : Bool :=
 			String.beq rem "" &&
 			match out.kind {
 				ParseTermKind.var _ => true,
+				_ => false,
+			},
+		fail _ => false
+	}
+
+// ─── `Sort (max u v)`: the level-expression form (W1.4 grammar) ───────
+//
+// Before this arm, `(` failed both the numeral and the identifier arm, so
+// `Sort (max u v)` silently parsed as an APPLICATION of the hole-typed
+// `Sort` global -- the same wrong reading W1.1b removed for `Sort 1`.
+
+#[partial]
+def level_is_max_u_v (level : SortLevel) : Bool :=
+	match level {
+		SortLevel.max left right =>
+			match left {
+				SortLevel.var n => Similar.similar n (Identifier.id "u"),
+				_ => false,
+			} &&
+			match right {
+				SortLevel.var n => Similar.similar n (Identifier.id "v"),
+				_ => false,
+			},
+		_ => false,
+	}
+
+#[test]
+def test_sort_max_parses_as_a_level_max : Bool :=
+	match expression "Sort (max u v)" {
+		success rem out =>
+			String.beq rem "" &&
+			match out.kind {
+				ParseTermKind.sort level => level_is_max_u_v level,
+				_ => false,
+			},
+		fail _ => false
+	}
+
+#[test]
+def test_sort_nested_max_parses : Bool :=
+	match expression "Sort (max (max u v) w)" {
+		success rem out =>
+			String.beq rem "" &&
+			match out.kind {
+				ParseTermKind.sort level => match level {
+					SortLevel.max left right =>
+						level_is_max_u_v left &&
+						match right {
+							SortLevel.var n => Similar.similar n (Identifier.id "w"),
+							_ => false,
+						},
+					_ => false,
+				},
+				_ => false,
+			},
+		fail _ => false
+	}
+
+/// `maxish` is not `max`: the keyword needs a word boundary, so this keeps
+/// the pre-existing application reading of `Sort (…)`.
+#[test]
+def test_sort_max_needs_a_word_boundary : Bool :=
+	match expression "Sort (maxish u v)" {
+		success _ out =>
+			match out.kind {
+				ParseTermKind.sort _ => false,
+				ParseTermKind.app _ _ => true,
 				_ => false,
 			},
 		fail _ => false
