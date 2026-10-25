@@ -35,7 +35,7 @@ use std::list {List.contains_by, List.filter, List.intercalate, List.length}
 use std::process {exec_cmd}
 use parsec::number {parse_i64}
 use build::hash {Build.file_digest_with, Build.probe_digest_tool, DigestTool}
-use build::identity {Build.compiler_digest_with}
+use build::identity {Build.compiler_key_with}
 use build::closure {Build.artifact_key, Build.closure_digest_with}
 use build::check {
   Build.check_entry_leaf, Build.check_plan_active, Build.check_plan_all,
@@ -233,7 +233,7 @@ def Build.reach_keyed (files : List String) (triples : List String) (checks : Li
 
 #[partial]
 def Build.reach_digested (tool : DigestTool) (files : List String) (triples : List String) (checks : List String) : IO Reach := do {
-    let c <- Build.compiler_digest_with tool;
+    let c <- Build.compiler_key_with tool;
     match c {
         err m => Build.refuse m,
         ok compiler => do {

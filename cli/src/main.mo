@@ -241,11 +241,20 @@ def profile_name (debug : Bool) : String := if debug then "debug" else "release"
 /// (`Build.mote_root_of`, `Build.target_dir_for`), because the `check`
 /// and `test` caches need the identical answers and a second copy of
 /// either rule is a second place for it to drift.
+/// The store/output root for a build of `src`: `--target-dir` wins, and
+/// otherwise the config and default are resolved from the SOURCE's own
+/// directory -- so building a file inside a workspace uses that
+/// workspace's store, which `monad build` has always done and a flag must
+/// not quietly change.
 #[partial]
-def build_cached (src : String) (dest_name : Path) (verbose : Bool) (debug : Bool) (no_cache : Bool) (target : TargetSpec) : IO I64 := do {
+def build_target_dir (target_dir_flag : String) (src : String) : IO String := do {
+    if String.is_empty target_dir_flag then Build.target_dir_for src else target_dir_flagged target_dir_flag
+}
+
+def build_cached (src : String) (dest_name : Path) (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (target : TargetSpec) : IO I64 := do {
     // Resolved either way: it is where the binary lands, not a cache
     // decision.
-    let target_dir <- Build.target_dir_for src;
+    let target_dir <- build_target_dir target_dir_flag src;
     let dest_dir : String := build_dest_dir target_dir debug;
     let root <- Build.mote_root_of src;
     // The target is in the key, so a native aarch64 or darwin build cannot be
@@ -586,16 +595,16 @@ def resolve_build_input (path : String) (bin : String) (out_name : String) : IO 
 
 /// The build verb: verify the lock for this target first, then compile.
 #[partial]
-def build_target (path : String) (out_name : String) (bin : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (locked : Bool) (spec : TargetSpec) : IO I64 := do {
+def build_target (path : String) (out_name : String) (bin : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (locked : Bool) (target_dir_flag : String) (spec : TargetSpec) : IO I64 := do {
     let locks <- check_locks [path] locked;
     match locks {
         Option.some e => do { println ("error: " ++ e); return 1 },
-        Option.none => build_target_body path out_name bin verbose debug no_cache spec
+        Option.none => build_target_body path out_name bin verbose debug no_cache target_dir_flag spec
     }
 }
 
 #[partial]
-def build_target_body (path : String) (out_name : String) (bin : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (spec : TargetSpec) : IO I64 := do {
+def build_target_body (path : String) (out_name : String) (bin : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (target_dir_flag : String) (spec : TargetSpec) : IO I64 := do {
     let resolved <- resolve_build_input path bin out_name;
     match resolved {
         Result.err msg => do {
@@ -619,6 +628,7 @@ def build_target_body (path : String) (out_name : String) (bin : String) (verbos
                     // cached wasm build miss its own output.
                     let final_name : String := TargetPlan.output_name plan input.name;
                     build_cached { src := input.src, dest_name := (Path.path final_name),
+                        target_dir_flag := target_dir_flag,
                         verbose := verbose, debug := debug, no_cache := no_cache,
                         target := spec }
                 }
@@ -669,6 +679,7 @@ def install_resolved (home : String) (path : String) (out_name : String) (bin : 
                         } else do {
                             if Bool.not (String.is_empty input.label) then println input.label else IO.pure Unit.unit;
                             let rc <- build_cached { src := input.src, dest_name := (Path.path final_name),
+                                target_dir_flag := "",
                                 verbose := verbose, debug := false, no_cache := no_cache, target := spec };
                             if not (rc == 0) then do {
                                 println "install: compilation failed";
@@ -828,8 +839,8 @@ def run_file (path : String) (verbose : Bool) (debug : Bool) (program_args : Lis
         },
         Result.ok input => do {
             let rc <- build_cached { src := input.src,
-                dest_name := (Path.path input.name), verbose := verbose,
-                debug := debug, no_cache := false, target := native };
+                dest_name := (Path.path input.name), target_dir_flag := "",
+                verbose := verbose, debug := debug, no_cache := false, target := native };
             if not (rc == 0) then do {
                 println "run: compilation failed";
                 return 1
@@ -1138,6 +1149,10 @@ struct CheckOptions {
     /// a changed tag is ignored, which is what makes a locked build
     /// stable.
     locked : Bool,
+    /// `--target-dir`: where the store and the check entries live. Empty
+    /// means the config (`monad.toml`'s `[build] target-dir`) and then the
+    /// default.
+    target_dir : String,
 }
 
 /// `checked`/`errors` accumulate across all files — errors are counted
@@ -1535,7 +1550,7 @@ def run_check_body (files : List String) (opts : CheckOptions) : IO I64 := do {
             // workspace resolves to the same one anyway, and resolving it
             // once is what keeps a `--workspace` run over eleven motes
             // from writing eleven partial stores.
-            let target_dir <- Build.target_dir_at "";
+            let target_dir <- target_dir_flagged opts.target_dir;
             let requested <- cache_enabled opts.no_cache;
             // `--verbose` disables the cache outright rather than
             // bypassing hits: its trace is a record of what the checker
@@ -2142,7 +2157,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
 // helpers with the macro-derived demo in motes/clap/src/tests/cli_derive_tests.mo,
 // though — same argv-munging primitives either way.
 type Command {
-    build (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (debug: Bool) (no_cache: Bool) (locked: Bool) (target: String),
+    build (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (debug: Bool) (no_cache: Bool) (locked: Bool) (target_dir: String) (target: String),
     /// `monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>]
     /// [-v] [--no-cache]`: build a RELEASE binary (the `release` profile, no
     /// DWARF) and install it atomically to `$MONAD_HOME/bin/<name>` (default
@@ -2265,13 +2280,23 @@ def Command.from_args (args : List String) : Command :=
                                         // other flags so it can never be read as a path.
                                         match Cli.take_flag "locked" "" rest1c {
                                             Cli.FlagResult.flag_result locked rest1c2 =>
+                                        // `--target-dir <dir>`: where the store
+                                        // and the output directories live.
+                                        // Peeled with the other flags for the
+                                        // same reason -- left in the list it
+                                        // is read as the positional path, and
+                                        // its VALUE as the output name (which
+                                        // is the bug this flag existed to
+                                        // stop).
+                                        match Cli.take_opt "target-dir" "" "" rest1c2 {
+                                            Cli.OptResult.opt_result target_dir rest1c3 =>
                                         // `--bin <name>` selects among a mote's
                                         // `[[bin]]` targets. Peeled with the
                                         // other flags, for the same reason:
                                         // left in the list, `--bin` would be
                                         // handed to the positional reader as a
                                         // path and its NAME as the output name.
-                                        match Cli.take_opt "bin" "" "" rest1c2 {
+                                        match Cli.take_opt "bin" "" "" rest1c3 {
                                             Cli.OptResult.opt_result bin_name rest1d =>
                                         // `--target <triple>` is what to build
                                         // FOR, and it is peeled with the other
@@ -2314,7 +2339,7 @@ def Command.from_args (args : List String) : Command :=
                                                             err _ => Command.help,
                                                             ok p => match Path.of out_name {
                                                                 err _ => Command.help,
-                                                                ok o => Command.build p o bin_name verbose debug no_cache locked target_name,
+                                                                ok o => Command.build p o bin_name verbose debug no_cache locked target_dir target_name,
                                                             },
                                                         },
                                                 },
@@ -2322,6 +2347,7 @@ def Command.from_args (args : List String) : Command :=
                                             },
                                             },
                                 },
+                                            },
                                             },
                                             },
                         },
@@ -2430,8 +2456,11 @@ def Command.from_args (args : List String) : Command :=
                                     Cli.FlagResult.flag_result no_cache rest3 =>
                                         match Cli.take_flag "locked" "" rest3 {
                                             Cli.FlagResult.flag_result locked rest4 =>
-                                                let opts : CheckOptions := { verbose := verbose, workspace := workspace, no_cache := no_cache, locked := locked } in
-                                                Command.check rest4 opts,
+                                                match Cli.take_opt "target-dir" "" "" rest4 {
+                                                    Cli.OptResult.opt_result target_dir rest5 =>
+                                                let opts : CheckOptions := { verbose := verbose, workspace := workspace, no_cache := no_cache, locked := locked, target_dir := target_dir } in
+                                                Command.check rest5 opts,
+                                                },
                                         },
                                 },
                         },
@@ -2544,7 +2573,7 @@ def Command.from_args (args : List String) : Command :=
 def main (args : List String) : IO I64 {
     let cmd : Command := Command.from_args args;
     match cmd {
-        build file_path out_name bin verbose debug no_cache locked target_name => do {
+        build file_path out_name bin verbose debug no_cache locked target_dir target_name => do {
             // Resolved HERE rather than in `from_args`, which is pure and
             // has no IO to probe a toolchain with. An empty name is this
             // machine, and a name this compiler does not know is still taken
@@ -2559,7 +2588,7 @@ def main (args : List String) : IO I64 {
                 Result.ok target => do {
                     // A directory is a mote to build (`build_target`); a file
                     // goes straight to `compile_file`.
-                    build_target (Path.to_string file_path) (Path.to_string out_name) bin verbose debug no_cache locked target
+                    build_target (Path.to_string file_path) (Path.to_string out_name) bin verbose debug no_cache locked target_dir target
                 },
             }
         },
@@ -2726,6 +2755,8 @@ def print_help : IO I64 {
     println "         --offline uses only what is already cached; a missing mirror is an error naming the URL";
     println "       monad update [<dir>] [--offline]  Like fetch, but re-resolve every tag/branch/HEAD pin";
     println "         Writes mote.lock from scratch; `fetch` is the one to run after a manifest edit";
+    println "       build/check take --target-dir <dir>: where the store and the output directories live";
+    println "         (clean/gc/store take the same flag). Without it the config and default decide";
     println "       build/check/test verify mote.lock before compiling, and take --locked, which also";
     println "         fails when a dependency's declared tag/branch/rev no longer matches the lock";
     println "         They accept --offline too, and ignore it: they never use the network";

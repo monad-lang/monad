@@ -15,7 +15,7 @@ use build::hash {
   Build.file_digest_with, Build.probe_digest_tool, Build.tree_digest_with,
   DigestTool,
 }
-use build::identity {Build.compiler_digest_with}
+use build::identity {Build.compiler_key_with}
 
 /// The declared dependency directories of the mote at `dir`, paired with
 /// its own name, or `none` when `dir` is not inside a mote.
@@ -289,7 +289,7 @@ pub def Build.input_hash_with (tool : DigestTool) (src : String) (root : String)
             match closure {
                 err m => return (err m),
                 ok c => do {
-                    let comp <- Build.compiler_digest_with tool;
+                    let comp <- Build.compiler_key_with tool;
                     match comp {
                         err m => return (err m),
                         ok k => return (ok (Build.artifact_key f c k profile triple))
