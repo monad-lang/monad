@@ -12,6 +12,17 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 TURNS = os.environ.get(
     "WV_TURNS",
     os.path.join(REPO, "scripts", "weaver-tui-repro", "turns_two_reads.json"))
+if "WV_TURNS" not in os.environ:
+    # The driver answers ONE approval; the checked-in fixture scripts three
+    # turns (a second read dialog would swallow the exit gesture), so stage
+    # its first turn exactly as the CI runner does.
+    import json, tempfile
+    with open(TURNS, encoding="utf-8") as fh:
+        first = json.load(fh)[:1]
+    staged = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    json.dump(first, staged)
+    staged.close()
+    TURNS = staged.name
 BIN = os.environ.get("WV_BIN", REPO + "/target-monad/release/weaver")
 
 master, slave = pty.openpty()
@@ -67,6 +78,24 @@ print("PASS3 answer accepted, turn continues:", "done" in striptight(t2))
 pump(2)
 t3 = txt()
 print("PASS4 turn finished with transcript:", "done" in striptight(t3))
+
+# The exit gesture below must start from an IDLE app: `with_turn_end`
+# zeroes the streak, so a turn completing between the two Ctrl+C presses
+# disarms it (the second press shows the hint again). The turn's
+# completion forces a full repaint (ESC[2J), which is the observable
+# end -- the staged single-read fixture ends the turn with an error, so
+# a status-line/turn-count probe would not fire.
+def wait_turn_over(sec):
+    end = time.time() + sec
+    while time.time() < end:
+        before = len(buf)
+        pump(0.25)
+        if "\x1b[2J" in bytes(buf[before:]).decode("utf-8", "replace"):
+            return True
+    return False
+
+turn_over = wait_turn_over(15)
+print("PASS4a turn over before the exit gesture:", turn_over)
 
 # 5. double ctrl+c clean exit (restore ?1049l)
 os.write(master, b"\x03"); time.sleep(0.5); pump(0.5)

@@ -1267,7 +1267,13 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             // and `live_base` is the submit-time total.
             write_usage st2.store st2.run.session.spent;
             let r <- ResultT.run (drive_tui log gen st2 text);
-            return (turn_result_of st2 before note r)
+            // A plan-mode turn's text is captured and persisted here, as
+            // dumb mode does: `turn_result_of` must get it at the call,
+            // or it returns a partial application (the checker does not
+            // reject an under-applied constructor/def in value position).
+            let plan : Option String := Commands.plan_after_turn st2 r;
+            let _ <- persist_plan st2.store plan;
+            return (turn_result_of st2 before note r plan)
         }
     }
 }
