@@ -1114,6 +1114,145 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
         err e => err e,
     }
 
+// ─── R3b: elaboration into `Elim` (core-term-simplification.md) ──────────
+//
+// `elaborate_if_to_elim`/`elaborate_match_to_elim` build the `Term.elim`
+// that an `if`/`match` COULD be, with a CONSTANT motive -- the same
+// non-dependent result `type_check_if`/`type_check_match` already produce
+// today. Deliberately NOT called from either of those yet: that is R3c,
+// gated on R4, since the checker has no typing rule for `Elim` with a
+// real motive until then, and wiring this in early would make every
+// `if`/`match` uncheckable. Exercised directly by pins in
+// `lang/src/tests/infer_tests.mo` instead.
+
+/// `if c t e` as an `Elim` on `Bool`: two nullary constructors, so each
+/// minor is its branch TERM unchanged -- no lambda wrapping needed, the
+/// same reason `type_check_if` never builds a `MatchCase` today.
+/// `bool_ind` is the caller's to resolve (R3c would do this once, the
+/// way `type_check_match` resolves an inductive via `validate_match_
+/// constructors` today); this function assumes it already IS `Bool`'s
+/// real `Inductive`, `true` before `false` in `constructors`
+/// (`init/src/prelude.mo`'s own declaration order), and does no
+/// resolution of its own.
+///
+/// `motive` ignores the scrutinee -- both branches already share one
+/// `result_typ` by the time `type_check_if` has unified `two`/`three`
+/// against each other, so a constant function `Bool -> Sort l`
+/// reproduces today's non-dependent result exactly. `term_shift 1` is
+/// what keeps `result_typ` well-scoped under the motive's own new
+/// binder, which it does not reference.
+def elaborate_if_to_elim (bool_ind : Inductive) (cond : Term) (then_term : Term)
+    (else_term : Term) (result_typ : Term) : Term :=
+    let bool_typ : Term := named_type_ref "Bool" in
+    let motive : Term := Term.lam binder_anon bool_typ (term_shift 1 result_typ) in
+    let minors : List Term := List.cons then_term (List.cons else_term List.empty) in
+    Term.elim (Elim.mk bool_ind.name List.empty List.empty motive minors cond)
+
+/// `match value_ { ... }` as an `Elim`, with a constant motive -- same
+/// non-dependent reproduction as `elaborate_if_to_elim` above,
+/// generalized to any inductive and any arity. `checked_cases` must
+/// already be the TYPE-CHECKED case list `type_check_cases` returns
+/// (field patterns resolved, each case's `args` in ITS OWN
+/// constructor's declared field order -- `term_permute`'s job, already
+/// done): this function does no resolution of its own, exactly mirroring
+/// how `Literal.match_ scrutinee_term checked_cases` is itself built from
+/// that same list (`type_check_cases`, above). `ind` must be the
+/// scrutinee's real resolved `Inductive`; a `match` whose inductive could
+/// not be resolved (`maybe_ind = Option.none`) has no `Elim` this
+/// function can build and stays on the old `Literal.match_` path at R3c,
+/// same as every other partial-information fallback in this file.
+def elaborate_match_to_elim (ind : Inductive) (scrutinee_typ : Term) (scrutinee_term : Term)
+    (checked_cases : List MatchCase) (result_typ : Term) : Term :=
+    let params : List Term := match flatten_call_spine scrutinee_typ { CallSpine.mk _head args => args } in
+    let motive : Term := Term.lam binder_anon scrutinee_typ (term_shift 1 result_typ) in
+    let maybe_ind : Option Inductive := Option.some ind in
+    let minors : List Term := build_elim_minors (inductive_constructors ind) checked_cases scrutinee_typ maybe_ind in
+    Term.elim (Elim.mk ind.name List.empty params motive minors scrutinee_term)
+
+/// One minor per constructor, in `ind`'s own DECLARATION order -- not
+/// `cases`' written order, which `missing_constructors_go` below already
+/// deliberately ignores for the same reason (coverage is a set test, not
+/// a positional one).
+def build_elim_minors (ctors : List InductConstructor) (cases : List MatchCase)
+    (scrutinee_typ : Term) (maybe_ind : Option Inductive) : List Term :=
+    match ctors {
+        List.empty => List.empty,
+        List.cons ctor rest =>
+            List.cons
+                (elim_minor_for_ctor ctor cases scrutinee_typ maybe_ind)
+                (build_elim_minors rest cases scrutinee_typ maybe_ind),
+    }
+
+/// The one minor this constructor contributes: built from the first case
+/// (in WRITTEN order) that covers it -- a real named arm, or a `_` that
+/// reaches it. `Option.none` is unreachable once `validate_match_
+/// coverage` (strict-exhaustiveness.md Phase 4, now a hard error) has
+/// run over this same `cases`/`ind` pair before elaboration ever gets
+/// here; `Term.hole` is a backstop for a caller that skipped that check,
+/// never something a checked program can reach.
+def elim_minor_for_ctor (ctor : InductConstructor) (cases : List MatchCase)
+    (scrutinee_typ : Term) (maybe_ind : Option Inductive) : Term :=
+    match ctor {
+        InductConstructor.mk cname _cparams _ctyp =>
+            match find_covering_case cname cases {
+                Option.none => Term.hole,
+                Option.some case_ =>
+                    if match_is_wildcard_name case_.name
+                    then
+                        let field_types : List Term :=
+                            arg_types_for_case (constructor_bare_name cname) maybe_ind scrutinee_typ in
+                        build_anon_lambda_chain field_types (term_shift (List.length field_types) case_.body)
+                    else
+                        let field_types : List Term := arg_types_for_case case_.name maybe_ind scrutinee_typ in
+                        build_named_lambda_chain case_.args field_types case_.body,
+            },
+    }
+
+/// First case (written order) that covers `cname` -- an explicit arm by
+/// name, or `_` (which covers every constructor it reaches, by
+/// definition). Mirrors `case_names_cover_constructor`'s per-constructor
+/// predicate below, but returns the CASE itself rather than a `Bool`,
+/// since the caller needs its `args`/`body`, not just whether one
+/// exists.
+def find_covering_case (cname : NamePath) (cases : List MatchCase) : Option MatchCase :=
+    match cases {
+        List.empty => Option.none,
+        List.cons hd rest =>
+            if match_is_wildcard_name hd.name || case_name_covers hd.name cname
+            then Option.some hd
+            else find_covering_case cname rest,
+    }
+
+/// Wrap `body` in one `Term.lam` per `(name, type)` pair, OUTERMOST
+/// first -- `names[0]` ends up at the HIGHEST de Bruijn index, matching
+/// how a written case's `args`/`body` are already bound
+/// (`whnf_subst_case_fields`'s own doc comment: "the outermost binder
+/// sits at de Bruijn index n-1"), so no reindexing of `body` is needed,
+/// only real `Term.lam` nodes where there were none.
+def build_named_lambda_chain (names : List Identifier) (types : List Term) (body : Term) : Term :=
+    match names {
+        List.empty => body,
+        List.cons n nrest =>
+            match types {
+                List.cons t trest => Term.lam (binder_named n) t (build_named_lambda_chain nrest trest body),
+                List.empty => Term.lam (binder_named n) Term.hole (build_named_lambda_chain nrest List.empty body),
+            },
+    }
+
+/// Same shape as `build_named_lambda_chain`, for a constructor a `_` arm
+/// covers: there are no written names for its fields, so every binder is
+/// `binder_anon`. The one call site above (`elim_minor_for_ctor`) shifts
+/// the wildcard arm's `body` by the FULL field count ONCE, before calling
+/// this -- it is moving under that many new binders it does not
+/// reference, and shifting once rather than once per level is exactly as
+/// correct, since nothing between the shift and the outermost new binder
+/// references the shifted indices.
+def build_anon_lambda_chain (types : List Term) (body : Term) : Term :=
+    match types {
+        List.empty => body,
+        List.cons t trest => Term.lam binder_anon t (build_anon_lambda_chain trest body),
+    }
+
 /// Validate that all non-wildcard case constructors belong to the same
 /// inductive. Returns the resolved `Inductive` on success (threaded
 /// through to `type_check_match_case` below so a case's own bound

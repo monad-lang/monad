@@ -11,10 +11,12 @@ use lang::types {
 use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::typecheck::diagnostic {type_error_message}
 use lib::typecheck::infer {
-  CalleeDomain, TypedTerm, empty_local_types, empty_locals,
+  CalleeDomain, TypedTerm, elaborate_if_to_elim, elaborate_match_to_elim,
+  empty_local_types, empty_locals,
   is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
   type_check_match_case
 }
+use lib::typecheck::subst {term_shift}
 
 open Term {app, hole, lam, lit, pi, var}
 open DebugName {named, unnamed}
@@ -1635,3 +1637,164 @@ def test_level_solved_from_an_earlier_argument_reaches_a_later_parameter : Bool 
 def test_level_polymorphic_partial_application_instantiates : Bool :=
     checked_typ_is_pi_over_sorts
         (app (var sentinel (named (id "dup"))) (sort_n 0)) dup_scope 1
+
+// --- R3b: elaboration into `Elim` (core-term-simplification.md) ---
+//
+// Pins for `elaborate_if_to_elim`/`elaborate_match_to_elim`
+// (`lang/src/typecheck/infer.mo`) -- standalone functions, not wired
+// into `type_check_if`/`type_check_match` yet (R3c, gated on R4).
+// Exercised directly here instead of through `type_check`.
+//
+// The multi-element equality checks below are top-level helpers, each
+// matching one `List.cons` level at a time -- Monad's match patterns
+// take plain variables as a constructor's arguments, not a nested
+// parenthesized sub-pattern, so "exactly two elements" is a `List.cons`
+// arm whose own tail is matched by a SEPARATE nested `match`, not
+// `List.cons x1 (List.cons x2 List.empty)` as one pattern.
+
+def two_terms_eq (xs : List Term) (a : Term) (b : Term) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons x1 rest =>
+            match rest {
+                List.empty => false,
+                List.cons x2 _rest2 => Similar.similar x1 a && Similar.similar x2 b
+            },
+    }
+
+def one_term_eq (xs : List Term) (a : Term) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons x1 _rest => Similar.similar x1 a,
+    }
+
+def second_term_eq (xs : List Term) (b : Term) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons _x1 rest =>
+            match rest {
+                List.empty => false,
+                List.cons x2 _rest2 => Similar.similar x2 b
+            },
+    }
+
+def bool_name_for_elim_tests : NamePath := NamePath.mk (List.cons (Identifier.id "Bool") List.empty)
+
+/// Two nullary constructors, `true` before `false` -- mirrors
+/// `init/src/prelude.mo`'s own declaration order, which is what
+/// `elaborate_if_to_elim`'s minor order (`[then, else]`) depends on.
+def bool_ind_for_elim_tests : Inductive :=
+    let true_cn : InductConstructor := InductConstructor.mk
+        (NamePath.mk (List.cons (Identifier.id "true") List.empty)) List.empty (sort_n 1) in
+    let false_cn : InductConstructor := InductConstructor.mk
+        (NamePath.mk (List.cons (Identifier.id "false") List.empty)) List.empty (sort_n 1) in
+    Inductive.mk bool_name_for_elim_tests List.empty (sort_n 1)
+        [true_cn, false_cn] List.empty Visibility.package_private
+
+#[test]
+def test_elaborate_if_to_elim_builds_bool_elim_with_ordered_minors : Bool :=
+    let cond : Term := named_free_var "Cond" in
+    let then_term : Term := named_free_var "Then" in
+    let else_term : Term := named_free_var "Else" in
+    let result_typ : Term := named_free_var "ResultTyp" in
+    match elaborate_if_to_elim bool_ind_for_elim_tests cond then_term else_term result_typ {
+        Term.elim e =>
+            Similar.similar e.inductive bool_name_for_elim_tests
+                && (match e.levels { List.empty => true, _ => false })
+                && (match e.params { List.empty => true, _ => false })
+                && Similar.similar e.scrutinee cond
+                && Similar.similar e.motive
+                    (Term.lam binder_anon (named_free_var "Bool") (term_shift 1 result_typ))
+                && two_terms_eq e.minors then_term else_term,
+        _ => false,
+    }
+
+/// `circle`/`square`, each with one field `r` -- a multi-constructor,
+/// non-generic inductive (no type params to substitute, unlike `pair_ind`
+/// below), for pins about MINOR ORDER and the named lambda chain.
+def shape_name_for_elim_tests : NamePath := NamePath.mk (List.cons (Identifier.id "Shape") List.empty)
+
+def shape_ind_for_elim_tests : Inductive :=
+    let r_param : Param :=
+        Param.mk (Identifier.id "r") (named_free_var "I64") Multiplicity.many Option.none List.empty in
+    let circle_cn : InductConstructor :=
+        InductConstructor.mk (NamePath.mk [Identifier.id "circle"]) [r_param] (sort_n 1) in
+    let square_cn : InductConstructor :=
+        InductConstructor.mk (NamePath.mk [Identifier.id "square"]) [r_param] (sort_n 1) in
+    Inductive.mk shape_name_for_elim_tests List.empty (sort_n 1)
+        [circle_cn, square_cn] List.empty Visibility.package_private
+
+def shape_scrutinee_typ_for_elim_tests : Term := named_free_var "Shape"
+
+/// Cases are written SQUARE-then-circle -- the opposite of `Shape`'s own
+/// declared order -- so a minor list that merely echoed `cases` back
+/// would come out backwards. `missing_constructors_go` already proves
+/// coverage is a set test rather than a positional one; this is the same
+/// property for `Elim.minors`.
+#[test]
+def test_elaborate_match_to_elim_minors_follow_declared_order : Bool :=
+    let circle_body : Term := named_free_var "CircleBody" in
+    let square_body : Term := named_free_var "SquareBody" in
+    let circle_case : MatchCase := MatchCase.mk (Identifier.id "circle")
+        (List.cons (Identifier.id "r") List.empty) circle_body Option.none Option.none in
+    let square_case : MatchCase := MatchCase.mk (Identifier.id "square")
+        (List.cons (Identifier.id "r") List.empty) square_body Option.none Option.none in
+    let cases : List MatchCase := List.cons square_case (List.cons circle_case List.empty) in
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let result_typ : Term := named_free_var "ResultTyp" in
+    match elaborate_match_to_elim shape_ind_for_elim_tests shape_scrutinee_typ_for_elim_tests
+        scrutinee cases result_typ {
+        Term.elim e =>
+            two_terms_eq e.minors
+                (Term.lam (binder_named (Identifier.id "r")) (named_free_var "I64") circle_body)
+                (Term.lam (binder_named (Identifier.id "r")) (named_free_var "I64") square_body),
+        _ => false,
+    }
+
+/// `square` is covered only by a trailing `_` -- its minor must still
+/// bind one `r`-typed argument (the arity `Shape.square` declares), with
+/// the wildcard's own BODY shifted up by 1 since it moves under a binder
+/// it never references. A minor that forgot the shift would read the
+/// wrong index for anything the wildcard body names from further out.
+#[test]
+def test_elaborate_match_to_elim_wildcard_minor_ignores_and_shifts_fields : Bool :=
+    let circle_body : Term := named_free_var "CircleBody" in
+    let wildcard_body : Term := Term.var 0 DebugName.unnamed in
+    let circle_case : MatchCase := MatchCase.mk (Identifier.id "circle")
+        (List.cons (Identifier.id "r") List.empty) circle_body Option.none Option.none in
+    let wildcard_case : MatchCase :=
+        MatchCase.mk (Identifier.id "_") List.empty wildcard_body Option.none Option.none in
+    let cases : List MatchCase := List.cons circle_case (List.cons wildcard_case List.empty) in
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let result_typ : Term := named_free_var "ResultTyp" in
+    match elaborate_match_to_elim shape_ind_for_elim_tests shape_scrutinee_typ_for_elim_tests
+        scrutinee cases result_typ {
+        Term.elim e =>
+            second_term_eq e.minors (Term.lam binder_anon (named_free_var "I64") (term_shift 1 wildcard_body)),
+        _ => false,
+    }
+
+/// `pair_ind` (above) is generic over `A`/`B`; `pair_scrutinee_typ` applies
+/// it to `T`/`U`. `Elim.params` must carry `[T, U]` (read off the
+/// scrutinee type's own application spine), and the single `mk` minor's
+/// lambda chain must bind `first`/`second` at the INSTANTIATED types `T`/
+/// `U`, not the raw declared `A`/`B` -- the same substitution
+/// `arg_types_for_case` already does for `type_check_match_case`
+/// (`field-pattern-type-args-not-substituted.md`), now exercised through
+/// the elaboration path instead.
+#[test]
+def test_elaborate_match_to_elim_params_and_field_types_from_scrutinee_spine : Bool :=
+    let body : Term := named_free_var "Body" in
+    let fields : List Identifier := List.cons (Identifier.id "first") (List.cons (Identifier.id "second") List.empty) in
+    let case_ : MatchCase := MatchCase.mk (Identifier.id "mk") fields body Option.none Option.none in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let result_typ : Term := named_free_var "ResultTyp" in
+    match elaborate_match_to_elim pair_ind pair_scrutinee_typ scrutinee cases result_typ {
+        Term.elim e =>
+            two_terms_eq e.params (named_free_var "T") (named_free_var "U")
+                && one_term_eq e.minors
+                    (Term.lam (binder_named (Identifier.id "first")) (named_free_var "T")
+                        (Term.lam (binder_named (Identifier.id "second")) (named_free_var "U") body)),
+        _ => false,
+    }
