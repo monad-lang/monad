@@ -4393,6 +4393,11 @@ def llvm_type_eq (a : LLVMType) (b : LLVMType) : Bool := match a {
     LLVMType.i8_ => match b { LLVMType.i8_ => true, _ => false },
     LLVMType.i32_ => match b { LLVMType.i32_ => true, _ => false },
     LLVMType.i64_ => match b { LLVMType.i64_ => true, _ => false },
+    // `word` is its OWN constructor, not an alias for `i64_`: the two
+    // render the same text at 64 bits and differ at 32, so an equality
+    // that folded them would hide the difference exactly where it matters.
+    // No width context here, so this is the strict reading.
+    LLVMType.word => match b { LLVMType.word => true, _ => false },
     LLVMType.f32_ => match b { LLVMType.f32_ => true, _ => false },
     LLVMType.f64_ => match b { LLVMType.f64_ => true, _ => false },
     LLVMType.ptr inner_a => match b { LLVMType.ptr inner_b => llvm_type_eq inner_a inner_b, _ => false },
@@ -4499,6 +4504,16 @@ def emit_extern_return_cast (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMTyp
             match fresh_temp c {
                 CtxStrPair.mk ctx1 temp =>
                     let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast val ret_ty LLVMType.i64_) in
+                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
+            },
+        // The word arm: a C function returning a pointer-sized value
+        // already IS the wrapper's word, so it takes the same bitcast the
+        // i64_ arm does -- and on wasm32 the word is i32, which `ret_ty`
+        // itself now carries.
+        LLVMType.word =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 temp =>
+                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast val ret_ty LLVMType.word) in
                     CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
             },
         LLVMType.i32_ => emit_sext_return c val ret_ty,
