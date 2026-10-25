@@ -19,9 +19,9 @@ use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir, mkdir_parent}
 use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
-use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
-use lang::codegen::decls {collect_all_decls_from_modules, export_names}
-use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, validate_reachable_elaborated}
+use lang::codegen::decls {collect_all_decls_from_modules, export_names, filter_reachable_decls}
+use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, best_effort_decls, elaborate_module_decls_reporting, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
   Mote.discover, Mote.workspace_members, MoteManifest, BinTarget,
@@ -917,8 +917,30 @@ def eval_file_typechecked (em : ElaboratedModules) (verbose : Bool) : IO I64 {
     // raw elaborated graph: its class-method calls (`*` on I64 is
     // `HMul.mul` underneath) are still syntactic, and lowering them
     // failed with `le_unresolved_name` before this.
+    //
+    // `_reporting`, not `_best_effort`: the reachable decls are about to be
+    // LOWERED and evaluated, so a decl that failed to elaborate must not be
+    // silently kept -- the same hard gate the compile and test-driver
+    // pipelines run (2026-10-25, standing Item 11). The reachable closure is
+    // rooted at the bare "main" the lowerer itself uses below.
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-    let dispatched := elaborate_module_decls_best_effort em.scope em.elaborated_decls empty_locs;
+    let elab_report := elaborate_module_decls_reporting em.scope em.elaborated_decls empty_locs;
+    let dispatched : List Decl := best_effort_decls elab_report;
+    let reachable : List Decl := filter_reachable_decls ["main"] dispatched;
+    match validate_reachable_elaborated elab_report reachable {
+        Result.err e => do {
+            fail_line ("FAILED at stage: elaborate (" ++ e ++ ")");
+            return 1
+        },
+        Result.ok _ => eval_lower_and_run dispatched verbose,
+    }
+}
+
+/// `eval_file_typechecked`'s lowering tail, split out so the gate just above
+/// adds one match level without deepening this match/do nest (the reason
+/// this function was split from `eval_file` in the first place).
+#[partial]
+def eval_lower_and_run (dispatched : List Decl) (verbose : Bool) : IO I64 {
     // `lower_root` roots at a DEF name, not a module name: the target
     // file's `main` def. The graph above is from BEFORE codegen's
     // `qualify_modules` stage, so def names are still bare -- rooting

@@ -2592,7 +2592,7 @@ pub struct BestEffortElab {
 }
 
 #[partial]
-def best_effort_decls (r : BestEffortElab) : List Decl := r.decls
+pub def best_effort_decls (r : BestEffortElab) : List Decl := r.decls
 
 #[partial]
 def best_effort_failed (r : BestEffortElab) : List String := r.failed
@@ -2609,7 +2609,7 @@ def mk_best_effort_elab (decls : List Decl) (failed : List String) (errors : Lis
     { decls := decls, failed := failed, errors := errors }
 
 #[partial]
-def elaborate_module_decls_reporting (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : BestEffortElab :=
+pub def elaborate_module_decls_reporting (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : BestEffortElab :=
     match decl_list {
         List.empty => mk_best_effort_elab List.empty List.empty List.empty,
         List.cons d rest =>

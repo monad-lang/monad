@@ -57,7 +57,7 @@ use lang::codegen::symbols {
 }
 use parsec::number {parse_i64}
 use lib::codegen::validate {
-  report_elab_stats, strict_elab_enabled, validate_no_colliding_def_symbols,
+  report_elab_stats, validate_no_colliding_def_symbols,
   validate_no_undesugared_struct_lits, validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}
@@ -698,9 +698,8 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     // (a bug in dead code the test driver never actually
                     // exercises must not block every other test in the
                     // same file from running).
-                    let strict_elab : Bool <- strict_elab_enabled;
                     let dispatched_classes := collect_classes dispatched_decls;
-                    match test_driver_gates (validate_reachable_elaborated strict_elab elab_report reachable) dispatched_classes reachable {
+                    match test_driver_gates (validate_reachable_elaborated elab_report reachable) dispatched_classes reachable {
                         Result.err e => return (Result.err e),
                         Result.ok _ =>
                             // The same fail-fast gate the real compile

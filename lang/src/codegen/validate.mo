@@ -938,19 +938,16 @@ def print_stats_lines (ls : List String) : IO Unit := match ls {
 /// Print the handoff report when `verbose` or `MONAD_ELAB_STATS` is set.
 /// `elaborated` is the decl list straight out of elaboration (before
 /// `resolve_class_calls_decls`); `reachable` is the final filtered list.
-/// Interim switch for the reachable-elaboration-failure gate
-/// (`validate_reachable_elaborated`). The compiler's own self-compile still
-/// has 55 decls (34 reachable) that fail to elaborate, all bare-name
-/// collisions (`Param` in lang/types.mo and init/meta.mo, `MatchArm` in
-/// lang/core_ir.mo and init/meta.mo, and the constructors those drag in).
-/// Qualified-name resolution (plan item 10) removes them; the gate then
-/// becomes unconditional and this switch is deleted.
-#[partial]
-pub def strict_elab_enabled : IO Bool := do {
-    let env <- get_env "MONAD_STRICT_ELAB";
-    return (match env { Option.some _ => true, Option.none => false })
-}
-
+///
+/// The `MONAD_STRICT_ELAB` INTERIM SWITCH that lived here is gone
+/// (2026-10-25, standing checker-gaps Item 11): the gate
+/// (`validate_reachable_elaborated`, `lang/codegen/emit.mo`) is now
+/// unconditional. The switch existed because the self-compile had 55 decls
+/// (34 reachable) failing to elaborate on bare-name collisions (`Param` in
+/// lang/types.mo and init/meta.mo, `MatchArm` in lang/core_ir.mo and
+/// init/meta.mo, and the constructors those drag in); qualified-name
+/// resolution removed them and the re-measure reports `swallowed=0`.
+/// `MONAD_ELAB_STATS` stays -- it is a diagnostic, not a policy.
 #[partial]
 pub def report_elab_stats (verbose : Bool) (failed : List String) (elaborated : List Decl) (reachable : List Decl) : IO Unit := do {
     let env <- get_env "MONAD_ELAB_STATS";

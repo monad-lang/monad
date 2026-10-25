@@ -28,7 +28,7 @@ use runtime::natives {runtime_native_functions}
 use lang::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
-  report_elab_stats, strict_elab_enabled, validate_no_undesugared_struct_lits,
+  report_elab_stats, validate_no_undesugared_struct_lits,
   validate_no_monad_externs, validate_no_unwired_natives,
   validate_native_target_availability,
 }
@@ -6085,9 +6085,16 @@ def reachable_elab_failures_go (failed : List String) (errors : List String) (na
     }
 
 /// Hard error (no fallback) when a reachable decl did not elaborate.
+///
+/// UNCONDITIONAL since 2026-10-25 (standing checker-gaps Item 11): the
+/// `strict`/`MONAD_STRICT_ELAB` switch this used to carry existed only
+/// while the self-compile still had reachable decls failing on bare-name
+/// collisions (55 swallowed, 34 reachable, per `lang/codegen/validate.mo`'s
+/// retired switch comment). Qualified-name resolution removed them, and the
+/// re-measure reports `swallowed=0`; a swallowed decl is now a build error
+/// on every pipeline that runs this gate (codegen, the test driver, `eval`).
 #[partial]
-pub def validate_reachable_elaborated (strict : Bool) (report : BestEffortElab) (reachable : List Decl) : Result String (List Decl) :=
-    if not strict then Result.ok reachable else
+pub def validate_reachable_elaborated (report : BestEffortElab) (reachable : List Decl) : Result String (List Decl) :=
     let bad : List String := reachable_elab_failures_go (best_effort_failed report) (best_effort_errors report) (decl_name_set reachable str_map_empty) in
     match bad {
         List.empty => Result.ok reachable,
@@ -6384,9 +6391,8 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     // for the direct repro that found this the hard way) and fail here,
     // with a precise message, instead of proceeding to codegen/`llc` and
     // surfacing it many stages later as an undefined-symbol error.
-    let strict_elab : Bool <- strict_elab_enabled;
     let dispatched_classes := collect_classes dispatched_decls;
-    match gate_then (validate_reachable_elaborated strict_elab elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
+    match gate_then (validate_reachable_elaborated elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
         Result.err e => do {
             if verbose then do { fail_line ("FAILED at stage: validate_no_unresolved_class_calls (" ++ e ++ ")"); return unit } else return unit;
             return (Result.err e)
@@ -6561,3 +6567,23 @@ def test_collision_gate_rejects_runtime_symbol_clash : Bool :=
         Result.err _ => true,
         Result.ok _ => false,
     }
+
+/// The reachable-elaboration gate is UNCONDITIONAL (standing Item 11): the
+/// retried `MONAD_STRICT_ELAB` switch is gone, so no environment can turn it
+/// off. A failed decl the reachable closure CONTAINS is an error; the same
+/// failure on an unreachable decl is not (a bug in dead code must not block a
+/// compile that otherwise works).
+#[test]
+def test_reachable_elaboration_gate_is_unconditional : Bool :=
+    let f_def : Def := Def.mk (NamePath.mk [Identifier.id "f"]) Term.hole Term.hole List.empty List.empty Visibility.package_private List.empty in
+    let g_def : Def := Def.mk (NamePath.mk [Identifier.id "g"]) Term.hole Term.hole List.empty List.empty Visibility.package_private List.empty in
+    let report : BestEffortElab := { decls := List.empty, failed := ["f"], errors := ["f: boom"] } in
+    let hit : Bool := match validate_reachable_elaborated report [Decl.def_d f_def] {
+        Result.ok _ => false,
+        Result.err _ => true,
+    } in
+    let miss : Bool := match validate_reachable_elaborated report [Decl.def_d g_def] {
+        Result.ok _ => true,
+        Result.err _ => false,
+    } in
+    hit && miss

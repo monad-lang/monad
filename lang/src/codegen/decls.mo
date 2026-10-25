@@ -14,8 +14,8 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.length}
 use lang::types {
-  Attribute, Decl, Def, Identifier, Inductive, Multiplicity, NamePath, Struct, StructField,
-  Term, Visibility, concrete, id_eq,
+  Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
+  StructField, Term, Visibility, concrete, id_eq, sentinel,
 }
 use lib::module {ModuleInfo}
 use lib::codegen::symbols {def_symbol_name, unqualify_def_name}
@@ -125,7 +125,7 @@ def extract_structs_go (decl_list : List Decl) (acc : List Struct) : List Struct
 /// `#[export "c"]` defs, which `main` never references (see
 /// `export_roots`). Everything else is unchanged.
 #[partial]
-def filter_reachable_decls (roots : List String) (decl_list : List Decl) : List Decl :=
+pub def filter_reachable_decls (roots : List String) (decl_list : List Decl) : List Decl :=
     let all_defs := extract_defs decl_list in
     let all_inds := extract_inductives decl_list in
     let all_structs := extract_structs decl_list in
@@ -377,3 +377,22 @@ def test_filter_reachable_decls_keeps_structs : Bool :=
     I64.beq (List.length (extract_structs filtered)) 1
         && I64.beq (List.length (extract_inductives filtered)) 1
         && I64.beq (List.length (extract_defs filtered)) 0
+
+/// The eval path roots the closure at the BARE `main` (elaboration runs
+/// before `qualify_modules` renames anything), while codegen roots at the
+/// qualified `module::main`. Both are just strings to this filter; pin the
+/// bare half, because an EMPTY reachable set would silently make the
+/// unconditional elaboration gate vacuous for `monad eval`.
+#[test]
+def test_filter_reachable_decls_roots_at_a_bare_name : Bool :=
+    let main_def : Def := Def.mk (NamePath.mk [Identifier.id "main"]) Term.hole
+        (Term.var sentinel (DebugName.named (Identifier.id "helper")))
+        List.empty List.empty Visibility.package_private List.empty in
+    let helper_def : Def := Def.mk (NamePath.mk [Identifier.id "helper"]) Term.hole Term.hole
+        List.empty List.empty Visibility.package_private List.empty in
+    let unused_def : Def := Def.mk (NamePath.mk [Identifier.id "unused"]) Term.hole Term.hole
+        List.empty List.empty Visibility.package_private List.empty in
+    let decls : List Decl := [Decl.def_d main_def, Decl.def_d helper_def, Decl.def_d unused_def] in
+    let filtered := filter_reachable_decls ["main"] decls in
+    I64.beq (List.length (extract_defs filtered)) 2
+        && I64.beq (List.length (extract_structs filtered)) 0
