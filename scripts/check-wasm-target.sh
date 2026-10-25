@@ -139,6 +139,12 @@ echo "== web: nested dynamic list (Patch.drop_last regression) =="
     -o "$tmp/oak_spa_nested.wasm" --no-cache
 node wasm/web/nested_spa_smoke.mjs "$tmp/oak_spa_nested.wasm"
 
+echo "== web: SSR hydration (adopt a matching server-rendered tree) =="
+# Reuses the nested fixture: the harness seeds its exact initial markup and
+# asserts the same nodes survive mount (no creates), stale attributes are
+# corrected, surplus SSR nodes are trimmed, and ticking still patches.
+node wasm/web/hydrate_smoke.mjs "$tmp/oak_spa_nested.wasm"
+
 echo "== web: keyed lists (reorder/insert/remove keep node identity) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_keyed.mo \
     -o "$tmp/oak_spa_keyed.wasm" --no-cache

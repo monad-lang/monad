@@ -25,7 +25,8 @@ use oak::elements {Html.key_attr}
 use web_wasm::types {Node}
 use web_wasm::dom {
   Dom.append, Dom.child, Dom.child_count, Dom.comment, Dom.create, Dom.insert_before,
-  Dom.remove, Dom.remove_attr, Dom.replace, Dom.set_attr, Dom.set_text, Dom.text_node,
+  Dom.node_type, Dom.remove, Dom.remove_attr, Dom.replace, Dom.set_attr, Dom.set_text,
+  Dom.tag_name, Dom.text_node,
 }
 
 pub type Patch {
@@ -513,9 +514,9 @@ def Patch.last_or_zero (path : List I64) : I64 := match path {
 
 // ─── Mounting ─────────────────────────────────────────────────────────
 
-/// Empty a mount container. v1 hydration: a server-rendered page puts its
-/// own content under the root, and the SPA replaces it wholesale rather
-/// than adopting nodes (`data-oak` markers exist for the adopting version).
+/// Empty a mount container. This is `Patch.hydrate_root`'s fallback: when
+/// the server-rendered tree does not match the view (a stale build, or the
+/// wrong container), the old content is removed rather than adopted.
 pub def Patch.clear (root : Node) : IO Unit := do {
     let count <- Dom.child_count root;
     Patch.clear_n root count
@@ -604,3 +605,186 @@ def Patch.apply_attrs (element : Node) (attrs : List Html.Attr) : IO Unit := mat
 /// DOM listener in step (replace on change, unregister on removal).
 pub def Patch.set_attribute (element : Node) (name : String) (value : String) : IO Unit :=
     Dom.set_attr element name value
+
+// ─── Hydration ───────────────────────────────────────────────────────
+//
+// `Runtime.mount` adopts a server-rendered tree instead of clearing it, so
+// the first paint does not flash and node state (focus, scroll) survives.
+// The contract is strict and worth restating: the mount container holds the
+// SSR view root and nothing else, and the markup must be the serializer's
+// exact output -- Oak's `Html.to_string` emits no inter-element whitespace,
+// and hydration matches `childNodes` positionally. Prettifying the HTML
+// before serving would shift every index.
+//
+// Two documented limits: an SSR-only attribute cannot be removed (there is
+// no attribute-enumeration extern; `data-oak` is the one cleaned here), and
+// a fragment never adopts (the serializer renders it flat, `mount_node`
+// wraps it in a `data-oak-fragment` div).
+
+/// What DOM `nodeType` an adopted rendering of this node must have; 0 means
+/// "never adopt". A doctype mounts as a comment (`mount_node`), so it adopts
+/// a comment.
+#[partial]
+pub def Patch.adopt_type (node : Html.Node) : I64 := match node {
+    Html.Node.node_element _tag _attrs _children => 1i64,
+    Html.Node.node_void _tag _attrs => 1i64,
+    Html.Node.node_raw_text _tag _attrs _content => 1i64,
+    Html.Node.node_text _content => 3i64,
+    Html.Node.node_comment _content => 8i64,
+    Html.Node.node_doctype _declaration => 8i64,
+    Html.Node.node_fragment _children => 0i64,
+}
+
+/// The tag an adopted rendering must carry (none for non-element nodes).
+pub def Patch.adopt_tag (node : Html.Node) : Option String := match node {
+    Html.Node.node_element tag _attrs _children => Option.some tag,
+    Html.Node.node_void tag _attrs => Option.some tag,
+    Html.Node.node_raw_text tag _attrs _content => Option.some tag,
+    _ => Option.none,
+}
+
+pub def Patch.tag_ok (node : Html.Node) (tag : String) : Bool :=
+    Patch.tag_ok_opt tag (Patch.adopt_tag node)
+
+def Patch.tag_ok_opt (want : String) (found : Option String) : Bool := match found {
+    Option.none => false,
+    Option.some have => String.beq want have,
+}
+
+/// Is the live node (`node_type`, lowercase `tag` from `Dom.tag_name`) the
+/// DOM rendering this rendered node would have produced?
+pub def Patch.kind_ok (node : Html.Node) (node_type : I64) (tag : String) : Bool :=
+    let want : I64 := Patch.adopt_type node in
+    if Bool.not (node_type == want)
+    then false
+    else if node_type == 1i64
+    then Patch.tag_ok node tag
+    else Bool.not (want == 0i64)
+
+/// Adopt the live node at `parent.childNodes[index]` for `node`, or mount a
+/// fresh one there. Returns the node now in place.
+#[partial]
+pub def Patch.hydrate (parent : Node) (node : Html.Node) (index : I64) : IO Node := do {
+    let existing <- Dom.child parent index;
+    let kind <- Dom.node_type existing;
+    Patch.hydrate_decide parent node existing index kind;
+}
+
+#[terminating]
+def Patch.hydrate_decide (parent : Node) (node : Html.Node) (existing : Node) (index : I64) (kind : I64) : IO Node := do {
+    let tag <- Dom.tag_name existing;
+    if Patch.kind_ok node kind tag
+    then Patch.hydrate_adopt parent node existing index
+    else Patch.hydrate_fresh parent node index;
+}
+
+#[partial]
+def Patch.hydrate_adopt (parent : Node) (node : Html.Node) (existing : Node) (index : I64) : IO Node := match node {
+    Html.Node.node_element _tag attrs children => do {
+        let _ <- Patch.apply_attrs existing attrs;
+        let _ <- Dom.remove_attr existing "data-oak";
+        let _ <- Patch.hydrate_children existing children;
+        let count <- Dom.child_count existing;
+        let _ <- Patch.trim_children existing (List.length children) count;
+        IO.pure existing
+    },
+    Html.Node.node_void _tag attrs => do {
+        let _ <- Patch.apply_attrs existing attrs;
+        let _ <- Dom.remove_attr existing "data-oak";
+        IO.pure existing
+    },
+    Html.Node.node_raw_text _tag attrs content => do {
+        let _ <- Patch.apply_attrs existing attrs;
+        let _ <- Dom.remove_attr existing "data-oak";
+        let _ <- Dom.set_text existing content;
+        IO.pure existing
+    },
+    Html.Node.node_text content => do {
+        let _ <- Dom.set_text existing content;
+        IO.pure existing
+    },
+    Html.Node.node_comment content => do {
+        let _ <- Dom.set_text existing content;
+        IO.pure existing
+    },
+    Html.Node.node_doctype declaration => do {
+        let _ <- Dom.set_text existing (String.concat "DOCTYPE " declaration);
+        IO.pure existing
+    },
+    // `adopt_type` is 0 for a fragment, so this arm is unreachable; it is
+    // here only to keep the match exhaustive.
+    Html.Node.node_fragment _children => Patch.hydrate_fresh parent node index,
+}
+
+def Patch.hydrate_fresh (parent : Node) (node : Html.Node) (index : I64) : IO Node := do {
+    let fresh <- Patch.mount_node node;
+    let _ <- Patch.insert_at parent index fresh;
+    IO.pure fresh
+}
+
+#[terminating]
+def Patch.hydrate_children (parent : Node) (children : List Html.Node) : IO Unit :=
+    Patch.hydrate_children_at parent children 0i64
+
+#[terminating]
+def Patch.hydrate_children_at (parent : Node) (children : List Html.Node) (index : I64) : IO Unit := match children {
+    List.empty => IO.pure unit,
+    List.cons child rest => do {
+        let _ <- Patch.hydrate parent child index;
+        Patch.hydrate_children_at parent rest (index + 1i64)
+    },
+}
+
+/// Insert before the node at `index`; when `index` equals the child count the
+/// null anchor makes `insert_before` append.
+pub def Patch.insert_at (parent : Node) (index : I64) (node : Node) : IO Unit := do {
+    let anchor <- Dom.child parent index;
+    Dom.insert_before parent node anchor
+}
+
+/// Remove children at `keep` until `count` of them are gone; `count` is the
+/// live child count, passed in so the recursion has a decreasing measure.
+#[terminating]
+def Patch.trim_children (parent : Node) (keep : I64) (count : I64) : IO Unit :=
+    if I64.gt count keep
+    then do {
+        let victim <- Dom.child parent keep;
+        let _ <- Dom.remove victim;
+        Patch.trim_children parent keep (count - 1i64)
+    }
+    else IO.pure unit
+
+/// Mount the view under the root, adopting a matching server-rendered tree.
+/// On a root mismatch -- a stale build, or the wrong container -- it clears
+/// and mounts instead, so the DOM is never a hybrid of two trees.
+pub def Patch.hydrate_root (root : Node) (tree : Html.Node) : IO Node := do {
+    let count <- Dom.child_count root;
+    Patch.hydrate_root_at root tree count;
+}
+
+def Patch.hydrate_root_at (root : Node) (tree : Html.Node) (count : I64) : IO Node :=
+    if Bool.not (I64.gt count 0i64)
+    then Patch.hydrate_append root tree
+    else Patch.hydrate_root_decide root tree count
+
+def Patch.hydrate_root_decide (root : Node) (tree : Html.Node) (count : I64) : IO Node := do {
+    let existing <- Dom.child root 0i64;
+    let kind <- Dom.node_type existing;
+    let tag <- Dom.tag_name existing;
+    if Patch.kind_ok tree kind tag
+    then do {
+        let node <- Patch.hydrate root tree 0i64;
+        let _ <- Patch.trim_children root 1i64 count;
+        IO.pure node
+    }
+    else do {
+        let _ <- Patch.clear root;
+        Patch.hydrate_append root tree
+    };
+}
+
+def Patch.hydrate_append (root : Node) (tree : Html.Node) : IO Node := do {
+    let node <- Patch.mount_node tree;
+    let _ <- Dom.append root node;
+    IO.pure node
+}

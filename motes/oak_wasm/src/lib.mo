@@ -8,6 +8,7 @@
 pub use lib::patch {
     Patch, Patch.diff, Patch.apply, Patch.clear, Patch.mount_node,
     Patch.resolve, Patch.set_attribute,
+    Patch.hydrate, Patch.hydrate_root, Patch.insert_at,
 }
 
 pub use lib::program {

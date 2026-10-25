@@ -21,10 +21,10 @@
 use std::ref {Ref, Ref.get, Ref.set, Ref.update}
 use xml_html::html {Html.Node}
 use oak::app {Command, Host, Host.run_effect, Program, Program.step, Program.view}
-use web_wasm::dom {Dom.append, Dom.root}
+use web_wasm::dom {Dom.root}
 use web_wasm::keep {Keep.load, Keep.save}
 use web_wasm::types {Node}
-use lib::patch {Patch.mount_node, Patch.diff, Patch.apply, Patch.clear}
+use lib::patch {Patch.diff, Patch.apply, Patch.hydrate_root}
 
 pub type RuntimeState (S : Type) (Msg : Type) {
     st (root : Node) (last : Html.Node) (model : S) (queue : List Msg) (stopped : Bool)
@@ -32,14 +32,17 @@ pub type RuntimeState (S : Type) (Msg : Type) {
 
 /// Mount `view init` under the root the loader selected, and hand the state
 /// to the next export call.
+///
+/// The container's server-rendered tree is ADOPTED when it matches (same
+/// node types/tags, in order), so node state survives the first paint; on a
+/// mismatch the container is cleared and the view mounted. The contract:
+/// the container holds the SSR view root and nothing else, from an explicit
+/// selector, and the markup is the serializer's exact output (no added
+/// whitespace -- `Patch.hydrate` matches `childNodes` positionally).
 pub def Runtime.mount {S : Type} {Msg : Type} (init : S) (view : S -> Html.Node) : IO Unit := do {
     let root <- Dom.root;
-    // v1 hydration: replace whatever the container already holds (an
-    // SSR-rendered page) rather than adopting it.
-    let _ <- Patch.clear root;
     let tree := view init;
-    let node <- Patch.mount_node tree;
-    let _ <- Dom.append root node;
+    let _ <- Patch.hydrate_root root tree;
     let state : Ref (RuntimeState S Msg) <- Ref.new (RuntimeState.st root tree init List.empty false);
     let _ <- Keep.save state;
     return unit

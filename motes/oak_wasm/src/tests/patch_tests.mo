@@ -305,3 +305,55 @@ def test_duplicate_keys_fall_back_to_positional : Bool :=
 def test_unkeyed_list_stays_positional : Bool :=
     no_structural (Patch.diff (list_node [text "a", text "b"]) (list_node [text "a", text "c"]))
 
+// ─── Hydration match predicate ──────────────────────────────
+//
+// The IO half of hydration (`Patch.hydrate`) is DOM-bound and covered end
+// to end by `wasm/web/hydrate_smoke.mjs`; the decision it makes is pure and
+// pinned here.
+
+def node_comment (content : String) : Html.Node := Html.Node.node_comment content
+def node_doctype (declaration : String) : Html.Node := Html.Node.node_doctype declaration
+def node_fragment (children : List Html.Node) : Html.Node := Html.Node.node_fragment children
+
+#[test]
+def test_adopt_type_mapping : Bool :=
+    Patch.adopt_type (element "div" List.empty List.empty) == 1i64
+        && Patch.adopt_type (Html.Node.node_void "br" List.empty) == 1i64
+        && Patch.adopt_type (Html.Node.node_raw_text "script" List.empty "x") == 1i64
+        && Patch.adopt_type (text "x") == 3i64
+        && Patch.adopt_type (node_comment "c") == 8i64
+        && Patch.adopt_type (node_doctype "html") == 8i64
+        && Patch.adopt_type (node_fragment List.empty) == 0i64
+
+#[test]
+def test_kind_ok_accepts_a_matching_element : Bool :=
+    Patch.kind_ok (element "div" List.empty List.empty) 1i64 "div"
+
+#[test]
+def test_kind_ok_rejects_a_wrong_tag : Bool :=
+    Bool.not (Patch.kind_ok (element "div" List.empty List.empty) 1i64 "span")
+
+/// `Dom.tag_name` is lowercase by contract; an uppercase tag means the host
+/// broke it, and must not match.
+#[test]
+def test_kind_ok_rejects_an_uppercase_dom_tag : Bool :=
+    Bool.not (Patch.kind_ok (element "div" List.empty List.empty) 1i64 "DIV")
+
+#[test]
+def test_kind_ok_accepts_a_text_node_whatever_the_tag : Bool :=
+    Patch.kind_ok (text "x") 3i64 ""
+
+#[test]
+def test_kind_ok_rejects_an_element_against_a_text_node : Bool :=
+    Bool.not (Patch.kind_ok (element "div" List.empty List.empty) 3i64 "")
+
+#[test]
+def test_kind_ok_adopts_a_doctype_as_a_comment : Bool :=
+    Patch.kind_ok (node_doctype "html") 8i64 ""
+
+#[test]
+def test_kind_ok_never_adopts_a_fragment : Bool :=
+    Bool.not (Patch.kind_ok (node_fragment List.empty) 1i64 "div")
+        && Bool.not (Patch.kind_ok (node_fragment List.empty) 0i64 "")
+
+
