@@ -1,7 +1,8 @@
 // Structured concurrency combinators: all, race, scoped, sleepIO, Duration.
 // Builds on forkIO/await_fiber/cancel_fiber from std.concurrent.fiber.
 
-use lib::concurrent::fiber {Fiber, await_fiber, cancel_fiber}
+use init::borrow {Borrow, Borrow.get}
+use lib::concurrent::fiber {Fiber, await_fiber, cancel_fiber, pollFiber}
 
 struct Duration {
     millis : I64,
@@ -47,23 +48,47 @@ def cancel_all (fibers : List (Fiber A)) : IO Unit :=
     }
   }
 
-// Race: cancel all but the first fiber, await the first.
-//
-// `List.empty` is deliberately NOT covered, unlike `all`/`cancel_all`
-// above: those have an obviously correct answer for zero fibers (nothing
-// to accumulate/cancel), but there is no value of `A` to synthesize for
-// the winner of racing zero contestants -- a structural non-totality in
-// the API itself, the same shape as `head`/`last` of an empty list, not a
-// provable invariant. Callers are expected to pass at least one fiber.
-#[allow_incomplete_match "race requires >=1 fiber; no value of A exists for racing zero contestants"]
+// The result of the first fiber in `fibers` that has stopped, polling
+// each once in list order; `none` while every one is still running.
+def poll_first (fibers : List (Fiber A)) : IO (Option A) :=
+  match fibers {
+    List.empty => IO.pure Option.none,
+    List.cons f rest =>
+      Monad.bind (pollFiber f) (fn done =>
+        match done {
+          Option.some a => IO.pure (Option.some a),
+          Option.none => poll_first rest
+        })
+  }
+
+// The race loop reads the contestant list every round and cancels it at
+// the end, so it threads a `Borrow`: `race` hands the list over once.
+def race_won (fibers : Borrow (List (Fiber A))) (winner : A) : IO A :=
+  Monad.bind (cancel_all (Borrow.get fibers)) (fn _ => IO.pure winner)
+
+#[partial]
+def race_step (fibers : Borrow (List (Fiber A))) (done : Option A) : IO A :=
+  match done {
+    Option.some a => race_won fibers a,
+    Option.none => Monad.bind (sleepIO 1) (fn _ => race_loop fibers)
+  }
+
+#[partial]
+def race_loop (fibers : Borrow (List (Fiber A))) : IO A :=
+  Monad.bind (poll_first (Borrow.get fibers)) (race_step fibers)
+
+/// The result of whichever fiber finishes first; every other one is
+/// cancelled. Waits by polling the contestants every millisecond, so a
+/// win is seen at most about 1 ms late. On the Rust host polling runs a
+/// fiber to completion, so the first fiber in the list always wins there.
+/// A cancelled loser keeps running until its body returns (cancellation
+/// cannot preempt), but nothing waits for it.
+///
+/// Racing zero fibers never returns: there is no value of `A` to hand
+/// back. Callers pass at least one fiber.
 #[partial]
 pub def race (fibers : List (Fiber A)) : IO A :=
-  match fibers {
-    List.cons f rest => do {
-      cancel_all rest;
-      await_fiber f
-    }
-  }
+  race_loop (Borrow.of fibers)
 
 // Scoped: run f with a scope; all fibers forked via scope_fork
 // are cancelled when the scope exits.

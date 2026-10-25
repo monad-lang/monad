@@ -7,7 +7,7 @@
 // host's. See that test's own comment for the numbers and the reason.
 
 use lib::concurrent::fiber {Fiber, await_fiber, cancel_fiber, forkIO}
-use lib::concurrent::combine {FiberScope, scope_fork, scoped, sleepIO}
+use lib::concurrent::combine {FiberScope, race, scope_fork, scoped, sleepIO}
 use lib::io {}
 open IO {current_time_nano}
 
@@ -41,18 +41,6 @@ def cancel_i64 (fibers : List (Fiber I64)) : IO Unit :=
     List.cons f rest => do {
       cancel_fiber f;
       cancel_i64 rest
-    }
-  }
-
-// Test-local specialization of `combine.mo`'s `race` -- same reasoning:
-// no value of I64 is correct for racing zero fibers, and both call sites
-// (`test_race_first`, `test_race_single`) pass >=1 fiber.
-#[allow_incomplete_match "race_i64 specialization; no value of I64 is correct for racing zero fibers"]
-def race_i64 (fibers : List (Fiber I64)) : IO I64 :=
-  match fibers {
-    List.cons f rest => do {
-      cancel_i64 rest;
-      await_fiber f
     }
   }
 
@@ -98,20 +86,31 @@ def test_all_empty : IO Bool {
   return (is_empty results)
 }
 
+def slow_10_action (_ : Unit) : IO I64 := do {
+  sleepIO 400;
+  return 10
+}
+
+/// The first fiber to FINISH wins, not the first in the list: the head
+/// sleeps 400 ms, so the instant one must win, and well before the head
+/// would have finished. Compiled only, like the timing test below: the
+/// host runs fibers lazily and in order, so its head always wins.
 #[test]
-def test_race_first : IO Bool {
-  let f1 <- forkIO io_10_action;
-  let f2 <- forkIO io_20_action;
-  let fibers := List.cons f1 (List.cons f2 List.empty);
-  let result <- race_i64 fibers;
-  return (result == 10)
+def test_race_first_to_finish : IO Bool {
+  let start <- current_time_nano;
+  let slow <- forkIO slow_10_action;
+  let fast <- forkIO io_20_action;
+  let result <- race [slow, fast];
+  let stop <- current_time_nano;
+  let elapsed_ms := I64.div (I64.sub stop start) 1000000;
+  return (result == 20 && elapsed_ms < 300)
 }
 
 #[test]
 def test_race_single : IO Bool {
   let f1 <- forkIO io_30_action;
   let fibers := List.cons f1 List.empty;
-  let result <- race_i64 fibers;
+  let result <- race fibers;
   return (result == 30)
 }
 
