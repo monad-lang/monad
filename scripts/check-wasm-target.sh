@@ -88,6 +88,13 @@ diff -u "$tmp/json-native.out" "$tmp/json-wasi.out" \
 grep -Fqx '[1,"a",0.5,0.3333333333333333]' "$tmp/json-native.out" \
     || fail "unexpected json_to_string stdout: $(cat "$tmp/json-native.out")"
 
+echo "== web: log mote (Json.to_string through the log path) =="
+# Logger.format_json_line reaches Json.to_string, which used to pull in the
+# web-gated f64 native. The sink checks the line shape and prints "ok".
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/log_web.mo \
+    -o "$tmp/log-web.wasm" --no-cache
+node wasm/web/smoke.mjs "$tmp/log-web.wasm" ok
+
 echo "== web: dictionary-capturing closure in a constructor =="
 # The lifted lambda captures the implicit `[Monad M]` dictionary. It used
 # to resolve to the prelude's catch-all bridge, whose layout does not match
