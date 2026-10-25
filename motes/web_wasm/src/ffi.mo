@@ -60,6 +60,21 @@ def dom_child_raw (n : Node) (index : I64) : RawIO Node
 #[extern "c" {link_name := "web_dom_child_count"}]
 def dom_child_count_raw (n : Node) : RawIO I64
 
+/// Read-only introspection (hydration's match predicate, and the
+/// value/selector pair an SPA needs to read a text input).
+/// `dom_tag_name_raw` is lowercase -- the host folds the case.
+#[extern "c" {link_name := "web_dom_node_type"}]
+def dom_node_type_raw (n : Node) : RawIO I64
+
+#[extern "c" {link_name := "web_dom_tag_name"}]
+def dom_tag_name_raw (n : Node) : RawIO String
+
+#[extern "c" {link_name := "web_dom_value"}]
+def dom_value_raw (n : Node) : RawIO String
+
+#[extern "c" {link_name := "web_dom_query"}]
+def dom_query_raw (selector : String) : RawIO Node
+
 #[extern "c" {link_name := "web_fetch_begin"}]
 def fetch_begin_raw (url : String) (method : I64) (body : String) : RawIO RequestId
 

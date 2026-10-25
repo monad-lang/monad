@@ -15,7 +15,8 @@ pub use lib::glue {Glue.loader}
 pub use lib::dom {
     Dom.create, Dom.text_node, Dom.comment, Dom.root, Dom.append, Dom.insert_before,
     Dom.remove, Dom.replace, Dom.set_attr, Dom.remove_attr, Dom.set_text,
-    Dom.on, Dom.child,
+    Dom.on, Dom.child, Dom.child_count,
+    Dom.node_type, Dom.tag_name, Dom.value, Dom.query,
 }
 
 pub use lib::fetch {Fetch.begin, Fetch.poll, Fetch.status, Fetch.read}

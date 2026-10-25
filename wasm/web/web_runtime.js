@@ -270,6 +270,34 @@ export const host = {
     return BigInt(n ? n.childNodes.length : 0);
   },
 
+  // ── read-only introspection (hydration, form reads) ──────────────────
+  // `Node` is opaque in Monad, so these reads are the only way to ask what
+  // a handle points at. A null handle reads nodeType 0 / an empty string.
+  dom_node_type(node) {
+    const n = nodeById(node);
+    return BigInt(n ? n.nodeType : 0);
+  },
+
+  // Lowercase here: the Monad side never pays for a per-node case fold, and
+  // the view's tag names are lowercase.
+  dom_tag_name(node, ptr, max) {
+    const n = nodeById(node);
+    const tag = n && n.nodeType === 1 && n.tagName ? n.tagName.toLowerCase() : '';
+    return writeBytes(ptr, encoder.encode(tag), max);
+  },
+
+  dom_value(node, ptr, max) {
+    const n = nodeById(node);
+    const value = n && typeof n.value === 'string' ? n.value : '';
+    return writeBytes(ptr, encoder.encode(value), max);
+  },
+
+  // A handler only carries a message id, so this is how it addresses a node
+  // it wants to read. No match is the null handle (0), like dom_child.
+  dom_query(ptr, len) {
+    return addNode(doc().querySelector(str(ptr, len)));
+  },
+
   // ── fetch (two-phase: a promise must not re-enter wasm) ─────────────
   fetch_begin(uptr, ulen, method, bptr, blen) {
     const url = str(uptr, ulen);

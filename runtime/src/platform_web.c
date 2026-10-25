@@ -208,6 +208,18 @@ extern int64_t monad_js_dom_child(int64_t node, int64_t index);
 __attribute__((import_module("monad"), import_name("dom_child_count")))
 extern int64_t monad_js_dom_child_count(int64_t node);
 
+__attribute__((import_module("monad"), import_name("dom_node_type")))
+extern int64_t monad_js_dom_node_type(int64_t node);
+
+__attribute__((import_module("monad"), import_name("dom_tag_name")))
+extern int64_t monad_js_dom_tag_name(int64_t node, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("dom_value")))
+extern int64_t monad_js_dom_value(int64_t node, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("dom_query")))
+extern int64_t monad_js_dom_query(int64_t ptr, int64_t len);
+
 __attribute__((import_module("monad"), import_name("fetch_begin")))
 extern int64_t monad_js_fetch_begin(int64_t uptr, int64_t ulen, int64_t method,
                                     int64_t bptr, int64_t blen);
@@ -323,6 +335,29 @@ int64_t web_dom_child(int64_t node, int64_t index) {
 
 int64_t web_dom_child_count(int64_t node) {
     return monad_js_dom_child_count(node);
+}
+
+int64_t web_dom_node_type(int64_t node) {
+    return monad_js_dom_node_type(node);
+}
+
+/* The host writes the tag/value UTF-8 into the shared scratch buffer and
+   returns the byte count; copy out into a fresh Monad string (see
+   `web_take_str`). */
+char* web_dom_tag_name(int64_t node) {
+    int64_t n = monad_js_dom_tag_name(node, (int64_t)(intptr_t)web_scratch,
+                                      WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_dom_value(int64_t node) {
+    int64_t n = monad_js_dom_value(node, (int64_t)(intptr_t)web_scratch,
+                                   WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_dom_query(const char* selector) {
+    return monad_js_dom_query(web_str_ptr(selector), web_str_len(selector));
 }
 
 int64_t web_fetch_begin(const char* url, int64_t method, const char* body) {

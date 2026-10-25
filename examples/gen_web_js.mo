@@ -1,6 +1,11 @@
 // Regenerate the browser loader from the ABI spec.
 //
-//   monad run examples/gen_web_js.mo > wasm/web/web.js
+//   monad build examples/gen_web_js.mo -o /tmp/gen_web_js --no-cache
+//   /tmp/gen_web_js > wasm/web/web.js
+//
+// Build first, then run the binary: `monad run` prints its compile status
+// on stdout, so redirecting it directly would prepend progress lines to
+// the generated file.
 //
 // `wasm/web/web.js` is committed (it is what the page imports) and is
 // otherwise treated as build output: `motes/web_wasm`'s drift test compares

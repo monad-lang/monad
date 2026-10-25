@@ -43,4 +43,16 @@ if (div.textContent !== 'hello from wasm') {
   process.exit(1);
 }
 
-console.log(`ok: ${path} -> <div id="probe">hello from wasm</div> under #app`);
+// The program's own readings of tag/type/value/query/null-handle.
+const report = body.childNodes.find((n) => n.attrs && n.attrs.id === 'report');
+if (!report) {
+  console.error('no span#report was appended to the root');
+  process.exit(1);
+}
+const want = 'tag=ok type=ok value=ok queried=ok nulltype=ok nulltag=ok ';
+if (report.textContent !== want) {
+  console.error(`DOM read report mismatch: ${JSON.stringify(report.textContent)}`);
+  process.exit(1);
+}
+
+console.log(`ok: ${path} -> <div id="probe">hello from wasm</div> under #app, reads ok`);

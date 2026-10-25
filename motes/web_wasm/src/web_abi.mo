@@ -72,6 +72,26 @@ def WebImport.dom_child : WebImport :=
 def WebImport.dom_child_count : WebImport :=
   { module := "monad", name := "dom_child_count", params := ["i64"], result := "i64" }
 
+/// Read-only DOM introspection. `nodeType` is a plain word; `tag_name` and
+/// `value` are written into a caller-supplied buffer (the C wrapper owns
+/// the scratch buffer) and return the byte count, exactly like
+/// `storage_get_raw`. `tag_name` is LOWERCASE: the host folds the case, so
+/// no Monad-side allocation is spent per node.
+def WebImport.dom_node_type : WebImport :=
+  { module := "monad", name := "dom_node_type", params := ["i64"], result := "i64" }
+
+def WebImport.dom_tag_name : WebImport :=
+  { module := "monad", name := "dom_tag_name", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.dom_value : WebImport :=
+  { module := "monad", name := "dom_value", params := ["i64", "i64", "i64"], result := "i64" }
+
+/// A selector lookup: an SPA event handler only gets a numeric message id,
+/// so this is how it finds a node to read (`Dom.value`). The null handle
+/// (`0`) means "no match".
+def WebImport.dom_query : WebImport :=
+  { module := "monad", name := "dom_query", params := ["i64", "i64"], result := "i64" }
+
 def WebImport.fetch_begin : WebImport :=
   { module := "monad", name := "fetch_begin", params := ["i64", "i64", "i64", "i64", "i64"], result := "i64" }
 
@@ -138,6 +158,8 @@ pub def WebAbi.default : WebAbi :=
         WebImport.dom_replace, WebImport.dom_set_attr, WebImport.dom_remove_attr,
         WebImport.dom_set_text, WebImport.dom_add_listener, WebImport.dom_child,
         WebImport.dom_child_count,
+        WebImport.dom_node_type, WebImport.dom_tag_name, WebImport.dom_value,
+        WebImport.dom_query,
         WebImport.fetch_begin, WebImport.fetch_poll, WebImport.fetch_status,
         WebImport.fetch_read, WebImport.now_ms, WebImport.storage_get_raw,
         WebImport.storage_set, WebImport.console_log,
