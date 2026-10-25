@@ -166,3 +166,142 @@ def test_nested_child_count_change_patches_at_depth_three : Bool :=
             _ => false,
         },
     }
+
+// ─── Keyed children ─────────────────────────────────────────
+
+def keyed (k : String) (label : String) : Html.Node :=
+    element "li" [Html.Attr.attr "data-oak-key" k] [text label]
+
+def list_node (children : List Html.Node) : Html.Node :=
+    element "ul" List.empty children
+
+def patch_is_move (p : Patch) (from : List I64) (to : List I64) : Bool := match p {
+    Patch.move f t => same_path f from && same_path t to,
+    _ => false,
+}
+
+def patch_is_insert (p : Patch) (path : List I64) : Bool := match p {
+    Patch.insert at _node => same_path at path,
+    _ => false,
+}
+
+def patch_is_remove (p : Patch) (path : List I64) : Bool := match p {
+    Patch.remove at => same_path at path,
+    _ => false,
+}
+
+def patch_is_replace (p : Patch) (path : List I64) : Bool := match p {
+    Patch.replace at _node => same_path at path,
+    _ => false,
+}
+
+def patch_is_structural (p : Patch) : Bool := match p {
+    Patch.insert _ _ => true,
+    Patch.remove _ => true,
+    Patch.move _ _ => true,
+    _ => false,
+}
+
+#[terminating]
+def no_structural (patches : List Patch) : Bool := match patches {
+    List.empty => true,
+    List.cons p rest => Bool.not (patch_is_structural p) && no_structural rest,
+}
+
+#[test]
+def test_keyed_reorder_is_one_move : Bool :=
+    let a := keyed "a" "A" in
+    let b := keyed "b" "B" in
+    let c := keyed "c" "C" in
+    match Patch.diff (list_node [a, b, c]) (list_node [c, a, b]) {
+        List.cons p rest =>
+            patch_is_move p [0i64, 2i64] [0i64, 0i64] && List.is_empty rest,
+        List.empty => false,
+    }
+
+#[test]
+def test_keyed_remove_does_not_move_survivors : Bool :=
+    let a := keyed "a" "A" in
+    let b := keyed "b" "B" in
+    match Patch.diff (list_node [a, b]) (list_node [b]) {
+        List.cons p rest => patch_is_remove p [0i64, 0i64] && List.is_empty rest,
+        List.empty => false,
+    }
+
+#[test]
+def test_keyed_insert_at_end : Bool :=
+    let a := keyed "a" "A" in
+    let b := keyed "b" "B" in
+    match Patch.diff (list_node [a]) (list_node [a, b]) {
+        List.cons p rest => patch_is_insert p [0i64, 1i64] && List.is_empty rest,
+        List.empty => false,
+    }
+
+#[test]
+def test_keyed_removals_are_descending : Bool :=
+    let a := keyed "a" "A" in
+    let b := keyed "b" "B" in
+    let c := keyed "c" "C" in
+    let d := keyed "d" "D" in
+    match Patch.diff (list_node [a, b, c, d]) (list_node [a, d]) {
+        List.cons p1 rest1 => match rest1 {
+            List.cons p2 rest2 =>
+                patch_is_remove p1 [0i64, 2i64]
+                    && patch_is_remove p2 [0i64, 1i64]
+                    && List.is_empty rest2,
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
+#[test]
+def test_keyed_key_change_is_remove_then_insert : Bool :=
+    let a := keyed "a" "A" in
+    let z := keyed "z" "Z" in
+    match Patch.diff (list_node [a]) (list_node [z]) {
+        List.cons p1 rest1 => match rest1 {
+            List.cons p2 rest2 =>
+                patch_is_remove p1 [0i64, 0i64]
+                    && patch_is_insert p2 [0i64, 0i64]
+                    && List.is_empty rest2,
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
+#[test]
+def test_keyed_matched_tag_change_replaces_the_child : Bool :=
+    let a := keyed "a" "A" in
+    let b := element "div" [Html.Attr.attr "data-oak-key" "a"] [text "A"] in
+    match Patch.diff (list_node [a]) (list_node [b]) {
+        List.cons p rest => patch_is_replace p [0i64, 0i64] && List.is_empty rest,
+        List.empty => false,
+    }
+
+#[test]
+def test_keyed_to_empty_removes_in_descending_order : Bool :=
+    let a := keyed "a" "A" in
+    let b := keyed "b" "B" in
+    match Patch.diff (list_node [a, b]) (list_node List.empty) {
+        List.cons p1 rest1 => match rest1 {
+            List.cons p2 rest2 =>
+                patch_is_remove p1 [0i64, 1i64]
+                    && patch_is_remove p2 [0i64, 0i64]
+                    && List.is_empty rest2,
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
+#[test]
+def test_duplicate_keys_fall_back_to_positional : Bool :=
+    let a1 := keyed "a" "A" in
+    let a2 := keyed "a" "B" in
+    let a3 := keyed "a" "C" in
+    let a4 := keyed "a" "D" in
+    no_structural (Patch.diff (list_node [a1, a2]) (list_node [a3, a4]))
+
+#[test]
+def test_unkeyed_list_stays_positional : Bool :=
+    no_structural (Patch.diff (list_node [text "a", text "b"]) (list_node [text "a", text "c"]))
+

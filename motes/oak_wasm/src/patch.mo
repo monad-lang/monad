@@ -1,12 +1,13 @@
 /// Diff two rendered `Html.Node` trees into a patch list, and apply it to a
 /// live DOM.
 ///
-/// v1 scope, deliberately: attributes diff by name, children diff
-/// positionally when the child COUNT is unchanged, and any other change
-/// (different tag, different child count, text/raw-text content, a comment)
-/// replaces that node. That is exact, cheap to reason about, and covers the
-/// Elm-loop shapes; keyed list reordering is the follow-up in
-/// `plans/library-ideas/oak.md`.
+/// Attributes diff by name. Children reconcile one of two ways: a list
+/// whose children all carry a distinct `data-oak-key` (`Html.key`) is
+/// matched BY KEY, so a reorder moves the existing DOM nodes; any other
+/// list diffs positionally when the child count is unchanged, and any
+/// other change (different tag, different child count, text/raw-text
+/// content, a comment) replaces that node. That is exact, cheap to reason
+/// about, and covers the Elm-loop shapes.
 ///
 /// Paths are `childNodes` indices from the mount container: the top-level
 /// node is `[0]`, its i-th child `[0, i]`, and so on. `childNodes` counts text
@@ -20,17 +21,21 @@
 /// rule in one place is what stops a re-render from stacking listeners.
 use std::list {List.length}
 use xml_html::html {Html.Attr, Html.Node, Html.beq}
+use oak::elements {Html.key_attr}
 use web_wasm::types {Node}
 use web_wasm::dom {
-  Dom.append, Dom.child, Dom.child_count, Dom.comment, Dom.create, Dom.remove,
-  Dom.remove_attr, Dom.replace, Dom.set_attr, Dom.set_text, Dom.text_node,
+  Dom.append, Dom.child, Dom.child_count, Dom.comment, Dom.create, Dom.insert_before,
+  Dom.remove, Dom.remove_attr, Dom.replace, Dom.set_attr, Dom.set_text, Dom.text_node,
 }
 
 pub type Patch {
     replace (path : List I64) (node : Html.Node),
     set_text (path : List I64) (text : String),
     set_attr (path : List I64) (name : String) (value : String),
-    remove_attr (path : List I64) (name : String)
+    remove_attr (path : List I64) (name : String),
+    insert (path : List I64) (node : Html.Node),
+    remove (path : List I64),
+    move (from : List I64) (to : List I64)
 }
 
 /// The patch list that turns `old` into `new` under the mount container.
@@ -72,6 +77,8 @@ def Patch.diff_element (path : List I64) (old : Html.Node) (tag : String) (attrs
 def Patch.diff_same_element (path : List I64) (old_tag : String) (old_attrs : List Html.Attr) (old_children : List Html.Node) (tag : String) (attrs : List Html.Attr) (children : List Html.Node) : List Patch :=
     if Bool.not (String.beq old_tag tag)
     then Patch.replace_at path (Html.Node.node_element tag attrs children)
+    else if Patch.keyed_mode old_children children
+    then List.append (Patch.attr_patches path old_attrs attrs) (Patch.keyed_patches path old_children children)
     else if Bool.not (List.length old_children == List.length children)
     then Patch.replace_at path (Html.Node.node_element tag attrs children)
     else List.append (Patch.attr_patches path old_attrs attrs) (Patch.child_patches path old_children children)
@@ -105,6 +112,246 @@ def Patch.child_patches_at (path : List I64) (old_children : List Html.Node) (ch
                         (Patch.child_patches_at path old_rest rest (index + 1i64)),
             },
     }
+
+// ─── Keyed children ──────────────────────────────────────────────────
+//
+// A list whose children all carry a distinct `data-oak-key` (see
+// `Html.key`) is reconciled by key: a reorder moves the existing DOM nodes,
+// an insertion mounts one node, a deletion removes one. A node therefore
+// keeps its identity -- focus, scroll, listeners, CSS transitions -- across
+// a reorder. Unkeyed lists, and lists with a duplicate key, keep the
+// positional behavior above.
+//
+// Apply-order invariant: every patch is interpreted against the DOM as left
+// by all preceding patches, and the generator performs the identical splice
+// on `model`, so `model[i]` is `parent.childNodes[i]` when its patch runs.
+// Each apply operation mutates the DOM once and resolves every index before
+// mutating.
+
+/// `path ++ [index]`.
+def Patch.child_path (path : List I64) (index : I64) : List I64 :=
+    List.append path (List.cons index List.empty)
+
+#[terminating]
+#[partial]
+def Patch.attr_lookup (name : String) (attrs : List Html.Attr) : Option String := match attrs {
+    List.empty => Option.none,
+    List.cons a rest =>
+        if String.beq (Patch.attr_name a) name
+        then Option.some (Patch.attr_value a)
+        else Patch.attr_lookup name rest,
+}
+
+/// A child's key, when it is an element/void carrying `data-oak-key`.
+#[partial]
+def Patch.key_of (node : Html.Node) : Option String := match node {
+    Html.Node.node_element _tag attrs _children => Patch.attr_lookup Html.key_attr attrs,
+    Html.Node.node_void _tag attrs => Patch.attr_lookup Html.key_attr attrs,
+    _ => Option.none,
+}
+
+/// How many times `key` occurs in `nodes` (duplicate detection).
+#[terminating]
+def Patch.key_count (key : String) (nodes : List Html.Node) : I64 := match nodes {
+    List.empty => 0i64,
+    List.cons node rest => I64.add (Patch.key_is key node) (Patch.key_count key rest),
+}
+
+def Patch.key_is (key : String) (node : Html.Node) : I64 :=
+    Patch.key_is_opt key (Patch.key_of node)
+
+def Patch.key_is_opt (key : String) (found : Option String) : I64 := match found {
+    Option.none => 0i64,
+    Option.some k => if String.beq k key then 1i64 else 0i64,
+}
+
+/// Every child is keyed and no key repeats. `[]` is vacuously true, which
+/// is what lets empty -> keyed (all inserts) and keyed -> empty (all
+/// removes) work without replacing the parent. Uniqueness is also what
+/// guarantees a match is never behind the cursor during the walk.
+#[terminating]
+def Patch.keys_unique (nodes : List Html.Node) : Bool := match nodes {
+    List.empty => true,
+    List.cons node rest => Patch.key_unique_child node rest && Patch.keys_unique rest,
+}
+
+def Patch.key_unique_child (node : Html.Node) (rest : List Html.Node) : Bool :=
+    Patch.key_unique_opt (Patch.key_of node) rest
+
+def Patch.key_unique_opt (found : Option String) (rest : List Html.Node) : Bool := match found {
+    Option.none => false,
+    Option.some k => I64.beq (Patch.key_count k rest) 0i64,
+}
+
+def Patch.keyed_mode (old_children : List Html.Node) (children : List Html.Node) : Bool :=
+    Patch.keys_unique old_children && Patch.keys_unique children
+
+/// Is `key` present in `nodes`?
+#[terminating]
+def Patch.key_in (key : String) (nodes : List Html.Node) : Bool := match nodes {
+    List.empty => false,
+    List.cons node rest => Patch.key_in_step key node rest,
+}
+
+#[terminating]
+def Patch.key_in_step (key : String) (node : Html.Node) (rest : List Html.Node) : Bool :=
+    Patch.key_in_opt key (Patch.key_of node) rest
+
+#[terminating]
+def Patch.key_in_opt (key : String) (found : Option String) (rest : List Html.Node) : Bool := match found {
+    Option.none => Patch.key_in key rest,
+    Option.some k => if String.beq k key then true else Patch.key_in key rest,
+}
+
+/// `remove` patches for old children whose key is gone, in DESCENDING index
+/// order: deleting a higher index never shifts a lower one, so every path
+/// is still valid when its patch runs, and no surviving node is moved to
+/// express a pure deletion.
+#[terminating]
+def Patch.keyed_removals (path : List I64) (rev : List Html.Node) (children : List Html.Node) (index : I64) : List Patch := match rev {
+    List.empty => List.empty,
+    List.cons node rest =>
+        List.append
+            (Patch.keyed_removal path node children index)
+            (Patch.keyed_removals path rest children (index - 1i64)),
+}
+
+def Patch.keyed_removal (path : List I64) (node : Html.Node) (children : List Html.Node) (index : I64) : List Patch :=
+    Patch.keyed_removal_opt path (Patch.key_of node) children index
+
+def Patch.keyed_removal_opt (path : List I64) (found : Option String) (children : List Html.Node) (index : I64) : List Patch := match found {
+    Option.none => List.empty,
+    Option.some key =>
+        if Patch.key_in key children
+        then List.empty
+        else List.cons (Patch.remove (Patch.child_path path index)) List.empty,
+}
+
+/// The old children whose key survives, in their original order: the model
+/// the walk starts from, i.e. the DOM after the removals.
+#[terminating]
+def Patch.keyed_kept (nodes : List Html.Node) (children : List Html.Node) : List Html.Node := match nodes {
+    List.empty => List.empty,
+    List.cons node rest =>
+        if Patch.keyed_kept_child node children
+        then List.cons node (Patch.keyed_kept rest children)
+        else Patch.keyed_kept rest children,
+}
+
+def Patch.keyed_kept_child (node : Html.Node) (children : List Html.Node) : Bool :=
+    Patch.keyed_kept_opt (Patch.key_of node) children
+
+def Patch.keyed_kept_opt (found : Option String) (children : List Html.Node) : Bool := match found {
+    Option.none => false,
+    Option.some key => Patch.key_in key children,
+}
+
+/// Where `key` sits in the model, with the node to diff against.
+#[terminating]
+def Patch.key_locate (key : String) (model : List Html.Node) (index : I64) : Option (Pair I64 Html.Node) := match model {
+    List.empty => Option.none,
+    List.cons head rest => Patch.key_locate_head key head rest index,
+}
+
+#[terminating]
+def Patch.key_locate_head (key : String) (head : Html.Node) (rest : List Html.Node) (index : I64) : Option (Pair I64 Html.Node) :=
+    Patch.key_locate_opt key (Patch.key_of head) head rest index
+
+#[terminating]
+def Patch.key_locate_opt (key : String) (found : Option String) (head : Html.Node) (rest : List Html.Node) (index : I64) : Option (Pair I64 Html.Node) := match found {
+    Option.none => Patch.key_locate key rest (index + 1i64),
+    Option.some k =>
+        if String.beq k key
+        then Option.some (Pair.pair index head)
+        else Patch.key_locate key rest (index + 1i64),
+}
+
+#[terminating]
+def Patch.model_insert (index : I64) (node : Html.Node) (model : List Html.Node) : List Html.Node := match model {
+    List.empty => List.cons node List.empty,
+    List.cons head rest =>
+        if index == 0i64
+        then List.cons node (List.cons head rest)
+        else List.cons head (Patch.model_insert (index - 1i64) node rest),
+}
+
+#[terminating]
+def Patch.model_remove (index : I64) (model : List Html.Node) : List Html.Node := match model {
+    List.empty => List.empty,
+    List.cons head rest =>
+        if index == 0i64
+        then rest
+        else List.cons head (Patch.model_remove (index - 1i64) rest),
+}
+
+def Patch.model_move (from : I64) (to : I64) (node : Html.Node) (model : List Html.Node) : List Html.Node :=
+    Patch.model_insert to node (Patch.model_remove from model)
+
+/// Reconcile the new children against the model, left to right.
+#[terminating]
+def Patch.keyed_walk (path : List I64) (model : List Html.Node) (children : List Html.Node) (index : I64) : List Patch := match children {
+    List.empty => List.empty,
+    List.cons child rest => Patch.keyed_step path model child rest index,
+}
+
+#[terminating]
+def Patch.keyed_step (path : List I64) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) : List Patch :=
+    Patch.keyed_step_opt path model child rest index (Patch.key_of child)
+
+#[terminating]
+def Patch.keyed_step_opt (path : List I64) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) (found : Option String) : List Patch := match found {
+    Option.none => List.empty,
+    Option.some key => Patch.keyed_continue path key model child rest index,
+}
+
+#[terminating]
+def Patch.keyed_continue (path : List I64) (key : String) (model : List Html.Node) (child : Html.Node) (rest : List Html.Node) (index : I64) : List Patch :=
+    let step : Pair (List Patch) (List Html.Node) :=
+        Patch.keyed_match path key model child index (Patch.key_locate key model 0i64) in
+    Patch.keyed_append path step rest index
+
+def Patch.keyed_append (path : List I64) (step : Pair (List Patch) (List Html.Node)) (rest : List Html.Node) (index : I64) : List Patch :=
+    match step {
+        Pair.pair patches next_model =>
+            List.append patches (Patch.keyed_walk path next_model rest (index + 1i64)),
+    }
+
+#[terminating]
+def Patch.keyed_match (path : List I64) (key : String) (model : List Html.Node) (child : Html.Node) (target : I64) (found : Option (Pair I64 Html.Node)) : Pair (List Patch) (List Html.Node) := match found {
+    Option.none =>
+        Pair.pair
+            (List.cons (Patch.insert (Patch.child_path path target) child) List.empty)
+            (Patch.model_insert target child model),
+    Option.some located => Patch.keyed_located path model child target located,
+}
+
+#[terminating]
+def Patch.keyed_located (path : List I64) (model : List Html.Node) (child : Html.Node) (target : I64) (located : Pair I64 Html.Node) : Pair (List Patch) (List Html.Node) := match located {
+    Pair.pair from old_node => Patch.keyed_move path model child old_node target from,
+}
+
+/// A matched key: `from == target` diffs in place; `from > target` moves the
+/// node left first. `from < target` cannot happen -- keys are unique and the
+/// prefix `0..target-1` already holds the new keys.
+#[terminating]
+def Patch.keyed_move (path : List I64) (model : List Html.Node) (child : Html.Node) (old_node : Html.Node) (target : I64) (from : I64) : Pair (List Patch) (List Html.Node) :=
+    if from == target
+    then Pair.pair
+            (Patch.diff_at (Patch.child_path path target) old_node child)
+            model
+    else Pair.pair
+            (List.cons
+                (Patch.move (Patch.child_path path from) (Patch.child_path path target))
+                (Patch.diff_at (Patch.child_path path target) old_node child))
+            (Patch.model_move from target old_node model)
+
+#[terminating]
+def Patch.keyed_patches (path : List I64) (old_children : List Html.Node) (children : List Html.Node) : List Patch :=
+    let rev : List Html.Node := List.reverse old_children in
+    let last_index : I64 := List.length old_children - 1i64 in
+    let removals : List Patch := Patch.keyed_removals path rev children last_index in
+    let kept : List Html.Node := Patch.keyed_kept old_children children in
+    List.append removals (Patch.keyed_walk path kept children 0i64)
 
 // ─── Attributes ──────────────────────────────────────────────────────
 
@@ -186,7 +433,33 @@ def Patch.apply_one (root : Node) (p : Patch) : IO Unit :=
         Patch.set_text path text => Patch.apply_set_text root path text,
         Patch.set_attr path name value => Patch.apply_set_attr root path name value,
         Patch.remove_attr path name => Patch.apply_remove_attr root path name,
+        Patch.insert path node => Patch.apply_insert root path node,
+        Patch.remove path => Patch.apply_remove root path,
+        Patch.move from to => Patch.apply_move root from to,
     }
+
+def Patch.apply_insert (root : Node) (path : List I64) (node : Html.Node) : IO Unit := do {
+    let parent <- Patch.resolve root (Patch.drop_last path);
+    let fresh <- Patch.mount_node node;
+    let anchor <- Dom.child parent (Patch.last_or_zero path);
+    Dom.insert_before parent fresh anchor
+}
+
+def Patch.apply_remove (root : Node) (path : List I64) : IO Unit := do {
+    let victim <- Patch.resolve root path;
+    Dom.remove victim
+}
+
+/// Move the node at `from` to sit at `to`. Both endpoints are resolved
+/// before the mutation, and they share a parent by construction (a keyed
+/// child list): `insert_before` detaches and reinserts the node, which is
+/// the splice the generator modelled.
+def Patch.apply_move (root : Node) (from : List I64) (to : List I64) : IO Unit := do {
+    let parent <- Patch.resolve root (Patch.drop_last from);
+    let moved <- Dom.child parent (Patch.last_or_zero from);
+    let anchor <- Dom.child parent (Patch.last_or_zero to);
+    Dom.insert_before parent moved anchor
+}
 
 def Patch.apply_replace (root : Node) (path : List I64) (node : Html.Node) : IO Unit := do {
     let parent <- Patch.resolve root (Patch.drop_last path);

@@ -7,7 +7,7 @@ use lib::elements {
     Html.placeholder, Html.name_, Html.for_, Html.open_, Html.data, Html.style_attr,
     Html.disabled, Html.checked, Html.required, Html.readonly, Html.selected,
     Html.attr, Html.bool_attr, Html.role, Html.aria, Html.method_, Html.action,
-    Html.enctype, Html.enctype_multipart, Html.charset,
+    Html.enctype, Html.enctype_multipart, Html.charset, Html.key,
     Html.div, Html.span, Html.p, Html.a, Html.ul, Html.li,
     Html.h1, Html.h2, Html.h3, Html.h4, Html.h5, Html.h6,
     Html.header, Html.footer, Html.nav, Html.main_, Html.section, Html.article, Html.aside,
@@ -63,6 +63,10 @@ def test_open_bool : Bool :=
 #[test]
 def test_data_attr : Bool :=
     element_renders (Html.div [Html.data "id" "42"] List.empty) "<div data-id=\"42\"></div>"
+
+#[test]
+def test_key_attr : Bool :=
+    element_renders (Html.li [Html.key "k1"] List.empty) "<li data-oak-key=\"k1\"></li>"
 
 #[test]
 def test_style_attr : Bool :=

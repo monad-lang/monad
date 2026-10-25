@@ -33,6 +33,7 @@ pub use lib::elements {
 
 pub use lib::elements {
     Html.attr, Html.bool_attr, Html.role, Html.aria,
+    Html.key_attr, Html.key,
     Html.method_, Html.action, Html.enctype, Html.enctype_multipart,
     Html.target, Html.rel, Html.charset, Html.accept,
     Html.width, Html.height, Html.min_, Html.max_, Html.step,

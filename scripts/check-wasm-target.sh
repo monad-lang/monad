@@ -139,6 +139,11 @@ echo "== web: nested dynamic list (Patch.drop_last regression) =="
     -o "$tmp/oak_spa_nested.wasm" --no-cache
 node wasm/web/nested_spa_smoke.mjs "$tmp/oak_spa_nested.wasm"
 
+echo "== web: keyed lists (reorder/insert/remove keep node identity) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_keyed.mo \
+    -o "$tmp/oak_spa_keyed.wasm" --no-cache
+node wasm/web/keyed_spa_smoke.mjs "$tmp/oak_spa_keyed.wasm"
+
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \

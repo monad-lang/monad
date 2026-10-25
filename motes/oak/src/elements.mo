@@ -72,6 +72,16 @@ with Html {
     pub def data (key : String) (value : String) : Html.Attr :=
         Html.Attr.attr (String.concat "data-" key) value
 
+    /// The attribute a keyed list child carries. One literal, imported by
+    /// `oak_wasm`'s diff so the two motes cannot drift.
+    pub def key_attr : String := "data-oak-key"
+
+    /// Mark a list child with a stable identity. A list whose children all
+    /// carry distinct keys is reconciled by key, so reordering keeps the
+    /// DOM nodes (and their focus/scroll/listeners) instead of rewriting
+    /// each position.
+    pub def key (k : String) : Html.Attr := Html.attr Html.key_attr k
+
     pub def open_ : Html.Attr := Html.Attr.bool_attr "open"
     pub def disabled : Html.Attr := Html.Attr.bool_attr "disabled"
     pub def checked : Html.Attr := Html.Attr.bool_attr "checked"
