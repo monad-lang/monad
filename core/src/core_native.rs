@@ -1790,10 +1790,11 @@ fn fd_streams() -> Result<std::sync::MutexGuard<'static, Vec<Option<FdEntry>>>, 
 //
 // `cell_update` is evaluator-backed (it applies a closure), so it lives
 // beside `await_fiber` and is dispatched from `core_eval::fire_or_accumulate`
-// rather than `exec_native`. The other four are ordinary arms. The lock is
-// held across `apply`, which is what makes the read-modify-write atomic; a
-// function that calls another `Ref` operation therefore deadlocks, and the
-// API documents that.
+// rather than `exec_native`. The other four are ordinary arms. The registry
+// lock is never held across `apply`: host fibers run on this one thread, so
+// nothing can write the slot between the read and the store, and the
+// function is free to touch any `Ref`, this one included. The compiled
+// runtime gets the same contract from a compare-and-swap retry loop.
 
 static CELLS: std::sync::LazyLock<std::sync::Mutex<Vec<Option<Value>>>> =
   std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
@@ -1897,15 +1898,13 @@ pub fn cell_update(
   let handle = extract_handle_id(&args[0])?;
   let idx = cell_slot(handle, "cell_update")?;
   let f = args[1].clone();
-  // The lock is held across `apply`: that is the atomic unit. `f` must not
-  // call a `Ref` operation (the lock is not reentrant).
-  let mut reg = cells()?;
-  let current = reg
+  let current = cells()?
     .get(idx)
     .and_then(|slot| slot.as_ref())
     .cloned()
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("cell_update: no such ref {handle}")))?;
   let next = crate::core_eval::apply(f, current, globals, natives, cache)?;
+  let mut reg = cells()?;
   if let Some(slot) = reg.get_mut(idx) {
     *slot = Some(next.clone());
   }

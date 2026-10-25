@@ -5,13 +5,13 @@
 /// deliberately small: get, set, and one *atomic* read-modify-write.
 ///
 /// Concurrency: native fibers are OS threads, so an unlocked slot would be a
-/// data race. `Ref.update` applies a PURE function under a lock and is the
-/// only correct way to do a read-modify-write across fibers. The function it
-/// is given MUST NOT call another `Ref` operation: the lock is not reentrant,
-/// and a nested call deadlocks.
+/// data race. `Ref.update` applies a PURE function atomically and is the
+/// only correct way to do a read-modify-write across fibers. No lock is held
+/// while the function runs: if another fiber stores first, the function is
+/// applied again to the new value, so it may run more than once.
 ///
-/// On wasi/web the runtime is single-threaded, so the lock is a no-op; the
-/// API and the atomicity contract are the same. A `Ref` is never matched or
+/// On wasi/web the runtime is single-threaded; the API and the atomicity
+/// contract are the same. A `Ref` is never matched or
 /// compared; the constructor is not built by user code.
 pub type Ref (A : Type) { ref }
 
@@ -24,8 +24,8 @@ pub def Ref.get (r : Ref A) : IO A
 #[native cell_set]
 pub def Ref.set (r : Ref A) (v : A) : IO Unit
 
-/// Apply a pure `f` under the lock and store the result. Returns the new
-/// value. `f` must not call a `Ref` operation (non-reentrant lock).
+/// Apply a pure `f` to the current value and store the result atomically.
+/// Returns the new value. `f` may run more than once under contention.
 #[native cell_update]
 pub def Ref.update (r : Ref A) (f : A -> A) : IO A
 

@@ -472,28 +472,23 @@ static int64_t monad_io_bind_impl(int64_t io_val, int64_t f) {
 }
 
 /* ── Ref (std/src/ref.mo) ──────────────────────────────────────────────
-   A shared mutable slot. Native fibers are OS threads, so the slot carries
-   a real mutex; wasi/web are single-threaded and compile the lock away.
-   `monad_cell_update` holds the lock across `apply_closure1_impl`, which is
-   what makes the read-modify-write atomic. The value word is stored in a
-   GC-scanned block (`monad_alloc`), so the collector traces it. Slots are
-   never freed: a Ref has no drop operation. */
+   A shared mutable slot, lock-free: native fibers are OS threads, so every
+   access to the value word is atomic (the `__atomic` builtins, as for
+   `g_nullary`, so wasi/web compile them to plain accesses).
+   `monad_cell_update` reads the word, applies the closure with nothing
+   held, and compare-and-swaps the result in, retrying from the new word if
+   another fiber got there first. Holding a lock across the closure used to
+   deadlock when the closure touched the same Ref (compiled IO natives run
+   when evaluated), and stalled every other fiber on a slow one. `f` is
+   pure, so running it more than once is invisible; comparing words is
+   enough because a word names an immutable value. The value word is
+   stored in a GC-scanned block (`monad_alloc`), so the collector traces
+   it. Slots are never freed: a Ref has no drop operation. */
 
 typedef struct {
     Header header;
     rt_word value;
-#if defined(MONAD_TARGET_NATIVE)
-    pthread_mutex_t lock;
-#endif
 } RefObj;
-
-#if defined(MONAD_TARGET_NATIVE)
-#define REF_LOCK(r) pthread_mutex_lock(&(r)->lock)
-#define REF_UNLOCK(r) pthread_mutex_unlock(&(r)->lock)
-#else
-#define REF_LOCK(r) ((void)0)
-#define REF_UNLOCK(r) ((void)0)
-#endif
 
 static RefObj* ref_of(rt_word handle) {
     RefObj* r = (RefObj*)RT_PTR(handle);
@@ -505,52 +500,46 @@ static rt_word ref_new_impl(rt_word init) {
     RefObj* r = (RefObj*)RT_PTR(monad_alloc((rt_size)sizeof(RefObj)));
     if (!r) return 0;
     r->header.tag = MONAD_REF_TAG;
-    r->value = init;
-#if defined(MONAD_TARGET_NATIVE)
-    pthread_mutex_init(&r->lock, NULL);
-#endif
+    __atomic_store_n(&r->value, init, __ATOMIC_RELEASE);
     return RT_WORD(r);
 }
 
 static rt_word ref_get_impl(rt_word handle) {
     RefObj* r = ref_of(handle);
     if (!r) return 0;
-    REF_LOCK(r);
-    rt_word v = r->value;
-    REF_UNLOCK(r);
-    return v;
+    return __atomic_load_n(&r->value, __ATOMIC_ACQUIRE);
 }
 
 static rt_word ref_set_impl(rt_word handle, rt_word v) {
     RefObj* r = ref_of(handle);
-    if (r) {
-        REF_LOCK(r);
-        r->value = v;
-        REF_UNLOCK(r);
-    }
+    if (r) __atomic_store_n(&r->value, v, __ATOMIC_RELEASE);
     return alloc_constructor_impl(0, 0);
 }
 
 static rt_word ref_update_impl(rt_word handle, rt_word f) {
     RefObj* r = ref_of(handle);
     if (!r) return 0;
-    REF_LOCK(r);
-    int64_t next = apply_closure1_impl(RT_PTR(f), (int64_t)(intptr_t)r->value);
-    r->value = (rt_word)(intptr_t)next;
-    REF_UNLOCK(r);
-    return (rt_word)(intptr_t)next;
+    rt_word old = __atomic_load_n(&r->value, __ATOMIC_ACQUIRE);
+    rt_word next;
+    do {
+        next = (rt_word)(intptr_t)apply_closure1_impl(RT_PTR(f), (int64_t)(intptr_t)old);
+    } while (!__atomic_compare_exchange_n(&r->value, &old, next, 0,
+                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+    return next;
 }
 
 static int64_t ref_add_i64_impl(rt_word handle, int64_t delta) {
     RefObj* r = ref_of(handle);
     if (!r) return 0;
-    REF_LOCK(r);
-    /* Unsigned addition, then reinterpret: signed `+` here is UB on overflow
-       and clang emits `add nsw`, while the interpreter and I64 arithmetic
-       wrap. */
-    int64_t next = (int64_t)((uint64_t)(intptr_t)r->value + (uint64_t)delta);
-    r->value = (rt_word)(intptr_t)next;
-    REF_UNLOCK(r);
+    rt_word old = __atomic_load_n(&r->value, __ATOMIC_ACQUIRE);
+    int64_t next;
+    do {
+        /* Unsigned addition, then reinterpret: signed `+` here is UB on
+           overflow and clang emits `add nsw`, while the interpreter and I64
+           arithmetic wrap. */
+        next = (int64_t)((uint64_t)(intptr_t)old + (uint64_t)delta);
+    } while (!__atomic_compare_exchange_n(&r->value, &old, (rt_word)(intptr_t)next, 0,
+                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
     return next;
 }
 
