@@ -474,6 +474,34 @@ def test_type_decl_kind_position_accepts_the_sort_forms : Bool :=
 def test_level_polymorphic_signature_checks : Bool :=
     typecheck_source "def idL {A : Sort u} (x : A) : A := x"
 
+/// `{u : Universe}` on a `def` is DOCUMENTATION, like `{A : Type}`: the
+/// clause is dropped and `u` is generalized from the surviving `Sort u`.
+/// Checks before and after W1.4 -- a regression guard.
+#[test]
+def test_typecheck_def_universe_clause : Bool :=
+    typecheck_source "def idU {u : Universe} (A : Sort u) (x : A) : A := x"
+
+/// The polymorphic `Sigma` shape: universe clauses on a `type` head and a
+/// `Sort (max u v)` kind. FAIL-FIRST for the grammar (before it, the first
+/// `{u}` was read as the constructor body and the rest of the declaration
+/// never parsed). Nothing checks an inductive's declared KIND
+/// (`check_inductive_with_scope` ignores `_typ`), so the declaration's
+/// acceptance plus its constructors checking is the whole self-hosted
+/// story.
+#[test]
+def test_typecheck_universe_polymorphic_sigma : Bool :=
+    typecheck_source "type P { p0 }\ntype Sigma {u} {v} (A : Sort u) (B : A -> Sort v) : Sort (max u v) { dpair (fst : A) (snd : B fst) }\ndef fam (x : P) : Type := P\ndef v : Sigma P fam := Sigma.dpair P.p0 P.p0"
+
+/// A level-polymorphic call checks, and the same def is usable at two
+/// levels. The strict observable for the INSTANTIATION is
+/// `infer_tests.mo`'s `test_level_polymorphic_call_instantiates_the_level`
+/// -- `type_check`'s expectation path is lenient about a mismatched
+/// return sort (`try_type_check_def_call` keeps the unrefined type rather
+/// than erroring), so acceptance alone is a regression guard here.
+#[test]
+def test_typecheck_level_polymorphic_calls : Bool :=
+    typecheck_source "def lift {u : Universe} (A : Sort u) : Sort u := A\ndef use1 : Sort 1 := lift Prop\ndef use2 : Sort 2 := lift (Sort 1)"
+
 /// FAIL-FIRST, and the reason this commit is observable at all: a sort
 /// is not its own type, in the VARIABLE spelling as well as the concrete
 /// one. At HEAD this was accepted because both sides were applications

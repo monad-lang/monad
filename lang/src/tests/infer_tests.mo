@@ -1,9 +1,9 @@
 use std::list {List.length}
 use lang::types {
-  Attribute, Binder, BinderInfo, DebugName, Decl, FieldPattern, FieldPatternEntry,
+  Attribute, Binder, BinderInfo, DebugName, Decl, Def, FieldPattern, FieldPatternEntry,
   Identifier, CubicalPrim, InductConstructor, Inductive, MatchCase, ModulePath,
-  NamePath, Param, Scope, ScopeClassDef, ScopeData, Similar, Term, TypeError,
-  binder_anon, binder_binder, binder_explicit, char, cub_i0, cub_i1, cub_ijoin,
+  NamePath, Param, Scope, ScopeClassDef, ScopeData, Similar, SortLevel, Term, TypeError,
+  binder_anon, binder_binder, binder_explicit, binder_named, char, cub_i0, cub_i1, cub_ijoin,
   cub_imeet, cub_ineg,
   cub_interval, if_, many, match_, package_private, sentinel, sort_n,
   cub,
@@ -1497,3 +1497,141 @@ def test_a_term_variable_is_not_an_uninformative_carrier : Bool :=
     not (is_uninformative_carrier (var 0 (named (id "x"))))
         && is_uninformative_carrier Term.hole
         && is_uninformative_carrier (sort_n 1)
+
+// ─── W1.4: level instantiation at call sites ──────────────────────────
+//
+// The observable is the CALL'S INFERRED TYPE, not an accept/reject: the
+// end-to-end paths are lenient about an expectation (`try_type_check_def_call`
+// falls back to the unrefined return type instead of erroring), so before
+// this step `lift Prop` type-checked with the signature's free `Sort u`
+// still in it and nothing downstream objected. Here the type itself is
+// read back.
+//
+// The fixture def is built by hand rather than parsed. Importing
+// `lib::module` (for `parse_all_decls`) pulls `lang::parser` into the test
+// binary's closure, where ITS `test_if_simple` collides with this file's
+// own test of that name and the generated driver miscompiles -- measured
+// as a SIGSEGV (`driver exited -1`) that a fresh probe without the import
+// does not reproduce.
+
+def lift_def : Def :=
+    let u : Identifier := id "u" in
+    let a : Identifier := id "A" in
+    let level : Term := Term.sort (SortLevel.var u) in
+    let params : List Param := [Param.mk a level Multiplicity.many Option.none List.empty] in
+    let lift_name : NamePath := NamePath.mk [id "lift"] in
+    Def.mk lift_name (pi (binder_named a) level level) (var 0 (named a))
+           List.empty List.empty Visibility.package_private params
+
+/// A VALUE def (`three : I64`): its declared type is not a sort, so a call
+/// whose parameter is `Sort u` gets no level evidence from it.
+def three_def : Def :=
+    let i64_ty : Term := var sentinel (named (id "I64")) in
+    let three_name : NamePath := NamePath.mk [id "three"] in
+    Def.mk three_name i64_ty Term.hole
+           List.empty List.empty Visibility.package_private List.empty
+
+def scope_with_decls (decl_list : List Decl) : Scope := {
+    module_id := empty_path,
+    scope := build_scope_from_decls empty_path decl_list,
+    parent := Option.none,
+    incomplete_match_ok := false,
+}
+
+def lift_scope : Scope := scope_with_decls [Decl.def_d lift_def]
+def lift_value_scope : Scope := scope_with_decls [Decl.def_d lift_def, Decl.def_d three_def]
+
+def lift_call (arg : Term) : Term :=
+    app (var sentinel (named (id "lift"))) arg
+
+def checked_typ_is (t : Term) (scope : Scope) (want : Term) : Bool :=
+    match type_check t hole scope empty_local_types empty_locals {
+        err _ => false,
+        ok tt => match tt { mk _ typ => Similar.similar typ want },
+    }
+
+def checked_typ_is_a_level_var (t : Term) (scope : Scope) : Bool :=
+    match type_check t hole scope empty_local_types empty_locals {
+        err _ => false,
+        ok tt => match tt {
+            mk _ typ => match typ {
+                Term.sort level => match level {
+                    SortLevel.var _ => true,
+                    _ => false,
+                },
+                _ => false,
+            },
+        },
+    }
+
+/// `lift Prop`: the argument's type is `Sort 1`, so `u` instantiates to 1
+/// and the call's type is `Sort 1`. Before W1.4 the same call's type was
+/// the signature's free `Sort u`.
+#[test]
+def test_level_polymorphic_call_instantiates_the_level : Bool :=
+    checked_typ_is (lift_call (sort_n 0)) lift_scope (sort_n 1)
+
+/// The SAME def at a second level: `lift (Sort 1)` has type `Sort 2`.
+/// A solver that hard-coded the first level it saw passes the test above
+/// and fails this one.
+#[test]
+def test_level_polymorphic_call_instantiates_a_second_level : Bool :=
+    checked_typ_is (lift_call (sort_n 1)) lift_scope (sort_n 2)
+
+/// No evidence, no binding: a VALUE argument's type (`I64`) is not a
+/// sort, so it says nothing about `u`; `u` stays a variable and the
+/// call's type is `Sort u` -- never a defaulted level. This is the
+/// non-committal half of `solve_levels`.
+#[test]
+def test_level_polymorphic_call_without_evidence_keeps_the_variable : Bool :=
+    checked_typ_is_a_level_var
+        (lift_call (var sentinel (named (id "three"))))
+        lift_value_scope
+
+/// `def dup (A : Sort u) (B : Sort u) : Sort u := B` -- TWO
+/// level-dependent parameters and a level-dependent return.
+def dup_def : Def :=
+    let u : Identifier := id "u" in
+    let a : Identifier := id "A" in
+    let b : Identifier := id "B" in
+    let level : Term := Term.sort (SortLevel.var u) in
+    let params : List Param := [
+        Param.mk a level Multiplicity.many Option.none List.empty,
+        Param.mk b level Multiplicity.many Option.none List.empty,
+    ] in
+    let dup_name : NamePath := NamePath.mk [id "dup"] in
+    Def.mk dup_name (pi (binder_named a) level (pi (binder_named b) level level))
+           (var 0 (named b)) List.empty List.empty Visibility.package_private params
+
+def dup_scope : Scope := scope_with_decls [Decl.def_d dup_def]
+
+def dup_call (first : Term) (second : Term) : Term :=
+    app (app (var sentinel (named (id "dup"))) first) second
+
+/// A pi over two sorts at level `n`, whose components both compare equal
+/// to `Sort n` -- name-insensitive by construction, so a solver that
+/// instantiated a different level is what fails, not a binder name.
+def checked_typ_is_pi_over_sorts (t : Term) (scope : Scope) (n : I64) : Bool :=
+    match type_check t hole scope empty_local_types empty_locals {
+        err _ => false,
+        ok tt => match tt {
+            mk _ typ => match typ {
+                Term.pi _b dom cod =>
+                    Similar.similar dom (sort_n n) && Similar.similar cod (sort_n n),
+                _ => false,
+            },
+        },
+    }
+
+/// The level solved from the FIRST argument reaches the later parameter
+/// and the result: `dup Prop Prop` checks and its type is `Sort 1`.
+#[test]
+def test_level_solved_from_an_earlier_argument_reaches_a_later_parameter : Bool :=
+    checked_typ_is (dup_call (sort_n 0) (sort_n 0)) dup_scope (sort_n 1)
+
+/// A PARTIAL application keeps the remaining pi chain WITH the level
+/// instantiated: `dup Prop : (B : Sort 1) -> Sort 1`.
+#[test]
+def test_level_polymorphic_partial_application_instantiates : Bool :=
+    checked_typ_is_pi_over_sorts
+        (app (var sentinel (named (id "dup"))) (sort_n 0)) dup_scope 1

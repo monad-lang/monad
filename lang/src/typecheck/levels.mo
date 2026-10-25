@@ -22,7 +22,7 @@
 /// they reach a sort through their existing catch-alls.
 use lang::types {
   Identifier, Similar, SortLevel, Term, binder_anon, binder_level, free_level_vars_of,
-  level_const, level_subst, union_ids,
+  level_const, level_subst, sort_level_of, union_ids,
 }
 use lib::typecheck::traverse {term_map_children}
 
@@ -38,6 +38,62 @@ pub def subst_levels_term (t: Term) (binds: List (Pair Identifier SortLevel)) : 
     Term.sort l => Term.sort (level_subst l binds),
     _ => term_map_children (fn c => subst_levels_term c binds) t,
 }
+
+/// The level instantiation half (W1.4): bind a call site's level variable
+/// from one argument.
+///
+/// The rule is deliberately narrow. Only a parameter whose type is
+/// literally `Sort (var u)` contributes, and only when the argument's own
+/// inferred type is a sort; `u` then takes that sort's level, normalized
+/// to a concrete numeral when `level_const` folds it (`Sort 1` arrives
+/// here as `succ (concrete 0)` from `type_check_sort_full`).
+///
+/// First binding wins, and everything else is left FREE rather than
+/// defaulted -- the same non-committal discipline `solve_typevars`
+/// documents, and for the same reason: `level_le` (`lang/types.mo`)
+/// answers `false` for a variable it cannot evaluate, so guessing a level
+/// the call site did not determine turns a missing constraint into a
+/// wrong one. Cumulativity is the unifier's job (`unify_sort`), which is
+/// why the MINIMAL binding is the right one here.
+///
+/// `Sort (max u v)` parameters and non-sort arguments contribute nothing
+/// (which of the two operands to bind is not determined); that is the
+/// documented completeness gap, not an oversight.
+pub def solve_levels (param_ty : Term) (actual_ty : Term) (binds : List (Pair Identifier SortLevel)) : List (Pair Identifier SortLevel) :=
+    match sort_level_of param_ty {
+        Option.some param_level => match param_level {
+            SortLevel.var name => match sort_level_of actual_ty {
+                Option.some actual_level =>
+                    if level_binds_has name binds
+                    then binds
+                    else List.cons (Pair.pair name (level_instantiation actual_level)) binds,
+                Option.none => binds,
+            },
+            _ => binds,
+        },
+        Option.none => binds,
+    }
+
+/// A solved level, written as the numeral it folds to when it has one.
+/// The solver reads sorts through `type_check_sort_full`, which builds
+/// `succ n` rather than `concrete (n + 1)`, so normalizing here is what
+/// makes the substituted level compare by `level_eq` without relying on
+/// `level_const` at every use.
+#[partial]
+def level_instantiation (l : SortLevel) : SortLevel := match level_const l {
+    Option.some n => SortLevel.concrete n,
+    Option.none => l,
+}
+
+#[partial]
+def level_binds_has (name : Identifier) (binds : List (Pair Identifier SortLevel)) : Bool :=
+    match binds {
+        List.cons entry rest => match entry {
+            Pair.pair key _ =>
+                if Similar.similar key name then true else level_binds_has name rest,
+        },
+        List.empty => false,
+    }
 
 /// Every free level variable in a TERM, in first-seen order.
 ///
@@ -195,3 +251,123 @@ def test_free_level_vars_reaches_under_a_binder : Bool :=
     let inner : Term := Term.sort (SortLevel.var (Identifier.id "u")) in
     let t : Term := Term.pi (binder_level (Identifier.id "k")) (Term.sort (SortLevel.concrete 0)) inner in
     ids_are_exactly_one (free_level_vars t) (Identifier.id "u")
+
+// ─── W1.4: level instantiation at call sites ──────────────────────────
+
+#[partial]
+def bound_level_of (binds : List (Pair Identifier SortLevel)) (name : Identifier) : Option SortLevel :=
+    match binds {
+        List.cons entry rest => match entry {
+            Pair.pair key val =>
+                if Similar.similar key name
+                then Option.some val
+                else bound_level_of rest name,
+        },
+        List.empty => Option.none,
+    }
+
+#[test]
+def test_solve_levels_binds_a_concrete_level : Bool :=
+    let binds : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
+                     (Term.sort (SortLevel.concrete 1)) List.empty in
+    match bound_level_of binds (Identifier.id "u") {
+        Option.some l => match l {
+            SortLevel.concrete n => I64.beq n 1,
+            _ => false,
+        },
+        Option.none => false,
+    }
+
+/// `type_check_sort_full` builds an argument's sort as `succ n`, so the
+/// solver must normalize it: the stored level is literally `concrete 1`,
+/// not `succ (concrete 0)`. A version that skipped the fold passes the
+/// concrete test above and fails this one.
+#[test]
+def test_solve_levels_normalizes_a_succ : Bool :=
+    let binds : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
+                     (Term.sort (SortLevel.succ (SortLevel.concrete 0))) List.empty in
+    match bound_level_of binds (Identifier.id "u") {
+        Option.some l => match l {
+            SortLevel.concrete n => I64.beq n 1,
+            _ => false,
+        },
+        Option.none => false,
+    }
+
+/// A variable solved by an earlier argument keeps that binding: a later
+/// argument cannot retract a level the call site already determined.
+#[test]
+def test_solve_levels_first_binding_wins : Bool :=
+    let first : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
+                     (Term.sort (SortLevel.concrete 1)) List.empty in
+    let second : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
+                     (Term.sort (SortLevel.concrete 2)) first in
+    match bound_level_of second (Identifier.id "u") {
+        Option.some l => match l {
+            SortLevel.concrete n => I64.beq n 1,
+            _ => false,
+        },
+        Option.none => false,
+    }
+
+/// Nothing is defaulted: an argument whose type is not a sort leaves the
+/// variable free (an empty substitution, not `u := 1`).
+#[test]
+def test_solve_levels_leaves_a_non_sort_alone : Bool :=
+    let binds : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u"))) Term.hole List.empty in
+    List.is_empty binds
+
+/// `Sort (max u v)` does not say which operand to bind, so it binds
+/// neither -- the documented completeness gap, pinned so it cannot start
+/// guessing silently.
+#[test]
+def test_solve_levels_ignores_a_max_parameter : Bool :=
+    let max_param : Term := Term.sort (SortLevel.max (SortLevel.var (Identifier.id "u"))
+                                                     (SortLevel.var (Identifier.id "v"))) in
+    let binds : List (Pair Identifier SortLevel) :=
+        solve_levels max_param (Term.sort (SortLevel.concrete 1)) List.empty in
+    List.is_empty binds
+
+/// A concrete parameter's level is not a variable, so there is nothing to
+/// solve even when the argument is a different sort.
+#[test]
+def test_solve_levels_ignores_a_concrete_parameter : Bool :=
+    let binds : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.concrete 1))
+                     (Term.sort (SortLevel.concrete 2)) List.empty in
+    List.is_empty binds
+
+/// Two level VARIABLES: the parameter's takes the argument's, so a later
+/// `Sort v` is CARRIED rather than guessed at.
+#[test]
+def test_solve_levels_binds_a_level_var_to_a_level_var : Bool :=
+    let binds : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
+                     (Term.sort (SortLevel.var (Identifier.id "v"))) List.empty in
+    match bound_level_of binds (Identifier.id "u") {
+        Option.some l => match l {
+            SortLevel.var n => Similar.similar n (Identifier.id "v"),
+            _ => false,
+        },
+        Option.none => false,
+    }
+
+/// A repeated variable does not grow the substitution: first binding wins,
+/// one entry.
+#[test]
+def test_solve_levels_does_not_duplicate_a_binding : Bool :=
+    let first : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
+                     (Term.sort (SortLevel.concrete 1)) List.empty in
+    let second : List (Pair Identifier SortLevel) :=
+        solve_levels (Term.sort (SortLevel.var (Identifier.id "u")))
+                     (Term.sort (SortLevel.concrete 2)) first in
+    match second {
+        List.cons _ rest => List.is_empty rest,
+        List.empty => false,
+    }

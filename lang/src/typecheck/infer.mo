@@ -40,6 +40,7 @@ use lang::scope {
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {term_permute, term_subst, term_shift}
+use lib::typecheck::levels {solve_levels, subst_levels_term}
 use lib::typecheck::traverse {term_children}
 use lib::typecheck::cubical {
   PathParts, endpoint_of, path_parts_of, peels_to_bare_interval,
@@ -3615,11 +3616,11 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                     let ret_seed : List (Pair Identifier Term) :=
                                                                         drop_no_progress_bindings
                                                                             (solve_typevars scope (rebuild_pi_chain (drop_params (List.length real_args) params) ret) expected_type List.empty) in
-                                                                    match def_call_check_args real_args params (List.append pre ret_seed) scope local_types locals {
+                                                                    match def_call_check_args real_args params (List.append pre ret_seed) List.empty scope local_types locals {
                                                                         err _ => Option.none,
                                                                         ok pair =>
                                                                             match pair {
-                                                                                DccPair.mk elab_args subst =>
+                                                                                DccPair.mk elab_args subst levels =>
                                                                                     // A PARTIAL application's type is the
                                                                                     // remaining pi chain, not the final
                                                                                     // return type: `add2 1` (of `def add2
@@ -3630,7 +3631,18 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     // the reference checker rejects.
                                                                                     let full_ret : Term :=
                                                                                         rebuild_pi_chain (drop_params (List.length real_args) params) ret in
-                                                                                    let subst_ret : Term := subst_typevars_term full_ret subst in
+                                                                                    // W1.4: the LEVEL instantiation runs
+                                                                                    // beside the type-variable one. A
+                                                                                    // declared `: Sort u` return type
+                                                                                    // (`def lift (A : Sort u) : Sort u`)
+                                                                                    // otherwise came back still naming
+                                                                                    // `u`, and `unify_sort`
+                                                                                    // (`lang/typecheck/unify.mo`) answers
+                                                                                    // `false` for an unresolved level, so
+                                                                                    // the call's own type could never
+                                                                                    // match a concrete expectation.
+                                                                                    let subst_ret : Term :=
+                                                                                        subst_levels_term (subst_typevars_term full_ret subst) levels in
                                                                                     // SOLVE THE RETURN DIRECTION.
                                                                                     // The argument direction above can
                                                                                     // only solve a type variable the
@@ -3977,6 +3989,12 @@ def rebuild_pi_chain (params : List Term) (ret : Term) : Term :=
 pub struct DccPair {
     elab_args : List Term,
     subst : List (Pair Identifier Term),
+    /// Level variables solved from the arguments so far (W1.4), keyed by
+    /// name exactly like `subst` is keyed by type variable. Threaded
+    /// beside `subst` rather than inside it because a `SortLevel` is not a
+    /// `Term`; `try_type_check_def_call` applies it to the return type
+    /// with `subst_levels_term`.
+    levels : List (Pair Identifier SortLevel),
 }
 
 /// `try_type_check_def_call`'s argument loop: infer each argument's own
@@ -4066,14 +4084,17 @@ def drop_no_progress_bindings (bs : List (Pair Identifier Term)) : List (Pair Id
     }
 
 #[partial]
-def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
+def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
     match args {
-        List.empty => ok (DccPair.mk List.empty subst),
+        List.empty => ok (DccPair.mk List.empty subst levels),
         List.cons arg rest =>
             match params {
                 List.empty => err (TypeError.custom "over-application"),
                 List.cons param_ty rest_params =>
-                    let a_expected : Term := subst_typevars_term param_ty subst in
+                    // Levels solved by the arguments BEFORE this one
+                    // (W1.4) reach this parameter's type, so a later
+                    // `(B : Sort u)` is checked at the instantiated `u`.
+                    let a_expected : Term := subst_levels_term (subst_typevars_term param_ty subst) levels in
                     // A CALL argument gets the parameter type as its
                     // expectation when that type is fully solved: a nested
                     // constrained call (`outer id (inner 41)`,
@@ -4096,7 +4117,7 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                     match check_arg_for_call prefer arg want scope local_types locals {
                         ok a_tt0 =>
                             let a_tt : TypedTerm := recheck_unresolved_class_calls arg a_tt0 a_expected scope local_types locals in
-                            def_call_continue arg a_tt param_ty rest rest_params subst scope local_types locals,
+                            def_call_continue arg a_tt param_ty rest rest_params subst levels scope local_types locals,
                         err _ =>
                             // Same vacuous-success trap `type_check_app`
                             // guards against (see `struct_literal_arg_
@@ -4119,7 +4140,7 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                             match type_check arg a_expected scope local_types locals {
                                 err e => err e,
                                 ok a_tt =>
-                                    def_call_continue arg a_tt param_ty rest rest_params subst scope local_types locals,
+                                    def_call_continue arg a_tt param_ty rest rest_params subst levels scope local_types locals,
                             },
                     },
             },
@@ -4329,15 +4350,20 @@ def open_free_type_vars (t : Term) (scope : Scope) : Term :=
 /// type variables from the argument's (already inferred) type, then
 /// recurse for the remaining arguments.
 #[partial]
-def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
+def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
     let a_typ : Term := a_tt.typ in
     let next_subst : List (Pair Identifier Term) := solve_typevars scope param_ty a_typ subst in
-    match def_call_check_args rest rest_params next_subst scope local_types locals {
+    // W1.4: the same argument pair also determines LEVEL variables, whose
+    // solution cannot live in `subst` (a `SortLevel` is not a `Term`).
+    // `solve_levels` is non-committal, so an argument that says nothing
+    // about the level leaves it free for a later one to solve.
+    let next_levels : List (Pair Identifier SortLevel) := solve_levels param_ty a_typ levels in
+    match def_call_check_args rest rest_params next_subst next_levels scope local_types locals {
         err e => err e,
         ok pair =>
             match pair {
-                DccPair.mk rest_elab rest_subst =>
-                    ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst),
+                DccPair.mk rest_elab rest_subst rest_levels =>
+                    ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst rest_levels),
             },
     }
 
@@ -5368,7 +5394,11 @@ def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (l
                             match nth_type (List.length args) params {
                                 Option.none => Option.none,
                                 Option.some next_param =>
-                                    match def_call_check_args args params List.empty scope local_types locals {
+                                    // `dcc.levels` is not read here: a
+                                    // level-polymorphic CLASS method is
+                                    // out of W1.4's scope (see
+                                    // `solve_levels`'s own doc comment).
+                                    match def_call_check_args args params List.empty List.empty scope local_types locals {
                                         err _ => Option.none,
                                         ok dcc =>
                                             // `dcc.subst` solves type variables from arguments
