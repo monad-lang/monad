@@ -20,6 +20,7 @@ use shuttle::session {Session}
 use weaver::commands {
     WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact,
     Commands.plan_after_turn, Commands.set_plan,
+    Commands.context_used, Commands.context_percent,
 }
 use weaver::gate {Gate.weaver}
 use weaver::policy {Mode, Mode.show, Mode.warns_auto}

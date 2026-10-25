@@ -144,11 +144,6 @@ pub def tick_redraw (m : TuiModel) : Bool :=
 /// The loop's read gate: while a dialog is open, ack its ownership (only
 /// now -- the poll has already marked the overlay open and this model's
 /// last frame has drawn) and decline the read. Otherwise read normally.
-pub def TuiApp.enter_key_probe (m : TuiModel) (text : String) : TuiModel :=
-    match enter_key m text {
-        Pair.pair m2 _ => m2,
-    }
-
 def reads_input (m : TuiModel) : IO Bool := do {
     // Read the handshake FILE, not just the polled `overlay_open`: the
     // poll is a tick message, and a dialog must own stdin even on a loop
@@ -1159,8 +1154,11 @@ def permissions_choose (i : I64) (st : WeaverState) : IO WeaverMsg := do {
 /// values are `/settings <key> <value>`.
 def settings_dialog_step (st : WeaverState) : IO WeaverMsg := do {
     let rows : List SettingRow := Commands.setting_rows st;
+    // The lambda's literal needs its own annotation: the host checker
+    // cannot infer it from `List.map`'s result type.
     let row_opts : List DialogOption := List.map (fn (r : SettingRow) =>
-        { label := String.concat r.label (String.concat ": " r.value), hint := "Enter", key := "" }) rows;
+        let o : DialogOption := { label := String.concat r.label (String.concat ": " r.value), hint := "Enter", key := "" } in
+        o) rows;
     let a_model : DialogOption := { label := "Model... (opens the picker)", hint := "", key := "" };
     let a_provider : DialogOption := { label := "Provider (use /provider <name>)", hint := "", key := "" };
     let a_save_p : DialogOption := { label := "Save to project (.weaver/config.toml)", hint := "", key := "" };
