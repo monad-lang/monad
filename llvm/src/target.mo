@@ -35,6 +35,12 @@ pub struct TargetSpec {
     triple : String,
     llc_triple : String,
     llc_flags : List String,
+    /// `i64` or `i32` -- the width of `LLVMType.word` on this target. A
+    /// field rather than a function of the triple because it IS the ABI
+    /// fact the triple only implies: every target this compiler knows is
+    /// LP64 except wasm32, and a future 32-bit target would say so here
+    /// rather than by a second spelling of the wasm check.
+    pointer_bits : I64,
 }
 
 /// The targets this compiler has a measured spelling for. A name that is not
@@ -45,15 +51,37 @@ pub struct TargetSpec {
 /// PIE, so llc's default non-PIC object dies at the link with
 /// `relocation R_RISCV_HI20 ... recompile with -fPIC`.
 pub def TargetSpec.known_targets : List TargetSpec := [
-    TargetSpec.mk "x86_64-unknown-linux-gnu" "" List.empty,
-    TargetSpec.mk "aarch64-unknown-linux-gnu" "" List.empty,
-    TargetSpec.mk "aarch64-apple-darwin" "" List.empty,
+    TargetSpec.mk "x86_64-unknown-linux-gnu" "" List.empty 64,
+    TargetSpec.mk "aarch64-unknown-linux-gnu" "" List.empty 64,
+    TargetSpec.mk "aarch64-apple-darwin" "" List.empty 64,
     TargetSpec.mk "riscv64gc-unknown-linux-gnu" "riscv64-unknown-linux-gnu" [
         "-mattr=+m,+a,+f,+d,+c", "-target-abi=lp64d", "-relocation-model=pic",
-    ],
-    TargetSpec.mk "wasm32-unknown-wasip1" "" List.empty,
-    TargetSpec.mk "wasm32-unknown-unknown" "" List.empty,
+    ] 64,
+    TargetSpec.mk "wasm32-unknown-wasip1" "" List.empty 32,
+    TargetSpec.mk "wasm32-unknown-unknown" "" List.empty 32,
 ]
+
+/// The pointer width a triple implies, for the sites that build a
+/// `TargetSpec` from a spelling that is not in `known_targets` (and for
+/// tests). Only the wasm family is 32-bit, which is the same test
+/// `TargetKind.of_triple` makes.
+pub def pointer_bits_of (triple : String) : I64 :=
+    pointer_bits_in TargetSpec.known_targets triple
+
+/// The width `known_targets` says for `triple`, falling back to the wasm
+/// test for a spelling the list does not carry (an unknown target is
+/// accepted by `resolve`, so this must answer for one).
+///
+/// The list is the ONE place the fact lives: `TargetSpec.pointer_bits` is
+/// the field a future cc/target-plan consumer reads, and routing this
+/// through it means the emitter and that consumer cannot disagree.
+#[partial]
+def pointer_bits_in (targets : List TargetSpec) (triple : String) : I64 :=
+    match targets {
+        List.empty => if String.starts_with "wasm" triple then 32 else 64,
+        List.cons t rest =>
+            if String.beq t.triple triple then t.pointer_bits else pointer_bits_in rest triple
+    }
 
 /// The two wasm profiles behind the wasm triples. Everything else is the
 /// host's native target.
@@ -270,9 +298,9 @@ def TargetSpec.unvalidated (want : String) : IO (Result String TargetSpec) := do
     let archs <- TargetSpec.registered_archs;
     if List.is_empty archs then do {
         println (String.concat "note: `llc --version` listed no registered targets; accepting " want);
-        return (Result.ok (TargetSpec.mk want "" List.empty))
+        return (Result.ok (TargetSpec.mk want "" List.empty (pointer_bits_of want)))
     } else if TargetSpec.arch_registered archs want then
-        return (Result.ok (TargetSpec.mk want "" List.empty))
+        return (Result.ok (TargetSpec.mk want "" List.empty (pointer_bits_of want)))
     else
         return (Result.err (TargetSpec.unknown_message want))
 }
@@ -334,7 +362,7 @@ def TargetSpec.lookup (specs : List TargetSpec) (triple : String) : Option Targe
 def TargetSpec.table_or (triple : String) : TargetSpec :=
     match TargetSpec.lookup TargetSpec.known_targets triple {
         Option.some t => t,
-        Option.none => TargetSpec.mk triple "" List.empty,
+        Option.none => TargetSpec.mk triple "" List.empty (pointer_bits_of triple),
     }
 
 /// The triples a store may hold artifacts under, for `gc` to spare.
@@ -576,8 +604,8 @@ def test_arch_registered_rejects_an_unknown_architecture : Bool :=
 /// so the four targets that need no extra spelling stay one token long.
 #[test]
 def test_describe_names_the_llc_spelling_only_when_it_differs : Bool :=
-    let riscv := TargetSpec.mk "riscv64gc-unknown-linux-gnu" "riscv64-unknown-linux-gnu" ["-mattr=+m,+a,+f,+d,+c", "-target-abi=lp64d", "-relocation-model=pic"] in
-    let linux := TargetSpec.mk "x86_64-unknown-linux-gnu" "" List.empty in
+    let riscv := TargetSpec.mk "riscv64gc-unknown-linux-gnu" "riscv64-unknown-linux-gnu" ["-mattr=+m,+a,+f,+d,+c", "-target-abi=lp64d", "-relocation-model=pic"] 64 in
+    let linux := TargetSpec.mk "x86_64-unknown-linux-gnu" "" List.empty 64 in
     String.beq (TargetSpec.describe linux) "x86_64-unknown-linux-gnu"
         && String.beq (TargetSpec.describe riscv)
             "riscv64gc-unknown-linux-gnu  (llc -mtriple=riscv64-unknown-linux-gnu -mattr=+m,+a,+f,+d,+c -target-abi=lp64d -relocation-model=pic)"
@@ -585,8 +613,8 @@ def test_describe_names_the_llc_spelling_only_when_it_differs : Bool :=
 #[test]
 def test_describe_all_marks_what_this_llc_cannot_build : Bool :=
     String.beq (TargetSpec.describe_all ["aarch64"] [
-        TargetSpec.mk "aarch64-unknown-linux-gnu" "" List.empty,
-        TargetSpec.mk "wasm32-unknown-wasip1" "" List.empty,
+        TargetSpec.mk "aarch64-unknown-linux-gnu" "" List.empty 64,
+        TargetSpec.mk "wasm32-unknown-wasip1" "" List.empty 32,
     ]) "aarch64-unknown-linux-gnu\nwasm32-unknown-wasip1  (llc registers no wasm32)"
 
 #[test]

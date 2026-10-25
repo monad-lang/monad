@@ -4,6 +4,7 @@ use std::list {List.intercalate, List.length}
 use lib::strmap {str_map_empty, str_map_insert, str_map_lookup}
 // For the `HashMap` type itself, which the `loc_suffixes` field names.
 use std::map {HashMap}
+use llvm::target {pointer_bits_of}
 
 pub type LLVMType {
     void,
@@ -11,15 +12,21 @@ pub type LLVMType {
     i8_,
     i32_,
     i64_,
-    /// The machine word: a pointer, a `String`, or an SSA value. Renders as
-    /// `i64` on every LP64 target and `i32` on wasm32 -- the single place
-    /// pointer width enters the IR.
-    word,
     f32_,
     f64_,
     ptr (inner : LLVMType),
     fn_ (params : List LLVMType) (ret : LLVMType),
     struct_ (name : String),
+    /// The machine word: a pointer, a `String`, or an SSA value. Renders as
+    /// `i64` on every LP64 target and `i32` on wasm32 -- the single place
+    /// pointer width enters the IR.
+    ///
+    /// LAST in the type on purpose: a constructor's position IS its tag in
+    /// the emitted IR, and inserting `word` in the middle shifted every
+    /// later one -- which made the two bootstrap ladders disagree
+    /// (`target-monad/bootstrap-ci/monad.ll` vs `monad2.ll`, line 20712,
+    /// 2026-10-25). Appending it leaves every existing tag alone.
+    word,
 }
 
 pub type ParamPair {
@@ -331,8 +338,8 @@ def join_types (bits : I64) (types : List LLVMType) : String :=
     List.intercalate ", " (List.map (fn (t : LLVMType) => show_llvm_type_bits bits t) types)
 
 #[partial]
-def show_args_typed (args : List LLVMValue) : String :=
-    List.intercalate ", " (List.map show_llvm_value_typed args)
+def show_args_typed (bits : I64) (args : List LLVMValue) : String :=
+    List.intercalate ", " (List.map (fn (v : LLVMValue) => show_llvm_value_typed bits v) args)
 
 /// Every `@`-prefixed LLVM global/function reference this module emits,
 /// in one place -- quoted only when the name actually needs it.
@@ -448,49 +455,49 @@ def llvm_name_digit (b : U8) : Bool :=
     else Bool.not (U8.gt b 57u8)
 
 #[partial]
-def show_llvm_value (val : LLVMValue) : String := match val {
+def show_llvm_value (bits : I64) (val : LLVMValue) : String := match val {
     int_ n => I64.to_string n,
     int32_ n => I32.to_string n,
     bool_ b => show_bool b,
     void_val => "void",
     var_ name => String.concat "%" name,
     parm_ idx => String.concat "%p" (I64.to_string idx),
-    typed v ty => show_llvm_value v,
+    typed v ty => show_llvm_value bits v,
     global_ name => llvm_symbol_ref name,
     fn_ref name => llvm_symbol_ref name,
-    call fn_name ret_ty args tail => show_call fn_name ret_ty args tail,
-    add lhs rhs => show_arith "add" lhs rhs,
-    sub lhs rhs => show_arith "sub" lhs rhs,
-    mul lhs rhs => show_arith "mul" lhs rhs,
-    sdiv lhs rhs => show_arith "sdiv" lhs rhs,
-    udiv lhs rhs => show_arith "udiv" lhs rhs,
-    urem lhs rhs => show_arith "urem" lhs rhs,
-    and_ lhs rhs => show_arith "and" lhs rhs,
-    or_ lhs rhs => show_arith "or" lhs rhs,
-    xor_ lhs rhs => show_arith "xor" lhs rhs,
-    shl_ lhs rhs => show_arith "shl" lhs rhs,
-    lshr_ lhs rhs => show_arith "lshr" lhs rhs,
-    icmp_eq lhs rhs => show_arith "icmp eq" lhs rhs,
-    icmp_ne lhs rhs => show_arith "icmp ne" lhs rhs,
-    icmp_slt lhs rhs => show_arith "icmp slt" lhs rhs,
-    icmp_sgt lhs rhs => show_arith "icmp sgt" lhs rhs,
-    icmp_ult lhs rhs => show_arith "icmp ult" lhs rhs,
-    icmp_ugt lhs rhs => show_arith "icmp ugt" lhs rhs,
-    zext v from_ty to_ty => show_ext "zext" v from_ty to_ty,
-    sext v from_ty to_ty => show_ext "sext" v from_ty to_ty,
-    trunc v from_ty to_ty => show_ext "trunc" v from_ty to_ty,
-    ptrtoint v from_ty to_ty => show_ext "ptrtoint" v from_ty to_ty,
-    inttoptr v from_ty to_ty => show_ext "inttoptr" v from_ty to_ty,
-    phi pairs => show_phi pairs,
-    gep base indices => show_gep base indices,
+    call fn_name ret_ty args tail => show_call bits fn_name ret_ty args tail,
+    add lhs rhs => show_arith bits "add" lhs rhs,
+    sub lhs rhs => show_arith bits "sub" lhs rhs,
+    mul lhs rhs => show_arith bits "mul" lhs rhs,
+    sdiv lhs rhs => show_arith bits "sdiv" lhs rhs,
+    udiv lhs rhs => show_arith bits "udiv" lhs rhs,
+    urem lhs rhs => show_arith bits "urem" lhs rhs,
+    and_ lhs rhs => show_arith bits "and" lhs rhs,
+    or_ lhs rhs => show_arith bits "or" lhs rhs,
+    xor_ lhs rhs => show_arith bits "xor" lhs rhs,
+    shl_ lhs rhs => show_arith bits "shl" lhs rhs,
+    lshr_ lhs rhs => show_arith bits "lshr" lhs rhs,
+    icmp_eq lhs rhs => show_arith bits "icmp eq" lhs rhs,
+    icmp_ne lhs rhs => show_arith bits "icmp ne" lhs rhs,
+    icmp_slt lhs rhs => show_arith bits "icmp slt" lhs rhs,
+    icmp_sgt lhs rhs => show_arith bits "icmp sgt" lhs rhs,
+    icmp_ult lhs rhs => show_arith bits "icmp ult" lhs rhs,
+    icmp_ugt lhs rhs => show_arith bits "icmp ugt" lhs rhs,
+    zext v from_ty to_ty => show_ext bits "zext" v from_ty to_ty,
+    sext v from_ty to_ty => show_ext bits "sext" v from_ty to_ty,
+    trunc v from_ty to_ty => show_ext bits "trunc" v from_ty to_ty,
+    ptrtoint v from_ty to_ty => show_ext bits "ptrtoint" v from_ty to_ty,
+    inttoptr v from_ty to_ty => show_ext bits "inttoptr" v from_ty to_ty,
+    phi pairs => show_phi bits pairs,
+    gep base indices => show_gep bits base indices,
     load ty ptr_ty ptr_ =>
-        String.concat "load " (String.concat (show_llvm_type ty)
-            (String.concat ", " (String.concat (show_llvm_type ptr_ty)
-            (String.concat " " (show_llvm_value ptr_))))),
+        String.concat "load " (String.concat (show_llvm_type_bits bits ty)
+            (String.concat ", " (String.concat (show_llvm_type_bits bits ptr_ty)
+            (String.concat " " (show_llvm_value bits ptr_))))),
     bitcast v from_ty to_ty =>
-        String.concat "bitcast " (String.concat (show_llvm_type from_ty)
-            (String.concat " " (String.concat (show_llvm_value v)
-                (String.concat " to " (show_llvm_type to_ty))))),
+        String.concat "bitcast " (String.concat (show_llvm_type_bits bits from_ty)
+            (String.concat " " (String.concat (show_llvm_value bits v)
+                (String.concat " to " (show_llvm_type_bits bits to_ty))))),
     alloc_closure entry arity env =>
         String.concat "call i64 @alloc_closure(i64 " (String.concat entry
             (String.concat ", i64 " (String.concat (I64.to_string arity)
@@ -582,51 +589,51 @@ def phi_pairs_type (pairs : List PhiPair) : LLVMType := match pairs {
 }
 
 #[partial]
-def show_llvm_value_typed (val : LLVMValue) : String :=
-    String.concat (show_llvm_type (llvm_value_type val))
-        (String.concat " " (show_llvm_value val))
+def show_llvm_value_typed (bits : I64) (val : LLVMValue) : String :=
+    String.concat (show_llvm_type_bits bits (llvm_value_type val))
+        (String.concat " " (show_llvm_value bits val))
 
 #[partial]
-def show_call (fn_name : String) (ret_ty : LLVMType) (args : List LLVMValue) (tail : Bool) : String :=
+def show_call (bits : I64) (fn_name : String) (ret_ty : LLVMType) (args : List LLVMValue) (tail : Bool) : String :=
     let prefix := if tail then "tail call " else "call " in
     let sig := String.concat prefix
-        (String.concat (show_llvm_type ret_ty) (String.concat " " (llvm_symbol_ref fn_name))) in
-    let args_str := show_args_typed args in
+        (String.concat (show_llvm_type_bits bits ret_ty) (String.concat " " (llvm_symbol_ref fn_name))) in
+    let args_str := show_args_typed bits args in
     String.concat sig (String.concat "(" (String.concat args_str ")"))
 
 #[partial]
-def show_arith (op : String) (lhs : LLVMValue) (rhs : LLVMValue) : String :=
-    String.concat (String.concat op " i64 ") (String.concat (show_llvm_value lhs)
-        (String.concat ", " (show_llvm_value rhs)))
+def show_arith (bits : I64) (op : String) (lhs : LLVMValue) (rhs : LLVMValue) : String :=
+    String.concat (String.concat op " i64 ") (String.concat (show_llvm_value bits lhs)
+        (String.concat ", " (show_llvm_value bits rhs)))
 
 #[partial]
-def show_ext (op : String) (v : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType) : String :=
-    String.concat (String.concat op " ") (String.concat (show_llvm_type from_ty)
-        (String.concat " " (String.concat (show_llvm_value v)
-        (String.concat " to " (show_llvm_type to_ty)))))
+def show_ext (bits : I64) (op : String) (v : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType) : String :=
+    String.concat (String.concat op " ") (String.concat (show_llvm_type_bits bits from_ty)
+        (String.concat " " (String.concat (show_llvm_value bits v)
+        (String.concat " to " (show_llvm_type_bits bits to_ty)))))
 
 // Real merge type (`phi_pairs_type`), not hardcoded `i64` -- see
 // `llvm_value_type`'s own `phi` arm doc comment for why (pointer-typed
 // merges, e.g. `if b then "a" else "b"`, need `phi ptr` not `phi i64`).
 #[partial]
-def show_phi (pairs : List PhiPair) : String :=
-    let inner := join_phi_pairs pairs in
-    String.concat "phi " (String.concat (show_llvm_type (phi_pairs_type pairs)) (String.concat " " inner))
+def show_phi (bits : I64) (pairs : List PhiPair) : String :=
+    let inner := join_phi_pairs bits pairs in
+    String.concat "phi " (String.concat (show_llvm_type_bits bits (phi_pairs_type pairs)) (String.concat " " inner))
 
 #[partial]
-def join_phi_pairs (pairs : List PhiPair) : String :=
-    List.intercalate ", " (List.map show_one_phi pairs)
+def join_phi_pairs (bits : I64) (pairs : List PhiPair) : String :=
+    List.intercalate ", " (List.map (fn (p : PhiPair) => show_one_phi bits p) pairs)
 
 #[partial]
-def show_one_phi (p : PhiPair) : String := match p {
+def show_one_phi (bits : I64) (p : PhiPair) : String := match p {
     PhiPair.mk val label =>
-        String.concat "[" (String.concat (show_llvm_value val)
+        String.concat "[" (String.concat (show_llvm_value bits val)
             (String.concat ", %" (String.concat label "]"))),
 }
 
 #[partial]
-def show_gep (base : LLVMValue) (indices : List I64) : String :=
-    let pre := String.concat "getelementptr " (String.concat (show_llvm_value_typed base)
+def show_gep (bits : I64) (base : LLVMValue) (indices : List I64) : String :=
+    let pre := String.concat "getelementptr " (String.concat (show_llvm_value_typed bits base)
         (String.concat ", " (I64.to_string (list_i64_len indices)))) in
     join_gep_indices pre indices
 
@@ -647,22 +654,22 @@ def join_gep_indices (pre : String) (indices : List I64) : String := match indic
 /// source-text-only `;` line, not a real instruction, so it never
 /// takes a `!dbg` suffix.
 #[partial]
-def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String := match instr {
+def show_instruction (bits : I64) (instr : LLVMInstruction) (dbg_suffix : String) : String := match instr {
     assign target value =>
         String.concat "  %" (String.concat target (String.concat " = "
-            (String.concat (show_llvm_value value) dbg_suffix))),
+            (String.concat (show_llvm_value bits value) dbg_suffix))),
     branch cond then_label else_label =>
-        String.concat "  br i1 " (String.concat (show_llvm_value cond)
+        String.concat "  br i1 " (String.concat (show_llvm_value bits cond)
             (String.concat ", label %" (String.concat then_label
             (String.concat ", label %" (String.concat else_label dbg_suffix))))),
     jump label =>
         String.concat "  br label %" (String.concat label dbg_suffix),
     store val ptr_ty ptr_ =>
-        String.concat "  store " (String.concat (show_llvm_type (llvm_pointee ptr_ty))
-            (String.concat " " (String.concat (show_llvm_value val)
-            (String.concat ", " (String.concat (show_llvm_type ptr_ty)
-            (String.concat " " (String.concat (show_llvm_value ptr_) dbg_suffix))))))),
-    ret val => String.concat (show_ret_instr val) dbg_suffix,
+        String.concat "  store " (String.concat (show_llvm_type_bits bits (llvm_pointee ptr_ty))
+            (String.concat " " (String.concat (show_llvm_value bits val)
+            (String.concat ", " (String.concat (show_llvm_type_bits bits ptr_ty)
+            (String.concat " " (String.concat (show_llvm_value bits ptr_) dbg_suffix))))))),
+    ret val => String.concat (show_ret_instr bits val) dbg_suffix,
     comment text =>
         String.concat "  ; " text,
     // Reuses `show_llvm_value`'s own `call` rendering (`show_call`) --
@@ -671,7 +678,7 @@ def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String :=
     // other statement-shaped instruction gets, mirroring `assign`'s own
     // arm minus the `%target = ` prefix.
     call_void value =>
-        String.concat "  " (String.concat (show_llvm_value value) dbg_suffix),
+        String.concat "  " (String.concat (show_llvm_value bits value) dbg_suffix),
     // Unreachable: `emit_instrs` consumes a marker to update the current
     // suffix and never renders it. The arm exists because this match is
     // exhaustive, and a marker that DID reach here must produce no line
@@ -680,7 +687,7 @@ def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String :=
 }
 
 // Every non-`void_val` `LLVMValue` renders the same way here (`"  ret "
-// ++ show_llvm_value_typed val`) -- previously spelled out as 23
+// ++ show_llvm_value_typed bits val`) -- previously spelled out as 23
 // identical match arms (one per variant), which made adding a new
 // `LLVMValue` variant a maintenance trap (silently missing this list
 // would be a non-exhaustive-match crash risk, per the real `fn_ref`
@@ -700,9 +707,9 @@ def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String :=
 // The wildcard fallback below covers every current and future variant
 // the same way, so this can't recur.
 #[partial]
-def show_ret_instr (val : LLVMValue) : String := match val {
+def show_ret_instr (bits : I64) (val : LLVMValue) : String := match val {
     void_val => "  ret void",
-    _ => "  ret " ++ show_llvm_value_typed val,
+    _ => "  ret " ++ show_llvm_value_typed bits val,
 }
 
 /// Each block starts back at the function's own location rather than
@@ -711,9 +718,9 @@ def show_ret_instr (val : LLVMValue) : String := match val {
 /// happened to be emitted before it in the text. Every construct that
 /// creates blocks (`if`, `match`) marks its own position on entry anyway.
 #[partial]
-def emit_block (block : LLVMBasicBlock) (refs : DbgFuncRefs) : String := match block {
+def emit_block (bits : I64) (block : LLVMBasicBlock) (refs : DbgFuncRefs) : String := match block {
     LLVMBasicBlock.mk label instructions =>
-        String.concat "\n" (String.concat label (String.concat ":" (emit_instrs instructions refs refs.instr_suffix))),
+        String.concat "\n" (String.concat label (String.concat ":" (emit_instrs bits instructions refs refs.instr_suffix))),
 }
 
 /// `current` is the suffix in force, updated by each `loc_marker` and
@@ -736,25 +743,25 @@ def emit_block (block : LLVMBasicBlock) (refs : DbgFuncRefs) : String := match b
 /// difference; the chunks and their order are unchanged, so the rendered
 /// text is byte-identical by construction.
 #[partial]
-def emit_instrs (instructions : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) : String :=
-    String.concat_list (List.reverse (emit_instrs_go instructions refs current List.empty))
+def emit_instrs (bits : I64) (instructions : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) : String :=
+    String.concat_list (List.reverse (emit_instrs_go bits instructions refs current List.empty))
 
 #[partial]
-def emit_instrs_go (instructions : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) (acc : List String) : List String :=
+def emit_instrs_go (bits : I64) (instructions : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) (acc : List String) : List String :=
     match instructions {
         List.empty => acc,
-        List.cons i rest => emit_instrs_step i rest refs current acc,
+        List.cons i rest => emit_instrs_step bits i rest refs current acc,
     }
 
 /// Split out because a marker CONSUMES itself: it renders no line and
 /// changes the suffix for everything after it, so it contributes no chunk
 /// and instead hands the next step a new `current`.
 #[partial]
-def emit_instrs_step (i : LLVMInstruction) (rest : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) (acc : List String) : List String :=
+def emit_instrs_step (bits : I64) (i : LLVMInstruction) (rest : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) (acc : List String) : List String :=
     match i {
-        LLVMInstruction.loc_marker loc => emit_instrs_go rest refs (dbg_suffix_for refs loc) acc,
-        _ => emit_instrs_go rest refs current
-                (List.cons (String.concat "\n" (show_instruction i current)) acc),
+        LLVMInstruction.loc_marker loc => emit_instrs_go bits rest refs (dbg_suffix_for refs loc) acc,
+        _ => emit_instrs_go bits rest refs current
+                (List.cons (String.concat "\n" (show_instruction bits i current)) acc),
     }
 
 /// A function's own two `!dbg` attachment forms -- LLVM needs BOTH, not
@@ -810,15 +817,15 @@ def empty_dbg_func_refs : DbgFuncRefs :=
 /// is off, in which case `find_dbg_refs` always misses and every
 /// function renders exactly as it did before this field existed.
 #[partial]
-def emit_function (func : LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String := match func {
+def emit_function (bits : I64) (func : LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String := match func {
     { name := name, params := params, ret_ty := ret_ty, blocks := blocks, dbg_loc := _ } =>
         let prefix := String.concat "\n; Function: " (String.concat name "\n") in
         let sig := String.concat "define "
-            (String.concat (show_llvm_type ret_ty)
+            (String.concat (show_llvm_type_bits bits ret_ty)
             (String.concat " " (String.concat (llvm_symbol_ref name) "("))) in
         let refs := find_dbg_refs name dbg_refs in
-        let sig2 := String.concat sig (String.concat (join_params params) (String.concat ")" (String.concat refs.define_suffix " {"))) in
-        let body := emit_blocks blocks refs in
+        let sig2 := String.concat sig (String.concat (join_params bits params) (String.concat ")" (String.concat refs.define_suffix " {"))) in
+        let body := emit_blocks bits blocks refs in
         String.concat prefix (String.concat sig2 (String.concat body "\n}")),
 }
 
@@ -837,13 +844,13 @@ def find_dbg_refs (name : String) (refs : List (Pair String DbgFuncRefs)) : DbgF
 }
 
 #[partial]
-def join_params (params : List ParamPair) : String :=
-    List.intercalate ", " (List.map show_one_param params)
+def join_params (bits : I64) (params : List ParamPair) : String :=
+    List.intercalate ", " (List.map (fn (p : ParamPair) => show_one_param bits p) params)
 
 #[partial]
-def show_one_param (p : ParamPair) : String := match p {
+def show_one_param (bits : I64) (p : ParamPair) : String := match p {
     ParamPair.mk param_name param_ty =>
-        String.concat (show_llvm_type param_ty) (String.concat " %" param_name),
+        String.concat (show_llvm_type_bits bits param_ty) (String.concat " %" param_name),
 }
 
 /// Collect the pieces, then join once.
@@ -854,13 +861,13 @@ def show_one_param (p : ParamPair) : String := match p {
 /// `String.concat_list` measures and copies in one pass. The same rewrite applies to
 /// `emit_globals`/`emit_decls`/`emit_functions` below.
 #[partial]
-def emit_blocks (blocks : List LLVMBasicBlock) (refs : DbgFuncRefs) : String :=
-    String.concat_list (List.reverse (emit_blocks_go blocks refs List.empty))
+def emit_blocks (bits : I64) (blocks : List LLVMBasicBlock) (refs : DbgFuncRefs) : String :=
+    String.concat_list (List.reverse (emit_blocks_go bits blocks refs List.empty))
 
 #[partial]
-def emit_blocks_go (blocks : List LLVMBasicBlock) (refs : DbgFuncRefs) (acc : List String) : List String := match blocks {
+def emit_blocks_go (bits : I64) (blocks : List LLVMBasicBlock) (refs : DbgFuncRefs) (acc : List String) : List String := match blocks {
     List.empty => acc,
-    List.cons b rest => emit_blocks_go rest refs (List.cons (emit_block b refs) acc),
+    List.cons b rest => emit_blocks_go bits rest refs (List.cons (emit_block bits b refs) acc),
 }
 
 #[partial]
@@ -981,13 +988,13 @@ def join_strs (xs : List String) : String :=
     List.intercalate ", " xs
 
 #[partial]
-def emit_functions (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String :=
-    String.concat_list (List.reverse (emit_functions_go fs dbg_refs List.empty))
+def emit_functions (bits : I64) (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String :=
+    String.concat_list (List.reverse (emit_functions_go bits fs dbg_refs List.empty))
 
 #[partial]
-def emit_functions_go (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) (acc : List String) : List String := match fs {
+def emit_functions_go (bits : I64) (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) (acc : List String) : List String := match fs {
     List.empty => acc,
-    List.cons f rest => emit_functions_go rest dbg_refs (List.cons (String.concat (emit_function f dbg_refs) "\n") acc),
+    List.cons f rest => emit_functions_go bits rest dbg_refs (List.cons (String.concat (emit_function bits f dbg_refs) "\n") acc),
 }
 
 // --- DWARF debug info (v1: one location per top-level def) ---
@@ -1260,6 +1267,11 @@ def emit_debug_metadata (source_path : String) (files : List (Pair String String
 #[partial]
 pub def emit_module (module_ : LLVMModule) : String := match module_ {
     LLVMModule.mk target_triple globals functions declarations debug_source debug_files =>
+        // The module carries its own triple, so the width every `word`
+        // renders at is decided HERE -- once -- and threaded to the
+        // renderers. That keeps `emit_module`'s public one-argument shape
+        // and makes a module's text a function of the module alone.
+        let bits : I64 := pointer_bits_of target_triple in
         let h1 := String.concat "; ModuleID = 'monad'\ntarget triple = \"" (String.concat target_triple "\"\n\n") in
         let h2 := String.concat h1 "; === Type Definitions ===\n%Header = type { i64, i16, i16 }\n%Closure = type { %Header, i8*, i64, i64, [0 x i8*] }\n%Constructor = type { %Header, i64, i64, [0 x i8*] }\n%StringObj = type { %Header, i64, [0 x i8] }\n\n" in
         let h3 := match declarations {
@@ -1277,7 +1289,7 @@ pub def emit_module (module_ : LLVMModule) : String := match module_ {
                 match functions {
                     List.empty => h4,
                     List.cons x y => String.concat h4 (String.concat "; === Functions ===\n"
-                        (emit_functions functions List.empty)),
+                        (emit_functions bits functions List.empty)),
                 },
             Option.some path =>
                 match emit_debug_metadata path debug_files functions {
@@ -1285,7 +1297,7 @@ pub def emit_module (module_ : LLVMModule) : String := match module_ {
                         let h5 := match functions {
                             List.empty => h4,
                             List.cons x y => String.concat h4 (String.concat "; === Functions ===\n"
-                                (emit_functions functions dbg_refs)),
+                                (emit_functions bits functions dbg_refs)),
                         } in
                         String.concat h5 (String.concat "\n; === Debug Info ===\n" metadata_text),
                 },
@@ -1313,6 +1325,17 @@ def test_type_word_nested_renders_per_width : Bool :=
         && String.beq (show_llvm_type_bits 64 (ptr word)) "i64*"
         && String.beq (show_llvm_type_bits 32 (fn_ [word, word] word)) "i32 (i32, i32)"
 
+/// The width reaches `emit_function` from `emit_module`'s triple, so a
+/// `word` return renders `i32` in a wasm module and `i64` in a native
+/// one. This is the wiring step 5b's remaining half depends on: it is what
+/// makes a `word` anywhere in a signature mean the target's pointer.
+#[test]
+def test_emit_function_renders_word_per_width : Bool :=
+    let blk : LLVMBasicBlock := LLVMBasicBlock.mk "entry" [LLVMInstruction.ret (LLVMValue.int_ 0)] in
+    let fn_ : LLVMFunction := LLVMFunction.mk "w" [] word [blk] Option.none in
+    String.contains (emit_function 32 fn_ List.empty) "define i32 @w("
+        && String.contains (emit_function 64 fn_ List.empty) "define i64 @w("
+
 #[test]
 def test_type_void_display : Bool :=
     String.beq (show_llvm_type void) "void"
@@ -1332,79 +1355,79 @@ def test_type_struct_display : Bool :=
 
 #[test]
 def test_value_int : Bool :=
-    String.beq (show_llvm_value (int_ 42)) "42"
+    String.beq (show_llvm_value 64 (int_ 42)) "42"
 
 #[test]
 def test_value_int_typed : Bool :=
-    String.beq (show_llvm_value_typed (int_ 42)) "i64 42"
+    String.beq (show_llvm_value_typed 64 (int_ 42)) "i64 42"
 
 #[test]
 def test_value_bool_true : Bool :=
-    String.beq (show_llvm_value (bool_ true)) "true"
+    String.beq (show_llvm_value 64 (bool_ true)) "true"
 
 #[test]
 def test_value_bool_false : Bool :=
-    String.beq (show_llvm_value (bool_ false)) "false"
+    String.beq (show_llvm_value 64 (bool_ false)) "false"
 
 #[test]
 def test_value_var : Bool :=
-    String.beq (show_llvm_value (var_ "t0")) "%t0"
+    String.beq (show_llvm_value 64 (var_ "t0")) "%t0"
 
 /// The bitwise/shift family renders as plain LLVM binary operators, the
 /// same shape `add`/`udiv` use. They exist for the fixed-width unsigned
 /// natives in runtime/src/natives.mo, which mask to width with `and`.
 #[test]
 def test_value_and : Bool :=
-    String.beq (show_llvm_value (and_ (var_ "a") (int_ 255))) "and i64 %a, 255"
+    String.beq (show_llvm_value 64 (and_ (var_ "a") (int_ 255))) "and i64 %a, 255"
 
 #[test]
 def test_value_or : Bool :=
-    String.beq (show_llvm_value (or_ (var_ "a") (var_ "b"))) "or i64 %a, %b"
+    String.beq (show_llvm_value 64 (or_ (var_ "a") (var_ "b"))) "or i64 %a, %b"
 
 #[test]
 def test_value_xor : Bool :=
-    String.beq (show_llvm_value (xor_ (var_ "a") (var_ "b"))) "xor i64 %a, %b"
+    String.beq (show_llvm_value 64 (xor_ (var_ "a") (var_ "b"))) "xor i64 %a, %b"
 
 #[test]
 def test_value_shl : Bool :=
-    String.beq (show_llvm_value (shl_ (var_ "a") (var_ "b"))) "shl i64 %a, %b"
+    String.beq (show_llvm_value 64 (shl_ (var_ "a") (var_ "b"))) "shl i64 %a, %b"
 
 /// `lshr`, not `ashr`: every caller is unsigned.
 #[test]
 def test_value_lshr : Bool :=
-    String.beq (show_llvm_value (lshr_ (var_ "a") (var_ "b"))) "lshr i64 %a, %b"
+    String.beq (show_llvm_value 64 (lshr_ (var_ "a") (var_ "b"))) "lshr i64 %a, %b"
 
 #[test]
 def test_value_parm : Bool :=
-    String.beq (show_llvm_value (parm_ 0)) "%p0"
+    String.beq (show_llvm_value 64 (parm_ 0)) "%p0"
 
 #[test]
 def test_value_global : Bool :=
-    String.beq (show_llvm_value (global_ "str_0")) "@str_0"
+    String.beq (show_llvm_value 64 (global_ "str_0")) "@str_0"
 
 #[test]
 def test_value_add : Bool :=
     let val := add (parm_ 0) (parm_ 1) in
-    String.beq (show_llvm_value val) "add i64 %p0, %p1"
+    String.beq (show_llvm_value 64 val) "add i64 %p0, %p1"
 
 #[test]
 def test_value_call : Bool :=
     let val := call "add" i64_ (List.cons (parm_ 0) (List.cons (parm_ 1) List.empty)) false in
-    String.beq (show_llvm_value val) "call i64 @add(i64 %p0, i64 %p1)"
+    String.beq (show_llvm_value 64 val) "call i64 @add(i64 %p0, i64 %p1)"
 
 #[test]
 def test_value_icmp_eq : Bool :=
     let val := icmp_eq (parm_ 0) (parm_ 1) in
-    String.beq (show_llvm_value val) "icmp eq i64 %p0, %p1"
+    String.beq (show_llvm_value 64 val) "icmp eq i64 %p0, %p1"
 
 #[test]
 def test_instruction_assign : Bool :=
     let instr := assign "t0" (add (parm_ 0) (parm_ 1)) in
-    String.beq (show_instruction instr "") "  %t0 = add i64 %p0, %p1"
+    String.beq (show_instruction 64 instr "") "  %t0 = add i64 %p0, %p1"
 
 #[test]
 def test_instruction_ret_void : Bool :=
-    String.beq (show_instruction (ret void_val) "") "  ret void"
+    String.beq (show_instruction 64 (ret void_val) "") "  ret void"
 
 #[test]
 def test_instruction_call_void : Bool :=
@@ -1412,21 +1435,21 @@ def test_instruction_call_void : Bool :=
     // a bare statement, no `%target =` -- `assign` cannot express this
     // (`%t = call void @f(...)` is not legal LLVM IR).
     let instr := call_void (call "monad_release" LLVMType.void (List.cons (parm_ 0) List.empty) false) in
-    String.beq (show_instruction instr "") "  call void @monad_release(i64 %p0)"
+    String.beq (show_instruction 64 instr "") "  call void @monad_release(i64 %p0)"
 
 #[test]
 def test_instruction_call_void_with_dbg_suffix : Bool :=
     let instr := call_void (call "monad_release" LLVMType.void (List.cons (parm_ 0) List.empty) false) in
-    String.beq (show_instruction instr ", !dbg !7") "  call void @monad_release(i64 %p0), !dbg !7"
+    String.beq (show_instruction 64 instr ", !dbg !7") "  call void @monad_release(i64 %p0), !dbg !7"
 
 #[test]
 def test_instruction_ret_int : Bool :=
-    String.beq (show_instruction (ret (int_ 42)) "") "  ret i64 42"
+    String.beq (show_instruction 64 (ret (int_ 42)) "") "  ret i64 42"
 
 #[test]
 def test_instruction_assign_with_dbg_suffix : Bool :=
     let instr := assign "t0" (add (parm_ 0) (parm_ 1)) in
-    String.beq (show_instruction instr ", !dbg !7") "  %t0 = add i64 %p0, %p1, !dbg !7"
+    String.beq (show_instruction 64 instr ", !dbg !7") "  %t0 = add i64 %p0, %p1, !dbg !7"
 
 // --- loc_marker: distinct locations within one function ---------------
 
@@ -1447,7 +1470,7 @@ def test_loc_marker_switches_suffix_mid_block : Bool :=
          LLVMInstruction.assign "t1" (add (parm_ 0) (parm_ 1))] in
     // `t0` before the marker takes the function's own location; `t1` after
     // it takes the marked one; the marker itself occupies no line.
-    String.beq (emit_instrs instrs refs refs.instr_suffix)
+    String.beq (emit_instrs 64 instrs refs refs.instr_suffix)
         "\n  %t0 = add i64 %p0, %p1, !dbg !7\n  %t1 = add i64 %p0, %p1, !dbg !8"
 
 /// An unknown marker falls back to the function's own location rather than
@@ -1462,7 +1485,7 @@ def test_loc_marker_unknown_falls_back : Bool :=
     let instrs : List LLVMInstruction :=
         [LLVMInstruction.loc_marker (DbgLoc.mk 42 1),
          LLVMInstruction.assign "t0" (add (parm_ 0) (parm_ 1))] in
-    String.beq (emit_instrs instrs refs refs.instr_suffix)
+    String.beq (emit_instrs 64 instrs refs refs.instr_suffix)
         "\n  %t0 = add i64 %p0, %p1, !dbg !7"
 
 /// Distinct locations are interned once each, deduped by line:column, and
@@ -1507,9 +1530,9 @@ def test_collect_marker_locs_dedups : Bool :=
 def test_value_inttoptr_load : Bool :=
     let cast := inttoptr (parm_ 0) i64_ (ptr i8_) in
     let ld := load i8_ (ptr i8_) cast in
-    (String.beq (show_llvm_value cast) "inttoptr i64 %p0 to i8*"
-        && String.beq (show_llvm_value ld) "load i8, i8* inttoptr i64 %p0 to i8*"
-        && String.beq (show_llvm_value_typed ld) "i8 load i8, i8* inttoptr i64 %p0 to i8*")
+    (String.beq (show_llvm_value 64 cast) "inttoptr i64 %p0 to i8*"
+        && String.beq (show_llvm_value 64 ld) "load i8, i8* inttoptr i64 %p0 to i8*"
+        && String.beq (show_llvm_value_typed 64 ld) "i8 load i8, i8* inttoptr i64 %p0 to i8*")
 
 /// The byte loop's actual shape: the inttoptr lands in an SSA temp
 /// first, so the load's pointer operand is a plain i64-typed `var_` --
@@ -1518,8 +1541,8 @@ def test_value_inttoptr_load : Bool :=
 #[test]
 def test_value_load_typed_var : Bool :=
     let ld := load i8_ (ptr i8_) (var_ "q0") in
-    String.beq (show_llvm_value ld) "load i8, i8* %q0"
-        && String.beq (show_llvm_value_typed ld) "i8 load i8, i8* %q0"
+    String.beq (show_llvm_value 64 ld) "load i8, i8* %q0"
+        && String.beq (show_llvm_value_typed 64 ld) "i8 load i8, i8* %q0"
 
 /// A store's value renders at the POINTER's pointee type, not the
 /// value's own convention type (an SSA var would otherwise render
@@ -1531,15 +1554,15 @@ def test_value_load_typed_var : Bool :=
 def test_value_store : Bool :=
     let instr := store (var_ "b0") (ptr i8_) (var_ "q0") in
     let instr64 := store (var_ "b0") (ptr i64_) (var_ "q1") in
-    String.beq (show_instruction instr "") "  store i8 %b0, i8* %q0"
-        && String.beq (show_instruction instr64 "") "  store i64 %b0, i64* %q1"
+    String.beq (show_instruction 64 instr "") "  store i8 %b0, i8* %q0"
+        && String.beq (show_instruction 64 instr64 "") "  store i64 %b0, i64* %q1"
 
 #[test]
 def test_value_urem_ult : Bool :=
-    String.beq (show_llvm_value (urem (parm_ 0) (parm_ 1))) "urem i64 %p0, %p1"
-        && String.beq (show_llvm_value (icmp_ult (parm_ 0) (parm_ 1))) "icmp ult i64 %p0, %p1"
-        && String.beq (show_llvm_value (icmp_ugt (parm_ 0) (parm_ 1))) "icmp ugt i64 %p0, %p1"
-        && String.beq (show_llvm_value (udiv (parm_ 0) (parm_ 1))) "udiv i64 %p0, %p1"
+    String.beq (show_llvm_value 64 (urem (parm_ 0) (parm_ 1))) "urem i64 %p0, %p1"
+        && String.beq (show_llvm_value 64 (icmp_ult (parm_ 0) (parm_ 1))) "icmp ult i64 %p0, %p1"
+        && String.beq (show_llvm_value 64 (icmp_ugt (parm_ 0) (parm_ 1))) "icmp ugt i64 %p0, %p1"
+        && String.beq (show_llvm_value 64 (udiv (parm_ 0) (parm_ 1))) "udiv i64 %p0, %p1"
 
 #[test]
 def test_type_f32_display : Bool :=
