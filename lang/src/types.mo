@@ -1496,6 +1496,15 @@ pub def binder_name (b : Binder) : DebugName :=
 /// over); `levels : List SortLevel` needs no `Term`-walking of its own --
 /// `SortLevel` is closed over `I64`/`Identifier`/itself, never `Term`.
 ///
+/// `indices` (R4c, `core-term-simplification.md`) are the CONCRETE index
+/// values for an indexed family (`Eq A a b`'s `b`) -- the same role
+/// `scrutinee` plays for the thing being eliminated itself, not a count or
+/// a type. `params ++ indices` together reconstruct the scrutinee's own
+/// full type application spine. Empty for a non-indexed inductive (every
+/// `Bool`/`Shape`/`Sigma`-shaped `Elim` so far) -- `R3b`'s elaboration
+/// functions only ever build those, so this list is `List.empty`
+/// everywhere one is actually constructed today.
+///
 /// R3a is purely additive: nothing in the tree constructs one yet (that is
 /// R3b/R3c), so every walker's new `Term.elim` arm below is unreachable in
 /// any program today and is verified by the corpus check/sweep reporting
@@ -1504,6 +1513,7 @@ pub struct Elim {
     inductive : NamePath,
     levels : List SortLevel,
     params : List Term,
+    indices : List Term,
     motive : Term,
     minors : List Term,
     scrutinee : Term,
@@ -2953,6 +2963,7 @@ def similar_elim (a : Elim) (b : Elim) : Bool :=
     Similar.similar a.inductive b.inductive
         && levels_similar a.levels b.levels
         && similar_terms_pointwise a.params b.params
+        && similar_terms_pointwise a.indices b.indices
         && Similar.similar a.motive b.motive
         && similar_terms_pointwise a.minors b.minors
         && Similar.similar a.scrutinee b.scrutinee

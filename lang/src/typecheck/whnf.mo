@@ -162,8 +162,13 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                 let scrut_r : Term := whnf_go (fuel - 1) scope locals e.scrutinee in
                 match whnf_elim_iota e scrut_r scope {
                     Option.some body => whnf_go (fuel - 1) scope locals body,
+                    // `{ e with .. }`, not a positional `Elim.mk` rebuild
+                    // (R4c's own `indices` field growth found this site --
+                    // a positional call silently drops/misorders whatever
+                    // field comes next; the update syntax carries every
+                    // field through unchanged except the one named here).
                     Option.none =>
-                        Term.elim (Elim.mk e.inductive e.levels e.params e.motive e.minors scrut_r),
+                        Term.elim { e with scrutinee := scrut_r },
                 },
             // Rigid heads: `pi`, `forall`, `type_`, `sort`, `ntv`, `con`,
             // `hole`, and the two macro-only forms. Already in WHNF.

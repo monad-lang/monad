@@ -110,7 +110,7 @@ def elim_rejected (e : Elim) (local_types : List Term) (scope : Scope) : Bool :=
 /// lockstep walk over `Bool`'s two constructors.
 #[test]
 def elim_bool_constant_motive_is_accepted : Bool :=
-    let e : Elim := Elim.mk bool_name List.empty List.empty bool_constant_motive
+    let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_constant_motive
         (List.cons Term.hole (List.cons Term.hole List.empty)) bool_scrutinee in
     elim_accepted e bool_local_types bool_scope
 
@@ -119,7 +119,7 @@ def elim_bool_constant_motive_is_accepted : Bool :=
 #[test]
 def elim_unknown_inductive_is_rejected : Bool :=
     let bad_name : NamePath := NamePath.mk (List.cons (Identifier.id "NoSuchInductive") List.empty) in
-    let e : Elim := Elim.mk bad_name List.empty List.empty bool_constant_motive
+    let e : Elim := Elim.mk bad_name List.empty List.empty List.empty bool_constant_motive
         (List.cons Term.hole (List.cons Term.hole List.empty)) bool_scrutinee in
     elim_rejected e bool_local_types bool_scope
 
@@ -128,7 +128,7 @@ def elim_unknown_inductive_is_rejected : Bool :=
 #[test]
 def elim_non_sort_motive_is_rejected : Bool :=
     let bad_motive : Term := Term.lam binder_anon Term.hole Term.hole in
-    let e : Elim := Elim.mk bool_name List.empty List.empty bad_motive
+    let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bad_motive
         (List.cons Term.hole (List.cons Term.hole List.empty)) bool_scrutinee in
     elim_rejected e bool_local_types bool_scope
 
@@ -137,7 +137,7 @@ def elim_non_sort_motive_is_rejected : Bool :=
 /// from a wrong field arity WITHIN one minor (below).
 #[test]
 def elim_wrong_minor_count_is_rejected : Bool :=
-    let e : Elim := Elim.mk bool_name List.empty List.empty bool_constant_motive
+    let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_constant_motive
         (List.cons Term.hole List.empty) bool_scrutinee in
     elim_rejected e bool_local_types bool_scope
 
@@ -155,7 +155,7 @@ def elim_minor_with_wrong_field_arity_is_rejected : Bool :=
     let shape_scrutinee : Term := Term.var 0 DebugName.unnamed in
     let shape_local_types : List Term := List.cons (named_free_var "Shape") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
-    let e : Elim := Elim.mk shape_name List.empty List.empty motive
+    let e : Elim := Elim.mk shape_name List.empty List.empty List.empty motive
         (List.cons (sort_n 0) (List.cons (sort_n 0) List.empty)) shape_scrutinee in
     elim_rejected e shape_local_types shape_scope
 
@@ -172,7 +172,7 @@ def elim_minor_with_wrong_field_arity_is_rejected : Bool :=
 #[test]
 def elim_checked_term_reduces_to_first_minor : Bool :=
     let scrutinee : Term := named_free_var "Bool.true" in
-    let e : Elim := Elim.mk bool_name List.empty List.empty bool_marker_motive
+    let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_marker_motive
         (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty)) scrutinee in
     match type_check (Term.elim e) Term.hole marker_scope List.empty empty_locals {
         err _ => false,
@@ -183,7 +183,7 @@ def elim_checked_term_reduces_to_first_minor : Bool :=
 #[test]
 def elim_checked_term_reduces_to_second_minor : Bool :=
     let scrutinee : Term := named_free_var "Bool.false" in
-    let e : Elim := Elim.mk bool_name List.empty List.empty bool_marker_motive
+    let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_marker_motive
         (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty)) scrutinee in
     match type_check (Term.elim e) Term.hole marker_scope List.empty empty_locals {
         err _ => false,
@@ -197,7 +197,7 @@ def elim_checked_term_reduces_to_second_minor : Bool :=
 /// minor regardless of its scrutinee.
 #[test]
 def elim_checked_term_with_unresolved_scrutinee_stays_stuck : Bool :=
-    let e : Elim := Elim.mk bool_name List.empty List.empty bool_marker_motive
+    let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_marker_motive
         (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty)) bool_scrutinee in
     match type_check (Term.elim e) Term.hole marker_scope bool_local_types empty_locals {
         err _ => false,

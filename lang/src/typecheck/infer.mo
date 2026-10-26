@@ -39,7 +39,7 @@ use lang::scope {
   type_mentions_any, validate_dict_hints,
 }
 use lib::typecheck::name_subst {name_subst_term}
-use lib::typecheck::subst {term_abstract_var, term_permute, term_subst, term_shift}
+use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
 use lib::typecheck::traverse {term_children}
 use lib::typecheck::cubical {
@@ -1193,8 +1193,8 @@ def derive_motive (scrutinee_idx : I64) (scrutinee_typ : Term) (expected_type : 
 def type_check_elim (e : Elim) (expected_type : Term) (scope : Scope)
     (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match e {
-        { inductive := inductive, levels := _, params := params, motive := _,
-          minors := _, scrutinee := scrutinee } =>
+        { inductive := inductive, levels := _, params := params, indices := indices,
+          motive := _, minors := _, scrutinee := scrutinee } =>
             match scope_find_inductive inductive scope {
                 err _ => err (TypeError.custom
                     (String.concat "Term.elim: unknown inductive " (show_name_path inductive))),
@@ -1202,7 +1202,12 @@ def type_check_elim (e : Elim) (expected_type : Term) (scope : Scope)
                     match type_check scrutinee Term.hole scope local_types locals {
                         err err_ => err err_,
                         ok sc_tt =>
-                            let expected_scrutinee_typ : Term := rebuild_call (free_var_ref inductive) params in
+                            // R4c: `indices` extends the scrutinee's own
+                            // claimed type spine alongside `params` --
+                            // `Eq T x y`'s full spine is `params ++
+                            // indices = [T, x] ++ [y]`, not `params` alone.
+                            let expected_scrutinee_typ : Term :=
+                                rebuild_call (free_var_ref inductive) (List.append params indices) in
                             match unify sc_tt.typ expected_scrutinee_typ scope locals {
                                 err err_ => err err_,
                                 ok _ =>
@@ -1230,26 +1235,80 @@ def type_check_elim_motive (e : Elim) (ind : Inductive) (sc_term : Term) (sc_typ
     (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope)
     : Result TypeError TypedTerm :=
     match e {
-        { inductive := _, levels := _, params := _, motive := motive,
+        { inductive := _, levels := _, params := _, indices := indices, motive := motive,
           minors := _, scrutinee := _ } =>
             match type_check motive Term.hole scope local_types locals {
                 err err_ => err err_,
                 ok motive_tt =>
-                    match term_peel motive_tt.typ {
-                        Term.pi _b dom cod =>
-                            match unify sc_typ dom scope locals {
+                    match type_check_elim_motive_pis indices motive_tt.typ sc_typ scope
+                        local_types locals {
+                        err err_ => err err_,
+                        ok cod =>
+                            match sort_level_of cod {
+                                Option.none => err (TypeError.custom
+                                    "Term.elim's motive must be a function into a sort"),
+                                Option.some _l =>
+                                    type_check_elim_minors e ind motive_tt.term sc_term
+                                        sc_typ expected_type scope local_types locals,
+                            },
+                    },
+            },
+    }
+
+/// Peels one `Term.pi` per entry in `indices`, checking each index TERM's
+/// own inferred type against that Pi's domain (the same "infer, then
+/// unify against the motive's own declared domain" shape the scrutinee
+/// itself already gets, generalized from one argument to `K+1`), then
+/// peels one final `Pi` for the scrutinee itself -- R4's own original
+/// rule, unchanged, once `indices` is empty. Returns the final codomain
+/// for the caller's own sort check, same contract `term_peel`'s result
+/// had before this generalized it.
+///
+/// **Must `beta_reduce` the peeled codomain against the ACTUAL index
+/// term before continuing**, not pass it through raw -- confirmed as a
+/// real bug, not a style choice, by actually running a genuinely
+/// dependent two-argument motive (`(x:P) -> MyEq P p0 x -> Sort 1`): the
+/// SECOND Pi's own domain (`MyEq P p0 x`) still mentions `x` as a BOUND
+/// variable until the first index's own concrete value is substituted in
+/// for it, exactly the same "apply a dependent Pi to its argument"
+/// semantics `beta_reduce` already exists for -- an unsubstituted `cod`
+/// made the base case's `unify sc_typ dom` compare a concrete scrutinee
+/// type against a domain that still contained a dangling bound variable,
+/// failing even on a genuinely correct motive.
+///
+/// `#[terminating]`: `motive_typ` is this def's SECOND parameter, so the
+/// recursive call (which passes the PEELED, SUBSTITUTED codomain, not a
+/// subterm of `indices`) cannot be seen as a structural decrease on
+/// `indices` alone by the automatic checker -- `indices` itself IS still
+/// strictly decreasing (`irest`), which is the real reason this
+/// terminates.
+#[terminating]
+def type_check_elim_motive_pis (indices : List Term) (motive_typ : Term) (sc_typ : Term)
+    (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Term :=
+    match indices {
+        List.empty =>
+            match term_peel motive_typ {
+                Term.pi _b dom cod =>
+                    match unify sc_typ dom scope locals {
+                        err err_ => err err_,
+                        ok _ => ok cod,
+                    },
+                _ => err (TypeError.custom "Term.elim's motive must be a function"),
+            },
+        List.cons idx irest =>
+            match term_peel motive_typ {
+                Term.pi _b dom cod =>
+                    match type_check idx Term.hole scope local_types locals {
+                        err err_ => err err_,
+                        ok idx_tt =>
+                            match unify idx_tt.typ dom scope locals {
                                 err err_ => err err_,
                                 ok _ =>
-                                    match sort_level_of cod {
-                                        Option.none => err (TypeError.custom
-                                            "Term.elim's motive must be a function into a sort"),
-                                        Option.some _l =>
-                                            type_check_elim_minors e ind motive_tt.term sc_term
-                                                sc_typ expected_type scope local_types locals,
-                                    },
+                                    type_check_elim_motive_pis irest (beta_reduce cod idx_tt.term)
+                                        sc_typ scope local_types locals,
                             },
-                        _ => err (TypeError.custom "Term.elim's motive must be a function"),
                     },
+                _ => err (TypeError.custom "Term.elim's motive must be a function"),
             },
     }
 
@@ -1270,16 +1329,23 @@ def type_check_elim_motive (e : Elim) (ind : Inductive) (sc_term : Term) (sc_typ
 def type_check_elim_minors (e : Elim) (ind : Inductive) (motive_term : Term) (sc_term : Term)
     (sc_typ : Term) (expected_type : Term) (scope : Scope) (local_types : List Term)
     (locals : LocalScope) : Result TypeError TypedTerm :=
-    match type_check_elim_minors_go (inductive_constructors ind) e.minors ind sc_typ
-        motive_term scope local_types locals {
+    let actual_args : List Term := List.append e.params e.indices in
+    let num_params : I64 := List.length e.params in
+    match type_check_elim_minors_go (inductive_constructors ind) e.minors ind actual_args
+        num_params sc_typ motive_term scope local_types locals {
         err err_ => err err_,
         ok checked_minors =>
-            let elim_typ : Term := Term.app motive_term sc_term in
+            // The elim's own type: motive applied to EVERY index, then the
+            // (real, checked) scrutinee -- `motive y e` for `Eq.rec`, not
+            // just `motive e`. `rebuild_call` generalizes the plain
+            // `Term.app motive_term sc_term` this was before R4c.
+            let elim_typ : Term :=
+                rebuild_call motive_term (List.append e.indices (List.cons sc_term List.empty)) in
             match unify elim_typ expected_type scope locals {
                 err err_ => err err_,
                 ok unified =>
                     ok (mk_typed
-                        (Term.elim (Elim.mk e.inductive e.levels e.params motive_term checked_minors sc_term))
+                        (Term.elim { e with motive := motive_term, minors := checked_minors, scrutinee := sc_term })
                         unified),
             },
     }
@@ -1292,8 +1358,8 @@ def type_check_elim_minors (e : Elim) (ind : Inductive) (motive_term : Term) (sc
 /// Inductive`, `ind` here is always resolved (R4's caller already erred
 /// out if it wasn't).
 def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Term) (ind : Inductive)
-    (sc_typ : Term) (motive_term : Term) (scope : Scope) (local_types : List Term)
-    (locals : LocalScope) : Result TypeError (List Term) :=
+    (actual_args : List Term) (num_params : I64) (sc_typ : Term) (motive_term : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Result TypeError (List Term) :=
     match ctors {
         List.empty =>
             match minors {
@@ -1306,12 +1372,12 @@ def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Te
                 List.empty => err (TypeError.custom
                     "Term.elim is missing a minor for a constructor"),
                 List.cons minor mrest =>
-                    match type_check_elim_minor ctor minor ind sc_typ motive_term scope
-                        local_types locals {
+                    match type_check_elim_minor ctor minor ind actual_args num_params sc_typ motive_term
+                        scope local_types locals {
                         err err_ => err err_,
                         ok checked_minor =>
-                            match type_check_elim_minors_go crest mrest ind sc_typ motive_term
-                                scope local_types locals {
+                            match type_check_elim_minors_go crest mrest ind actual_args num_params
+                                sc_typ motive_term scope local_types locals {
                                 err err_ => err err_,
                                 ok checked_rest => ok (List.cons checked_minor checked_rest),
                             },
@@ -1338,17 +1404,101 @@ def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Te
 /// not reordering `type_check`'s call, only misaligning it against this
 /// def's own signature).
 #[terminating]
-def type_check_elim_minor (ctor : InductConstructor) (minor : Term) (ind : Inductive) (sc_typ : Term)
+def type_check_elim_minor (ctor : InductConstructor) (minor : Term) (ind : Inductive)
+    (actual_args : List Term) (num_params : I64) (sc_typ : Term)
     (motive_term : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope)
     : Result TypeError Term :=
     let field_types : List Term := substitute_inductive_type_params ind sc_typ (types_from_params ctor.params) in
     let n : I64 := List.length field_types in
     let ctor_app : Term := rebuild_call (free_var_ref ctor.name) (elim_field_vars field_types (n - 1)) in
     let shifted_motive : Term := term_shift n motive_term in
-    let expected_minor_typ : Term := build_elim_minor_pi_chain field_types (Term.app shifted_motive ctor_app) in
+    // R4c: this constructor's OWN index value(s), not the caller's generic
+    // `indices` -- `refl`'s own minor is checked against `motive a
+    // (refl)`, not `motive y (refl)`, the same way an ordinary dependent
+    // pattern-match arm's expected type uses THAT branch's own refined
+    // index, not the scrutinee's pre-refinement one. `n`-shifted for the
+    // same reason `shifted_motive`/`ctor_app` already are: these values
+    // are built from OUTER-context data now sitting under `n` new binders
+    // the Pi-chain just introduced.
+    let ctor_indices : List Term := terms_shift n (ctor_index_values ind actual_args num_params ctor) in
+    let expected_minor_typ : Term :=
+        build_elim_minor_pi_chain field_types
+            (rebuild_call shifted_motive (List.append ctor_indices (List.cons ctor_app List.empty))) in
     match type_check minor expected_minor_typ scope local_types locals {
         err err_ => err err_,
         ok minor_tt => ok minor_tt.term,
+    }
+
+/// This constructor's own concrete index value(s) (R4c) -- substitute the
+/// inductive's own declared params into THIS ctor's own declared return
+/// type (`ctor.typ`, which the parser keeps verbatim for an explicitly
+/// annotated constructor like `refl : Eq A a a` -- confirmed directly,
+/// not assumed, see the R4c reconnaissance in `core-term-
+/// simplification.md`), using the SAME actual-argument list (`e.params ++
+/// e.indices`) that instantiates the whole `Elim`, then read off
+/// everything in the result's own spine PAST the `params` portion. Pure
+/// by-name substitution, reusing `substitute_inductive_type_params`'s own
+/// established technique (generalized from a `List Term` of field types
+/// to one return-type term) -- no unification, no arithmetic, which is
+/// exactly the scope line that reconnaissance draws: this only works when
+/// a constructor's own return type specializes an index via an
+/// ALREADY-BOUND name (`Eq.refl`'s `a`), never an expression depending on
+/// that SAME constructor's own fields (`Vec`'s `cons : ... -> Vec A
+/// (n+1)`, out of scope, same unaddressed gap `implementations/field-
+/// pattern-type-args-not-substituted.md` already names).
+def ctor_index_values (ind : Inductive) (actual_args : List Term) (num_params : I64)
+    (ctor : InductConstructor) : List Term :=
+    let substituted : Term := substitute_inductive_params_into ind.params actual_args ctor.typ in
+    match flatten_call_spine substituted {
+        CallSpine.mk _head args => drop_n num_params args,
+    }
+
+/// Substitute the inductive's own declared params into ONE term (`ctor.
+/// typ`), by name -- the single-term twin of `substitute_inductive_type_
+/// params_go`'s own `List Term` walk, needed because a constructor's
+/// return type is one term, not a field-type list. `p.name` by dot
+/// access, not `Param.mk pname _ _ _ _` positionally -- the style
+/// ratchet's `wide_positional_pattern_violation` counter flags a wide
+/// positional match against a NAMED-field struct like `Param`, even
+/// though `substitute_inductive_type_params_go` (just below) already does
+/// this the positional way; copying that existing idiom into a brand-new
+/// function was confirmed (not assumed) to regress the ratchet, fixed by
+/// not repeating it rather than by excusing a second instance.
+#[terminating]
+def substitute_inductive_params_into (ind_params : List Param) (actual_args : List Term) (t : Term) : Term :=
+    match ind_params {
+        List.cons p prest =>
+            match actual_args {
+                List.cons a arest =>
+                    substitute_inductive_params_into prest arest (name_subst_term p.name a t),
+                List.empty => t,
+            },
+        List.empty => t,
+    }
+
+/// Drop the first `n` elements of `xs` -- `std`'s own `List` carries no
+/// `drop` (confirmed: grepped the whole tree, the only `.drop` is
+/// `String.drop`), so this is a small hand-rolled twin, same convention
+/// `elim_field_vars`/`substitute_inductive_type_params_go` already use
+/// for a brand-new list op in this file.
+#[terminating]
+def drop_n (n : I64) (xs : List Term) : List Term :=
+    if I64.beq n 0 then xs
+    else match xs {
+        List.cons _ rest => drop_n (n - 1) rest,
+        List.empty => List.empty,
+    }
+
+/// `term_shift d` over every element of a list -- needed because a
+/// constructor's own computed index values (`ctor_index_values`) are
+/// built from OUTER-context data and must be re-scoped the same way
+/// `shifted_motive`/`ctor_app` already are once placed under the Pi-
+/// chain's `n` new field binders.
+#[terminating]
+def terms_shift (d : I64) (ts : List Term) : List Term :=
+    match ts {
+        List.empty => List.empty,
+        List.cons t rest => List.cons (term_shift d t) (terms_shift d rest),
     }
 
 /// `[var(n-1), var(n-2), ..., var(0)]` for `n = List.length field_types`
@@ -1404,7 +1554,7 @@ def elaborate_if_to_elim (bool_ind : Inductive) (cond : Term) (then_term : Term)
     let bool_typ : Term := named_type_ref "Bool" in
     let motive : Term := Term.lam binder_anon bool_typ (term_shift 1 result_typ) in
     let minors : List Term := List.cons then_term (List.cons else_term List.empty) in
-    Term.elim (Elim.mk bool_ind.name List.empty List.empty motive minors cond)
+    Term.elim (Elim.mk bool_ind.name List.empty List.empty List.empty motive minors cond)
 
 /// `match value_ { ... }` as an `Elim`, with a constant motive -- same
 /// non-dependent reproduction as `elaborate_if_to_elim` above,
@@ -1425,7 +1575,7 @@ def elaborate_match_to_elim (ind : Inductive) (scrutinee_typ : Term) (scrutinee_
     let motive : Term := Term.lam binder_anon scrutinee_typ (term_shift 1 result_typ) in
     let maybe_ind : Option Inductive := Option.some ind in
     let minors : List Term := build_elim_minors (inductive_constructors ind) checked_cases scrutinee_typ maybe_ind in
-    Term.elim (Elim.mk ind.name List.empty params motive minors scrutinee_term)
+    Term.elim (Elim.mk ind.name List.empty params List.empty motive minors scrutinee_term)
 
 /// One minor per constructor, in `ind`'s own DECLARATION order -- not
 /// `cases`' written order, which `missing_constructors_go` below already

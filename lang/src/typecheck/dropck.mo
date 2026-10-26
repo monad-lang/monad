@@ -239,7 +239,8 @@ def collect_drop_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         // `motive`/`params` are type positions, same skip as `pi`'s domain.
         Term.elim e =>
             match e {
-                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                { inductive := _, levels := _, params := _, indices := _,
+                  motive := _, minors := minors, scrutinee := scrutinee } =>
                     collect_drop_terms ctors borrows minors (collect_drop_term ctors borrows scrutinee acc),
             },
     }

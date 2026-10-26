@@ -12,7 +12,7 @@ use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::typecheck::diagnostic {type_error_message}
 use lib::typecheck::infer {
-  CalleeDomain, TypedTerm, derive_motive, elaborate_if_to_elim, elaborate_match_to_elim,
+  CalleeDomain, TypedTerm, ctor_index_values, derive_motive, elaborate_if_to_elim, elaborate_match_to_elim,
   empty_local_types, empty_locals,
   is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
   type_check_elim, type_check_match_case
@@ -1854,7 +1854,7 @@ def test_type_check_elim_bool_constant_motive_checks : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
-    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
         (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
     elim_result_ok (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
@@ -1864,7 +1864,7 @@ def test_type_check_elim_rejects_unknown_inductive : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
-    let e : Elim := Elim.mk bad_name List.empty List.empty motive
+    let e : Elim := Elim.mk bad_name List.empty List.empty List.empty motive
         (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
@@ -1876,7 +1876,7 @@ def test_type_check_elim_rejects_scrutinee_type_mismatch : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let local_types : List Term := List.cons (named_free_var "NotBool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
-    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
         (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
@@ -1888,7 +1888,7 @@ def test_type_check_elim_rejects_non_sort_motive : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole Term.hole in
-    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
         (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
@@ -1898,7 +1898,7 @@ def test_type_check_elim_rejects_too_few_minors : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
-    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
         (List.cons Term.hole List.empty) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
@@ -1908,7 +1908,7 @@ def test_type_check_elim_rejects_too_many_minors : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
-    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty motive
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
         (List.cons Term.hole (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
@@ -1949,7 +1949,7 @@ def square_minor_for_elim_tests : Term :=
 #[test]
 def test_type_check_elim_accepts_a_real_dependent_motive : Bool :=
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
-    let e : Elim := Elim.mk shape_name_for_elim_tests List.empty List.empty
+    let e : Elim := Elim.mk shape_name_for_elim_tests List.empty List.empty List.empty
         dependent_motive_for_elim_tests
         (List.cons circle_minor_for_elim_tests (List.cons square_minor_for_elim_tests List.empty))
         scrutinee in
@@ -2030,7 +2030,7 @@ def my_sigma_snd_minor : Term :=
 #[test]
 def test_derive_motive_lets_sigma_snd_shaped_elim_check : Bool :=
     let motive : Term := derive_motive 0 my_sigma_scrutinee_typ my_sigma_expected_type in
-    let e : Elim := Elim.mk (NamePath.mk [Identifier.id "MySigma"]) List.empty my_sigma_params
+    let e : Elim := Elim.mk (NamePath.mk [Identifier.id "MySigma"]) List.empty my_sigma_params List.empty
         motive (List.cons my_sigma_snd_minor List.empty) my_sigma_p in
     elim_result_ok (type_check_elim e Term.hole my_sigma_scope my_sigma_local_types empty_locals)
 
@@ -2055,3 +2055,141 @@ def test_derive_motive_lets_sigma_snd_shaped_elim_check : Bool :=
 /// `type_check_bound_var`/`type_check_app` to a real bidirectional check
 /// is its own, separately-scoped change with its own blast radius across
 /// the whole checker, not something R4b's own scope covers.
+
+// ─── R4c: index abstraction (core-term-simplification.md) ───────────────
+//
+// `Eq.rec`'s own shape (`init/src/prelude.mo`): a motive over BOTH the
+// index (`b`) and the scrutinee (`e`), `(b : A) -> Eq A a b -> Sort 1` --
+// one argument more than R4/R4b's own pins ever needed. `MyEq`/`P` mirror
+// the real `Eq`/`Bool`-style fixtures elsewhere in this file, built from
+// real parsed source (same `try_parse_decls` technique as R4b's
+// `MySigma`) so `MyEq.refl`'s own declared return type (`MyEq A a a`) is
+// the REAL, parser-kept term `ctor_index_values` reads, not a hand-
+// guessed one. `P` has TWO constructors (`p0`/`p1`), not one, so a
+// caller's own generic index (`p1`, standing for `Eq.rec`'s `b`) is
+// DIFFERENT from what `refl`'s own return type actually specializes it to
+// (`p0`, matching `a`) -- the one shape that actually exercises `ctor_
+// index_values` computing a PER-CONSTRUCTOR value rather than echoing the
+// caller's own `indices` back unchanged.
+def my_eq_mod_path : ModulePath := ModulePath.mk [Identifier.id "my_eq_r4c"]
+
+def my_eq_scope : Scope :=
+    let source : String :=
+        "type P { p0, p1 }\ntype Marker1 { m1 }\ntype Marker2 { m2 }\ndef Fam (x : P) : Type := match x { p0 => Marker1, p1 => Marker2 }\ntype MyEq (A : Type) (a : A) (b : A) { refl : MyEq A a a }" in
+    let sd : ScopeData := match try_parse_decls source {
+        Option.some decl_list => build_scope_from_decls my_eq_mod_path decl_list,
+        Option.none => build_scope_from_decls my_eq_mod_path List.empty,
+    } in
+    {
+        module_id := my_eq_mod_path,
+        scope := sd,
+        parent := Option.none,
+        incomplete_match_ok := false,
+    }
+
+/// `[P, P.p0]` -- `MyEq`'s own first two type arguments (`A := P`, `a :=
+/// P.p0`), the "fixed" half of the instantiation.
+def my_eq_params : List Term :=
+    List.cons (named_free_var "P") (List.cons (named_free_var "P.p0") List.empty)
+
+/// `[P.p1]` -- the caller's own GENERIC index value (`Eq.rec`'s `b`),
+/// deliberately DIFFERENT from what `refl`'s own return type specializes
+/// to (`P.p0`) -- the whole point of this fixture.
+def my_eq_indices : List Term := List.cons (named_free_var "P.p1") List.empty
+
+/// `MyEq P p0 p1` -- the scrutinee's own claimed type, `params ++
+/// indices` applied to `MyEq`, matching how `e : Eq A a b` (`b` ARBITRARY,
+/// not forced to equal `a`) is `Eq.rec`'s own real parameter.
+def my_eq_scrutinee_typ : Term :=
+    Term.app (Term.app (Term.app (named_free_var "MyEq") (named_free_var "P"))
+        (named_free_var "P.p0")) (named_free_var "P.p1")
+
+def my_eq_local_types : List Term := List.cons my_eq_scrutinee_typ List.empty
+
+/// `e`, the scrutinee -- the def's own (only) bound parameter, index 0.
+def my_eq_e : Term := Term.var 0 DebugName.unnamed
+
+/// `(x : P) -> MyEq P p0 x -> Type` by inference -- `Fam x`'s own result
+/// type (`Type`) is what makes the motive's CODOMAIN a sort once both
+/// `Pi`s are peeled; `Fam x` itself (the BODY) is what makes each minor's
+/// expected type depend on the INDEX the checker computes for that
+/// constructor, which is the thing under test.
+def my_eq_motive : Term :=
+    Term.lam binder_anon (named_free_var "P")
+        (Term.lam binder_anon my_eq_scrutinee_typ_at_x (Term.app (named_free_var "Fam") (Term.var 1 DebugName.unnamed)))
+
+/// `MyEq P p0 x`, where `x` is the just-introduced index binder (de Bruijn
+/// 0 at this position, under the motive's own first `Pi`) -- the
+/// scrutinee-Pi's own domain, generalizing `my_eq_scrutinee_typ`'s fixed
+/// `p1` to the bound `x`.
+def my_eq_scrutinee_typ_at_x : Term :=
+    Term.app (Term.app (Term.app (named_free_var "MyEq") (named_free_var "P"))
+        (named_free_var "P.p0")) (Term.var 0 DebugName.unnamed)
+
+/// `refl`'s own minor: zero fields, so its body is checked DIRECTLY
+/// (no lambda chain) against `motive <refl's own computed index> (refl)`,
+/// intended as `Fam P.p0 = Marker1` (the correct computation) vs `Fam
+/// P.p1 = Marker2` (the caller's generic index, wrongly reused).
+///
+/// **This pin alone cannot mutation-discriminate the two -- confirmed
+/// directly, not assumed.** Mutating `ctor_index_values` to just echo the
+/// caller's generic indices back (`drop_n num_params actual_args`,
+/// skipping `ctor.typ` entirely) makes this SAME pin still pass with
+/// EITHER `Marker1` or `Marker2` as the minor. Root cause, found by
+/// tracing it rather than guessing: `type_check_free_var` (`infer.mo`),
+/// like `type_check_bound_var` (R4b's own finding 5), does not `unify`
+/// the resolved name's real type against the `expected_type` it is
+/// handed for an ordinary (non-constrained) reference like `Marker1` --
+/// so a `Term.var` reference of EITHER kind, bound or free, passes
+/// against any application-shaped expected type a minor's own tail
+/// position hands it. This generalizes R4b's finding 5 from "bound
+/// variables" to "`Term.var` in general." The real mutation-checked
+/// negative control is `test_ctor_index_values_computes_refl_own_
+/// specialization` below, which inspects `ctor_index_values`'s OWN
+/// output directly rather than routing through this unchecked path --
+/// confirmed BY mutating `ctor_index_values` the same way and rerunning:
+/// that pin fails, this one doesn't. Kept anyway as the real plumbing/
+/// capstone proof (the whole `Eq.rec`-shaped `Elim` -- motive, two
+/// index Pis, the one minor -- does check end to end with a CORRECT
+/// answer), exactly how R4b's own integration pin is kept for the same
+/// reason.
+def my_eq_refl_minor : Term := named_free_var "Marker1"
+
+#[test]
+def test_type_check_elim_computes_per_constructor_index_not_the_callers_generic_one : Bool :=
+    let e : Elim := Elim.mk (NamePath.mk [Identifier.id "MyEq"]) List.empty my_eq_params my_eq_indices
+        my_eq_motive (List.cons my_eq_refl_minor List.empty) my_eq_e in
+    elim_result_ok (type_check_elim e Term.hole my_eq_scope my_eq_local_types empty_locals)
+
+/// The REAL mutation-checked negative control (see the doc comment
+/// above) -- a direct unit pin on `ctor_index_values` itself: resolves
+/// `MyEq`'s real `refl` constructor from `my_eq_scope` and confirms its
+/// own computed index is `P.p0`, not the caller's generic `P.p1`
+/// (`my_eq_indices`) and not `Term.hole`/anything else that could pass by
+/// accident.
+def refl_ctor_of (ind : Inductive) : Option InductConstructor :=
+    match ind.constructors {
+        List.cons refl_ctor rest =>
+            if List.is_empty rest then Option.some refl_ctor else Option.none,
+        List.empty => Option.none,
+    }
+
+def only_index_is_p0 (vals : List Term) : Bool :=
+    match vals {
+        List.cons only rest =>
+            if List.is_empty rest then term_is_named_var only "P.p0" else false,
+        List.empty => false,
+    }
+
+#[test]
+def test_ctor_index_values_computes_refl_own_specialization : Bool :=
+    match scope_find_inductive (NamePath.mk [Identifier.id "MyEq"]) my_eq_scope {
+        Result.err _ => false,
+        Result.ok ind =>
+            match refl_ctor_of ind {
+                Option.none => false,
+                Option.some refl_ctor =>
+                    let actual_args : List Term := List.append my_eq_params my_eq_indices in
+                    only_index_is_p0 (ctor_index_values ind actual_args (List.length my_eq_params) refl_ctor),
+            },
+    }

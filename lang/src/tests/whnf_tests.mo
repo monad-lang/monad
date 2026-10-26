@@ -563,7 +563,7 @@ def test_whnf_a_malformed_arity_does_not_reduce : Bool :=
 def elim_mk (inductive_name : String) (minors : List Term) (scrutinee : Term) : Term :=
     Term.elim (Elim.mk
         (NamePath.mk (List.cons (Identifier.id inductive_name) List.empty))
-        List.empty List.empty Term.hole minors scrutinee)
+        List.empty List.empty List.empty Term.hole minors scrutinee)
 
 #[test]
 def test_whnf_elim_iota_fires_first_minor : Bool :=

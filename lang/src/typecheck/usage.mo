@@ -112,7 +112,8 @@ def uses_of (target : I64) (t : Term) : I64 :=
         // domain.
         Term.elim e =>
             match e {
-                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                { inductive := _, levels := _, params := _, indices := _,
+                  motive := _, minors := minors, scrutinee := scrutinee } =>
                     uses_of target scrutinee + uses_of_minors target minors,
             },
     }
@@ -527,7 +528,8 @@ def borrow_aware_at (borrows : HashMap String Bool) (borrowed_here : Bool) (targ
         // `borrowed_here`), and exactly one does, so MAX across them.
         Term.elim e =>
             match e {
-                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                { inductive := _, levels := _, params := _, indices := _,
+                  motive := _, minors := minors, scrutinee := scrutinee } =>
                     borrow_aware_at borrows false target scrutinee
                         + borrow_aware_minors borrows borrowed_here target minors,
             },
@@ -670,7 +672,8 @@ def owning_at (ctors : HashMap String Bool) (borrows : HashMap String Bool) (ctx
         // does, so MAX across them.
         Term.elim e =>
             match e {
-                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                { inductive := _, levels := _, params := _, indices := _,
+                  motive := _, minors := minors, scrutinee := scrutinee } =>
                     owning_at ctors borrows UsePos.up_scrutinee target scrutinee
                         + owning_at_minors ctors borrows ctx target minors,
             },
@@ -919,7 +922,8 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
         // `List Term`, which `minors` is.
         Term.elim e =>
             match e {
-                { inductive := _, levels := _, params := _, motive := _, minors := minors, scrutinee := scrutinee } =>
+                { inductive := _, levels := _, params := _, indices := _,
+                  motive := _, minors := minors, scrutinee := scrutinee } =>
                     collect_uses_terms ctors borrows minors (collect_uses_term ctors borrows scrutinee acc),
             },
     }

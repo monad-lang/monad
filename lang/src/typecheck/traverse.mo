@@ -71,6 +71,7 @@ def term_map_children (f : Term -> Term) (t : Term) : Term :=
 def elim_map_children (f : Term -> Term) (e : Elim) : Elim :=
     { e with
       params := terms_map_children f e.params,
+      indices := terms_map_children f e.indices,
       motive := f e.motive,
       minors := terms_map_children f e.minors,
       scrutinee := f e.scrutinee }
@@ -205,6 +206,7 @@ def term_map_children_at_depth (f : I64 -> Term -> Term) (t : Term) : Term :=
 def elim_map_children_at_depth (f : I64 -> Term -> Term) (e : Elim) : Elim :=
     { e with
       params := terms_map_children (f 0) e.params,
+      indices := terms_map_children (f 0) e.indices,
       motive := f 0 e.motive,
       minors := terms_map_children (f 0) e.minors,
       scrutinee := f 0 e.scrutinee }
@@ -270,7 +272,8 @@ def cubical_children (c : Cubical) : List Term := c.args
 /// no counterpart for (an un-elaborated `match` carries no explicit
 /// motive or inductive parameters yet; `Elim` does).
 def elim_children (e : Elim) : List Term :=
-    List.append e.params (List.cons e.motive (List.append e.minors (List.singleton e.scrutinee)))
+    List.append e.params
+        (List.append e.indices (List.cons e.motive (List.append e.minors (List.singleton e.scrutinee))))
 
 def literal_children (l : Literal) : List Term :=
     match l {

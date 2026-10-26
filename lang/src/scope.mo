@@ -2414,19 +2414,21 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
         Term.cubical c =>
             let rewritten : List Term := resolve_open_alias_terms_scoped names bound c.args in
             Term.cubical { c with args := rewritten },
-        // `params`/`motive`/`minors`/`scrutinee` are all rewritten under
-        // the SAME `bound` -- none of them is where a new name enters
-        // scope relative to this walk (a minor's own binders are `Term.lam`
-        // nodes inside it, already handled by the `lam` arm above when
-        // this recurses in).
+        // `params`/`indices`/`motive`/`minors`/`scrutinee` are all
+        // rewritten under the SAME `bound` -- none of them is where a new
+        // name enters scope relative to this walk (a minor's own binders
+        // are `Term.lam` nodes inside it, already handled by the `lam` arm
+        // above when this recurses in).
         Term.elim e =>
             let rewritten_params : List Term := resolve_open_alias_terms_scoped names bound e.params in
+            let rewritten_indices : List Term := resolve_open_alias_terms_scoped names bound e.indices in
             let rewritten_motive : Term := resolve_open_alias_term_scoped names bound e.motive in
             let rewritten_minors : List Term := resolve_open_alias_terms_scoped names bound e.minors in
             let rewritten_scrutinee : Term := resolve_open_alias_term_scoped names bound e.scrutinee in
             Term.elim
                 { e with
                   params := rewritten_params,
+                  indices := rewritten_indices,
                   motive := rewritten_motive,
                   minors := rewritten_minors,
                   scrutinee := rewritten_scrutinee },
