@@ -125,7 +125,9 @@ def precheck_of (mode : Mode) (grants : Option (Ref (List PermGrant))) (root : O
     return r
 }
 
-/// A repo grant lets an in-repo write through without a prompt...
+/// A repo grant lets an in-repo write through without a prompt -- and
+/// with EXACTLY `once`: a deny here would otherwise pass a test that only
+/// checks for "some decision".
 #[test]
 def test_precheck_allows_a_granted_repo_write : IO Bool := do {
     let empty_grants : List PermGrant := List.empty;
@@ -133,7 +135,24 @@ def test_precheck_allows_a_granted_repo_write : IO Bool := do {
     let g : PermGrant := { cap := Capability.write, scope := PermScope.repo };
     let _ <- Permissions.add (Option.some r) g;
     let res <- precheck_of Mode.manual (Option.some r) (Option.some "/repo") (write_pick "src/a.mo");
-    return (match res { Option.some _ => true, Option.none => false })
+    return (match res {
+        Option.some ap => match ap { Approval.once => true, _ => false },
+        Option.none => false,
+    })
+}
+
+/// An anywhere grant matches too, and also answers `once`.
+#[test]
+def test_precheck_allows_a_granted_anywhere_write : IO Bool := do {
+    let empty_grants : List PermGrant := List.empty;
+    let r <- Ref.new empty_grants;
+    let g : PermGrant := { cap := Capability.write, scope := PermScope.anywhere };
+    let _ <- Permissions.add (Option.some r) g;
+    let res <- precheck_of Mode.manual (Option.some r) (Option.some "/repo") (write_pick "/tmp/a.mo");
+    return (match res {
+        Option.some ap => match ap { Approval.once => true, _ => false },
+        Option.none => false,
+    })
 }
 
 /// ...but not a write outside the root: that still asks.
