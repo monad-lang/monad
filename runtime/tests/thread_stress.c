@@ -23,7 +23,9 @@
  *     and a fiber whose thread could not be created is `err 2` (forced
  *     with a zero RLIMIT_NPROC, which root ignores; then it is skipped);
  *   * cooperative cancellation -- a fiber cancelled while it sleeps must
- *     not run the continuation bound after the sleep.
+ *     not run the continuation bound after the sleep;
+ *   * channels -- a take parks until a put arrives, a put parks while the
+ *     channel is full, and try_take probes without blocking.
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -62,6 +64,10 @@ void* monad_await_fiber(void* handle);
 void* monad_poll_fiber(void* handle);
 void* monad_io_pure(int64_t a);
 int64_t monad_io_bind(int64_t io_val, int64_t f);
+void* monad_channel_new(void);
+void* monad_channel_put(void* handle, int64_t value);
+int64_t monad_channel_take(void* handle);
+void* monad_channel_try_take(void* handle);
 
 /* The runtime references codegen's entry point; nothing calls it here. */
 void* main_monad(void* args) {
@@ -434,6 +440,83 @@ static void check_cooperative_cancel(void) {
     }
 }
 
+/* Channels: the two blocking sides, each woken by a real second thread. */
+typedef struct {
+    void* channel;
+    int64_t value;
+} channel_arg;
+
+static void* channel_put_later(void* arg) {
+    channel_arg* a = (channel_arg*)arg;
+    struct timespec nap = {0, 20 * 1000000};
+    nanosleep(&nap, NULL);
+    monad_channel_put(a->channel, a->value);
+    return NULL;
+}
+
+static void* channel_take_later(void* arg) {
+    channel_arg* a = (channel_arg*)arg;
+    struct timespec nap = {0, 20 * 1000000};
+    nanosleep(&nap, NULL);
+    a->value = monad_channel_take(a->channel);
+    return NULL;
+}
+
+static void check_channels(void) {
+    void* ch = monad_channel_new();
+    Con* none = (Con*)monad_channel_try_take(ch);
+    if (!none || none->tag != TAG_NONE) {
+        fprintf(stderr, "thread_stress: try_take of an empty channel was not none\n");
+        fail();
+    }
+
+    /* take parks until the other thread's put arrives. */
+    channel_arg a = {ch, 7};
+    pthread_t t;
+    if (pthread_create(&t, NULL, channel_put_later, &a) != 0) {
+        fprintf(stderr, "thread_stress: could not start the channel putter\n");
+        fail();
+        return;
+    }
+    if (monad_channel_take(ch) != 7) {
+        fprintf(stderr, "thread_stress: take did not receive the later put's value\n");
+        fail();
+    }
+    pthread_join(t, NULL);
+
+    /* put parks while full until the taker removes the value. */
+    monad_channel_put(ch, 1);
+    channel_arg b = {ch, 0};
+    if (pthread_create(&t, NULL, channel_take_later, &b) != 0) {
+        fprintf(stderr, "thread_stress: could not start the channel taker\n");
+        fail();
+        return;
+    }
+    monad_channel_put(ch, 2);
+    pthread_join(t, NULL);
+    if (b.value != 1) {
+        fprintf(stderr, "thread_stress: the parked taker saw %lld, expected 1\n",
+                (long long)b.value);
+        fail();
+    }
+    if (monad_channel_take(ch) != 2) {
+        fprintf(stderr, "thread_stress: the put after the taker did not store 2\n");
+        fail();
+    }
+
+    Con* drained = (Con*)monad_channel_try_take(ch);
+    if (!drained || drained->tag != TAG_NONE) {
+        fprintf(stderr, "thread_stress: try_take after draining was not none\n");
+        fail();
+    }
+    monad_channel_put(ch, 33);
+    Con* some = (Con*)monad_channel_try_take(ch);
+    if (!some || some->tag != TAG_SOME || (int64_t)(intptr_t)some->fields[0] != 33) {
+        fprintf(stderr, "thread_stress: try_take of a full channel was not some 33\n");
+        fail();
+    }
+}
+
 static void run(void* (*worker)(void*), int threads) {
     pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
@@ -465,6 +548,7 @@ int main(void) {
 #endif
     check_fiber_answers();
     check_cooperative_cancel();
+    check_channels();
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }

@@ -354,6 +354,10 @@ pub fn exec_native(
     "scope_new" => scope_new(natives),
     "scope_fork" => scope_fork(args, natives),
     "scope_drop" => scope_drop(args, natives),
+    "channel_new" => channel_new(natives),
+    "channel_put" => channel_put(args, natives),
+    "channel_take" => channel_take(args, natives),
+    "channel_try_take" => channel_try_take(args, natives),
     "process_id" => process_id(),
     "build_commit" => build_commit(),
     // `Ptr.null : Ptr` (init/prelude.mo) — the NULL pointer, for C
@@ -3117,7 +3121,7 @@ fn extract_handle_id(v: &Value) -> Result<u64, CoreEvalError> {
   match v {
     Value::Lit(IrLit::Num(n, _)) => Ok(*n as u64),
     other => Err(CoreEvalError::NativeArgError(format!(
-      "expected an opaque fiber/scope handle, got {other:?}"
+      "expected an opaque fiber/scope/channel handle, got {other:?}"
     ))),
   }
 }
@@ -3349,6 +3353,72 @@ fn scope_drop(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
     crate::runtime::global::with::<FiberHandle, _>(*fid, |h| h.fiber.cancel());
   }
   io_wrap(natives, unit_value())
+}
+
+/// A host channel: a one-slot cell in the handle table. The host has no
+/// concurrency (fibers are lazy thunks that run at await/poll), so a
+/// blocking `put` would deadlock the interpreter. The degraded contract:
+/// `put` stores into the slot, replacing a value that was never taken;
+/// `take` on an empty channel is a loud eval error, never a made-up value
+/// and never a hang. `tryTake` and a producer-then-await-then-take
+/// sequence behave the same as the compiled backend.
+struct HostChannel {
+  slot: std::sync::Mutex<Option<Value>>,
+}
+
+/// `channel_new : RawIO (Channel A)` (`std/concurrent/channel.mo`).
+fn channel_new(natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let id = crate::runtime::global::register(HostChannel {
+    slot: std::sync::Mutex::new(None),
+  });
+  raw_io_wrap(natives, handle_value(id))
+}
+
+/// `channel_put (c : Channel A) (v : A) : RawIO Unit` — see `HostChannel`.
+fn channel_put(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "channel_put needs 2 args".into(),
+    ));
+  }
+  let id = extract_handle_id(&args[0])?;
+  let value = args[1].clone();
+  crate::runtime::global::with_mut::<HostChannel, _>(id, |c| {
+    *c.slot.lock().unwrap() = Some(value);
+  })
+  .ok_or_else(|| CoreEvalError::NativeArgError(format!("channel handle {id} not found")))?;
+  raw_io_wrap(natives, unit_value())
+}
+
+/// `channel_take (c : Channel A) : RawIO A` — an empty channel is an eval
+/// error on the host (see `HostChannel`); the compiled runtime blocks.
+fn channel_take(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let c = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("channel_take needs 1 arg".into()))?;
+  let id = extract_handle_id(c)?;
+  let taken =
+    crate::runtime::global::with_mut::<HostChannel, _>(id, |c| c.slot.lock().unwrap().take())
+      .ok_or_else(|| CoreEvalError::NativeArgError(format!("channel handle {id} not found")))?;
+  match taken {
+    Some(value) => raw_io_wrap(natives, value),
+    None => Err(CoreEvalError::NativeArgError(
+      "Channel.take: the Rust host has no concurrency, so a blocking take on an empty channel cannot make progress"
+        .into(),
+    )),
+  }
+}
+
+/// `channel_try_take (c : Channel A) : RawIO (Option A)` — never blocks.
+fn channel_try_take(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let c = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("channel_try_take needs 1 arg".into()))?;
+  let id = extract_handle_id(c)?;
+  let taken =
+    crate::runtime::global::with_mut::<HostChannel, _>(id, |c| c.slot.lock().unwrap().take())
+      .ok_or_else(|| CoreEvalError::NativeArgError(format!("channel handle {id} not found")))?;
+  raw_io_wrap(natives, make_option(natives, taken)?)
 }
 
 #[cfg(test)]

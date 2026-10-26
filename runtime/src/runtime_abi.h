@@ -98,6 +98,7 @@ void monad_release(rt_word ptr);
  * cancellation exists. */
 #define MONAD_CANCELLED_SENTINEL INT64_MIN
 void monad_set_cancel_flag(int64_t* flag);
+int monad_fiber_cancelled(void);
 
 /* Codegen's entry point: `main` is renamed at emit time and takes one i64
    argument (the List String). */

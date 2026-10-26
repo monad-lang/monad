@@ -573,6 +573,15 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "scope_new" then Option.some (NativeWrapKind.io_passthrough "monad_scope_new")
             else if String.beq target "scope_fork" then Option.some (NativeWrapKind.io_passthrough "monad_scope_fork")
             else if String.beq target "scope_drop" then Option.some (NativeWrapKind.io_passthrough "monad_scope_drop")
+            // `std/concurrent/channel.mo` -- an MVar-style channel. All
+            // four are `RawIO` natives behind `.mo` wrappers: the runtime
+            // returns the raw handle/value/`Option` pointer and the
+            // backend adds one `RawIO.io`. `channel_put`'s result is the
+            // Unit constructor. Native targets only (no threads on wasm).
+            else if String.beq target "channel_new" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_new")
+            else if String.beq target "channel_put" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_put")
+            else if String.beq target "channel_take" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_take")
+            else if String.beq target "channel_try_take" then Option.some (NativeWrapKind.raw_io_passthrough "monad_channel_try_take")
             // The TCP family (`std/io.mo`'s `#[native "tcp_*"]` defs,
             // reached by `motes/moon`'s server and `motes/moose`'s
             // client). They are `RawIO` natives behind `.mo` wrappers, so
@@ -951,6 +960,15 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
     // `stream_read_line` (runtime.c): stream, bound and discard flag in;
     // a `Result`/`Option` pointer out.
     let d107 := mk_decl "monad_stream_read_line" ["i64", "i64", "i64"] "i64" in
+    // `std/concurrent/channel.mo` (platform_posix.c): the channel handle is
+    // one i64 word, `put`'s value another, and every result is i64 --
+    // `channel_put` returns the Unit constructor pointer, `channel_take`
+    // the value word, `channel_try_take` a real `Option` pointer. The
+    // `.mo` wrappers add `IO.mk`; `raw_io_passthrough` adds the `RawIO.io`.
+    let d113 := mk_decl "monad_channel_new" List.empty "i64" in
+    let d114 := mk_decl "monad_channel_put" ["i64", "i64"] "i64" in
+    let d115 := mk_decl "monad_channel_take" ["i64"] "i64" in
+    let d116 := mk_decl "monad_channel_try_take" ["i64"] "i64" in
     [d1, d2, d3, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
@@ -959,7 +977,7 @@ pub def runtime_declarations_for (kind : TargetKind) : List LLVMDeclaration :=
      d65, d66, d66a, d67, d72,
      d74, d76, d78, d79, d80, d81, d82, d83, d84, d85, d87,
      d88, d91, d92, d93, d94, d95, d96, d97, d98, d99, d99a, d99b, d100, d101, d102, d103,
-     d104, d105, d106, d107, d108, d109, d110, d111, d112]
+     d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116]
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.
@@ -976,7 +994,8 @@ pub type NativeAvailability {
 /// a compile error naming the native and the target.
 def wasm_os_only_natives : List String := [
     "fork_io", "await_fiber", "poll_fiber", "cancel_fiber", "scope_new", "scope_fork",
-    "scope_drop", "sleep_io", "exec_cmd", "process_id", "proc_spawn",
+    "scope_drop", "sleep_io", "channel_new", "channel_put", "channel_take",
+    "channel_try_take", "exec_cmd", "process_id", "proc_spawn",
     "proc_stream_fd", "proc_wait", "tcp_connect_timeout", "tcp_listen",
     "tcp_listen_on", "tcp_accept", "tcp_local_port", "file_exists", "is_dir", "list_dir",
     "get_env", "stream_open", "stream_poll", "stream_set_timeout", "term_ctl",
@@ -1026,6 +1045,10 @@ def test_wasm_gates_posix_only_natives : Bool :=
             NativeAvailability.available => false,
         }
         && match native_target_availability TargetKind.web "poll_fiber" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+        && match native_target_availability TargetKind.wasi "channel_take" {
             NativeAvailability.unavailable _ => true,
             NativeAvailability.available => false,
         }

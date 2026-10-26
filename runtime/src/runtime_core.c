@@ -39,6 +39,11 @@ typedef struct {
    its kind too; matching on a `Ref` is documented as unsupported, and the
    interpreter rejects it with "value is not a constructor". */
 #define MONAD_REF_TAG 21
+/* A channel (`std/src/concurrent/channel.mo`): an MVar whose value word is
+   GC-traced, with pthread mutex/condvar on native targets. 22 is the next
+   free slot after `MONAD_REF_TAG`. Like every handle, it has no Constructor
+   slot, so `monad_get_tag` names it; matching on a channel is unsupported. */
+#define MONAD_CHANNEL_TAG 22
 
 typedef struct {
     Header header;
@@ -348,7 +353,8 @@ static int64_t monad_get_tag_impl(rt_word ptr) {
     if (!ptr) return -1;
     Header* header = (Header*)RT_PTR(ptr);
     if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG
-        || header->tag == MONAD_BUF_TAG || header->tag == MONAD_REF_TAG) {
+        || header->tag == MONAD_BUF_TAG || header->tag == MONAD_REF_TAG
+        || header->tag == MONAD_CHANNEL_TAG) {
         return header->tag;
     }
     return ((Constructor*)RT_PTR(ptr))->tag;
@@ -478,6 +484,12 @@ void monad_set_cancel_flag(int64_t* flag) {
 static int monad_io_cancelled(void) {
     int64_t* flag = monad_cancel_flag;
     return flag != NULL && __atomic_load_n(flag, __ATOMIC_ACQUIRE) != 0;
+}
+
+/* For blocking natives (channels) that must give a cancelled fiber back
+   instead of parking it forever. Not part of the IR surface. */
+int monad_fiber_cancelled(void) {
+    return monad_io_cancelled();
 }
 
 /* monad_io_bind: RawIO.bind (a : RawIO A) (f : A -> RawIO B) : RawIO B --

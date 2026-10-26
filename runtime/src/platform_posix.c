@@ -395,6 +395,108 @@ void* monad_scope_drop(void* handle) {
     return alloc_constructor_impl(0, 0);
 }
 
+/* --- Channels (`std/src/concurrent/channel.mo`) ---------------------
+
+   An MVar: at most one value in flight. `put` parks while full and `take`
+   parks while empty, both on one condvar, so either side can wake the
+   other. Every blocked wait is a bounded `pthread_cond_timedwait` that
+   re-checks `monad_fiber_cancelled`: a fiber cancelled inside `put` or
+   `take` gives the lock back instead of parking forever, and the bind
+   that follows short-circuits on the same flag. The value word lives in a
+   GC-scanned block, so the collector traces whatever is in flight. */
+
+#define CHANNEL_WAIT_MS 50
+
+typedef struct {
+    Header header;
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    int64_t full;
+    int64_t value;
+} ChannelObj;
+
+static void channel_deadline(struct timespec* ts) {
+    ts->tv_sec = 0;
+    ts->tv_nsec = 0;
+    clock_gettime(CLOCK_REALTIME, ts);
+    ts->tv_nsec += CHANNEL_WAIT_MS * 1000000L;
+    if (ts->tv_nsec >= 1000000000L) {
+        ts->tv_sec += 1;
+        ts->tv_nsec -= 1000000000L;
+    }
+}
+
+static void channel_wait(ChannelObj* c) {
+    struct timespec ts;
+    channel_deadline(&ts);
+    pthread_cond_timedwait(&c->changed, &c->lock, &ts);
+}
+
+void* monad_channel_new(void) {
+    ChannelObj* c = (ChannelObj*)monad_alloc(sizeof(ChannelObj));
+    if (!c) return NULL;
+    c->header.tag = MONAD_CHANNEL_TAG;
+    pthread_mutex_init(&c->lock, NULL);
+    pthread_cond_init(&c->changed, NULL);
+    c->full = 0;
+    c->value = 0;
+    return c;
+}
+
+void* monad_channel_put(void* handle, int64_t value) {
+    ChannelObj* c = (ChannelObj*)handle;
+    if (c) {
+        pthread_mutex_lock(&c->lock);
+        while (c->full && !monad_fiber_cancelled()) channel_wait(c);
+        if (!monad_fiber_cancelled()) {
+            c->value = value;
+            c->full = 1;
+            pthread_cond_broadcast(&c->changed);
+        }
+        pthread_mutex_unlock(&c->lock);
+    }
+    return alloc_constructor_impl(0, 0);
+}
+
+int64_t monad_channel_take(void* handle) {
+    ChannelObj* c = (ChannelObj*)handle;
+    if (!c) return 0;
+    int64_t value = 0;
+    pthread_mutex_lock(&c->lock);
+    while (!c->full && !monad_fiber_cancelled()) channel_wait(c);
+    /* A cancelled fiber gives the wait up WITHOUT consuming a value that
+       arrived at the same moment: the flag wins. */
+    if (c->full && !monad_fiber_cancelled()) {
+        value = c->value;
+        c->full = 0;
+        pthread_cond_broadcast(&c->changed);
+    }
+    pthread_mutex_unlock(&c->lock);
+    return value;
+}
+
+void* monad_channel_try_take(void* handle) {
+    ChannelObj* c = (ChannelObj*)handle;
+    int64_t value = 0;
+    int64_t got = 0;
+    if (c) {
+        pthread_mutex_lock(&c->lock);
+        if (c->full) {
+            value = c->value;
+            c->full = 0;
+            got = 1;
+            pthread_cond_broadcast(&c->changed);
+        }
+        pthread_mutex_unlock(&c->lock);
+    }
+    if (got) {
+        Constructor* some = (Constructor*)alloc_constructor_impl(4, 1);
+        some->fields[0] = (void*)(intptr_t)value;
+        return some;
+    }
+    return alloc_constructor_impl(3, 0);
+}
+
 /* SIGPIPE back to its default action. `sigaction` rather than `signal`
    because the fork children below call this between `fork` and `exec`,
    where a multithreaded process may only use async-signal-safe calls. */
