@@ -842,4 +842,4 @@ def test_apply_deltas_default_cell_does_not_inherit_style : Bool :=
         CellDelta.set 0 0 (mk_styled_cell "a" bold),
         CellDelta.set 0 1 (mk_styled_cell "b" style_default)
     ] in
-    out == "\u{1b}[1;1H\u{1b}[0m\u{1b}[1ma\u{1b}[1;2H\u{1b}[0mb"
+    out == "\u{1b}[1;1H\u{1b}[0m\u{1b}[1ma\u{1b}[1;2H\u{1b}[0mb\u{1b}[0m"

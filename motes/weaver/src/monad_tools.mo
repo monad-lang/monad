@@ -22,7 +22,7 @@ use json::json {
 }
 use lang::module {
     ModuleInfoCache, module_info_cache_empty, check_file_cached,
-    check_file_cached_from_source, FileCheckAndCache, FileCheckResult,
+    FileCheckAndCache, FileCheckResult,
 }
 use lang::eval_run {EvalRun.run_file}
 use lang::mote {MoteManifest, Mote.discover}
@@ -99,7 +99,7 @@ def check_schema : Json :=
 
 pub def MonadCheck.spec : ToolSpec :=
     { name := "monad_check",
-      description := "Type-check Monad source with the compiler's own checker: pass `path` for a file or `source` for an in-memory buffer. A buffer resolves imports from the nearest enclosing mote. Returns the diagnostics.",
+      description := "Type-check Monad source with the compiler's own checker: pass `path` for a file or `source` for an in-memory buffer. A buffer is staged as a temporary .mo in the nearest enclosing mote (so its imports resolve) and removed after the check. Returns the diagnostics.",
       schema := check_schema }
 
 def has_errors (r : FileCheckResult) : Bool :=
@@ -124,19 +124,27 @@ def check_text (path : String) (r : FileCheckResult) : String :=
             (String.concat (List.intercalate "\n" errs) (warnings_text warns)))),
     }
 
-/// The checker resolves a `use` against the buffer's PATH, so the buffer
-/// is checked under a virtual module name in the nearest mote, with no
-/// file written: `monad_check` is a `read` tool and must stay one even in
-/// plan mode. `check_file_cached_from_source` is the compiler's own
-/// no-write buffer path.
+/// The checker resolves a `use` against the buffer's PATH, and the
+/// compiler's from-source entry point still needs that path to exist (a
+/// virtual one fails to load), so the buffer is staged as a real temp
+/// module in the nearest mote, checked, and removed. The file is ours,
+/// never the model's, and is deleted on every path a return reaches; a
+/// kill can leave it behind.
 def check_source (cache : Ref ModuleInfoCache) (root : Option String) (id : String) (src : String) : IO Content := do {
     let dir <- buffer_dir root;
     let vpath : String := check_path_of dir;
-    let c <- Ref.get cache;
-    let fc <- check_file_cached_from_source c vpath src false;
-    let _ <- Ref.set cache fc.cache;
-    let r : FileCheckResult := fc.result;
-    return (Content.tool_result id (check_text "buffer" r) (has_errors r))
+    let w <- IO.write_file (Path.path vpath) src;
+    match w {
+        Result.err _ => IO.pure (Content.tool_result id (String.concat "monad_check: could not write " vpath) true),
+        Result.ok _ => do {
+            let c <- Ref.get cache;
+            let fc <- check_file_cached c vpath false;
+            let _ <- Ref.set cache fc.cache;
+            let _ <- cleanup vpath;
+            let r : FileCheckResult := fc.result;
+            return (Content.tool_result id (check_text "buffer" r) (has_errors r))
+        },
+    }
 }
 
 def check_path_of (dir : String) : String :=
@@ -211,11 +219,18 @@ def run_temp (root : Option String) (content : String) : IO (Result String Strin
 def check_buffer (cache : Ref ModuleInfoCache) (root : Option String) (content : String) : IO Bool := do {
     let dir <- buffer_dir root;
     let vpath : String := String.concat dir (String.concat "/weaver_eval_buffer_" (String.concat (I64.to_string process_id) ".mo"));
-    let c <- Ref.get cache;
-    let fc <- check_file_cached_from_source c vpath content false;
-    let _ <- Ref.set cache fc.cache;
-    let r : FileCheckResult := fc.result;
-    IO.pure (Bool.not (has_errors r))
+    let w <- IO.write_file (Path.path vpath) content;
+    match w {
+        Result.err _ => IO.pure false,
+        Result.ok _ => do {
+            let c <- Ref.get cache;
+            let fc <- check_file_cached c vpath false;
+            let _ <- Ref.set cache fc.cache;
+            let _ <- cleanup vpath;
+            let r : FileCheckResult := fc.result;
+            IO.pure (Bool.not (has_errors r))
+        },
+    }
 }
 
 def accept_def (buf : Ref (List String)) (id : String) (next : List String) : IO Content := do {

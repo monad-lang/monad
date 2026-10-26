@@ -435,7 +435,7 @@ def test_enter_forks_the_turn : Bool :=
 def unused_placeholder : WeaverMsg := WeaverMsg.command_failed (WeaverError.config "unused")
 
 #[test]
-def test_enter_while_pending_is_refused : Bool :=
+def test_enter_while_pending_queues_the_line : Bool :=
     match TuiApp.update (model_of Mode.manual) (key_msg (Key.char "h")) {
         Pair.pair m1 _ =>
             match TuiApp.update m1 (key_msg Key.enter) {
@@ -443,10 +443,12 @@ def test_enter_while_pending_is_refused : Bool :=
                     match TuiApp.update m2 (key_msg (Key.char "i")) {
                         Pair.pair m3 _ =>
                             match TuiApp.update m3 (key_msg Key.enter) {
-                                // Refused: nothing appends, no echo, and
-                                // the typed text STAYS in the box (the
-                                // still-open edit survives the turn).
-                                Pair.pair m4 cmd => cmd_be cmd Cmd.none && m4.input.value == "i"
+                                // Queued, not refused: the box clears and
+                                // the line waits behind the running turn.
+                                Pair.pair m4 cmd =>
+                                    cmd_be cmd Cmd.none
+                                        && List.length m4.queued == 1
+                                        && String.is_empty m4.input.value
                             }
                     }
             }

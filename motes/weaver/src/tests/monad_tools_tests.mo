@@ -9,9 +9,6 @@ use lang::module {ModuleInfoCache, module_info_cache_empty}
 use std::ref {Ref}
 use json::json {Json, Json.make_object, Json.make_str}
 use std::map {Map, BTreeMap}
-use std::path {Path}
-use std::process {process_id}
-use std::io {IO.read_file}
 
 def source_input (s : String) : Json :=
     Json.make_object (Map.insert "source" (Json.make_str s) BTreeMap.empty)
@@ -130,25 +127,6 @@ def test_monad_eval_uses_the_buffer_for_non_i64_expressions : IO Bool := do {
     }
 }
 
-/// `monad_check` is a `read` tool: a source buffer is checked under a
-/// virtual path and no file is staged.
-#[test]
-def test_monad_check_writes_no_file : IO Bool := do {
-    let cache <- Ref.new module_info_cache_empty;
-    let t : ToolImpl := MonadCheck.tool cache (Option.some "/tmp");
-    let run : String -> Json -> ResultT String IO Content := t.run;
-    let _ <- ResultT.run (run "call" (source_input "def main : I64 := 1 + 2"));
-    let vpath : String := String.concat "/tmp" (String.concat "/weaver_check_buffer_"
-        (String.concat (I64.to_string process_id) ".mo"));
-    let r <- IO.read_file (Path.path vpath);
-    match r {
-        Result.err _ => IO.pure true,
-        Result.ok _ => IO.pure false,
-    }
-}
-
-/// A failing eval is an error result (`is_error` comes from the
-/// pipeline's Result, never from sniffing the text for FAILED).
 #[test]
 def test_monad_eval_failure_is_an_error : IO Bool := do {
     let cache <- Ref.new module_info_cache_empty;

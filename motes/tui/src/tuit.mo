@@ -44,7 +44,7 @@ use lib::core { empty_screen }
 use lib::render { apply_deltas, diff }
 use lib::types { Screen }
 use lib::terminal {
-    Terminal.enter_raw_mode, Terminal.leave_raw_mode, Terminal.leave_alt_screen_code,
+    Terminal.enter_raw_mode, Terminal.leave_raw_mode, Terminal.leave_alt_screen_code, Terminal.reset_style_code,
     Terminal.cursor_show_code, Terminal.poll, Terminal.size
 }
 
@@ -206,7 +206,7 @@ pub def TuiT.close [Monad M] : TuiT M Raw Closed Unit :=
 /// keeps its own copy only because that file has no `bind` to clash
 /// with.
 def tui_close_code : String :=
-    Terminal.leave_alt_screen_code ++ Terminal.cursor_show_code
+    Terminal.reset_style_code ++ Terminal.leave_alt_screen_code ++ Terminal.cursor_show_code
 
 def tui_close_go [Monad M] (t : Term M) : M Unit :=
     Monad.bind (Term.write t tui_close_code)
