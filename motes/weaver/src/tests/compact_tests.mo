@@ -86,3 +86,28 @@ def test_summary_prompt_carries_roles_and_instructions : Bool :=
     String.contains p "user: fix the build"
         && String.contains p "assistant: on it"
         && String.contains p "focus on the CI failure"
+
+#[partial]
+def pairs_go (i : I64) (n : I64) (acc : List Message) : List Message :=
+    if Bool.not (I64.lt i n)
+    then List.reverse acc
+    else
+        let u : Message := user_msg (String.concat "u" (I64.to_string i)) in
+        let a : Message := assistant_msg (String.concat "a" (I64.to_string i)) in
+        pairs_go (i + 1) n (List.cons a (List.cons u acc))
+
+/// A long session still splits at a user boundary, in one pass (the old
+/// split re-walked the list at every boundary -- quadratic exactly when
+/// compaction has to run).
+#[test]
+def test_keep_tail_scales_to_a_long_history : Bool :=
+    let history : List Message := pairs_go 0 1000 List.empty in
+    let tail : List Message := Compact.keep_tail history 400 in
+    let n : I64 := List.length tail in
+    Bool.and (I64.gt n 0) (I64.lt n (List.length history))
+
+/// The rendered summary prompt carries both messages with their roles.
+#[test]
+def test_summary_prompt_renders_roles : Bool :=
+    let p : String := Compact.summary_prompt [user_msg "first-ask", assistant_msg "first-answer"] "" in
+    Bool.and (String.contains p "user: first-ask") (String.contains p "assistant: first-answer")

@@ -12,8 +12,8 @@ use shuttle::message {Message, Usage, Turn}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::session {Session}
 use shuttle::provider {ProviderConfig, Provider.send, Provider.silent_emit}
-use shuttle::context {history_tokens, usage_add}
-use std::list {List.length}
+use shuttle::context {history_tokens, message_tokens, usage_add}
+use std::list {List.length, List.intercalate}
 use init::transformers {ResultT, ResultT.run}
 
 /// The estimated-token threshold; 0 (a zero window) disables autocompact.
@@ -48,34 +48,35 @@ def drop_messages (n : I64) (ms : List Message) : List Message :=
         List.cons _ rest => drop_messages (n - 1i64) rest,
     }
 
-#[partial]
-def message_at (i : I64) (ms : List Message) : Option Message :=
-    match ms {
-        List.empty => Option.none,
-        List.cons m rest => if i < 1i64 then Option.some m else message_at (i - 1i64) rest,
-    }
-
 def role_is_user (m : Message) : Bool :=
     match m { { role, .. } => match role { Role.user => true, _ => false } }
 
 /// The first USER-message boundary whose remaining tail fits the
 /// budget: a kept tail never begins with an orphan tool result (both
 /// wires reject that), and never begins mid tool_use/result pair.
+/// One pass, O(n): `seen` is the tokens before the current message, so
+/// the suffix's size is `total - seen`. The first version re-walked the
+/// list (`List.length`, `drop_messages`, `history_tokens`) at every user
+/// boundary -- quadratic in a long session, exactly when compaction has
+/// to run.
 #[partial]
-def find_split (history : List Message) (i : I64) (budget : I64) : I64 :=
-    if i > (List.length history) - 1i64 then 0i64 - 1i64
-    else match message_at i history {
-        Option.none => 0i64 - 1i64,
-        Option.some m =>
-            if Bool.and (role_is_user m) (Bool.not (I64.gt (history_tokens (drop_messages i history)) budget))
+def find_split_go (history : List Message) (total : I64) (i : I64) (seen : I64) (budget : I64) : I64 :=
+    match history {
+        List.empty => 0i64 - 1i64,
+        List.cons m rest =>
+            let suffix : I64 := total - seen in
+            if Bool.and (role_is_user m) (Bool.not (I64.gt suffix budget))
             then i
-            else find_split history (i + 1i64) budget,
+            else find_split_go rest total (i + 1i64) (seen + message_tokens m) budget,
     }
+
+def find_split (history : List Message) (budget : I64) : I64 :=
+    find_split_go history (history_tokens history) 0i64 0i64 budget
 
 /// The recent messages kept verbatim; empty when no user boundary fits
 /// (the summary is then the whole context).
 pub def Compact.keep_tail (history : List Message) (budget : I64) : List Message :=
-    let split : I64 := find_split history 0i64 budget in
+    let split : I64 := find_split history budget in
     if split < 0i64 then List.empty else drop_messages split history
 
 #[partial]
@@ -89,20 +90,28 @@ def render_content (c : Content) : String :=
         Content.thinking s _ => "",
     }
 
+/// Accumulate each part's text (with its trailing newline) and join in
+/// ONE pass: the old right-nested `part ++ rest` re-copied the whole
+/// remainder per message, which on a long session is quadratic memory --
+/// the compaction prompt is the biggest string weaver builds.
 #[partial]
-def render_contents (cs : List Content) : String :=
+def render_contents_go (cs : List Content) (acc : List String) : List String :=
     match cs {
-        List.empty => "",
+        List.empty => acc,
         List.cons c rest =>
             let part : String := render_content c in
-            if String.is_empty part then render_contents rest
-            else String.concat part (String.concat "\n" (render_contents rest)),
+            if String.is_empty part
+            then render_contents_go rest acc
+            else render_contents_go rest (List.cons (String.concat part "\n") acc),
     }
 
+def render_contents (cs : List Content) : String :=
+    String.concat_list (List.reverse (render_contents_go cs List.empty))
+
 #[partial]
-def render_history (ms : List Message) : String :=
+def render_msgs_go (ms : List Message) (acc : List String) : List String :=
     match ms {
-        List.empty => "",
+        List.empty => acc,
         List.cons m rest =>
             let label : String := match m.role {
                 Role.user => "user: ",
@@ -110,14 +119,19 @@ def render_history (ms : List Message) : String :=
                 Role.system_ => "system: ",
                 Role.tool => "tool: ",
             } in
-            String.concat label (String.concat (render_contents m.content) (String.concat "\n\n" (render_history rest))),
+            let part : String := String.concat label (render_contents m.content) in
+            render_msgs_go rest (List.cons part acc),
     }
+
+def render_history (ms : List Message) : String :=
+    List.intercalate "\n\n" (List.reverse (render_msgs_go ms List.empty))
 
 /// The summarization request: the transcript plus any user instructions.
 pub def Compact.summary_prompt (history : List Message) (instructions : String) : String :=
     let ask : String := "Summarize the session below so the assistant can continue it from your summary alone." in
     let extra : String := if String.is_empty instructions then "" else String.concat "\n\nThe user asks you to focus on: " (String.concat instructions "\n") in
-    String.concat ask (String.concat extra (String.concat "\n\n---\n\n" (render_history history)))
+    let parts : List String := [ask, extra, "\n\n---\n\n", render_history history] in
+    String.concat_list parts
 
 #[partial]
 def first_text (cs : List Content) : Result String String :=

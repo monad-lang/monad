@@ -21,13 +21,13 @@ use shuttle::gate {Pick, Approval, Gate, Capability}
 use shuttle::message {Message, Usage}
 use shuttle::context {usage_zero}
 use shuttle::message_types {Role, Content}
-use weaver::usage {Usage.delta}
+use weaver::usage {Usage.delta, UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use std::ref {Ref}
 use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, SettingRow,
-    SessionPage, Commands.session_page, Commands.turns_label,
+    SessionPage, Commands.session_page, Commands.turns_label, Commands.turn_context,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Decision}
@@ -298,10 +298,11 @@ def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta
             Pair.pair start block =>
                 let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                 let store : Option StoreState := m3.state.store in
-                let waiting : Bool := queued_waiting m3 in
-                match store {
-                    Option.none => if waiting then start_queued m3 else Pair.pair m3 Cmd.none,
-                    Option.some _ => Pair.pair { m3 with queued_ready := waiting } (persist_turn_cmd store run delta start block),
+                if Bool.not (queued_waiting m3)
+                then Pair.pair m3 (persist_turn_cmd store run delta start block)
+                else match store {
+                    Option.none => start_queued m3,
+                    Option.some _ => Pair.pair { m3 with queued_ready := true } (persist_turn_cmd store run delta start block),
                 },
         },
     }
@@ -319,10 +320,11 @@ def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiMod
                 then
                     let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                     let store : Option StoreState := m3.state.store in
-                    let waiting : Bool := queued_waiting m3 in
-                    match store {
-                        Option.none => if waiting then start_queued m3 else Pair.pair m3 repaint_cmd,
-                        Option.some _ => Pair.pair { m3 with queued_ready := waiting } (persist_output_cmd repaint_cmd store start block m3.state.run.session),
+                    if Bool.not (queued_waiting m3)
+                    then Pair.pair m3 (persist_output_cmd repaint_cmd store start block m3.state.run.session)
+                    else match store {
+                        Option.none => start_queued m3,
+                        Option.some _ => Pair.pair { m3 with queued_ready := true } (persist_output_cmd repaint_cmd store start block m3.state.run.session),
                     }
                 else
                     let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
@@ -1319,26 +1321,36 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             // The live row's baseline: the file carries cumulative spend,
             // and `live_base` is the submit-time total.
             write_usage st2.store st2.run.session.spent;
-            let r <- ResultT.run (drive_tui log gen st2 text);
+            // The live row reads the cumulative file; the tracker answers
+            // the one number autocompact needs -- the LAST call's prompt
+            // (the turn's summed delta overstates it per tool call).
+            let tracker <- UsageTracker.start st2.run.session.spent;
+            let live_seam : Usage -> IO Unit := usage_live log st2.store;
+            let on_u : Usage -> IO Unit := fn (u : Usage) => do {
+                let _ <- live_seam u;
+                UsageTracker.silent tracker u
+            };
+            let r <- ResultT.run (drive_tui log gen st2 text on_u);
+            let last <- UsageTracker.last tracker;
+            let last_context : I64 := match r {
+                Result.err _ => st2.last_context,
+                Result.ok run2 => Commands.turn_context st2.run.session.spent last run2,
+            };
             // A plan-mode turn's text is captured and persisted here, as
             // dumb mode does: `turn_result_of` must get it at the call,
             // or it returns a partial application (the checker does not
             // reject an under-applied constructor/def in value position).
             let plan : Option String := Commands.plan_after_turn st2 before r;
             let _ <- persist_plan st2.store plan;
-            return (turn_result_of st2 before note r plan)
+            return (turn_result_of st2 before note r last_context plan)
         }
     }
 }
 
-def turn_result_of (st : WeaverState) (before : I64) (note : Option String) (r : Result WeaverError RunState) (plan : Option String) : WeaverMsg :=
+def turn_result_of (st : WeaverState) (before : I64) (note : Option String) (r : Result WeaverError RunState) (last_context : I64) (plan : Option String) : WeaverMsg :=
     match r {
         Result.err e => WeaverMsg.turn_failed st.run e,
         Result.ok run2 =>
-            // The turn's billed delta bounds the next request's size; the
-            // status line takes max(this, Compact.estimate).
-            let turn_usage : Usage := Usage.delta run2.session.spent st.run.session.spent in
-            let last_context : I64 := turn_usage.input_tokens in
             let delta : List Message := drop_n_messages before run2.session.history in
             let render : List Message := drop_n_messages 1 delta in
             let lines : List TLine := transcript_lines_of_messages render in
@@ -1360,11 +1372,11 @@ def error_line (e : WeaverError) : TLine :=
 /// screen mid-frame -- the recorded UI-repair finding). Drive the loop
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
-def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : ResultT WeaverError IO RunState := do {
+def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) : ResultT WeaverError IO RunState := do {
     let stop : Unit -> IO Bool := Stop.predicate st.store gen;
     let with_task : RunState := { (st.run) with reg := ToolRegistry.register (Subagent.task_tool st.run.session.config log st.store stop) st.run.reg };
     let gated : RunState := { with_task with gate := Gate.weaver_tui st.mode st.colors st.store st.grants st.workspace_root,
-        emit := progress_live log st.store, on_usage := usage_live log st.store,
+        emit := progress_live log st.store, on_usage := on_usage,
         should_stop := stop, stopped := false };
     let ready : RunState := append_user gated text;
     drive_loop ready

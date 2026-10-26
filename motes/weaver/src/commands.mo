@@ -21,7 +21,8 @@
 use shuttle::provider {ProviderConfig}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session, Session.save, Session.load}
-use shuttle::message {Message}
+use shuttle::message {Message, Usage}
+use weaver::usage {Usage.delta}
 use shuttle::message_types {Role, Content}
 use shuttle::agent {RunState}
 use shuttle::context {usage_zero}
@@ -322,6 +323,15 @@ pub def Commands.plan_after_turn (st : WeaverState) (before : I64) (r : Result W
         },
         _ => Option.none,
     }
+
+/// The turn's LAST model call's prompt size -- the number the next
+/// request's size is judged by. The turn's summed delta is only a
+/// fallback: a tool-using turn re-sends the whole prompt per call, so the
+/// sum overstates the context several-fold and made autocompact fire (and
+/// the status bar read) far too early.
+pub def Commands.turn_context (spent_before : Usage) (last : Usage) (run2 : RunState) : I64 :=
+    let d : Usage := Usage.delta run2.session.spent spent_before in
+    if last.input_tokens < 1 then d.input_tokens else last.input_tokens
 
 /// The next request's likely prompt size: the larger of the byte
 /// heuristic and the real size of the last model call. The heuristic

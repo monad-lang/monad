@@ -19,7 +19,7 @@ use shuttle::message_types {Role, Content}
 use shuttle::session {Session}
 use weaver::commands {
     WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact,
-    Commands.plan_after_turn, Commands.set_plan,
+    Commands.plan_after_turn, Commands.set_plan, Commands.turn_context,
     Commands.context_used, Commands.context_percent,
 }
 use weaver::gate {Gate.weaver}
@@ -30,7 +30,7 @@ use weaver::theme {Theme.tint, theme_status_code, class_code, LineClass}
 use log::logger {Logger}
 use shuttle::registry {ToolRegistry}
 use weaver::subagent {Subagent.task_tool}
-use weaver::usage {Usage.delta}
+use weaver::usage {UsageTracker.start, UsageTracker.silent, UsageTracker.last}
 use weaver::format {format_tokens}
 use init::transformers {ResultT}
 use std::ref {Ref}
@@ -157,8 +157,14 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
         Pair.pair st2 note => do {
             let _ <- write_note write note;
             let before : I64 := msg_len st2.run.session.history;
-            let r <- ResultT.run (drive read write st2 text);
-            let st3 : WeaverState := set_last_context_from st2 r;
+            // The next request's size is the LAST call's prompt, not the
+            // turn's summed billed input (a tool-using turn re-sends the
+            // prompt per call); the tracker owns that distinction.
+            let tracker <- UsageTracker.start st2.run.session.spent;
+            let st_t : WeaverState := set_on_usage st2 (UsageTracker.silent tracker);
+            let r <- ResultT.run (drive read write st_t text);
+            let last <- UsageTracker.last tracker;
+            let st3 : WeaverState := set_last_context_from st2 last r;
             // A plan-mode turn's text is captured and persisted; other
             // turns leave the stored plan untouched.
             let plan : Option String := Commands.plan_after_turn st2 before r;
@@ -172,16 +178,23 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
     }
 }
 
-/// The turn's billed input delta, an upper bound on the next request's
-/// prompt size (the status line takes max(this, Compact.estimate)).
-def set_last_context_from (st : WeaverState) (r : Result WeaverError RunState) : WeaverState :=
+/// The turn's last model call's prompt size (the status line takes
+/// max(this, Compact.estimate) and autocompact compares against it).
+def set_last_context_from (st : WeaverState) (last : Usage) (r : Result WeaverError RunState) : WeaverState :=
     match r {
         Result.err _ => st,
         Result.ok run2 =>
-            let d : Usage := Usage.delta run2.session.spent st.run.session.spent in
-            let st2 : WeaverState := { st with last_context := d.input_tokens } in
+            let lc : I64 := Commands.turn_context st.run.session.spent last run2 in
+            let st2 : WeaverState := { st with last_context := lc } in
             st2,
     }
+
+/// The turn's `on_usage` seam, without losing the one already installed.
+def set_on_usage (st : WeaverState) (f : Usage -> IO Unit) : WeaverState :=
+    let base : RunState := st.run in
+    let run2 : RunState := { base with on_usage := f } in
+    let st2 : WeaverState := { st with run := run2 } in
+    st2
 
 /// Persist a plan-mode turn's text for later `/plan` displays. Silent
 /// on failure: the in-memory plan and the history remain the fallback.

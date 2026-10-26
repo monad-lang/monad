@@ -10,7 +10,7 @@ use init::transformers {ResultT}
 use shuttle::agent {RunState, silent_sleep, silent_usage, silent_stop}
 use shuttle::context {usage_zero}
 use shuttle::gate {Capability, Gate}
-use shuttle::message {Message}
+use shuttle::message {Message, Usage}
 use shuttle::message_types {Content, Role}
 use shuttle::provider {ProviderConfig, Wire}
 use shuttle::registry {ToolRegistry}
@@ -19,7 +19,7 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
-    Commands.turns_label,
+    Commands.turns_label, Commands.turn_context,
 }
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
@@ -1018,3 +1018,26 @@ def test_resume_resets_last_context : IO Bool := do {
         }
     }
 }
+
+// ── the turn's context size ────────────────────────────────────────────
+
+/// A tool-using turn's summed billed input is several prompts; the next
+/// request's size is the LAST call's. Using the sum made autocompact fire
+/// (and the status bar read) far too early.
+#[test]
+def test_turn_context_uses_the_last_call : Bool :=
+    let before : Usage := { input_tokens := 100, output_tokens := 0, cached_tokens := 0 } in
+    let after : Usage := { input_tokens := 700, output_tokens := 30, cached_tokens := 0 } in
+    let last : Usage := { input_tokens := 150, output_tokens := 5, cached_tokens := 0 } in
+    let sess : Session := { session_of with spent := after } in
+    let run2 : RunState := { run_of with session := sess } in
+    Commands.turn_context before last run2 == 150
+
+#[test]
+def test_turn_context_falls_back_to_the_delta : Bool :=
+    let before : Usage := { input_tokens := 100, output_tokens := 0, cached_tokens := 0 } in
+    let after : Usage := { input_tokens := 700, output_tokens := 30, cached_tokens := 0 } in
+    let none : Usage := { input_tokens := 0, output_tokens := 0, cached_tokens := 0 } in
+    let sess : Session := { session_of with spent := after } in
+    let run2 : RunState := { run_of with session := sess } in
+    Commands.turn_context before none run2 == 600
