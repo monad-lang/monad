@@ -17,6 +17,58 @@
 //   * `textContent` returns `_text` for non-element nodes and the joined
 //     children for elements.
 
+export class FakeDataTransfer {
+  constructor() {
+    this._data = {};
+    this.effectAllowed = 'uninitialized';
+    this.dropEffect = 'none';
+    this.files = [];
+  }
+
+  setData(mime, value) {
+    this._data[mime] = String(value);
+  }
+
+  getData(mime) {
+    return this._data[mime] || '';
+  }
+
+  clearData(mime) {
+    if (mime) delete this._data[mime];
+    else this._data = {};
+  }
+
+  get types() {
+    return Object.keys(this._data);
+  }
+}
+
+export class FakeEvent {
+  constructor(type, init = {}) {
+    this.type = type;
+    this.target = init.target || null;
+    this.defaultPrevented = false;
+    this.stopped = false;
+    this.preventCount = 0;
+    this.stopCount = 0;
+    this.dataTransfer = init.dataTransfer || null;
+    this.clipboardData = init.clipboardData || null;
+    for (const [k, v] of Object.entries(init)) {
+      if (k !== 'target') this[k] = v;
+    }
+  }
+
+  preventDefault() {
+    this.defaultPrevented = true;
+    this.preventCount += 1;
+  }
+
+  stopPropagation() {
+    this.stopped = true;
+    this.stopCount += 1;
+  }
+}
+
 export class FakeNode {
   constructor(nodeType, tagName) {
     this.nodeType = nodeType;
@@ -27,6 +79,7 @@ export class FakeNode {
     this.parentNode = null;
     this._text = '';
     this.value = '';
+    this.checked = false;
   }
 
   appendChild(child) {
@@ -72,17 +125,32 @@ export class FakeNode {
     delete this.attrs[name];
   }
 
-  addEventListener(event, handler) {
-    (this.listeners[event] ||= []).push(handler);
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
   }
 
-  removeEventListener(event, handler) {
-    const handlers = this.listeners[event] || [];
-    this.listeners[event] = handlers.filter((h) => h !== handler);
+  addEventListener(event, handler, options) {
+    (this.listeners[event] ||= []).push({ handler, options: options || {} });
   }
 
-  fire(event) {
-    for (const handler of this.listeners[event] || []) handler();
+  removeEventListener(event, handler, options) {
+    const capture = !!(options && options.capture);
+    const entries = this.listeners[event] || [];
+    this.listeners[event] = entries.filter(
+      (e) => !(e.handler === handler && !!e.options.capture === capture),
+    );
+  }
+
+  fire(event, init) {
+    const evt = init instanceof FakeEvent ? init : new FakeEvent(event, { target: this, ...(init || {}) });
+    const entries = (this.listeners[event] || []).slice();
+    for (const entry of entries) {
+      entry.handler(evt);
+      if (entry.options && entry.options.once) {
+        this.removeEventListener(event, entry.handler, entry.options);
+      }
+    }
+    return evt;
   }
 
   get textContent() {
@@ -92,7 +160,12 @@ export class FakeNode {
 
   set textContent(value) {
     this.childNodes = [];
-    this._text = value;
+    this._text = '';
+    if (value === '') return;
+    const t = new FakeNode(3, '#text');
+    t.nodeValue = value;
+    t.parentNode = this;
+    this.childNodes.push(t);
   }
 
   get nodeValue() {
@@ -105,7 +178,12 @@ export class FakeNode {
 }
 
 /// Module-level observation of `createElement`, for identity/count asserts.
-export const stub = { lastCreated: null, createdCount: 0 };
+export const stub = {
+  lastCreated: null,
+  createdCount: 0,
+  clipboardText: 'from-clipboard',
+  clipboardWritten: null,
+};
 
 export const body = new FakeNode(1, 'BODY');
 
@@ -129,6 +207,11 @@ function find(node, selector) {
 /// other selector is matched against the tree (null when absent, which the
 /// runtime turns into a thrown "mount selector not found").
 export function installDocument() {
+  // `document` and `window` are event targets too: give them the same
+  // listener bookkeeping a node has, so global subscriptions are observable.
+  const documentEvents = new FakeNode(9, '#document');
+  const windowEvents = new FakeNode(9, '#window');
+
   globalThis.document = {
     body,
     querySelector(selector) {
@@ -150,7 +233,30 @@ export function installDocument() {
       stub.lastCreated.nodeValue = text;
       return stub.lastCreated;
     },
+    listeners: documentEvents.listeners,
+    addEventListener: documentEvents.addEventListener.bind(documentEvents),
+    removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
+    fire: documentEvents.fire.bind(documentEvents),
   };
+
+  globalThis.window = {
+    listeners: windowEvents.listeners,
+    addEventListener: windowEvents.addEventListener.bind(windowEvents),
+    removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    fire: windowEvents.fire.bind(windowEvents),
+  };
+
+  // Node exposes `navigator` as a getter-only global; define our own.
+  Object.defineProperty(globalThis, 'navigator', {
+    value: {
+      clipboard: {
+        readText: () => Promise.resolve(stub.clipboardText),
+        writeText: (text) => { stub.clipboardWritten = text; return Promise.resolve(); },
+      },
+    },
+    configurable: true,
+    writable: true,
+  });
 }
 
 export function fail(message) {

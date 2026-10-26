@@ -7,6 +7,7 @@ use lib::ffi {
   dom_insert_before_raw, dom_remove_raw, dom_replace_raw, dom_set_attr_raw,
   dom_remove_attr_raw, dom_set_text_raw, dom_add_listener_raw, dom_child_raw,
   dom_child_count_raw, dom_node_type_raw, dom_tag_name_raw, dom_value_raw, dom_query_raw,
+  dom_add_listener_global_raw, dom_remove_listener_global_raw,
 }
 
 pub def Dom.create (tag : String) : IO Node := IO.mk (dom_create_raw tag)
@@ -35,10 +36,40 @@ pub def Dom.remove_attr (n : Node) (key : String) : IO Unit := IO.mk (dom_remove
 
 pub def Dom.set_text (n : Node) (text : String) : IO Unit := IO.mk (dom_set_text_raw n text)
 
-/// Register `handler_id` for `event`; the JS side calls the exported
-/// `oak_dispatch_event(handler_id)` when it fires.
+/// Register a listener for `event` with a full spec value: a handler id
+/// (hex `0x…` as `Handler.spec_of` emits, or decimal), optionally followed by
+/// `:` and flag letters (`c` capture, `d` preventDefault before dispatch,
+/// `s` stopPropagation, `o` once, `p` passive). The JS host calls the
+/// exported `oak_dispatch_event(id)`.
+pub def Dom.on_with (n : Node) (event : String) (spec : String) : IO Unit :=
+  IO.mk (dom_add_listener_raw n event spec)
+
+/// Register a listener with a bare handler id (no flags).
 pub def Dom.on (n : Node) (event : String) (handler_id : I64) : IO Unit :=
-  IO.mk (dom_add_listener_raw n event handler_id)
+  IO.mk (dom_add_listener_raw n event (I64.to_string handler_id))
+
+/// Register a listener on `window` (target 0). The spec is the same
+/// `"<id><:flags>"` value a node attribute carries.
+pub def Dom.on_window (event : String) (spec : String) : IO Unit :=
+  IO.mk (dom_add_listener_global_raw 0i64 event spec)
+
+pub def Dom.off_window (event : String) : IO Unit :=
+  IO.mk (dom_remove_listener_global_raw 0i64 event)
+
+/// Register a listener on `document` (target 1).
+pub def Dom.on_document (event : String) (spec : String) : IO Unit :=
+  IO.mk (dom_add_listener_global_raw 1i64 event spec)
+
+pub def Dom.off_document (event : String) : IO Unit :=
+  IO.mk (dom_remove_listener_global_raw 1i64 event)
+
+/// Ask the loader's animation-frame loop to dispatch `spec`'s handler once per
+/// frame, before `oak_tick` (target 2).
+pub def Dom.on_frame (spec : String) : IO Unit :=
+  IO.mk (dom_add_listener_global_raw 2i64 "" spec)
+
+pub def Dom.off_frame : IO Unit :=
+  IO.mk (dom_remove_listener_global_raw 2i64 "")
 
 /// The indexed child of `n` (text nodes included, matching `childNodes`).
 /// Returns a null handle (`0`) when the index is out of range; patch

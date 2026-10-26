@@ -27,6 +27,9 @@ path = "../oak"
 [dependencies.web_wasm]
 path = "../web_wasm"
 
+[dependencies.web_event]
+path = "../web_event"
+
 [dependencies.parsec]
 path = "../parsec"
 

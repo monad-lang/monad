@@ -1,0 +1,20 @@
+# The pure DOM-event vocabulary: the value a browser event becomes before a
+# Monad handler sees it.
+#
+# This mote holds no IO and no browser handles. `web_wasm` builds an `Event`
+# from the live JS object, `oak` names it in typed view attributes, and
+# `oak_wasm` passes it to a pure handler. Keeping it here lets both the view
+# library and the browser boundary depend on it without depending on each
+# other.
+#
+# `init` and `std` are ambient; declared anyway, as every manifest here does.
+[mote]
+name = "web_event"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"

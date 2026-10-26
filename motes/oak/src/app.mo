@@ -8,13 +8,16 @@
 // `perform` runs the host effect immediately and folds its optional
 // message back into the CURRENT batch, and `quit` stops the batch.
 
-use xml_html::html {Html.Node}
+use lib::events {Subscription}
+use lib::typed {Oak.Node}
 
 // ═══ Types ═══
 //
 // Single-constructor parameterized `type`s, not structs (parameterized
 // structs do not parse). Constructors are reached through the type
-// (`Command.none`, `Host.host`, `Program.app`).
+// (`Command.none`, `Host.host`, `Program.program`). `Program.app` is a def
+// (three arguments, no subscriptions) so existing call sites keep working;
+// use `Program.with_subs` to declare global subscriptions.
 
 pub type Command (E : Type) (Msg : Type) {
     none,
@@ -28,9 +31,10 @@ pub type Host (N : Type -> Type) (E : Type) (Msg : Type) {
 }
 
 pub type Program (S : Type) (Msg : Type) (E : Type) {
-    app (init : S)
+    program (init : S)
         (update : S -> Msg -> Pair S (Command E Msg))
-        (view : S -> Html.Node)
+        (view : S -> Oak.Node Msg)
+        (subscriptions : S -> List (Subscription Msg))
 }
 
 // ═══ Accessors ═══
@@ -42,17 +46,40 @@ pub def Host.run_effect {N : Type -> Type} {E : Type} {Msg : Type}
     (h : Host N E Msg) (effect : E) : N (Option Msg) :=
     match h { Host.host f => f effect }
 
-with Program {
-    pub def init {S : Type} {Msg : Type} {E : Type} (a : Program S Msg E) : S :=
-        match a { Program.app s _ _ => s }
+def no_subscriptions {S : Type} {Msg : Type} (_s : S) : List (Subscription Msg) := List.empty
 
-    pub def view {S : Type} {Msg : Type} {E : Type} (a : Program S Msg E) (s : S) : Html.Node :=
-        match a { Program.app _ _ v => v s }
+with Program {
+    /// A program with no subscriptions (the common case).
+    pub def app {S : Type} {Msg : Type} {E : Type}
+        (init : S)
+        (update : S -> Msg -> Pair S (Command E Msg))
+        (view : S -> Oak.Node Msg) : Program S Msg E :=
+        Program.program init update view no_subscriptions
+
+    /// A program that declares global subscriptions as a function of the
+    /// model (Elm's `Subscription msg`).
+    pub def with_subs {S : Type} {Msg : Type} {E : Type}
+        (init : S)
+        (update : S -> Msg -> Pair S (Command E Msg))
+        (view : S -> Oak.Node Msg)
+        (subscriptions : S -> List (Subscription Msg)) : Program S Msg E :=
+        Program.program init update view subscriptions
+
+    pub def init {S : Type} {Msg : Type} {E : Type} (a : Program S Msg E) : S :=
+        match a { Program.program s _ _ _ => s }
+
+    pub def view {S : Type} {Msg : Type} {E : Type} (a : Program S Msg E) (s : S) : Oak.Node Msg :=
+        match a { Program.program _ _ v _ => v s }
 
     /// The pure `update` projection.
     pub def step {S : Type} {Msg : Type} {E : Type}
         (a : Program S Msg E) (s : S) (msg : Msg) : Pair S (Command E Msg) :=
-        match a { Program.app _ update _ => update s msg }
+        match a { Program.program _ update _ _ => update s msg }
+
+    /// The pure subscription request for a model.
+    pub def subscriptions {S : Type} {Msg : Type} {E : Type}
+        (a : Program S Msg E) : S -> List (Subscription Msg) :=
+        match a { Program.program _ _ _ subs => subs }
 }
 
 /// Fold a batch to quiescence: run it, then drain the messages its

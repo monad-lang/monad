@@ -13,18 +13,19 @@
 #![mote { name := "oak_page", deps := [oak, xml_html] }]
 
 use oak::elements {Html.card, Html.document, Html.navbar, Html.text, Html.title}
-use xml_html::html {Html.Node, Html.to_string}
+use oak::typed {Oak.Node, Oak.to_html}
+use xml_html::html {Html.to_string}
 
 def links : List (Pair String String) :=
     [Pair.pair "/" "Home", Pair.pair "/docs" "Docs"]
 
-def page : Html.Node :=
+def page : Oak.Node Unit :=
     Html.document
         [Html.title List.empty [Html.text "Oak"]]
         [Html.navbar links, Html.card "Oak" "Declarative HTML in Monad"]
 
 def main (args : List String) : IO Unit := do {
-    let _ <- IO.write_stdout (Html.to_string page);
+    let _ <- IO.write_stdout (Html.to_string (Oak.to_html page));
     let _ <- IO.println "";
     return Unit.unit
 }

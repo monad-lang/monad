@@ -12,10 +12,10 @@ Every browser call goes through `web_wasm`'s `Dom`/`Keep` wrappers
 
 ```monad
 #[export "c"]
-def oak_mount : IO Unit := Runtime.mount init view
+def oak_mount : IO Unit := Runtime.mount prog
 
 #[export "c"]
-def oak_dispatch_event (handler : I64) : IO Unit := Runtime.dispatch decode handler
+def oak_dispatch_event (handler : I64) : IO Unit := Runtime.dispatch handler
 
 #[export "c"]
 def oak_tick : IO Unit := Runtime.tick app host
@@ -29,11 +29,44 @@ lives in the `web_wasm.Keep` slot (the export ABI carries only i64 words).
 
 ## Event handlers
 
-An element registers a listener with an ordinary attribute:
-`Html.attr "data-oak-on-click" "3"`. The JS host keeps the DOM listener in
-step when the value changes and removes it when the attribute goes away,
-so a re-render can never stack listeners. The value is the numeric message
-id passed to `runtime dispatch decode`.
+Handlers are pure functions in the typed view; there is no decoder:
+
+```monad
+Html.button [Html.on_click Msg.increment] [Html.text "add"]
+Html.div [Html.on_dragover Msg.over, Html.drop_effect "copy",
+          Html.on_drop (fn (e : WebEvent) => Msg.dropped e.data)] [...]
+Html.input [Html.on_input (fn (s : String) => Msg.set_text s)]
+```
+
+`Oak.lower` turns each `Oak.Attr.on` into `data-oak-on-<event>="<hex-id><:flags>"`
+and collects the handler table. The id is derived from the node's patch
+path + event name, so it is stable across renders; the JS host keeps the DOM
+listener in step (replace on change, remove when the attribute goes away) and
+`Runtime.dispatch` looks the id up, snapshots the live event into a
+`web_event::WebEvent`, and runs the pure handler. The `HandlerResult` it returns
+decides `preventDefault`/`stopPropagation`, applied while the browser is
+still dispatching.
+
+Outgoing effects are declarative: `Html.drag_payload`, `Html.drag_effect`,
+`Html.drop_effect`, `Html.copy_text` render `data-oak-*` attributes the host
+honours during the event. `Html.on_dragover` and `Html.on_drop` set the
+preventDefault flag (a drop target must prevent default).
+
+## Subscriptions
+
+`Program.with_subs init update view subs` adds Elm's `Sub msg` (spelled `Subscription` here):
+
+```monad
+def subs (_m : Model) : List (Subscription Msg) :=
+    [ Subscription.window_msg "resize" Msg.resized,
+      Subscription.document_msg "visibilitychange" Msg.hidden,
+      Subscription.animation_frame_msg Msg.frame ]
+```
+
+The runtime diffs the list by (target, event) after every batch and
+registers/unregisters the difference. `animation_frame` is dispatched by the
+loader's `requestAnimationFrame` loop just before `oak_tick`, so a frame
+message is folded in the same frame.
 
 ## Patch
 
@@ -90,5 +123,7 @@ monad test motes/oak_wasm      # pure diff/hydration-predicate tests
 The DOM half is covered end to end by the Node harnesses in `wasm/web/`,
 which drive real web-profile modules over a stub DOM:
 `spa_smoke.mjs`, `nested_spa_smoke.mjs`, `keyed_spa_smoke.mjs`,
-`hydrate_smoke.mjs`. `scripts/check-wasm-target.sh` builds and runs them
-(all of it runs in CI).
+`hydrate_smoke.mjs`, `oak_event_smoke.mjs` (typed handlers, drag/drop,
+clipboard), `event_smoke.mjs` (the raw snapshot), `clipboard_smoke.mjs`
+(async clipboard) and `subs_smoke.mjs` (window/document/frame).
+`scripts/check-wasm-target.sh` builds and runs them (all of it runs in CI).

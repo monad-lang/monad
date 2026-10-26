@@ -29,9 +29,51 @@ let kept = 0n; // the export-call state slot (`Keep.save`/`Keep.load`)
 const nodes = [null]; // id -> DOM node; 0 is the null handle
 const nodeIds = new WeakMap(); // node -> id, so a re-read keeps its handle
 const listenerTables = new WeakMap(); // node -> Map(event -> { id, wrapper })
+const globalTables = new Map(); // "target:event" -> { flags, wrapper }
+let frameHandler = null; // the animation-frame subscription's handler id
 const fetches = []; // id -> { state, status, bytes, offset }
+const clips = []; // id -> { state, text, error }
 
 const EVENT_PREFIX = 'data-oak-on-';
+const EVENT_FLAGS = 'cdsop';
+
+// The live event, set only for the duration of the synchronous
+// `oak_dispatch_event` export call. Getters read it; after the call it is
+// restored, so an event read from a later tick is `valid = 0`.
+let currentEvent = null;
+
+function dispatchWith(evt, id) {
+  const prev = currentEvent;
+  currentEvent = evt;
+  try {
+    const dispatch = instance && instance.exports.oak_dispatch_event;
+    if (dispatch) dispatch(id);
+  } finally {
+    currentEvent = prev;
+  }
+}
+
+// A handler spec: "<id>" or "<id>:<flags>", flags in `cdsop` order.
+function parseListenerSpec(text) {
+  const sep = text.indexOf(':');
+  const id = idFromText(sep < 0 ? text : text.slice(0, sep));
+  if (id === null) return null;
+  const flags = {
+    capture: false, preventDefault: false, stopPropagation: false,
+    once: false, passive: false,
+  };
+  const letters = sep < 0 ? '' : text.slice(sep + 1);
+  for (let i = 0; i < letters.length; i++) {
+    const ch = letters[i];
+    if (!EVENT_FLAGS.includes(ch)) continue;
+    if (ch === 'c') flags.capture = true;
+    else if (ch === 'd') flags.preventDefault = true;
+    else if (ch === 's') flags.stopPropagation = true;
+    else if (ch === 'o') flags.once = true;
+    else if (ch === 'p') flags.passive = true;
+  }
+  return { id, flags };
+}
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -72,35 +114,133 @@ function idFromText(text) {
   }
 }
 
-// Register (or REPLACE) the listener for one event on one node. A re-render
-// that changes a handler id must not stack a second listener, and removing
-// the attribute must unregister.
-function setListener(n, event, id) {
+// Register (or REPLACE) the listener for one event on one node from a spec
+// string. A re-render that changes a handler id must not stack a second
+// listener, and removing the attribute must unregister. The capture flag is
+// stored because `removeEventListener` must match it.
+function attrOf(n, name) {
+  return n && typeof n.getAttribute === 'function' ? n.getAttribute(name) : null;
+}
+
+// Declarative outgoing effects. The view names them as attributes; the host
+// performs them on the listening element while the browser is dispatching.
+function applyDeclarative(n, event, evt) {
+  if (!evt) return;
+  const dt = evt.dataTransfer || evt.clipboardData;
+  if (!dt) return;
+  if (event === 'dragstart') {
+    const drag = attrOf(n, 'data-oak-drag');
+    if (drag !== null) {
+      const sep = drag.indexOf(':');
+      const mimeLen = sep < 0 ? 0 : Number(drag.slice(0, sep));
+      const mime = sep < 0 ? 'text/plain' : drag.slice(sep + 1, sep + 1 + mimeLen);
+      const text = sep < 0 ? drag : drag.slice(sep + 1 + mimeLen);
+      dt.setData(mime, text);
+    }
+    const effect = attrOf(n, 'data-oak-drag-effect');
+    if (effect !== null) dt.effectAllowed = effect;
+  } else if (event === 'dragover') {
+    const effect = attrOf(n, 'data-oak-drop-effect');
+    if (effect !== null) dt.dropEffect = effect;
+  } else if (event === 'copy' || event === 'cut') {
+    const text = attrOf(n, 'data-oak-copy-text');
+    if (text !== null) {
+      dt.setData('text/plain', text);
+      if (evt.preventDefault) evt.preventDefault();
+    }
+  }
+}
+
+function makeWrapper(n, event, id, flags) {
+  return (evt) => {
+    applyDeclarative(n, event, evt);
+    if (flags.preventDefault && evt && evt.preventDefault) evt.preventDefault();
+    if (flags.stopPropagation && evt && evt.stopPropagation) evt.stopPropagation();
+    dispatchWith(evt, id);
+  };
+}
+
+function removeEntry(n, event, entry) {
+  if (entry) {
+    n.removeEventListener(event, entry.wrapper, { capture: entry.flags.capture });
+  }
+}
+
+function setListener(n, event, spec) {
   let table = listenerTables.get(n);
   if (!table) {
     table = new Map();
     listenerTables.set(n, table);
   }
-  const previous = table.get(event);
-  if (previous) n.removeEventListener(event, previous.wrapper);
-  if (id === null) {
+  removeEntry(n, event, table.get(event));
+  const parsed = spec === null ? null : parseListenerSpec(spec);
+  if (parsed === null) {
     table.delete(event);
     return;
   }
-  const wrapper = () => {
-    const dispatch = instance && instance.exports.oak_dispatch_event;
-    if (dispatch) dispatch(id);
-  };
-  n.addEventListener(event, wrapper);
-  table.set(event, { id, wrapper });
+  const wrapper = makeWrapper(n, event, parsed.id, parsed.flags);
+  n.addEventListener(event, wrapper, {
+    capture: parsed.flags.capture,
+    once: parsed.flags.once,
+    passive: parsed.flags.passive,
+  });
+  table.set(event, { id: parsed.id, flags: parsed.flags, wrapper });
 }
 
 function clearListener(n, event) {
   const table = listenerTables.get(n);
   if (!table) return;
-  const previous = table.get(event);
-  if (previous) n.removeEventListener(event, previous.wrapper);
+  removeEntry(n, event, table.get(event));
   table.delete(event);
+}
+
+// Window (0), document (1) and animation-frame (2) listeners. Global events
+// have no element to carry declarative attributes, so only the spec flags
+// apply.
+function globalTarget(which) {
+  if (Number(which) === 1) return globalThis.document || null;
+  return globalThis.window || globalThis;
+}
+
+function setGlobalListener(target, event, spec) {
+  if (Number(target) === 2) {
+    const parsed = spec === null ? null : parseListenerSpec(spec);
+    frameHandler = parsed ? parsed.id : null;
+    return;
+  }
+  const t = globalTarget(target);
+  if (!t || typeof t.addEventListener !== 'function') return;
+  const key = `${Number(target)}:${event}`;
+  const previous = globalTables.get(key);
+  if (previous) {
+    t.removeEventListener(event, previous.wrapper, { capture: previous.flags.capture });
+  }
+  const parsed = spec === null ? null : parseListenerSpec(spec);
+  if (parsed === null) {
+    globalTables.delete(key);
+    return;
+  }
+  const wrapper = makeWrapper(null, event, parsed.id, parsed.flags);
+  t.addEventListener(event, wrapper, {
+    capture: parsed.flags.capture,
+    once: parsed.flags.once,
+    passive: parsed.flags.passive,
+  });
+  globalTables.set(key, { flags: parsed.flags, wrapper });
+}
+
+function clearGlobalListener(target, event) {
+  if (Number(target) === 2) {
+    frameHandler = null;
+    return;
+  }
+  const key = `${Number(target)}:${event}`;
+  const previous = globalTables.get(key);
+  const t = globalTarget(target);
+  if (previous && t) {
+    t.removeEventListener(event, previous.wrapper, { capture: previous.flags.capture });
+  }
+  globalTables.delete(key);
 }
 
 function nodeById(id) {
@@ -157,8 +297,18 @@ export const host = {
     if (!inst.exports.oak_tick) return;
     const raf = globalThis.requestAnimationFrame;
     if (!raf) return; // no frame loop outside a browser; the caller drives ticks
-    const loop = () => {
+    const loop = (ts) => {
       if (instance !== inst) return;
+      if (frameHandler !== null) {
+        // Dispatch through the slot with a synthetic event so a frame
+        // handler's `Event` is valid and carries the rAF timestamp.
+        const timeStamp = typeof ts === 'number'
+          ? ts
+          : (globalThis.performance && globalThis.performance.now
+            ? globalThis.performance.now()
+            : Date.now());
+        dispatchWith({ type: 'frame', timeStamp, target: null }, frameHandler);
+      }
       inst.exports.oak_tick();
       raf(loop);
     };
@@ -228,7 +378,7 @@ export const host = {
     const name = str(kptr, klen);
     const value = str(vptr, vlen);
     if (name.startsWith(EVENT_PREFIX)) {
-      setListener(n, name.slice(EVENT_PREFIX.length), idFromText(value));
+      setListener(n, name.slice(EVENT_PREFIX.length), value);
     }
     n.setAttribute(name, value);
     return 0n;
@@ -252,10 +402,20 @@ export const host = {
     return 0n;
   },
 
-  dom_add_listener(node, eptr, elen, handler) {
+  dom_add_listener(node, eptr, elen, sptr, slen) {
     const n = nodeById(node);
     if (!n) return 0n;
-    setListener(n, str(eptr, elen), BigInt(handler));
+    setListener(n, str(eptr, elen), str(sptr, slen));
+    return 0n;
+  },
+
+  dom_add_listener_global(target, eptr, elen, sptr, slen) {
+    setGlobalListener(target, str(eptr, elen), str(sptr, slen));
+    return 0n;
+  },
+
+  dom_remove_listener_global(target, eptr, elen) {
+    clearGlobalListener(target, str(eptr, elen));
     return 0n;
   },
 
@@ -296,6 +456,125 @@ export const host = {
   // it wants to read. No match is the null handle (0), like dom_child.
   dom_query(ptr, len) {
     return addNode(doc().querySelector(str(ptr, len)));
+  },
+
+  // ── current event (see motes/web_wasm/src/event.mo) ─────────────────
+  event_i64(which) {
+    const e = currentEvent;
+    if (!e) return 0n;
+    switch (Number(which)) {
+      case 1: return BigInt(e.button || 0);
+      case 2: return BigInt(e.buttons || 0);
+      case 3: return BigInt(e.detail || 0);
+      case 4: return BigInt(e.pointerId || 0);
+      case 5: return BigInt(e.location || 0);
+      case 6: return BigInt(e.deltaMode || 0);
+      case 7: return e.repeat ? 1n : 0n;
+      case 8: return e.isPrimary ? 1n : 0n;
+      case 9: return e.target && e.target.checked ? 1n : 0n;
+      case 10: return e.dataTransfer || e.clipboardData ? 1n : 0n;
+      case 11:
+        return BigInt((e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0)
+          | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0));
+      case 12: return 1n;
+      case 13: return e.defaultPrevented ? 1n : 0n;
+      case 14: return BigInt(e.which || 0);
+      default: return 0n;
+    }
+  },
+
+  event_f64(which) {
+    const e = currentEvent;
+    if (!e) return 0;
+    switch (Number(which)) {
+      case 1: return Number(e.clientX) || 0;
+      case 2: return Number(e.clientY) || 0;
+      case 3: return Number(e.pageX) || 0;
+      case 4: return Number(e.pageY) || 0;
+      case 5: return Number(e.screenX) || 0;
+      case 6: return Number(e.screenY) || 0;
+      case 7: return Number(e.offsetX) || 0;
+      case 8: return Number(e.offsetY) || 0;
+      case 9: return Number(e.deltaX) || 0;
+      case 10: return Number(e.deltaY) || 0;
+      case 11: return Number(e.deltaZ) || 0;
+      case 12: return Number(e.pressure) || 0;
+      case 13: return Number(e.width) || 0;
+      case 14: return Number(e.height) || 0;
+      case 15: return Number(e.timeStamp) || 0;
+      default: return 0;
+    }
+  },
+
+  event_str(which, ptr, max) {
+    const e = currentEvent;
+    let text = '';
+    switch (Number(which)) {
+      case 1: text = e ? String(e.type || '') : ''; break;
+      case 2: text = e ? String(e.pointerType || '') : ''; break;
+      case 3: text = e ? String(e.key || '') : ''; break;
+      case 4: text = e ? String(e.code || '') : ''; break;
+      case 5:
+        text = e && e.target && typeof e.target.value === 'string'
+          ? e.target.value : '';
+        break;
+      case 6:
+        text = e && e.dataTransfer
+          ? String(e.dataTransfer.effectAllowed || '') : '';
+        break;
+      case 7:
+        text = e && e.dataTransfer ? String(e.dataTransfer.dropEffect || '') : '';
+        break;
+    }
+    return writeBytes(ptr, encoder.encode(text), max);
+  },
+
+  event_data(mptr, mlen, ptr, max) {
+    const e = currentEvent;
+    const dt = e && (e.clipboardData || e.dataTransfer);
+    const text = dt && typeof dt.getData === 'function'
+      ? String(dt.getData(str(mptr, mlen)) || '') : '';
+    return writeBytes(ptr, encoder.encode(text), max);
+  },
+
+  event_types(ptr, max) {
+    const e = currentEvent;
+    const dt = e && (e.dataTransfer || e.clipboardData);
+    const text = dt && dt.types ? Array.from(dt.types).join('\n') : '';
+    return writeBytes(ptr, encoder.encode(text), max);
+  },
+
+  event_files_count() {
+    const e = currentEvent;
+    const dt = e && (e.dataTransfer || e.clipboardData);
+    return BigInt(dt && dt.files ? dt.files.length : 0);
+  },
+
+  event_file_i64(index, which) {
+    const e = currentEvent;
+    const dt = e && (e.dataTransfer || e.clipboardData);
+    const f = dt && dt.files ? dt.files[Number(index)] : null;
+    if (!f) return 0n;
+    return BigInt(Number(which) === 2 ? (f.lastModified || 0) : (f.size || 0));
+  },
+
+  event_file_str(index, which, ptr, max) {
+    const e = currentEvent;
+    const dt = e && (e.dataTransfer || e.clipboardData);
+    const f = dt && dt.files ? dt.files[Number(index)] : null;
+    const text = !f ? '' : (Number(which) === 2
+      ? String(f.type || '') : String(f.name || ''));
+    return writeBytes(ptr, encoder.encode(text), max);
+  },
+
+  event_prevent_default() {
+    if (currentEvent && currentEvent.preventDefault) currentEvent.preventDefault();
+    return 0n;
+  },
+
+  event_stop_propagation() {
+    if (currentEvent && currentEvent.stopPropagation) currentEvent.stopPropagation();
+    return 0n;
   },
 
   // ── fetch (two-phase: a promise must not re-enter wasm) ─────────────
@@ -346,6 +625,59 @@ export const host = {
       r.offset = 0;
     }
     return n;
+  },
+
+  // ── async clipboard (two-phase: a promise must not re-enter wasm) ──
+  clipboard_available() {
+    const cb = globalThis.navigator && globalThis.navigator.clipboard;
+    return cb && typeof cb.readText === 'function' ? 1n : 0n;
+  },
+
+  clipboard_read_begin() {
+    const rec = { state: 0, text: '', error: '' };
+    clips.push(rec);
+    const id = BigInt(clips.length - 1);
+    const cb = globalThis.navigator && globalThis.navigator.clipboard;
+    if (!cb || typeof cb.readText !== 'function') {
+      rec.state = 2;
+      rec.error = 'NotSupportedError';
+      return id;
+    }
+    cb.readText()
+      .then((text) => { rec.text = String(text || ''); rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  clipboard_write_begin(ptr, len) {
+    const rec = { state: 0, text: '', error: '' };
+    clips.push(rec);
+    const id = BigInt(clips.length - 1);
+    const cb = globalThis.navigator && globalThis.navigator.clipboard;
+    if (!cb || typeof cb.writeText !== 'function') {
+      rec.state = 2;
+      rec.error = 'NotSupportedError';
+      return id;
+    }
+    cb.writeText(str(ptr, len))
+      .then(() => { rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  clipboard_poll(id) {
+    const rec = clips[Number(id)];
+    return BigInt(rec ? rec.state : 2);
+  },
+
+  clipboard_read(id, ptr, max) {
+    const rec = clips[Number(id)];
+    return writeBytes(ptr, encoder.encode(rec ? rec.text : ''), max);
+  },
+
+  clipboard_error(id, ptr, max) {
+    const rec = clips[Number(id)];
+    return writeBytes(ptr, encoder.encode(rec ? rec.error : ''), max);
   },
 
   // ── clock, storage, console, stdio ──────────────────────────────────

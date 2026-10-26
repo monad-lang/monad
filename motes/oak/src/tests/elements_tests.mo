@@ -19,10 +19,11 @@ use lib::elements {
     Html.fragment, Html.document, Html.document_with, Html.document_utf8,
     Html.navbar, Html.card
 }
-use xml_html::html {Html.Node, Html.to_string}
+use lib::typed {Oak.Node, Oak.to_html}
+use xml_html::html {Html.to_string}
 
-def element_renders (n : Html.Node) (want : String) : Bool :=
-    String.beq (Html.to_string n) want
+def element_renders (n : Oak.Node Unit) (want : String) : Bool :=
+    String.beq (Html.to_string (Oak.to_html n)) want
 
 // ─── Attributes ───
 

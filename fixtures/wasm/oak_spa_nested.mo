@@ -16,10 +16,11 @@
 // `motes/monadup`'s own `Command` and `motes/oak`'s `Msg` type parameter.
 #![mote { name := "oak_spa_nested", deps := [oak, oak_wasm, web_wasm, xml_html] }]
 
-use xml_html::html {Html.Node}
+use oak::typed {Oak.Node}
 use oak::elements {
   Html.attr, Html.button, Html.div, Html.footer, Html.li, Html.p, Html.text, Html.ul,
 }
+use oak::events {Html.on_click}
 use oak::app {Command, Host, Program}
 use oak_wasm::program {Runtime.dispatch, Runtime.mount, Runtime.tick}
 
@@ -36,36 +37,31 @@ def update (model : List String) (msg : Msg) : Pair (List String) (Command Unit 
         Msg.clear => Pair.pair List.empty Command.none,
     }
 
-def item_view (label : String) : Html.Node :=
+def item_view (label : String) : Oak.Node Msg :=
     Html.li List.empty [Html.text label]
 
-def view (items : List String) : Html.Node :=
-    let list : Html.Node :=
+def view (items : List String) : Oak.Node Msg :=
+    let list : Oak.Node Msg :=
         Html.ul [Html.attr "id" "items"] (List.map item_view items) in
-    let wrapper : Html.Node :=
+    let wrapper : Oak.Node Msg :=
         Html.div List.empty [Html.p List.empty [Html.text "nested"], list] in
-    let add : Html.Node :=
-        Html.button [Html.attr "data-oak-on-click" "1"] [Html.text "add"] in
-    let clear : Html.Node :=
-        Html.button [Html.attr "data-oak-on-click" "2"] [Html.text "clear"] in
-    let footer : Html.Node := Html.footer List.empty [add, clear] in
+    let add : Oak.Node Msg :=
+        Html.button [Html.on_click Msg.add] [Html.text "add"] in
+    let clear : Oak.Node Msg :=
+        Html.button [Html.on_click Msg.clear] [Html.text "clear"] in
+    let footer : Oak.Node Msg := Html.footer List.empty [add, clear] in
     Html.div [Html.attr "class" "app"] [wrapper, footer]
 
 def app : Program (List String) Msg Unit := Program.app init update view
-
-def decode (handler : I64) : Option Msg :=
-    if handler == 1i64 then Option.some Msg.add
-    else if handler == 2i64 then Option.some Msg.clear
-    else Option.none
 
 /// The SPA has no effects; a host that produces no messages is enough.
 def host : Host IO Unit Msg := Host.host (fn _effect => IO.pure Option.none)
 
 #[export "c"]
-def oak_mount : IO Unit := Runtime.mount init view
+def oak_mount : IO Unit := Runtime.mount app
 
 #[export "c"]
-def oak_dispatch_event (handler : I64) : IO Unit := Runtime.dispatch decode handler
+def oak_dispatch_event (handler : I64) : IO Unit := Runtime.dispatch handler
 
 #[export "c"]
 def oak_tick : IO Unit := Runtime.tick app host

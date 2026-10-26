@@ -4,3 +4,4 @@
 
 pub type Node { node }
 pub type RequestId { request_id }
+pub type ClipboardOp { clipboard_op }

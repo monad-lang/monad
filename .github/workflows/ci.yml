@@ -199,21 +199,20 @@ jobs:
           # `check <file>` it appends.
           MONAD_BIN: cargo run --release --quiet --
 
-      # The `use`-completeness rule, enforced BY DEFAULT in the loader:
-      # every name a module reaches from another module has to be named in
-      # its own `use` line (unless ambient), or the file fails to LOAD.
-      # This began as the `MONAD_USE_COMPLETENESS=error` flip of a warning
-      # the `monad-check` pre-commit hook emitted, and was a step of its
-      # own rather than an edit to that hook because .pre-commit-config.yaml
-      # is generated per checkout but SHARED by every worktree on the
-      # machine: a hook that failed on an unimported name would break
-      # commits in a sibling worktree still on a branch whose corpus
-      # predates the migration. The hook itself is gone now -- it ran this
-      # same whole-corpus `check` on every commit in every worktree -- so
-      # this is the pipeline's ONLY whole-corpus check, and the env-var
-      # opt-in has been deleted: no caller can weaken the rule by
-      # forgetting to set it.
-      - name: "`use` completeness (enforced)"
+      # The pipeline's only whole-corpus check, run through the RUST
+      # REFERENCE host (`cargo run --release`). It exercises every rule the
+      # reference enforces, including `use` completeness -- that rule is also
+      # enforced BY DEFAULT in the loader on every check/run/test/build/LSP
+      # path, so nothing here is opt-in and no caller can weaken it.
+      #
+      # The name says what the step is: it is broader than use-completeness
+      # (it is the reference host's whole-corpus sweep, and the step that
+      # catches host-only name-resolution differences such as a bare
+      # `Event`/`Sub` colliding with a flattened corpus declaration). It
+      # began as the `MONAD_USE_COMPLETENESS=error` flip, then replaced the
+      # old `monad-check` pre-commit hook when that hook -- which ran this
+      # same check on every commit in every worktree -- was removed.
+      - name: Rust corpus check
         run: |
           nix develop --no-pure-eval --accept-flake-config -c \
             cargo run --release -- \

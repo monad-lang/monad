@@ -15,7 +15,8 @@
 use init::transformers {ResultT, ResultT.lift}
 use std::io {IO.flush_stdout, IO.write_stdout}
 use lib::elements {Html.document}
-use xml_html::html {Html.Node, Html.to_string}
+use lib::typed {Oak.Node, Oak.to_html}
+use xml_html::html {Html.to_string}
 use xml_html::html {}
 
 // ═══ Types ═══
@@ -31,10 +32,12 @@ pub type Render (M : Type -> Type) {
 }
 
 /// Page state: head and body children in source order. Non-parameterized,
-/// so it is a real `struct` (field access and update syntax).
+/// so it is a real `struct` (field access and update syntax). Page assembly
+/// is handler-free by design: a browser view that needs handlers is an
+/// `Oak.Node Msg`, assembled and lowered by the client runtime, not a `Page`.
 pub struct Page {
-    head : List Html.Node,
-    body : List Html.Node
+    head : List (Oak.Node Unit),
+    body : List (Oak.Node Unit)
 }
 
 pub type Open {}
@@ -113,16 +116,16 @@ with Page {
     pub def empty : Page :=
         let d : Page := { head := List.empty, body := List.empty } in d
 
-    pub def append_head (d : Page) (n : Html.Node) : Page :=
+    pub def append_head (d : Page) (n : Oak.Node Unit) : Page :=
         let d2 : Page := { d with head := List.append d.head (List.cons n List.empty) } in d2
 
-    pub def append_heads (d : Page) (ns : List Html.Node) : Page :=
+    pub def append_heads (d : Page) (ns : List (Oak.Node Unit)) : Page :=
         let d2 : Page := { d with head := List.append d.head ns } in d2
 
-    pub def append_body (d : Page) (n : Html.Node) : Page :=
+    pub def append_body (d : Page) (n : Oak.Node Unit) : Page :=
         let d2 : Page := { d with body := List.append d.body (List.cons n List.empty) } in d2
 
-    pub def append_bodies (d : Page) (ns : List Html.Node) : Page :=
+    pub def append_bodies (d : Page) (ns : List (Oak.Node Unit)) : Page :=
         let d2 : Page := { d with body := List.append d.body ns } in d2
 }
 
@@ -133,7 +136,7 @@ with Page {
 // step against it; `map_step` is pure.
 
 def emit_document (d : Page) : String :=
-    Html.to_string (Html.document d.head d.body)
+    Html.to_string (Oak.to_html (Html.document d.head d.body))
 
 def bind_step {M : Type -> Type} {J : Type} {K : Type} {A : Type} {B : Type}
     (f : A -> HtmlT M J K B) (r : Render M) (p : Pair Page A) : M (Pair Page B) :=
@@ -177,19 +180,19 @@ with HtmlT {
         HtmlT.html_t (fn (_ : Render M) (d : Page) =>
             Monad.bind m (fn (a : A) => Monad.pure (Pair.pair d a)))
 
-    pub def head_node [Monad M] (n : Html.Node) : HtmlT M Open Open Unit :=
+    pub def head_node [Monad M] (n : Oak.Node Unit) : HtmlT M Open Open Unit :=
         HtmlT.html_t (fn (_ : Render M) (d : Page) =>
             Monad.pure (Pair.pair (Page.append_head d n) Unit.unit))
 
-    pub def head_nodes [Monad M] (ns : List Html.Node) : HtmlT M Open Open Unit :=
+    pub def head_nodes [Monad M] (ns : List (Oak.Node Unit)) : HtmlT M Open Open Unit :=
         HtmlT.html_t (fn (_ : Render M) (d : Page) =>
             Monad.pure (Pair.pair (Page.append_heads d ns) Unit.unit))
 
-    pub def body_node [Monad M] (n : Html.Node) : HtmlT M Open Open Unit :=
+    pub def body_node [Monad M] (n : Oak.Node Unit) : HtmlT M Open Open Unit :=
         HtmlT.html_t (fn (_ : Render M) (d : Page) =>
             Monad.pure (Pair.pair (Page.append_body d n) Unit.unit))
 
-    pub def body_nodes [Monad M] (ns : List Html.Node) : HtmlT M Open Open Unit :=
+    pub def body_nodes [Monad M] (ns : List (Oak.Node Unit)) : HtmlT M Open Open Unit :=
         HtmlT.html_t (fn (_ : Render M) (d : Page) =>
             Monad.pure (Pair.pair (Page.append_bodies d ns) Unit.unit))
 

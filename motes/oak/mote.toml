@@ -19,6 +19,11 @@ path = "../../std"
 [dependencies.xml_html]
 path = "../xml_html"
 
+# The pure event vocabulary shared with the browser boundary. Oak names it in
+# `Oak.Attr.on`; `web_wasm` builds it. Neither depends on the other.
+[dependencies.web_event]
+path = "../web_event"
+
 # `Ssr.to_response` names `http.Response`; the view library itself never
 # depends on the server (`moon` does not depend on Oak).
 [dependencies.http]

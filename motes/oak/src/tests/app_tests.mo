@@ -7,7 +7,8 @@
 use std::list {List.length}
 use lib::app {Program, Program.run_batch, Program.step, Program.view, Command, Host}
 use lib::elements {Html.li, Html.text, Html.ul}
-use xml_html::html {Html.Node, Html.to_string}
+use lib::typed {Oak.Node, Oak.to_html}
+use xml_html::html {Html.to_string}
 
 // ═══ A write-logging base monad ═══
 
@@ -58,11 +59,18 @@ def app_update (log : List String) (m : String) : Pair (List String) (Command St
     then Pair.pair (log_add log "quit") Command.quit
     else Pair.pair (log_add log m) Command.none
 
-def log_item (s : String) : Html.Node :=
+def log_item (s : String) : Oak.Node String :=
     Html.li List.empty [Html.text s]
 
-def app_view (log : List String) : Html.Node :=
-    Html.ul List.empty (List.map log_item log)
+#[terminating]
+def log_items (log : List String) : List (Oak.Node String) :=
+    match log {
+        List.empty => List.empty,
+        List.cons s rest => List.cons (log_item s) (log_items rest),
+    }
+
+def app_view (log : List String) : Oak.Node String :=
+    Html.ul List.empty (log_items log)
 
 def app_under_test : Program (List String) String String :=
     Program.app List.empty app_update app_view
@@ -146,7 +154,7 @@ def test_step_is_pure : Bool :=
 
 #[test]
 def test_golden_view : Bool :=
-    String.beq (Html.to_string (Program.view app_under_test ["a", "b"]))
+    String.beq (Html.to_string (Oak.to_html (Program.view app_under_test ["a", "b"])))
         "<ul><li>a</li><li>b</li></ul>"
 
 #[test]

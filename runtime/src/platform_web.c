@@ -200,7 +200,67 @@ extern int64_t monad_js_dom_set_text(int64_t node, int64_t ptr, int64_t len);
 
 __attribute__((import_module("monad"), import_name("dom_add_listener")))
 extern int64_t monad_js_dom_add_listener(int64_t node, int64_t eptr, int64_t elen,
-                                         int64_t handler);
+                                         int64_t sptr, int64_t slen);
+
+__attribute__((import_module("monad"), import_name("clipboard_available")))
+extern int64_t monad_js_clipboard_available(void);
+
+__attribute__((import_module("monad"), import_name("clipboard_read_begin")))
+extern int64_t monad_js_clipboard_read_begin(void);
+
+__attribute__((import_module("monad"), import_name("clipboard_write_begin")))
+extern int64_t monad_js_clipboard_write_begin(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("clipboard_poll")))
+extern int64_t monad_js_clipboard_poll(int64_t op);
+
+__attribute__((import_module("monad"), import_name("clipboard_read")))
+extern int64_t monad_js_clipboard_read(int64_t op, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("clipboard_error")))
+extern int64_t monad_js_clipboard_error(int64_t op, int64_t ptr, int64_t max);
+
+/* The current-event getters. The JS host keeps the live `Event` in a slot for
+   the duration of the synchronous export call; strings are written into the
+   shared scratch buffer like `dom_tag_name`. `event_f64` returns a plain
+   double: the Monad extern wrapper bitcasts it to the F64 word. */
+__attribute__((import_module("monad"), import_name("event_i64")))
+extern int64_t monad_js_event_i64(int64_t which);
+
+__attribute__((import_module("monad"), import_name("event_f64")))
+extern double monad_js_event_f64(int64_t which);
+
+__attribute__((import_module("monad"), import_name("event_str")))
+extern int64_t monad_js_event_str(int64_t which, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("event_data")))
+extern int64_t monad_js_event_data(int64_t mptr, int64_t mlen, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("event_types")))
+extern int64_t monad_js_event_types(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("event_files_count")))
+extern int64_t monad_js_event_files_count(void);
+
+__attribute__((import_module("monad"), import_name("event_file_i64")))
+extern int64_t monad_js_event_file_i64(int64_t index, int64_t which);
+
+__attribute__((import_module("monad"), import_name("event_file_str")))
+extern int64_t monad_js_event_file_str(int64_t index, int64_t which, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("event_prevent_default")))
+extern int64_t monad_js_event_prevent_default(void);
+
+__attribute__((import_module("monad"), import_name("event_stop_propagation")))
+extern int64_t monad_js_event_stop_propagation(void);
+
+__attribute__((import_module("monad"), import_name("dom_add_listener_global")))
+extern int64_t monad_js_dom_add_listener_global(int64_t target, int64_t eptr, int64_t elen,
+                                                int64_t sptr, int64_t slen);
+
+__attribute__((import_module("monad"), import_name("dom_remove_listener_global")))
+extern int64_t monad_js_dom_remove_listener_global(int64_t target, int64_t eptr,
+                                                   int64_t elen);
 
 __attribute__((import_module("monad"), import_name("dom_child")))
 extern int64_t monad_js_dom_child(int64_t node, int64_t index);
@@ -325,8 +385,18 @@ int64_t web_dom_set_text(int64_t node, const char* text) {
     return monad_js_dom_set_text(node, web_str_ptr(text), web_str_len(text));
 }
 
-int64_t web_dom_add_listener(int64_t node, const char* event, int64_t handler) {
-    return monad_js_dom_add_listener(node, web_str_ptr(event), web_str_len(event), handler);
+int64_t web_dom_add_listener(int64_t node, const char* event, const char* spec) {
+    return monad_js_dom_add_listener(node, web_str_ptr(event), web_str_len(event),
+                                     web_str_ptr(spec), web_str_len(spec));
+}
+
+int64_t web_dom_add_listener_global(int64_t target, const char* event, const char* spec) {
+    return monad_js_dom_add_listener_global(target, web_str_ptr(event), web_str_len(event),
+                                            web_str_ptr(spec), web_str_len(spec));
+}
+
+int64_t web_dom_remove_listener_global(int64_t target, const char* event) {
+    return monad_js_dom_remove_listener_global(target, web_str_ptr(event), web_str_len(event));
 }
 
 int64_t web_dom_child(int64_t node, int64_t index) {
@@ -406,6 +476,88 @@ int64_t web_keep_set(int64_t value) {
 
 int64_t web_keep_get(void) {
     return monad_js_keep_get();
+}
+
+/* ── async clipboard (motes/web_wasm/src/clipboard.mo) ─────────────────── */
+
+int64_t web_clipboard_available(void) {
+    return monad_js_clipboard_available();
+}
+
+int64_t web_clipboard_read_begin(void) {
+    return monad_js_clipboard_read_begin();
+}
+
+int64_t web_clipboard_write_begin(const char* text) {
+    return monad_js_clipboard_write_begin(web_str_ptr(text), web_str_len(text));
+}
+
+int64_t web_clipboard_poll(int64_t op) {
+    return monad_js_clipboard_poll(op);
+}
+
+char* web_clipboard_read(int64_t op) {
+    int64_t n = monad_js_clipboard_read(op, (int64_t)(intptr_t)web_scratch,
+                                         WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_clipboard_error(int64_t op) {
+    int64_t n = monad_js_clipboard_error(op, (int64_t)(intptr_t)web_scratch,
+                                         WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+/* ── current-event getters (motes/web_wasm/src/event.mo) ───────────────── */
+
+int64_t web_event_i64(int64_t which) {
+    return monad_js_event_i64(which);
+}
+
+double web_event_f64(int64_t which) {
+    return monad_js_event_f64(which);
+}
+
+char* web_event_str(int64_t which) {
+    int64_t n = monad_js_event_str(which, (int64_t)(intptr_t)web_scratch,
+                                   WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_event_data(const char* mime) {
+    int64_t n = monad_js_event_data(web_str_ptr(mime), web_str_len(mime),
+                                    (int64_t)(intptr_t)web_scratch,
+                                    WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_event_types(void) {
+    int64_t n = monad_js_event_types((int64_t)(intptr_t)web_scratch,
+                                     WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_event_files_count(void) {
+    return monad_js_event_files_count();
+}
+
+int64_t web_event_file_i64(int64_t index, int64_t which) {
+    return monad_js_event_file_i64(index, which);
+}
+
+char* web_event_file_str(int64_t index, int64_t which) {
+    int64_t n = monad_js_event_file_str(index, which,
+                                        (int64_t)(intptr_t)web_scratch,
+                                        WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_event_prevent_default(void) {
+    return monad_js_event_prevent_default();
+}
+
+int64_t web_event_stop_propagation(void) {
+    return monad_js_event_stop_propagation();
 }
 
 rt_void monad_print_str(rt_str s) {

@@ -64,7 +64,13 @@ def WebImport.dom_set_text : WebImport :=
   { module := "monad", name := "dom_set_text", params := ["i64", "i64", "i64"], result := "void" }
 
 def WebImport.dom_add_listener : WebImport :=
-  { module := "monad", name := "dom_add_listener", params := ["i64", "i64", "i64", "i64"], result := "void" }
+  { module := "monad", name := "dom_add_listener", params := ["i64", "i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.dom_add_listener_global : WebImport :=
+  { module := "monad", name := "dom_add_listener_global", params := ["i64", "i64", "i64", "i64", "i64"], result := "void" }
+
+def WebImport.dom_remove_listener_global : WebImport :=
+  { module := "monad", name := "dom_remove_listener_global", params := ["i64", "i64", "i64"], result := "void" }
 
 def WebImport.dom_child : WebImport :=
   { module := "monad", name := "dom_child", params := ["i64", "i64"], result := "i64" }
@@ -103,6 +109,24 @@ def WebImport.fetch_status : WebImport :=
 
 def WebImport.fetch_read : WebImport :=
   { module := "monad", name := "fetch_read", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.clipboard_available : WebImport :=
+  { module := "monad", name := "clipboard_available", params := List.empty, result := "i64" }
+
+def WebImport.clipboard_read_begin : WebImport :=
+  { module := "monad", name := "clipboard_read_begin", params := List.empty, result := "i64" }
+
+def WebImport.clipboard_write_begin : WebImport :=
+  { module := "monad", name := "clipboard_write_begin", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.clipboard_poll : WebImport :=
+  { module := "monad", name := "clipboard_poll", params := ["i64"], result := "i64" }
+
+def WebImport.clipboard_read : WebImport :=
+  { module := "monad", name := "clipboard_read", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.clipboard_error : WebImport :=
+  { module := "monad", name := "clipboard_error", params := ["i64", "i64", "i64"], result := "i64" }
 
 def WebImport.now_ms : WebImport :=
   { module := "monad", name := "now_ms", params := List.empty, result := "i64" }
@@ -145,6 +169,40 @@ def WebImport.read_stdin : WebImport :=
 def WebImport.f64_to_string : WebImport :=
   { module := "monad", name := "f64_to_string", params := ["i64", "i64", "i64"], result := "i64" }
 
+/// The current-event getters. `event_str`/`event_data`/`event_types`/
+/// `event_file_str` write UTF-8 into the C scratch buffer and return the byte
+/// count; `event_f64` returns an `f64` (the C wrapper bitcasts, and the JS
+/// import sees a plain number).
+def WebImport.event_i64 : WebImport :=
+  { module := "monad", name := "event_i64", params := ["i64"], result := "i64" }
+
+def WebImport.event_f64 : WebImport :=
+  { module := "monad", name := "event_f64", params := ["i64"], result := "f64" }
+
+def WebImport.event_str : WebImport :=
+  { module := "monad", name := "event_str", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.event_data : WebImport :=
+  { module := "monad", name := "event_data", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.event_types : WebImport :=
+  { module := "monad", name := "event_types", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.event_files_count : WebImport :=
+  { module := "monad", name := "event_files_count", params := List.empty, result := "i64" }
+
+def WebImport.event_file_i64 : WebImport :=
+  { module := "monad", name := "event_file_i64", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.event_file_str : WebImport :=
+  { module := "monad", name := "event_file_str", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.event_prevent_default : WebImport :=
+  { module := "monad", name := "event_prevent_default", params := List.empty, result := "void" }
+
+def WebImport.event_stop_propagation : WebImport :=
+  { module := "monad", name := "event_stop_propagation", params := List.empty, result := "void" }
+
 def WebExport.oak_mount : WebExport := { name := "oak_mount" }
 def WebExport.oak_dispatch_event : WebExport := { name := "oak_dispatch_event" }
 def WebExport.oak_tick : WebExport := { name := "oak_tick" }
@@ -156,16 +214,27 @@ pub def WebAbi.default : WebAbi :=
         WebImport.dom_root,
         WebImport.dom_append, WebImport.dom_insert_before, WebImport.dom_remove,
         WebImport.dom_replace, WebImport.dom_set_attr, WebImport.dom_remove_attr,
-        WebImport.dom_set_text, WebImport.dom_add_listener, WebImport.dom_child,
+        WebImport.dom_set_text, WebImport.dom_add_listener,
+        WebImport.dom_add_listener_global, WebImport.dom_remove_listener_global,
+        WebImport.dom_child,
         WebImport.dom_child_count,
         WebImport.dom_node_type, WebImport.dom_tag_name, WebImport.dom_value,
         WebImport.dom_query,
         WebImport.fetch_begin, WebImport.fetch_poll, WebImport.fetch_status,
-        WebImport.fetch_read, WebImport.now_ms, WebImport.storage_get_raw,
+        WebImport.fetch_read,
+        WebImport.clipboard_available, WebImport.clipboard_read_begin,
+        WebImport.clipboard_write_begin, WebImport.clipboard_poll,
+        WebImport.clipboard_read, WebImport.clipboard_error,
+        WebImport.now_ms, WebImport.storage_get_raw,
         WebImport.storage_set, WebImport.console_log,
         WebImport.keep_set, WebImport.keep_get,
         WebImport.write_stdout, WebImport.write_stderr, WebImport.read_stdin,
-        WebImport.f64_to_string
+        WebImport.f64_to_string,
+        WebImport.event_i64, WebImport.event_f64, WebImport.event_str,
+        WebImport.event_data, WebImport.event_types,
+        WebImport.event_files_count, WebImport.event_file_i64,
+        WebImport.event_file_str, WebImport.event_prevent_default,
+        WebImport.event_stop_propagation
       ],
       exports := [
         WebExport.oak_mount, WebExport.oak_dispatch_event, WebExport.oak_tick

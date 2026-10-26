@@ -13,6 +13,7 @@ use lib::html_t {
     HtmlT.body_nodes, HtmlT.emit, HtmlT.head_node, HtmlT.lift, HtmlT.map,
     HtmlT.run, HtmlT.seal, Open, Render, Sealed
 }
+use lib::typed {Oak.to_html}
 use xml_html::html {Html.to_string}
 
 // ═══ A write-logging base monad ═══
@@ -52,7 +53,7 @@ def mock_doc {A : Type} (m : RenderM (Pair Page A)) : Page :=
     match m { RenderM.render_m _ p => pair_doc p }
 
 def doc_string (d : Page) : String :=
-    Html.to_string (Html.document d.head d.body)
+    Html.to_string (Oak.to_html (Html.document d.head d.body))
 
 def html_t_strs_eq (a : List String) (b : List String) : Bool :=
     match a {

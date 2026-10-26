@@ -2,12 +2,15 @@
 ///
 /// The app owns three `#[export "c"]` thunks that call these:
 ///
-///     oak_mount                 -> Runtime.mount init view
-///     oak_dispatch_event(id)    -> Runtime.dispatch decode id
+///     oak_mount                 -> Runtime.mount program
+///     oak_dispatch_event(id)    -> Runtime.dispatch id
 ///     oak_tick                  -> Runtime.tick program host
 ///
-/// and the state they share travels through `web_wasm.Keep` (the export ABI
-/// is i64 words, so no Monad value can be an argument or a return).
+/// The event id is assigned by `Oak.lower` (path + event name) and baked into
+/// the lowered attribute. `Runtime.dispatch` looks it up in the pure handler
+/// table, snapshots the live event into an `WebEvent`, runs the pure handler and
+/// applies the `preventDefault`/`stopPropagation` it asks for. There is no
+/// user decoder and no IO in the view or update.
 ///
 /// The batch fold is written HERE, monomorphically over `IO`, rather than
 /// instantiating `oak/src/app.mo`'s `Program.run_batch [Monad N]`: a compiled
@@ -20,18 +23,144 @@
 /// tick drains them, folds, re-renders, and patches the DOM.
 use std::ref {Ref, Ref.get, Ref.set, Ref.update}
 use xml_html::html {Html.Node}
-use oak::app {Command, Host, Host.run_effect, Program, Program.step, Program.view}
-use web_wasm::dom {Dom.root}
+use web_event::event {WebEvent, HandlerResult, ListenerFlags}
+use oak::app {
+    Command, Host, Host.run_effect, Program, Program.init, Program.step, Program.view,
+    Program.subscriptions,
+}
+use oak::typed {Oak.Node, Oak.Lowered, Oak.lower, Handler.id, Handler.spec_of}
+use oak::events {Subscription}
+use web_wasm::dom {
+    Dom.root, Dom.on_window, Dom.on_document, Dom.on_frame,
+    Dom.off_window, Dom.off_document, Dom.off_frame,
+}
+use web_wasm::event {WebEvent.current, WebEvent.prevent_default, WebEvent.stop_propagation}
 use web_wasm::keep {Keep.load, Keep.save}
 use web_wasm::types {Node}
 use lib::patch {Patch.diff, Patch.apply, Patch.hydrate_root}
 
-pub type RuntimeState (S : Type) (Msg : Type) {
-    st (root : Node) (last : Html.Node) (model : S) (queue : List Msg) (stopped : Bool)
+// ═══ Subscriptions ═══
+//
+// A subscription is a pure declarative request (`Subscription`) for a window,
+// document or animation-frame listener. The runtime diffs the list by key
+// (target + event) after every batch and registers/unregisters the
+// difference; the handlers themselves live in the dispatch table under a
+// path-like id.
+
+#[terminating]
+def Runtime.sub_key {Msg : Type} (sub : Subscription Msg) : String :=
+    match sub {
+        Subscription.none => "",
+        Subscription.window event _handler => String.concat "window:" event,
+        Subscription.document event _handler => String.concat "document:" event,
+        Subscription.animation_frame _handler => "frame",
+    }
+
+def Runtime.window_spec (event : String) : String :=
+    Handler.spec_of (Handler.id List.empty (String.concat "window:" event)) ListenerFlags.none
+
+def Runtime.document_spec (event : String) : String :=
+    Handler.spec_of (Handler.id List.empty (String.concat "document:" event)) ListenerFlags.none
+
+def Runtime.frame_spec : String :=
+    Handler.spec_of (Handler.id List.empty "frame") ListenerFlags.none
+
+pub def Runtime.install_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
+    match sub {
+        Subscription.none => IO.pure unit,
+        Subscription.window event _handler => Dom.on_window event (Runtime.window_spec event),
+        Subscription.document event _handler => Dom.on_document event (Runtime.document_spec event),
+        Subscription.animation_frame _handler => Dom.on_frame Runtime.frame_spec,
+    }
+
+pub def Runtime.remove_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
+    match sub {
+        Subscription.none => IO.pure unit,
+        Subscription.window event _handler => Dom.off_window event,
+        Subscription.document event _handler => Dom.off_document event,
+        Subscription.animation_frame _handler => Dom.off_frame,
+    }
+
+/// Install only the subscriptions whose key is not already applied.
+#[terminating]
+def Runtime.install_added {Msg : Type} (old : List (Subscription Msg)) (new : List (Subscription Msg)) : IO Unit :=
+    match new {
+        List.empty => IO.pure unit,
+        List.cons sub rest =>
+            if Runtime.key_in (Runtime.sub_key sub) old
+            then Runtime.install_added old rest
+            else do {
+                let _ <- Runtime.install_sub sub;
+                Runtime.install_added old rest
+            },
+    }
+
+#[terminating]
+def Runtime.key_in {Msg : Type} (key : String) (subs : List (Subscription Msg)) : Bool :=
+    match subs {
+        List.empty => false,
+        List.cons sub rest =>
+            if String.beq key (Runtime.sub_key sub) then true else Runtime.key_in key rest,
+    }
+
+#[terminating]
+def Runtime.remove_stale {Msg : Type} (old : List (Subscription Msg)) (new : List (Subscription Msg)) : IO Unit :=
+    match old {
+        List.empty => IO.pure unit,
+        List.cons sub rest =>
+            if Runtime.key_in (Runtime.sub_key sub) new
+            then Runtime.remove_stale rest new
+            else do {
+                let _ <- Runtime.remove_sub sub;
+                Runtime.remove_stale rest new
+            },
+    }
+
+pub def Runtime.apply_subs {Msg : Type} (old : List (Subscription Msg)) (new : List (Subscription Msg)) : IO Unit := do {
+    let _ <- Runtime.install_added old new;
+    Runtime.remove_stale old new
 }
 
-/// Mount `view init` under the root the loader selected, and hand the state
-/// to the next export call.
+def Runtime.sub_handler {Msg : Type} (sub : Subscription Msg)
+    : List (Pair U32 (WebEvent -> HandlerResult Msg)) :=
+    match sub {
+        Subscription.none => List.empty,
+        Subscription.window event handler =>
+            List.cons
+                (Pair.pair (Handler.id List.empty (String.concat "window:" event))
+                    (fn (e : WebEvent) => HandlerResult.msg (handler e)))
+                List.empty,
+        Subscription.document event handler =>
+            List.cons
+                (Pair.pair (Handler.id List.empty (String.concat "document:" event))
+                    (fn (e : WebEvent) => HandlerResult.msg (handler e)))
+                List.empty,
+        Subscription.animation_frame handler =>
+            List.cons
+                (Pair.pair (Handler.id List.empty "frame")
+                    (fn (e : WebEvent) => HandlerResult.msg (handler e)))
+                List.empty,
+    }
+
+#[terminating]
+def Runtime.collect_sub_handlers {Msg : Type} (subs : List (Subscription Msg))
+    : List (Pair U32 (WebEvent -> HandlerResult Msg)) :=
+    match subs {
+        List.empty => List.empty,
+        List.cons sub rest =>
+            List.append (Runtime.sub_handler sub) (Runtime.collect_sub_handlers rest),
+    }
+
+pub type RuntimeState (S : Type) (Msg : Type) {
+    st (root : Node) (last : Html.Node) (model : S)
+       (queue : List Msg) (stopped : Bool)
+       (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
+       (subs : List (Subscription Msg))
+}
+
+/// Mount a `Program` under the root the loader selected, and hand the state
+/// to the next export call. Initial subscriptions are registered before the
+/// first render.
 ///
 /// The container's server-rendered tree is ADOPTED when it matches (same
 /// node types/tags, in order), so node state survives the first paint; on a
@@ -39,26 +168,72 @@ pub type RuntimeState (S : Type) (Msg : Type) {
 /// the container holds the SSR view root and nothing else, from an explicit
 /// selector, and the markup is the serializer's exact output (no added
 /// whitespace -- `Patch.hydrate` matches `childNodes` positionally).
-pub def Runtime.mount {S : Type} {Msg : Type} (init : S) (view : S -> Html.Node) : IO Unit := do {
+pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
+    (prog : Program S Msg E) : IO Unit := do {
     let root <- Dom.root;
-    let tree := view init;
-    let _ <- Patch.hydrate_root root tree;
-    let state : Ref (RuntimeState S Msg) <- Ref.new (RuntimeState.st root tree init List.empty false);
-    let _ <- Keep.save state;
-    return unit
-}
-
-/// Queue one message decoded from a DOM handler id.
-pub def Runtime.dispatch {S : Type} {Msg : Type} (decode : I64 -> Option Msg) (handler : I64) : IO Unit := do {
-    let state <- Runtime.load_state;
-    match decode handler {
-        Option.none => IO.pure unit,
-        Option.some msg => do {
-            let _ <- Ref.update state (Runtime.enqueue msg);
+    let model := Program.init prog;
+    let subs := (Program.subscriptions prog) model;
+    let _ <- Runtime.apply_subs List.empty subs;
+    match Oak.lower (Program.view prog model) {
+        Oak.Lowered.lowered tree handlers => do {
+            let _ <- Patch.hydrate_root root tree;
+            let table := List.append handlers (Runtime.collect_sub_handlers subs);
+            let state : Ref (RuntimeState S Msg) <-
+                Ref.new (RuntimeState.st root tree model List.empty false table subs);
+            let _ <- Keep.save state;
             return unit
         },
     }
 }
+
+/// Queue the message the handler registered for `id` produces.
+///
+/// The id is looked up in the handler table collected by the last render; the
+/// live event is snapshotted while the browser is still dispatching, so the
+/// pure handler sees a complete `WebEvent`.
+pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do {
+    let state <- Runtime.load_state;
+    let snapshot <- Ref.get state;
+    match snapshot {
+        RuntimeState.st _root _last _model _queue stopped handlers _subs =>
+            if stopped
+            then IO.pure unit
+            else
+                match Runtime.lookup_handler (I64.to_u32 handler) handlers {
+                    Option.none => IO.pure unit,
+                    Option.some handler_fn => do {
+                        let ev <- WebEvent.current;
+                        let outcome := handler_fn ev;
+                        match outcome {
+                            HandlerResult.handler_result msg prevent stop => do {
+                                let _ <- if prevent then WebEvent.prevent_default else IO.pure unit;
+                                let _ <- if stop then WebEvent.stop_propagation else IO.pure unit;
+                                match msg {
+                                    Option.some m => do {
+                                        let _ <- Ref.update state (Runtime.enqueue m);
+                                        return unit
+                                    },
+                                    Option.none => IO.pure unit,
+                                }
+                            },
+                        }
+                    },
+                },
+    }
+}
+
+#[terminating]
+def Runtime.lookup_handler {Msg : Type} (id : U32)
+    (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg)))
+    : Option (WebEvent -> HandlerResult Msg) :=
+    match handlers {
+        List.empty => Option.none,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair key handler_fn =>
+                    if U32.beq key id then Option.some handler_fn else Runtime.lookup_handler id rest,
+            },
+    }
 
 /// Append, not cons: events arrive in order and a frame must fold them in
 /// that order (`motes/oak/src/tests/app_tests.mo`'s `test_message_order`
@@ -66,8 +241,9 @@ pub def Runtime.dispatch {S : Type} {Msg : Type} (decode : I64 -> Option Msg) (h
 /// landed in one frame.
 def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped =>
-            RuntimeState.st root last model (List.append queue (List.cons msg List.empty)) stopped,
+        RuntimeState.st root last model queue stopped handlers subs =>
+            RuntimeState.st root last model (List.append queue (List.cons msg List.empty))
+                stopped handlers subs,
     }
 
 /// One frame: drain the queue, fold it, re-render and patch. A no-op when
@@ -78,34 +254,50 @@ pub def Runtime.tick {S : Type} {Msg : Type} {E : Type}
     let state <- Runtime.load_state;
     let snapshot <- Ref.get state;
     match snapshot {
-        RuntimeState.st root last model queue stopped =>
+        RuntimeState.st root last model queue stopped handlers subs =>
             if stopped
             then IO.pure unit
             else if List.is_empty queue
             then IO.pure unit
-            else Runtime.drain prog host state root last model queue,
+            else Runtime.drain prog host state root last model queue handlers subs,
     }
 }
 
 def Runtime.drain {S : Type} {Msg : Type} {E : Type}
     (prog : Program S Msg E) (host : Host IO E Msg) (state : Ref (RuntimeState S Msg))
-    (root : Node) (last : Html.Node) (model : S) (queue : List Msg) : IO Unit := do {
+    (root : Node) (last : Html.Node) (model : S) (queue : List Msg)
+    (handlers : List (Pair U32 (WebEvent -> HandlerResult Msg))) (subs : List (Subscription Msg)) : IO Unit := do {
     // Clear the queue first: a message dispatched while the batch runs lands
     // in the NEXT frame. The final write below reads the queue back so it is
     // not overwritten.
-    let drained : RuntimeState S Msg := RuntimeState.st root last model List.empty false;
+    let drained : RuntimeState S Msg :=
+        RuntimeState.st root last model List.empty false handlers subs;
     let _ <- Ref.set state drained;
     let folded <- Runtime.run_batch prog host model queue;
     match folded {
         Pair.pair next_model quit => do {
-            let tree := Program.view prog next_model;
-            let patches := Patch.diff last tree;
-            let _ <- Patch.apply root patches;
-            let current <- Ref.get state;
-            let pending := Runtime.pending_of current;
-            let next : RuntimeState S Msg := RuntimeState.st root tree next_model pending quit;
-            let _ <- Ref.set state next;
-            return unit
+            let next_subs := (Program.subscriptions prog) next_model;
+            match Oak.lower (Program.view prog next_model) {
+                Oak.Lowered.lowered tree next_handlers => do {
+                    let table := List.append next_handlers (Runtime.collect_sub_handlers next_subs);
+                    // Make the new handlers reachable BEFORE the DOM changes:
+                    // a patch can fire an event synchronously (e.g. an
+                    // autofocused input), and that event must resolve to the
+                    // handler just lowered, not the previous frame's table.
+                    let staged : RuntimeState S Msg :=
+                        RuntimeState.st root last model List.empty false table next_subs;
+                    let _ <- Ref.set state staged;
+                    let patches := Patch.diff last tree;
+                    let _ <- Patch.apply root patches;
+                    let _ <- Runtime.apply_subs subs next_subs;
+                    let current <- Ref.get state;
+                    let pending := Runtime.pending_of current;
+                    let next : RuntimeState S Msg :=
+                        RuntimeState.st root tree next_model pending quit table next_subs;
+                    let _ <- Ref.set state next;
+                    return unit
+                },
+            }
         },
     }
 }
@@ -113,7 +305,7 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
 /// The messages dispatched while the batch ran.
 def Runtime.pending_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List Msg :=
     match state {
-        RuntimeState.st _root _last _model queue _stopped => queue,
+        RuntimeState.st _root _last _model queue _stopped _handlers _subs => queue,
     }
 
 /// The state slot, typed for the caller. `Keep.load` is generic because the

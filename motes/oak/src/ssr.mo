@@ -14,9 +14,9 @@ use lib::elements {Html.document, Html.document_utf8}
 use lib::html_t {
   Emitted, HtmlT, HtmlT.run, Open, Page, Page.empty, PageM, Render,
 }
+use lib::typed {Oak.Node, Oak.to_html}
 use xml_html::html {
-  Html.Node, Html.RenderOpts, Html.default_opts, Html.to_string,
-  Html.to_string_with,
+  Html.RenderOpts, Html.default_opts, Html.to_string, Html.to_string_with,
 }
 
 /// Render a page as a document with the given options. `charset` prepends
@@ -24,22 +24,22 @@ use xml_html::html {
 /// one `Html.document` always produced.
 pub def Ssr.render_page (opts : Html.RenderOpts) (page : Page) : String :=
   if opts.charset
-  then Html.to_string_with opts (Html.document_utf8 page.head page.body)
-  else Html.to_string_with opts (Html.document page.head page.body)
+  then Html.to_string_with opts (Oak.to_html (Html.document_utf8 page.head page.body))
+  else Html.to_string_with opts (Oak.to_html (Html.document page.head page.body))
 
 /// Render a single node (a body fragment, a component) without a document
 /// wrapper.
-pub def Ssr.render_body (node : Html.Node) : String :=
-  Html.to_string node
+pub def Ssr.render_body (node : Oak.Node Msg) : String :=
+  Html.to_string (Oak.to_html node)
 
 pub def Ssr.to_response (status : U16) (opts : Html.RenderOpts) (page : Page) : Response :=
   Response.html status (Ssr.render_page opts page)
 
-pub def Ssr.to_response_node (status : U16) (node : Html.Node) : Response :=
-  Response.html status (Html.to_string node)
+pub def Ssr.to_response_node (status : U16) (node : Oak.Node Msg) : Response :=
+  Response.html status (Html.to_string (Oak.to_html node))
 
 /// A 200 HTML response for a fragment (no doctype/html wrapper).
-pub def Ssr.fragment_response (node : Html.Node) : Response :=
+pub def Ssr.fragment_response (node : Oak.Node Msg) : Response :=
   Ssr.to_response_node 200u16 node
 
 /// A sink that discards writes. `render_io` renders the final `Page` itself,

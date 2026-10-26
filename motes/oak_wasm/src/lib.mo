@@ -12,5 +12,6 @@ pub use lib::patch {
 }
 
 pub use lib::program {
-    Runtime.mount, Runtime.dispatch, Runtime.tick, Runtime.run_batch, RuntimeState,
+    Runtime.mount, Runtime.dispatch, Runtime.tick,
+    Runtime.run_batch, RuntimeState,
 }

@@ -31,6 +31,11 @@ path = "../../std"
 [dependencies.jsgen]
 path = "../jsgen"
 
+# The pure event vocabulary: what a browser event becomes before Monad sees
+# it. Shared with `oak`, which names it in typed view attributes.
+[dependencies.web_event]
+path = "../web_event"
+
 # Affine-by-default migration exception (measured 2026-10-23).
 # Delete this table when the mote reaches zero violations; the default
 # (no table) is `mode = "error"`. See plans/type-system/quantitative-types.md.

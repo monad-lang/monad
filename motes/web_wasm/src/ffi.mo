@@ -15,7 +15,7 @@
 /// rebase supplies `std::cstring`/`Ptr` for length-carrying calls; switch
 /// the multi-byte-string externs to `(ptr, len)` when that lands.
 
-use lib::types {Node, RequestId}
+use lib::types {Node, RequestId, ClipboardOp}
 use std::ref {Ref}
 
 #[extern "c" {link_name := "web_dom_create"}]
@@ -52,7 +52,13 @@ def dom_remove_attr_raw (n : Node) (key : String) : RawIO Unit
 def dom_set_text_raw (n : Node) (text : String) : RawIO Unit
 
 #[extern "c" {link_name := "web_dom_add_listener"}]
-def dom_add_listener_raw (n : Node) (event : String) (handler : I64) : RawIO Unit
+def dom_add_listener_raw (n : Node) (event : String) (spec : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_dom_add_listener_global"}]
+def dom_add_listener_global_raw (target : I64) (event : String) (spec : String) : RawIO Unit
+
+#[extern "c" {link_name := "web_dom_remove_listener_global"}]
+def dom_remove_listener_global_raw (target : I64) (event : String) : RawIO Unit
 
 #[extern "c" {link_name := "web_dom_child"}]
 def dom_child_raw (n : Node) (index : I64) : RawIO Node
@@ -87,6 +93,24 @@ def fetch_status_raw (r : RequestId) : RawIO I64
 #[extern "c" {link_name := "web_fetch_read"}]
 def fetch_read_raw (r : RequestId) (max : I64) : RawIO String
 
+#[extern "c" {link_name := "web_clipboard_available"}]
+def clipboard_available_raw : RawIO I64
+
+#[extern "c" {link_name := "web_clipboard_read_begin"}]
+def clipboard_read_begin_raw : RawIO ClipboardOp
+
+#[extern "c" {link_name := "web_clipboard_write_begin"}]
+def clipboard_write_begin_raw (text : String) : RawIO ClipboardOp
+
+#[extern "c" {link_name := "web_clipboard_poll"}]
+def clipboard_poll_raw (op : ClipboardOp) : RawIO I64
+
+#[extern "c" {link_name := "web_clipboard_read"}]
+def clipboard_read_raw (op : ClipboardOp) : RawIO String
+
+#[extern "c" {link_name := "web_clipboard_error"}]
+def clipboard_error_raw (op : ClipboardOp) : RawIO String
+
 #[extern "c" {link_name := "web_now_ms"}]
 def now_ms_raw : RawIO I64
 
@@ -108,3 +132,40 @@ def keep_set_raw {A : Type} (r : Ref A) : RawIO Unit
 
 #[extern "c" {link_name := "web_keep_get"}]
 def keep_get_raw {A : Type} : RawIO (Ref A)
+
+// ── The current event ────────────────────────────────────────────────
+//
+// The JS host keeps the live `WebEvent` in a slot for the duration of the
+// synchronous `oak_dispatch_event` export call. These getters read it.
+// Strings are written into the C side's scratch buffer and copied out, like
+// `dom_tag_name`; numeric selectors live in `event.mo` next to their use.
+
+#[extern "c" {link_name := "web_event_i64"}]
+def event_i64_raw (which : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_event_f64"}]
+def event_f64_raw (which : I64) : RawIO F64
+
+#[extern "c" {link_name := "web_event_str"}]
+def event_str_raw (which : I64) : RawIO String
+
+#[extern "c" {link_name := "web_event_data"}]
+def event_data_raw (mime : String) : RawIO String
+
+#[extern "c" {link_name := "web_event_types"}]
+def event_types_raw : RawIO String
+
+#[extern "c" {link_name := "web_event_files_count"}]
+def event_files_count_raw : RawIO I64
+
+#[extern "c" {link_name := "web_event_file_i64"}]
+def event_file_i64_raw (index : I64) (which : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_event_file_str"}]
+def event_file_str_raw (index : I64) (which : I64) : RawIO String
+
+#[extern "c" {link_name := "web_event_prevent_default"}]
+def event_prevent_default_raw : RawIO Unit
+
+#[extern "c" {link_name := "web_event_stop_propagation"}]
+def event_stop_propagation_raw : RawIO Unit

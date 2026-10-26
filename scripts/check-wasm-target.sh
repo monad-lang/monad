@@ -157,6 +157,22 @@ echo "== web: keyed lists (reorder/insert/remove keep node identity) =="
     -o "$tmp/oak_spa_keyed.wasm" --no-cache
 node wasm/web/keyed_spa_smoke.mjs "$tmp/oak_spa_keyed.wasm"
 
+echo "== web: event payload transport (snapshot, flags, drag/clipboard text) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_events.mo \
+    -o "$tmp/web_events.wasm" --no-cache
+node wasm/web/event_smoke.mjs "$tmp/web_events.wasm"
+node wasm/web/clipboard_smoke.mjs "$tmp/web_events.wasm"
+
+echo "== web: Oak events (typed handlers, drag and drop, sync clipboard) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_events.mo \
+    -o "$tmp/oak_events.wasm" --no-cache
+node wasm/web/oak_event_smoke.mjs "$tmp/oak_events.wasm"
+
+echo "== web: subscriptions (window/document listeners, animation frame) =="
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_subs.mo \
+    -o "$tmp/oak_subs.wasm" --no-cache
+node wasm/web/subs_smoke.mjs "$tmp/oak_subs.wasm"
+
 echo "== output suffix (build without -o) =="
 # The same rule must name the cache destination and the linked artifact.
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/hello.mo \
