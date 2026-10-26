@@ -103,6 +103,10 @@ const PURE_NATIVES: &[&str] = &[
   "i64_to_u32",
   "i64_to_u64",
   "u8_to_u64",
+  "u8_to_i64",
+  "u16_to_i64",
+  "u32_to_i64",
+  "u64_to_i64",
   "i32_to_i64",
   "i64_to_i32",
   "f32_add",
@@ -275,6 +279,11 @@ pub fn exec_native(
     "u32_to_string" => int_to_string(args, |v| (v as u32).to_string()),
     "u64_to_string" => int_to_string(args, |v| (v as u64).to_string()),
     "i64_to_u64" | "u8_to_u64" => int_to_int(args, NumSuffix::U64),
+    // `init/src/number.mo`'s `U8/U16/U32/U64.to_i64`: payload identity, the
+    // inverse of the widenings above. The interpreter's own u32/u64 and
+    // String→List bridges call these, so their absence broke Rust-host
+    // execution of `lang/src/core_eval.mo` too.
+    "u8_to_i64" | "u16_to_i64" | "u32_to_i64" | "u64_to_i64" => int_to_int(args, NumSuffix::I64),
     // `i32_to_i64` is payload identity (`mask_to_suffix(v, I64) = v`);
     // `i64_to_i32` re-interprets the low 32 bits (`v as i32 as i64`),
     // which the compiled backend emits as trunc+sext.

@@ -11,8 +11,9 @@
 # is enforced per declaration, at codegen. A reachable `web_*` extern on a
 # non-web target is a compile error naming the extern and the target
 # (`validate_native_target_availability`), while this mote's PURE parts
-# (`WebAbi`, `Glue.loader`) keep running everywhere -- their goldens and the
-# `wasm/web/web.js` drift test are ordinary tests.
+# (`WebAbi`, `Glue.loader`) keep running everywhere -- their goldens are
+# ordinary tests. `wasm/web/web.js` itself is a build artifact now
+# (`scripts/gen-web-js.sh`), so there is no committed copy to drift from.
 #
 # `jsgen` renders the browser glue from `src/web_abi.mo`, so the import map,
 # the C declarations and the externs cannot drift.

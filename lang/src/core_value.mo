@@ -47,7 +47,7 @@ pub type Env {
 /// A runtime value. Distinct from `CoreIr` (the compiled syntax it's
 /// reduced from) on purpose — a value here is always already in normal
 /// form, never a still-to-be-reduced expression.
-type Value {
+pub type Value {
   /// Scalar literals reuse `core_ir.IrLit` directly.
   v_lit (l: IrLit),
   /// What a `lam` evaluates to: the still-unevaluated body plus the
@@ -158,8 +158,23 @@ def slot_is_in_progress (slot : Slot) : Bool :=
 /// per `GlobalTable` entry. Unlike the Rust original, this is not mutated
 /// in place: every "mutating" operation below returns a new `GlobalCache`
 /// value (see this module's doc comment).
+///
+/// `fuel` is the evaluator's step budget. It rides the cache because the
+/// cache is the one value every `eval` recursion already threads and
+/// returns; `lang/core_eval.mo` burns it once per IR node. `-1` is
+/// unlimited (every caller but the browser REPL), and it is never read
+/// when unlimited, so the native interpreter pays one comparison per node.
+///
+/// `depth` is the current call depth and `depth_limit` the cap `apply`
+/// enforces against it. The limit rides the cache for the same reason as
+/// the fuel, and `-1` likewise means unlimited: only the browser REPL
+/// supplies one (its wasm stack is a fixed 32 MiB, so a runaway recursion
+/// must be reported before the trap). The native hosts leave it off: the
+/// meta-evaluator legitimately nests well past a couple of hundred frames
+/// (compiling shuttle's derives tripped a 200 cap), and a native stack is
+/// not the constraint there.
 type GlobalCache {
-  global_cache (slots: List Slot),
+  global_cache (slots: List Slot) (fuel: I64) (depth: I64) (depth_limit: I64),
 }
 
 /// A global slot was still `slot_in_progress` when it was referenced
@@ -175,12 +190,51 @@ def list_replicate (n : I64) (v : Slot) : List Slot :=
   else List.cons v (list_replicate (n - 1) v)
 
 pub def global_cache_new (len : I64) : GlobalCache :=
-  GlobalCache.global_cache (list_replicate len Slot.slot_empty)
+  GlobalCache.global_cache (list_replicate len Slot.slot_empty) (-1) 0 (-1)
+
+/// The same cache with a finite step budget and a nesting limit (see
+/// `GlobalCache`'s own notes on `fuel` and `depth_limit`).
+/// `lang/core_eval.mo`'s `eval_fueled` is the entry point.
+pub def global_cache_new_fueled (len : I64) (fuel : I64) (depth_limit : I64) : GlobalCache :=
+  GlobalCache.global_cache (list_replicate len Slot.slot_empty) fuel 0 depth_limit
+
+pub def global_cache_fuel (cache : GlobalCache) : I64 :=
+  match cache {
+    GlobalCache.global_cache _slots fuel _depth _limit => fuel,
+  }
+
+pub def global_cache_with_fuel (cache : GlobalCache) (fuel : I64) : GlobalCache :=
+  match cache {
+    GlobalCache.global_cache slots _old depth limit =>
+      GlobalCache.global_cache slots fuel depth limit,
+  }
+
+
+/// The interpreter's current *call* depth (`lang/core_eval.mo`'s `apply`).
+/// The fuel budget bounds steps, not frames, so this is the only thing that
+/// can turn a would-be wasm stack trap into a clean error.
+pub def global_cache_depth (cache : GlobalCache) : I64 :=
+  match cache {
+    GlobalCache.global_cache _slots _fuel depth _limit => depth,
+  }
+
+/// The call-depth cap, or `-1` for unlimited (every caller but the browser
+/// REPL). See `GlobalCache`'s note on `depth_limit`.
+pub def global_cache_depth_limit (cache : GlobalCache) : I64 :=
+  match cache {
+    GlobalCache.global_cache _slots _fuel _depth limit => limit,
+  }
+
+pub def global_cache_with_depth (cache : GlobalCache) (depth : I64) : GlobalCache :=
+  match cache {
+    GlobalCache.global_cache slots fuel _old limit =>
+      GlobalCache.global_cache slots fuel depth limit,
+  }
 
 /// Already-forced value for `idx`, if any -- never a re-evaluation.
 def global_cache_get (cache : GlobalCache) (idx : I64) : Option Value :=
   match cache {
-    GlobalCache.global_cache slots =>
+    GlobalCache.global_cache slots _fuel _depth _limit =>
       match List.get idx slots {
         Option.some slot => slot_done_value slot,
         Option.none => Option.none,
@@ -204,21 +258,21 @@ def list_set_nth (idx : I64) (v : Slot) (l : List Slot) : List Slot :=
 /// `global_cache_store` after.
 def global_cache_begin (cache : GlobalCache) (idx : I64) : Result CoreEvalCycle GlobalCache :=
   match cache {
-    GlobalCache.global_cache slots =>
+    GlobalCache.global_cache slots fuel depth limit =>
       match List.get idx slots {
         Option.some slot =>
           if slot_is_in_progress slot
           then Result.err (CoreEvalCycle.core_eval_cycle idx)
-          else Result.ok (GlobalCache.global_cache (list_set_nth idx Slot.slot_in_progress slots)),
+          else Result.ok (GlobalCache.global_cache (list_set_nth idx Slot.slot_in_progress slots) fuel depth limit),
         Option.none =>
-          Result.ok (GlobalCache.global_cache (list_set_nth idx Slot.slot_in_progress slots)),
+          Result.ok (GlobalCache.global_cache (list_set_nth idx Slot.slot_in_progress slots) fuel depth limit),
       },
   }
 
 def global_cache_store (cache : GlobalCache) (idx : I64) (value : Value) : GlobalCache :=
   match cache {
-    GlobalCache.global_cache slots =>
-      GlobalCache.global_cache (list_set_nth idx (Slot.slot_done value) slots),
+    GlobalCache.global_cache slots fuel depth limit =>
+      GlobalCache.global_cache (list_set_nth idx (Slot.slot_done value) slots) fuel depth limit,
   }
 
 /// Release `idx`'s in-progress marker back to empty after its evaluation
@@ -229,8 +283,8 @@ def global_cache_store (cache : GlobalCache) (idx : I64) (value : Value) : Globa
 /// `GlobalCache::fail` doc comment -- a real, previously-hit bug class.
 def global_cache_fail (cache : GlobalCache) (idx : I64) : GlobalCache :=
   match cache {
-    GlobalCache.global_cache slots =>
-      GlobalCache.global_cache (list_set_nth idx Slot.slot_empty slots),
+    GlobalCache.global_cache slots fuel depth limit =>
+      GlobalCache.global_cache (list_set_nth idx Slot.slot_empty slots) fuel depth limit,
   }
 
 // ─── Tests (mirror core_value.rs's #[cfg(test)] module) ────────────────

@@ -36,6 +36,12 @@ path = "../build"
 [dependencies.lang]
 path = "../lang"
 
+# The shared evaluator behind `monad eval` and `monad repl`: `eval::file`'s
+# filesystem entry plus (for the REPL) `eval::session`. The recipe itself
+# is `eval::run`, which the browser engine imports too.
+[dependencies.eval]
+path = "../eval"
+
 [dependencies.llvm]
 path = "../llvm"
 

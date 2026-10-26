@@ -24,7 +24,7 @@ use lang::module {
     ModuleInfoCache, module_info_cache_empty, check_file_cached,
     FileCheckAndCache, FileCheckResult,
 }
-use lang::eval_run {EvalRun.run_file}
+use eval::file {Eval.run_file}
 use lang::mote {MoteManifest, Mote.discover}
 use std::ref {Ref, Ref.get, Ref.set}
 use std::map {Map, BTreeMap}
@@ -207,7 +207,7 @@ def run_temp (root : Option String) (content : String) : IO (Result String Strin
     match w {
         Result.err _ => IO.pure (Result.err (String.concat "monad_eval: could not write " path)),
         Result.ok _ => do {
-            let r <- EvalRun.run_file path false;
+            let r <- Eval.run_file path false;
             let _ <- cleanup path;
             return r
         },

@@ -48,6 +48,11 @@ path = "../parsec"
 [dependencies.lang]
 path = "../../lang"
 
+# `monad_eval` runs through the shared evaluator's filesystem entry
+# (`eval::file`), the same pipeline `monad eval` uses.
+[dependencies.eval]
+path = "../../eval"
+
 [dependencies.llvm]
 path = "../../llvm"
 

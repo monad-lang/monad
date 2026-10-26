@@ -1,0 +1,38 @@
+# The /try page: the Oak UI for the browser REPL.
+#
+# It never evaluates Monad itself. Run posts the scratchpad source to a
+# worker hosting `try_engine.wasm` (`motes/try_engine`), then polls on the
+# animation-frame subscription until the result arrives. Cancel terminates
+# the worker, so it also cancels a runaway loop.
+[mote]
+name = "try_ui"
+version = "0.1.0"
+edition = "2026"
+targets = ["web"]
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.oak]
+path = "../oak"
+
+[dependencies.oak_wasm]
+path = "../oak_wasm"
+
+[dependencies.web_wasm]
+path = "../web_wasm"
+
+[dependencies.web_event]
+path = "../web_event"
+
+[dependencies.xml_html]
+path = "../xml_html"
+
+# Affine-by-default migration exception (measured 2026-10-26). Delete this
+# table when the mote reaches zero violations; the default (no table) is
+# `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

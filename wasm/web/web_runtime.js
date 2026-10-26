@@ -25,6 +25,22 @@ let instance = null;
 let memory = null;
 let rootSelector = 'body';
 let kept = 0n; // the export-call state slot (`Keep.save`/`Keep.load`)
+let tryResult = null; // the last /try engine result (see `try_result`)
+// The /try worker channel (main thread only; the engine worker never
+// calls these). A fresh Worker per run bounds the engine's leaky bump
+// allocator, and terminating it is what Cancel does.
+let tryWorker = null;
+let workerState = 0; // 0 idle, 1 running, 2 done, 3 timeout, 4 failed
+let workerResult = null;
+let workerSeq = 0;
+let workerTimer = null;
+// The timer covers two phases with different budgets: loading the engine
+// (fetch + compile, which dominates on a slow link) and then evaluation.
+// `worker.js` posts `started` when the instance is up, which switches to
+// the evaluation backstop. Fuel is the primary bound; this is the wall
+// clock for the front end, which has no fuel.
+const WORKER_LOAD_TIMEOUT_MS = 30000;
+const WORKER_EVAL_TIMEOUT_MS = 30000;
 
 const nodes = [null]; // id -> DOM node; 0 is the null handle
 const nodeIds = new WeakMap(); // node -> id, so a re-read keeps its handle
@@ -245,6 +261,42 @@ function clearGlobalListener(target, event) {
 
 function nodeById(id) {
   return nodes[Number(id)] || null;
+}
+
+const WORKER_LOAD_HINT =
+  'the engine worker failed to start: worker.js or one of its imports ' +
+  '(web.js, web_runtime.js, float_format.js, try_engine.wasm) did not load. ' +
+  'Check the browser console and rebuild with scripts/build-try.sh.';
+
+/// A worker failure arrives as an ErrorEvent, a plain Event (a module
+/// script or one of its imports failed to load), or a thrown value.
+/// `String(event)` is `[object Event]`, which tells the user nothing.
+function workerErrorMessage(ev) {
+  if (!ev) return WORKER_LOAD_HINT;
+  if (typeof ev === 'string') return ev;
+  if (typeof ev.message === 'string' && ev.message) return ev.message;
+  if (ev.error && typeof ev.error.message === 'string' && ev.error.message) {
+    return ev.error.message;
+  }
+  if (ev.filename) return `${ev.filename}:${ev.lineno || 0}`;
+  return WORKER_LOAD_HINT;
+}
+
+/// Terminate the run worker (if any), clear the timeout, and record `state`.
+/// Called on completion, timeout, cancel and before a new run.
+function tryStopWorker(state) {
+  if (workerTimer !== null) {
+    clearTimeout(workerTimer);
+    workerTimer = null;
+  }
+  if (tryWorker) {
+    tryWorker.onmessage = null;
+    tryWorker.onerror = null;
+    tryWorker.onmessageerror = null;
+    tryWorker.terminate();
+    tryWorker = null;
+  }
+  workerState = state;
 }
 
 function str(ptr, len) {
@@ -699,6 +751,124 @@ export const host = {
 
   console_log(ptr, len) {
     console.log(str(ptr, len));
+    return 0n;
+  },
+
+  // ── /try engine result (pushed from try_engine.wasm in the worker) ──
+  // The engine's `try_run` ends by calling this with its status and four
+  // rendered strings; the worker reads them with `takeTryResult` after the
+  // export returns and posts them to the UI.
+  try_result(status, vp, vl, tp, tl, ep, el, np, nl) {
+    tryResult = {
+      status: Number(status),
+      value: str(vp, vl),
+      type: str(tp, tl),
+      error: str(ep, el),
+      notes: str(np, nl),
+    };
+    return 0n;
+  },
+
+  takeTryResult() {
+    const r = tryResult;
+    tryResult = null;
+    return r;
+  },
+
+  // ── /try worker channel (UI side) ──
+  worker_run(ptr, len) {
+    tryStopWorker(0);
+    const source = str(ptr, len);
+    workerSeq += 1;
+    workerState = 1;
+    workerResult = null;
+    const WorkerCtor = globalThis.Worker;
+    if (!WorkerCtor) {
+      workerState = 4;
+      workerResult = { status: 'internal', value: '', type: '',
+                       error: 'Web Workers are not available in this browser', notes: '' };
+      return BigInt(workerSeq);
+    }
+    const workerUrl = new URL('./worker.js', import.meta.url);
+    try {
+      tryWorker = new WorkerCtor(workerUrl, { type: 'module' });
+    } catch (err) {
+      const message = workerErrorMessage(err);
+      console.error('oak: could not start the /try worker', workerUrl.href, err);
+      workerState = 4;
+      workerResult = { status: 'internal', value: '', type: '', error: message, notes: '' };
+      return BigInt(workerSeq);
+    }
+    const seq = workerSeq;
+    tryWorker.onmessage = (ev) => {
+      const d = ev.data || {};
+      if (d.seq !== seq) return;
+      if (d.type === 'started') {
+        if (workerTimer !== null) clearTimeout(workerTimer);
+        workerTimer = setTimeout(() => {
+          workerResult = { status: 'timeout', value: '', type: '',
+                           error: 'the evaluation did not finish within 30 seconds', notes: '' };
+          tryStopWorker(3);
+        }, WORKER_EVAL_TIMEOUT_MS);
+        return;
+      }
+      workerResult = {
+        status: d.status || 'internal',
+        value: d.value || '',
+        type: d.typeText || '',
+        error: d.error || '',
+        notes: d.notes || '',
+      };
+      workerState = d.type === 'result' ? 2 : 4;
+      tryStopWorker(workerState);
+    };
+    tryWorker.onerror = (ev) => {
+      console.error('oak: /try worker failed', workerUrl.href, ev);
+      workerResult = { status: 'internal', value: '', type: '',
+                       error: workerErrorMessage(ev), notes: '' };
+      tryStopWorker(4);
+    };
+    tryWorker.onmessageerror = (ev) => {
+      console.error('oak: /try worker message could not be deserialized', workerUrl.href, ev);
+      workerResult = { status: 'internal', value: '', type: '',
+                       error: 'the engine worker sent a message this page could not read', notes: '' };
+      tryStopWorker(4);
+    };
+    tryWorker.postMessage({ type: 'run', seq, source });
+    workerTimer = setTimeout(() => {
+      workerResult = { status: 'timeout', value: '', type: '',
+                       error: 'loading the engine did not finish within 30 seconds', notes: '' };
+      tryStopWorker(3);
+    }, WORKER_LOAD_TIMEOUT_MS);
+    return BigInt(seq);
+  },
+
+  worker_poll() {
+    return BigInt(workerState);
+  },
+
+  worker_status(ptr, max) {
+    return writeBytes(ptr, encoder.encode(workerResult ? workerResult.status : ''), max);
+  },
+
+  worker_value(ptr, max) {
+    return writeBytes(ptr, encoder.encode(workerResult ? workerResult.value : ''), max);
+  },
+
+  worker_type(ptr, max) {
+    return writeBytes(ptr, encoder.encode(workerResult ? workerResult.type : ''), max);
+  },
+
+  worker_error(ptr, max) {
+    return writeBytes(ptr, encoder.encode(workerResult ? workerResult.error : ''), max);
+  },
+
+  worker_notes(ptr, max) {
+    return writeBytes(ptr, encoder.encode(workerResult ? workerResult.notes : ''), max);
+  },
+
+  worker_cancel() {
+    tryStopWorker(0);
     return 0n;
   },
 

@@ -1,16 +1,15 @@
-// Regenerate the browser loader from the ABI spec.
+// Render the browser loader from the ABI spec.
 //
-//   monad build examples/gen_web_js.mo -o /tmp/gen_web_js --no-cache
-//   /tmp/gen_web_js > wasm/web/web.js
+//   scripts/gen-web-js.sh [out]        # default wasm/web/web.js
+//
+// The output is a BUILD ARTIFACT (gitignored), not a checked-in source:
+// this program is its only author. `scripts/gen-web-js.sh` builds the
+// binary in a temp dir, runs it, and sanity-checks the result; every
+// consumer (build-try, check-wasm-target, check-try) calls it first.
 //
 // Build first, then run the binary: `monad run` prints its compile status
 // on stdout, so redirecting it directly would prepend progress lines to
-// the generated file.
-//
-// `wasm/web/web.js` is committed (it is what the page imports) and is
-// otherwise treated as build output: `motes/web_wasm`'s drift test compares
-// the committed file against `Glue.loader WebAbi.default`, so editing it by
-// hand fails the suite. This program is pure except for the write, and it
+// the generated file. This program is pure except for the write, and it
 // never reaches a `web_*` extern, so it builds natively.
 
 #![mote { name := "gen_web_js", deps := [web_wasm] }]

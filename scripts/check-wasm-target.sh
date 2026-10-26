@@ -27,6 +27,10 @@ done
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
+# The Node harnesses import `wasm/web/web.js`, which is generated rather
+# than committed; every run regenerates it before the first harness.
+MONAD="$MONAD" "$repo_root/scripts/gen-web-js.sh"
+
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/monad-wasm-check.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
@@ -232,5 +236,8 @@ grep -q 'web_dom_create' "$tmp/gate-native.log" \
     || fail "native gate did not name web_dom_create: $(cat "$tmp/gate-native.log")"
 grep -q 'not available on target' "$tmp/gate-native.log" \
     || fail "native gate did not explain the target: $(cat "$tmp/gate-native.log")"
+
+echo "== /try: browser REPL engine + UI =="
+"$repo_root/scripts/check-try.sh" "$MONAD"
 
 echo "ok: wasm target checks passed"

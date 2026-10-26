@@ -275,6 +275,13 @@ pub def U8.beq (a b : U8) : Bool
 #[native u8_to_u64]
 def U8.to_u64 (a : U8) : U64
 
+/// Payload identity, like every `uN_to_*` conversion in this backend (a
+/// `U8` is an i64 whose high bits are zero). Exists so Monad-level code
+/// can take a byte back to `I64` without a second native family; the
+/// evaluator's `String.to_list`/`String.get` bridge is the first caller.
+#[native u8_to_i64]
+pub def U8.to_i64 (a : U8) : I64
+
 #[native u8_to_u32]
 pub def U8.to_u32 (a : U8) : U32
 
@@ -344,6 +351,9 @@ pub def U16.gt (a b : U16) : Bool
 #[native u16_to_string]
 pub def U16.to_string (a : U16) : String
 
+#[native u16_to_i64]
+pub def U16.to_i64 (a : U16) : I64
+
 pub instance Add U16 {
 	def add (a b : U16) : U16 := U16.add a b
 }
@@ -387,7 +397,7 @@ pub def U32.sub (a b : U32) : U32
 pub def U32.mul (a b : U32) : U32
 
 #[native u32_div]
-def U32.div (a b : U32) : U32
+pub def U32.div (a b : U32) : U32
 
 #[native u32_eq]
 pub def U32.beq (a b : U32) : Bool
@@ -400,6 +410,9 @@ pub def U32.gt (a b : U32) : Bool
 
 #[native u32_to_string]
 pub def U32.to_string (a : U32) : String
+
+#[native u32_to_i64]
+pub def U32.to_i64 (a : U32) : I64
 
 pub instance Add U32 {
 	def add (a b : U32) : U32 := U32.add a b
@@ -473,7 +486,7 @@ pub def U64.div (a b : U64) : U64
 pub def U64.mod (a b : U64) : U64
 
 #[native u64_xor]
-def U64.xor (a b : U64) : U64
+pub def U64.xor (a b : U64) : U64
 
 #[native u64_eq]
 pub def U64.beq (a b : U64) : Bool
@@ -486,6 +499,9 @@ pub def U64.gt (a b : U64) : Bool
 
 #[native u64_to_string]
 pub def U64.to_string (a : U64) : String
+
+#[native u64_to_i64]
+pub def U64.to_i64 (a : U64) : I64
 
 pub instance Add U64 {
 	def add (a b : U64) : U64 := U64.add a b

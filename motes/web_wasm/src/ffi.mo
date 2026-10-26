@@ -123,6 +123,13 @@ def storage_set_raw (key : String) (value : String) : RawIO Unit
 #[extern "c" {link_name := "web_console_log"}]
 def console_log_raw (s : String) : RawIO Unit
 
+/// The /try engine's export channel (`motes/try_engine`). Not a runtime
+/// `monad_*` symbol: the C side is `web_try_result`, which forwards four
+/// (ptr,len) pairs to the JS host.
+#[extern "c" {link_name := "web_try_result"}]
+def try_result_raw (status : I64) (value : String) (typ : String)
+    (error : String) (notes : String) : RawIO Unit
+
 /// The export-call state slot. Exports cannot take or return Monad values
 /// (the export ABI is i64 words), so a `Ref` is stashed in the JS host and
 /// read back by the next export. `Ref A` is one opaque word at runtime and
@@ -169,3 +176,30 @@ def event_prevent_default_raw : RawIO Unit
 
 #[extern "c" {link_name := "web_event_stop_propagation"}]
 def event_stop_propagation_raw : RawIO Unit
+
+/// The UI half of the /try worker channel (`worker.mo`). The worker runs
+/// `try_engine.wasm`; the main-thread Oak app starts a run, polls, and
+/// reads the finished result.
+#[extern "c" {link_name := "web_worker_run"}]
+def worker_run_raw (source : String) : RawIO I64
+
+#[extern "c" {link_name := "web_worker_poll"}]
+def worker_poll_raw : RawIO I64
+
+#[extern "c" {link_name := "web_worker_status"}]
+def worker_status_raw : RawIO String
+
+#[extern "c" {link_name := "web_worker_value"}]
+def worker_value_raw : RawIO String
+
+#[extern "c" {link_name := "web_worker_type"}]
+def worker_type_raw : RawIO String
+
+#[extern "c" {link_name := "web_worker_error"}]
+def worker_error_raw : RawIO String
+
+#[extern "c" {link_name := "web_worker_notes"}]
+def worker_notes_raw : RawIO String
+
+#[extern "c" {link_name := "web_worker_cancel"}]
+def worker_cancel_raw : RawIO Unit

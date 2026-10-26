@@ -1,0 +1,32 @@
+# The shared evaluator: the one typecheck/elaborate/lower/evaluate recipe
+# behind `monad eval`, the /try browser engine, and `monad repl`.
+#
+# A top-level toolchain mote, not a package under motes/: `cli` links it,
+# so it is compiled into the compiler binary beside `lang`/`build`. `run.mo`
+# is the pure recipe (supplied-source loading only, so `/try` can import it
+# on wasm); `file.mo` is the filesystem entry `monad eval` and weaver use;
+# `session.mo` is the REPL's state machine.
+[mote]
+name = "eval"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.init]
+path = "../init"
+
+[dependencies.std]
+path = "../std"
+
+[dependencies.lang]
+path = "../lang"
+
+# Affine-by-default migration exception (measured 2026-10-29). The shared
+# recipe mirrors lang::eval_run's field-access pattern, which reads a
+# struct's fields more than once; delete this table when the mote reaches
+# zero violations. The default (no table) is `mode = "error"`. See
+# plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

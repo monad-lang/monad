@@ -140,6 +140,41 @@ def WebImport.storage_set : WebImport :=
 def WebImport.console_log : WebImport :=
   { module := "monad", name := "console_log", params := ["i64", "i64"], result := "void" }
 
+/// The /try engine's one export channel: `status` plus the four rendered
+/// strings, each as (ptr,len). Push rather than pull because an `IO`-typed
+/// wasm export cannot return a value and a pure one cannot read engine
+/// state; the JS host copies the strings immediately.
+def WebImport.try_result : WebImport :=
+  { module := "monad", name := "try_result",
+    params := ["i64", "i64", "i64", "i64", "i64", "i64", "i64", "i64", "i64"],
+    result := "void" }
+
+/// The UI side of the worker channel (`motes/web_wasm/src/worker.mo`):
+/// start a run, poll its state, read the finished result's fields, cancel.
+def WebImport.worker_run : WebImport :=
+  { module := "monad", name := "worker_run", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.worker_poll : WebImport :=
+  { module := "monad", name := "worker_poll", params := List.empty, result := "i64" }
+
+def WebImport.worker_status : WebImport :=
+  { module := "monad", name := "worker_status", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.worker_value : WebImport :=
+  { module := "monad", name := "worker_value", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.worker_type : WebImport :=
+  { module := "monad", name := "worker_type", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.worker_error : WebImport :=
+  { module := "monad", name := "worker_error", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.worker_notes : WebImport :=
+  { module := "monad", name := "worker_notes", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.worker_cancel : WebImport :=
+  { module := "monad", name := "worker_cancel", params := List.empty, result := "void" }
+
 /// The export-call state slot: one opaque word in, one out.
 def WebImport.keep_set : WebImport :=
   { module := "monad", name := "keep_set", params := ["i64"], result := "void" }
@@ -226,7 +261,10 @@ pub def WebAbi.default : WebAbi :=
         WebImport.clipboard_write_begin, WebImport.clipboard_poll,
         WebImport.clipboard_read, WebImport.clipboard_error,
         WebImport.now_ms, WebImport.storage_get_raw,
-        WebImport.storage_set, WebImport.console_log,
+        WebImport.storage_set, WebImport.console_log, WebImport.try_result,
+        WebImport.worker_run, WebImport.worker_poll, WebImport.worker_status,
+        WebImport.worker_value, WebImport.worker_type, WebImport.worker_error,
+        WebImport.worker_notes, WebImport.worker_cancel,
         WebImport.keep_set, WebImport.keep_get,
         WebImport.write_stdout, WebImport.write_stderr, WebImport.read_stdin,
         WebImport.f64_to_string,

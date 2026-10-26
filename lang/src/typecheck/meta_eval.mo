@@ -146,6 +146,8 @@ pub def show_core_eval_error_debug (e : CoreEvalError) : String :=
         CoreEvalError.ce_arity_mismatch expected got => String.concat "ce_arity_mismatch expected=" (String.concat (I64.to_string expected) (String.concat " got=" (I64.to_string got))),
         CoreEvalError.ce_cycle idx => String.concat "ce_cycle " (I64.to_string idx),
         CoreEvalError.ce_unknown_native native_id => String.concat "ce_unknown_native " (I64.to_string native_id),
+        CoreEvalError.ce_out_of_fuel => "ce_out_of_fuel",
+        CoreEvalError.ce_recursion_too_deep => "ce_recursion_too_deep",
         CoreEvalError.ce_native_arg_error msg => String.concat "ce_native_arg_error " msg,
         CoreEvalError.ce_non_exhaustive_match inductive ctor => String.concat "ce_non_exhaustive_match " (String.concat (show_module_path_ inductive) (String.concat "." (id_str ctor))),
     }

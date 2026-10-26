@@ -90,7 +90,9 @@ def numeric_runtime_functions : List LLVMFunction :=
    emit_u32_add, emit_u32_sub, emit_u32_mul, emit_u32_and, emit_u32_or,
    emit_u32_xor,
    emit_u32_shl, emit_u32_shr, emit_u32_eq, emit_u32_lt, emit_u32_gt,
+   emit_u32_div, emit_u32_to_string,
    emit_i64_to_u64, emit_u8_to_u64,
+   emit_u8_to_i64, emit_u16_to_i64, emit_u32_to_i64, emit_u64_to_i64,
    emit_u16_eq, emit_u16_lt, emit_u16_gt,
    emit_u16_add, emit_u16_sub, emit_u16_mul, emit_u16_div,
    emit_i8_eq, emit_i8_lt, emit_i8_gt,
@@ -536,6 +538,44 @@ def emit_u32_shl : LLVMFunction :=
 def emit_u32_shr : LLVMFunction :=
   emit_masked_binop "monad_u32_shr" (Borrow.of u32_mask) (lshr_ (var_ "a") (var_ "b"))
 
+/// `monad_u32_div(a, b)`: masked operands, 0 when the masked divisor is 0,
+/// else the masked quotient. Newly reachable because the interpreter
+/// (`lang/core_eval.mo`) implements `u32_div` by calling `U32.div`; the
+/// `Div U32` instance alone never made it reachable before.
+def emit_u32_div : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "a" (and_ (parm_ 0) u32_mask),
+       assign "b" (and_ (parm_ 1) u32_mask),
+       assign "zero_b" (icmp_eq (var_ "b") (int_ 0)),
+       branch (var_ "zero_b") "zero" "calc"] in
+  let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
+  let calc :=
+    LLVMBasicBlock.mk "calc"
+      [assign "r" (sdiv (var_ "a") (var_ "b")),
+       assign "m" (and_ (var_ "r") u32_mask),
+       ret (var_ "m")] in
+  { name := "monad_u32_div",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry, zero, calc],
+    dbg_loc := Option.none }
+
+/// `monad_u32_to_string`: mask, then reuse `monad_i64_to_string` (a
+/// u32's canonical range is non-negative, so the signed printer is
+/// exact). Same reason for the new reachability as `emit_u32_div`.
+def emit_u32_to_string : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "m" (and_ (parm_ 0) u32_mask),
+       assign "r" (call "monad_i64_to_string" i64_ [var_ "m"] false),
+       ret (var_ "r")] in
+  { name := "monad_u32_to_string",
+    params := (i64_params 1),
+    ret_ty := i64_,
+    blocks := [entry],
+    dbg_loc := Option.none }
+
 /// A two-argument comparison native that masks both operands to `mask`
 /// before comparing, then widens the `i1` for the wrapper's `2 - raw`
 /// Bool boxing. `cmp` is built from `var_ "a"`/`var_ "b"` by the caller.
@@ -668,6 +708,16 @@ def emit_identity_native (name : String) : LLVMFunction :=
 
 def emit_i64_to_u64 : LLVMFunction := emit_identity_native "monad_i64_to_u64"
 def emit_u8_to_u64 : LLVMFunction := emit_identity_native "monad_u8_to_u64"
+
+/// The reverse direction (`init/number.mo`'s `UN.to_i64`): payload
+/// identity, present so Monad-level code can consume a width-typed value
+/// as the i64 every evaluator value carries. The interpreter
+/// (`lang/core_eval.mo`) needs them to build `List U8`/`String.hash`
+/// results without inventing a second representation.
+def emit_u8_to_i64 : LLVMFunction := emit_identity_native "monad_u8_to_i64"
+def emit_u16_to_i64 : LLVMFunction := emit_identity_native "monad_u16_to_i64"
+def emit_u32_to_i64 : LLVMFunction := emit_identity_native "monad_u32_to_i64"
+def emit_u64_to_i64 : LLVMFunction := emit_identity_native "monad_u64_to_i64"
 
 /// The `I64` arithmetic/comparison family -- the LAST set of natives with
 /// no runtime backing, and the only one whose absence was a live

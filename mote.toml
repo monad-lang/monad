@@ -31,6 +31,7 @@ members = [
   "llvm",
   "runtime",
   "build",
+  "eval",
   "slow_tests",
   "bench",
   "proofs",

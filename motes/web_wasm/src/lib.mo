@@ -33,4 +33,6 @@ pub use lib::event {
 pub use lib::clock {Clock.now_ms}
 pub use lib::storage {Storage.get, Storage.set}
 pub use lib::console {Console.log}
+pub use lib::try_bridge {TryBridge.push_result}
+pub use lib::worker {Worker.run, Worker.poll, Worker.status, Worker.value, Worker.typ, Worker.error, Worker.notes, Worker.cancel}
 pub use lib::keep {Keep.save, Keep.load}

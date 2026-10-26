@@ -22,7 +22,7 @@ use lib::parser {
   LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_with_ranges,
   decls_parser_strict, module_path_to_string,
 }
-use parsec::core {ParseError, ParseResult}
+use parsec::core {ParseError, ParseResult, parse_error_remaining}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
 use lang::mote {
   BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
@@ -92,11 +92,11 @@ open IO {file_exists, is_dir, list_dir, println}
 open ParseResult {fail, success}
 
 /// Module path for the prelude
-def prelude_module_path : ModulePath := ModulePath.mk [Identifier.id "prelude"]
+pub def prelude_module_path : ModulePath := ModulePath.mk [Identifier.id "prelude"]
 
-def init_module_path : ModulePath := ModulePath.mk [Identifier.id "init"]
+pub def init_module_path : ModulePath := ModulePath.mk [Identifier.id "init"]
 
-def std_module_path : ModulePath := ModulePath.mk [Identifier.id "std"]
+pub def std_module_path : ModulePath := ModulePath.mk [Identifier.id "std"]
 
 /// `std.test` -- the module path `test_elaborate_loaded_modules_...` below
 /// resolves to a file rather than naming one.
@@ -173,10 +173,33 @@ pub def try_parse_decls (input : String) : Option (List Decl) :=
 /// `check_module_with_scope`), so `expand_decls` runs here too, same
 /// as `parse_all_decls` above.
 pub def try_parse_decls_strict (input : String) (path : Option String) : Result String (List Decl) :=
+    match try_parse_decls_strict_diag input {
+        Result.ok decl_list => Result.ok decl_list,
+        Result.err e => Result.err (show_parse_error input path e),
+    }
+
+/// `try_parse_decls_strict` without the rendering: the same strict parse
+/// and macro expansion, but the raw `ParseError` on failure. A caller that
+/// must distinguish "the input ended mid-construct" from "the input is
+/// wrong" needs the error's remaining text, which the printed diagnostic
+/// no longer carries (the REPL's continuation signal; see
+/// `parse_error_at_eof`).
+pub def try_parse_decls_strict_diag (input : String) : Result ParseError (List Decl) :=
     match decls_parser_strict input {
         ParseResult.success _ decl_list => Result.ok (expand_decls decl_list),
-        ParseResult.fail e => Result.err (render_parse_error input path e),
+        ParseResult.fail e => Result.err e,
     }
+
+/// Did this parse failure happen at the end of the input? The strict
+/// parser reports the text it could not consume; only whitespace left
+/// means the construct was cut off rather than malformed. A failure with
+/// real text remaining (`1 +* 2`) is a genuine error, not a continuation.
+pub def parse_error_at_eof (e : ParseError) : Bool :=
+    String.is_empty (String.trim (parse_error_remaining e))
+
+/// Render a strict-parse failure the way `try_parse_decls_strict` does.
+pub def show_parse_error (input : String) (path : Option String) (e : ParseError) : String :=
+    render_parse_error input path e
 
 // --- Declaration ranges (what navigation reads) ---
 //
@@ -308,7 +331,7 @@ def mk_decl_range (d : Decl) (range : SourceRange) : DeclRange :=
 // --- Module dependency loading ---
 
 /// Extract use declarations from a list of declarations
-def extract_use_decls (decl_list : List Decl) : List ModulePath :=
+pub def extract_use_decls (decl_list : List Decl) : List ModulePath :=
     extract_use_decls_go decl_list List.empty
 
 #[partial]
@@ -3641,6 +3664,19 @@ pub struct LoadedModules {
     all_modules : List ModuleInfo,
 }
 
+/// Build a `ModuleInfo` from already-parsed declarations. The in-memory
+/// caller (the browser REPL's engine) parses its own sources and hands the
+/// result to `elaborate_loaded_modules_pure`; this keeps the constructor
+/// spelling in one place and makes the loader's field order explicit.
+pub def make_module_info (path : ModulePath) (file_path : String) (decls : List Decl) : ModuleInfo :=
+    ModuleInfo.mk path file_path decls
+
+/// The `LoadedModules` a loader would have produced, from a main module and
+/// its already-resolved dependency list (the main module is included in
+/// `all` too, matching `load_file_modules_cached_go`).
+pub def make_loaded_modules (main : ModuleInfo) (all : List ModuleInfo) : LoadedModules :=
+    { main_module := main, all_modules := all }
+
 def show_loaded_modules (m : LoadedModules) : String :=
     match m {
         mk main all => "main: " ++ Show.show main ++ "\nall: " ++ Show.show all
@@ -3660,6 +3696,114 @@ def get_loaded_main (loaded : LoadedModules) : ModuleInfo :=
 pub def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
     match loaded {
         LoadedModules.mk main_module all_modules => all_modules
+    }
+
+// --- The source-list loader (an in-memory module set) -------------------
+//
+// The filesystem loader above resolves each module through the on-disk
+// cascade. A caller that already HOLDS the module texts -- the browser
+// REPL's served prelude, and any other embedded module set -- needs the
+// same walk over that set instead: same strict parser, same `lib`
+// rewrite, same dependency extraction, only the lookup differs. Keeping
+// it here, beside the disk loader, is what lets those callers stop
+// re-implementing the walk.
+
+/// One module's source text with the identity the loader assigns it:
+/// `path` is the module path a `use` names, `file_path` is the label
+/// diagnostics use, and `mote` is the owning mote the `use lib::` rewrite
+/// needs.
+pub struct ModuleSource {
+    path : ModulePath,
+    mote : String,
+    file_path : String,
+    source : String,
+}
+
+pub def make_module_source (path : ModulePath) (mote : String)
+    (file_path : String) (source : String) : ModuleSource :=
+    { path := path, mote := mote, file_path := file_path, source := source }
+
+/// Parse one supplied module exactly as the disk loader parses a file:
+/// the strict parser, then the `lib` rewrite for the module's own mote.
+pub def module_info_of_source (ms : ModuleSource) : Result String ModuleInfo :=
+    match ms {
+        { path, mote, file_path, source } =>
+            match try_parse_decls_strict source (Option.some file_path) {
+                Result.err e =>
+                    Result.err (String.concat file_path (String.concat ": " e)),
+                Result.ok decls =>
+                    Result.ok (make_module_info path file_path (rewrite_lib_uses mote decls)),
+            },
+    }
+
+def source_list_contains (mp : ModulePath) (seen : List ModulePath) : Bool :=
+    match seen {
+        List.empty => false,
+        List.cons hd rest => if modpath_eq hd mp then true else source_list_contains mp rest,
+    }
+
+def lookup_module_source (mp : ModulePath) (sources : List ModuleSource) : Option ModuleSource :=
+    match sources {
+        List.empty => Option.none,
+        List.cons ms rest =>
+            if modpath_eq ms.path mp
+            then Option.some ms
+            else lookup_module_source mp rest,
+    }
+
+/// The walk: `pending` modules to resolve, `seen` those already queued,
+/// `visited` the resolved ones (in discovery order). `reject` is the
+/// caller's policy hook; it runs before the lookup, which is how a caller
+/// keeps its own message for a module it does not serve (`std` in the
+/// browser REPL, `lib` without a mote). Matches the filesystem walker's
+/// order and error vocabulary.
+#[terminating]
+def load_sources_go (pending : List ModulePath) (seen : List ModulePath)
+    (visited : List ModuleInfo) (sources : List ModuleSource)
+    (reject : ModulePath -> Option String) : Result String (List ModuleInfo) :=
+    match pending {
+        List.empty => Result.ok visited,
+        List.cons mp rest =>
+            match reject mp {
+                Option.some message => Result.err message,
+                Option.none =>
+                    if source_list_contains mp seen
+                    then load_sources_go rest seen visited sources reject
+                    else match lookup_module_source mp sources {
+                        Option.none =>
+                            Result.err (String.concat "unresolved module: " (show_module_path mp)),
+                        Option.some ms =>
+                            match module_info_of_source ms {
+                                Result.err e => Result.err e,
+                                Result.ok info =>
+                                    let deps : List ModulePath := extract_use_decls info.decl_list
+                                    in
+                                    load_sources_go (List.append deps rest)
+                                        (List.cons mp seen) (List.cons info visited) sources reject,
+                            },
+                    },
+            },
+    }
+
+/// The dependency closure of `main` over supplied sources: `seeds` plus
+/// `main`'s own `use` lines, then each reached module's own `use` lines,
+/// deduplicated by module path. Pure -- parsing and rewriting only -- so
+/// it is usable on the wasm target.
+#[terminating]
+pub def load_modules_from_sources (main : ModuleInfo) (seeds : List ModulePath)
+    (sources : List ModuleSource) (reject : ModulePath -> Option String)
+    : Result String LoadedModules :=
+    match main {
+        ModuleInfo.mk mp_path file_path decl_list =>
+            let pending : List ModulePath := List.append seeds (extract_use_decls decl_list)
+            in
+            match load_sources_go pending List.empty List.empty sources reject {
+                Result.err e => Result.err e,
+                Result.ok infos =>
+                    let main_info : ModuleInfo := ModuleInfo.mk mp_path file_path decl_list in
+                    let main_again : ModuleInfo := ModuleInfo.mk mp_path file_path decl_list in
+                    Result.ok (make_loaded_modules main_info (List.cons main_again infos)),
+            },
     }
 
 /// Resolves every bare `open`/`use`-imported name inside ONE module's
@@ -3809,6 +3953,13 @@ def resolve_lib_alias_decls (base_dir : String) (decls : List Decl) : IO (List D
     else return decls
 }
 
+/// `resolve_lib_alias_decls` for a main module named by `file_path`: the
+/// loading directory is derived here. The disk loader runs the rewrite
+/// internally for its target module; a caller whose main module never
+/// touches the disk loader (the REPL's session) needs it directly.
+pub def rewrite_lib_aliases_of (file_path : String) (decls : List Decl) : IO (List Decl) :=
+    resolve_lib_alias_decls (extract_directory file_path) decls
+
 def has_lib_use (decls : List Decl) : Bool :=
     match decls {
         List.empty => false,
@@ -3829,7 +3980,7 @@ def is_lib_alias (mp : ModulePath) : Bool :=
             }
     }
 
-def rewrite_lib_uses (mote : String) (decls : List Decl) : List Decl :=
+pub def rewrite_lib_uses (mote : String) (decls : List Decl) : List Decl :=
     match decls {
         List.empty => List.empty,
         List.cons d rest =>
@@ -5307,70 +5458,58 @@ def load_file_modules_cached_go (file_path : String) (source : Option String) (c
     module_line verbose module_name;
     let module <- load_target_module base_dir mp source;
     match module {
-        Option.some main_module =>
-            match main_module {
-                ModuleInfo.mk mp_path file_path decl_list => do {
-                    let main_base_dir : String := extract_directory file_path;
-                    // Seed prelude/init into the WALK itself (mirroring
-                    // `load_module_with_dependencies_and_prelude`'s own
-                    // `direct_deps_with_prelude` pattern) rather than
-                    // prepending them to the walk's already-deduplicated
-                    // result -- prepending after the fact can reintroduce
-                    // a duplicate (prelude/init reached again via an
-                    // explicit `use`).
-                    //
-                    // The walk now both resolves AND loads each dependency
-                    // in one pass (`collect_dep_module_infos`), so each
-                    // module is loaded from its OWN parent's resolved
-                    // directory instead of being re-resolved from the
-                    // target's directory afterwards -- see
-                    // `collect_dep_module_infos`'s own doc comment for the
-                    // `lang/parser/string.mo` shadowing bug this fixes.
-                    let direct_deps : List ModulePath := extract_use_decls decl_list;
-                    // `++` (`Append.append`) needs an `Append (List A)`
-                    // instance -- only defined in `std/list.mo`, which
-                    // isn't in `cli/src/main.mo`'s own dependency closure
-                    // (`lang.module` itself never `use`s `std.list`).
-                    // Compiling `cli/src/main.mo` through itself then hits
-                    // an unresolvable `Append.append` class-method call
-                    // (no matching instance in scope), which
-                    // `resolve_class_calls_decls`'s own documented
-                    // fallback leaves as an unrewritten reference --
-                    // `llc: use of undefined value '@Append_append'` once
-                    // codegen dot-to-underscore-mangles it. `List.append`
-                    // (`init/prelude.mo`, always in scope, no typeclass
-                    // needed) is the idiom already used elsewhere in this
-                    // exact file (`new_to_visit` above) for the identical
-                    // purpose -- use it here too instead of `++`.
-                    let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path, std_module_path] direct_deps;
-                    // Said HERE, before the walk, and only when the ambient
-                    // tier is unresolvable -- see
-                    // `report_missing_toolchain`'s own note on why the one
-                    // line that names `monadup` goes above the wall.
-                    report_missing_toolchain main_base_dir;
-                    let no_visited : List ModuleInfo := List.empty;
-                    let no_visiting : List ModulePath := List.empty;
-                    let walked <- collect_dep_module_infos (pending_from main_base_dir direct_deps_with_prelude) no_visiting no_visited cache verbose;
-                    let all_modules : List ModuleInfo := List.cons main_module walked.infos;
-                    // Each level bound with an explicit annotation
-                    // rather than inlined as `Result.ok { ... }` inside
-                    // an outer literal -- same constructor-argument
-                    // struct-literal pitfall documented at
-                    // `load_module_with_info`'s own `Option.some info`
-                    // above, which reached a real SIGSEGV through this
-                    // backend.
-                    let main_info : ModuleInfo := ModuleInfo.mk mp_path file_path decl_list;
-                    let loaded : LoadedModules := { main_module := main_info, all_modules := all_modules };
-                    let result : LoadedAndCache := { loaded := Result.ok loaded, cache := walked.cache };
-                    return result
-                }
-            },
+        Option.some main_module => load_modules_from_main main_module cache verbose,
         Option.none => do {
             let out : LoadedAndCache := { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache };
             return out
         }
     }
 }
+
+/// The dependency half of the filesystem loader: `main` is already parsed
+/// and resolved (from disk, or from the caller's text), and this seeds
+/// prelude/init/std into the walk and loads `main`'s transitive `use`
+/// closure from disk. Extracted from `load_file_modules_cached_go` so a
+/// caller whose main module never comes from a file -- the REPL's session
+/// -- uses the same standard loader instead of re-walking the closure.
+///
+/// The seed goes into the WALK rather than being prepended to the walk's
+/// already-deduplicated result: prepending after the fact can reintroduce
+/// a duplicate (prelude/init reached again via an explicit `use`). Each
+/// dependency is resolved from its OWN importer's directory
+/// (`collect_dep_module_infos`'s own doc explains the shadowing bug that
+/// fixes).
+///
+/// A supplied main cannot fail to load, so `loaded` is always `Result.ok`.
+#[partial]
+pub def load_modules_from_main (main : ModuleInfo) (cache : ModuleInfoCache) (verbose : Bool) : IO LoadedAndCache :=
+    match main {
+        ModuleInfo.mk mp_path file_path decl_list => do {
+            let main_base_dir : String := extract_directory file_path;
+            let direct_deps : List ModulePath := extract_use_decls decl_list;
+            // `List.append`, not `++`: `Append.append` needs an
+            // `Append (List A)` instance that is absent from some
+            // closures (see the note this comment replaced in
+            // `load_file_modules_cached_go`).
+            let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path, std_module_path] direct_deps;
+            // Said HERE, before the walk, and only when the ambient tier
+            // is unresolvable -- see `report_missing_toolchain`'s own note
+            // on why the one line that names `monadup` goes above the wall.
+            report_missing_toolchain main_base_dir;
+            let no_visited : List ModuleInfo := List.empty;
+            let no_visiting : List ModulePath := List.empty;
+            let walked <- collect_dep_module_infos (pending_from main_base_dir direct_deps_with_prelude) no_visiting no_visited cache verbose;
+            // Annotated locals, never inlined `Result.ok { ... }` --
+            // same constructor-argument struct-literal pitfall documented
+            // at `load_module_with_info`'s own `Option.some info`.
+            let main_info : ModuleInfo := ModuleInfo.mk mp_path file_path decl_list;
+            let main_again : ModuleInfo := ModuleInfo.mk mp_path file_path decl_list;
+            let all_modules : List ModuleInfo := List.cons main_again walked.infos;
+            let loaded : LoadedModules := { main_module := main_info, all_modules := all_modules };
+            let result : LoadedAndCache := { loaded := Result.ok loaded, cache := walked.cache };
+            return result
+        }
+    }
 
 /// Read the target module from disk. The shape every non-server caller
 /// wants; see `load_file_modules_cached_go` for the in-memory variant.
@@ -6087,222 +6226,126 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
 /// The real body; `source` is threaded down to the target module's load,
 /// so a language server can elaborate a buffer. `Option.none` is every
 /// existing caller -- see the wrapper above.
+/// The post-load half of `elaborate_loaded_modules_cached_go`, split out so
+/// an in-memory caller (the browser REPL's engine) can run the exact same
+/// preparation the CLI runs, without a filesystem. Pure: no reads, no
+/// manifest/use-completeness gates, and no `bench_step` -- those timing
+/// spans inside this half collapse to the caller's one aggregate line,
+/// which is the deliberate cost of sharing one implementation.
+///
+/// Everything below is the original body's shape unchanged: one scope for
+/// the whole visible graph, the same infix/promotion/dict-param passes, and
+/// the same guarded post-expansion scope rebuild.
+pub def elaborate_loaded_modules_pure
+    (loaded : LoadedModules) (check_deps : Bool) : Result String ElaboratedModules :=
+    let target_module : ModuleInfo := get_loaded_main loaded in
+    let target_path : ModulePath := target_module.path in
+    let decl_groups : List DeclGroup :=
+        if check_deps
+        then flatten_module_decl_groups (get_loaded_all loaded) List.empty
+        else flatten_visible_module_decl_groups target_path (get_loaded_all loaded) List.empty in
+    let all_decls : List Decl := decl_groups_flatten decl_groups in
+    let infixes : List Infix := collect_infixes all_decls in
+    let resolved : List DeclGroup := resolve_infix_decl_groups infixes decl_groups in
+    let promoted : List DeclGroup := promote_instance_decl_groups resolved in
+    let dict_paramed : List DeclGroup := add_constraint_dict_params_decl_groups promoted in
+    let dict_paramed_flat : List Decl := decl_groups_flatten dict_paramed in
+    let main_module : ModuleInfo := get_loaded_main loaded in
+    let target_mp : ModulePath := main_module.path in
+    let scope_data : ScopeData :=
+        refine_scope_instances dict_paramed_flat (build_scope_from_groups dict_paramed) in
+    let scope : Scope :=
+        { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false } in
+    let target_decls_raw : List Decl := main_module.decl_list in
+    let target_decls_pre : List Decl :=
+        if check_deps then
+            dict_paramed_flat
+        else
+            add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw)) in
+    let dep_mods : List ModuleInfo :=
+        List.filter (fn (m : ModuleInfo) => Bool.not (modpath_eq m.path target_mp)) (get_loaded_all loaded) in
+    let expansion_result : Result String GraphExpansion :=
+        expand_decls_graph scope dict_paramed_flat target_decls_pre target_decls_raw dep_mods in
+    match expansion_result {
+        Result.err e => Result.err e,
+        Result.ok expansion =>
+            let dict_paramed2 : List Decl := expansion.graph in
+            let target_decls_pre2 : List Decl := expansion.target in
+            let did_change : Bool := expansion.changed in
+            let scope2 : Scope :=
+                if did_change then rebuild_target_scope target_mp dict_paramed2 else scope in
+            let known_names : List Identifier := names_of_decls dict_paramed2 in
+            let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
+            let raw_changed : Bool := expansion.raw_changed in
+            let loaded_main_patched : LoadedModules :=
+                if raw_changed then replace_main_decls loaded target_mp expansion.raw_target else loaded in
+            let loaded2 : LoadedModules := replace_dep_module_decls loaded_main_patched expansion.raw_all in
+            let elaborated : ElaboratedModules :=
+                { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded2 } in
+            Result.ok elaborated,
+    }
+
+/// The three pre-elaboration gates the compiled pipeline runs over a
+/// loaded set. Manifest enforcement (package-system.md 2a/5d) comes
+/// first: a mote reaching into one it never declared, or one that names
+/// no target that exists, is a manifest error -- and saying so beats
+/// letting it surface as whatever name happens to go missing first.
+///
+/// Two sibling gates rather than one, each first-error-wins and each
+/// independently revertable, so a bisect separates a bad dependency check
+/// from a bad target check. The completeness gate needs the ORIGINAL
+/// source (pre-expansion decls), so `source` is threaded here; it runs on
+/// the main module only, exactly like its host-side twin.
+#[partial]
+pub def gate_loaded_modules (source : Option String)
+    (r : Result String LoadedModules) : IO (Result String LoadedModules) := do {
+    let checked_deps <- gate_declared_deps r;
+    let targetted_result <- gate_mote_targets checked_deps;
+    gate_use_completeness source targetted_result
+}
+
+/// The post-load half of the front end, shared by the disk path and the
+/// in-memory-main path: gates, then `elaborate_loaded_modules_pure`.
+#[partial]
+pub def elaborate_loaded_set (source : Option String)
+    (loaded_result : Result String LoadedModules) (check_deps : Bool)
+    : IO (Result String ElaboratedModules) := do {
+    let checked <- gate_loaded_modules source loaded_result;
+    return (match checked {
+        Result.err e => Result.err e,
+        Result.ok loaded => elaborate_loaded_modules_pure loaded check_deps,
+    })
+}
+
+/// The whole front end for an already-parsed main module: the standard
+/// filesystem dependency walk, the same gates the compiled pipeline runs,
+/// and the pure elaboration. This is `elaborate_loaded_modules`'s body
+/// with the target supplied instead of read from disk, which an unsaved
+/// session needs: `check_file_cached_from_source` cannot serve it, because
+/// `load_module_with_info_from_source` resolves the target path on disk
+/// first.
+#[partial]
+pub def elaborate_loaded_modules_from_main (main : ModuleInfo) (source : Option String)
+    (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool)
+    : IO ElaboratedAndCache := do {
+    let lc <- load_modules_from_main main cache verbose;
+    let out_cache : ModuleInfoCache := lc.cache;
+    let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_set source lc.loaded check_deps;
+    let out : ElaboratedAndCache := { elaborated := elaborated_result, cache := out_cache };
+    return out
+}
+
 #[partial]
 def elaborate_loaded_modules_cached_go (file_path : String) (check_deps : Bool) (source : Option String) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
     let t_load : I64 <- Bench.now;
     let lc <- load_file_modules_cached_go file_path source cache verbose;
-    // Manifest enforcement (package-system.md 2a/5d) before any elaboration
-    // work: a mote reaching into one it never declared, or one that names no
-    // target that exists, is a manifest error -- and saying so beats letting
-    // it surface as whatever name happens to go missing first.
-    //
-    // Two sibling gates rather than one, each first-error-wins and each
-    // independently revertable, so a bisect separates a bad dependency check
-    // from a bad target check.
-    let checked_deps <- gate_declared_deps lc.loaded;
-    let targetted_result <- gate_mote_targets checked_deps;
-    // The completeness gate needs the ORIGINAL source (pre-expansion
-    // decls), so it runs here -- after the manifest gates, before any
-    // elaboration work, and on the main module only, exactly like its
-    // host-side twin.
-    let loaded_result <- gate_use_completeness source targetted_result;
     let out_cache : ModuleInfoCache := lc.cache;
     let _t_load_done : I64 <- bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;
+    let t0 : I64 <- Bench.now;
     // Annotated local, never a bare literal in `return` position -- see
     // the identical note in `collect_dep_module_infos` above.
-    let elaborated_result : Result String ElaboratedModules <- match loaded_result {
-        Result.err e => return (Result.err e),
-        Result.ok loaded => do {
-            let t0 : I64 <- Bench.now;
-            // `priv` declarations from OTHER modules are dropped here --
-            // see `flatten_visible_module_decls` for why the filter lives
-            // at the flatten rather than in the scope builder.
-            //
-            // Only when `check_deps` is off, which is every real
-            // `check`/`compile`. This list is ONE scope, shared by the
-            // target and by every dependency whose bodies are being
-            // checked -- so with `check_deps` on, dropping a dependency's
-            // `priv` helper would hide it from that dependency's own `pub`
-            // defs, enforcing the rule against the module allowed to break
-            // it. Per-consumer resolution is what would do both;
-            // visibility-declarations.md tracks it.
-            let target_module : ModuleInfo := get_loaded_main loaded;
-            let target_path : ModulePath := target_module.path;
-            // GROUPS, not a flat list: each group carries its own module's
-            // path, so the scope built below registers every dependency def
-            // under the module that OWNS it. That is what makes a
-            // cross-module qualified reference resolvable -- see
-            // `build_scope_from_groups` (`lang/scope.mo`) for why one path
-            // for the whole list cannot work.
-            let decl_groups : List DeclGroup :=
-                if check_deps
-                then flatten_module_decl_groups (get_loaded_all loaded) List.empty
-                else flatten_visible_module_decl_groups target_path (get_loaded_all loaded) List.empty;
-            let all_decls : List Decl := decl_groups_flatten decl_groups;
-            let t_flat : I64 <- bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls);
-            let infixes : List Infix := collect_infixes all_decls;
-            let t_collect : I64 <- bench_step verbose "  elab: collect_infixes" t_flat (List.length infixes);
-            let resolved : List DeclGroup := resolve_infix_decl_groups infixes decl_groups;
-            let t_infix : I64 <- bench_step verbose "  elab: resolve_infix_decls" t_collect (List.length (decl_groups_flatten resolved));
-            let promoted : List DeclGroup := promote_instance_decl_groups resolved;
-            let t_promote : I64 <- bench_step verbose "  elab: promote_instance_defs" t_infix (List.length (decl_groups_flatten promoted));
-            let dict_paramed : List DeclGroup := add_constraint_dict_params_decl_groups promoted;
-            let t_dict : I64 <- bench_step verbose "  elab: add_constraint_dict_params_decls" t_promote (List.length (decl_groups_flatten dict_paramed));
-            // Everything after the scope is built from the FLAT view, not
-            // the groups: `expand_decls_graph` and `target_decls_pre` both
-            // take a `List Decl`, and codegen consumes the flat list too.
-            // The grouping exists only to give the scope builder each
-            // decl's owner.
-            let dict_paramed_flat : List Decl := decl_groups_flatten dict_paramed;
-            let main_module : ModuleInfo := get_loaded_main loaded;
-            let target_mp : ModulePath := main_module.path;
-            let scope_data : ScopeData := refine_scope_instances dict_paramed_flat (build_scope_from_groups dict_paramed);
-            let t_scope : I64 <- bench_step verbose "  elab: build_scope_from_decls" t_dict (List.length scope_data.classes);
-            let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
-            // `target_decls` must go through the SAME infix-resolution/
-            // promotion/dict-param passes as the whole graph above -- the
-            // raw `main_module.decl_list` still has bare
-            // placeholder operator vars (`Term.var (DebugName.named "+")`
-            // etc, from the self-hosted parser -- see `resolve_infix_
-            // decls`'s own doc comment, `lang/scope.mo`), which `scope`
-            // (built from the ALREADY-resolved whole graph) has no entry
-            // for under that literal name, only under `HAdd.add` --
-            // checking the raw decls against the resolved scope produced
-            // a bogus `unknown variable '+'` before this fix. When
-            // `check_deps` is true, `dict_paramed_flat` already IS that
-            // fully-resolved list, for the whole graph (main module's own
-            // decls included -- `all_decls`/`flatten_module_decls` folds;
-            // `main_module` too, see `load_file_modules`), so reuse it
-            // directly instead of redundantly re-running the same three
-            // passes on just the main module's own raw decls again.
-            let target_decls_raw : List Decl := main_module.decl_list;
-            let target_decls_pre : List Decl :=
-                if check_deps then
-                    dict_paramed_flat
-                else
-                    add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw));
-            let t_target : I64 <- bench_step verbose "  elab: target-only re-run of the same 3 passes" t_scope (List.length target_decls_pre);
-            // Forall-wrap each target def's type with its free + constraint-
-            // only type vars (`elaborate_def_typs`), using the whole-graph
-            // name set so globals aren't wrapped. `known_names` comes from
-            // `dict_paramed_flat` (the fully-prepared whole-graph list) -- a
-            // target-only `names_of_decls` would miss dependency globals and
-            // wrongly Forall-wrap them. This re-introduces the implicit
-            // type vars the parser deliberately dropped (e.g. `F`;
-            // `def Lens [Functor F] {F : ...} ...`); `locals_with_def_typevars`
-            // then skolemizes them from the resulting `Forall` chain.
-            // Whole-graph macro/intrinsic expansion (`reflect_type_info!`)
-            // -- see `expand_decls_graph`'s own doc comment. A no-op for
-            // any file that never (transitively) invokes
-            // `reflect_type_info!`, so safe to run unconditionally.
-            // `dep_mods` excludes the target itself -- `target_decls_raw`/
-            // `raw_target` already cover that one; see `GraphExpansion.raw_all`.
-            let dep_mods : List ModuleInfo := List.filter (fn (m : ModuleInfo) => Bool.not (modpath_eq m.path target_mp)) (get_loaded_all loaded);
-            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed_flat target_decls_pre target_decls_raw dep_mods;
-            let t_expand : I64 <- bench_step verbose "  elab: expand_decls_graph" t_target 0;
-            match expansion_result {
-                Result.err e => return (Result.err e),
-                Result.ok expansion => do {
-                    let dict_paramed2 : List Decl := expansion.graph;
-                    let target_decls_pre2 : List Decl := expansion.target;
-                    // Rebuild the scope ONLY if the expansion actually
-                    // rewrote decls. When nothing expanded -- the norm,
-                    // since only `std/derive.mo` invokes
-                    // `reflect_type_info!` in this corpus --
-                    // `dict_paramed2` IS `dict_paramed`, so a rebuild
-                    // would produce a scope identical to the one built
-                    // just above, at the cost of a second full
-                    // `build_scope_from_decls` over the whole dependency
-                    // graph (measured: 1523ms of `elaborate_loaded_
-                    // modules`' 5255ms on `examples/hello.mo`).
-                    // The literal needs its OWN annotated binding: a
-                    // `let x : T := if c then { ... } else y` annotation
-                    // does not reach into the branch, so the bare literal
-                    // there gets no expected type, never desugars, and
-                    // survives to codegen as a `Literal.struct_lit` (see
-                    // `validate_no_undesugared_struct_lits`). It also made
-                    // this whole def fail to elaborate ("expected Bool,
-                    // found Type"), which -- because codegen elaboration
-                    // is best-effort -- silently left the ENTIRE body
-                    // unelaborated.
-                    // The rebuild is INSIDE the branch, not bound by a `let`
-                    // above it. This evaluator is strict (AGENTS.md item 25),
-                    // so `let rebuilt_scope := build_scope_from_decls ...`
-                    // ran the rebuild unconditionally and the `if` only chose
-                    // which already-computed scope to keep. `if` is the one
-                    // form that does not evaluate the branch it does not take,
-                    // so this is what makes the guard real.
-                    //
-                    // It was not a small waste: `build_scope_from_decls` is
-                    // the single most expensive phase, and a self-hosted
-                    // `check cli/src/main.mo` spent 83.9s of 232s here -- 36% of
-                    // the run -- duplicating the 81.9s the first build had
-                    // already done, for a graph that had not changed.
-                    // The annotated local moves INSIDE the branch rather
-                    // than being dropped. It was load-bearing twice over:
-                    // outside the branch it forced the rebuild eagerly (the
-                    // bug above), but the literal also needs an expected type
-                    // to desugar against, and a bare `{ ... }` in the branch
-                    // has none -- it survives to codegen as a
-                    // `Literal.struct_lit` and compiles to a void
-                    // placeholder, which `validate_no_undesugared_struct_lits`
-                    // rejects. An annotated `let ... in` INSIDE the branch
-                    // does not help either: the annotation does not reach the
-                    // literal from there.
-                    //
-                    // `rebuild_target_scope`'s declared return type is what
-                    // gives it one, and calling it inside the branch keeps the
-                    // laziness. Same shape the rest of the codebase uses when
-                    // a literal needs a type it cannot get from its position.
-                    // `did_change` keeps its own annotated binding: the
-                    // condition is a field access, and inlining it into the
-                    // `if` is the other half of what made this def fail to
-                    // elaborate as "expected Bool, found Type".
-                    let did_change : Bool := expansion.changed;
-                    let scope2 : Scope :=
-                        if did_change
-                        then rebuild_target_scope target_mp dict_paramed2
-                        else scope;
-                    // Timed separately from `names_of_decls` below: when
-                    // `expansion.changed` this is a SECOND whole-graph
-                    // `build_scope_from_decls` (~1500ms, per the note
-                    // above), and folding it into the next span would
-                    // silently attribute that to `names_of_decls`. The
-                    // arithmetic self-check (AGENTS.md item 25) cannot
-                    // catch a mislabelled boundary -- the sub-times still
-                    // sum to the total either way.
-                    let t_scope2 : I64 <- bench_step verbose "  elab: post-expansion scope rebuild" t_expand (List.length scope2.scope.classes);
-                    let known_names : List Identifier := names_of_decls dict_paramed2;
-                    let t_names : I64 <- bench_step verbose "  elab: names_of_decls" t_scope2 (List.length known_names);
-                    let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names;
-                    let _t_typs : I64 <- bench_step verbose "  elab: elaborate_def_typs" t_names (List.length target_decls);
-                    // Hand the CODEGEN pipeline the expansion too: the
-                    // generated decls go into the main module's own RAW
-                    // `decl_list`, so both codegen paths (which run the
-                    // elaboration passes themselves, over exactly that
-                    // list) pick them up the same way they pick up a
-                    // parsed decl -- see `GraphExpansion`'s own doc
-                    // comment for why the prepared list is the wrong shape
-                    // to hand them.
-                    let raw_changed : Bool := expansion.raw_changed;
-                    let loaded_main_patched : LoadedModules :=
-                        if raw_changed
-                        then replace_main_decls loaded target_mp expansion.raw_target
-                        else loaded;
-                    // Dependency modules whose OWN raw decls gained
-                    // decl-gen output -- see `GraphExpansion.raw_all`'s
-                    // own doc comment. A no-op (empty list) for every file
-                    // that doesn't derive into a dependency, same as above.
-                    let loaded2 : LoadedModules := replace_dep_module_decls loaded_main_patched expansion.raw_all;
-                    // Annotated local, not an inline literal --
-                    // see `load_module_with_info`'s own note.
-                    let elaborated : ElaboratedModules :=
-                        { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded2 };
-                    return (Result.ok elaborated)
-                },
-            }
-        },
-    };
+    let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_set source lc.loaded check_deps;
+    let _t_post : I64 <- bench_step verbose "  elab: post-load (pure)" t0 0;
     let out : ElaboratedAndCache := { elaborated := elaborated_result, cache := out_cache };
     return out
 }

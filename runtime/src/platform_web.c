@@ -105,6 +105,20 @@ rt_word monad_alloc_atomic(rt_size size) {
     return web_alloc(size, 1);
 }
 
+/* The /try engine stages the source text JS wants evaluated here: JS calls
+ * `try_alloc(len + 1)`, writes UTF-8 plus a NUL, then calls the module's
+ * `try_run(source : String)` export with the returned Number.
+ *
+ * A C-only linker export with NO Monad declaration, exactly like
+ * `monad_alloc`: the pointer never round-trips through Monad, so no Monad
+ * code gains an address-producing primitive. It is a no-header allocation
+ * (`monad_alloc_atomic`), so JS owns exactly the bytes it asked for and
+ * must not read a header that is not there. Returns 0 on OOM. */
+__attribute__((export_name("try_alloc")))
+int32_t try_alloc(int64_t size) {
+    return (int32_t)(intptr_t)RT_PTR(monad_alloc_atomic((rt_size)size));
+}
+
 void monad_retain(rt_word ptr) {
     if (!ptr) return;
     Header* h = (Header*)RT_PTR(ptr);
@@ -302,6 +316,41 @@ extern int64_t monad_js_storage_set(int64_t kptr, int64_t klen, int64_t vptr, in
 __attribute__((import_module("monad"), import_name("console_log")))
 extern int64_t monad_js_console_log(int64_t ptr, int64_t len);
 
+/* The /try engine's result push (`motes/web_wasm/src/try_bridge.mo`):
+   status plus four (ptr,len) strings. The JS host copies every string
+   immediately, so the engine may drop them as soon as the call returns. */
+__attribute__((import_module("monad"), import_name("try_result")))
+extern int64_t monad_js_try_result(int64_t status,
+                                   int64_t vp, int64_t vl,
+                                   int64_t tp, int64_t tl,
+                                   int64_t ep, int64_t el,
+                                   int64_t np, int64_t nl);
+
+/* The UI half of the /try worker channel (`motes/web_wasm/src/worker.mo`). */
+__attribute__((import_module("monad"), import_name("worker_run")))
+extern int64_t monad_js_worker_run(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("worker_poll")))
+extern int64_t monad_js_worker_poll(void);
+
+__attribute__((import_module("monad"), import_name("worker_status")))
+extern int64_t monad_js_worker_status(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("worker_value")))
+extern int64_t monad_js_worker_value(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("worker_type")))
+extern int64_t monad_js_worker_type(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("worker_error")))
+extern int64_t monad_js_worker_error(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("worker_notes")))
+extern int64_t monad_js_worker_notes(int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("worker_cancel")))
+extern int64_t monad_js_worker_cancel(void);
+
 /* The export-call state slot (`motes/web_wasm/src/keep.mo`): one opaque
    word the JS host stores between export calls. */
 __attribute__((import_module("monad"), import_name("keep_set")))
@@ -468,6 +517,38 @@ int64_t web_storage_set(const char* key, const char* value) {
 
 int64_t web_console_log(const char* s) {
     return monad_js_console_log(web_str_ptr(s), web_str_len(s));
+}
+
+int64_t web_try_result(int64_t status, const char* value, const char* typ,
+                       const char* error, const char* notes) {
+    return monad_js_try_result(status,
+                               web_str_ptr(value), web_str_len(value),
+                               web_str_ptr(typ), web_str_len(typ),
+                               web_str_ptr(error), web_str_len(error),
+                               web_str_ptr(notes), web_str_len(notes));
+}
+
+int64_t web_worker_run(const char* source) {
+    return monad_js_worker_run(web_str_ptr(source), web_str_len(source));
+}
+
+int64_t web_worker_poll(void) {
+    return monad_js_worker_poll();
+}
+
+static char* web_worker_str(int64_t (*read)(int64_t, int64_t)) {
+    int64_t n = read((int64_t)(intptr_t)web_scratch, WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+char* web_worker_status(void) { return web_worker_str(monad_js_worker_status); }
+char* web_worker_value(void) { return web_worker_str(monad_js_worker_value); }
+char* web_worker_type(void) { return web_worker_str(monad_js_worker_type); }
+char* web_worker_error(void) { return web_worker_str(monad_js_worker_error); }
+char* web_worker_notes(void) { return web_worker_str(monad_js_worker_notes); }
+
+int64_t web_worker_cancel(void) {
+    return monad_js_worker_cancel();
 }
 
 int64_t web_keep_set(int64_t value) {

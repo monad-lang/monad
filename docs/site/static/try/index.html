@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Try Monad</title>
+  <meta name="description" content="Run Monad programs in your browser. A scratchpad evaluated by the self-hosted Monad compiler compiled to WebAssembly.">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="try-header">
+    <a class="try-brand" href="../">
+      <img src="../logo.svg" alt="" width="28" height="28">
+      <span>Monad</span>
+    </a>
+    <nav class="try-nav">
+      <a href="../docs/introduction.html">Documentation</a>
+      <a href="../">Home</a>
+    </nav>
+  </header>
+
+  <main id="app"></main>
+
+  <noscript>Try Monad needs JavaScript (and WebAssembly) enabled.</noscript>
+
+  <script type="module">
+    import { start } from './web.js';
+    start('./try_ui.wasm', '#app').catch((err) => {
+      document.getElementById('app').textContent =
+        'Could not load the Monad REPL: ' + err;
+    });
+  </script>
+</body>
+</html>

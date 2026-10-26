@@ -1,0 +1,39 @@
+# The /try engine: the browser REPL's evaluator, compiled to
+# `wasm32-unknown-unknown` and hosted in a Web Worker.
+#
+# It is deliberately DOM-free. `lang` provides the parser, scope builder,
+# typechecker, lowerer and CoreIr interpreter. The prelude is NOT compiled
+# in: the page fetches the real `init/src/*.mo` files served beside the wasm
+# and hands their text over as the framed payload `src/sources.mo` parses,
+# so the program is checked against exactly what the site ships.
+# `src/main.mo` is the `#[export "c"]` ABI (`try_run`); the Oak UI is a
+# separate mote (`motes/try_ui`) so this module never links DOM code.
+[mote]
+name = "try_engine"
+version = "0.1.0"
+edition = "2026"
+targets = ["web"]
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.lang]
+path = "../../lang"
+
+# The shared evaluator (`eval::run`): the standard source-list loader and
+# the one typecheck/elaborate/lower/evaluate recipe. Never bare `eval` --
+# its `file`/`session` modules reach filesystem natives.
+[dependencies.eval]
+path = "../../eval"
+
+[dependencies.web_wasm]
+path = "../web_wasm"
+
+# Affine-by-default migration exception (measured 2026-10-26). Delete this
+# table when the mote reaches zero violations; the default (no table) is
+# `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

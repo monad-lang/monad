@@ -1,6 +1,6 @@
 use std::list {List.length}
 use std::map {HashMap.to_list}
-use lib::core_eval {basic_native_table}
+use lib::core_eval {basic_native_table, native_id_for_name}
 use lib::core_ir {CoreIr, IrLit, MatchArm}
 use lib::core_value {GlobalDef, GlobalTable, NativeTable}
 use lib::scope {
@@ -11,7 +11,7 @@ use lib::scope {
 use lang::types {
   AttrArg, Attribute, Con, DebugName, Decl, Def, Identifier, InductConstructor,
   Inductive, Literal, MatchCase, ModulePath, NamePath, Native, Scope, ScopeData,
-  ScopeDef, Term, i64, id_eq, nid, sentinel, show_name_path,
+  ScopeDef, Term, i64, id_eq, nid, sentinel, show_module_path, show_name_path,
 }
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
 
@@ -870,26 +870,32 @@ def is_dict_projection_scrutinee (value : Term) : Bool :=
     _ => false,
   }
 
-/// A fixed name -> id mapping matching `lang/core_eval.mo`'s
-/// `basic_native_table`/`exec_native_by_name` exactly -- this module
-/// doesn't own the native table, just maps into it.
-def native_id_for_name (name : Identifier) : Option I64 :=
-  match name {
-    Identifier.id s =>
-      if String.beq s "i64_add" then Option.some 0
-      else if String.beq s "i64_sub" then Option.some 1
-      else if String.beq s "i64_mul" then Option.some 2
-      else if String.beq s "i64_eq" then Option.some 3
-      else if String.beq s "i64_lt" then Option.some 4
-      else if String.beq s "string_concat" then Option.some 5
-      else if String.beq s "string_eq" then Option.some 6
-      else if String.beq s "string_to_lowercase" then Option.some 7
-      else if String.beq s "string_length" then Option.some 8
-      else if String.beq s "string_slice" then Option.some 9
-      else if String.beq s "string_drop" then Option.some 10
-      else if String.beq s "string_starts_with" then Option.some 11
-      else Option.none,
+/// Rendered diagnostics for `LowerError`. Moved here from the CLI so the
+/// browser REPL's engine shares the same wording.
+pub def show_identifier (id : Identifier) : String :=
+  match id {
+    Identifier.id s => s,
   }
+
+pub def show_lower_error (e : LowerError) : String :=
+  match e {
+    LowerError.le_unresolved_name name => String.concat "unresolved name " (show_identifier name),
+    LowerError.le_unresolved_module_path path => String.concat "unresolved module path " (show_module_path path),
+    LowerError.le_unknown_inductive path => String.concat "unknown inductive " (show_module_path path),
+    LowerError.le_unknown_constructor path => String.concat "unknown constructor " (show_module_path path),
+    LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
+    LowerError.le_type_level_term => "type-level term reached lowering",
+    LowerError.le_con_hole_before_filled_arg => "constructor hole before a filled arg",
+    LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
+    LowerError.le_float_literal_unsupported => "float literals are not supported by the evaluator (the eval IR cannot carry one yet)",
+    LowerError.le_unresolved_macro_artifact => "an unresolved macro-template variable or quote reached lowering",
+    LowerError.le_elim_not_lowered => "a dependent match/if reached meta-eval lowering with no lowering rule yet",
+    LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
+  }
+
+/// `native_id_for_name` lives in `lang/core_eval.mo` beside `native_specs`
+/// (imported above): the id is a position in that one spec list, so this
+/// module no longer keeps a second copy that can drift.
 
 #[partial]
 def lower_native (ctx : LowerCtx) (native : Native) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
@@ -974,6 +980,10 @@ def native_attr_arg_name (args : List AttrArg) : Option String :=
     List.cons a _ =>
       match a {
         AttrArg.ident id => Option.some (identifier_text id),
+        // `#[native "ptr_null"]` (quoted) is the same declaration as
+        // `#[native ptr_null]`; `init/src/prelude.mo`'s pointer constants
+        // use the quoted form.
+        AttrArg.str s => Option.some s,
         _ => Option.none,
       },
     List.empty => Option.none,

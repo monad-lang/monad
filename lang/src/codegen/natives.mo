@@ -376,6 +376,12 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u8_to_u32" then Option.some (NativeWrapKind.passthrough "monad_u8_to_u32")
             else if String.beq target "i64_to_u32" then Option.some (NativeWrapKind.passthrough "monad_i64_to_u32")
             else if String.beq target "u32_to_u8" then Option.some (NativeWrapKind.passthrough "monad_u32_to_u8")
+            // Division and to_string: newly reachable through the
+            // interpreter (`lang/core_eval.mo` calls `U32.div`/
+            // `U32.to_string` to implement the u32 natives), so the
+            // compiled backend needs them too.
+            else if String.beq target "u32_div" then Option.some (NativeWrapKind.passthrough "monad_u32_div")
+            else if String.beq target "u32_to_string" then Option.some (NativeWrapKind.passthrough "monad_u32_to_string")
             // `U64` widening (`I64.to_u64`, `std/src/number.mo`) is the
             // IDENTITY: the reference's `int_to_int(args, U64)` masks to
             // `v as u64 as i64`, which changes nothing about an i64
@@ -385,6 +391,15 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // same way, by this chain alone.
             else if String.beq target "i64_to_u64" then Option.some (NativeWrapKind.passthrough "monad_i64_to_u64")
             else if String.beq target "u8_to_u64" then Option.some (NativeWrapKind.passthrough "monad_u8_to_u64")
+            // The reverse conversions (`UN.to_i64`): payload identity in
+            // this backend, emitted by `runtime/src/natives.mo` beside
+            // the forward pair. Added for the evaluator's `String.to_list`
+            // bridge; `validate_no_unwired_natives` is what requires them
+            // to be named here at all.
+            else if String.beq target "u8_to_i64" then Option.some (NativeWrapKind.passthrough "monad_u8_to_i64")
+            else if String.beq target "u16_to_i64" then Option.some (NativeWrapKind.passthrough "monad_u16_to_i64")
+            else if String.beq target "u32_to_i64" then Option.some (NativeWrapKind.passthrough "monad_u32_to_i64")
+            else if String.beq target "u64_to_i64" then Option.some (NativeWrapKind.passthrough "monad_u64_to_i64")
             // The `U16`/`I8` comparisons, same unmasked-i64 family as the
             // `U8` entries above (the reference sends every width except
             // `U32` through one generic `int_cmp`).

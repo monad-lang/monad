@@ -54,11 +54,9 @@ use clap::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`std/src/log.mo` -- its own header documents the gating rules).
 use std::log {fail_line, ok_line, stage}
-use lang::eval_run {EvalRun.run_file}
-use lang::core_ir {CoreIr}
-use lang::core_eval {eval, basic_native_table}
-use lang::core_value {GlobalTable, env_nil, global_cache_new, global_table_len}
-use lang::typecheck::meta_eval {show_value_debug, show_core_eval_error_debug}
+// The shared evaluator (`monad eval`'s filesystem entry). The recipe itself
+// lives in `eval::run`, which the /try engine uses too.
+use eval::file {Eval.run_file}
 // The language server. It is a dependency of the BINARY and not of the
 // library: `lsp_serve` is a whole program that talks on stdin/stdout, so
 // nothing outside `main`'s `lsp` arm may reach it -- an editor's protocol
@@ -863,12 +861,12 @@ def run_file (path : String) (verbose : Bool) (debug : Bool) (program_args : Lis
     }
 }
 
-/// Evaluate a source file using the self-hosted interpreter. The
-/// pipeline lives in `lang::eval_run`, shared with weaver's
-/// `monad_eval` tool -- one loader/checker/lowering/evaluator, one
-/// error vocabulary. Pure programs only (`basic_native_table`).
+/// Evaluate a source file using the self-hosted interpreter. The pipeline
+/// lives in `eval::file`/`eval::run`, shared with the /try engine -- one
+/// loader/checker/lowering/evaluator, one error vocabulary. Pure programs
+/// only (`basic_native_table`).
 def eval_file (file_path : String) (verbose : Bool) : IO I64 := do {
-    let r <- EvalRun.run_file file_path verbose;
+    let r <- Eval.run_file file_path verbose;
     match r {
         Result.ok text => do {
             println text;

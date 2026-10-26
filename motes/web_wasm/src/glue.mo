@@ -24,7 +24,7 @@ use lib::web_abi {WebAbi, WebImport}
 /// visibly the one hand-written piece of the generated file, which is why
 /// `Glue.loader`'s goldens pin it.
 def Glue.start_snippet : String :=
-  "async (url, selector) => { host.set_root(selector); const { instance } = await WebAssembly.instantiateStreaming(fetch(url), imports); host.bind(instance); if (instance.exports.oak_mount) instance.exports.oak_mount(); host.start_ticks(instance); return instance; }"
+  "async (url, selector) => { host.set_root(selector); let mod; try { mod = await WebAssembly.compileStreaming(fetch(url)); } catch (e) { mod = await WebAssembly.compile(await (await fetch(url)).arrayBuffer()); } const instance = await WebAssembly.instantiate(mod, imports); host.bind(instance); if (instance.exports.oak_mount) instance.exports.oak_mount(); host.start_ticks(instance); return instance; }"
 
 pub def Glue.loader (abi : WebAbi) : String :=
   Js.render_module (Glue.module abi)

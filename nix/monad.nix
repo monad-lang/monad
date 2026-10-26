@@ -244,6 +244,9 @@
                 "llvm"
                 "runtime"
                 "build"
+                # The shared evaluator: `cli` links it for `monad eval` and
+                # `monad repl`, so it is a compiler input like `lang`/`build`.
+                "eval"
                 # Compiler inputs -- see THE RULE above. `clap` arrives through
                 # `cli`, whose `main.mo` parses its own argv with it;
                 # `lsp`/`toolkit` arrive through `cli` too (its `lsp` subcommand),

@@ -25,6 +25,7 @@ monad/
 ├── llvm/              # Self-hosted LLVM IR + linking (llc/clang via exec_cmd)
 ├── runtime/           # C runtime linked into every compiled binary (runtime.c)
 ├── build/             # Build orchestrator: input hashing, content store, cache
+├── eval/              # The shared evaluator: `monad eval`, `monad repl`, and /try's engine
 ├── init/              # Pure, portable core mote (prelude, IO type, parser) — no deps
 ├── std/               # OS-specific side effects (io, process, path, map, test, ...)
 ├── motes/             # Monad packages (json, lsp, clap, toolkit, shuttle, mcp_client, ...)
@@ -39,8 +40,8 @@ monad/
 
 ## Motes
 
-`init/`, `std/`, `lang/`, `cli/`, and everything under `motes/` are **motes**
-(Monad's packages). A mote's modules live in its `src/` directory; a `use`
+`init/`, `std/`, `lang/`, `cli/`, `eval/`, and everything under `motes/` are
+**motes** (Monad's packages). A mote's modules live in its `src/` directory; a `use`
 path's first segment names the mote, the rest is the path within its `src/`
 (`use lang::codegen::emit {...}` reads `lang/src/codegen/emit.mo`).
 

@@ -25,8 +25,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The /try page needs a compiler to build two wasm modules (the DOM-free
+  # evaluator and the Oak UI). That build needs the self-hosted toolchain,
+  # so it runs where ci.yml's compiler job runs and hands the artifacts to
+  # the site job below. `mdbook.yml` is main-only, so PR coverage for the
+  # same artifacts is `scripts/check-try.sh` in ci.yml's compiler-checks.
+  try-wasm:
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 90
+    env:
+      # `nix develop` otherwise runs the devShell's pre-commit sweep.
+      DEVENV_SKIP_TASKS: "1"
+    steps:
+      - uses: actions/checkout@v5
+      # Same bootstrap as ci.yml's compiler job: a packaged Rust host for the
+      # self-compile, so this job never depends on the runner's installed
+      # nightly being new enough to build this tree.
+      - name: Build the packaged host from the flake
+        run: |
+          host="$(nix build --no-link --print-out-paths --accept-flake-config .#monadHost)"
+          echo "MONAD_HOST_BIN=$host/bin/monad-rs" >> "$GITHUB_ENV"
+      - name: Self-compile with the latest nightly (Rust host fallback)
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c scripts/ci-self-compile.sh
+      - name: Build the /try wasm
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c env MONAD="$PWD/target-monad/ci-self-compile/monad" \
+              scripts/build-try.sh
+      - name: Upload the /try artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: try-wasm
+          path: |
+            docs/site/static/try/try_engine.wasm
+            docs/site/static/try/try_ui.wasm
+            docs/site/static/try/web.js
+            docs/site/static/try/web_runtime.js
+            docs/site/static/try/float_format.js
+            docs/site/static/try/sources.json
+            docs/site/static/try/sources
+          if-no-files-found: error
+
   # Build job
   build:
+    needs: try-wasm
     runs-on: ubuntu-latest
     env:
       MDBOOK_VERSION: 0.4.36
@@ -68,6 +114,11 @@ jobs:
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
+      - name: Stage the /try wasm
+        uses: actions/download-artifact@v5
+        with:
+          name: try-wasm
+          path: docs/site/static/try
       - name: Build docs with mdBook
         run: cd docs && mdbook build
       # `scripts/monadup` is canonical; Zola serves the generated copy at
@@ -95,3 +146,24 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+      # A minimal post-deploy check: the page exists and the engine is a
+      # real wasm module exporting `try_run`. Pages propagation can lag the
+      # deploy call, hence the retry.
+      - name: Smoke-check /try
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsSL -o /tmp/try_engine.wasm https://monad-lang.org/try/try_engine.wasm; then
+              break
+            fi
+            sleep 6
+          done
+          node -e 'const fs=require("fs");const m=new WebAssembly.Module(fs.readFileSync("/tmp/try_engine.wasm"));console.log(WebAssembly.Module.exports(m).map(e=>e.name).join(","))' \
+            | grep -q 'try_run'
+          # `try/sources.json` + one served module: the page hands the engine
+          # the real prelude sources, so a deploy missing them breaks every run.
+          for asset in try/ try/try_ui.wasm try/web.js try/web_runtime.js \
+                       try/float_format.js try/worker.js try/sources.js \
+                       try/sources.json try/sources/init/src/prelude.mo; do
+            curl -fsSL -o /dev/null "https://monad-lang.org/$asset"
+          done

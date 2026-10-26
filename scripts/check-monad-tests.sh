@@ -536,7 +536,7 @@ fi
 # `find` lists agree exactly" was a comment that a later edit could
 # falsify silently; a list built once cannot drift from itself. Biggest
 # first, which is the order `shard_files` wants.
-corpus_dirs=(init std examples lang cli llvm runtime build motes slow_tests bench proofs)
+corpus_dirs=(init std examples lang cli llvm runtime build eval motes slow_tests bench proofs)
 corpus_sizes() {
   find "${corpus_dirs[@]}" -name '*.mo' -printf '%s\t%p\n' | sort -rn
 }

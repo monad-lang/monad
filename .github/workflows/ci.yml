@@ -216,7 +216,7 @@ jobs:
         run: |
           nix develop --no-pure-eval --accept-flake-config -c \
             cargo run --release -- \
-              check init std examples lang cli llvm runtime build motes
+              check init std examples lang cli llvm runtime build eval motes
 
       # This step is why `nix/host.nix` may set `doCheck = false`: the flake's
       # host derivation skips the workspace's own `cargo test`, on the premise
