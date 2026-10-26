@@ -11,8 +11,6 @@
 /// contract; proxy tools are tagged `exec` (a server's catalogue is
 /// arbitrary code), the conservative default Weaver's settings
 /// (Phase 6) override per server.
-use clap::args {Cli.take_opt, Cli.take_flag, Cli.take_positional, opt_result, pos_result, flag_result}
-use parsec::number {parse_i64}
 use mcp_client::protocol {McpClientInfo, McpTool}
 use mcp_client::server {McpServer, Server.connect, Server.list_tools, Server.call, Server.dispose}
 use shuttle::gate {Capability, Gate, Gate.auto}
@@ -26,6 +24,15 @@ use shuttle::tool {ToolSpec, ToolImpl}
 use shuttle::tools::file_tools {ReadTool.impl, WriteTool.impl, EditTool.impl}
 use shuttle::tools::search_tools {GrepTool.impl, GlobTool.impl}
 use shuttle::tools::shell_tools {ShellTool.impl}
+use clap::parse {Cli.run}
+// Wildcards: the derive's defs (decode_weavercli) are macro-generated,
+// and a named import of one does not resolve in the self-hosted loader.
+use weaver::cli {*}
+use weaver::cli_spec {
+    weaver_cli_spec, WeaverCli.provider_text, WeaverCli.model_text, WeaverCli.max_turns_of,
+    WeaverCli.resume_text, WeaverCli.resume_asked, WeaverCli.cont_of, WeaverCli.no_color_of,
+    WeaverCli.mcps, WeaverCli.version,
+}
 use weaver::commands {WeaverState, Commands.set_plan}
 use weaver::monad_tools {MonadCheck.tool, MonadEval.tool}
 use lang::module {ModuleInfoCache, module_info_cache_empty}
@@ -113,24 +120,7 @@ def stdout_write (s : String) : IO Unit :=
 
 /// How this run identifies itself to MCP servers in the `initialize`
 /// handshake.
-def client_info : McpClientInfo := { name := "weaver", version := "0.1.0" }
-
-// ── Argument parsing ───────────────────────────────────────────────────
-
-/// The raw tokens; parsing itself cannot fail (every flag defaults to
-/// empty = unset), so error detection is a validation pass over the
-/// filled struct. An unset flag falls to the settings file, then the
-/// built-in default -- the resolution order `settings.mo` owns.
-struct CliArgs {
-    provider : String,
-    model : String,
-    max_turns_str : String,
-    mcps : List String,
-    resume : String,
-    cont : Bool,
-    no_color : Bool,
-    error : String,
-}
+def client_info : McpClientInfo := { name := "weaver", version := WeaverCli.version }
 
 /// A validated start: provider config resolved, budget parsed.
 struct Plan {
@@ -150,111 +140,24 @@ struct Plan {
     model_note : Option String,
 }
 
-/// `take_opt` returns its default for BOTH "absent" and "present with no
-/// value", so a dangling `--resume` (or `--resume --continue`, which
-/// would swallow the flag as a token) is rejected here by scanning the
-/// raw argv before the parser chain.
-#[partial]
-def dangling_resume (args : List String) : Bool :=
-    match args {
-        List.empty => false,
-        List.cons a rest => match rest {
-            List.empty => a == "--resume",
-            List.cons b more =>
-                if a == "--resume"
-                then Bool.or (String.is_empty b) (String.starts_with "-" b)
-                else dangling_resume more,
-        },
-    }
-
-def resume_usage_error : CliArgs :=
-    let c : CliArgs := cli_of "" "" "" "" false false [] in
-    let c2 : CliArgs := { c with error := "--resume needs a session id or checkpoint file" } in
-    c2
-
-def parse_args (args : List String) : CliArgs :=
-    if dangling_resume args
-    then resume_usage_error
-    else match Cli.take_opt "provider" "" "" args {
-        Cli.OptResult.opt_result provider rest => parse_model provider rest,
-    }
-
-def parse_model (provider : String) (args : List String) : CliArgs :=
-    match Cli.take_opt "model" "" "" args {
-        Cli.OptResult.opt_result model rest => parse_max_turns provider model rest,
-    }
-
-def parse_max_turns (provider : String) (model : String) (args : List String) : CliArgs :=
-    match Cli.take_opt "max-turns" "" "" args {
-        Cli.OptResult.opt_result n rest => parse_resume provider model n rest,
-    }
-
-def parse_resume (provider : String) (model : String) (max_turns_str : String) (args : List String) : CliArgs :=
-    match Cli.take_opt "resume" "" "" args {
-        Cli.OptResult.opt_result r rest => parse_continue provider model max_turns_str r rest,
-    }
-
-def parse_continue (provider : String) (model : String) (max_turns_str : String) (resume : String) (args : List String) : CliArgs :=
-    match Cli.take_flag "continue" "" args {
-        Cli.FlagResult.flag_result found rest => parse_no_color provider model max_turns_str resume found rest,
-    }
-
-def parse_no_color (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (args : List String) : CliArgs :=
-    match Cli.take_flag "no-color" "" args {
-        Cli.FlagResult.flag_result found rest => parse_mcps provider model max_turns_str resume cont found [] rest,
-    }
-
-/// Repeatable `--mcp`: keep taking until absent.
-#[partial]
-def parse_mcps (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (no_color : Bool) (mcps : List String) (args : List String) : CliArgs :=
-    match Cli.take_opt "mcp" "" "" args {
-        Cli.OptResult.opt_result v rest =>
-            if String.is_empty v
-            then parse_done provider model max_turns_str resume cont no_color mcps rest
-            else parse_mcps provider model max_turns_str resume cont no_color (List.append mcps [v]) rest,
-    }
-
-/// An interactive entry has no positional arguments (the tasks come
-/// from stdin), so the FIRST one found is the whole error -- it fails
-/// the run, and the message says what to remove.
-#[partial]
-def parse_done (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (no_color : Bool) (mcps : List String) (args : List String) : CliArgs :=
-    match Cli.take_positional args {
-        Cli.PosResult.pos_result extra rest => parse_extra_step (cli_of provider model max_turns_str resume cont no_color mcps) extra,
-    }
-
-def cli_of (provider : String) (model : String) (max_turns_str : String) (resume : String) (cont : Bool) (no_color : Bool) (mcps : List String) : CliArgs :=
-    let c : CliArgs := { provider := provider, model := model, max_turns_str := max_turns_str, mcps := mcps, resume := resume, cont := cont, no_color := no_color, error := "" } in
-    c
-
-def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
-    match extra {
-        Option.some x =>
-            let c2 : CliArgs := { c with error := String.concat "unexpected argument: " x } in
-            c2,
-        Option.none => c,
-    }
-
 /// The start plan, resolved RUNTIME -> PROJECT -> GLOBAL -> default:
 /// a flag always wins over a settings file, a settings file over the
 /// built-in floor (ollama / the provider's default model / the
 /// provider-aware turn and window defaults).
 /// Phase 9: a bad plan is a `config` error -- the run was misshapen
 /// before it started, and `main` exits 1 on it.
-def plan_of (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result WeaverError Plan :=
+def plan_of (s : Settings) (ws : List WeaverError) (c : WeaverCli) : Result WeaverError Plan :=
     match Settings.validate s {
         Result.err e => Result.err (WeaverError.config e),
         Result.ok _ => plan_validated s ws c,
     }
 
-def plan_validated (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result WeaverError Plan :=
-    if Bool.not (String.is_empty c.error)
-    then Result.err (WeaverError.config c.error)
-    else if Bool.and c.cont (Bool.not (String.is_empty c.resume))
+def plan_validated (s : Settings) (ws : List WeaverError) (c : WeaverCli) : Result WeaverError Plan :=
+    if Bool.and (WeaverCli.cont_of c) (WeaverCli.resume_asked c)
     then Result.err (WeaverError.config "--resume and --continue are mutually exclusive")
     else
-        let provider : String := resolve_provider s c.provider in
-        let model : String := resolve_model s c.model in
+        let provider : String := resolve_provider s (WeaverCli.provider_text c) in
+        let model : String := resolve_model s (WeaverCli.model_text c) in
         // Settings warnings (unknown keys, parse failures) ride the same
         // startup note, so the TUI shows them in its first block instead
         // of losing them behind the alternate screen.
@@ -308,8 +211,8 @@ def resolve_model (s : Settings) (flag : String) : String :=
     then match s.model { Option.some m => m, Option.none => "" }
     else flag
 
-def plan_turns (s : Settings) (c : CliArgs) (provider : String) (cfg : ProviderConfig) (note : Option String) : Result WeaverError Plan :=
-    match resolve_max_turns s c.max_turns_str {
+def plan_turns (s : Settings) (c : WeaverCli) (provider : String) (cfg : ProviderConfig) (note : Option String) : Result WeaverError Plan :=
+    match resolve_max_turns s (WeaverCli.max_turns_of c) {
         Result.err e => Result.err (WeaverError.config e),
         Result.ok n => plan_done provider cfg n c note (resolve_window s provider) (resolve_compact_at s),
     }
@@ -326,19 +229,20 @@ def resolve_window (s : Settings) (provider : String) : I64 :=
 def resolve_compact_at (s : Settings) : I64 :=
     match s.compact_at { Option.some n => n, Option.none => 80 }
 
-def resolve_max_turns (s : Settings) (flag : String) : Result String I64 :=
-    if String.is_empty flag
-    then turn_cap (match s.max_turns { Option.some n => n, Option.none => Weaver.default_max_turns })
-    else match parse_i64 flag {
+/// `--max-turns` is an `I64` in the derived CLI, so a non-number is
+/// already a usage error (exit 2) before this runs; the settings file's
+/// value takes the same floor.
+def resolve_max_turns (s : Settings) (flag : Option I64) : Result String I64 :=
+    match flag {
         Option.some n => turn_cap n,
-        Option.none => Result.err "--max-turns must be a number",
+        Option.none => turn_cap (match s.max_turns { Option.some n => n, Option.none => Weaver.default_max_turns }),
     }
 
 def turn_cap (n : I64) : Result String I64 :=
     if n < 1 then Result.err "--max-turns must be at least 1" else Result.ok n
 
-def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : CliArgs) (note : Option String) (window : I64) (compact_at : I64) : Result WeaverError Plan :=
-    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := c.mcps, resume := c.resume, cont := c.cont, context_window := window, compact_at := compact_at, model_note := note } in
+def plan_done (provider : String) (cfg : ProviderConfig) (n : I64) (c : WeaverCli) (note : Option String) (window : I64) (compact_at : I64) : Result WeaverError Plan :=
+    let p : Plan := { provider := provider, cfg := cfg, max_turns := n, mcps := WeaverCli.mcps c, resume := WeaverCli.resume_text c, cont := WeaverCli.cont_of c, context_window := window, compact_at := compact_at, model_note := note } in
     Result.ok p
 
 // ── MCP mounting (shuttle main.mo's machinery, ported) ─────────────────
@@ -518,7 +422,7 @@ pub def main (args : List String) : IO I64 := do {
     let loaded <- Settings.load;
     let _ <- warn_settings setup.log loaded.warnings;
     let _ <- warn_project_keys loaded.project_keys;
-    let code <- main_plan setup colors_on_main loaded.settings loaded.warnings (parse_args args);
+    let code <- Cli.run weaver_cli_spec args decode_weavercli (fn (c : WeaverCli) => main_plan setup colors_on_main loaded.settings loaded.warnings c);
     Logs.finish setup.log code;
     IO.pure code
 }
@@ -552,8 +456,8 @@ def warn_project_keys (names : List String) : IO Unit :=
             write_errln (String.concat "warning: api key(s) for " (String.concat (List.intercalate ", " names) " came from .weaver/config.toml -- plaintext on disk; ~/.weaver/config.toml is the recommended home")),
     }
 
-def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : CliArgs) : IO I64 :=
-    let effective : Bool := Bool.and colors (Bool.not c.no_color) in
+def main_plan (setup : LogSetup) (colors : Bool) (s : Settings) (ws : List WeaverError) (c : WeaverCli) : IO I64 :=
+    let effective : Bool := Bool.and colors (Bool.not (WeaverCli.no_color_of c)) in
     match plan_of s ws c {
         Result.err e => do {
             write_errln (String.concat "error: " (WeaverError.show e));

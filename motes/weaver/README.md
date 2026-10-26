@@ -14,19 +14,28 @@ monad build motes/weaver/src/main.mo -o ./weaver
 ```
 
 ```
-usage: weaver [--provider <name>] [--model <name>] [--max-turns <n>] [--mcp <exe>]...
-              [--resume <id|file>] [--continue] [--no-color]
-  --provider ollama|mistral|openrouter|anthropic|mock  (default ollama)
-  --model <name>       (default: the provider's preferred model; /model
-                        lists what the API actually serves)
-  --max-turns <n>      (default 40, total across a save/resume)
-  --mcp <exe>          (repeatable; bare executable, no arguments yet)
-  --resume <id|file>   open a session directory/id or a /save checkpoint
-  --continue           resume the newest session under ~/.weaver/sessions
-  --no-color           disable the palette in both UIs (NO_COLOR works too)
+usage: weaver [OPTIONS]
+  -p, --provider <VALUE>   provider preset: ollama | mistral | openrouter |
+                           anthropic | mock            (default: ollama)
+  -m, --model <VALUE>      default: the provider's preferred model;
+                           /model lists what the API actually serves
+      --max-turns <VALUE>  total model-call budget (default 100, across a
+                           save/resume); a non-number is a usage error
+  -r, --resume <VALUE>     open a session id, a session directory, or a
+                           /save checkpoint
+      --continue           resume the newest session under the session root
+      --no-color           disable the palette in both UIs (NO_COLOR works too)
+      --mcp <VALUE>        mount an MCP server executable (repeatable)
+  -h, --help               print help
+  -V, --version            print version
 ```
 
-Every flag overrides the settings files; see below. The session ends on
+The options are declared once with `#[derive Cli]` (`src/cli.mo`, spec and
+accessors in `src/cli_spec.mo`), so they take long and short spellings,
+`--flag=value`, and typed values; a usage error prints the message plus
+usage and exits 2, while `--help`/`--version` exit 0. Weaver's hand-rolled
+parser (`src/main.mo`) is gone. Every flag overrides the settings files;
+see below. The session ends on
 EOF, `/quit` or a crashed loop, and the mounted MCP servers are disposed
 on every one of those paths.
 
