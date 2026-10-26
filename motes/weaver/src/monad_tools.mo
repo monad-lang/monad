@@ -22,7 +22,7 @@ use json::json {
 }
 use lang::module {
     ModuleInfoCache, module_info_cache_empty, check_file_cached,
-    FileCheckAndCache, FileCheckResult,
+    check_file_cached_from_source, FileCheckAndCache, FileCheckResult,
 }
 use lang::eval_run {EvalRun.run_file}
 use lang::mote {MoteManifest, Mote.discover}
@@ -124,24 +124,19 @@ def check_text (path : String) (r : FileCheckResult) : String :=
             (String.concat (List.intercalate "\n" errs) (warnings_text warns)))),
     }
 
-/// The checker resolves a module from its FILE, so an in-memory buffer
-/// is staged as a real temp module in the nearest mote, checked, and
-/// removed -- exactly the file a `use` in the buffer resolves against.
+/// The checker resolves a `use` against the buffer's PATH, so the buffer
+/// is checked under a virtual module name in the nearest mote, with no
+/// file written: `monad_check` is a `read` tool and must stay one even in
+/// plan mode. `check_file_cached_from_source` is the compiler's own
+/// no-write buffer path.
 def check_source (cache : Ref ModuleInfoCache) (root : Option String) (id : String) (src : String) : IO Content := do {
     let dir <- buffer_dir root;
     let vpath : String := check_path_of dir;
-    let w <- IO.write_file (Path.path vpath) src;
-    match w {
-        Result.err _ => IO.pure (Content.tool_result id (String.concat "monad_check: could not write " vpath) true),
-        Result.ok _ => do {
-            let c <- Ref.get cache;
-            let fc <- check_file_cached c vpath false;
-            let _ <- Ref.set cache fc.cache;
-            let _ <- cleanup vpath;
-            let r : FileCheckResult := fc.result;
-            return (Content.tool_result id (check_text "buffer" r) (has_errors r))
-        },
-    }
+    let c <- Ref.get cache;
+    let fc <- check_file_cached_from_source c vpath src false;
+    let _ <- Ref.set cache fc.cache;
+    let r : FileCheckResult := fc.result;
+    return (Content.tool_result id (check_text "buffer" r) (has_errors r))
 }
 
 def check_path_of (dir : String) : String :=
@@ -195,21 +190,18 @@ def buffer_text (defs : List String) : String :=
     List.intercalate "\n\n" defs
 
 /// Write `content` as a temp module in the nearest mote, run it, delete
-/// it. Returns the pipeline's text (result or staged failure).
-def run_temp (root : Option String) (content : String) : IO String := do {
+/// it. The Result is kept apart from the text: the pipeline prefixes
+/// warnings onto failures too, so an `is_error` sniffing the text lied.
+def run_temp (root : Option String) (content : String) : IO (Result String String) := do {
     let dir <- buffer_dir root;
     let path : String := temp_path dir;
     let w <- IO.write_file (Path.path path) content;
     match w {
-        Result.err _ => IO.pure (String.concat "monad_eval: could not write " path),
+        Result.err _ => IO.pure (Result.err (String.concat "monad_eval: could not write " path)),
         Result.ok _ => do {
             let r <- EvalRun.run_file path false;
             let _ <- cleanup path;
-            let text : String := match r {
-                Result.ok t => t,
-                Result.err t => t,
-            };
-            return text
+            return r
         },
     }
 }
@@ -219,18 +211,11 @@ def run_temp (root : Option String) (content : String) : IO String := do {
 def check_buffer (cache : Ref ModuleInfoCache) (root : Option String) (content : String) : IO Bool := do {
     let dir <- buffer_dir root;
     let vpath : String := String.concat dir (String.concat "/weaver_eval_buffer_" (String.concat (I64.to_string process_id) ".mo"));
-    let w <- IO.write_file (Path.path vpath) content;
-    match w {
-        Result.err _ => IO.pure false,
-        Result.ok _ => do {
-            let c <- Ref.get cache;
-            let fc <- check_file_cached c vpath false;
-            let _ <- Ref.set cache fc.cache;
-            let _ <- cleanup vpath;
-            let r : FileCheckResult := fc.result;
-            IO.pure (Bool.not (has_errors r))
-        },
-    }
+    let c <- Ref.get cache;
+    let fc <- check_file_cached_from_source c vpath content false;
+    let _ <- Ref.set cache fc.cache;
+    let r : FileCheckResult := fc.result;
+    IO.pure (Bool.not (has_errors r))
 }
 
 def accept_def (buf : Ref (List String)) (id : String) (next : List String) : IO Content := do {
@@ -255,15 +240,19 @@ def eval_append_def (cache : Ref ModuleInfoCache) (buf : Ref (List String)) (roo
 /// result types against the SESSION checker cache (cheap after the
 /// first) and evaluates the one that checks. None accepted -> evaluate
 /// as I64 so the user sees that type's real diagnostics.
+/// Probe `expr` against the accumulated definitions (`pre`), exactly as
+/// the module that will run is built: a probe without them fails every
+/// type for an expression that uses a buffered definition, and the I64
+/// fallback then mis-signs the real module.
 #[partial]
-def first_type (cache : Ref ModuleInfoCache) (root : Option String) (expr : String) (types : List String) : IO (Option String) :=
+def first_type (cache : Ref ModuleInfoCache) (root : Option String) (pre : String) (expr : String) (types : List String) : IO (Option String) :=
     match types {
         List.empty => IO.pure Option.none,
         List.cons t rest => do {
-            let content : String := String.concat "def main : " (String.concat t
-                (String.concat " := " (String.concat expr "\n")));
+            let content : String := String.concat pre (String.concat "\n\ndef main : " (String.concat t
+                (String.concat " := " (String.concat expr "\n"))));
             let ok <- check_buffer cache root content;
-            if ok then IO.pure (Option.some t) else first_type cache root expr rest
+            if ok then IO.pure (Option.some t) else first_type cache root pre expr rest
         },
     }
 
@@ -271,15 +260,18 @@ def eval_expression (cache : Ref ModuleInfoCache) (buf : Ref (List String)) (roo
     let defs <- Ref.get buf;
     let pre : String := buffer_text defs;
     let types : List String := ["I64", "String", "Bool", "Unit"];
-    let found <- first_type cache root src types;
+    let found <- first_type cache root pre src types;
     let ty : String := match found {
         Option.some t => t,
         Option.none => "I64",
     };
     let content : String := String.concat pre (String.concat "\n\ndef main : "
         (String.concat ty (String.concat " := " (String.concat src "\n"))));
-    let text <- run_temp root content;
-    return (Content.tool_result id text (String.starts_with "FAILED" text))
+    let text_r <- run_temp root content;
+    return (match text_r {
+        Result.ok text => Content.tool_result id text false,
+        Result.err text => Content.tool_result id text true,
+    })
 }
 
 def eval_dispatch (cache : Ref ModuleInfoCache) (buf : Ref (List String)) (root : Option String) (id : String) (input : Json) : IO Content := do {
@@ -304,8 +296,11 @@ def eval_source (cache : Ref ModuleInfoCache) (buf : Ref (List String)) (root : 
     else eval_expression cache buf root id s
 
 def run_whole (root : Option String) (id : String) (s : String) : IO Content := do {
-    let text <- run_temp root s;
-    return (Content.tool_result id text (String.starts_with "FAILED" text))
+    let text_r <- run_temp root s;
+    return (match text_r {
+        Result.ok text => Content.tool_result id text false,
+        Result.err text => Content.tool_result id text true,
+    })
 }
 
 def eval_run (cache : Ref ModuleInfoCache) (buf : Ref (List String)) (root : Option String) (id : String) (input : Json) : ResultT String IO Content :=
