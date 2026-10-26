@@ -3648,7 +3648,7 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
 def type_check_bound_var (idx : I64) (dbg : DebugName) (local_types : List Term) : Result TypeError TypedTerm :=
     match nth_type idx local_types {
         Option.some typ =>
-            ok (mk_typed (Term.var idx dbg) typ),
+            ok (mk_typed (Term.var idx dbg) (term_shift (idx + 1) typ)),
         Option.none =>
             let bogus_id : Identifier := Identifier.id "bound_var" in
             err (TypeError.unknown_var (NameRef.nid bogus_id)),

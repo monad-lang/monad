@@ -15,7 +15,7 @@ use lib::typecheck::infer {
   CalleeDomain, TypedTerm, ctor_index_values, derive_motive, elaborate_if_to_elim, elaborate_match_to_elim,
   empty_local_types, empty_locals,
   is_uninformative_carrier, lam_binder_hint, match_coverage_warning, type_check,
-  type_check_elim, type_check_match_case
+  type_check_bound_var, type_check_elim, type_check_match_case
 }
 use lib::typecheck::subst {term_shift}
 
@@ -151,6 +151,45 @@ def test_var_bound_oob : Bool :=
             unknown_var _ => true,
             _ => false,
         },
+    }
+
+// A bound variable's STORED type is written relative to its own binding
+// depth, not the depth it is read from. `(A : Type) (a : A) (c : _)`'s
+// body stores `a`'s type as `Term.var 0 "A"` -- correct one binder below
+// `a`'s own -- but reading it back from one binder DEEPER (`c`'s scope,
+// where `a` itself is `Term.var 1`) must shift that embedded reference
+// up by `idx + 1` (the number of binders opened since the type was
+// written) or it names the wrong variable. This is `univalence.md`
+// Stage 6 reconnaissance's real root cause for giving `Path` a body via
+// `Cubical.PathP (fn _ => A) a b`: the line's endpoint check unifies
+// `a`'s declared type against an independently-built, correctly-indexed
+// term, and without the shift the two sides name different binders
+// despite printing identically ("A").
+#[test]
+def test_type_check_bound_var_shifts_a_dependent_stored_type : Bool :=
+    let a_name : Identifier := Identifier.id "A" in
+    // `a`'s stored type, as written one binder below its own: `Term.var
+    // 0 "A"`. Read from two binders below (idx 1), it must come back
+    // shifted to `Term.var 2 "A"`.
+    let a_stored_typ : Term := Term.var 0 (DebugName.named a_name) in
+    let types : List Term := List.cons Term.hole (List.cons a_stored_typ (List.cons Term.hole List.empty)) in
+    match type_check_bound_var 1 (DebugName.named (Identifier.id "a")) types {
+        ok tt => match tt { mk _ typ => Similar.similar typ (Term.var 2 (DebugName.named a_name)) },
+        err _ => false,
+    }
+
+// The nearest binder (idx 0) needs no shift at all -- `idx + 1 = 1`,
+// and a CLOSED stored type (no embedded bound references) is a fixed
+// point of any shift, so this also passes with the shift removed. Paired
+// with the test above (idx 1, a non-trivial shift) so the mutation this
+// rule actually guards against -- dropping the shift -- is caught by at
+// least one of the two.
+#[test]
+def test_type_check_bound_var_nearest_binder_closed_type : Bool :=
+    let types : List Term := List.cons (sort_n 1) List.empty in
+    match type_check_bound_var 0 DebugName.unnamed types {
+        ok tt => match tt { mk _ typ => Similar.similar typ (sort_n 1) },
+        err _ => false,
     }
 
 #[test]
