@@ -161,7 +161,7 @@ def drive_turn (read : Unit -> IO (Option String)) (write : String -> IO Unit) (
             let st3 : WeaverState := set_last_context_from st2 r;
             // A plan-mode turn's text is captured and persisted; other
             // turns leave the stored plan untouched.
-            let plan : Option String := Commands.plan_after_turn st2 r;
+            let plan : Option String := Commands.plan_after_turn st2 before r;
             let _ <- persist_plan st2.store plan;
             let st4 : WeaverState := match plan {
                 Option.none => st3,

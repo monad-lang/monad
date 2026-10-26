@@ -705,7 +705,7 @@ def test_plan_after_turn_captures_plan_mode_text : IO Bool := do {
     let run : RunState := run_with_history [msg];
     let r : Result WeaverError RunState := Result.ok run;
     let st : WeaverState := state_of Mode.plan [];
-    let got : Option String := Commands.plan_after_turn st r;
+    let got : Option String := Commands.plan_after_turn st 0 r;
     match got {
         Option.some t => IO.pure (String.contains t "PLAN: 1) read the file"),
         Option.none => IO.pure false,
@@ -719,7 +719,7 @@ def test_plan_after_turn_ignores_other_modes : IO Bool := do {
     let run : RunState := run_with_history [msg];
     let r : Result WeaverError RunState := Result.ok run;
     let st : WeaverState := state_of Mode.manual [];
-    let got : Option String := Commands.plan_after_turn st r;
+    let got : Option String := Commands.plan_after_turn st 0 r;
     match got { Option.none => IO.pure true, Option.some _ => IO.pure false }
 }
 
@@ -983,3 +983,38 @@ def test_turns_label_singular_and_plural : Bool :=
     String.beq (Commands.turns_label 1) "1 turn"
         && String.beq (Commands.turns_label 12) "12 turns"
         && String.beq (Commands.turns_label 0) "0 turns"
+
+/// Only the turn's own delta is scanned for a plan: a plan-mode turn
+/// that ends without assistant text captures nothing, rather than an
+/// earlier turn's answer.
+#[test]
+def test_plan_after_turn_ignores_earlier_turns : IO Bool := do {
+    let old : Message := { role := Role.assistant, content := [Content.text "earlier answer"] };
+    let tool : Message := { role := Role.tool, content := [Content.text "tool output"] };
+    let run : RunState := run_with_history [old, tool];
+    let r : Result WeaverError RunState := Result.ok run;
+    let st : WeaverState := state_of Mode.plan [];
+    let got : Option String := Commands.plan_after_turn st 1 r;
+    match got { Option.none => IO.pure true, Option.some _ => IO.pure false }
+}
+
+/// A session switch drops the last request's size: a stale context from
+/// the previous session would autocompact the fresh one immediately.
+#[test]
+def test_resume_resets_last_context : IO Bool := do {
+    let root : Path := test_root "resume_ctx";
+    clean_dir root;
+    let base : WeaverState := state_of Mode.manual [];
+    let r <- Store.new_session root base.run.session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok s0 => do {
+            let st : WeaverState := { (with_store base s0) with last_context := 9000 };
+            let res <- Commands.dispatch (String.concat "/resume " (Path.to_string s0.dir)) st;
+            match res {
+                Result.err _ => IO.pure false,
+                Result.ok e => IO.pure (e.state.last_context == 0),
+            }
+        }
+    }
+}

@@ -299,13 +299,26 @@ pub def Commands.set_plan (st : WeaverState) (p : Option String) : WeaverState :
     let st2 : WeaverState := { st with plan := p } in
     st2
 
-/// The assistant text a plan-mode turn produced, if any. The mode is
-/// read from the PRE-turn state (a turn cannot change it).
-pub def Commands.plan_after_turn (st : WeaverState) (r : Result WeaverError RunState) : Option String :=
+/// The messages appended after the first `before` entries (the turn's
+/// own delta).
+#[partial]
+def turn_delta (before : I64) (ms : List Message) : List Message :=
+    if before < 1 then ms
+    else match ms {
+        List.empty => List.empty,
+        List.cons _ rest => turn_delta (before - 1) rest,
+    }
+
+/// The assistant text a plan-mode turn produced, if any. Only the turn's
+/// own delta is scanned: a turn that ends without assistant text (a
+/// tool-only turn at the cap, or a stopped one) must not capture an
+/// earlier turn's message as "the plan". The mode is read from the
+/// PRE-turn state (a turn cannot change it).
+pub def Commands.plan_after_turn (st : WeaverState) (before : I64) (r : Result WeaverError RunState) : Option String :=
     match st.mode {
         Mode.plan => match r {
             Result.err _ => Option.none,
-            Result.ok run2 => Commands.last_assistant_text run2.session.history,
+            Result.ok run2 => Commands.last_assistant_text (turn_delta before run2.session.history),
         },
         _ => Option.none,
     }
@@ -1449,8 +1462,11 @@ def set_store (st : WeaverState) (s : Option StoreState) : WeaverState :=
 
 def set_session (st : WeaverState) (s : Session) (budget : I64) : WeaverState :=
     let remaining : I64 := if budget - s.turns < 0 then 0 else budget - s.turns in
-    // A session switch clears the `always` cache: the approval is
-    // per-session by definition, and `/clear`/`/resume` start a new one.
+    // A session switch clears the `always` cache (the approval is
+    // per-session by definition) and the last request's real size: the
+    // new session's context is unknown until its first turn, and a stale
+    // number from the old one makes the next autocompact summarize a
+    // one-message history.
     let run2 : RunState := { (st.run) with session := s, turns_left := remaining, always := List.empty } in
-    let st2 : WeaverState := { st with run := run2 } in
+    let st2 : WeaverState := { st with run := run2, last_context := 0 } in
     st2
