@@ -166,15 +166,26 @@ pub def Permissions.normalize (s : String) : String :=
 
 /// `target` (relative targets resolved against `root`) is `root` or
 /// below it, after lexical normalization. The boundary is the `/`, so
-/// `root = /src/monad` does not accept `/src/monad-evil`.
+/// `root = /src/monad` does not accept `/src/monad-evil`; a root of `/`
+/// is the one case where the boundary is the root itself.
+///
+/// A root that NORMALIZES to nothing (`.` or `./`, i.e. a `PWD` no shell
+/// made absolute) is refused: the normalized boundary would be `/`, which
+/// accepts every absolute path -- a "this repo" grant covering all of the
+/// filesystem. Repo scope is simply not offered in that case.
 pub def Permissions.within (root : String) (target : String) : Bool :=
     if String.is_empty root then false
     else
         let root_n : String := Permissions.normalize root in
-        let target_abs : String := if String.starts_with "/" target then target else raw_join root_n target in
-        let target_n : String := Permissions.normalize target_abs in
-        if target_n == root_n then true
-        else String.starts_with (String.concat root_n "/") target_n
+        if String.is_empty root_n then false
+        else
+            let target_abs : String := if String.starts_with "/" target then target else raw_join root_n target in
+            let target_n : String := Permissions.normalize target_abs in
+            if String.is_empty target_n then false
+            else if target_n == root_n then true
+            else
+                let boundary : String := if root_n == "/" then "/" else String.concat root_n "/" in
+                String.starts_with boundary target_n
 
 def raw_join (a : String) (b : String) : String :=
     if String.ends_with a "/" then String.concat a b else String.concat a (String.concat "/" b)

@@ -68,3 +68,18 @@ def test_grant_store_operations : IO Bool := do {
     let g4 <- Permissions.get (Option.some r);
     return (List.length g1 == 3 && List.length g2 == 2 && List.length g3 == 1 && List.length g4 == 0)
 }
+
+/// A root that NORMALIZES to nothing ("." or "./") must not accept the
+/// world: its boundary would become "/", i.e. a repo grant over the
+/// whole filesystem.
+#[test]
+def test_within_refuses_a_root_that_normalizes_empty : Bool :=
+    Bool.not (Permissions.within "." "/etc/passwd")
+        && Bool.not (Permissions.within "./" "../../x")
+        && Bool.not (Permissions.within "." "a.mo")
+
+/// `/` is the one root whose boundary is the root itself.
+#[test]
+def test_within_root_slash_covers_the_filesystem : Bool :=
+    Permissions.within "/" "/etc/passwd"
+        && Permissions.within "/" "/"
