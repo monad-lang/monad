@@ -54,6 +54,39 @@ pub def Settings.empty : Settings := {
     api_keys := BTreeMap.empty,
 }
 
+/// Range checks for the numeric knobs the config FILE can set. The slash
+/// commands enforce the same ranges (`/settings max_tokens`, `compact_at`);
+/// a hand-edited file must not be able to send `max_tokens = 0` (every
+/// provider rejects it) or a negative `compact_at` (which silently
+/// disables autocompact). `context_window = 0` is legal: it turns
+/// autocompact off on purpose.
+pub def Settings.validate (s : Settings) : Result String Unit :=
+    match s.max_tokens {
+        Option.some n =>
+            if n < 16
+            then Result.err "max_tokens must be at least 16 (use /settings or remove the key)"
+            else validate_compact s,
+        Option.none => validate_compact s,
+    }
+
+def validate_compact (s : Settings) : Result String Unit :=
+    match s.compact_at {
+        Option.some n =>
+            if Bool.or (n < 0) (100 < n)
+            then Result.err "compact_at must be between 0 and 100 (use /settings or remove the key)"
+            else validate_window s,
+        Option.none => validate_window s,
+    }
+
+def validate_window (s : Settings) : Result String Unit :=
+    match s.context_window {
+        Option.some n =>
+            if n < 0
+            then Result.err "context_window must be 0 (autocompact off) or positive (use /settings or remove the key)"
+            else Result.ok unit,
+        Option.none => Result.ok unit,
+    }
+
 /// The resolution order as a function: `over` wins field by field, the
 /// capability tables union with `over`'s entries winning per key.
 pub def Settings.merge (base : Settings) (over : Settings) : Settings := {

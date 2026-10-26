@@ -47,7 +47,7 @@ use weaver::providers {
 use std::map {BTreeMap}
 use std::ref {Ref, Ref.new}
 use weaver::permissions {PermGrant}
-use weaver::settings {Settings, Settings.load, Settings.cap_of}
+use weaver::settings {Settings, Settings.load, Settings.cap_of, Settings.validate}
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed}
 use log::logger {Logger}
@@ -242,6 +242,12 @@ def parse_extra_step (c : CliArgs) (extra : Option String) : CliArgs :=
 /// Phase 9: a bad plan is a `config` error -- the run was misshapen
 /// before it started, and `main` exits 1 on it.
 def plan_of (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result WeaverError Plan :=
+    match Settings.validate s {
+        Result.err e => Result.err (WeaverError.config e),
+        Result.ok _ => plan_validated s ws c,
+    }
+
+def plan_validated (s : Settings) (ws : List WeaverError) (c : CliArgs) : Result WeaverError Plan :=
     if Bool.not (String.is_empty c.error)
     then Result.err (WeaverError.config c.error)
     else if Bool.and c.cont (Bool.not (String.is_empty c.resume))

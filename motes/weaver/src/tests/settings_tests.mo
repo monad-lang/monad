@@ -10,7 +10,7 @@ use std::test {Test.write_fixture}
 use weaver::settings {
     Settings, Settings.empty, Settings.merge, Settings.load_of_path,
     Settings.cap_of, Settings.key_of, Loaded, parse_settings, parse_warned, parse_cap,
-    SettingsUpdate, Settings.render_update,
+    SettingsUpdate, Settings.render_update, Settings.validate,
 }
 use weaver::error {WeaverError, WeaverError.show}
 use weaver::policy {Mode}
@@ -358,3 +358,29 @@ def test_render_update_refuses_unparsable_input : Bool :=
         Result.err _ => true,
         Result.ok _ => false,
     }
+
+// ── range validation for the file-set numeric knobs ────────────────────
+
+#[test]
+def test_validate_accepts_the_defaults : Bool :=
+    match Settings.validate Settings.empty {
+        Result.ok _ => true,
+        Result.err _ => false,
+    }
+
+/// The slash commands refuse these; a hand-edited file must not smuggle
+/// them in (0 max_tokens is rejected by every provider, a negative
+/// compact_at silently disables autocompact).
+#[test]
+def test_validate_refuses_out_of_range_knobs : Bool :=
+    let e : Settings := Settings.empty in
+    let tiny : Settings := { e with max_tokens := Option.some 0 } in
+    let neg_compact : Settings := { e with compact_at := Option.some (0 - 5) } in
+    let big_compact : Settings := { e with compact_at := Option.some 140 } in
+    let neg_window : Settings := { e with context_window := Option.some (0 - 1) } in
+    let off_window : Settings := { e with context_window := Option.some 0 } in
+    (match Settings.validate tiny { Result.err _ => true, Result.ok _ => false })
+        && (match Settings.validate neg_compact { Result.err _ => true, Result.ok _ => false })
+        && (match Settings.validate big_compact { Result.err _ => true, Result.ok _ => false })
+        && (match Settings.validate neg_window { Result.err _ => true, Result.ok _ => false })
+        && (match Settings.validate off_window { Result.ok _ => true, Result.err _ => false })
