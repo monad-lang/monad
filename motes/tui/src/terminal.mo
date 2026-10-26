@@ -94,7 +94,14 @@ pub def Terminal.cursor_hide_code : String := "\u{1b}[?25l"
 
 /// Clear the whole screen. Does NOT move the cursor -- pair with
 /// `cursor_move 0 0` for a "clear and go home".
-pub def Terminal.clear_screen_code : String := "\u{1b}[2J"
+/// Reset before erasing: the erase fills with the CURRENT attributes, so
+/// a screen left in a colored SGR state clears into that color, and the
+/// next unstyled write inherits it.
+pub def Terminal.clear_screen_code : String := "\u{1b}[0m\u{1b}[2J"
+
+/// The SGR reset on its own -- the exit path uses it so the shell never
+/// inherits a mode tint (plan mode's status bar is green).
+pub def Terminal.reset_style_code : String := "\u{1b}[0m"
 
 /// Restrict scrolling (and cursor-movement clamping) to the 0-based
 /// inclusive `[top, bottom]` rows.
@@ -143,6 +150,9 @@ pub def Terminal.cursor_hide : IO Unit :=
 pub def Terminal.clear_screen : IO Unit :=
     IO.write_stdout Terminal.clear_screen_code
 
+pub def Terminal.reset_style : IO Unit :=
+    IO.write_stdout Terminal.reset_style_code
+
 pub def Terminal.set_scroll_region (top : I64) (bottom : I64) : IO Unit :=
     IO.write_stdout (Terminal.set_scroll_region_code top bottom)
 
@@ -190,7 +200,8 @@ def test_cursor_show_hide_codes : Bool :=
 
 #[test]
 def test_clear_screen_code : Bool :=
-    Terminal.clear_screen_code == "\u{1b}[2J"
+    Terminal.clear_screen_code == "\u{1b}[0m\u{1b}[2J"
+        && Terminal.reset_style_code == "\u{1b}[0m"
 
 #[test]
 def test_scroll_region_codes : Bool :=

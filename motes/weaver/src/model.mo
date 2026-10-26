@@ -745,6 +745,16 @@ pub def Model.display_line (colors : Bool) (width : I64) (line : TLine) : List D
     then List.append rows [mk_row style "[truncated for display -- full text is in the session history]"]
     else rows
 
+/// Wrap `s` with the DEFAULT style, one row per wrapped part: a dialog
+/// body that is prose (a plan, a permission prompt) must not inherit the
+/// transcript's line classification -- a plan bullet starting "+ " turned
+/// the whole line green, diff colors and all.
+pub def Model.display_plain (width : I64) (s : String) : List DisplayRow :=
+    let w : I64 := if width < 1 then 1 else width in
+    if String.is_empty s
+    then List.singleton (mk_row style_default "")
+    else List.flatten (List.map (fn (part : String) => List.map (fn (t : String) => mk_row style_default t) (wrap_text w part)) (theme_split_lines s))
+
 #[partial]
 pub def Model.rows_of_line (colors : Bool) (width : I64) (line : TLine) : I64 :=
     rows_len (Model.display_line colors width line)

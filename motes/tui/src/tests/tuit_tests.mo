@@ -17,7 +17,7 @@
 
 use lib::core {empty_screen, mk_rect}
 use lib::render {render}
-use lib::terminal {Terminal.cursor_show_code, Terminal.leave_alt_screen_code}
+use lib::terminal {Terminal.cursor_show_code, Terminal.leave_alt_screen_code, Terminal.reset_style_code}
 use lib::tuit {Closed, Cooked, Raw, Term, TuiT, screen_repaint}
 use lib::types {Screen}
 use lib::widget {label}
@@ -91,7 +91,7 @@ def demo_screen : Screen :=
 /// (`MatchTraversalMismatch`) -- a known compiler gap; hoisting is the
 /// standing workaround.
 def restore_code : String :=
-    Terminal.leave_alt_screen_code ++ Terminal.cursor_show_code
+    Terminal.reset_style_code ++ Terminal.leave_alt_screen_code ++ Terminal.cursor_show_code
 
 // ==================== the lifecycle ====================
 

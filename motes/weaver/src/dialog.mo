@@ -25,6 +25,10 @@ pub struct Dialog {
     note : InputState,
     editing : Bool,
     footer : String,
+    /// Render the body with the default style instead of the transcript's
+    /// line classification: a plan's prose is not a diff, and a "+ " or
+    /// "- " bullet must not paint the whole line green/red.
+    plain_body : Bool := false,
 }
 
 pub type DialogStep {
@@ -44,6 +48,7 @@ pub def Dialog.make (title : String) (subtitle : String) (body : List String) (o
         note := input_state "" "add a note (optional)",
         editing := false,
         footer := "↑/↓ select · Enter confirm · e note · Esc cancel",
+        plain_body := false,
     } in
     d
 

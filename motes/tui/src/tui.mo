@@ -90,7 +90,7 @@ use lib::terminal {
     Terminal.enable_mouse, Terminal.disable_mouse,
     Terminal.enable_bracketed_paste, Terminal.disable_bracketed_paste,
     Terminal.enter_alt_screen, Terminal.enter_raw_mode, Terminal.leave_alt_screen,
-    Terminal.leave_raw_mode, Terminal.size
+    Terminal.leave_raw_mode, Terminal.reset_style, Terminal.size
 }
 use std::concurrent::fiber {Fiber, FiberError, forkIO, pollFiber}
 use std::io { IO.flush_stdout, IO.write_stdout }
@@ -532,6 +532,10 @@ def draw_frame {S : Type} (vw : S -> Widget) (model : S) (reader : InputReader) 
 /// mode. Every controlled exit lands here; nothing else writes these
 /// sequences, so an app cannot half-restore.
 def restore_terminal : IO Unit := do {
+    // Reset the SGR state FIRST: the app's last frame may have ended on a
+    // styled cell (plan mode's status bar is green), and the shell must
+    // never inherit it.
+    Terminal.reset_style;
     Terminal.disable_bracketed_paste;
     Terminal.disable_mouse;
     Terminal.leave_alt_screen;

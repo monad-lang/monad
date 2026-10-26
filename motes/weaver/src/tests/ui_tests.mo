@@ -22,7 +22,7 @@ use weaver::model {
     Model.scroll_step, Model.append_block, Model.window, Model.needs_page,
     Model.page_request, Model.visible_rows, scroll_indicator, panel_height,
     Model.display_rows, Model.content_width, DisplayRow,
-    Model.display_line, Model.display_cap_bytes,
+    Model.display_line, Model.display_plain, Model.display_cap_bytes,
     Model.body_height, Model.thinking_text, Model.live_stream_height, Model.live_row, status_line,
     Model.row_total_of,
 }
@@ -317,3 +317,19 @@ def test_a_message_taller_than_the_panel_is_fully_reachable : Bool :=
         && Text.width pinned_last == 24
         && String.contains top_first "lines above"
         && Text.width top_last == 76
+
+// ── plain dialog bodies ────────────────────────────────────────────────
+
+/// A plan line that looks like a diff row keeps the default style in a
+/// plain dialog body: plans are prose, not diffs.
+#[test]
+def test_display_plain_does_not_classify : Bool :=
+    let rows := Model.display_plain 40 "+ not a diff" in
+    match rows {
+        List.cons r _ => r.style.fg == Option.none && Bool.not r.style.dim,
+        List.empty => false,
+    }
+
+#[test]
+def test_display_plain_wraps_like_a_transcript_line : Bool :=
+    Bool.not (I64.lt (List.length (Model.display_plain 4 "abcdefghij")) 3)

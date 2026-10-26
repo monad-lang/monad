@@ -39,7 +39,7 @@ use weaver::model {
     TuiModel, WeaverMsg, Window, LiveDelta, on_event, init_tui_model, init_tui_model_with,
     Model.view, Model.scroll_step, Model.append_block, Model.append_lines,
     Model.window, Model.needs_page, Model.page_request, Model.hist_keep,
-    DisplayRow, Model.display_line, Model.take_last_rows, Model.display_row_widget,
+    DisplayRow, Model.display_line, Model.display_plain, Model.take_last_rows, Model.display_row_widget,
     Model.refresh_rows, Model.begin_selection, Model.drag_selection, Model.finish_selection,
     Model.clear_input_selection, Model.in_input, Model.input_drag, Model.input_press,
     Model.input_release, Model.input_sel_active, Model.picker_height,
@@ -1810,7 +1810,7 @@ def plan_dialog_step (st : WeaverState) (text : String) : IO WeaverMsg :=
 def plan_view_step (st : WeaverState) : IO WeaverMsg := do {
     let o0 : DialogOption := { label := "Close", hint := "Esc", key := "" };
     let d0 : Dialog := Dialog.make "Current plan" "read-only -- switch to plan mode to revise or approve" (plan_body st) [o0];
-    let d : Dialog := { d0 with footer := "PageUp/PageDown scroll -- Enter/Esc close" };
+    let d : Dialog := { d0 with plain_body := true, footer := "PageUp/PageDown scroll -- Enter/Esc close" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair _ _ => IO.pure (WeaverMsg.command_result (plan_effect st "plan closed")),
@@ -1823,7 +1823,7 @@ def plan_approval_step (st : WeaverState) : IO WeaverMsg := do {
     let o2 : DialogOption := { label := "Revise with a note", hint := "r", key := "r" };
     let o3 : DialogOption := { label := "Cancel", hint := "Esc", key := "" };
     let d0 : Dialog := Dialog.make "Plan ready" "approve it to leave plan mode" (plan_body st) [o0, o1, o2, o3];
-    let d : Dialog := { d0 with footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
+    let d : Dialog := { d0 with plain_body := true, footer := "PageUp/PageDown scroll -- a approve/edit, m manual, r revise, Esc cancel" };
     let pr <- dialog_run st.colors st.store d;
     match pr {
         Pair.pair final step => match step {
@@ -1880,10 +1880,15 @@ def drop_rows (n : I64) (rs : List DisplayRow) : List DisplayRow :=
     }
 
 #[partial]
-def dialog_body_rows (colors : Bool) (width : I64) (lines : List String) : List DisplayRow :=
+def dialog_body_rows (colors : Bool) (plain : Bool) (width : I64) (lines : List String) : List DisplayRow :=
     match lines {
         List.empty => List.empty,
-        List.cons l rest => List.append (Model.display_line colors width (TLine.plain l)) (dialog_body_rows colors width rest),
+        List.cons l rest =>
+            let rows : List DisplayRow :=
+                if plain
+                then Model.display_plain width l
+                else Model.display_line colors width (TLine.plain l) in
+            List.append rows (dialog_body_rows colors plain width rest),
     }
 
 def dim_row (r : DisplayRow) : DisplayRow :=
@@ -1966,7 +1971,7 @@ def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {
             let raw_w : I64 := cols - 4;
             let width : I64 := if raw_w < 20 then (if raw_w < 1 then 1 else raw_w) else (if raw_w < 88 then raw_w else 88);
             let content_w : I64 := if width - 4 < 1 then 1 else width - 4;
-            let body_all : List DisplayRow := dialog_body_rows colors content_w d.body;
+            let body_all : List DisplayRow := dialog_body_rows colors d.plain_body content_w d.body;
             let total : I64 := dialog_total_rows d body_all;
             let max_h : I64 := if rows - 2 < 6 then 6 else rows - 2;
             let wanted : I64 := total + 4;

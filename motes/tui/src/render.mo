@@ -561,7 +561,11 @@ def apply_one (d : CellDelta) : String :=
 /// accumulated tail at every step), and a full repaint is thousands of
 /// deltas.
 pub def apply_deltas (deltas : List CellDelta) : String :=
-    String.concat_list (List.map apply_one deltas)
+    // The trailing reset leaves the terminal in the default style: the
+    // last painted cell may be styled (plan mode's green status bar), and
+    // anything written after the frame -- a raw fragment, the next clear,
+    // the shell after exit -- would otherwise inherit it.
+    String.concat (String.concat_list (List.map apply_one deltas)) "\u{1b}[0m"
 
 // ==================== Tests ====================
 
@@ -619,7 +623,7 @@ def test_render_label_wide_clipped_at_the_edge : Bool :=
 def test_apply_deltas_skips_a_wide_continuation : Bool :=
     let d1 := CellDelta.set 0 0 (mk_styled_cell "日" style_default) in
     let d2 := CellDelta.set 0 1 (mk_styled_cell "" style_default) in
-    apply_deltas [d1, d2] == "\u{1b}[1;1H\u{1b}[0m日"
+    apply_deltas [d1, d2] == "\u{1b}[1;1H\u{1b}[0m日\u{1b}[0m"
 
 #[test]
 def test_render_border_plain : Bool :=
@@ -820,13 +824,14 @@ def test_diff_different_size_is_empty : Bool :=
 def test_apply_deltas_set_cell : Bool :=
     let d := CellDelta.set 0 1 (mk_styled_cell "x" style_default) in
     let out := apply_deltas [d] in
-    // the cursor code for 1-indexed (1,2), the reset, and the char "x".
-    out == "\u{1b}[1;2H\u{1b}[0mx"
+    // the cursor code for 1-indexed (1,2), the reset, the char "x", and
+    // the frame's trailing reset.
+    out == "\u{1b}[1;2H\u{1b}[0mx\u{1b}[0m"
 
 #[test]
 def test_apply_deltas_clear_cell_writes_space : Bool :=
     let out := apply_deltas [CellDelta.clear 0 0] in
-    out == "\u{1b}[1;1H\u{1b}[0m "
+    out == "\u{1b}[1;1H\u{1b}[0m \u{1b}[0m"
 
 #[test]
 def test_apply_deltas_default_cell_does_not_inherit_style : Bool :=
