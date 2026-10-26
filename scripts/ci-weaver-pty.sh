@@ -126,6 +126,7 @@ drivers=(
   pty_repro_async.py
   pty_repro_bigplan.py
   pty_repro_sessions.py
+  pty_repro_resume.py
   pty_repro.py
 )
 
@@ -143,6 +144,7 @@ marker_for() {
     pty_repro_bigplan.py) echo "big-plan repro: ok" ;;
     pty_repro_processes.py) echo "processes repro: ok" ;;
     pty_repro_selection.py) echo "selection repro: ok" ;;
+    pty_repro_resume.py) echo "RESUME PICKER REPRO: ALL PASS" ;;
     *) echo "" ;;
   esac
 }

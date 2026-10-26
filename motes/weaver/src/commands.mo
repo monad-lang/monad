@@ -37,8 +37,10 @@ use weaver::store {
     StoreState, Store.new_session, Store.latest_session, Store.load_session,
     Store.import_session, Store.session_dir, Store.base_name, Store.record_compacted,
     Store.read_plan, Store.write_plan,
+    SessionInfo, TitleField, StoreMeta, Store.list_sessions, Store.read_meta, Store.write_title,
+    Store.derive_name, Store.derive_description,
 }
-use std::path {Path, Path.of, Path.parent}
+use std::path {Path, Path.of, Path.parent, Path.to_string}
 use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {Map, BTreeMap}
 use std::list {List.intercalate}
@@ -156,6 +158,8 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/mcp" (SlashCommand.mk cmd_mcp)
         (Map.insert "/mode" (SlashCommand.mk cmd_mode)
         (Map.insert "/model" (SlashCommand.mk cmd_model)
+        (Map.insert "/name" (SlashCommand.mk cmd_name)
+        (Map.insert "/describe" (SlashCommand.mk cmd_describe)
         (Map.insert "/permissions" (SlashCommand.mk cmd_permissions)
         (Map.insert "/settings" (SlashCommand.mk cmd_settings)
         (Map.insert "/plan" (SlashCommand.mk cmd_plan)
@@ -169,7 +173,7 @@ pub def command_table : BTreeMap String SlashCommand :=
         (Map.insert "/procs" (SlashCommand.mk cmd_processes)
         (Map.insert "/thinking" (SlashCommand.mk cmd_thinking)
         (Map.insert "/tools" (SlashCommand.mk cmd_tools)
-            BTreeMap.empty))))))))))))))))))))
+            BTreeMap.empty))))))))))))))))))))))
 
 /// Route one `/`-line: split at the first space, look the command up,
 /// run it. Unknown names get `/help`'s hint, not silence.
@@ -650,19 +654,185 @@ def save_result (file : String) (st : WeaverState) (r : Result String Unit) : IO
         Result.ok _ => respond st (String.concat "saved " file),
     }
 
-/// `/resume [<id|file>]`: continue a saved session. No argument picks
-/// the newest session (`meta.updated`). A directory or a session id
-/// under the root opens that directory in place; anything else is a
-/// shuttle checkpoint file, imported into a fresh directory. The turn
-/// budget SPANS both halves (the remaining budget is the total minus
-/// the turns the loaded session already took).
+/// `/resume [<id|file>]`: continue a saved session. No argument LISTS
+/// the saved sessions -- a bare resume of `meta.updated` would reload
+/// the session already open, since a turn bumps its `updated`. (The TUI
+/// intercepts the bare command and opens the picker dialog instead.)
+/// A directory or a session id under the root opens that directory in
+/// place; anything else is a shuttle checkpoint file, imported into a
+/// fresh directory. The turn budget SPANS both halves (the remaining
+/// budget is the total minus the turns the loaded session already took).
 def cmd_resume (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
     if String.is_empty arg
-    then resume_latest st
+    then list_sessions_effect st
     else match Path.of arg {
         Result.err e => IO.pure (Result.err (WeaverError.io e)),
         Result.ok p => resume_path st p arg,
     }
+
+// ── the session list ───────────────────────────────────────────────────
+
+/// `1 turn` / `N turns` -- one spelling for both the line UI and the
+/// TUI picker's hint.
+pub def Commands.turns_label (n : I64) : String :=
+    if n == 1 then "1 turn" else String.concat (I64.to_string n) " turns"
+
+/// One picker/list row: `[current] name -- description (N turns · model) id`.
+def session_line (current : String) (i : SessionInfo) : String :=
+    let id : String := i.id in
+    let name : String := i.name in
+    let desc : String := i.description in
+    let turns : I64 := i.turns in
+    let model : String := i.model in
+    let mark : String := if String.beq current id then "[current] " else "          " in
+    let label : String := if String.is_empty desc then name else String.concat name (String.concat " -- " desc) in
+    let stats : String := String.concat (Commands.turns_label turns) (String.concat " · " model) in
+    String.concat "  " (String.concat mark (String.concat label
+        (String.concat "  (" (String.concat stats (String.concat ") " id)))))
+
+/// One page of the `/resume` picker: the sessions on it plus whether
+/// newer/older pages exist. Pure, so the TUI's paging is unit-testable
+/// without a terminal.
+pub struct SessionPage {
+    page : I64,
+    rows : List SessionInfo,
+    has_newer : Bool,
+    has_older : Bool,
+}
+
+#[partial]
+def page_len (xs : List SessionInfo) : I64 :=
+    match xs {
+        List.empty => 0,
+        List.cons _ rest => 1 + page_len rest,
+    }
+
+#[partial]
+def page_take (n : I64) (xs : List SessionInfo) : List SessionInfo :=
+    if n < 1 then List.empty
+    else match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons x (page_take (n - 1) rest),
+    }
+
+#[partial]
+def page_drop (n : I64) (xs : List SessionInfo) : List SessionInfo :=
+    if n < 1 then xs
+    else match xs {
+        List.empty => xs,
+        List.cons _ rest => page_drop (n - 1) rest,
+    }
+
+pub def Commands.session_page (page_size : I64) (page : I64) (infos : List SessionInfo) : SessionPage :=
+    let size : I64 := if page_size < 1 then 1 else page_size in
+    let p : I64 := if page < 0 then 0 else page in
+    let start : I64 := p * size in
+    let total : I64 := page_len infos in
+    let rows : List SessionInfo := page_take size (page_drop start infos) in
+    let end : I64 := start + page_len rows in
+    let newer : Bool := I64.gt p 0 in
+    let older : Bool := I64.lt end total in
+    let sp : SessionPage := { page := p, rows := rows, has_newer := newer, has_older := older } in
+    sp
+
+#[partial]
+def session_lines_go (current : String) (infos : List SessionInfo) (acc : List String) : List String :=
+    match infos {
+        List.empty => List.reverse acc,
+        List.cons i rest => session_lines_go current rest (List.cons (session_line current i) acc),
+    }
+
+def sessions_text (s : StoreState) (infos : List SessionInfo) : String :=
+    let root : String := Path.to_string s.root in
+    let current : String := s.id in
+    let head : String := String.concat "sessions under " (String.concat root " (newest first):") in
+    let body : String := List.intercalate "\n" (session_lines_go current infos List.empty) in
+    String.concat head (String.concat "\n" (String.concat body
+        "\nresume one with /resume <id> (the TUI's bare /resume opens a picker)"))
+
+def list_sessions_effect (st : WeaverState) : IO (Result WeaverError Effect) :=
+    match st.store {
+        Option.none => respond st "session persistence unavailable (HOME unset or ~/.weaver/sessions unwritable)",
+        Option.some s => do {
+            let infos <- Store.list_sessions s.root;
+            match infos {
+                List.empty => respond st "no saved sessions",
+                List.cons _ _ => respond st (sessions_text s infos),
+            }
+        },
+    }
+
+// ── /name and /describe ────────────────────────────────────────────────
+
+def title_label (f : TitleField) : String :=
+    match f {
+        TitleField.title_name => "name",
+        TitleField.title_description => "description",
+    }
+
+def title_stored (f : TitleField) (m : StoreMeta) : Option String :=
+    match f {
+        TitleField.title_name => m.name,
+        TitleField.title_description => m.description,
+    }
+
+def title_derived (f : TitleField) (st : WeaverState) : Option String :=
+    let s : Session := st.run.session in
+    match f {
+        TitleField.title_name => Store.derive_name s,
+        TitleField.title_description => Store.derive_description s,
+    }
+
+def title_show (f : TitleField) (st : WeaverState) (m : StoreMeta) : IO (Result WeaverError Effect) :=
+    let stored : Option String := title_stored f m in
+    match stored {
+        Option.some v => respond st (String.concat (title_label f) (String.concat ": " v)),
+        Option.none => match title_derived f st {
+            Option.some v => respond st (String.concat (title_label f) (String.concat ": " v)),
+            Option.none => respond st (String.concat (title_label f)
+                ": (none yet -- it derives from the first user message, and the description from the first assistant reply)"),
+        },
+    }
+
+def title_set (f : TitleField) (st : WeaverState) (dir : Path) (text : String) : IO (Result WeaverError Effect) := do {
+    let value : Option String := if String.beq text "-" then Option.none else Option.some text;
+    let w <- Store.write_title dir f value;
+    match w {
+        Result.err e => IO.pure (Result.err (WeaverError.io e)),
+        Result.ok _ => do {
+            let msg : String := match value {
+                Option.none => String.concat (title_label f) " cleared (it re-derives on the next turn)",
+                Option.some v => String.concat (title_label f) (String.concat ": " v),
+            };
+            respond st msg
+        },
+    }
+}
+
+/// `/name [<text>|-]` (and `/describe`): show the effective value, set
+/// it, or clear it back to the derived one.
+def cmd_title (f : TitleField) (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) := do {
+    let text : String := String.trim arg;
+    match st.store {
+        Option.none => respond st (String.concat (title_label f) ": session persistence unavailable"),
+        Option.some s => do {
+            let meta_r <- Store.read_meta s.dir;
+            match meta_r {
+                Result.err e => IO.pure (Result.err (WeaverError.io e)),
+                Result.ok m =>
+                    if String.is_empty text
+                    then title_show f st m
+                    else title_set f st s.dir text,
+            }
+        },
+    }
+}
+
+def cmd_name (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    cmd_title TitleField.title_name arg st
+
+def cmd_describe (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=
+    cmd_title TitleField.title_description arg st
 
 def resume_latest (st : WeaverState) : IO (Result WeaverError Effect) :=
     match st.store {
@@ -1219,7 +1389,9 @@ def help_text : String :=
         "/log                                 the debug log path, tail and crash note",
         "/mcp                                 list mounted MCP servers",
         "/save <file>                         checkpoint the session as a JSON file",
-        "/resume [<id|file>]                  continue a session (newest by default)",
+        "/resume [<id|file>]                  list saved sessions (TUI picker) or continue an id/file",
+        "/name [<text>|-]                     show, set or clear this session's name",
+        "/describe [<text>|-]                 show, set or clear this session's description",
         "/clear                               start a new session and reset the budget",
         "/compact [instructions]              summarize the context and keep a recent tail",
         "/help (or /h)                        this table",

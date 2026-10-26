@@ -22,6 +22,7 @@ use std::list {List.length}
 use shuttle::session {Session, Session.messages_to_json, Session.messages_of_json}
 use shuttle::message {Message}
 use shuttle::message_types {Role, Content}
+use weaver::text {Text.cut, Text.first_line}
 
 // ── the in-memory view ────────────────────────────────────────────────
 // Absolute line coordinates: `total` counts every line ever appended;
@@ -65,6 +66,25 @@ pub struct StoreState {
     id : String,
 }
 
+/// One saved session, as the `/resume` picker lists it: display fields
+/// (name/description, already derived-or-overridden by the store) plus
+/// the ordering facts. `created` is carried only for the tie-break.
+pub struct SessionInfo {
+    id : String,
+    name : String,
+    description : String,
+    turns : I64,
+    model : String,
+    created : I64,
+    updated : I64,
+}
+
+/// Which title `/name` and `/describe` write.
+pub type TitleField {
+    title_name,
+    title_description,
+}
+
 pub struct StoreIndexBlock {
     seq : I64,
     start : I64,
@@ -90,7 +110,86 @@ pub struct StoreMeta {
     /// plan after approval, after later turns, and after a resume.
     /// Absent in sessions written before the field existed.
     plan : Option String := Option.none,
+    /// The session's display name: the first user message (one line,
+    /// byte-capped) unless `/name` set one. Filled at the first meta
+    /// write, before compaction can drop the first prompt from history.
+    /// Absent in sessions written before the field existed.
+    name : Option String := Option.none,
+    /// A one-line description: the first assistant text, unless
+    /// `/describe` set one. Same fill rules as `name`.
+    description : Option String := Option.none,
 }
+
+// ── derived session titles ─────────────────────────────────────────────
+// The name is the first user message and the description the first
+// assistant text; both are captured at the first meta write, because
+// compaction can later move `history_base` past the prompt and
+// `meta.json` never stores history. `/name` and `/describe` override
+// them, and an override is never overwritten by the derivation.
+
+#[partial]
+def content_text_go (cs : List Content) (acc : String) : String :=
+    match cs {
+        List.empty => acc,
+        List.cons c rest =>
+            match c {
+                Content.text s => content_text_go rest (String.concat acc s),
+                _ => content_text_go rest acc,
+            },
+    }
+
+def message_text (m : Message) : String := content_text_go m.content ""
+
+def role_is (target : Role) (r : Role) : Bool :=
+    match target {
+        Role.system_ => match r { Role.system_ => true, _ => false },
+        Role.user => match r { Role.user => true, _ => false },
+        Role.assistant => match r { Role.assistant => true, _ => false },
+        Role.tool => match r { Role.tool => true, _ => false },
+    }
+
+#[partial]
+def first_text_role (target : Role) (ms : List Message) : Option String :=
+    match ms {
+        List.empty => Option.none,
+        List.cons m rest =>
+            if role_is target m.role
+            then
+                let t : String := String.trim (message_text m) in
+                if String.is_empty t then first_text_role target rest else Option.some t
+            else first_text_role target rest,
+    }
+
+/// The name a session shows without `/name`: its first user message, one
+/// line, byte-capped (the dialog truncates further at render time).
+pub def Store.derive_name (s : Session) : Option String :=
+    match first_text_role Role.user s.history {
+        Option.none => Option.none,
+        Option.some t => Option.some (Text.cut 120 (Text.first_line t)),
+    }
+
+/// The description a session shows without `/describe`: what the first
+/// assistant turn said (its first line, capped), not its last word.
+pub def Store.derive_description (s : Session) : Option String :=
+    match first_text_role Role.assistant s.history {
+        Option.none => Option.none,
+        Option.some t => Option.some (Text.cut 160 (Text.first_line t)),
+    }
+
+/// Fill whichever title fields are still absent. An explicit value is
+/// never overwritten (`/name` is sticky); a cleared one is re-derived on
+/// the next write.
+pub def Store.fill_title (m : StoreMeta) (s : Session) : StoreMeta :=
+    let name : Option String := match m.name {
+        Option.some _ => m.name,
+        Option.none => Store.derive_name s,
+    } in
+    let description : Option String := match m.description {
+        Option.some _ => m.description,
+        Option.none => Store.derive_description s,
+    } in
+    let m2 : StoreMeta := { m with name := name, description := description } in
+    m2
 
 pub def Store.tail_lines : I64 := 512
 pub def Store.page_lines : I64 := 512
@@ -460,7 +559,7 @@ def decode_index_finish (total : I64) (next_seq : I64) (js : List Json) : Result
             Result.ok i,
     }
 
-def plan_json (p : Option String) : Json :=
+def opt_str_json (p : Option String) : Json :=
     match p {
         Option.none => Json.make_null,
         Option.some s => Json.make_str s,
@@ -475,8 +574,10 @@ pub def Store.encode_meta (m : StoreMeta) : Json :=
         (Map.insert "updated" (Json.make_num_int m.updated)
         (Map.insert "history_next" (Json.make_num_int m.history_next)
         (Map.insert "history_base" (Json.make_num_int m.history_base)
-        (Map.insert "plan" (plan_json m.plan)
-        (Map.insert "session" (Session.serialize_json bare) BTreeMap.empty)))))) in
+        (Map.insert "plan" (opt_str_json m.plan)
+        (Map.insert "name" (opt_str_json m.name)
+        (Map.insert "description" (opt_str_json m.description)
+        (Map.insert "session" (Session.serialize_json bare) BTreeMap.empty)))))))) in
     Json.make_object body
 
 pub def Store.decode_meta (j : Json) : Result String StoreMeta :=
@@ -520,10 +621,11 @@ def decode_meta_session (obj : BTreeMap String Json) (created : I64) (updated : 
         Result.ok sj => decode_meta_finish obj sj created updated next base,
     }
 
-/// Optional `plan`: anything but a string (absent, null, malformed)
-/// decodes as none -- a plan is display state, never load-bearing.
-def decode_meta_plan (obj : BTreeMap String Json) : Option String :=
-    match Json.object_get "plan" obj {
+/// Optional string fields (`plan`, `name`, `description`): anything but
+/// a non-empty string (absent, null, malformed) decodes as none -- they
+/// are display state, never load-bearing.
+def decode_meta_opt_str (key : String) (obj : BTreeMap String Json) : Option String :=
+    match Json.object_get key obj {
         Option.none => Option.none,
         Option.some pj =>
             match Json.get_str pj {
@@ -536,8 +638,10 @@ def decode_meta_finish (obj : BTreeMap String Json) (sj : Json) (created : I64) 
     match Session.deserialize_json sj {
         Result.err e => Result.err e,
         Result.ok s =>
-            let plan : Option String := decode_meta_plan obj in
-            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := base, plan := plan } in
+            let plan : Option String := decode_meta_opt_str "plan" obj in
+            let name : Option String := decode_meta_opt_str "name" obj in
+            let description : Option String := decode_meta_opt_str "description" obj in
+            let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := base, plan := plan, name := name, description := description } in
             Result.ok m,
     }
 
@@ -766,8 +870,9 @@ def history_path (dir : Path) (seq : I64) : Path :=
     Store.child (history_dir dir) (String.concat (Store.pad12 seq) ".json")
 
 def meta_of (s : Session) (created : I64) (updated : I64) (next : I64) : StoreMeta :=
-    let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := 1i64, plan := Option.none } in
-    m
+    let m : StoreMeta := { session := s, created := created, updated := updated, history_next := next, history_base := 1i64, plan := Option.none,
+                            name := Option.none, description := Option.none } in
+    Store.fill_title m s
 
 def state_of (root : Path) (dir : Path) (id : String) : StoreState :=
     let st : StoreState := { root := root, dir := dir, id := id } in
@@ -1190,7 +1295,8 @@ def load_session_meta (dir : Path) (m : StoreMeta) : IO (Result String Session) 
 }
 
 def meta_updated (m : StoreMeta) (s : Session) (now : I64) : StoreMeta :=
-    let m2 : StoreMeta := { m with session := s, updated := now } in
+    let m1 : StoreMeta := Store.fill_title m s in
+    let m2 : StoreMeta := { m1 with session := s, updated := now } in
     m2
 
 pub def Store.update_meta (dir : Path) (s : Session) : IO (Result String Unit) := do {
@@ -1231,7 +1337,8 @@ pub def Store.record_history (st : StoreState) (s : Session) (delta : List Messa
     }
 
 def meta_next (m : StoreMeta) (s : Session) (now : I64) (next : I64) : StoreMeta :=
-    let m2 : StoreMeta := { m with session := s, updated := now, history_next := next } in
+    let m1 : StoreMeta := Store.fill_title m s in
+    let m2 : StoreMeta := { m1 with session := s, updated := now, history_next := next } in
     m2
 
 def record_turn_meta (st : StoreState) (s : Session) (delta : List Message) (m : StoreMeta) : IO (Result String Unit) := do {
@@ -1259,7 +1366,8 @@ pub def Store.record_compacted (st : StoreState) (s : Session) : IO (Result Stri
             if Bool.not ok then IO.pure (Result.err "could not write the compacted history")
             else do {
                 let now <- Bench.now;
-                let m2 : StoreMeta := { m with session := s, updated := now, history_next := m.history_next + 1i64, history_base := m.history_next };
+                let m1 : StoreMeta := Store.fill_title m s;
+                let m2 : StoreMeta := { m1 with session := s, updated := now, history_next := m1.history_next + 1i64, history_base := m1.history_next };
                 let wok <- write_meta_at st.dir m2;
                 if wok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the session meta")
             }
@@ -1280,7 +1388,8 @@ pub def Store.append_history_note (st : StoreState) (s : Session) (text : String
             if Bool.not ok then IO.pure (Result.err "could not write the history note")
             else do {
                 let now <- Bench.now;
-                let m2 : StoreMeta := { m with session := s, updated := now, history_next := m.history_next + 1 };
+                let m1 : StoreMeta := Store.fill_title m s;
+                let m2 : StoreMeta := { m1 with session := s, updated := now, history_next := m1.history_next + 1 };
                 let wok <- write_meta_at st.dir m2;
                 if wok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the session meta")
             }
@@ -1325,12 +1434,106 @@ def latest_go (names : List Path) (best : Option String) (best_t : I64) (best_c 
         },
     }
 
-/// The session with the greatest `meta.updated` (the `/resume` default);
-/// `created` breaks a same-millisecond tie (deterministically, without
-/// depending on the directory-name order).
+/// The session with the greatest `meta.updated` (`--continue`); `created`
+/// breaks a same-millisecond tie (deterministically, without depending on
+/// the directory-name order).
 pub def Store.latest_session (root : Path) : IO (Option String) := do {
     let names <- IO.list_dir root;
     latest_go names Option.none 0 0
+}
+
+// ── IO: the session list (`/resume` picker) ───────────────────────────
+
+def info_of (dir : Path) (m : StoreMeta) : SessionInfo :=
+    let id : String := Store.base_name dir in
+    let name : String := match m.name {
+        Option.none => id,
+        Option.some n => n,
+    } in
+    let description : String := match m.description {
+        Option.none => "",
+        Option.some d => d,
+    } in
+    // Annotated locals first: a deep field chain written straight into a
+    // literal/argument position has produced garbage in compiled code.
+    let turns : I64 := m.session.turns in
+    let model : String := m.session.config.model in
+    let created : I64 := m.created in
+    let updated : I64 := m.updated in
+    let info : SessionInfo := { id := id, name := name, description := description,
+                                turns := turns, model := model,
+                                created := created, updated := updated } in
+    info
+
+/// `a` sorts before `b`: newest `updated` first, `created` breaking ties.
+def info_before (a : SessionInfo) (b : SessionInfo) : Bool :=
+    let au : I64 := a.updated in
+    let bu : I64 := b.updated in
+    let ac : I64 := a.created in
+    let bc : I64 := b.created in
+    if I64.gt au bu then true
+    else if I64.lt au bu then false
+    else I64.gt ac bc
+
+#[partial]
+def insert_info (x : SessionInfo) (sorted : List SessionInfo) : List SessionInfo :=
+    match sorted {
+        List.empty => List.cons x List.empty,
+        List.cons h rest =>
+            if info_before h x then List.cons h (insert_info x rest)
+            else List.cons x sorted,
+    }
+
+#[partial]
+def sort_infos (xs : List SessionInfo) (acc : List SessionInfo) : List SessionInfo :=
+    match xs {
+        List.empty => acc,
+        List.cons x rest => sort_infos rest (insert_info x acc),
+    }
+
+#[partial]
+def collect_infos (names : List Path) (acc : List SessionInfo) : IO (List SessionInfo) :=
+    match names {
+        List.empty => IO.pure acc,
+        List.cons dir rest => do {
+            let isd <- IO.is_dir dir;
+            if Bool.not isd then collect_infos rest acc
+            else do {
+                let meta_r <- Store.read_meta dir;
+                match meta_r {
+                    Result.err _ => collect_infos rest acc,
+                    Result.ok m => collect_infos rest (List.cons (info_of dir m) acc),
+                }
+            }
+        },
+    }
+
+/// Every saved session under the root, newest first. Meta-only (no
+/// history is read), and anything that is not a decodable session
+/// directory is skipped -- which also skips `debug/` and `procs/`.
+pub def Store.list_sessions (root : Path) : IO (List SessionInfo) := do {
+    let names <- IO.list_dir root;
+    let infos <- collect_infos names List.empty;
+    IO.pure (sort_infos infos List.empty)
+}
+
+/// Set or clear one title field (read-modify-write; the write is
+/// atomic). `Option.none` clears it, so the next turn re-derives. A
+/// rename deliberately leaves `updated` alone: it must not reorder the
+/// picker.
+pub def Store.write_title (dir : Path) (field : TitleField) (value : Option String) : IO (Result String Unit) := do {
+    let r <- Store.read_meta dir;
+    match r {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok m => do {
+            let m2 : StoreMeta := match field {
+                TitleField.title_name => { m with name := value },
+                TitleField.title_description => { m with description := value },
+            };
+            let ok <- write_meta_at dir m2;
+            if ok then IO.pure (Result.ok unit) else IO.pure (Result.err "could not write the session meta")
+        }
+    }
 }
 
 /// Decode a block straight from its file text (used by page reads).

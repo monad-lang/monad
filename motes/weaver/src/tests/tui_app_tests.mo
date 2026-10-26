@@ -21,10 +21,17 @@ use weaver::model {
     Picker.window_offset, Picker.visible,
 }
 use weaver::overlay {OverlayState}
-use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage}
+use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo}
 use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
-use weaver::tui_app {TuiApp.update, turn_never_ran}
+use weaver::tui_app {
+    TuiApp.update, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
+    TuiApp.resume_action_at,
+    ResumeAction, ResumeChoice,
+}
+use weaver::commands {SessionPage, Commands.session_page}
+use weaver::dialog {DialogOption}
+use tui::text {Text.width}
 use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
@@ -826,4 +833,89 @@ def test_empty_model_list_opens_no_picker : Bool :=
             },
     }
 
+// ── the /resume picker's option rows (pure) ───────────────────────────
 
+def info_row (id : String) (name : String) (desc : String) (turns : I64) (updated : I64) : SessionInfo :=
+    { id := id, name := name, description := desc, turns := turns, model := "m", created := updated, updated := updated }
+
+def two_infos : List SessionInfo :=
+    let a : SessionInfo := info_row "s-1" "fix the overlay" "I'll start by reading overlay.mo" 12 20 in
+    let b : SessionInfo := info_row "s-2" "plan the settings" "Here is a plan in four steps" 4 10 in
+    List.cons a (List.cons b List.empty)
+
+def page_of (rows : List SessionInfo) (has_newer : Bool) (has_older : Bool) : SessionPage :=
+    { page := 0, rows := rows, has_newer := has_newer, has_older := has_older }
+
+def first_option (p : Pair (List DialogOption) (List ResumeAction)) : Option DialogOption :=
+    match p {
+        Pair.pair opts _ => match opts {
+            List.empty => Option.none,
+            List.cons o _ => Option.some o,
+        },
+    }
+
+/// The current session is tagged, and the label carries name + description.
+#[test]
+def test_resume_option_marks_the_current_session : Bool :=
+    let i : SessionInfo := info_row "s-1" "fix the overlay" "reading overlay.mo" 12 20 in
+    let o : DialogOption := TuiApp.resume_option "s-1" i in
+    String.contains o.label "(current)"
+        && String.contains o.label "fix the overlay"
+        && String.contains o.label "reading overlay.mo"
+        && String.beq o.hint "12 turns"
+
+#[test]
+def test_resume_option_without_a_description : Bool :=
+    let i : SessionInfo := info_row "s-9" "s-9" "" 0 1 in
+    let o : DialogOption := TuiApp.resume_option "other" i in
+    String.beq o.label "s-9" && Bool.not (String.contains o.label "(current)")
+
+/// A long (multibyte) label must stay one dialog row: it is clipped with
+/// an ellipsis, never left to wrap.
+#[test]
+def test_resume_option_clips_a_long_label : Bool :=
+    let i : SessionInfo := info_row "s-1" "日本語のセッション名がとても長い場合のテスト" "説明文もとても長いのでクリップされるはずです" 3 1 in
+    let o : DialogOption := TuiApp.resume_option "s-1" i in
+    I64.lt (Text.width o.label) 64 && String.ends_with o.label "…"
+
+def ten_rows (ids : List String) (i : I64) (acc : List SessionInfo) : List SessionInfo :=
+    match ids {
+        List.empty => List.reverse acc,
+        List.cons id rest => ten_rows rest (i + 1) (List.cons (info_row id id "" 1 (0i64 - i)) acc),
+    }
+
+def ten_infos : List SessionInfo :=
+    ten_rows ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] 0 List.empty
+
+/// The row indices map to the right actions: sessions first, then the
+/// page shift, then Cancel.
+#[test]
+def test_resume_rows_actions_align_with_indices : Bool :=
+    let p : Pair (List DialogOption) (List ResumeAction) := TuiApp.resume_rows "s-1" (page_of two_infos false false) in
+    match p {
+        Pair.pair opts acts =>
+            List.length opts == 3
+                && List.length acts == 3
+                && (match TuiApp.resume_action_at 0 acts { ResumeAction.resume_session id => String.beq id "s-1", _ => false })
+                && (match TuiApp.resume_action_at 1 acts { ResumeAction.resume_session id => String.beq id "s-2", _ => false })
+                && (match TuiApp.resume_action_at 2 acts { ResumeAction.resume_cancel => true, _ => false }),
+    }
+
+/// Ten sessions: page 0 shows 8 + Older + Cancel; page 1 shows 2 + Newer
+/// + Cancel, and the shift rows carry the right delta.
+#[test]
+def test_resume_rows_paginate : Bool :=
+    let sp0 : SessionPage := Commands.session_page 8 0 ten_infos in
+    let sp1 : SessionPage := Commands.session_page 8 1 ten_infos in
+    let p0 : Pair (List DialogOption) (List ResumeAction) := TuiApp.resume_rows "a" sp0 in
+    let p1 : Pair (List DialogOption) (List ResumeAction) := TuiApp.resume_rows "a" sp1 in
+    match p0 {
+        Pair.pair o0 a0 => match p1 {
+            Pair.pair o1 a1 =>
+                List.length o0 == 10
+                    && List.length o1 == 4
+                    && (match TuiApp.resume_action_at 8 a0 { ResumeAction.resume_shift d => d == 1i64, _ => false })
+                    && (match TuiApp.resume_action_at 9 a0 { ResumeAction.resume_cancel => true, _ => false })
+                    && (match TuiApp.resume_action_at 2 a1 { ResumeAction.resume_shift d => d == 0i64 - 1i64, _ => false }),
+        },
+    }

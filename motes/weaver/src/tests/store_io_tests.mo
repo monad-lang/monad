@@ -9,6 +9,7 @@ use weaver::store {
     Store.append_history_note, Store.update_meta,
     Store.append_note, Store.record_compacted, Store.encode_meta, Store.decode_meta,
     Store.read_plan, Store.write_plan,
+    SessionInfo, TitleField, Store.list_sessions, Store.read_meta, Store.write_title,
 }
 use shuttle::session {Session, Session.messages_to_json}
 use shuttle::provider {ProviderConfig, mock}
@@ -524,7 +525,7 @@ def compact_resume_ok (w : Result String Unit) (loaded : Result String Session) 
 /// A meta written before `history_base` existed decodes with base 1.
 #[test]
 def test_meta_without_history_base_defaults_to_one : Bool :=
-    let m : StoreMeta := { session := test_session, created := 1i64, updated := 2i64, history_next := 3i64, history_base := 1i64, plan := Option.none } in
+    let m : StoreMeta := { session := test_session, created := 1i64, updated := 2i64, history_next := 3i64, history_base := 1i64, plan := Option.none, name := Option.none, description := Option.none } in
     match Json.get_object (Store.encode_meta m) {
         Result.err _ => false,
         Result.ok obj => match Store.decode_meta (Json.make_object (Map.delete "history_base" obj)) {
@@ -555,5 +556,193 @@ def test_plan_rides_the_session_meta : IO Bool := do {
             };
             IO.pure (empty_before && wrote && kept)
         },
+    }
+}
+
+// ── session titles and the session list ───────────────────────────────
+
+def delta_of (u : String) (a : String) : List Message :=
+    let ua : Message := user_msg u in
+    let aa : Message := assistant_msg a in
+    List.cons ua (List.cons aa List.empty)
+
+/// One turn's delta is captured as the title pair at the meta write.
+#[test]
+def test_record_history_derives_titles : IO Bool := do {
+    let root : Path := root_for "title_derive";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let delta : List Message := delta_of "fix the overlay\nwith notes" "I'll start by reading overlay.mo";
+            let _ <- Store.record_history st (with_history test_session delta) delta;
+            titles_are st "fix the overlay" "I'll start by reading overlay.mo"
+        }
+    }
+}
+
+def titles_are (st : StoreState) (name : String) (desc : String) : IO Bool := do {
+    let m_r <- Store.read_meta st.dir;
+    match m_r {
+        Result.err _ => IO.pure false,
+        Result.ok m => IO.pure ((match m.name { Option.some n => String.beq n name, Option.none => false })
+            && (match m.description { Option.some d => String.beq d desc, Option.none => false }))
+    }
+}
+
+/// An explicit name is never overwritten by a later turn; a missing
+/// description still fills in.
+#[test]
+def test_manual_name_is_sticky_across_turns : IO Bool := do {
+    let root : Path := root_for "title_sticky";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let w <- Store.write_title st.dir TitleField.title_name (Option.some "hand picked");
+            match w {
+                Result.err _ => IO.pure false,
+                Result.ok _ => do {
+                    let delta : List Message := delta_of "the prompt" "the reply";
+                    let _ <- Store.record_history st (with_history test_session delta) delta;
+                    titles_are st "hand picked" "the reply"
+                }
+            }
+        }
+    }
+}
+
+/// A cleared name re-derives from the session's first user message.
+#[test]
+def test_cleared_name_rederives_on_the_next_write : IO Bool := do {
+    let root : Path := root_for "title_clear";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let delta : List Message := delta_of "the prompt" "the reply";
+            let s2 := with_history test_session delta;
+            let _ <- Store.record_history st s2 delta;
+            let w <- Store.write_title st.dir TitleField.title_name Option.none;
+            match w {
+                Result.err _ => IO.pure false,
+                Result.ok _ => do {
+                    let _ <- Store.update_meta st.dir s2;
+                    titles_are st "the prompt" "the reply"
+                }
+            }
+        }
+    }
+}
+
+/// A rename must not reorder the picker: `updated` is untouched.
+#[test]
+def test_write_title_leaves_updated_alone : IO Bool := do {
+    let root : Path := root_for "title_updated";
+    clean root;
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let before <- Store.read_meta st.dir;
+            match before {
+                Result.err _ => IO.pure false,
+                Result.ok m0 => do {
+                    let w <- Store.write_title st.dir TitleField.title_description (Option.some "manual");
+                    match w {
+                        Result.err _ => IO.pure false,
+                        Result.ok _ => do {
+                            let after <- Store.read_meta st.dir;
+                            match after {
+                                Result.err _ => IO.pure false,
+                                Result.ok m1 => IO.pure (m1.updated == m0.updated),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+def first_id (infos : List SessionInfo) : String :=
+    match infos {
+        List.empty => "",
+        List.cons i _ => i.id,
+    }
+
+/// Newest `updated` first; a session with no turns falls back to its id
+/// and an empty description. The timestamps are written explicitly: the
+/// clock's resolution is not part of this test.
+def set_updated (st : StoreState) (updated : I64) : IO Bool := do {
+    let m_r <- Store.read_meta st.dir;
+    match m_r {
+        Result.err _ => IO.pure false,
+        Result.ok m => do {
+            let m2 : StoreMeta := { m with updated := updated };
+            let text : String := Json.to_string (Store.encode_meta m2);
+            let w <- IO.write_file (Store.child st.dir "meta.json") text;
+            match w {
+                Result.err _ => IO.pure false,
+                Result.ok _ => IO.pure true,
+            }
+        }
+    }
+}
+
+#[test]
+def test_list_sessions_is_newest_first_with_fallbacks : IO Bool := do {
+    let root : Path := root_for "list_order";
+    clean root;
+    let r1 <- Store.new_session root test_session;
+    match r1 {
+        Result.err _ => IO.pure false,
+        Result.ok st1 => do {
+            let r2 <- Store.new_session root test_session;
+            match r2 {
+                Result.err _ => IO.pure false,
+                Result.ok st2 => do {
+                    let _ <- set_updated st1 10;
+                    let _ <- set_updated st2 20;
+                    let infos <- Store.list_sessions root;
+                    match infos {
+                        List.empty => IO.pure false,
+                        List.cons top rest => do {
+                            let order_ok : Bool := String.beq top.id st2.id;
+                            let name_ok : Bool := String.beq top.name st2.id;
+                            let desc_ok : Bool := String.is_empty top.description;
+                            let second_ok : Bool := match rest {
+                                List.cons i2 _ => String.beq i2.id st1.id,
+                                List.empty => false,
+                            };
+                            IO.pure (order_ok && name_ok && desc_ok && second_ok)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `debug/` (and any non-session dir) is not a session: the meta read
+/// fails and the listing skips it.
+#[test]
+def test_list_sessions_skips_non_session_dirs : IO Bool := do {
+    let root : Path := root_for "list_skip";
+    clean root;
+    let mk <- exec_cmd "mkdir" ["-p", Path.to_string (Store.child root "debug")];
+    let r <- Store.new_session root test_session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok st => do {
+            let infos <- Store.list_sessions root;
+            match infos {
+                List.empty => IO.pure false,
+                List.cons only rest => IO.pure (String.beq only.id st.id && List.length rest == 0),
+            }
+        }
     }
 }

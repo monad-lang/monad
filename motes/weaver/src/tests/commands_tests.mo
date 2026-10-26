@@ -18,16 +18,21 @@ use shuttle::session {Session}
 use shuttle::tool {ToolSpec, ToolImpl}
 use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
-    Commands.set_plan, Commands.plan_after_turn,
+    Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
+    Commands.turns_label,
 }
 use weaver::catalog {Catalog.lookup}
 use weaver::error {WeaverError}
 use weaver::policy {Mode}
 use weaver::permissions {PermGrant}
 use std::ref {Ref}
-use weaver::store {StoreState, TLine, TLine.user_line, Store.new_session, Store.append_transcript}
+use weaver::store {
+    StoreState, TLine, TLine.user_line, Store.new_session, Store.append_transcript,
+    SessionInfo, Store.read_meta,
+}
 use std::path {Path, Path.of, Path.to_string}
 use std::process {exec_cmd}
+use std::list {List.length}
 use json::json {Json}
 use std::map {Map, BTreeMap}
 use std::process {process_id}
@@ -831,3 +836,150 @@ def test_settings_rejects_an_unknown_key : IO Bool := do {
         Result.ok e => IO.pure (String.contains e.output "unknown setting: nope"),
     }
 }
+
+// ── /name, /describe and the /resume list ─────────────────────────────
+
+#[test]
+def test_name_sets_and_bare_shows : IO Bool := do {
+    let root : Path := test_root "name";
+    clean_dir root;
+    let base : WeaverState := state_of Mode.manual [];
+    let r <- Store.new_session root base.run.session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok s0 => do {
+            let st : WeaverState := with_store base s0;
+            let set_r <- Commands.dispatch "/name hand picked" st;
+            match set_r {
+                Result.err _ => IO.pure false,
+                Result.ok _ => do {
+                    let show_r <- Commands.dispatch "/name" st;
+                    match show_r {
+                        Result.err _ => IO.pure false,
+                        Result.ok e => IO.pure (String.contains e.output "hand picked"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+def test_name_dash_clears_the_stored_value : IO Bool := do {
+    let root : Path := test_root "name_clear";
+    clean_dir root;
+    let base : WeaverState := state_of Mode.manual [];
+    let r <- Store.new_session root base.run.session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok s0 => do {
+            let st : WeaverState := with_store base s0;
+            let _ <- Commands.dispatch "/name temporary" st;
+            let clr <- Commands.dispatch "/name -" st;
+            match clr {
+                Result.err _ => IO.pure false,
+                Result.ok _ => do {
+                    let m_r <- Store.read_meta s0.dir;
+                    match m_r {
+                        Result.err _ => IO.pure false,
+                        Result.ok m => IO.pure (match m.name { Option.none => true, Option.some _ => false }),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+def test_describe_sets_and_bare_shows : IO Bool := do {
+    let root : Path := test_root "describe";
+    clean_dir root;
+    let base : WeaverState := state_of Mode.manual [];
+    let r <- Store.new_session root base.run.session;
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok s0 => do {
+            let st : WeaverState := with_store base s0;
+            let set_r <- Commands.dispatch "/describe reads the overlay" st;
+            match set_r {
+                Result.err _ => IO.pure false,
+                Result.ok _ => do {
+                    let show_r <- Commands.dispatch "/describe" st;
+                    match show_r {
+                        Result.err _ => IO.pure false,
+                        Result.ok e => IO.pure (String.contains e.output "reads the overlay"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+def test_name_without_a_store_says_unavailable : IO Bool := do {
+    let r <- Commands.dispatch "/name anything" (state_of Mode.manual []);
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok e => IO.pure (String.contains e.output "persistence unavailable"),
+    }
+}
+
+/// Bare `/resume` lists the saved sessions (newest first) and marks the
+/// current one -- it never reloads `meta.updated`.
+#[test]
+def test_resume_bare_lists_sessions_and_marks_current : IO Bool := do {
+    let root : Path := test_root "list";
+    clean_dir root;
+    let base : WeaverState := state_of Mode.manual [];
+    let r1 <- Store.new_session root base.run.session;
+    match r1 {
+        Result.err _ => IO.pure false,
+        Result.ok s1 => do {
+            let r2 <- Store.new_session root base.run.session;
+            match r2 {
+                Result.err _ => IO.pure false,
+                Result.ok s2 => do {
+                    let st : WeaverState := with_store base s2;
+                    let r <- Commands.dispatch "/resume" st;
+                    match r {
+                        Result.err _ => IO.pure false,
+                        Result.ok e =>
+                            IO.pure (String.contains e.output s1.id
+                                && String.contains e.output s2.id
+                                && String.contains e.output "[current]"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── session paging (the TUI picker's pure half) ───────────────────────
+
+def info_of (id : String) (updated : I64) : SessionInfo :=
+    { id := id, name := id, description := "", turns := 1, model := "m", created := updated, updated := updated }
+
+def infos_of (ids : List String) (i : I64) (acc : List SessionInfo) : List SessionInfo :=
+    match ids {
+        List.empty => List.reverse acc,
+        List.cons id rest => infos_of rest (i + 1) (List.cons (info_of id i) acc),
+    }
+
+def ten_infos : List SessionInfo :=
+    infos_of ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] 0 List.empty
+
+#[test]
+def test_session_page_first_page : Bool :=
+    let sp : SessionPage := Commands.session_page 8 0 ten_infos in
+    List.length sp.rows == 8 && Bool.not sp.has_newer && sp.has_older
+
+#[test]
+def test_session_page_second_page : Bool :=
+    let sp : SessionPage := Commands.session_page 8 1 ten_infos in
+    List.length sp.rows == 2 && sp.has_newer && Bool.not sp.has_older
+
+#[test]
+def test_turns_label_singular_and_plural : Bool :=
+    String.beq (Commands.turns_label 1) "1 turn"
+        && String.beq (Commands.turns_label 12) "12 turns"
+        && String.beq (Commands.turns_label 0) "0 turns"

@@ -27,6 +27,7 @@ use weaver::commands {
     WeaverState, Effect, Effect.ok, set_fatal, Commands.dispatch, Commands.set_model,
     Commands.autocompact, Commands.last_assistant_text, Commands.current_plan,
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, SettingRow,
+    SessionPage, Commands.session_page, Commands.turns_label,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Policy.decide, Decision}
@@ -54,6 +55,7 @@ use weaver::store {
     Store.startup_transcript, Store.append_chunk, Store.discard_live,
     Store.append_history_note, Store.child, Store.append_named, Store.write_named, Store.write_plan,
     Store.read_named, Store.read_named_from, Store.read_live_from, Store.discard_named,
+    SessionInfo, Store.list_sessions,
 }
 use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
 use weaver::overlay {
@@ -71,7 +73,7 @@ use tui::widgets::input {InputState, input_state, handle_input_multiline_key, in
 use tui::widgets::input {handle_input_key}
 use tui::core {empty_screen, mk_rect, style_to_ansi}
 use tui::render {render, diff, apply_deltas}
-use tui::text {Text.take_width}
+use tui::text {Text.take_width, Text.width}
 use tui::clipboard {Clipboard.copy}
 use tui::layout {center_rect_in}
 use weaver::dialog {
@@ -1009,10 +1011,7 @@ def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
                      live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
                      live_activity := Option.none, scroll := 0,
                      stop_requested := false, turn_gen := gen,
-                     modal := Bool.or (plan_dialog_wanted st text)
-                         (Bool.or (text == "/processes")
-                             (Bool.or (text == "/procs")
-                                 (Bool.or (text == "/settings") (text == "/permissions")))) } in
+                     modal := modal_command st text } in
         Pair.pair m2 (Cmd.perform_async
             (fn (_ : Unit) => do {
                 let _ <- write_echo store start block;
@@ -1215,7 +1214,9 @@ def settings_choose_action (i : I64) (st : WeaverState) : IO WeaverMsg := do {
 }
 
 def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
-    if text == "/settings"
+    if text == "/resume"
+    then resume_dialog_step st
+    else if text == "/settings"
     then settings_dialog_step st
     else if text == "/permissions"
     then permissions_dialog_step st
@@ -1233,6 +1234,17 @@ def mode_is_plan (m : Mode) : Bool :=
 /// direct path); only the exact command is intercepted.
 def plan_dialog_wanted (st : WeaverState) (text : String) : Bool :=
     text == "/plan"
+
+/// Commands that open a modal dialog on this turn's fiber: the main
+/// loop must not read stdin while one runs (`enter_key` suppresses tick
+/// redraws through the same flag). Exact matches only; subcommands such
+/// as `/resume <id>` and `/settings save` stay plain commands.
+def modal_command (st : WeaverState) (text : String) : Bool :=
+    Bool.or (plan_dialog_wanted st text)
+        (Bool.or (text == "/processes")
+            (Bool.or (text == "/procs")
+                (Bool.or (text == "/settings")
+                    (Bool.or (text == "/permissions") (text == "/resume")))))
 
 def command_step_tui (st : WeaverState) (line : String) : IO WeaverMsg := do {
     let r <- Commands.dispatch line st;
@@ -1538,6 +1550,146 @@ def perm_answer_at (repo_ok : Bool) (i : I64) : PickAnswer :=
 
 def cap_is_read (c : Capability) : Bool :=
     match c { Capability.read => true, _ => false }
+
+// ── the /resume picker ─────────────────────────────────────────────────
+
+/// Sessions per dialog page. The dialog lays out `nopts + 7` fixed rows
+/// inside `height - 4`, and only ~11 one-row options fit a 24-row
+/// terminal; 8 sessions + Older + Cancel leaves room for the subtitle.
+def resume_page_size (rows : I64) : I64 :=
+    if rows < 22 then 4 else 8
+
+/// `s` clipped to `max_cells` cells with an ellipsis when it was cut.
+/// `Text.take_width` is cell-aware; a dialog label must stay one row
+/// (a wrapped label breaks the dialog's row budget).
+def ellipsize (max_cells : I64) (s : String) : String :=
+    let w : I64 := Text.width s in
+    if Bool.not (I64.lt max_cells w) then s
+    else String.concat (Text.take_width s max_cells) "…"
+
+/// What a picker row does: load a session, change page, or close.
+pub type ResumeAction {
+    resume_session (id : String),
+    resume_shift (delta : I64),
+    resume_cancel,
+}
+
+/// One session's row: `name (current) — description`, hint `N turns`.
+/// The caps keep label + hint inside one 80-column dialog row.
+pub def TuiApp.resume_option (current : String) (i : SessionInfo) : DialogOption :=
+    let id : String := i.id in
+    let name : String := i.name in
+    let desc : String := i.description in
+    let turns : I64 := i.turns in
+    let is_current : Bool := String.beq current id in
+    let tagged : String := if is_current then String.concat name " (current)" else name in
+    let name_text : String := ellipsize 26 tagged in
+    let label : String :=
+        if String.is_empty desc
+        then name_text
+        else String.concat name_text (String.concat " — " (ellipsize 22 desc)) in
+    let hint : String := Commands.turns_label turns in
+    let opt : DialogOption := { label := label, hint := hint, key := "" } in
+    opt
+
+#[partial]
+def resume_option_rows (current : String) (infos : List SessionInfo) (opts : List DialogOption) (acts : List ResumeAction) : Pair (List DialogOption) (List ResumeAction) :=
+    match infos {
+        List.empty => Pair.pair (List.reverse opts) (List.reverse acts),
+        List.cons i rest =>
+            let id : String := i.id in
+            let opt : DialogOption := TuiApp.resume_option current i in
+            let act : ResumeAction := ResumeAction.resume_session id in
+            resume_option_rows current rest (List.cons opt opts) (List.cons act acts),
+    }
+
+/// Append one option/action pair to the running lists.
+def push_row (opt : DialogOption) (act : ResumeAction) (p : Pair (List DialogOption) (List ResumeAction)) : Pair (List DialogOption) (List ResumeAction) :=
+    match p {
+        Pair.pair opts acts =>
+            Pair.pair (List.append opts (List.cons opt List.empty)) (List.append acts (List.cons act List.empty)),
+    }
+
+/// The page's rows: its sessions, then Newer/Older page shifts when
+/// they exist, then Cancel. Pure, so the labels and the index-to-action
+/// mapping are unit-testable without a terminal.
+pub def TuiApp.resume_rows (current : String) (sp : SessionPage) : Pair (List DialogOption) (List ResumeAction) :=
+    let close_opt : DialogOption := { label := "Cancel", hint := "Esc", key := "" } in
+    let older_opt : DialogOption := { label := "Older sessions…", hint := "", key := "" } in
+    let newer_opt : DialogOption := { label := "Newer sessions…", hint := "", key := "" } in
+    let p0 : Pair (List DialogOption) (List ResumeAction) := resume_option_rows current sp.rows List.empty List.empty in
+    let p1 : Pair (List DialogOption) (List ResumeAction) :=
+        if sp.has_older then push_row older_opt (ResumeAction.resume_shift 1i64) p0 else p0 in
+    let p2 : Pair (List DialogOption) (List ResumeAction) :=
+        if sp.has_newer then push_row newer_opt (ResumeAction.resume_shift (0i64 - 1i64)) p1 else p1 in
+    push_row close_opt ResumeAction.resume_cancel p2
+
+#[partial]
+pub def TuiApp.resume_action_at (i : I64) (acts : List ResumeAction) : ResumeAction :=
+    match acts {
+        List.empty => ResumeAction.resume_cancel,
+        List.cons a rest => if i < 1 then a else TuiApp.resume_action_at (i - 1) rest,
+    }
+
+/// The picker outcome: a session id to load, or the dialog was closed.
+pub type ResumeChoice {
+    resume_id (id : String),
+    resume_closed,
+}
+
+/// Run the modal for one page and recurse when a page shift is chosen.
+/// The caller holds the overlay open across the whole loop: releasing
+/// it per page would leave a window where the main loop reads stdin and
+/// steals the keystroke meant for the next page.
+#[partial]
+def resume_pick (st : WeaverState) (s : StoreState) (page_size : I64) (infos : List SessionInfo) (page : I64) : IO ResumeChoice := do {
+    let sp : SessionPage := Commands.session_page page_size page infos;
+    let rows : Pair (List DialogOption) (List ResumeAction) := TuiApp.resume_rows s.id sp;
+    match rows {
+        Pair.pair opts acts => do {
+            let d0 : Dialog := Dialog.make "Resume a session" "Enter loads the selected session · Esc cancels" List.empty opts;
+            let d : Dialog := { d0 with footer := "↑/↓ select · Enter load · Esc cancel" };
+            let size <- Terminal.size;
+            let pr <- dialog_body st.colors d size;
+            match pr {
+                Pair.pair _ step => match step {
+                    DialogStep.choose i => match TuiApp.resume_action_at i acts {
+                        ResumeAction.resume_session id => IO.pure (ResumeChoice.resume_id id),
+                        ResumeAction.resume_shift delta => resume_pick st s page_size infos (page + delta),
+                        ResumeAction.resume_cancel => IO.pure ResumeChoice.resume_closed,
+                    },
+                    _ => IO.pure ResumeChoice.resume_closed,
+                },
+            }
+        },
+    }
+}
+
+/// Bare `/resume` in the TUI: list the sessions in a dialog, then run
+/// the chosen one through the ordinary command path (whose reset
+/// restores its transcript). `/resume <id>` is untouched.
+def resume_dialog_step (st : WeaverState) : IO WeaverMsg :=
+    match st.store {
+        Option.none => command_step_tui st "/resume",
+        Option.some s => do {
+            let infos <- Store.list_sessions s.root;
+            match infos {
+                List.empty => IO.pure (WeaverMsg.command_result (Effect.ok st "no saved sessions")),
+                List.cons _ _ => do {
+                    let size <- Terminal.size;
+                    let rows : I64 := match size { Pair.pair r _ => r };
+                    let page_size : I64 := resume_page_size rows;
+                    let _ <- Overlay.begin (Option.some s);
+                    let choice <- resume_pick st s page_size infos 0;
+                    let _ <- Overlay.finish (Option.some s);
+                    match choice {
+                        ResumeChoice.resume_id id => command_step_tui st (String.concat "/resume " id),
+                        ResumeChoice.resume_closed => IO.pure (WeaverMsg.command_result (Effect.ok st "resume closed")),
+                    }
+                },
+            }
+        },
+    }
 
 // ── the plan dialog ────────────────────────────────────────────────────
 

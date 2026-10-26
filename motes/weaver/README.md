@@ -195,7 +195,9 @@ warning flag shuttle's loop prints.
 /log                                 the debug log path, tail and crash note
 /mcp                                 list mounted MCP servers
 /save <file>                         checkpoint the session
-/resume <file>                       continue a saved session (budget spans both halves)
+/resume [<id>]                       pick a saved session (TUI dialog) or load one by id
+/name [<text>|-]                     show, set or clear this session's name
+/describe [<text>|-]                 show, set or clear this session's description
 /clear                               drop the transcript and reset the budget
 /help (or /h)                        this table
 /quit (or /q)                        exit (MCP servers are disposed)
@@ -358,11 +360,24 @@ disk, so the full scrollback is reachable while memory stays bounded.
 The model's conversation history (what a provider call needs) remains
 in memory by design; the rendered copy no longer accumulates.
 
-`/resume` with no argument opens the newest session; `/resume <id>` a
-session id; `/resume <dir>` a directory; `/resume <file>` a `/save`
-checkpoint (imported into a new session directory). `--resume` and
-`--continue` do the same at startup. `/clear` starts a NEW session
-directory and leaves the old one resumable.
+Bare `/resume` opens a picker of the saved sessions, newest first: each
+row carries the session's **name** and a one-line **description**, the
+current session is marked `(current)`, and a list longer than a screen
+pages with `Older sessions…`/`Newer sessions…` rows. Choosing a row loads
+that session, transcript and history both. In the line UI the same
+command prints the list; `/resume <id>` loads a session id, `/resume
+<dir>` a directory, and `/resume <file>` a `/save` checkpoint (imported
+into a new session directory). `--resume <id>` and `--continue` do the
+same at startup. `/clear` starts a NEW session directory and leaves the
+old one resumable.
+
+A session's name is its first user message (one line, byte-capped) and
+its description is the first assistant text; both are captured at the
+first turn's meta write, so a later compaction does not lose them.
+`/name <text>` and `/describe <text>` override them (`-` clears the
+override, so the next turn re-derives), and a rename never reorders the
+picker. Older sessions with neither field fall back to their directory
+id.
 
 A streamed TUI turn's text is appended to `live.txt` as it arrives; a
 turn that completes removes it, and one interrupted by a crash leaves

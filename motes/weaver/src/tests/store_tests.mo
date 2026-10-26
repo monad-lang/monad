@@ -8,11 +8,13 @@ use weaver::store {
     Transcript.with_page,
     Store.encode_block, Store.decode_block, Store.encode_index, Store.decode_index,
     Store.encode_meta, Store.decode_meta, Store.pad12, Store.chunks, Store.root_of,
-    Store.tail_lines,
+    Store.tail_lines, Store.fill_title, Store.derive_name, Store.derive_description,
 }
-use shuttle::session {Session}
+use shuttle::session {Session, Session.serialize_json}
 use shuttle::provider {ProviderConfig, mock}
-use shuttle::message {Usage}
+use shuttle::message {Message, Usage}
+use shuttle::message_types {Role, Content}
+use weaver::text {Text.cut, Text.first_line}
 use json::json {Json.parse, Json.to_string}
 use std::path {Path.to_string}
 use std::list {List.length}
@@ -156,7 +158,7 @@ def test_session : Session :=
 
 #[test]
 def test_meta_json_roundtrip : Bool :=
-    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.none } in
+    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.none, name := Option.none, description := Option.none } in
     let j := Store.encode_meta m in
     match Json.parse (Json.to_string j) {
         Result.err _ => false,
@@ -213,7 +215,7 @@ def test_empty_override_is_unset : Bool :=
 /// and an absent key (an older session) decodes as none.
 #[test]
 def test_meta_plan_roundtrip : Bool :=
-    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.some "PLAN: 1) read" } in
+    let m : StoreMeta := { session := test_session, created := 10, updated := 20, history_next := 3, history_base := 1, plan := Option.some "PLAN: 1) read", name := Option.none, description := Option.none } in
     match Store.decode_meta (Store.encode_meta m) {
         Result.err _ => false,
         Result.ok m2 =>
@@ -222,3 +224,100 @@ def test_meta_plan_roundtrip : Bool :=
                 Option.none => false,
             },
     }
+
+// ── session titles: derivation, stickiness, UTF-8 ─────────────────────
+
+def user_msg (text : String) : Message :=
+    { role := Role.user, content := [Content.text text] }
+
+def assistant_msg (text : String) : Message :=
+    { role := Role.assistant, content := [Content.text text] }
+
+def titled (ms : List Message) : Session :=
+    let s : Session := { test_session with history := ms } in
+    s
+
+#[test]
+def test_meta_name_description_roundtrip : Bool :=
+    let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1,
+                            plan := Option.none, name := Option.some "fix the overlay", description := Option.some "I'll start by reading overlay.mo" } in
+    match Store.decode_meta (Store.encode_meta m) {
+        Result.err _ => false,
+        Result.ok m2 =>
+            (match m2.name { Option.some n => String.beq n "fix the overlay", Option.none => false })
+                && (match m2.description { Option.some d => String.beq d "I'll start by reading overlay.mo", Option.none => false }),
+    }
+
+/// An older session's meta.json has neither key: both decode as none.
+#[test]
+def test_meta_without_title_keys_decodes_none : Bool :=
+    let bare : Session := { test_session with history := List.empty } in
+    let sj : String := Json.to_string (Session.serialize_json bare) in
+    let text : String := String.concat "{\"created\":1,\"updated\":2,\"history_next\":3,\"session\":" (String.concat sj "}") in
+    match Json.parse text {
+        Result.err _ => false,
+        Result.ok j => match Store.decode_meta j {
+            Result.err _ => false,
+            Result.ok m2 =>
+                (match m2.name { Option.none => true, _ => false })
+                    && (match m2.description { Option.none => true, _ => false }),
+        },
+    }
+
+#[test]
+def test_derive_name_is_the_first_user_line : Bool :=
+    match Store.derive_name (titled [user_msg "first line\nsecond line", assistant_msg "hi"]) {
+        Option.some n => String.beq n "first line",
+        Option.none => false,
+    }
+
+#[test]
+def test_derive_name_skips_earlier_roles : Bool :=
+    match Store.derive_name (titled [assistant_msg "hello", user_msg "the task"]) {
+        Option.some n => String.beq n "the task",
+        Option.none => false,
+    }
+
+#[test]
+def test_derive_name_without_a_user_message_is_none : Bool :=
+    match Store.derive_name (titled [assistant_msg "only a reply"]) {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_derive_description_is_the_first_assistant_text : Bool :=
+    match Store.derive_description (titled [user_msg "task", assistant_msg "", assistant_msg "first real text", assistant_msg "later"]) {
+        Option.some d => String.beq d "first real text",
+        Option.none => false,
+    }
+
+/// An override wins and is never rewritten; a missing description still
+/// gets derived on the same write.
+#[test]
+def test_fill_title_keeps_an_existing_name : Bool :=
+    let m : StoreMeta := { session := test_session, created := 1, updated := 2, history_next := 3, history_base := 1,
+                            plan := Option.none, name := Option.some "manual", description := Option.none } in
+    let m2 := Store.fill_title m (titled [user_msg "derived", assistant_msg "the reply"]) in
+    (match m2.name { Option.some n => String.beq n "manual", Option.none => false })
+        && (match m2.description { Option.some d => String.beq d "the reply", Option.none => false })
+
+/// `String.slice` returns "" when the length lands mid-codepoint, so the
+/// cut walks bytes; every prefix here must be a whole glyph plus `…`.
+#[test]
+def test_text_cut_never_splits_a_codepoint : Bool :=
+    String.beq (Text.cut 1 "日本語") "…"
+        && String.beq (Text.cut 2 "日本語") "…"
+        && String.beq (Text.cut 3 "日本語") "日…"
+        && String.beq (Text.cut 4 "日本語") "日…"
+        && String.beq (Text.cut 5 "日本語") "日…"
+        && String.beq (Text.cut 6 "日本語") "日本…"
+        && String.beq (Text.cut 9 "日本語") "日本語"
+        && String.beq (Text.cut 20 "日本語") "日本語"
+
+#[test]
+def test_text_first_line : Bool :=
+    String.beq (Text.first_line "a\nb") "a"
+        && String.beq (Text.first_line "a\rb") "a"
+        && String.beq (Text.first_line "only") "only"
+        && String.beq (Text.first_line "日本\nx") "日本"

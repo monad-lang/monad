@@ -112,6 +112,17 @@ tiny-session baseline, flat while idle. The temp root is pid-qualified
 and removed at exit unless `WV_SESSION_KEEP` is set; `WV_SESSION_TMP`
 chooses its parent.
 
+## Resume picker (`pty_repro_resume.py`)
+
+Synthesizes session directories (`meta.json` with a name and description,
+plus one transcript block each) and drives the TUI's bare `/resume`
+dialog: both sessions are listed with their descriptions, the current
+one is marked `(current)`, Esc leaves the app responsive, choosing a row
+restores that session's transcript, and ten sessions page -- the first
+screen shows the newest eight plus `Older sessions…`, the second the two
+oldest plus `Newer sessions…`. Isolated `HOME`/`WEAVER_SESSION_ROOT`; no
+provider or model turn is involved.
+
 ## Input (`pty_repro_input.py`)
 
 Asserts the input caret is visible on the initial frame and after a
