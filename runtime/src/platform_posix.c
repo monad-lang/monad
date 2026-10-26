@@ -654,7 +654,8 @@ static pid_t fork_excl(void) {
    fork + execvp + waitpid. Returns the child's exit code, or -1 if the
    command could not be spawned or died on a signal -- matching the
    reference's `status.code().unwrap_or(-1)`. The wrapper
-   (native_runtime_fn_name's io_passthrough kind) does the IO boxing. */
+   (native_runtime_fn_name's raw_io_passthrough kind) does the RawIO.io
+   boxing; the `.mo` wrapper adds IO.mk. */
 int64_t monad_exec_cmd(char* cmd, void* args) {
     char** argv = monad_build_argv(cmd, args);
     if (!argv) return -1;
@@ -1126,8 +1127,9 @@ void* monad_list_dir(char* path) {
    its one field, `none` tag 3 -- the same fixed prelude-constructor tags
    runtime.mo's `rt_tag_some`/`rt_tag_none` mirror (see `monad_list_dir`
    above for the List equivalents of the same convention). Wired as
-   `io_passthrough` in natives.mo: the raw result is already a valid
-   backend value, so the emitted wrapper only IO.io-wraps it. The value
+   `raw_io_passthrough` in natives.mo: the raw result is already a valid
+   backend value, so the emitted wrapper only adds one `RawIO.io` (the
+   `.mo` wrapper adds `IO.mk`). The value
    is COPIED (like list_dir copies entry names): getenv's storage is
    owned by libc and can be invalidated by a later setenv/putenv, while
    every other `String` here is an owned, GC-visible char*. */

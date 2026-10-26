@@ -917,7 +917,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
 /// `compile_ntv_ir`) to use `compose_seq` themselves when combining
 /// THESE args' own `instrs`/`blocks` with the wrap-up code that
 /// actually builds the call/constructor, exactly the same "prior_val"
-/// requirement `wrap_io_value_native_result_go` already documents.
+/// requirement `wrap_raw_io_value_native_result` already documents.
 /// Without it, a constructor/native call whose LAST argument was itself
 /// branching (an `if`/`match`) had its OWN alloc/set-field/call
 /// instructions appended as dead code after that argument's own branch
@@ -2842,18 +2842,19 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
         _ => Option.none,
     }
 
-/// Every native op whose Monad-level declared type is `IO _`
+/// Every native op whose Monad-level declared type is `RawIO _`
 /// (`std/io.mo`) -- `op_file_exists`/`op_is_dir` -- needs its raw call
-/// result wrapped in a real `IO.mk (RawIO.io _)`-tagged constructor
-/// before it can be used as an `IO` value (do-notation's `<-`,
-/// `Monad_IO_bind`, ...). The 8 arithmetic/comparison ops and
+/// result wrapped in a real `RawIO.io`-tagged constructor before the
+/// `.mo` wrapper can add `IO.mk` and the value be used as an `IO` value
+/// (do-notation's `<-`, `Monad_IO_bind`, ...). The 8
+/// arithmetic/comparison ops and
 /// `op_i64_to_string` (`I64 -> String`, genuinely pure, no `IO` in its
 /// type at all) do not. Used as-is, the raw result was misread by
 /// `Monad_IO_bind`'s `monad_get_field(io_val, 0)` as a tagged
 /// constructor object -- compiled and linked cleanly, then segfaulted the
 /// moment the bound value was used.
 #[partial]
-def needs_io_wrap (op : NativeOp) : Bool :=
+def needs_raw_io_wrap (op : NativeOp) : Bool :=
     match op {
         NativeOp.op_file_exists => true,
         NativeOp.op_is_dir => true,
@@ -2866,8 +2867,8 @@ def needs_io_wrap (op : NativeOp) : Bool :=
 /// `IO.file_exists`/`IO.is_dir` (`monad_file_exists`/`monad_is_dir`,
 /// `runtime.c`) use a "truthy pointer" C convention -- a non-null
 /// pointer for true, `NULL` for false -- not a genuine tagged `Bool`.
-/// Left as-is, `wrap_io_value_native_result_go` stores that raw pointer
-/// directly as `IO.mk (RawIO.io _)`'s field, so any `if` that later consumes it
+/// Left as-is, `wrap_raw_io_value_native_result` stores that raw pointer
+/// directly as `RawIO.io _`'s field, so any `if` that later consumes it
 /// (through a `do`-block bind, never as a bare comparison term, so
 /// `term_is_native_bool_op`'s fast path never applies) calls
 /// `monad_get_tag` on it and reads garbage header bytes at that address
@@ -2925,14 +2926,14 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
                     // comment above `ends_with_terminator`).
                     match compose_seq ({ instrs := instrs1, blocks := blocks1, val := val1 }) ({ instrs := (List.cons assign_instr List.empty), blocks := List.empty, val := (LLVMValue.var_ temp) }) {
                         { instrs := new_instrs, blocks := new_blocks, val := _ } =>
-                            if needs_io_wrap op then
+                            if needs_raw_io_wrap op then
                                 if native_op_returns_truthy_ptr op then
                                     match materialize_truthy_ptr_as_bool ctx_t (LLVMValue.var_ temp) {
                                         { ctx := ctx_b, instrs := bool_instrs, val := bool_val } =>
-                                            wrap_io_value_native_result ctx_b (LLVMValue.var_ temp) bool_instrs new_instrs new_blocks funcs1 globals1 bool_val,
+                                            wrap_raw_io_value_native_result ctx_b (LLVMValue.var_ temp) bool_instrs new_instrs new_blocks funcs1 globals1 bool_val,
                                     }
                                 else
-                                    wrap_io_value_native_result ctx_t (LLVMValue.var_ temp) List.empty new_instrs new_blocks funcs1 globals1 (LLVMValue.var_ temp)
+                                    wrap_raw_io_value_native_result ctx_t (LLVMValue.var_ temp) List.empty new_instrs new_blocks funcs1 globals1 (LLVMValue.var_ temp)
                             else
                                 CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs1 globals1,
                     },
@@ -2940,11 +2941,12 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
     }
 
 /// Wraps an ALREADY-COMPUTED value (`inner_val`, e.g. `file_exists`'s
-/// materialized `Bool`) as `IO.mk (RawIO.io inner_val)`. See
-/// `needs_io_wrap`'s own doc comment for why this is needed.
+/// materialized `Bool`) ONCE as `RawIO.io inner_val` -- the `.mo` wrapper
+/// adds `IO.mk`, exactly like a `raw_io_passthrough` native. See
+/// `needs_raw_io_wrap`'s own doc comment for why this is needed.
 /// `extra_pre_instrs` (empty except at the truthy-pointer-to-`Bool` call
 /// site above, which must run its own materialization instructions BEFORE
-/// the `IO.mk (RawIO.io _)` alloc) comes before `prior_instrs`/
+/// the `RawIO.io _` alloc) comes before `prior_instrs`/
 /// `prior_blocks` positionally to match.
 ///
 /// `prior_val` -- the raw native call's OWN result value -- is required,
@@ -2958,36 +2960,17 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
 /// -- unreachable dead code, with the branching arg's own placeholder
 /// `ret` becoming the function's real, early, wrong answer.
 #[partial]
-def wrap_io_value_native_result (ctx : CodegenCtx) (prior_val : LLVMValue) (extra_pre_instrs : List LLVMInstruction) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (inner_val : LLVMValue) : CompileResult :=
-    wrap_io_value_native_result_go ctx inner_val extra_pre_instrs prior_val prior_instrs prior_blocks funcs globals
-
-/// The wrap helper's tail: `pre_instrs` computes
-/// `inner_val` (empty when it's already computed), then allocates the
-/// two-layer IO wrapper: `IO.mk (RawIO.io inner)`. The inner `RawIO.io`
-/// gets tag 7 / one field; the outer `IO.mk` gets tag 19 / one field
-/// holding the `RawIO.io` value. Both tags come from `builtin_ctor_tags`,
-/// looked up by qualified name, so they cannot drift from the C runtime's
-/// own copies. All spliced via `compose_seq`.
-#[partial]
-def wrap_io_value_native_result_go (ctx : CodegenCtx) (inner_val : LLVMValue) (pre_instrs : List LLVMInstruction) (prior_val : LLVMValue) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+def wrap_raw_io_value_native_result (ctx : CodegenCtx) (prior_val : LLVMValue) (extra_pre_instrs : List LLVMInstruction) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (inner_val : LLVMValue) : CompileResult :=
     match fresh_temp ctx {
         CtxStrPair.mk ctx_raw temp_raw =>
             let raw_alloc := LLVMValue.alloc_constructor (constructor_tag ctx "RawIO.io") (List.cons inner_val List.empty) in
             let raw_instr := LLVMInstruction.assign temp_raw raw_alloc in
             match build_set_field_instrs (LLVMValue.var_ temp_raw) (List.cons inner_val List.empty) 0 ctx_raw {
-                { ctx := ctx_raw2, instrs := raw_set_instrs } =>
-                    match fresh_temp ctx_raw2 {
-                        CtxStrPair.mk ctx_io temp_io =>
-                            let io_alloc := LLVMValue.alloc_constructor (constructor_tag ctx_io "IO.mk") (List.cons (LLVMValue.var_ temp_raw) List.empty) in
-                            let io_instr := LLVMInstruction.assign temp_io io_alloc in
-                            match build_set_field_instrs (LLVMValue.var_ temp_io) (List.cons (LLVMValue.var_ temp_raw) List.empty) 0 ctx_io {
-                                { ctx := ctx_set, instrs := io_set_instrs } =>
-                                    let wrap_instrs := List.append pre_instrs (List.append (List.cons raw_instr raw_set_instrs) (List.cons io_instr io_set_instrs)) in
-                                    match compose_seq ({ instrs := prior_instrs, blocks := prior_blocks, val := prior_val }) ({ instrs := wrap_instrs, blocks := List.empty, val := (LLVMValue.var_ temp_io) }) {
-                                        { instrs := all_instrs, blocks := all_blocks, val := final_val } =>
-                                            CompileResult.ok ctx_set all_instrs final_val all_blocks funcs globals,
-                                    },
-                            },
+                { ctx := ctx_set, instrs := raw_set_instrs } =>
+                    let wrap_instrs := List.append extra_pre_instrs (List.cons raw_instr raw_set_instrs) in
+                    match compose_seq ({ instrs := prior_instrs, blocks := prior_blocks, val := prior_val }) ({ instrs := wrap_instrs, blocks := List.empty, val := (LLVMValue.var_ temp_raw) }) {
+                        { instrs := all_instrs, blocks := all_blocks, val := final_val } =>
+                            CompileResult.ok ctx_set all_instrs final_val all_blocks funcs globals,
                     },
             },
     }
@@ -3521,8 +3504,8 @@ def emit_native_call2_instr (c : CodegenCtx) (op : NativeOp) (arg1_val : LLVMVal
             let call_instr := LLVMInstruction.assign temp call_val in
             match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (List.cons call_instr List.empty), blocks := List.empty, val := (LLVMValue.var_ temp) }) {
                 { instrs := new_instrs, blocks := new_blocks, val := _ } =>
-                    if needs_io_wrap op then
-                        wrap_io_value_native_result new_ctx (LLVMValue.var_ temp) List.empty new_instrs new_blocks funcs globals (LLVMValue.var_ temp)
+                    if needs_raw_io_wrap op then
+                        wrap_raw_io_value_native_result new_ctx (LLVMValue.var_ temp) List.empty new_instrs new_blocks funcs globals (LLVMValue.var_ temp)
                     else
                         CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
             },
@@ -4180,34 +4163,6 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                             },
                     },
             },
-        NativeWrapKind.io_passthrough rt_fn_name =>
-            match fresh_temp c {
-                CtxStrPair.mk ctx1 raw_temp =>
-                    match fresh_temp ctx1 {
-                        CtxStrPair.mk ctx2 raw_io_temp =>
-                            match fresh_temp ctx2 {
-                                CtxStrPair.mk ctx3 io_temp =>
-                                    let call_val := LLVMValue.call rt_fn_name LLVMType.i64_ (parm_values_for params) false in
-                                    let raw_instr := LLVMInstruction.assign raw_temp call_val in
-                                    // Inner: RawIO.io raw_temp
-                                    let raw_alloc := LLVMValue.alloc_constructor (constructor_tag c "RawIO.io") (List.cons (LLVMValue.var_ raw_temp) List.empty) in
-                                    let raw_alloc_instr := LLVMInstruction.assign raw_io_temp raw_alloc in
-                                    // Outer: IO.mk (RawIO.io raw_temp)
-                                    let io_alloc := LLVMValue.alloc_constructor (constructor_tag c "IO.mk") (List.cons (LLVMValue.var_ raw_io_temp) List.empty) in
-                                    let io_alloc_instr := LLVMInstruction.assign io_temp io_alloc in
-                                    match build_set_field_instrs (LLVMValue.var_ raw_io_temp) (List.cons (LLVMValue.var_ raw_temp) List.empty) 0 ctx3 {
-                                        { ctx := ctx_raw_set, instrs := raw_set_instrs } =>
-                                            match build_set_field_instrs (LLVMValue.var_ io_temp) (List.cons (LLVMValue.var_ raw_io_temp) List.empty) 0 ctx_raw_set {
-                                                { ctx := ctx_set, instrs := io_set_instrs } =>
-                                                    let entry_instrs := List.cons raw_instr (List.cons raw_alloc_instr (List.append raw_set_instrs (List.cons io_alloc_instr (List.append io_set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ io_temp)) List.empty))))) in
-                                                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
-                                                    { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty },
-                                            },
-                                    },
-                            },
-                    },
-            },
         NativeWrapKind.raw_io_passthrough rt_fn_name =>
             match fresh_temp c {
                 CtxStrPair.mk ctx1 raw_temp =>
@@ -4231,7 +4186,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                             },
                     },
             },
-        NativeWrapKind.io_truthy_ptr_bool_result rt_fn_name =>
+        NativeWrapKind.raw_io_truthy_ptr_bool_result rt_fn_name =>
             match fresh_temp c {
                 CtxStrPair.mk ctx1 raw_temp =>
                     let call_val := LLVMValue.call rt_fn_name LLVMType.i64_ (parm_values_for params) false in
@@ -4240,22 +4195,17 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                         { ctx := ctx2, instrs := bool_instrs, val := bool_val } =>
                             match fresh_temp ctx2 {
                                 CtxStrPair.mk ctx3 raw_io_temp =>
+                                    // ONE layer, like `raw_io_passthrough`:
+                                    // `RawIO.io` over the materialized Bool.
+                                    // The `.mo` wrapper adds `IO.mk`.
                                     let raw_alloc := LLVMValue.alloc_constructor (constructor_tag c "RawIO.io") (List.cons bool_val List.empty) in
                                     let raw_alloc_instr := LLVMInstruction.assign raw_io_temp raw_alloc in
                                     match build_set_field_instrs (LLVMValue.var_ raw_io_temp) (List.cons bool_val List.empty) 0 ctx3 {
-                                        { ctx := ctx_raw_set, instrs := raw_set_instrs } =>
-                                            match fresh_temp ctx_raw_set {
-                                                CtxStrPair.mk ctx4 io_temp =>
-                                                    let io_alloc := LLVMValue.alloc_constructor (constructor_tag ctx4 "IO.mk") (List.cons (LLVMValue.var_ raw_io_temp) List.empty) in
-                                                    let io_alloc_instr := LLVMInstruction.assign io_temp io_alloc in
-                                                    match build_set_field_instrs (LLVMValue.var_ io_temp) (List.cons (LLVMValue.var_ raw_io_temp) List.empty) 0 ctx4 {
-                                                        { ctx := ctx_set, instrs := io_set_instrs } =>
-                                                            let entry_instrs := List.cons raw_instr (List.append bool_instrs (List.cons raw_alloc_instr (List.append raw_set_instrs (List.cons io_alloc_instr (List.append io_set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ io_temp)) List.empty)))))) in
-                                                            let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                                            let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
-                                                            { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty },
-                                                    },
-                                            },
+                                        { ctx := ctx_set, instrs := raw_set_instrs } =>
+                                            let entry_instrs := List.cons raw_instr (List.append bool_instrs (List.cons raw_alloc_instr (List.append raw_set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ raw_io_temp)) List.empty)))) in
+                                            let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                                            let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) Option.none in
+                                            { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty },
                                     },
                             },
                     },
@@ -5557,16 +5507,14 @@ def test_native_i64_family_entries_are_wired : Bool :=
         && native_wrap_is_some (native_attr "i64_lt")
         && native_wrap_is_some (native_attr "i64_gt")
 
-/// `raw_io_passthrough`, not `io_passthrough`: the proc natives return
-/// the `RawIO` payload ALONE -- exactly ONE `alloc_constructor` (the
-/// inner `RawIO.io`), where `io_passthrough` would emit TWO (inner
-/// `RawIO.io` plus the outer `IO.mk`). The outer `IO.mk` layer is the
-/// `.mo` wrappers' job (`std/src/process.mo`), the same split
-/// `IO.pure`/`RawIO.pure` use. An exact count is the only way to tell
-/// the two wrap kinds apart in the emitted IR: both call the same
-/// runtime fn and both allocate. `proc_stream_fd` is pinned (it kept
-/// the pin the removed `proc_read` carried); the other two share its
-/// wrap kind and are pinned, as a group, by
+/// `raw_io_passthrough`: the proc natives return the `RawIO` payload
+/// ALONE -- exactly ONE `alloc_constructor` (the inner `RawIO.io`). The
+/// outer `IO.mk` layer is the `.mo` wrappers' job (`std/src/process.mo`),
+/// the same split `IO.pure`/`RawIO.pure` use. An exact count is the only
+/// way to tell a raw IO wrap from a doubly-wrapped one in the emitted IR:
+/// both call the same runtime fn and both allocate. `proc_stream_fd` is
+/// pinned (it kept the pin the removed `proc_read` carried); the other two
+/// share its wrap kind and are pinned, as a group, by
 /// `test_native_proc_family_entries_are_wired` below.
 #[test]
 def test_native_proc_stream_fd_wraps_raw_io_not_io : Bool :=

@@ -29,9 +29,11 @@ pub type ByteBuf {
   bytebuf
 }
 
-/// Allocate `n` zeroed bytes.
 #[native "bytebuf_alloc"]
-pub def ByteBuf.alloc (n : I64) : IO ByteBuf
+priv def bytebuf_alloc_raw (n : I64) : RawIO ByteBuf
+
+/// Allocate `n` zeroed bytes.
+pub def ByteBuf.alloc (n : I64) : IO ByteBuf := IO.mk (bytebuf_alloc_raw n)
 
 /// The raw address of the payload, for FFI functions that write into or
 /// read out of it. Compiled backend only (see the module doc).
@@ -55,18 +57,26 @@ pub def ByteBuf.take_ptr (b : ByteBuf) : Ptr
 #[native "bytebuf_len"]
 pub def ByteBuf.length (b : ByteBuf) : I64
 
-/// Copy `xs` into a fresh buffer.
 #[native "bytebuf_of_list"]
-pub def ByteBuf.of_list (xs : List U8) : IO ByteBuf
+priv def bytebuf_of_list_raw (xs : List U8) : RawIO ByteBuf
+
+/// Copy `xs` into a fresh buffer.
+pub def ByteBuf.of_list (xs : List U8) : IO ByteBuf :=
+  IO.mk (bytebuf_of_list_raw xs)
+
+#[native "bytebuf_to_list"]
+priv def bytebuf_to_list_raw (b : ByteBuf) (len : I64) : RawIO (List U8)
 
 /// The first `len` bytes of the buffer as a list, clamped to the buffer's
 /// own length.
-#[native "bytebuf_to_list"]
-pub def ByteBuf.to_list (b : ByteBuf) (len : I64) : IO (List U8)
+pub def ByteBuf.to_list (b : ByteBuf) (len : I64) : IO (List U8) :=
+  IO.mk (bytebuf_to_list_raw b len)
+
+#[native "bytebuf_free"]
+priv def bytebuf_free_raw (b : ByteBuf) : RawIO Unit
 
 /// Release the buffer (a no-op under the compiled GC backend).
-#[native "bytebuf_free"]
-pub def ByteBuf.free (b : ByteBuf) : IO Unit
+pub def ByteBuf.free (b : ByteBuf) : IO Unit := IO.mk (bytebuf_free_raw b)
 
 /// The first `len` bytes of the buffer as a `String`, clamped to the
 /// buffer's own length exactly as `to_list` is -- one copy, where

@@ -253,14 +253,21 @@ def IO.copy_chunk (dst : ByteBuf) (offset : I64) (b : ByteBuf) (rest : List Byte
 }
 
 #[native "file_exists"]
-def IO.file_exists_native (path : String) : IO Bool
+priv def file_exists_raw (path : String) : RawIO Bool
+
+def IO.file_exists_native (path : String) : IO Bool := IO.mk (file_exists_raw path)
 
 #[native "is_dir"]
-def IO.is_dir_native (path : String) : IO Bool
+priv def is_dir_raw (path : String) : RawIO Bool
+
+def IO.is_dir_native (path : String) : IO Bool := IO.mk (is_dir_raw path)
 
 // Bare entry names (not full paths), sorted, one directory level.
 #[native "list_dir"]
-def IO.list_dir_native (path : String) : IO (List String)
+priv def list_dir_raw (path : String) : RawIO (List String)
+
+def IO.list_dir_native (path : String) : IO (List String) :=
+    IO.mk (list_dir_raw path)
 
 // `pub`: three motes outside `std` read the environment through this --
 // `lang/src/mote.mo`'s toolchain-root discovery, `llvm/src/link.mo`'s
@@ -268,7 +275,9 @@ def IO.list_dir_native (path : String) : IO (List String)
 // and the cross-mote warning was already pointing at it before the third
 // arrived.
 #[native "get_env"]
-pub def IO.get_env (s : String) : IO (Option String)
+priv def get_env_raw (s : String) : RawIO (Option String)
+
+pub def IO.get_env (s : String) : IO (Option String) := IO.mk (get_env_raw s)
 
 // ── Raw stdio ───────────────────────────────────────────────────────────
 // The group below is the byte-level half of stdio, over `std/stream.mo`'s
@@ -349,6 +358,9 @@ pub def IO.flush_stdout : IO Unit := IO.mk flush_stdout
 // into the protocol stream on fd 1.
 pub def IO.write_stderr (s : String) : IO Unit := IO.write_to FdStream.stderr s
 
+#[native current_time]
+priv def current_time_raw : RawIO I64
+
 // Milliseconds since the Unix epoch, from the system WALL clock
 // (`SystemTime::now`, core/src/core_native.rs). Use it for differences
 // between two readings; because it is the wall clock and not a
@@ -369,8 +381,10 @@ pub def IO.write_stderr (s : String) : IO Unit := IO.write_to FdStream.stderr s
 // reading a file is: two calls in one expression may legitimately differ,
 // so it must not be something the evaluator can duplicate, reorder or
 // share. `std/bench.mo`'s `Bench.now` is the name callers use.
-#[native current_time]
-pub def IO.current_time : IO I64
+pub def IO.current_time : IO I64 := IO.mk current_time_raw
+
+#[native current_time_nano]
+priv def current_time_nano_raw : RawIO I64
 
 // Nanoseconds since the Unix epoch, from the same system WALL clock as
 // `IO.current_time` above -- same caveats (a backwards clock step can
@@ -384,8 +398,7 @@ pub def IO.current_time : IO I64
 // else -- every unit conversion and all the ns/us/ms/s formatting is
 // done in Monad, by the driver this runner synthesizes
 // (`lang/codegen/test_driver.mo`).
-#[native current_time_nano]
-pub def IO.current_time_nano : IO I64
+pub def IO.current_time_nano : IO I64 := IO.mk current_time_nano_raw
 
 pub def IO.file_exists (path : Path) : IO Bool :=
     IO.file_exists_native (Path.to_string path)

@@ -859,13 +859,13 @@ pub struct WellKnownCtors {
   pub list_cons: Option<CtorTag>,
   pub list_empty: Option<CtorTag>,
   /// `RawIO A`'s sole constructor (`init/io.mo`'s `type RawIO A { io A }`) —
-  /// the opaque inner type. Required by `io_wrap` (which builds
-  /// `IO.mk (RawIO.io inner)`) and by `io_bind` (which unwraps the
+  /// the opaque inner type. Required by `raw_io_wrap` (which builds
+  /// `RawIO.io inner`) and by `io_bind` (which unwraps the
   /// `RawIO.io` layer to apply the continuation).
   pub raw_io_io: Option<CtorTag>,
   /// `IO A`'s sole constructor (`init/io.mo`'s `type IO A { mk (RawIO A) }`) —
-  /// the user-facing wrapper. `io_wrap` builds `IO.mk (RawIO.io inner)`,
-  /// and `detect_test_result_value` unwraps `IO.mk` first, then
+  /// the user-facing wrapper. The `.mo` wrappers build
+  /// `IO.mk (RawIO.io inner)`, and `detect_test_result_value` unwraps `IO.mk` first, then
   /// `RawIO.io`, to reach the inner payload.
   pub io_mk: Option<CtorTag>,
   /// `Result E A`'s two constructors (`init/prelude.mo`) — same reason.

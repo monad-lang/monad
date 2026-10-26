@@ -9,7 +9,10 @@ use lib::bytebuf {ByteBuf.free, ByteBuf.of_string}
 open IO {current_time_nano, read_file}
 
 #[native "exec_cmd"]
-pub def exec_cmd (cmd : String) (args : List String) : IO I64
+priv def exec_cmd_raw (cmd : String) (args : List String) : RawIO I64
+
+pub def exec_cmd (cmd : String) (args : List String) : IO I64 :=
+  IO.mk (exec_cmd_raw cmd args)
 
 #[native "process_id"]
 pub def process_id : I64

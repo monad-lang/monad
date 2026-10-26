@@ -16,23 +16,35 @@
 pub type Ref (A : Type) { ref }
 
 #[native cell_new]
-pub def Ref.new (init : A) : IO (Ref A)
+priv def cell_new_raw (init : A) : RawIO (Ref A)
+
+pub def Ref.new (init : A) : IO (Ref A) := IO.mk (cell_new_raw init)
 
 #[native cell_get]
-pub def Ref.get (r : Ref A) : IO A
+priv def cell_get_raw (r : Ref A) : RawIO A
+
+pub def Ref.get (r : Ref A) : IO A := IO.mk (cell_get_raw r)
 
 #[native cell_set]
-pub def Ref.set (r : Ref A) (v : A) : IO Unit
+priv def cell_set_raw (r : Ref A) (v : A) : RawIO Unit
+
+pub def Ref.set (r : Ref A) (v : A) : IO Unit := IO.mk (cell_set_raw r v)
+
+#[native cell_update]
+priv def cell_update_raw (r : Ref A) (f : A -> A) : RawIO A
 
 /// Apply a pure `f` to the current value and store the result atomically.
 /// Returns the new value. `f` may run more than once under contention.
-#[native cell_update]
-pub def Ref.update (r : Ref A) (f : A -> A) : IO A
+pub def Ref.update (r : Ref A) (f : A -> A) : IO A :=
+  IO.mk (cell_update_raw r f)
+
+#[native cell_add_i64]
+priv def cell_add_i64_raw (r : Ref I64) (delta : I64) : RawIO I64
 
 /// An atomic integer add, for counters (rate limits, sequence numbers) where
 /// a general `update` would allocate a closure per call.
-#[native cell_add_i64]
-pub def Ref.add_i64 (r : Ref I64) (delta : I64) : IO I64
+pub def Ref.add_i64 (r : Ref I64) (delta : I64) : IO I64 :=
+  IO.mk (cell_add_i64_raw r delta)
 
 /// `Ref.update` with the result discarded.
 pub def Ref.modify (r : Ref A) (f : A -> A) : IO Unit := do {

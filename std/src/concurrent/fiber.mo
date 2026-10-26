@@ -39,7 +39,9 @@ def fiber_result (r : Result I64 A) : Result FiberError A :=
   }
 
 #[native fork_io]
-pub def forkIO (action : Unit -> IO A) : IO (Fiber A)
+priv def fork_io_raw (action : Unit -> IO A) : RawIO (Fiber A)
+
+pub def forkIO (action : Unit -> IO A) : IO (Fiber A) := IO.mk (fork_io_raw action)
 
 #[native await_fiber]
 priv def await_fiber_raw (f : Fiber A) : RawIO (Result I64 A)
@@ -56,7 +58,9 @@ pub def await_fiber (f : Fiber A) : IO (Result FiberError A) :=
   Monad.bind (IO.mk (await_fiber_raw f)) (fn r => IO.pure (fiber_result r))
 
 #[native cancel_fiber]
-pub def cancel_fiber (f : Fiber A) : IO Unit
+priv def cancel_fiber_raw (f : Fiber A) : RawIO Unit
+
+pub def cancel_fiber (f : Fiber A) : IO Unit := IO.mk (cancel_fiber_raw f)
 
 #[native poll_fiber]
 priv def poll_fiber_raw (f : Fiber A) : RawIO (Option (Result I64 A))

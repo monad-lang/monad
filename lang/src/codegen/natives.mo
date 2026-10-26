@@ -146,26 +146,20 @@ def lookup_native_any (name : String) : Option NativeOp :=
 type NativeWrapKind {
     passthrough (rt_fn_name : String),
     bool_result (rt_fn_name : String),
-    // `IO A`-returning natives (`monad_current_time`): call, then wrap
-    // the raw result directly as `IO.mk (RawIO.io raw)` -- mirrors
-    // `wrap_io_value_native_result_go` at the term-level fast-path call
-    // site: this backend already treats a native-sourced C string as a
-    // valid `String` value with no extra boxing.
-    io_passthrough (rt_fn_name : String),
-    // `RawIO A`-returning natives (the stream and piped-subprocess
-    // families): call, then wrap the raw result ONCE as `RawIO.io raw`
-    // -- no outer `IO.mk`. The `.mo` wrappers in std/src/process.mo and
-    // std/src/stream.mo build the user-facing `IO` type themselves
+    // `RawIO A`-returning natives: call, then wrap the raw result ONCE as
+    // `RawIO.io raw` -- no outer `IO.mk`. This is the only IO wrap kind;
+    // every `.mo` wrapper builds the user-facing `IO` type itself
     // (`IO.mk (proc_stream_fd c 0)`, `IO.mk (stream_read_line s max p)`),
     // the same split `IO.pure`/`RawIO.pure` use, so the C side stays a
     // raw payload producer and the naming/defaults live in Monad source.
     raw_io_passthrough (rt_fn_name : String),
-    // `IO Bool`-returning natives using the "truthy pointer" C
+    // `RawIO Bool`-returning natives using the "truthy pointer" C
     // convention (`monad_file_exists`/`monad_is_dir` -- non-null
     // pointer for true, `NULL` for false, NOT already 0/1 like
     // `bool_result`'s `monad_string_eq` assumes): `icmp_ne` against 0
-    // first (`materialize_truthy_ptr_as_bool`), then IO-wrap the result.
-    io_truthy_ptr_bool_result (rt_fn_name : String),
+    // first (`materialize_truthy_ptr_as_bool`), then wrap the Bool ONCE
+    // as `RawIO.io` -- the `.mo` wrapper adds `IO.mk`.
+    raw_io_truthy_ptr_bool_result (rt_fn_name : String),
 }
 
 /// A `#[native <name>]`-attributed def has no real body (`Term.hole`,
@@ -218,20 +212,22 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "array_len" then Option.some (NativeWrapKind.passthrough "monad_array_len")
             else if String.beq target "array_get" then Option.some (NativeWrapKind.passthrough "monad_array_get")
             else if String.beq target "array_with" then Option.some (NativeWrapKind.passthrough "monad_array_with")
-            // The two `IO`-typed ones: `io_passthrough` wraps the raw
-            // result as `IO.mk (RawIO.io raw)`, which is what `Monad.bind`'s `IO`
-            // instance destructures.
-            else if String.beq target "array_set_in_place" then Option.some (NativeWrapKind.io_passthrough "monad_array_set_in_place")
-            else if String.beq target "array_freeze" then Option.some (NativeWrapKind.io_passthrough "monad_array_freeze")
+            // The two mutating array ops: `raw_io_passthrough` wraps the
+            // raw result ONCE as `RawIO.io`; their `.mo` wrappers add
+            // `IO.mk`, which is what `Monad.bind`'s `IO` instance
+            // destructures.
+            else if String.beq target "array_set_in_place" then Option.some (NativeWrapKind.raw_io_passthrough "monad_array_set_in_place")
+            else if String.beq target "array_freeze" then Option.some (NativeWrapKind.raw_io_passthrough "monad_array_freeze")
             // `std/src/ref.mo`: shared mutable slots. All five are
-            // `IO`-typed, and `cell_update` applies a Monad closure under
+            // `RawIO`-typed (their `.mo` wrappers add `IO.mk`), and
+            // `cell_update` applies a Monad closure under
             // the runtime lock. Never add these to `native_op_table` -- a
             // lock acquisition must not be inlined.
-            else if String.beq target "cell_new" then Option.some (NativeWrapKind.io_passthrough "monad_cell_new")
-            else if String.beq target "cell_get" then Option.some (NativeWrapKind.io_passthrough "monad_cell_get")
-            else if String.beq target "cell_set" then Option.some (NativeWrapKind.io_passthrough "monad_cell_set")
-            else if String.beq target "cell_update" then Option.some (NativeWrapKind.io_passthrough "monad_cell_update")
-            else if String.beq target "cell_add_i64" then Option.some (NativeWrapKind.io_passthrough "monad_cell_add_i64")
+            else if String.beq target "cell_new" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_new")
+            else if String.beq target "cell_get" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_get")
+            else if String.beq target "cell_set" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_set")
+            else if String.beq target "cell_update" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_update")
+            else if String.beq target "cell_add_i64" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_add_i64")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
             // result, same shape as `string_length`. `IO.file_exists`/
             // `is_dir` (`std/io.mo`, `#[native "X_native"]` on the
@@ -247,13 +243,13 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // compiled `IO_is_dir_native` global was the bogus Unit
             // stub, called for real from `IO_is_dir`'s own compiled body.
             else if String.beq target "string_hash" then Option.some (NativeWrapKind.passthrough "monad_string_hash")
-            else if String.beq target "current_time" then Option.some (NativeWrapKind.io_passthrough "monad_current_time")
+            else if String.beq target "current_time" then Option.some (NativeWrapKind.raw_io_passthrough "monad_current_time")
             // Raw nanoseconds, same CLOCK_MONOTONIC origin as
             // `current_time` (std/io.mo). The test runner's synthesized
             // driver times each test with this and does every unit
             // conversion itself, in Monad -- see
             // `lang/codegen/test_driver.mo`.
-            else if String.beq target "current_time_nano" then Option.some (NativeWrapKind.io_passthrough "monad_current_time_nano")
+            else if String.beq target "current_time_nano" then Option.some (NativeWrapKind.raw_io_passthrough "monad_current_time_nano")
             // `String.lt`/`String.gt` (`init/string.mo`, `instance BOrd
             // String`'s own backing natives) -- same previously-unwired
             // gap as `string_length`/`string_hash` above (a `#[native]`
@@ -290,8 +286,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `RawIO` values (not `IO`), so `passthrough` is correct.
             else if String.beq target "io_pure" then Option.some (NativeWrapKind.passthrough "monad_io_pure")
             else if String.beq target "io_bind" then Option.some (NativeWrapKind.passthrough "monad_io_bind")
-            else if String.beq target "file_exists" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_file_exists")
-            else if String.beq target "is_dir" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_is_dir")
+            else if String.beq target "file_exists" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_file_exists")
+            else if String.beq target "is_dir" then Option.some (NativeWrapKind.raw_io_truthy_ptr_bool_result "monad_is_dir")
             // `std/io.mo`'s two remaining raw-stdio natives -- the
             // byte-level half of stdio the stream primitives cannot
             // express (`read_stdin_exact`'s fill-to-n read and a real
@@ -469,12 +465,10 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // table -- a native reached from a def the compiler compiles
             // is an ordinary native.
             else if String.beq target "f64_of_string" then Option.some (NativeWrapKind.passthrough "monad_f64_of_string")
-            // Generated IR: documented stubs (0 / true). `Bench` is a
-            // measurement API, never load-bearing for correctness, and
-            // the compiled runtime has no clock wired yet -- a typed
-            // zero keeps `--verbose` compiles from crashing on a Unit
-            // stub. Real timing is a later self-hosted-runtime phase.
-            else if String.beq target "current_time" then Option.some (NativeWrapKind.io_passthrough "monad_current_time")
+            // `bench_report` is a documented stub (0 / true). `Bench` is
+            // a measurement API, never load-bearing for correctness, and
+            // a typed zero keeps `--verbose` compiles from crashing on a
+            // Unit stub.
             else if String.beq target "bench_report" then Option.some (NativeWrapKind.bool_result "monad_bench_report")
             else if String.beq target "process_id" then Option.some (NativeWrapKind.passthrough "monad_process_id")
             else if String.beq target "build_commit" then Option.some (NativeWrapKind.passthrough "monad_build_commit")
@@ -508,7 +502,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `llvm/src/link.mo` shells out to `llc`/`clang` through
             // it, so without it a self-compiled compiler can never run
             // its own `compile` command at all.
-            else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.io_passthrough "monad_exec_cmd")
+            else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.raw_io_passthrough "monad_exec_cmd")
             // The piped-subprocess family (std/process.mo,
             // agent-skills.md Phase 4) -- `proc_spawn`, `proc_wait`, and
             // `proc_stream_fd`, which hands out an `FdStream` view of one
@@ -539,40 +533,40 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // deliberately no `native_op_table` key, for the same
             // hijack reason as the proc family.
             else if String.beq target "term_ctl" then Option.some (NativeWrapKind.raw_io_passthrough "monad_term_ctl")
-            else if String.beq target "list_dir" then Option.some (NativeWrapKind.io_passthrough "monad_list_dir")
+            else if String.beq target "list_dir" then Option.some (NativeWrapKind.raw_io_passthrough "monad_list_dir")
             // `IO.get_env` (std/io.mo) -- `IO (Option String)`: the raw
             // result is a real `Option` Constructor built in runtime.c
             // (some=4/none=3, the same fixed tags `monad_array_get` and
             // runtime.mo's `rt_tag_some`/`rt_tag_none` use), so plain
-            // `io_passthrough` (IO.mk/RawIO.io-wrap only) like `list_dir`. Wired
-            // because `std/ansi.mo`'s `colors_enabled` reads
+            // `raw_io_passthrough` (one `RawIO.io` wrap) like `list_dir`.
+            // Wired because `std/ansi.mo`'s `colors_enabled` reads
             // NO_COLOR/FORCE_COLOR/TERM through it, and the compiler's
             // own `--verbose` stage trace (std/src/log.mo) colorizes through
             // that.
-            else if String.beq target "get_env" then Option.some (NativeWrapKind.io_passthrough "monad_get_env")
+            else if String.beq target "get_env" then Option.some (NativeWrapKind.raw_io_passthrough "monad_get_env")
             // The async runtime (`std/concurrent/{fiber,combine}.mo`).
-            // Six of the eight are `IO`-returning the same way: call the
-            // runtime, wrap the raw result in `IO.mk (RawIO.io _)`.
-            // `await_fiber` and `poll_fiber` are `RawIO` natives behind
-            // `.mo` wrappers: runtime.c builds the raw `Result I64 A`
-            // (poll: `Option` of it) and the backend adds one `RawIO.io`.
+            // All eight are `RawIO` natives behind `.mo` wrappers: the
+            // runtime call's raw result is wrapped ONCE as `RawIO.io`,
+            // and the wrapper adds `IO.mk`. `await_fiber` and
+            // `poll_fiber` return a raw `Result I64 A` (poll: `Option`
+            // of it); the rest return a handle, a value or Unit.
             //
             // The handles themselves are opaque: `Fiber`/`Scope` values
             // are raw runtime pointers, never constructors, which is why
             // nothing here needs a `constructor_tag` lookup for them.
             // `Fiber`'s own module says so ("Fiber handles are opaque
             // runtime objects; do not pattern match on them").
-            else if String.beq target "fork_io" then Option.some (NativeWrapKind.io_passthrough "monad_fork_io")
+            else if String.beq target "fork_io" then Option.some (NativeWrapKind.raw_io_passthrough "monad_fork_io")
             else if String.beq target "await_fiber" then Option.some (NativeWrapKind.raw_io_passthrough "monad_await_fiber")
-            else if String.beq target "cancel_fiber" then Option.some (NativeWrapKind.io_passthrough "monad_cancel_fiber")
+            else if String.beq target "cancel_fiber" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cancel_fiber")
             // `pollFiber`'s raw native, await's non-blocking sibling:
             // the async event-loop primitive tui's `Cmd.perform_async`
             // and weaver's turn loop poll every tick (weaver.md Phase 12).
             else if String.beq target "poll_fiber" then Option.some (NativeWrapKind.raw_io_passthrough "monad_poll_fiber")
-            else if String.beq target "sleep_io" then Option.some (NativeWrapKind.io_passthrough "monad_sleep_io")
-            else if String.beq target "scope_new" then Option.some (NativeWrapKind.io_passthrough "monad_scope_new")
-            else if String.beq target "scope_fork" then Option.some (NativeWrapKind.io_passthrough "monad_scope_fork")
-            else if String.beq target "scope_drop" then Option.some (NativeWrapKind.io_passthrough "monad_scope_drop")
+            else if String.beq target "sleep_io" then Option.some (NativeWrapKind.raw_io_passthrough "monad_sleep_io")
+            else if String.beq target "scope_new" then Option.some (NativeWrapKind.raw_io_passthrough "monad_scope_new")
+            else if String.beq target "scope_fork" then Option.some (NativeWrapKind.raw_io_passthrough "monad_scope_fork")
+            else if String.beq target "scope_drop" then Option.some (NativeWrapKind.raw_io_passthrough "monad_scope_drop")
             // `std/concurrent/channel.mo` -- an MVar-style channel. All
             // four are `RawIO` natives behind `.mo` wrappers: the runtime
             // returns the raw handle/value/`Option` pointer and the
@@ -613,14 +607,15 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // flat byte buffer the FFI can address (motes/tls's
             // `SSL_read`/`SSL_write`). Compiled, a `ByteBuf` is a pointer
             // to a `BufObj` (runtime.c: element kind, recorded length,
-            // 64-byte-aligned payload); the four `IO`-typed ones are
-            // `io_passthrough` like the TCP family, `ptr` and `length`
+            // 64-byte-aligned payload); the four side-effecting ones are
+            // `raw_io_passthrough` like the TCP family (their `.mo`
+            // wrappers add `IO.mk`), `ptr` and `length`
             // are pure and stay bare `passthrough`es, and the two
             // `RawIO` text-bridge ones below are `raw_io_passthrough`.
-            else if String.beq target "bytebuf_alloc" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_alloc")
-            else if String.beq target "bytebuf_of_list" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_of_list")
-            else if String.beq target "bytebuf_to_list" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_to_list")
-            else if String.beq target "bytebuf_free" then Option.some (NativeWrapKind.io_passthrough "monad_bytebuf_free")
+            else if String.beq target "bytebuf_alloc" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_alloc")
+            else if String.beq target "bytebuf_of_list" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_of_list")
+            else if String.beq target "bytebuf_to_list" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_to_list")
+            else if String.beq target "bytebuf_free" then Option.some (NativeWrapKind.raw_io_passthrough "monad_bytebuf_free")
             else if String.beq target "bytebuf_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_ptr")
             else if String.beq target "bytebuf_take_ptr" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_take_ptr")
             else if String.beq target "bytebuf_len" then Option.some (NativeWrapKind.passthrough "monad_bytebuf_len")

@@ -930,28 +930,14 @@ fn string_drop(args: &[Value]) -> Result<Value, CoreEvalError> {
 
 // TODO: `IO` is slated to be replaced with an opaque indexed monad whose
 // internal value isn't reachable via an ordinary constructor match --
-// this `io_mk`/`raw_io_io`-wrapping helper will need to change to whatever that
+// this `raw_io_io`-wrapping helper will need to change to whatever that
 // type's own (non-structural) construction mechanism ends up being once
 // that lands.
-/// Wrap a raw value into an `IO` value: `IO.mk (RawIO.io inner)`.
-/// The outer `IO.mk` is the user-facing wrapper; the inner `RawIO.io`
-/// is the opaque native constructor. Both tags are resolved from
-/// `NativeTable::well_known`.
-fn io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> {
-  let raw_val = raw_io_wrap(natives, inner)?;
-  let io_mk = require_ctor(natives.well_known.io_mk, "IO.mk")?;
-  Ok(Value::Con {
-    tag: io_mk.tag,
-    args: std::sync::Arc::new(vec![raw_val].into()),
-  })
-}
-
-/// Wrap a raw value into a `RawIO` value: `RawIO.io inner` -- ONE layer,
-/// not the two-layer `IO.mk (RawIO.io ...)` that `io_wrap` produces. The
-/// `IO.mk` wrapping is done by the `.mo` wrappers in `std/src/process.mo`
-/// (`IO.mk (proc_stream_fd c 0)`), exactly the way `IO.pure` does it for
-/// `RawIO.pure` -- the interpreter-side counterpart of codegen's
-/// `NativeWrapKind.raw_io_passthrough`.
+/// Wrap a raw value into a `RawIO` value: `RawIO.io inner` -- ONE layer.
+/// Every `#[native]`/`#[extern "c"]` IO declaration is `RawIO`; the
+/// `.mo` wrappers in `std/` add the user-facing `IO.mk` layer, exactly
+/// the way `IO.pure` does it for `RawIO.pure` -- the interpreter-side
+/// counterpart of codegen's `NativeWrapKind.raw_io_passthrough`.
 fn raw_io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> {
   let raw_io = require_ctor(natives.well_known.raw_io_io, "RawIO.io")?;
   Ok(Value::Con {
@@ -961,10 +947,10 @@ fn raw_io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalErr
 }
 
 /// `io_pure (a : A) : RawIO A` — the native constructor for `RawIO`
-/// values. Creates a single `RawIO.io` wrapper (ONE layer), NOT the
-/// two-layer `IO.mk (RawIO.io ...)` that `io_wrap` produces — the
-/// `IO.mk` wrapping is done by `IO.pure` in the `.mo` source
-/// (`IO.pure a := IO.mk (RawIO.pure a)`).
+/// values. Creates a single `RawIO.io` wrapper (ONE layer); the `IO.mk`
+/// wrapping is done by `IO.pure` in the `.mo` source
+/// (`IO.pure a := IO.mk (RawIO.pure a)`), like every other user-facing
+/// wrapper.
 fn io_pure(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let inner = args
     .first()
@@ -1139,7 +1125,7 @@ fn array_set_in_place(args: &[Value], natives: &NativeTable) -> Result<Value, Co
   }
   // `IO Unit`'s payload: an empty string, never inspected -- `Unit` is
   // not in `WellKnownCtors` and nothing reads this value.
-  io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
+  raw_io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
 }
 
 /// `array_freeze (b : ArrayBuilder A) : IO (Array A)` -- COPIES rather
@@ -1155,7 +1141,7 @@ fn array_freeze(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
   }
   let elems = array_elems(&args[0])?;
   let mk = require_ctor(natives.well_known.array_mk, "Array.mk")?;
-  io_wrap(
+  raw_io_wrap(
     natives,
     Value::Con {
       tag: mk.tag,
@@ -1198,10 +1184,11 @@ fn string_get_char(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
   make_option(natives, Some(Value::Lit(IrLit::Char(chars[idx as usize]))))
 }
 
-/// `IO.file_exists (path : String) : IO Bool` — `Monad.bind`'s own `IO`
-/// instance (init/io.mo) pattern-matches its argument via `match a { io
-/// a => f a }`, so a real `IO.io`-wrapped `Con` is required, not a bare
-/// value (see `io_wrap`'s own doc comment).
+/// `file_exists (path : String) : RawIO Bool` — returns a SINGLE
+/// `RawIO.io`-wrapped `Bool`; the `.mo` wrapper `IO.file_exists_native`
+/// adds `IO.mk`, which is what `Monad.bind`'s own `IO` instance
+/// (init/io.mo) pattern-matches (`match a { io a => f a }`) and what the
+/// compiled `raw_io_truthy_ptr_bool_result` wrap kind produces.
 fn file_exists(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.is_empty() {
     return Err(CoreEvalError::NativeArgError(
@@ -1210,7 +1197,7 @@ fn file_exists(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
   }
   let path = extract_string(&args[0])?;
   let exists = make_bool(natives, std::fs::metadata(path).is_ok())?;
-  io_wrap(natives, exists)
+  raw_io_wrap(natives, exists)
 }
 
 /// `IO.is_dir (path : String) : IO Bool` — see `file_exists`'s own doc
@@ -1224,7 +1211,7 @@ fn is_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError>
   let path = extract_string(&args[0])?;
   let is_dir = std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
   let result = make_bool(natives, is_dir)?;
-  io_wrap(natives, result)
+  raw_io_wrap(natives, result)
 }
 
 /// `IO.list_dir (path : String) : IO (List String)` — bare entry names
@@ -1255,11 +1242,11 @@ fn list_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
       args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(entry.into())), result].into()),
     };
   }
-  io_wrap(natives, result)
+  raw_io_wrap(natives, result)
 }
 
 /// `IO.get_env (s : String) : IO (Option String)` — see `file_exists`'s
-/// own doc comment on why the `IO.io` wrapping is required; the INNER
+/// own doc comment on why the `RawIO.io` wrapping is required; the INNER
 /// `Option` needs the same real-`Con` treatment as `string_get`'s own
 /// `Option U8`, for the same reason.
 fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -1271,7 +1258,7 @@ fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
     Ok(value) => make_option(natives, Some(Value::Lit(IrLit::Str(value.into()))))?,
     Err(_) => make_option(natives, None)?,
   };
-  io_wrap(natives, opt)
+  raw_io_wrap(natives, opt)
 }
 
 // --- `std/io.mo`'s raw stdio family --------------------------------
@@ -1552,7 +1539,7 @@ fn bytebuf_alloc(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEva
   };
   let len = if n < 0 { 0 } else { n as usize };
   let id = crate::runtime::global::register(vec![0u8; len]);
-  io_wrap(natives, handle_value(id))
+  raw_io_wrap(natives, handle_value(id))
 }
 
 fn bytebuf_of_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -1563,7 +1550,7 @@ fn bytebuf_of_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
   }
   let bytes = byte_list_bytes(&args[0], natives)?;
   let id = crate::runtime::global::register(bytes);
-  io_wrap(natives, handle_value(id))
+  raw_io_wrap(natives, handle_value(id))
 }
 
 /// Walk a `List U8` value into owned bytes — `string_from_list`'s own
@@ -1624,7 +1611,7 @@ fn bytebuf_to_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
       ),
     };
   }
-  io_wrap(natives, result)
+  raw_io_wrap(natives, result)
 }
 
 /// `ByteBuf.length (b : ByteBuf) : I64` — the recorded element count.
@@ -1830,7 +1817,7 @@ fn cell_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   reg.push(Some(init.clone()));
   let id = (reg.len() - 1) as u64;
   drop(reg);
-  io_wrap(natives, handle_value(id))
+  raw_io_wrap(natives, handle_value(id))
 }
 
 /// `Ref.get (r : Ref A) : IO A`.
@@ -1848,7 +1835,7 @@ fn cell_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
     .cloned()
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("cell_get: no such ref {handle}")))?;
   drop(reg);
-  io_wrap(natives, value)
+  raw_io_wrap(natives, value)
 }
 
 /// `Ref.set (r : Ref A) (v : A) : IO Unit`.
@@ -1866,7 +1853,7 @@ fn cell_set(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("cell_set: no such ref {handle}")))?;
   *slot = Some(args[1].clone());
   drop(reg);
-  io_wrap(natives, unit_value())
+  raw_io_wrap(natives, unit_value())
 }
 
 /// `Ref.add_i64 (r : Ref I64) (delta : I64) : IO I64`.
@@ -1890,7 +1877,7 @@ fn cell_add_i64(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
     *slot = Some(Value::Lit(IrLit::Num(sum, NumSuffix::I64)));
   }
   drop(reg);
-  io_wrap(natives, Value::Lit(IrLit::Num(sum, NumSuffix::I64)))
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(sum, NumSuffix::I64)))
 }
 
 /// `Ref.update (r : Ref A) (f : A -> A) : IO A` — evaluator-backed because
@@ -1920,7 +1907,7 @@ pub fn cell_update(
     *slot = Some(next.clone());
   }
   drop(reg);
-  io_wrap(natives, next)
+  raw_io_wrap(natives, next)
 }
 
 /// What a stream handle names, without holding the registry lock across
@@ -2628,7 +2615,7 @@ fn bytebuf_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
     }
   };
   crate::runtime::global::drop_handle(id);
-  io_wrap(natives, unit_value())
+  raw_io_wrap(natives, unit_value())
 }
 
 /// Reads a `List String` value into an owned `Vec<String>` — the
@@ -2683,7 +2670,7 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
     .status()
     .map_err(|e| CoreEvalError::NativeArgError(format!("exec_cmd \"{cmd}\" failed: {e}")))?;
   let exit_code = status.code().unwrap_or(-1) as i64;
-  io_wrap(natives, Value::Lit(IrLit::Num(exit_code, NumSuffix::I64)))
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(exit_code, NumSuffix::I64)))
 }
 
 // ── Piped subprocesses (std/src/process.mo, agent-skills.md Phase 4) ──
@@ -2701,8 +2688,8 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
 // process boundary.
 //
 // The natives here return `RawIO <payload>` -- a SINGLE `RawIO.io`
-// layer via `raw_io_wrap`, not the two-layer `io_wrap` -- and the
-// `Proc.*` wrappers in `std/src/process.mo` build the user-facing `IO`
+// layer via `raw_io_wrap` -- and the `Proc.*` wrappers in
+// `std/src/process.mo` build the user-facing `IO`
 // type with `IO.mk`, the same split `IO.pure`/`RawIO.pure` already use.
 // That keeps the payload building here and the naming/defaults in `.mo`
 // source, and it is what codegen's
@@ -3041,7 +3028,7 @@ fn current_time(natives: &NativeTable) -> Result<Value, CoreEvalError> {
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap_or_default()
     .as_millis() as i64;
-  io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
 }
 
 /// `IO.current_time_nano` (std/io.mo) -- raw nanoseconds, `IO.io`-wrapped
@@ -3055,7 +3042,7 @@ fn current_time_nano(natives: &NativeTable) -> Result<Value, CoreEvalError> {
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap_or_default()
     .as_nanos() as i64;
-  io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
+  raw_io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
 }
 
 fn process_id() -> Result<Value, CoreEvalError> {
@@ -3127,7 +3114,7 @@ fn extract_handle_id(v: &Value) -> Result<u64, CoreEvalError> {
 }
 
 /// `Unit`'s own runtime shape never matters (never pattern-matched, same
-/// as `io_wrap`'s callers elsewhere in this file) — an empty string is as
+/// as `raw_io_wrap`'s callers elsewhere in this file) — an empty string is as
 /// good a placeholder as any.
 fn unit_value() -> Value {
   Value::Lit(IrLit::Str(String::new().into()))
@@ -3154,7 +3141,7 @@ fn fork_io(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
     action: Some(action),
   };
   let id = crate::runtime::global::register(handle);
-  io_wrap(natives, handle_value(id))
+  raw_io_wrap(natives, handle_value(id))
 }
 
 /// `await_fiber : Fiber A -> RawIO (Result I64 A)` — the raw native
@@ -3284,7 +3271,7 @@ fn cancel_fiber(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
   let id = extract_handle_id(f)?;
   crate::runtime::global::with::<FiberHandle, _>(id, |h| h.fiber.cancel())
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber handle {id} not found")))?;
-  io_wrap(natives, unit_value())
+  raw_io_wrap(natives, unit_value())
 }
 
 /// `sleepIO (ms : I64) : IO Unit` (`std/concurrent/combine.mo`). Mirrors
@@ -3296,7 +3283,7 @@ fn sleep_io(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
       .ok_or_else(|| CoreEvalError::NativeArgError("sleep_io needs 1 arg".into()))?,
   )?;
   std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
-  io_wrap(natives, unit_value())
+  raw_io_wrap(natives, unit_value())
 }
 
 /// `scope_new : IO Scope` — a zero-arg (point-free) native. Mirrors
@@ -3306,7 +3293,7 @@ fn scope_new(natives: &NativeTable) -> Result<Value, CoreEvalError> {
     fiber_ids: std::sync::Mutex::new(Vec::new()),
   };
   let id = crate::runtime::global::register(handle);
-  io_wrap(natives, handle_value(id))
+  raw_io_wrap(natives, handle_value(id))
 }
 
 /// `scope_fork (s : Scope) (action : Unit -> IO A) : IO (Fiber A)` — like
@@ -3335,7 +3322,7 @@ fn scope_fork(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
     scope.fiber_ids.lock().unwrap().push(fiber_id);
   })
   .ok_or_else(|| CoreEvalError::NativeArgError(format!("scope {scope_id} not found")))?;
-  io_wrap(natives, handle_value(fiber_id))
+  raw_io_wrap(natives, handle_value(fiber_id))
 }
 
 /// `scope_drop (s : Scope) : IO Unit` — cancels every fiber forked under
@@ -3352,7 +3339,7 @@ fn scope_drop(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
   for fid in &fiber_ids {
     crate::runtime::global::with::<FiberHandle, _>(*fid, |h| h.fiber.cancel());
   }
-  io_wrap(natives, unit_value())
+  raw_io_wrap(natives, unit_value())
 }
 
 /// A host channel: a one-slot cell in the handle table. The host has no
@@ -3724,19 +3711,16 @@ mod tests {
     }
   }
 
-  /// Extract the opaque handle id out of `fork_io`'s
-  /// `IO.mk (RawIO.io <handle>)` result, through the well-known tags.
+  /// Extract the opaque handle id out of `fork_io`'s `RawIO.io <handle>`
+  /// result, through the well-known tag. The native is `RawIO`-declared:
+  /// the outer `IO.mk` is added by the `.mo` wrapper `forkIO`
+  /// (`std/concurrent/fiber.mo`), which these direct-`exec_native` tests
+  /// bypass.
   fn handle_id_of(v: Value) -> u64 {
     let natives = test_natives();
-    let mk = natives.well_known.io_mk.unwrap();
     let raw = natives.well_known.raw_io_io.unwrap();
     let Value::Con { tag, args } = v else {
-      panic!("expected the IO.mk wrapper, got {v:?}")
-    };
-    assert_eq!(tag, mk.tag);
-    let inner = args.first().cloned().unwrap();
-    let Value::Con { tag, args } = inner else {
-      panic!("expected the RawIO.io wrapper")
+      panic!("expected the RawIO.io wrapper, got {v:?}")
     };
     assert_eq!(tag, raw.tag);
     let payload = args.first().cloned().unwrap();

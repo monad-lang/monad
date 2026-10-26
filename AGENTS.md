@@ -337,22 +337,23 @@ signature differs). Wiring only the first two compiles and fails at runtime.
 - **Side-effecting declarations return `RawIO A`.** Any `#[native]` or
   `#[extern "c"]` declaration that mutates state, writes memory or an
   out-parameter, or does I/O is declared `RawIO A` — never `IO A`, never a
-  bare payload type. The user-facing operation is a thin `.mo` wrapper
-  (`IO.mk raw`). An extern declared `RawIO A` gets exactly one `RawIO.io`
+  bare payload type. There is no exception and no grandfathered `IO A`
+  form: the codegen has no IO-producing wrap kind. The user-facing
+  operation is a thin `.mo` wrapper (`IO.mk raw`). An extern declared
+  `RawIO A` gets exactly one `RawIO.io`
   box from its generated wrapper (`compile_extern_def_wrapper_ir`), so it
   composes with `IO.mk` exactly like a `RawIO` native; the wrapper also
   reads the payload type out of `RawIO A` for the C ABI declaration, so
   `RawIO I32` still sign-extends and `RawIO Ptr` is still `i8*`. Pure
   getters (`strlen`, `sqlite3_column_int64`, `SSL_get_error`) keep their
-  raw return type. The older `io_passthrough` natives (`IO A`) are
-  grandfathered, not a pattern to copy.
-- A native declared `IO A` returns its raw payload; the C side returns the
-  payload and `NativeWrapKind.io_passthrough` (emit.mo) wraps it as
-  `IO.mk (RawIO.io raw)`. On the Rust host, `io_wrap` does the same.
+  raw return type.
 - A native declared `RawIO A` returns the payload wrapped once as
   `RawIO.io raw` (`raw_io_passthrough` in codegen, `raw_io_wrap` in
-  `core_native.rs`). Pair it with a thin `.mo` wrapper that builds the
-  user-facing type:
+  `core_native.rs`); a C `Bool` producer that uses the truthy-pointer
+  convention (`monad_file_exists`) uses `raw_io_truthy_ptr_bool_result`,
+  which materializes the `Bool` and still wraps once. Either way the
+  `.mo` wrapper adds the `IO.mk` layer. Pair it with a thin `.mo` wrapper
+  that builds the user-facing type:
 
    ```monad
    #[native "proc_read"]

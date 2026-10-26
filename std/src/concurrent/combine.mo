@@ -16,16 +16,25 @@ type FiberScope {
 }
 
 #[native sleep_io]
-pub def sleepIO (ms : I64) : IO Unit
+priv def sleep_io_raw (ms : I64) : RawIO Unit
+
+pub def sleepIO (ms : I64) : IO Unit := IO.mk (sleep_io_raw ms)
 
 #[native scope_new]
-def scope_new : IO FiberScope
+priv def scope_new_raw : RawIO FiberScope
+
+def scope_new : IO FiberScope := IO.mk scope_new_raw
 
 #[native scope_fork]
-def scope_fork (s : FiberScope) (action : Unit -> IO A) : IO (Fiber A)
+priv def scope_fork_raw (s : FiberScope) (action : Unit -> IO A) : RawIO (Fiber A)
+
+def scope_fork (s : FiberScope) (action : Unit -> IO A) : IO (Fiber A) :=
+  IO.mk (scope_fork_raw s action)
 
 #[native scope_drop]
-def scope_drop (s : FiberScope) : IO Unit
+priv def scope_drop_raw (s : FiberScope) : RawIO Unit
+
+def scope_drop (s : FiberScope) : IO Unit := IO.mk (scope_drop_raw s)
 
 // Await all fibers in order, collecting results; the first error ends it.
 def all_aux (fibers : List (Fiber A)) (acc : List A) : IO (Result FiberError (List A)) :=

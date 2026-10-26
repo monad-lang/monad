@@ -69,17 +69,23 @@ def Array.get (a : Array A) (i : I64) : Option A
 #[native array_with]
 def Array.set (a : Array A) (i : I64) (v : A) : Array A
 
+#[native array_set_in_place]
+priv def array_set_in_place_raw (b : ArrayBuilder A) (i : I64) (v : A) : RawIO Unit
+
 /// Builder fill. O(1) compiled, O(n) interpreted -- see this module's
 /// own doc comment.
-#[native array_set_in_place]
-def Array.set_in_place (b : ArrayBuilder A) (i : I64) (v : A) : IO Unit
+def Array.set_in_place (b : ArrayBuilder A) (i : I64) (v : A) : IO Unit :=
+  IO.mk (array_set_in_place_raw b i v)
+
+#[native array_freeze]
+priv def array_freeze_raw (b : ArrayBuilder A) : RawIO (Array A)
 
 /// COPIES rather than casting. A cast would leave the builder aliasing
 /// a value pure code believes is frozen, and a later `set_in_place`
 /// would mutate it -- the one way this design can produce a wrong
 /// answer rather than a slow one.
-#[native array_freeze]
-def Array.freeze (b : ArrayBuilder A) : IO (Array A)
+def Array.freeze (b : ArrayBuilder A) : IO (Array A) :=
+  IO.mk (array_freeze_raw b)
 
 /// A fresh `ArrayBuilder` of `n` slots, every one holding `fill`.
 /// Shares `array_new`'s implementation -- the two types have the same
