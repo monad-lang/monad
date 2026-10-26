@@ -114,12 +114,16 @@ def extract_structs_go (decl_list : List Decl) (acc : List Struct) : List Struct
 /// ANY of those 264 defs (even ones with zero callers from the actual
 /// program) blocked compiling ANYTHING.
 ///
-/// `root` is the entry point's own qualified symbol. There is no
-/// sensible default any more: every def carries its module
-/// (`cli.main::main`), so the literal `"main"` this used to root at
-/// names nothing at all, and a wrapper supplying it would silently
-/// return the empty closure. The caller knows which module is the
-/// program's entry point (`get_loaded_main`) and has to say.
+/// `roots` must be spelled the way THIS list spells the entry points.
+/// Codegen runs after `qualify_modules`, where every def carries its
+/// module (`cli.main::main`), so the literal `"main"` names nothing there
+/// and a wrapper defaulting to it would silently return the empty def
+/// closure; those callers take the qualified symbol from `get_loaded_main`.
+/// The PRE-qualification consumers -- `monad eval` and the test driver's
+/// unqualified fallback -- legitimately root at the bare `"main"`, because
+/// that is how defs are still spelled when they run (pinned by
+/// `test_filter_reachable_decls_roots_at_a_bare_name` and
+/// `slow_tests/src/codegen_eval_gate_tests.mo`).
 ///
 /// `roots` is a LIST because a wasm program can also be entered through
 /// `#[export "c"]` defs, which `main` never references (see

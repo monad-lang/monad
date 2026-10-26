@@ -6392,9 +6392,13 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     // with a precise message, instead of proceeding to codegen/`llc` and
     // surfacing it many stages later as an undefined-symbol error.
     let dispatched_classes := collect_classes dispatched_decls;
+    // BOTH gates can fail here, and `gate_then` returns whichever did first
+    // (the elaboration gate is unconditional since Item 11), so the stage
+    // line names both -- same convention as the unwired-native/monad-extern
+    // pair below. The message itself says which condition tripped.
     match gate_then (validate_reachable_elaborated elab_report reachable_decls) (validate_no_unresolved_class_calls dispatched_classes reachable_decls) {
         Result.err e => do {
-            if verbose then do { fail_line ("FAILED at stage: validate_no_unresolved_class_calls (" ++ e ++ ")"); return unit } else return unit;
+            if verbose then do { fail_line ("FAILED at stage: validate_reachable_elaborated/validate_no_unresolved_class_calls (" ++ e ++ ")"); return unit } else return unit;
             return (Result.err e)
         },
         Result.ok _ =>
