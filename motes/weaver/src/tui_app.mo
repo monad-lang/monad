@@ -298,7 +298,11 @@ def turn_result_step (m : TuiModel) (run : RunState) (lines : List TLine) (delta
             Pair.pair start block =>
                 let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                 let store : Option StoreState := m3.state.store in
-                Pair.pair m3 (persist_turn_cmd store run delta start block),
+                let waiting : Bool := queued_waiting m3 in
+                match store {
+                    Option.none => if waiting then start_queued m3 else Pair.pair m3 Cmd.none,
+                    Option.some _ => Pair.pair { m3 with queued_ready := waiting } (persist_turn_cmd store run delta start block),
+                },
         },
     }
 
@@ -315,7 +319,11 @@ def failure_step (m : TuiModel) (run : RunState) (e : WeaverError) : Pair TuiMod
                 then
                     let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                     let store : Option StoreState := m3.state.store in
-                    Pair.pair m3 (persist_output_cmd repaint_cmd store start block m3.state.run.session)
+                    let waiting : Bool := queued_waiting m3 in
+                    match store {
+                        Option.none => if waiting then start_queued m3 else Pair.pair m3 repaint_cmd,
+                        Option.some _ => Pair.pair { m3 with queued_ready := waiting } (persist_output_cmd repaint_cmd store start block m3.state.run.session),
+                    }
                 else
                     let m3 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m2 in
                     let st2 : WeaverState := set_fatal m3.state e in
@@ -398,19 +406,22 @@ def page_failed_step (m : TuiModel) (e : String) : Pair TuiModel (Cmd WeaverMsg)
     Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m3) Cmd.none
 
 def transcript_reset_step (m : TuiModel) (tr : Transcript) : Pair TuiModel (Cmd WeaverMsg) :=
-    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := true, banner_frame := 0 } in
+    let m2 : TuiModel := { m with transcript := tr, scroll := 0, page_pending := false, rows_key := Option.none, banner := true, banner_frame := 0,
+                            queued := List.empty, queued_ready := false } in
     maybe_page_cmd m2
 
 /// A store write failure disables persistence for the rest of the run;
 /// the session keeps working in memory.
 def store_result_step (m : TuiModel) (e : Option String) : Pair TuiModel (Cmd WeaverMsg) :=
     match e {
-        Option.none => Pair.pair m Cmd.none,
+        Option.none =>
+            if m.queued_ready then start_queued m else Pair.pair m Cmd.none,
         Option.some msg =>
             let st0 : WeaverState := m.state in
             let st : WeaverState := { st0 with store := Option.none } in
             let line : String := String.concat "warning: transcript persistence disabled: " msg in
-            Pair.pair (Model.append_lines { m with state := st } [TLine.plain line]) Cmd.none,
+            let m2 : TuiModel := Model.append_lines { m with state := st } [TLine.plain line] in
+            if m2.queued_ready then start_queued m2 else Pair.pair m2 (Cmd.none),
     }
 
 /// A turn's or command's completion: the fold `f` runs, the streak
@@ -634,7 +645,9 @@ def command_keep_append (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd We
 /// tail (plus the command's own line).
 def command_reset (m : TuiModel) (effect : Effect) : Pair TuiModel (Cmd WeaverMsg) :=
     let with_state : TuiModel := set_state m effect.state in
-    let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) with_state in
+    // A session switch drops instructions queued for the old session.
+    let m1 : TuiModel := { with_state with queued := List.empty, queued_ready := false } in
+    let m2 : TuiModel := with_turn_end (fn (mm : TuiModel) => mm) m1 in
     match m2.state.store {
         Option.none => reset_in_memory m2 effect.output,
         Option.some st => Pair.pair m2 (Cmd.perform (fn (_ : Unit) => reset_action st effect.output)),
@@ -994,30 +1007,60 @@ def cycle_mode (m : TuiModel) : TuiModel :=
 /// so `turn_pending` clears the same way a failed turn's does.
 def enter_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let text : String := String.trim m.input.value in
-    if Bool.or (String.is_empty text) m.turn_pending
-    then Pair.pair m Cmd.none
-    else
-        let st : WeaverState := m.state in
-        let echo : List TLine := echo_lines text in
-        let block : List TLine := Transcript.next_block m.transcript echo in
-        let start : I64 := m.transcript.total in
-        let store : Option StoreState := m.state.store in
-        let gen : I64 := m.turn_gen + 1 in
-        let m2 : TuiModel :=
-            { (with_streak_reset
-                (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
-                with turn_pending := true, banner := false, spinner_frame := 0,
-                     live_spent := Option.none, live_base := Option.some m.state.run.session.spent,
-                     live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
-                     live_activity := Option.none, scroll := 0,
-                     stop_requested := false, turn_gen := gen,
-                     modal := modal_command st text } in
-        Pair.pair m2 (Cmd.perform_async
-            (fn (_ : Unit) => do {
-                let _ <- write_echo store start block;
-                run_submitted_line m.log gen st text
-            })
-            (turn_never_ran st.run))
+    if String.is_empty text then Pair.pair m Cmd.none
+    else if m.turn_pending then queue_line m text
+    else submit_line m text
+
+/// Enter while a turn runs QUEUES the line instead of dropping it: the
+/// head starts when the running turn's result folds in. The
+/// acknowledgement is a transcript line, in memory only -- the queue is
+/// per-run UI state, not session content.
+def queue_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let queued : List String := List.append m.queued (List.cons text List.empty) in
+    let line : TLine := TLine.plain (String.concat "queued: " text) in
+    let m2 : TuiModel :=
+        { (with_streak_reset (fn (mm : TuiModel) => Model.append_block (clear_input mm) (List.cons line List.empty)) m)
+            with queued := queued } in
+    Pair.pair m2 Cmd.none
+
+/// Are instructions waiting behind the running turn?
+def queued_waiting (m : TuiModel) : Bool :=
+    match m.queued {
+        List.empty => false,
+        List.cons _ _ => true,
+    }
+
+/// Start the queue's head as the next turn, if one is waiting.
+#[partial]
+def start_queued (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
+    match m.queued {
+        List.empty => Pair.pair { m with queued_ready := false } Cmd.none,
+        List.cons text rest => submit_line { m with queued := rest, queued_ready := false } text,
+    }
+
+/// Submit `text` as this turn's line: echo, history, and the async turn.
+def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :=
+    let st : WeaverState := m.state in
+    let echo : List TLine := echo_lines text in
+    let block : List TLine := Transcript.next_block m.transcript echo in
+    let start : I64 := m.transcript.total in
+    let store : Option StoreState := m.state.store in
+    let gen : I64 := m.turn_gen + 1 in
+    let m2 : TuiModel :=
+        { (with_streak_reset
+            (fn (mm : TuiModel) => Model.append_block (hist_push (clear_input mm) text) echo) m)
+            with turn_pending := true, banner := false, spinner_frame := 0,
+                 live_spent := Option.none, live_base := Option.some m.state.run.session.spent,
+                 live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0,
+                 live_activity := Option.none, scroll := 0,
+                 stop_requested := false, turn_gen := gen,
+                 modal := modal_command st text } in
+    Pair.pair m2 (Cmd.perform_async
+        (fn (_ : Unit) => do {
+            let _ <- write_echo store start block;
+            run_submitted_line m.log gen st text
+        })
+        (turn_never_ran st.run))
 
 /// `enter_key`'s fiber-error message: the turn never ran, so it fails
 /// against the run state it started from. Classed `io`, which is

@@ -919,3 +919,71 @@ def test_resume_rows_paginate : Bool :=
                     && (match TuiApp.resume_action_at 2 a1 { ResumeAction.resume_shift d => d == 0i64 - 1i64, _ => false }),
         },
     }
+
+// ── queued instructions (Enter while a turn runs) ─────────────────────
+
+def queue_entry (m : TuiModel) (ch : String) : TuiModel :=
+    let m1 : TuiModel := match TuiApp.update m (key_msg (Key.char ch)) {
+        Pair.pair x _ => x,
+    } in
+    match TuiApp.update m1 (key_msg Key.enter) {
+        Pair.pair x _ => x,
+    }
+
+/// Enter mid-turn queues the line (and acknowledges it) instead of
+/// dropping it; the box clears and the turn keeps running.
+#[test]
+def test_enter_queues_while_a_turn_runs : Bool :=
+    let m0 : TuiModel := enter_pending (model_of Mode.manual) in
+    let m1 : TuiModel := match TuiApp.update m0 (key_msg (Key.char "q")) {
+        Pair.pair x _ => x,
+    } in
+    match TuiApp.update m1 (key_msg Key.enter) {
+        Pair.pair m2 cmd =>
+            m2.turn_pending
+                && List.length m2.queued == 1
+                && String.is_empty m2.input.value
+                && cmd_is_none cmd
+                && transcript_contains "queued: q" m2.transcript.tail,
+    }
+
+/// The completion starts the head of the queue as the next turn: with no
+/// store there is nothing to persist first, so it starts in the same
+/// fold; the line is echoed as a user message.
+#[test]
+def test_turn_completion_starts_the_queued_line : Bool :=
+    let m0 : TuiModel := queue_entry (enter_pending (model_of Mode.manual)) "q" in
+    match TuiApp.update m0 (WeaverMsg.turn_result run_of [] List.empty 0 Option.none) {
+        Pair.pair m2 cmd =>
+            cmd_is_perform cmd
+                && m2.turn_pending
+                && List.length m2.queued == 0
+                && transcript_user_contains "q" m2.transcript.tail,
+    }
+
+/// Queued lines run in submit order: the first starts, the rest wait.
+#[test]
+def test_queued_lines_start_in_order : Bool :=
+    let m0 : TuiModel := enter_pending (model_of Mode.manual) in
+    let m1 : TuiModel := queue_entry m0 "a" in
+    let m2 : TuiModel := queue_entry m1 "b" in
+    match TuiApp.update m2 (WeaverMsg.turn_result run_of [] List.empty 0 Option.none) {
+        Pair.pair m3 cmd =>
+            cmd_is_perform cmd
+                && List.length m3.queued == 1
+                && transcript_user_contains "a" m3.transcript.tail,
+    }
+
+/// With a store the completion persists first and hands the queue to the
+/// store write, which starts the head when it lands.
+#[test]
+def test_store_write_completion_starts_the_queued_line : Bool :=
+    let m0 : TuiModel := queue_entry (enter_pending (model_of Mode.manual)) "q" in
+    let m1 : TuiModel := { m0 with queued_ready := true } in
+    match TuiApp.update m1 (WeaverMsg.store_result Option.none) {
+        Pair.pair m2 cmd =>
+            cmd_is_perform cmd
+                && m2.turn_pending
+                && List.length m2.queued == 0
+                && transcript_user_contains "q" m2.transcript.tail,
+    }

@@ -295,6 +295,14 @@ pub struct TuiModel {
     /// The model picker, while `/model` with no argument
     /// has one open. The app loop still owns stdin; keys route here.
     picker : Option PickerState := Option.none,
+    /// Instructions typed while a turn runs, in submit order. Enter
+    /// queues instead of dropping them; the head starts when the running
+    /// turn's result folds in.
+    queued : List String := List.empty,
+    /// A running turn's store write is in flight and an instruction is
+    /// queued behind it: `store_result` starts the head when the write
+    /// lands (one `Cmd` per fold, so the two cannot share a fold).
+    queued_ready : Bool := false,
     /// The run's debug logger (none when WEAVER_LOG=off).
     log : Option Logger := Option.none,
 }
@@ -309,7 +317,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, log := log } in
+    let m : TuiModel := { state := st, input := input_state "" input_placeholder, transcript := tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, scroll := 0, row_total := 0, hist := List.empty, hist_idx := 0 - 1, turn_pending := false, spinner_frame := 0, page_pending := false, rows_cache := List.empty, rows_key := Option.none, sel := Option.none, banner := true, banner_frame := 0, live_spent := Option.none, live_base := Option.none, live_text := "", live_seen := 0, live_thinking := "", live_thinking_seen := 0, live_activity := Option.none, show_details := false, modal := false, stop_requested := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, log := log } in
     Model.refresh_rows m
 
 /// The input box's placeholder, shared by the live edit and a history
