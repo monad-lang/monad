@@ -556,17 +556,29 @@ pub class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type 
 // the checker's cubical probe handles every saturated one. `I` is
 // NEVER an inductive: one case split on a dimension destroys
 // univalence.
+//
+// Each is `pub` (univalence.md Stage 6 reconnaissance, 2026-10-26):
+// every existing reference to one of these twelve names is either
+// inside `init` itself or a hand-built synthetic `Scope` in a `lang`
+// test/pin file, which bypasses privacy enforcement entirely -- so the
+// missing `pub` was latent, not load-bearing, until a real cross-mote
+// consumer (a scratch `proofs/src` probe building `Path`/`fiber`/
+// `isEquiv`/`Equiv` on top of `Cubical.PathP`) tried to reach it and
+// was refused with "is declared in `prelude` and is not marked `pub`".
+// Confirmed by direct probe before fixing, not assumed. That consumer
+// itself did not land this session -- see univalence.md's Stage 6
+// reconnaissance for the two separate parser bugs that blocked it.
 with Cubical {
-	#[cubical "interval"] def I : Type
-	#[cubical "i0"] def i0 : Cubical.I
-	#[cubical "i1"] def i1 : Cubical.I
-	#[cubical "ineg"] def ineg (i : Cubical.I) : Cubical.I
-	#[cubical "imeet"] def imeet (i : Cubical.I) (j : Cubical.I) : Cubical.I
-	#[cubical "ijoin"] def ijoin (i : Cubical.I) (j : Cubical.I) : Cubical.I
-	#[cubical "pathp"] def PathP (A : Cubical.I -> Type) (a : A Cubical.i0) (b : A Cubical.i1) : Type
-	#[cubical "transp"] def transp (A : Cubical.I -> Type) (a : A Cubical.i0) : A Cubical.i1
-	#[cubical "face_eq0"] def face_eq0 (i : Cubical.I) : Cubical.I
-	#[cubical "face_eq1"] def face_eq1 (i : Cubical.I) : Cubical.I
-	#[cubical "is_one"] def is_one (i : Cubical.I) : Type
-	#[cubical "hcomp"] def hcomp (A : Type) (phi : Cubical.I) (u : Cubical.I -> Cubical.is_one phi -> A) (u0 : A) : A
+	#[cubical "interval"] pub def I : Type
+	#[cubical "i0"] pub def i0 : Cubical.I
+	#[cubical "i1"] pub def i1 : Cubical.I
+	#[cubical "ineg"] pub def ineg (i : Cubical.I) : Cubical.I
+	#[cubical "imeet"] pub def imeet (i : Cubical.I) (j : Cubical.I) : Cubical.I
+	#[cubical "ijoin"] pub def ijoin (i : Cubical.I) (j : Cubical.I) : Cubical.I
+	#[cubical "pathp"] pub def PathP (A : Cubical.I -> Type) (a : A Cubical.i0) (b : A Cubical.i1) : Type
+	#[cubical "transp"] pub def transp (A : Cubical.I -> Type) (a : A Cubical.i0) : A Cubical.i1
+	#[cubical "face_eq0"] pub def face_eq0 (i : Cubical.I) : Cubical.I
+	#[cubical "face_eq1"] pub def face_eq1 (i : Cubical.I) : Cubical.I
+	#[cubical "is_one"] pub def is_one (i : Cubical.I) : Type
+	#[cubical "hcomp"] pub def hcomp (A : Type) (phi : Cubical.I) (u : Cubical.I -> Cubical.is_one phi -> A) (u0 : A) : A
 }
