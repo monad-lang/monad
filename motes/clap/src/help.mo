@@ -117,8 +117,10 @@ pub def Cli.render_arg_lines (width : I64) (args : List Cli.ArgSpec) : List Stri
     match args {
         List.empty => List.empty,
         List.cons a rest =>
+            // `width + 1`: the longest label pads to exactly `width`, and
+            // without the extra column it runs straight into its help.
             List.cons
-                (String.concat "  " (String.concat (Cli.pad_right width (Cli.arg_label a)) (Cli.arg_help a)))
+                (String.concat "  " (String.concat (Cli.pad_right (I64.add width 1) (Cli.arg_label a)) (Cli.arg_help a)))
                 (Cli.render_arg_lines width rest),
     }
 
