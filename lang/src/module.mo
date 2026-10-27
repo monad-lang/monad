@@ -57,13 +57,11 @@ use lib::scope {
   alias_map_empty, build_alias_map,
   resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
-  scope_find_inductive, scope_find_local, scope_push_local, scope_resolve_name,
+  scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error, render_type_warning}
-use lib::typecheck::infer {empty_local_types, empty_locals, type_check}
-use lib::typecheck::unify {unify}
-use lib::typecheck::traverse {term_children}
+use lib::typecheck::infer {body_type_error, empty_local_types, empty_locals, type_check}
 // `--affine` (Phase 5 of the enforcement plan): the M2 usage rule as
 // real diagnostics. Built once per module by the affine walk below,
 // exactly how `affine.mo`'s own doc on `check_def` prescribes.
@@ -2450,28 +2448,6 @@ pub def def_body_diagnostics (df : Def) (scope : Scope) (locals : LocalScope) (p
             body_signature_diagnostics (show_name_path name) typ body body_scope locals_ path
     }
 
-/// Does `t` mention a type variable that is still UNINSTANTIATED --
-/// either a name `locals` skolemized, or a name nothing in `scope` binds?
-def mentions_uninstantiated_typevar (t : Term) (scope : Scope) (locals : LocalScope) : Bool :=
-    mentions_uninstantiated_name (free_vars t List.empty) scope locals
-
-def mentions_uninstantiated_name (names : List Identifier) (scope : Scope) (locals : LocalScope) : Bool :=
-    match names {
-        List.empty => false,
-        List.cons nm rest =>
-            match scope_find_local nm locals {
-                Option.some _ => true,
-                Option.none =>
-                    match scope_resolve_name (NameRef.nid nm) scope empty_locals {
-                        Result.ok _ => mentions_uninstantiated_name rest scope locals,
-                        // Nothing binds it: it is the callee's own type
-                        // variable, which instantiating a cross-def
-                        // reference did not substitute away.
-                        Result.err _ => true,
-                    },
-            },
-    }
-
 /// The pure signature check shared by both def-body entry points: check
 /// `body` against the def's own declared `typ`, and REPORT a mismatch.
 ///
@@ -2483,67 +2459,29 @@ def mentions_uninstantiated_name (names : List Identifier) (scope : Scope) (loca
 /// infer its own struct type. This is what the `expected_type` threading
 /// through match-arm checking was added for.
 ///
-/// The `unify` at the end is the part that was missing: `type_check`
-/// THREADED the declared type and then both entry points threw the checked
-/// result away, which made the threading vacuous for every arm that returns
-/// its own type without comparing (`type_check_lit`,
-/// `type_check_con`, `type_check_bound_var`). So
-/// `def p : I64 := "hello"` checked cleanly. `unify` accepts a
-/// `Term.hole` on either side, so infer-mode uses are unaffected.
+/// The `body_type_error` call at the end is the part that was missing:
+/// `type_check` THREADED the declared type and then both entry points
+/// threw the checked result away, which made the threading vacuous for
+/// every arm that returns its own type without comparing. That comparison
+/// and its guards live in `lang/typecheck/infer.mo`, because the lambda
+/// rule needs exactly the same ones for the parameterised half.
 ///
-/// Three guards gate the COMPARISON only, each forced by a corpus
-/// measurement rather than written defensively:
-///   - a `Term.hole` body is not a body at all (`is_term_hole`) -- the
-///     body-less declarations every cubical primitive and every
-///     `#[native]` stub is;
-///   - a body CONTAINING a hole is not a finished body:
-///     `def p1 : T -> T := apply (fn x => x) _` infers `T`, because
-///     `type_check_app` does not carry the callee's return type through a
-///     hole ARGUMENT (`lang/src/module.mo`'s own
-///     `test_hole_in_infer_position_accepts_named_callee*` pins);
-///   - either side mentioning a SKOLEMIZED or unbound type variable means
-///     the comparison is not a fair one: a generic def's body infers an
-///     INSTANTIATED type (`def empty_arities : HashMap String I64 :=
-///     str_map_empty` infers `HashMap String V`; `lang.scope`'s
-///     `npath_map_empty` infers `HashMap K V`), which is a limitation of
-///     instantiating a cross-def reference, not a wrong body.
-
+/// `type_check`'s own error is reported UNCONDITIONALLY: `body_type_error`
+/// gates only the signature COMPARISON. Gating the error too was tried and
+/// broke `test_class_default_body_is_checked` and three class-method
+/// pins -- a generic class default body is exactly what the typevar guard
+/// skips, and its unbound-name error must still surface.
 pub def body_signature_diagnostics (name_str : String) (typ : Term) (body : Term)
     (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
     if is_term_hole body then List.empty
     else match type_check body typ scope empty_local_types locals {
-        // `type_check`'s own failure is reported UNCONDITIONALLY: the
-        // guards below gate only the signature COMPARISON. Suppressing it
-        // behind them was tried and broke
-        // `test_class_default_body_is_checked` and the three
-        // class-method diagnostic pins -- a generic class default body is
-        // exactly what the typevar guard skips, and its unbound-name error
-        // must still surface.
         Result.err e => [render_type_error name_str path e],
         Result.ok tt =>
             let inferred : Term := tt.typ in
-            if body_has_hole body then List.empty
-            else if mentions_uninstantiated_typevar typ scope locals then List.empty
-            else if mentions_uninstantiated_typevar inferred scope locals then List.empty
-            else match unify typ inferred scope locals {
-                Result.ok _ => List.empty,
-                Result.err e => [render_type_error name_str path e],
+            match body_type_error body inferred typ scope locals {
+                Option.none => List.empty,
+                Option.some e => [render_type_error name_str path e],
             },
-    }
-
-/// Does `body` contain a `Term.hole` anywhere?
-#[terminating]
-def body_has_hole (t : Term) : Bool :=
-    match t {
-        Term.hole => true,
-        _ => body_children_have_hole (term_children t),
-    }
-
-#[terminating]
-def body_children_have_hole (ts : List Term) : Bool :=
-    match ts {
-        List.empty => false,
-        List.cons x rest => if body_has_hole x then true else body_children_have_hole rest,
     }
 
 // --- Elaboration: codegen consumes the checker's own resolved terms ---
@@ -2592,7 +2530,7 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
     else
         let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
         let body_scope : Scope := scope_for_elab_body attrs scope in
-        // Plain `type_check` here, NOT `check_against_expected`: this is
+        // Plain `type_check` here, NOT `body_signature_diagnostics`: this is
         // the COMPILE path, where a rejection is swallowed by
         // `elaborate_module_decls_reporting` and leaves the decl
         // un-elaborated for codegen (the `SIGSEGV with no diagnostic`

@@ -1584,7 +1584,7 @@ def lift_scope : Scope := scope_with_decls [Decl.def_d lift_def]
 def lift_value_scope : Scope := scope_with_decls [Decl.def_d lift_def, Decl.def_d three_def]
 
 def lift_call (arg : Term) : Term :=
-    app (var sentinel (named (id "lift"))) arg
+    Term.app (var sentinel (named (id "lift"))) arg
 
 def checked_typ_is (t : Term) (scope : Scope) (want : Term) : Bool :=
     match type_check t hole scope empty_local_types empty_locals {
@@ -1648,7 +1648,7 @@ def dup_def : Def :=
 def dup_scope : Scope := scope_with_decls [Decl.def_d dup_def]
 
 def dup_call (first : Term) (second : Term) : Term :=
-    app (app (var sentinel (named (id "dup"))) first) second
+    Term.app (Term.app (var sentinel (named (id "dup"))) first) second
 
 /// A pi over two sorts at level `n`, whose components both compare equal
 /// to `Sort n` -- name-insensitive by construction, so a solver that

@@ -163,6 +163,113 @@ def type_check_located (loc : Location) (inner : Term) (expected_type : Term) (s
         err e => err e,
     }
 
+/// Is `t` one of the sort terms (`Prop`/`Type`/`Sort n`)?
+def is_sort_typ (t : Term) : Bool :=
+    match t {
+        Term.sort _ => true,
+        _ => false,
+    }
+
+/// Is `t` a function type?
+def is_pi_typ (t : Term) : Bool :=
+    match t {
+        Term.pi _ _ _ => true,
+        _ => false,
+    }
+
+/// Does `t` contain a `Term.hole` anywhere?
+#[terminating]
+def term_has_hole (t : Term) : Bool :=
+    match t {
+        Term.hole => true,
+        _ => any_term_has_hole (term_children t),
+    }
+
+#[terminating]
+def any_term_has_hole (ts : List Term) : Bool :=
+    match ts {
+        List.empty => false,
+        List.cons x rest => if term_has_hole x then true else any_term_has_hole rest,
+    }
+
+/// Does `t` mention a type variable that is still UNINSTANTIATED -- a name
+/// `locals` skolemized, or a name nothing in `scope` binds?
+#[terminating]
+def mentions_uninstantiated_typevar (t : Term) (scope : Scope) (locals : LocalScope) : Bool :=
+    match t {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel then
+                match dbg {
+                    DebugName.named nm =>
+                        match scope_find_local nm locals {
+                            Option.some _ => true,
+                            Option.none =>
+                                match scope_resolve_name (NameRef.nid nm) scope empty_locals {
+                                    Result.ok _ => false,
+                                    // Nothing binds it: it is the callee's
+                                    // own type variable, which
+                                    // instantiating a cross-def reference
+                                    // did not substitute away.
+                                    Result.err _ => true,
+                                },
+                        },
+                    _ => false,
+                }
+            else false,
+        _ => any_mentions_uninstantiated (term_children t) scope locals,
+    }
+
+#[terminating]
+def any_mentions_uninstantiated (ts : List Term) (scope : Scope) (locals : LocalScope) : Bool :=
+    match ts {
+        List.empty => false,
+        List.cons x rest =>
+            if mentions_uninstantiated_typevar x scope locals
+            then true
+            else any_mentions_uninstantiated rest scope locals,
+    }
+
+/// The ONE definition of "is this body's type the type it was expected to
+/// have", shared by def bodies (`lang/module.mo`'s
+/// `body_signature_diagnostics`, i.e. every top-level def) and lambda
+/// bodies (`type_check_lam_explicit`, i.e. the parameterised half).
+///
+/// It exists because `type_check` returns its own idea of a term's type,
+/// and for several arms that idea is either not compared against
+/// `expected_type` at all (`type_check_lit`, `type_check_con`,
+/// `type_check_bound_var`) or is a placeholder. `unify` accepts a
+/// `Term.hole` on either side, so the comparison only ever bites where
+/// both sides carry real information -- which is exactly where silence was
+/// a bug: `def p : I64 := "hello"` used to check cleanly.
+///
+/// Four guards, each forced by a corpus measurement rather than written
+/// defensively:
+///   - a body containing a `Term.hole` is not a finished body:
+///     `def p1 : T -> T := apply (fn x => x) _` infers `T`, because
+///     `type_check_app` does not carry the callee's return type through a
+///     hole ARGUMENT (`lang/src/module.mo`'s own
+///     `test_hole_in_infer_position_accepts_named_callee*` pins);
+///   - either side mentioning a skolemized or unbound type variable is not
+///     a fair comparison: a generic def's body infers an INSTANTIATED type
+///     (`def empty_arities : HashMap String I64 := str_map_empty` infers
+///     `HashMap String V`; `lang.scope`'s `npath_map_empty` infers
+///     `HashMap K V`);
+///   - two SORTS are compared by CUMULATIVITY (`type_check_sort_full`),
+///     which `unify` does not implement --
+///     `let _f : (Sort 1 -> Sort 2) := fn x => x` (`init/src/tests.mo`'s
+///     `test_pi_universe`) is legitimate and `unify (Sort 2) (Sort 1)`
+///     rejects it.
+pub def body_type_error (body : Term) (inferred : Term) (expected : Term)
+    (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    if term_has_hole body then Option.none
+    else if is_sort_typ expected then Option.none
+    else if mentions_uninstantiated_typevar expected scope locals then Option.none
+    else if mentions_uninstantiated_typevar inferred scope locals then Option.none
+    else match unify expected inferred scope locals {
+        Result.ok _ => Option.none,
+        Result.err e => Option.some e,
+    }
+
 /// Build a TypedTerm from term and type.
 def mk_typed (a : Term) (b : Term) : TypedTerm :=
     { term := a, typ := b }
@@ -3778,7 +3885,36 @@ def type_check_lam_explicit (bnd : Binder) (t : Term) (body : Term) (expected_ty
                     // unified it. Prefer the inferred Pi there.
                     let lam_typ : Term :=
                         if is_hole ret_typ then Term.pi binder_anon bound_typ body_typ else expected_type in
-                    ok (mk_typed lam_term lam_typ),
+                    // The body's own type against the arrow's codomain.
+                    // `lam_typ` above is the declared Pi ECHOED back, so
+                    // the def-boundary check cannot see this half at all:
+                    // without it `def p (x : I64) : I64 := "hello"`
+                    // checks cleanly. `body_type_error` is the same
+                    // comparison, and the same guards, that
+                    // `lang/module.mo`'s `body_signature_diagnostics` runs
+                    // at the def boundary.
+                    //
+                    // SKIPPED when the arrow PROMISES a function and the
+                    // body did not infer one. That is not laziness: a def
+                    // whose first parameter is a DESTRUCTURING pattern
+                    // (`def f ({a, b, ..} : P) (x : T) : R := ...`) gets a
+                    // Pi chain that is longer than its lam chain, because
+                    // the remaining parameters become bindings INSIDE the
+                    // body -- so the body's type is the innermost result
+                    // and the codomain is still a Pi. Measured: `lang/src/
+                    // module.mo`'s `locals_with_class_typevars`,
+                    // `locals_with_inductive_params` and
+                    // `elaborate_def_with_scope` all reject without this.
+                    // The other direction -- a Pi inferred where a
+                    // non-function was expected, or two non-Pi types that
+                    // disagree -- is still compared, which is what catches
+                    // `def p (x : I64) : I64 := "hello"`.
+                    if is_pi_typ ret_typ && Bool.not (is_pi_typ body_typ)
+                    then ok (mk_typed lam_term lam_typ)
+                    else match body_type_error body body_typ ret_typ scope locals {
+                        Option.none => ok (mk_typed lam_term lam_typ),
+                        Option.some e => err e,
+                    },
                 err e => err e,
             },
         _ => err (TypeError.custom "type_check_lam_explicit: expected a function type"),

@@ -2,7 +2,7 @@ use lang::types {
   Attribute, Decl, Def, Identifier, InductConstructor, Inductive,
   LocalScope, LocalVar, ModulePath, NamePath, NameRef, Param, Scope,
   ScopeData, ScopeDef, ScopeError, Term, TypeConstraint, hole, package_private,
-  named, sentinel, sort_n, str,
+  binder_anon, binder_explicit, named, sentinel, sort_n, str,
 }
 use lib::module {def_body_diagnostics}
 use lib::scope {
@@ -146,9 +146,11 @@ def test_builtin_type_resolves : Bool :=
 // vacuous for every body shape whose arm never compares against
 // `expected_type` -- `def p : I64 := "hello"` checked cleanly. These pins
 // drive the real rule (not a helper), because the WIRING is what regressed
-// silently: replacing `body_signature_diagnostics`'s `unify` with
-// `List.empty` turns the first pin below red and leaves the other four
-// green, and dropping the hole guard separately turns the last one red.
+// silently. Two mutation checks, one per half: replacing the
+// `body_type_error` call in `body_signature_diagnostics` with `List.empty`
+// turns the first pin below red, and reverting the lambda arm's own
+// comparison turns `test_a_parameterised_def_body_of_the_wrong_type_is_
+// rejected` red. The rest stay green in both.
 
 /// A named type reference, the shape a declared signature's `I64` lowers to.
 def type_ref (nm : String) : Term :=
@@ -209,6 +211,27 @@ def test_a_hole_body_is_skipped_not_rejected : Bool :=
 #[test]
 def test_a_type_mentioning_an_unbound_typevar_is_not_rejected : Bool :=
     match probe_diagnostics (type_ref "V") hello {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+/// The PARAMETERISED half: for a `Term.lam` body, `type_check_lam_explicit`
+/// echoes the declared Pi back as the lambda's type, so the def-boundary
+/// check compares that Pi against itself and sees nothing. The comparison
+/// against the arrow's CODOMAIN is what catches this shape, and it is the
+/// `def p (x : I64) : I64 := "hello"` case.
+#[test]
+def test_a_parameterised_def_body_of_the_wrong_type_is_rejected : Bool :=
+    let body : Term := Term.lam (binder_explicit (DebugName.named (Identifier.id "x"))) (type_ref "I64") hello in
+    match probe_diagnostics (Term.pi binder_anon (type_ref "I64") (type_ref "I64")) body {
+        List.empty => false,
+        List.cons _ _ => true,
+    }
+
+#[test]
+def test_a_parameterised_def_body_of_the_right_type_has_no_diagnostics : Bool :=
+    let body : Term := Term.lam (binder_explicit (DebugName.named (Identifier.id "x"))) (type_ref "I64") hello in
+    match probe_diagnostics (Term.pi binder_anon (type_ref "I64") (type_ref "String")) body {
         List.empty => true,
         List.cons _ _ => false,
     }
