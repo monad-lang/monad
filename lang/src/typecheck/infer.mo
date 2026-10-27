@@ -104,6 +104,14 @@ def qualified_by_class (id : Identifier) (scope : Scope) : Bool :=
 /// crash risk (no `#[partial]` on this def) if a macro ever expanded to
 /// another macro call without fully resolving it. A clean `TypeError`
 /// is safer than a raw interpreter crash either way.
+///
+/// Several arms return their OWN type without comparing it against
+/// `expected_type` (`type_check_lit`, `type_check_con`, and
+/// `type_check_bound_var` behind `type_check_var`). That is deliberate
+/// here and gated one level up instead: `lang/module.mo`'s
+/// `body_signature_diagnostics` compares a def BODY's checked type against
+/// the def's declared one, which is where the difference is a bug rather
+/// than a placeholder.
 pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match term {
         Term.lit value => type_check_lit value expected_type scope local_types locals,

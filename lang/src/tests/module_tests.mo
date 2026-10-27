@@ -1,8 +1,10 @@
 use lang::types {
-  Attribute, Decl, Def, Identifier, InductConstructor, Inductive, LocalScope,
-  LocalVar, ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeDef,
-  ScopeError, TypeConstraint, hole, package_private, sort_n,
+  Attribute, Decl, Def, Identifier, InductConstructor, Inductive,
+  LocalScope, LocalVar, ModulePath, NamePath, NameRef, Param, Scope,
+  ScopeData, ScopeDef, ScopeError, Term, TypeConstraint, hole, package_private,
+  named, sentinel, sort_n, str,
 }
+use lib::module {def_body_diagnostics}
 use lib::scope {
   build_scope_from_decls, resolve_def_in_scope_by_name, scope_find_inductive,
   scope_resolve_name,
@@ -136,3 +138,88 @@ def test_builtin_type_resolves : Bool :=
         ok _ => true,
         err _ => false
     }
+
+// --- Def-body signature enforcement (`def_body_diagnostics`) ---
+//
+// `check_def_with_scope` threaded a def's real declared type into
+// `type_check` and then discarded the checked result, so the threading was
+// vacuous for every body shape whose arm never compares against
+// `expected_type` -- `def p : I64 := "hello"` checked cleanly. These pins
+// drive the real rule (not a helper), because the WIRING is what regressed
+// silently: replacing `body_signature_diagnostics`'s `unify` with
+// `List.empty` turns the first pin below red and leaves the other four
+// green, and dropping the hole guard separately turns the last one red.
+
+/// A named type reference, the shape a declared signature's `I64` lowers to.
+def type_ref (nm : String) : Term :=
+    Term.var sentinel (DebugName.named (Identifier.id nm))
+
+def probe_def (typ : Term) (body : Term) : Def :=
+    Def.mk (name_to_npath (Identifier.id "probe")) typ body empty_constraints empty_attrs
+        Visibility.package_private List.empty
+
+/// A body-less stub type, standing in for the `I64`/`String` the real
+/// prelude supplies. It has to be here because the rule skips a body whose
+/// type mentions a name NOTHING in scope binds (that is how an
+/// uninstantiated cross-def type variable shows up), so without these the
+/// fixture would look like the generic case and never compare anything.
+def stub_type (nm : String) : Decl :=
+    Decl.def_d (Def.mk (name_to_npath (Identifier.id nm)) (sort_n 1) Term.hole
+        empty_constraints empty_attrs Visibility.package_private List.empty)
+
+def probe_scope (typ : Term) (body : Term) : Scope :=
+    let path : ModulePath := test_module_path in
+    let decl_list : List Decl := [Decl.def_d (probe_def typ body), stub_type "I64", stub_type "String"] in
+    make_scope (build_scope_from_decls path decl_list)
+
+def probe_diagnostics (typ : Term) (body : Term) : List String :=
+    def_body_diagnostics (probe_def typ body) (probe_scope typ body) empty_local_scope Option.none
+
+def hello : Term := Term.lit (Literal.str "hello")
+
+#[test]
+def test_a_def_body_of_the_wrong_literal_type_is_rejected : Bool :=
+    match probe_diagnostics (type_ref "I64") hello {
+        List.empty => false,
+        List.cons _ _ => true,
+    }
+
+#[test]
+def test_a_def_body_of_the_right_literal_type_has_no_diagnostics : Bool :=
+    match probe_diagnostics (type_ref "String") hello {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+/// A body-less (`Term.hole`) def is skipped outright -- the arm
+/// `check_def_with_scope` had before this rule existed, and one a wrong
+/// declared type must not turn into a false rejection.
+#[test]
+def test_a_hole_body_is_skipped_not_rejected : Bool :=
+    match probe_diagnostics (type_ref "I64") Term.hole {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+/// The guard that keeps the rule from rejecting GENERIC defs: a side that
+/// still mentions a type variable is not a fair comparison and is skipped.
+/// `def empty_arities : HashMap String I64 := str_map_empty` is the real
+/// shape -- its body's checked type is `HashMap String V`, with `V` bound
+/// by nothing in scope.
+#[test]
+def test_a_type_mentioning_an_unbound_typevar_is_not_rejected : Bool :=
+    match probe_diagnostics (type_ref "V") hello {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+// The hole guard (`body_has_hole`) is deliberately NOT pinned here. It
+// cannot be reproduced by a hand-built fixture: an app whose argument is a
+// hole infers a HOLE against a hand-registered signature just as it does
+// against `build_scope_from_decls`'s `Term.hole` signature, and `unify`
+// accepts a hole -- so every fixture tried passed with the guard removed
+// (measured, twice: with the signature absent AND with it registered via
+// `scope_data_add_def_sig`). Its control is the real pipeline instead:
+// `def p1 : T -> T := apply (fn x => x) _` checks clean on the final build
+// and is REJECTED ("expected (T -> T), found T") by a build with the guard
+// removed.
