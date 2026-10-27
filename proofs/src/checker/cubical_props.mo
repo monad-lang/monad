@@ -16,7 +16,7 @@
 // and its `.term` field is readable, so no export widening is needed.
 //
 // The scope is built by the REAL parse + scope-build pipeline
-// (`try_parse_decls` + `build_scope_from_decls`) over the twelve
+// (`try_parse_decls` + `build_scope_from_decls`) over the thirteen
 // declarations as the prelude's `with Cubical` block spells them
 // (`init/src/prelude.mo`), minus the block wrapper and `Cubical.`
 // prefixes, because what is under test includes the marker's survival
@@ -30,18 +30,19 @@ use lang::typecheck::cubical {peels_to_bare_interval}
 use lang::typecheck::infer {empty_local_types, empty_locals, type_check}
 use lang::typecheck::whnf {whnf}
 use lang::types {
-  CubicalPrim, ModulePath, Scope, ScopeData, SortLevel, Similar, Term, binder_named,
+  CubicalPrim, DebugName, ModulePath, Scope, ScopeData, SortLevel, Similar, Term, binder_named,
   cub, cub_face_eq0, cub_face_eq1, cub_hcomp, cub_i0, cub_i1, cub_imeet,
-  cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_pathp, cub_transp,
-  cubical_prim_eq, id, named, sentinel, sort_n,
+  cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_it_is_one, cub_pathp,
+  cub_transp, cubical_prim_eq, id, sentinel, sort_n,
 }
 use init::borrow {Borrow}
 
 def checker_synthetic_path : ModulePath :=
     ModulePath.mk (List.cons (Identifier.id "proofs_checker") List.empty)
 
-/// The twelve Stage 1+2+3+4+5 declarations, spelled as the prelude's
-/// `with Cubical` block declares them (minus the wrapper and prefixes).
+/// The twelve Stage 1+2+3+4+5 declarations, plus Stage 6b's witness,
+/// spelled as the prelude's `with Cubical` block declares them (minus
+/// the wrapper and prefixes).
 def cubical_decls_source : String :=
     String.concat "#[cubical \"interval\"] def I : Type\n"
     (String.concat "#[cubical \"i0\"] def i0 : I\n"
@@ -54,7 +55,8 @@ def cubical_decls_source : String :=
     (String.concat "#[cubical \"face_eq0\"] def face_eq0 (i : I) : I\n"
     (String.concat "#[cubical \"face_eq1\"] def face_eq1 (i : I) : I\n"
     (String.concat "#[cubical \"is_one\"] def is_one (i : I) : Type\n"
-    "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"))))))))))
+    (String.concat "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"
+    "#[cubical \"it_is_one\"] def it_is_one : is_one i1\n")))))))))))
 
 /// The scope the checker sees when the prelude's cubical block is loaded.
 /// A parse failure yields an empty scope, which makes every pin below
@@ -1192,14 +1194,78 @@ def test_whnf_reduces_hcomp_over_a_refuted_face_to_the_base : Bool :=
     // half of the rule.
     arg_is_bare_prim (whnf cubical_scope empty_locals (hcomp_in cub_i0)) CubicalPrim.i0
 
+/// `hcomp I φ (fn (i : I) => fn (h : is_one φ) => i1) i0` -- a system whose
+/// TOP is `i1` while its base is `i0`, so the two candidate answers at a
+/// satisfied face are different terms and the pin below can tell them
+/// apart. `system_over` cannot: its top is its base.
+def system_top_over (phi : Term) : Term :=
+    Term.lam (binder_named (Identifier.id "i")) cub_interval
+        (Term.lam (binder_named (Identifier.id "h")) (cub_is_one phi) cub_i1)
+
+/// The witness-passing system `fn (i : I) => fn (h : is_one φ) => h`: its
+/// top is the cofibration proof ITSELF, so the composite at a satisfied
+/// face reduces to exactly the witness if -- and only if -- the rule
+/// passes one.
+///
+/// `DebugName.named`, qualified: a BARE `named` is ambiguous against
+/// `Attribute.named` (`lang/src/types.mo:61`) and the two have different
+/// arities. Measured: the Rust host resolves the bare spelling to the
+/// attribute one and reports "type mismatch: Identifier vs. String" for
+/// this def while every other def in the file is clean.
+def system_witness_over (phi : Term) : Term :=
+    Term.lam (binder_named (Identifier.id "i")) cub_interval
+        (Term.lam (binder_named (Identifier.id "h")) (cub_is_one phi)
+            (Term.var 0 (DebugName.named (Identifier.id "h"))))
+
 #[test]
-def test_whnf_leaves_hcomp_over_a_satisfied_face_stuck : Bool :=
-    // THE SOUNDNESS PIN. `hcomp A i1 u u0` is `u i1` -- the system's top,
-    // not its base, which is `u i0`. Reducing to `u0` here is what the
-    // plan's sketch of this rule asked for and is wrong; the rule is
-    // deliberately absent, so the term stays stuck. This pin goes red the
-    // moment anyone adds `some true => a_base` to `whnf_hcomp`.
-    stays_cubical_prim (whnf cubical_scope empty_locals (hcomp_in cub_i1)) CubicalPrim.hcomp
+def test_whnf_reduces_hcomp_over_a_satisfied_face_to_the_system_top : Bool :=
+    // THE SOUNDNESS PIN, INVERTED (Stage 6b). `hcomp A i1 u u0 ≡ u i1
+    // it_is_one` -- the system's TOP, not its base, which is `u i0`.
+    // `system_top_over` makes the two answers different terms (`i1`
+    // against `i0`), so this one assertion fails BOTH ways the rule can be
+    // got wrong: answering the base gives `i0`, and leaving the rule out
+    // leaves an `hcomp` node. It asserted "stays stuck" before the witness
+    // existed -- the assertion changed, the intent did not.
+    arg_is_bare_prim
+        (whnf cubical_scope empty_locals
+            (cub_hcomp cub_interval cub_i1 (system_top_over cub_i1) cub_i0))
+        CubicalPrim.i1
+
+#[test]
+def test_whnf_feeds_the_witness_to_the_system : Bool :=
+    // The composite is `u i1 it_is_one`, so a system whose top IS its own
+    // cofibration binder reduces to the witness term and nothing else.
+    // Measured: answer `u i1` alone (the system under-applied, no witness)
+    // and this pin fails -- and the `system_top_over` pin above fails with
+    // it, since `u i1` there is a lambda rather than the endpoint. The two
+    // pins are the two halves of one reduct: this one observes the WITNESS,
+    // that one the endpoint `i1`, and neither can substitute for the other.
+    Similar.similar
+        (whnf cubical_scope empty_locals
+            (cub_hcomp cub_interval cub_i1 (system_witness_over cub_i1) cub_i0))
+        cub_it_is_one
+
+#[test]
+def test_it_is_one_types_as_a_proof_of_is_one_i1 : Bool :=
+    // The witness's whole typing rule is one `cubical_result_type` row,
+    // reached through the BARE-reference path (`type_check_free_var`) for
+    // a zero-arity primitive -- there is no bespoke rule to pin. Asserted
+    // on the type it comes back with, not on accept/reject: that path
+    // returns the variable arm's own type without comparing it to the
+    // expectation, so a `check_fails` pin here would pass with the row
+    // wrong or missing. Mutation: change the row to `is_one i0` and the
+    // second conjunct goes red while the first stays green.
+    match type_check (free_var "it_is_one") Term.hole cubical_scope empty_local_types empty_locals {
+        // One destructure of `tt`, not two field reads: `TypedTerm` is not
+        // Copy, so reading `tt.term` and `tt.typ` is two uses of an affine
+        // value (the same reason `checks_as_bare_prim` spells it this way).
+        ok tt =>
+            match tt {
+                { term := tm, typ := ty } =>
+                    Similar.similar tm cub_it_is_one && Similar.similar ty (cub_is_one cub_i1),
+            },
+        err _ => false,
+    }
 
 #[test]
 def test_whnf_leaves_hcomp_over_an_undecided_face_stuck : Bool :=
