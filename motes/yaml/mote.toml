@@ -1,0 +1,31 @@
+# YAML reading and writing.
+#
+# A pure leaf like `motes/json`: `Yaml` is a value type with a parser and a
+# printer, and `src/serde_backend.mo` supplies the `serde` format instances
+# and the shared `derive_yaml_*` macros. No compiler input, so no
+# `nix/monad.nix` entry.
+#
+# Sub-table headers rather than inline tables, which the self-hosted reader
+# does not support -- an unparseable manifest makes `Mote.discover` return
+# none and SILENTLY disables the declared-dependency check.
+[mote]
+name = "yaml"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+# `serde`'s `Serializer`/`Deserializer` are the generic derive backend's own
+# interface; `src/serde_backend.mo` implements them for `Yaml`.
+[dependencies.serde]
+path = "../serde"
+
+# Affine-by-default migration exception (measured 2026-10-22). Delete this
+# table when the mote reaches zero violations; the default is `mode = "error"`.
+# See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"
