@@ -2,7 +2,7 @@ use std::list {List.length}
 use lib::types {
   Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
   Literal, LocalScope, MatchCase, NamePath, NameRef, Scope, Similar, Term,
-  cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cubical_arity, cubical_prim_eq, id_eq,
+  cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cub_it_is_one, cubical_arity, cubical_prim_eq, id_eq,
   show_identifier, sentinel, term_peel,
 }
 use lib::scope {
@@ -461,6 +461,27 @@ def whnf_face (c : Cubical) : Option Term :=
             },
     }
 
+/// The SATISFIED-face answer on its own, because it is the one branch
+/// whose guard is narrower than the decider's: `u i1 it_is_one`, and only
+/// when `φ` is the literal `i1`.
+///
+/// The narrowness is the rule, not an optimisation. `it_is_one` is a
+/// proof of `is_one i1`; feeding it to a system expecting `is_one φ` is
+/// justified only by `φ` BEING `i1`, and reduction has no conversion
+/// check that could supply the missing step. `face_decide` answers a
+/// FACT about `φ`, which is enough for the refuted half (`hcomp ≡ u0`
+/// asks nothing of the system) and not for this one. Nothing reachable
+/// is lost: `whnf_cubical_args` reduces `φ` before this runs, and
+/// `whnf_face`/`whnf_demorgan` fold every satisfiable non-literal shape
+/// (`face_eq0 i0`, a meet with an `i1` factor, a join with a satisfied
+/// disjunct) to a literal endpoint first -- the same reason the face
+/// pass leaves `ijoin`-of-opposite-faces stuck rather than reasoning
+/// about it.
+def whnf_hcomp_satisfied (a_face : Term) (a_sys : Term) : Option Term :=
+    if whnf_term_is_bare_prim a_face CubicalPrim.i1
+    then Option.some (Term.app (Term.app a_sys cub_i1) cub_it_is_one)
+    else Option.none
+
 /// The Kan rule for `hcomp A φ u u0`. Its input is the already-reduced
 /// `Cubical` -- `whnf_cubical` whnfs every argument before dispatching --
 /// which is what lets `face_decide` be consulted at all: that decision
@@ -468,23 +489,20 @@ def whnf_face (c : Cubical) : Option Term :=
 /// cofibration. Here the contract is met by construction rather than by
 /// a call, since the arguments arrived reduced.
 ///
-/// One case reduces, one deliberately does not.
+/// One case reduces, one reduces only at the literal endpoint.
 ///
 /// * `φ` REFUTED (`some false`): every disjunct has a definitely-false
 ///   literal or the contradiction pair, so `φ` is the empty subobject. A
 ///   system over nothing constrains nothing, and the composite of a box
 ///   with no sides is its base: `hcomp A i0 u u0 ≡ u0`.
-/// * `φ` SATISFIED (`some true`) stays STUCK, and that is the rule worth
-///   stating rather than the one worth wishing for. The boundary law is
-///   `hcomp A φ u u0 ≡ u i1` on `φ` -- CCHM's, the composite IS the
-///   system's top -- while `u0` is the system's BOTTOM (`u i0 = u0` on
-///   `φ`). So at `φ = i1` the answer is `u i1`, and answering `u0` there
-///   would be outright unsound. Computing `u i1` needs a witness of
-///   `is_one i1`, which this syntax has no canonical term for and the
-///   checker never fabricates: `is_one` stays rigid (Stage 4) and
-///   `hcomp` inherits its rigidity. A limit, recorded rather than
-///   papered over -- and the same reason the plan's sketch of this rule
-///   (`hcomp φ u u0 ≡ u0` on `φ` decided) is not what is implemented here.
+/// * `φ` the LITERAL `i1`: the boundary law applies and the composite is
+///   the system's top, `hcomp A i1 u u0 ≡ u i1 it_is_one` (`whnf_hcomp_satisfied`
+///   above, and `cub_it_is_one`). Note the asymmetry this states: `u0` is
+///   the system's BOTTOM (`u i0 = u0` on `φ`), so answering `u0` here
+///   would be outright unsound -- the `u i1` half is the whole point of
+///   the rule.
+/// * `φ` satisfied by `face_decide` but not literally `i1`: STUCK, for
+///   the reason `whnf_hcomp_satisfied` states.
 ///
 /// A malformed `hcomp` never reduces: the argument count is re-checked
 /// rather than trusted, the same discipline `whnf_face`'s arms use.
@@ -497,13 +515,14 @@ def whnf_hcomp (c : Cubical) : Option Term :=
                         match rest {
                             List.cons a_face rest2 =>
                                 match rest2 {
-                                    List.cons _a_sys rest3 =>
+                                    List.cons a_sys rest3 =>
                                         match rest3 {
                                             List.cons a_base rest4 =>
                                                 if List.is_empty rest4 then
                                                     match face_decide a_face {
                                                         Option.some b =>
-                                                            if b then Option.none
+                                                            if b then
+                                                                whnf_hcomp_satisfied a_face a_sys
                                                             else Option.some a_base,
                                                         Option.none => Option.none,
                                                     }
@@ -598,11 +617,21 @@ def whnf_face_contradicts (l : Term) (r : Term) : Option Term :=
 /// Normalize a cubical head: reduce each argument to WHNF, then take
 /// one De Morgan step if any applies, then one face-lattice step, then
 /// one transport step if the family is constant. No further pass over
-/// any step's result is needed -- it is assembled from pieces that are
-/// already in WHNF (whnf_transp answers the already-reduced element,
-/// which came out of `whnf_cubical_args` below), and a stuck head keeps
+/// any of THOSE steps' results is needed -- each is assembled from pieces
+/// that are already in WHNF (whnf_transp answers the already-reduced
+/// element, which came out of `whnf_cubical_args`), and a stuck head keeps
 /// its reduced arguments, so a caller comparing two stuck terms compares
 /// them as reduced as they can be.
+///
+/// `hcomp`'s satisfied-face answer is the ONE that is not already reduced:
+/// it is the system applied to `i1` and then to the witness, i.e. a beta
+/// redex, so it goes back through the reducer. Without that the head would
+/// be a `Term.lam` and `whnf`'s contract ("keep reducing at the head until
+/// the head is rigid") would be broken for every caller.
+/// `#[partial]`, exactly as `whnf_go` is and for the same reason: the
+/// `hcomp` step hands its answer back to the reducer, so the recursion is
+/// fuel-bounded rather than structural.
+#[partial]
 def whnf_cubical (fuel : I64) (scope : Scope) (locals : LocalScope) (c : Cubical) : Term :=
     match c {
         { prim := p, args := as } =>
@@ -617,7 +646,7 @@ def whnf_cubical (fuel : I64) (scope : Scope) (locals : LocalScope) (c : Cubical
                         Option.some t => t,
                         Option.none =>
                             match whnf_hcomp c_r {
-                                Option.some t => t,
+                                Option.some t => whnf_go (fuel - 1) scope locals t,
                                 Option.none =>
                                     match whnf_transp c_r {
                                         Option.some t => t,

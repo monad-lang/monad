@@ -546,8 +546,9 @@ pub class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type 
     def monad_lift (a : m I J A) : n I J A
 }
 
-// The cubical interval and its operations (univalence.md Stages 1-5),
-// as BODY-LESS marker defs inside a `with Cubical` block. The
+// The cubical interval and its operations (univalence.md Stages 1-5, plus
+// Stage 6b's `is_one i1` witness), as BODY-LESS marker defs inside a
+// `with Cubical` block. The
 // `#[cubical "..."]` MARKER, never the bare spelling, is what binds:
 // `build_scope_def` (lang/src/scope.mo) enters the def's prefixed name
 // into `ScopeData.cubical_prims`, and the checker rewrites a resolved
@@ -558,7 +559,7 @@ pub class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type 
 // univalence.
 //
 // Each is `pub` (univalence.md Stage 6 reconnaissance, 2026-10-26):
-// every existing reference to one of these twelve names is either
+// every existing reference to one of these thirteen names is either
 // inside `init` itself or a hand-built synthetic `Scope` in a `lang`
 // test/pin file, which bypasses privacy enforcement entirely -- so the
 // missing `pub` was latent, not load-bearing, until a real cross-mote
@@ -581,4 +582,11 @@ with Cubical {
 	#[cubical "face_eq1"] pub def face_eq1 (i : Cubical.I) : Cubical.I
 	#[cubical "is_one"] pub def is_one (i : Cubical.I) : Type
 	#[cubical "hcomp"] pub def hcomp (A : Type) (phi : Cubical.I) (u : Cubical.I -> Cubical.is_one phi -> A) (u0 : A) : A
+	// The canonical inhabitant of `is_one i1` (Stage 6b). Its signature is
+	// stated here for the bare/under-applied case like every other
+	// primitive's; the checker's own `cubical_result_type` row is what types
+	// it (`lang/typecheck/infer.mo`), and the pin
+	// `test_it_is_one_types_as_a_proof_of_is_one_i1`
+	// (`proofs/src/checker/cubical_props.mo`) asserts that row's answer.
+	#[cubical "it_is_one"] pub def it_is_one : Cubical.is_one Cubical.i1
 }

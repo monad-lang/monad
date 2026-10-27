@@ -28,8 +28,9 @@ use std::list {List.length}
 
 def synthetic_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "synthetic") List.empty)
 
-/// The twelve Stage 1+2+3+4+5 declarations, spelled the way the real ones
-/// are declared (the `with Cubical` block in `init/src/prelude.mo`), minus
+/// The twelve Stage 1+2+3+4+5 declarations plus Stage 6b's witness,
+/// spelled the way the real ones are declared (the `with Cubical` block
+/// in `init/src/prelude.mo`), minus
 /// the block wrapper and `Cubical.` prefixes: the binding pipeline under
 /// test is spelling-independent, and the block-form interaction has its
 /// own pin below. One literal per decl, concatenated: a single spanning
@@ -48,7 +49,8 @@ def cubical_source : String :=
     (String.concat "#[cubical \"face_eq0\"] def face_eq0 (i : I) : I\n"
     (String.concat "#[cubical \"face_eq1\"] def face_eq1 (i : I) : I\n"
     (String.concat "#[cubical \"is_one\"] def is_one (i : I) : Type\n"
-    "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"))))))))))
+    (String.concat "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"
+    "#[cubical \"it_is_one\"] def it_is_one : is_one i1\n")))))))))))
 
 /// A scope carrying whatever `source` declares. A snippet that fails to
 /// parse yields an empty scope, which makes the binding tests below
@@ -86,11 +88,11 @@ def binds_nothing (s : Scope) (nm : String) : Bool :=
 
 #[test]
 def test_cubical_decls_parse : Bool :=
-    // All twelve, not "at least one": a parser that stops after the
+    // All thirteen, not "at least one": a parser that stops after the
     // first body-less def (the reference host's does) still hands back
     // a successful non-empty parse.
     match parse_all_decls cubical_source {
-        success _ decls => I64.beq (List.length decls) 12,
+        success _ decls => I64.beq (List.length decls) 13,
         fail _ => false,
     }
 
@@ -109,6 +111,7 @@ def test_cubical_names_bind : Bool :=
         && binds s "face_eq1" CubicalPrim.face_eq1
         && binds s "is_one" CubicalPrim.is_one
         && binds s "hcomp" CubicalPrim.hcomp
+        && binds s "it_is_one" CubicalPrim.it_is_one
 
 #[test]
 def test_with_block_cubical_names_bind : Bool :=

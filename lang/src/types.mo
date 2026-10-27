@@ -717,17 +717,30 @@ pub type CubicalPrim {
     /// The BOUNDARY law is CCHM's: on `φ` the composite IS the system's
     /// top, `hcomp A φ u u0 ≡ u i1`. Note what that does NOT say: `u0`
     /// is the system's BOTTOM (`u i0 = u0` on `φ`), so `hcomp A i1 u u0`
-    /// is `u i1`, never `u0`. Only one of the two decided cases is
-    /// therefore reducible here. When `face_decide` refutes `φ` the
+    /// is `u i1`, never `u0`; that asymmetry is why the two decided
+    /// cases get different answers. When `face_decide` refutes `φ` the
     /// system constrains nothing and `whnf_hcomp` answers the base
-    /// (`hcomp A i0 u u0 ≡ u0`, the empty box's composition); when
-    /// `face_decide` satisfies `φ` the right answer is `u i1`, which
-    /// needs a witness of `is_one i1` that this syntax has no canonical
-    /// term for -- so it stays STUCK, deliberately, exactly as Stage 4
-    /// leaves `ijoin`-of-opposite-faces stuck. `whnf_hcomp`
-    /// (`lang/typecheck/whnf.mo`) is the reducer and states the
-    /// asymmetry at the rule.
+    /// (`hcomp A i0 u u0 ≡ u0`, the empty box's composition); when `φ`
+    /// is the LITERAL `i1` the answer is the system's top `u i1`
+    /// applied to `it_is_one` below. `whnf_hcomp`
+    /// (`lang/typecheck/whnf.mo`) is the reducer and states both.
     hcomp,
+    /// The canonical inhabitant of `is_one i1` (Stage 6b,
+    /// plans/type-system/univalence.md) -- Agda's `itIsOne`, and the
+    /// term Stage 4's `is_one` and Stage 5's `hcomp` both recorded as
+    /// missing. `is_one φ` is inhabited by construction only when `φ` IS
+    /// `i1`, which is why the one-argument-at-a-time reduction rules that
+    /// consume it (`whnf_hcomp`, and `Glue`'s in Stage 6b-ii) trigger on
+    /// the literal endpoint rather than on `face_decide`'s
+    /// `some true`: the decider answers a FACT about `φ`, this term is a
+    /// PROOF of `is_one i1`, and reduction has no conversion check that
+    /// could move one to the other.
+    ///
+    /// Zero arguments and not a former: its result type is the fixed
+    /// `is_one i1`, so it needs no rule of its own -- `cubical_result_type`
+    /// (`lang/typecheck/infer.mo`) states it and both typing paths a
+    /// zero-arity primitive can take already read that table.
+    it_is_one,
 }
 
 /// One cubical primitive applied to `args`, whose length is its arity.
@@ -2630,11 +2643,19 @@ pub def cub_face_eq1 (i : Term) : Term := cub CubicalPrim.face_eq1 [i]
 /// `is_one φ` -- the proposition that the cofibration `φ` is `i1`. A
 /// former of types (result `Sort 1`); its proofs are what a partial
 /// element (`is_one φ -> A`) consumes, and `hcomp` below is the one
-/// consumer of a whole system. Both `is_one` and the `hcomp` it feeds
-/// stay rigid -- nothing in the checker fabricates a proof of
-/// `is_one φ`, which is exactly why `hcomp`'s satisfied-face case has no
-/// reduction (see `CubicalPrim.hcomp`).
+/// consumer of a whole system. `is_one` itself stays rigid -- nothing
+/// in the checker fabricates a proof of `is_one φ` for a VARIABLE `φ`.
+/// The one proof it does have is `cub_it_is_one`, and it is a proof of
+/// `is_one i1` alone, which is what lets `hcomp`'s satisfied-face case
+/// reduce at the literal `i1` and nowhere else (see
+/// `CubicalPrim.hcomp`).
 pub def cub_is_one (i : Term) : Term := cub CubicalPrim.is_one [i]
+
+/// The canonical inhabitant of `is_one i1` (Stage 6b,
+/// plans/type-system/univalence.md) -- Agda's `itIsOne`. The only proof
+/// term of an `is_one` type the checker has, and the reason
+/// `whnf_hcomp` can compute `hcomp A i1 u u0` to `u i1 it_is_one`.
+pub def cub_it_is_one : Term := cub CubicalPrim.it_is_one List.empty
 
 /// `hcomp A φ u u0` -- Kan composition. `whnf_hcomp`
 /// (`lang/src/typecheck/whnf.mo`) answers `u0` when the cofibration is
@@ -2661,6 +2682,7 @@ pub def cubical_arity (prim : CubicalPrim) : I64 := match prim {
     CubicalPrim.face_eq1 => 1,
     CubicalPrim.is_one => 1,
     CubicalPrim.hcomp => 4,
+    CubicalPrim.it_is_one => 0,
 }
 
 /// Is this primitive one of the two interval ENDPOINTS? The reducer and the
@@ -2679,6 +2701,7 @@ pub def cubical_is_endpoint (prim : CubicalPrim) : Bool := match prim {
     CubicalPrim.face_eq1 => false,
     CubicalPrim.is_one => false,
     CubicalPrim.hcomp => false,
+    CubicalPrim.it_is_one => false,
 }
 
 /// A dense tag per primitive. Total over `CubicalPrim`, so a primitive added
@@ -2704,6 +2727,7 @@ pub def cubical_prim_tag (prim : CubicalPrim) : I64 := match prim {
     CubicalPrim.face_eq1 => 9,
     CubicalPrim.is_one => 10,
     CubicalPrim.hcomp => 11,
+    CubicalPrim.it_is_one => 12,
 }
 
 pub def cubical_prim_eq (a : CubicalPrim) (b : CubicalPrim) : Bool :=
@@ -2724,6 +2748,7 @@ pub def cubical_prim_name (prim : CubicalPrim) : String := match prim {
     CubicalPrim.face_eq1 => "face_eq1",
     CubicalPrim.is_one => "is_one",
     CubicalPrim.hcomp => "hcomp",
+    CubicalPrim.it_is_one => "it_is_one",
 }
 
 /// Every primitive, in `cubical_prim_tag` order. Exists as one list so the
@@ -2734,7 +2759,8 @@ pub def cubical_prims_all : List CubicalPrim :=
         (List.cons CubicalPrim.ineg (List.cons CubicalPrim.imeet (List.cons CubicalPrim.ijoin
         (List.cons CubicalPrim.pathp (List.cons CubicalPrim.transp (List.cons CubicalPrim.face_eq0
         (List.cons CubicalPrim.face_eq1 (List.cons CubicalPrim.is_one
-        (List.cons CubicalPrim.hcomp List.empty)))))))))))
+        (List.cons CubicalPrim.hcomp (List.cons CubicalPrim.it_is_one
+        List.empty))))))))))))
 
 /// The string a `#[cubical "..."]` MARKER names a primitive by -- the
 /// marker key, which is NOT the surface name `cubical_prim_name` returns:
@@ -2757,6 +2783,7 @@ pub def cubical_marker_key (prim : CubicalPrim) : String := match prim {
     CubicalPrim.face_eq1 => "face_eq1",
     CubicalPrim.is_one => "is_one",
     CubicalPrim.hcomp => "hcomp",
+    CubicalPrim.it_is_one => "it_is_one",
 }
 
 /// Decode a `#[cubical "..."]` marker's string back to the primitive it

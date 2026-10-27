@@ -6619,6 +6619,12 @@ def type_check_cubical (c : Cubical) (expected_type : Term) (scope : Scope)
                 check_cubical_args_then c expected_type scope local_types locals,
             CubicalPrim.hcomp =>
                 type_check_hcomp c.args expected_type scope local_types locals,
+            // Stage 6b's witness is the second primitive typed entirely by
+            // its `cubical_result_type` row: it takes no arguments and its
+            // type does not depend on any (`is_one i1`), so the generic tail
+            // is its whole rule.
+            CubicalPrim.it_is_one =>
+                check_cubical_args_then c expected_type scope local_types locals,
         }
 
 /// The generic tail of `type_check_cubical` shared by every Stage 1
@@ -6969,6 +6975,7 @@ def cubical_result_type (prim : CubicalPrim) : Term := match prim {
     CubicalPrim.face_eq1 => cub_interval,
     CubicalPrim.is_one => sort_n 1,
     CubicalPrim.hcomp => Term.hole,
+    CubicalPrim.it_is_one => cub_is_one cub_i1,
 }
 
 /// Every Stage 1 argument is a dimension, i.e. an `I`. When `PathP` lands
