@@ -12,3 +12,6 @@
 // (`with Cubical { ... }` in init/src/prelude.mo); nothing under proofs/
 // declares them any more. The mathematical proof modules (`paths`,
 // `nat`, `list`, `vec` follow) get re-exported here as they land.
+
+pub use lib::equiv {*}
+pub use lib::paths {*}
