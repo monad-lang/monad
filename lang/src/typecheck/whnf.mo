@@ -1,13 +1,14 @@
 use std::list {List.length}
 use lib::types {
-  Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor, Literal,
-  LocalScope, MatchCase, NamePath, NameRef, Scope, Similar, Term,
-  cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cubical_prim_eq, id_eq,
+  Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
+  Literal, LocalScope, MatchCase, NamePath, NameRef, Scope, Similar, Term,
+  cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cubical_arity, cubical_prim_eq, id_eq,
   show_identifier, sentinel, term_peel,
 }
 use lib::scope {
-  flatten_call_spine, last_dot_index, scope_find_def_body, scope_find_inductive,
-  scope_find_inductive_by_constructor, scope_find_local, scope_resolve_name,
+  CallSpine, flatten_call_spine, last_dot_index, scope_find_cubical_prim, scope_find_def_body,
+  scope_find_inductive, scope_find_inductive_by_constructor, scope_find_local,
+  scope_resolve_name,
 }
 use lib::typecheck::faces {face_decide}
 use lib::typecheck::subst {beta_reduce, term_shift, term_subst}
@@ -110,7 +111,28 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                     // Stuck head. Keep the reduced head anyway -- it is
                     // no less reduced than what came in, and a caller
                     // comparing two stuck applications compares heads.
-                    _ => Term.app f_r a,
+                    //
+                    // ...but a SATURATED cubical-primitive call is not
+                    // stuck: `type_check_app` rewrites `ineg i0` and
+                    // `PathP L a b` into a `Term.cubical` at check time,
+                    // and reduction has to reach the same canonical form
+                    // or a type SPELLED as a def never compares equal to
+                    // it. Measured: `Path A b a` delta-unfolds to an
+                    // `PathP L b a` APPLICATION SPINE, so it never matched
+                    // the `PathP` term the path rules echo back, and every
+                    // `proofs/src/paths.mo` combinator was rejected ("type
+                    // mismatch: expected (Path A b a), found (PathP (fn _
+                    // => A) b a)").
+                    _ =>
+                        // A canonical `Term.cubical` is a REDUCIBLE head
+                        // (the De Morgan arm below), so keep reducing it
+                        // rather than returning it: `ineg i0` reached as a
+                        // source spine should still come out `i1`.
+                        let canonical : Term := as_cubical_type (Term.app f_r a) scope locals in
+                        match canonical {
+                            Term.cubical _c => whnf_go (fuel - 1) scope locals canonical,
+                            _ => canonical,
+                        },
                 },
             Term.var idx dbg =>
                 if I64.beq idx sentinel then
@@ -917,6 +939,59 @@ def whnf_bool_con (cond : Term) (scope : Scope) : Option Bool :=
                     },
             },
         Option.none => Option.none,
+    }
+
+/// Classify `t` as the `Term.cubical` it denotes when it is a SATURATED
+/// application of a bound cubical primitive -- the pure half of
+/// `type_check_app`'s own `try_type_check_cubical_call` preamble, for a
+/// term that arrives as a TYPE rather than as a call being checked.
+///
+/// It exists because `path_parts_of` (`lang/typecheck/cubical.mo`) is
+/// syntactic: it recognizes `Term.cubical`. A path type SPELLED as a
+/// library def -- `Path A a b`, whose body is `Cubical.PathP (fn _ => A) a
+/// b` -- unfolds under delta into `PathP (fn _ => A) a b`, an APPLICATION
+/// SPINE of the `pathp` primitive's NAME, so before this every path rule
+/// (the `fn i =>` dispatch, the endpoint rewrite in
+/// `normalize_path_boundary`, and `unify`'s comparison of a `Path`-spelled
+/// type against the `PathP` the rules echo back) missed it.
+///
+/// Same guards, and the same reasons, as the checked-call probe: a
+/// sentinel free head, no LOCAL shadowing the name, a registered
+/// primitive, and an arity EQUALITY (a partially applied `imeet i` is not
+/// the cubical term).
+pub def as_cubical_type (t : Term) (scope : Scope) (locals : LocalScope) : Term :=
+    match flatten_call_spine t {
+        CallSpine.mk head args =>
+            match head {
+                Term.var idx dbg =>
+                    if I64.beq idx sentinel then
+                        match dbg {
+                            DebugName.named id =>
+                                match scope_find_local id locals {
+                                    Option.some _ => t,
+                                    Option.none =>
+                                        match scope_resolve_name (NameRef.nid id) scope locals {
+                                            err _ => t,
+                                            ok sd =>
+                                                match sd {
+                                                    mk resolved _ _ _ _ =>
+                                                        match scope_find_cubical_prim resolved scope {
+                                                            Option.none => t,
+                                                            Option.some prim =>
+                                                                if I64.beq (List.length args) (cubical_arity prim)
+                                                                then
+                                                                    let c : Cubical := { prim := prim, args := args } in
+                                                                    Term.cubical c
+                                                                else t,
+                                                        },
+                                                },
+                                        },
+                                },
+                            DebugName.unnamed => t,
+                        }
+                    else t,
+                _ => t,
+            },
     }
 
 /// Delta: the body of the global `def` this free variable names, if it

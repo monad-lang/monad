@@ -3827,7 +3827,26 @@ def type_check_lam (bnd : Binder) (t : Term) (body : Term) (expected_type : Term
         // inferring arm below because that arm discards the expected
         // type, and the boundary is the whole content of this rule.
         Term.cubical _c => check_path_lam bnd t body expected_type scope local_types locals,
-        _ => type_check_lam_inferring bnd t body scope local_types locals,
+        // An expected type SPELLED as a def reference -- `Path A a b`,
+        // whose own body is a `PathP` -- never reaches the arm above,
+        // because that dispatch is syntactic. Reduce the head and use the
+        // path rule on the reduced form when it lands on a cubical type;
+        // every other result is handled exactly as before, so this only
+        // ever accepts more. `whnf` is what makes the reduced form a
+        // `Term.cubical` at all (`as_cubical_type`, `lang/typecheck/
+        // whnf.mo`): delta turns `Path A a b` into an application SPINE of
+        // the `pathp` primitive's name, which no path rule recognizes.
+        // Without this a path abstraction checked against the library
+        // `Path` alias infers a Pi instead and is rejected (measured:
+        // `refl : Path A a a := fn (i : Cubical.I) => a` failed with
+        // "expected (Path A a a), found (I -> A)" -- see univalence.md's
+        // Stage 2 note).
+        _ =>
+            let reduced : Term := whnf scope locals expected_type in
+            match reduced {
+                Term.cubical _c => check_path_lam bnd t body reduced scope local_types locals,
+                _ => type_check_lam_inferring bnd t body scope local_types locals,
+            },
     }
 
 /// The explicit-arrow arm of `type_check_lam`. Split out so the merged
@@ -4141,7 +4160,11 @@ def rewrite_stuck_path_app (f : Term) (d : Term) (scope : Scope) (local_types : 
                 match nth_type idx local_types {
                     Option.none => Option.none,
                     Option.some f_typ =>
-                        match path_parts_of f_typ {
+                        // Reduced first: a local's declared type can be a
+                        // `Path` SPELLED as the library def, and only
+                        // `whnf` turns that into the `Term.cubical`
+                        // `path_parts_of` recognizes.
+                        match path_parts_of (whnf scope locals f_typ) {
                             Option.none => Option.none,
                             Option.some parts =>
                                 match endpoint_of (whnf scope locals d) {
