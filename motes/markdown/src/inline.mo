@@ -13,6 +13,7 @@ use lib::scan {
 use lib::entities {Markdown.entity_lookup}
 use lib::unicode {Markdown.is_unicode_punctuation, Markdown.is_unicode_whitespace}
 use lib::link_syntax {
+    Markdown.is_ascii_punct,
     Markdown.LinkTail, Markdown.normalize_label, Markdown.parse_link_tail,
     Markdown.parse_ref_label,
 }
@@ -86,16 +87,6 @@ def Markdown.push_node (n : Markdown.Inline) (b : Markdown.InlineBuild) : Markdo
           len := I64.add flushed.len 1i64, delims := flushed.delims, prev := flushed.prev } in next
 
 // ─── Escapes ───
-
-/// ASCII punctuation, the only characters a backslash escapes.
-def Markdown.is_ascii_punct (b : U8) : Bool :=
-    Bool.or
-        (Bool.and (U8.lt 32u8 b) (U8.lt b 48u8))
-        (Bool.or
-            (Bool.and (U8.lt 57u8 b) (U8.lt b 65u8))
-            (Bool.or
-                (Bool.and (U8.lt 90u8 b) (U8.lt b 97u8))
-                (Bool.and (U8.lt 122u8 b) (U8.lt b 127u8))))
 
 // ─── Character references ───
 
@@ -450,24 +441,45 @@ pub def Markdown.inline_parse_with (refs : List Markdown.LinkRef) (src : String)
 pub def Markdown.inline_parse (src : String) : List Markdown.Inline :=
     Markdown.inline_parse_with List.empty src
 
-/// Unescape a one-line string the way a link destination or a code fence's
-/// info string is unescaped: backslash escapes and character references, and
-/// nothing else.
-#[partial]
-def Markdown.flatten_text (nodes : List Markdown.Inline) (acc : List String) : String :=
-    match nodes {
-        List.empty => String.concat_list (List.reverse acc),
-        List.cons n rest =>
-            match n {
-                inline_text t => Markdown.flatten_text rest (List.cons t acc),
-                inline_soft_break => Markdown.flatten_text rest (List.cons "\n" acc),
-                _ => Markdown.flatten_text rest acc
-            }
-    }
-
+/// Resolve backslash escapes and character references, and nothing else: the
+/// rule for a link destination, a title, or a code fence's info string.
+/// Reference LABELS are deliberately not unescaped (`[foo\!]` does not match
+/// `[foo!]`), so they never pass through here.
 #[partial]
 pub def Markdown.unescape (s : String) : String :=
-    Markdown.flatten_text (Markdown.inline_parse s) List.empty
+    Markdown.unescape_go s List.empty
+
+#[partial]
+def Markdown.unescape_go (s : String) (acc : List String) : String :=
+    if is_empty s
+    then String.concat_list (List.reverse acc)
+    else
+        match String.get s 0 {
+            Option.none => String.concat_list (List.reverse acc),
+            Option.some b =>
+                if U8.beq b 92u8
+                then
+                    let after : String := String.drop 1i64 s in
+                    match String.get after 0 {
+                        Option.some p =>
+                            if Markdown.is_ascii_punct p
+                            then Markdown.unescape_go (String.drop 1i64 after) (List.cons (String.slice after 0 1i64) acc)
+                            else Markdown.unescape_go after (List.cons "\\" acc),
+                        Option.none => String.concat_list (List.reverse (List.cons "\\" acc))
+                    }
+                else if U8.beq b 38u8
+                then
+                    match Markdown.try_entity s {
+                        Option.some found =>
+                            match found {
+                                Pair.pair text rest => Markdown.unescape_go rest (List.cons text acc)
+                            },
+                        Option.none => Markdown.unescape_go (String.drop 1i64 s) (List.cons "&" acc)
+                    }
+                else
+                    let w : I64 := Markdown.char_width s in
+                    Markdown.unescape_go (String.drop w s) (List.cons (String.slice s 0 w) acc)
+        }
 
 // ─── Links and images ───
 
@@ -617,14 +629,14 @@ def Markdown.mk_resolved (dest : String) (title : Option String) (rest : String)
 #[partial]
 pub def Markdown.resolve_link (label : String) (after : String) (refs : List Markdown.LinkRef)
     : Option Markdown.Resolved :=
-    let normal : String := Markdown.normalize_label (Markdown.unescape label) in
+    let normal : String := Markdown.normalize_label label in
     match Markdown.Cursor.peek (Markdown.Cursor.start after) {
         Option.some b =>
             if U8.beq b 40u8
             then
                 match Markdown.parse_link_tail (Markdown.Cursor.start after) {
                     Option.some tail => Markdown.resolved_tail tail,
-                    Option.none => Option.none
+                    Option.none => Markdown.resolve_by_label normal after refs
                 }
             else if U8.beq b 91u8
             then
@@ -641,7 +653,7 @@ pub def Markdown.resolve_link (label : String) (after : String) (refs : List Mar
                                         match labelled {
                                             Pair.pair ref_label after_ref =>
                                                 Markdown.resolve_by_label
-                                                    (Markdown.normalize_label (Markdown.unescape ref_label))
+                                                    (Markdown.normalize_label ref_label)
                                                     after_ref.text refs
                                         },
                                     Option.none => Option.none

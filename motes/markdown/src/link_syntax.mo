@@ -9,6 +9,16 @@ use parsec::core {is_empty}
 use lib::scan {Markdown.Cursor, Markdown.char_width}
 use lib::unicode {Markdown.case_fold}
 
+/// ASCII punctuation, the set a backslash escapes.
+pub def Markdown.is_ascii_punct (b : U8) : Bool :=
+    Bool.or
+        (Bool.and (U8.lt 32u8 b) (U8.lt b 48u8))
+        (Bool.or
+            (Bool.and (U8.lt 57u8 b) (U8.lt b 65u8))
+            (Bool.or
+                (Bool.and (U8.lt 90u8 b) (U8.lt b 97u8))
+                (Bool.and (U8.lt 122u8 b) (U8.lt b 127u8))))
+
 // ─── Labels ───
 
 /// A reference label at the cursor's `[`: the label's text and the cursor
@@ -164,6 +174,18 @@ def Markdown.parse_bare_destination (c : Markdown.Cursor) (acc : List String) (d
             else if U8.beq b 32u8
             then (if List.is_empty acc then Option.none
                   else Option.some (Pair.pair (String.concat_list (List.reverse acc)) c))
+            else if U8.beq b 92u8
+            then
+                let after : Markdown.Cursor := Markdown.Cursor.step c in
+                match Markdown.Cursor.peek after {
+                    Option.some p =>
+                        if Markdown.is_ascii_punct p
+                        then
+                            Markdown.parse_bare_destination (Markdown.Cursor.step after)
+                                (List.cons (String.slice after.text 0 1i64) (List.cons "\\" acc)) depth
+                        else Markdown.parse_bare_destination after (List.cons "\\" acc) depth,
+                    Option.none => Option.none
+                }
             else if Bool.and (U8.beq b 40u8) (Bool.not (List.is_empty acc))
             then Markdown.parse_bare_destination (Markdown.Cursor.step c) (List.cons "(" acc) (I64.add depth 1i64)
             else if U8.beq b 41u8
@@ -235,7 +257,31 @@ pub def Markdown.parse_link_tail (c : Markdown.Cursor) : Option Markdown.LinkTai
         Option.some b =>
             if U8.beq b 40u8
             then
-                match Markdown.parse_destination (Markdown.Cursor.step c) {
+                match Markdown.empty_tail (Markdown.Cursor.step c) {
+                    Option.some tail => Option.some tail,
+                    Option.none => Markdown.parse_link_tail_dest (Markdown.Cursor.step c)
+                }
+            else Option.none,
+        Option.none => Option.none
+    }
+
+/// `()` -- an empty destination with no title.
+pub def Markdown.empty_tail (c : Markdown.Cursor) : Option Markdown.LinkTail :=
+    let skipped : Markdown.Cursor := Markdown.skip_spnl c in
+    match Markdown.Cursor.peek skipped {
+        Option.some b =>
+            if U8.beq b 41u8
+            then Option.some (Markdown.mk_tail "" Option.none (Markdown.Cursor.step skipped))
+            else Option.none,
+        Option.none => Option.none
+    }
+
+pub def Markdown.parse_link_tail_dest (c : Markdown.Cursor) : Option Markdown.LinkTail :=
+    match Markdown.Cursor.peek c {
+        Option.some b =>
+            if Bool.or (U8.beq b 40u8) true
+            then
+                match Markdown.parse_destination c {
                     Option.none => Option.none,
                     Option.some d =>
                         match d {
