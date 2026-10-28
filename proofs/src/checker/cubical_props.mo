@@ -27,11 +27,13 @@
 use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::cubical {peels_to_bare_interval}
-use lang::typecheck::infer {empty_local_types, empty_locals, type_check}
+use lang::typecheck::infer {empty_local_types, empty_locals, equiv_type, type_check}
 use lang::typecheck::whnf {whnf}
 use lang::types {
-  CubicalPrim, DebugName, ModulePath, Scope, ScopeData, SortLevel, Similar, Term, binder_named,
-  cub, cub_face_eq0, cub_face_eq1, cub_hcomp, cub_i0, cub_i1, cub_imeet,
+  CubicalPrim, DebugName, ModulePath, Scope, ScopeData, SortLevel, Similar, Term,
+  binder_anon, binder_named,
+  cub, cub_face_eq0, cub_face_eq1, cub_glue, cub_glue_elim, cub_glue_intro, cub_hcomp,
+  cub_i0, cub_i1, cub_imeet,
   cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_it_is_one, cub_pathp,
   cub_transp, cubical_prim_eq, id, sentinel, sort_n,
 }
@@ -58,12 +60,35 @@ def cubical_decls_source : String :=
     (String.concat "#[cubical \"hcomp\"] def hcomp (A : Type) (phi : I) (u : I -> is_one phi -> A) (u0 : A) : A\n"
     "#[cubical \"it_is_one\"] def it_is_one : is_one i1\n")))))))))))
 
+/// `Sigma` and the library's own `Path`/`isContr`/`fiber`/`isEquiv`/
+/// `Equiv`, spelled as `init/src/prelude.mo` and (`Sigma`) as
+/// `proofs/src/equiv.mo` spell them.
+///
+/// The `Glue` rule builds `w`'s type as the `Sigma`/`Pi`/`PathP` UNFOLDING
+/// of `Equiv` (it cannot name `Equiv` -- `proofs` is above the checker), so
+/// a scope with no `Sigma` cannot type a `Glue` at all, and the drift pin
+/// below needs `Equiv` itself to compare against. Kept as its own string
+/// rather than folded into the cubical list above, which is already one
+/// parenthesised `String.concat` chain deep enough.
+def library_decls_source : String :=
+    String.concat "type Sigma (A : Type) (B : A -> Type) { dpair (fst : A) (snd : B fst) }\n"
+    (String.concat "def Path (A : Type) (a : A) (b : A) : Type := PathP (fn _ => A) a b\n"
+    (String.concat "def isContr (A : Type) : Type := Sigma A (fn center => ((x : A) -> Path A x center))\n"
+    (String.concat "def fiber (A : Type) (B : Type) (f : A -> B) (b : B) : Type := Sigma A (fn a => Path B (f a) b)\n"
+    (String.concat "def isEquiv (A : Type) (B : Type) (f : A -> B) : Type := (b : B) -> isContr (fiber A B f b)\n"
+    "def Equiv (A : Type) (B : Type) : Type := Sigma (A -> B) (fn f => isEquiv A B f)\n"))))
+
+/// The whole synthetic prelude: the cubical block plus the library defs
+/// the `Glue` rule's expansion needs.
+def checker_decls_source : String :=
+    String.concat cubical_decls_source library_decls_source
+
 /// The scope the checker sees when the prelude's cubical block is loaded.
 /// A parse failure yields an empty scope, which makes every pin below
 /// fail rather than silently pass against a scope with nothing bound.
 def cubical_scope : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls cubical_decls_source {
+        match try_parse_decls checker_decls_source {
             Option.some decl_list => build_scope_from_decls checker_synthetic_path decl_list,
             Option.none => build_scope_from_decls checker_synthetic_path List.empty,
         } in
@@ -1324,3 +1349,192 @@ def test_whnf_leaves_an_over_applied_hcomp_stuck : Bool :=
     // spine would have reduced to `i0` on its refuted face.
     stays_cubical_prim
         (whnf cubical_scope empty_locals over_applied_hcomp) CubicalPrim.hcomp
+// ─── Stage 6b-ii: Glue ───────────────────────────────────────────────
+
+/// `T := fn (h : is_one i1) => I` -- a partial type whose value at ANY
+/// proof is the interval itself. A reduction that applies `T` to the
+/// witness is therefore observable as the bare `I`, and the term is a
+/// legal `Glue` third argument (`T`'s codomain is a sort).
+def partial_const : Term :=
+    Term.lam binder_anon (cub_is_one cub_i1) cub_interval
+
+/// The same shape used as a `Glue` SYSTEM: `t : (u : is_one i1) -> T u`
+/// with value `i0` everywhere, so a rule that answers `a` and a rule that
+/// answers `t it_is_one` produce DIFFERENT terms.
+def system_const : Term :=
+    Term.lam binder_anon (cub_is_one cub_i1) cub_i0
+
+#[test]
+def test_whnf_reduces_glue_at_the_literal_endpoint : Bool :=
+    // `Glue A i1 T w ≡ T it_is_one` (Stage 6b-ii). Mutation: drop
+    // `whnf_glue` and the term stays a `glue` node, which is not `I`.
+    arg_is_bare_prim
+        (whnf cubical_scope empty_locals
+            (cub_glue cub_interval cub_i1 partial_const (free_var "w")))
+        CubicalPrim.interval
+
+#[test]
+def test_whnf_leaves_glue_over_an_undecided_face_stuck : Bool :=
+    // The literal-`i1` trigger, from the other side: a bare dimension is
+    // no cofibration, so no witness can be fed to `T` and the form stays
+    // stuck. The dual of the pin above.
+    stays_cubical_prim
+        (whnf cubical_scope empty_locals
+            (cub_glue cub_interval dim_u partial_const (free_var "w")))
+        CubicalPrim.glue
+
+#[test]
+def test_whnf_reduces_glue_intro_at_the_literal_endpoint : Bool :=
+    // `glue A i1 T w t a ≡ t it_is_one`, so the system's top `i0` and not
+    // the base `i1`. Mutation: answer the base (the `hcomp` refuted-face
+    // habit) and this pin goes red.
+    arg_is_bare_prim
+        (whnf cubical_scope empty_locals
+            (cub_glue_intro cub_interval cub_i1 partial_const (free_var "w")
+                system_const cub_i1))
+        CubicalPrim.i0
+
+#[test]
+def test_whnf_leaves_glue_intro_over_an_undecided_face_stuck : Bool :=
+    // The introduction carries φ precisely so this case can stay stuck: a
+    // two-argument `glue` would have to reduce unconditionally, which is
+    // subject reduction-unsound off the endpoint.
+    stays_cubical_prim
+        (whnf cubical_scope empty_locals
+            (cub_glue_intro cub_interval dim_u partial_const (free_var "w")
+                system_const cub_i1))
+        CubicalPrim.glue_intro
+
+#[test]
+def test_whnf_unglue_fires_iota_on_an_introduction : Bool :=
+    // `unglue (glue ... t a) ≡ a`, and it fires on the UNREDUCED
+    // argument: at the literal `i1` the introduction itself reduces to
+    // `t it_is_one` and leaves no `glue` node to fire on. Measured: swap
+    // the order (reduce the argument first, as every other rule does) and
+    // this pin sees a stuck `unglue` instead of the base `i1`.
+    arg_is_bare_prim
+        (whnf cubical_scope empty_locals
+            (cub_glue_elim (cub_glue_intro cub_interval cub_i1 partial_const
+                Term.hole system_const cub_i1)))
+        CubicalPrim.i1
+
+#[test]
+def test_whnf_leaves_a_neutral_unglue_stuck : Bool :=
+    // CCHM's other half, `unglue g ≡ Sigma.fst (w it_is_one) g`, needs the
+    // introduction's `w t = a` condition, which nothing enforces. Only the
+    // iota half is kept, so a neutral `unglue` stays stuck rather than
+    // computing something the checker never justified.
+    stays_cubical_prim
+        (whnf cubical_scope empty_locals (cub_glue_elim (free_var "g")))
+        CubicalPrim.glue_elim
+
+/// The SHAPE control: `w`'s type has `Equiv`'s own outer shape -- a
+/// `Sigma` applied to the map `X -> Y` and to a family over it. It is not
+/// the drift control the plan asked for, and the reason is the point of
+/// the note below.
+///
+/// **What this pin is NOT, measured 2026-10-28.** The plan asked for a pin
+/// that compares the kernel's unfolding against `Equiv` ITSELF, and that
+/// comparison is not expressible in this checker today, for two
+/// independent reasons:
+///
+///   1. `unify` has NO `Term.lam` arm at all (the same gap
+///      `proofs/src/paths.mo` records for `funext`), and both types are
+///      `Sigma`-of-lambda, so a direct `unify` fails on the first lambda
+///      body.
+///   2. `whnf`'s delta/beta does not substitute a def parameter that
+///      occurs UNDER A BINDER: `Equiv I I` unfolds to
+///      `Sigma (I -> B) (fn f => isEquiv I I f)` -- measured, `B` still
+///      there -- so the library side cannot even be obtained to compare
+///      against.
+///
+/// Opening the lambdas by hand (a `strip_lams` helper, built and measured)
+/// works around (1) and then fails on (2). So this pins the SHAPE instead:
+/// it catches a botched edit of `equiv_type` or its helpers, which is the
+/// failure this file can control. Library drift is recorded as open in
+/// `univalence.md` Stage 6b-ii rather than silently assumed away.
+#[test]
+def test_glue_w_type_has_the_shape_of_equiv : Bool :=
+    // The spine is spelled out (`Sigma` applied twice) rather than
+    // flattened: `flatten_call_spine` is not exported from `lang.scope`,
+    // and the depth here is fixed by `equiv_type`'s own definition anyway.
+    // The two arguments DIFFER on purpose: with `X` and `Y` both the
+    // interval, a swapped map (`Y -> X`) would read the same and the pin
+    // could not tell them apart.
+    match equiv_type cub_interval (sort_n 1) {
+        Term.app outer a_family =>
+            match outer {
+                Term.app head a_map =>
+                    Similar.similar head (free_var "Sigma")
+                        && Similar.similar a_map
+                            (Term.pi binder_anon cub_interval (sort_n 1))
+                        && match a_family {
+                            Term.lam _b _ty _body => true,
+                            _ => false,
+                        },
+                _ => false,
+            },
+        _ => false,
+    }
+
+#[test]
+def test_glue_forms_a_type_at_the_partial_level : Bool :=
+    // Formation: the result is the sort `T`'s codomain lands in, read off
+    // the INFERRED `T` the same way `PathP` reads its line's level.
+    // `w` is `Term.hole`: an unresolved free variable would be rejected by
+    // the checker's own free-var arm, and none of these pins is about
+    // `w`'s contents -- the shape pin above is.
+    checks_as_prim_with4 cubical_scope
+        (cub_glue cub_interval cub_i1 partial_const Term.hole)
+        CubicalPrim.glue (sort_n 1)
+        (fn _a => fn _b => fn _c => fn _d => true)
+        (fn ty => Similar.similar ty (sort_n 1))
+
+#[test]
+def test_glue_rejects_a_first_argument_that_is_not_a_type : Bool :=
+    // `A` is a TYPE. A lambda is not one: its type is a `pi`, which
+    // `sort_level_of` answers none over.
+    match type_check (cub_glue partial_const cub_i1 partial_const Term.hole)
+        Term.hole cubical_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_glue_rejects_a_partial_type_that_is_not_a_function : Bool :=
+    // `T : is_one φ -> Sort l`. `I` alone is a type but not a partial
+    // one, so there is no pi to peel.
+    match type_check (cub_glue cub_interval cub_i1 cub_interval Term.hole)
+        Term.hole cubical_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_unglue_of_an_introduction_types_at_the_glue_base : Bool :=
+    // Elimination: the result is the `A` of the `Glue` the argument's type
+    // is, and the checked term is the `unglue` spine.
+    //
+    // The expectation is `A` itself -- `unglue g : A` -- not the `Glue`
+    // the argument's type is. `w` is a hole because none of this pin is
+    // about its contents.
+    match type_check
+        (cub_glue_elim (cub_glue_intro cub_interval cub_i1 partial_const
+            Term.hole system_const cub_i1))
+        cub_interval cubical_scope empty_local_types empty_locals {
+        ok tt =>
+            match tt {
+                { term := _tm, typ := ty } => Similar.similar ty cub_interval,
+            },
+        err _ => false,
+    }
+
+#[test]
+def test_unglue_rejects_an_argument_whose_type_is_not_glue : Bool :=
+    // The result type is read OFF the argument's type, so a non-`Glue`
+    // argument is rejected rather than left with a stuck type.
+    match type_check (cub_glue_elim cub_i0) Term.hole cubical_scope
+        empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
