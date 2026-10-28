@@ -98,7 +98,7 @@ def Markdown.line_length_go (s : String) (n : I64) : I64 :=
     else
         match String.get s 0 {
             Option.some b =>
-                if U8.beq b 10u8
+                if Bool.or (U8.beq b 10u8) (U8.beq b 13u8)
                 then n
                 else
                     let w : I64 := Markdown.char_width s in
@@ -109,30 +109,25 @@ def Markdown.line_length_go (s : String) (n : I64) : I64 :=
 pub def Markdown.line_length (s : String) : I64 :=
     Markdown.line_length_go s 0i64
 
-/// Drop one trailing `\r`, when the line had a CRLF ending.
-def Markdown.strip_cr (line : String) (len : I64) : String :=
-    if I64.lt 0i64 len
-    then
-        match String.get line (I64.sub len 1i64) {
-            Option.some b => if U8.beq b 13u8 then String.slice line 0 (I64.sub len 1i64) else line,
-            Option.none => line
-        }
-    else line
-
 #[partial]
 def Markdown.split_lines_go (s : String) (acc : List String) : List String :=
     if is_empty s
     then List.reverse acc
     else
         let len : I64 := Markdown.line_length s in
-        let line : String := Markdown.strip_cr (String.slice s 0 len) len in
+        let line : String := String.slice s 0 len in
         let after : String := String.drop len s in
-        let rest : String := if is_empty after then "" else String.drop 1i64 after in
+        let rest : String :=
+            if is_empty after
+            then ""
+            else if String.starts_with "\r\n" after
+            then String.drop 2i64 after
+            else String.drop 1i64 after in
         Markdown.split_lines_go rest (List.cons line acc)
 
-/// Split a source string into lines: one leading BOM is dropped, CRLF is
-/// accepted, and a final newline does not produce a trailing empty line.
-/// Empty input has no lines.
+/// Split a source string into lines: one leading BOM is dropped, `\n`, `\r`
+/// and `\r\n` all end a line, and a final line ending does not produce a
+/// trailing empty line. Empty input has no lines.
 pub def Markdown.split_lines (src : String) : List String :=
     let s : String := if String.starts_with "\u{feff}" src then String.drop 3i64 src else src in
     Markdown.split_lines_go s List.empty

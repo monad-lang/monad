@@ -326,21 +326,7 @@ pub def Markdown.phase3_sections : List String :=
 pub def Markdown.report_ok (r : Markdown.SpecReport) : Bool :=
     Bool.and (I64.beq r.failed 0i64) (I64.beq r.passed r.total)
 
-pub def Markdown.report_total (r : Markdown.SpecReport) : I64 := r.total
-
-pub def Markdown.report_passed (r : Markdown.SpecReport) : I64 := r.passed
-
 pub def Markdown.report_failed (r : Markdown.SpecReport) : I64 := r.failed
-
-pub def Markdown.section_counts (r : Markdown.SpecReport) : List (Pair String (Pair I64 I64)) := r.sections
-
-pub def Markdown.failure_count (r : Markdown.SpecReport) : I64 := List.length r.failures
-
-pub def Markdown.first_failure (r : Markdown.SpecReport) : Option Markdown.SpecFailure :=
-    match r.failures {
-        List.empty => Option.none,
-        List.cons f _ => Option.some f
-    }
 
 // ─── Printing ───
 

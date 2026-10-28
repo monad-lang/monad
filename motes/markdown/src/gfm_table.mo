@@ -87,7 +87,6 @@ def Markdown.finish_cell (current : List String) (cells : List String) : List St
 /// Walk the line, splitting on unescaped pipes outside code spans. The
 /// accumulator is reversed.
 #[partial]
-#[partial]
 def Markdown.cells_go (s : String) (current : List String) (cells : List String) (code : Option I64)
     : List String :=
     if is_empty s
@@ -109,8 +108,9 @@ def Markdown.cells_escape (s : String) (current : List String) (cells : List Str
     let after : String := String.drop 1i64 s in
     match String.get after 0 {
         Option.some _ =>
-            Markdown.cells_go (String.drop 1i64 after)
-                (List.cons (String.slice after 0 1i64) (List.cons "\\" current)) cells code,
+            Markdown.cells_go (String.drop (Markdown.char_width after) after)
+                (List.cons (String.slice after 0 (Markdown.char_width after))
+                    (List.cons "\\" current)) cells code,
         Option.none => Markdown.finish_cell (List.cons "\\" current) cells
     }
 

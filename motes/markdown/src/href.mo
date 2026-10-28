@@ -19,6 +19,7 @@ pub def Markdown.href_safe (b : U8) : Bool :=
     else if U8.beq b 36u8 then true
     else if U8.beq b 37u8 then true
     else if U8.beq b 38u8 then true
+    else if U8.beq b 39u8 then true
     else if U8.beq b 40u8 then true
     else if U8.beq b 41u8 then true
     else if U8.beq b 42u8 then true

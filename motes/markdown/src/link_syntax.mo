@@ -45,8 +45,10 @@ def Markdown.ref_label_go (c : Markdown.Cursor) (acc : List String) (n : I64) : 
                 then
                     let next : Markdown.Cursor := Markdown.Cursor.step c in
                     match Markdown.Cursor.peek next {
-                        Option.some e =>
-                            let w : I64 := Markdown.char_width c.text in
+                        Option.some _ =>
+                            // The width is the ESCAPED character's, and the piece
+                            // starts at the backslash, so it is `1 + width`.
+                            let w : I64 := Markdown.char_width next.text in
                             Markdown.ref_label_go (Markdown.Cursor.step next)
                                 (List.cons (String.slice c.text 0 (I64.add 1i64 w)) acc) (I64.add n 1i64),
                         Option.none => Option.none
@@ -145,7 +147,7 @@ def Markdown.pointy_char (c : Markdown.Cursor) (acc : List String) : Option (Pai
             if U8.beq b 92u8
             then
                 let next : Markdown.Cursor := Markdown.Cursor.step c in
-                let w : I64 := Markdown.char_width c.text in
+                let w : I64 := Markdown.char_width next.text in
                 Markdown.parse_pointy_destination (Markdown.Cursor.step next)
                     (List.cons (String.slice c.text 0 (I64.add 1i64 w)) acc)
             else
@@ -179,7 +181,8 @@ def Markdown.parse_bare_destination (c : Markdown.Cursor) (acc : List String) (d
                         if Markdown.is_ascii_punct p
                         then
                             Markdown.parse_bare_destination (Markdown.Cursor.step after)
-                                (List.cons (String.slice after.text 0 1i64) (List.cons "\\" acc)) depth
+                                (List.cons (String.slice after.text 0 (Markdown.char_width after.text))
+                                    (List.cons "\\" acc)) depth
                         else Markdown.parse_bare_destination after (List.cons "\\" acc) depth,
                     Option.none => Option.none
                 }
@@ -239,7 +242,7 @@ def Markdown.parse_quoted_go (c : Markdown.Cursor) (closing : U8) (acc : List St
             else if U8.beq b 92u8
             then
                 let next : Markdown.Cursor := Markdown.Cursor.step c in
-                let w : I64 := Markdown.char_width c.text in
+                let w : I64 := Markdown.char_width next.text in
                 Markdown.parse_quoted_go (Markdown.Cursor.step next) closing
                     (List.cons (String.slice c.text 0 (I64.add 1i64 w)) acc) newlines
             else if U8.beq b 10u8
@@ -289,42 +292,35 @@ pub def Markdown.empty_tail (c : Markdown.Cursor) : Option Markdown.LinkTail :=
     }
 
 pub def Markdown.parse_link_tail_dest (c : Markdown.Cursor) : Option Markdown.LinkTail :=
-    match Markdown.Cursor.peek c {
-        Option.some b =>
-            if Bool.or (U8.beq b 40u8) true
-            then
-                match Markdown.parse_destination c {
-                    Option.none => Option.none,
-                    Option.some d =>
-                        match d {
-                            Pair.pair dest after_dest =>
-                                match Markdown.parse_title after_dest {
-                                    Option.some t =>
-                                        match t {
-                                            Pair.pair title after_title =>
-                                                match Markdown.Cursor.peek (Markdown.skip_spnl after_title) {
-                                                    Option.some close =>
-                                                        if U8.beq close 41u8
-                                                        then Option.some
-                                                            (Markdown.mk_tail dest (Option.some title)
-                                                                (Markdown.Cursor.step (Markdown.skip_spnl after_title)))
-                                                        else Option.none,
-                                                    Option.none => Option.none
-                                                }
-                                        },
-                                    Option.none =>
-                                        match Markdown.Cursor.peek (Markdown.Cursor.skip_spaces after_dest) {
-                                            Option.some close =>
-                                                if U8.beq close 41u8
-                                                then Option.some
-                                                    (Markdown.mk_tail dest Option.none
-                                                        (Markdown.Cursor.step (Markdown.Cursor.skip_spaces after_dest)))
-                                                else Option.none,
-                                            Option.none => Option.none
-                                        }
-                                }
-                        }
-                }
-            else Option.none,
-        Option.none => Option.none
+    match Markdown.parse_destination c {
+        Option.none => Option.none,
+        Option.some d =>
+            match d {
+                Pair.pair dest after_dest =>
+                    match Markdown.parse_title after_dest {
+                        Option.some t =>
+                            match t {
+                                Pair.pair title after_title =>
+                                    match Markdown.Cursor.peek (Markdown.skip_spnl after_title) {
+                                        Option.some close =>
+                                            if U8.beq close 41u8
+                                            then Option.some
+                                                (Markdown.mk_tail dest (Option.some title)
+                                                    (Markdown.Cursor.step (Markdown.skip_spnl after_title)))
+                                            else Option.none,
+                                        Option.none => Option.none
+                                    }
+                            },
+                        Option.none =>
+                            match Markdown.Cursor.peek (Markdown.Cursor.skip_spaces after_dest) {
+                                Option.some close =>
+                                    if U8.beq close 41u8
+                                    then Option.some
+                                        (Markdown.mk_tail dest Option.none
+                                            (Markdown.Cursor.step (Markdown.Cursor.skip_spaces after_dest)))
+                                    else Option.none,
+                                Option.none => Option.none
+                            }
+                    }
+            }
     }

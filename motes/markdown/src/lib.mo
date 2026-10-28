@@ -1,8 +1,8 @@
 // The markdown mote's library root -- bare `use markdown` resolves here.
 //
-// The AST and its equality, the parser options, and (as later phases land)
-// `parse`, `to_html*`. No `{*}` globs: every name is spelled, so the mote's
-// public surface is this list.
+// The AST and its equality, the parser options, and the parser/renderer
+// entry points. No `{*}` globs: every name is spelled, so the mote's public
+// surface is this list.
 //
 // Consumers reach constructors through the dotted type
 // (`Markdown.Block.block_paragraph`), which is why every type is re-exported.

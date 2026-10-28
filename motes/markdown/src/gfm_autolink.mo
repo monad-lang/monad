@@ -74,8 +74,20 @@ def Markdown.count_char_go (s : String) (b : U8) (n : I64) : I64 :=
 def Markdown.has_dot (s : String) : Bool :=
     String.contains s "."
 
+/// A bare autolink: the destination, the text to show, and the remainder.
+/// `www.` is the only form whose text differs from its destination (the
+/// `http://` prefix is added), so the label is carried explicitly.
+pub struct Markdown.Bare {
+    dest : String,
+    label : String,
+    rest : String
+}
+
+def Markdown.mk_bare (dest : String) (label : String) (rest : String) : Markdown.Bare :=
+    let b : Markdown.Bare := { dest := dest, label := label, rest := rest } in b
+
 /// A bare URL or email at `s`: its destination and the remaining input.
-pub def Markdown.scan_bare (s : String) : Option (Pair String String) :=
+pub def Markdown.scan_bare (s : String) : Option Markdown.Bare :=
     if String.starts_with "www." s
     then Markdown.bare_www s
     else if String.starts_with "https://" s
@@ -84,21 +96,23 @@ pub def Markdown.scan_bare (s : String) : Option (Pair String String) :=
     then Markdown.bare_scheme s
     else Markdown.bare_email s
 
-def Markdown.bare_www (s : String) : Option (Pair String String) :=
+def Markdown.bare_www (s : String) : Option Markdown.Bare :=
     match Markdown.linkish_go s List.empty {
         Pair.pair text rest =>
             let trimmed : String := Markdown.trim_end_punct text in
             if Bool.and (Markdown.has_dot trimmed) (I64.gt (String.length trimmed) 4i64)
-            then Option.some (Pair.pair (String.concat "http://" trimmed) (Markdown.rewind trimmed text rest))
+            then Option.some
+                (Markdown.mk_bare (String.concat "http://" trimmed) trimmed
+                    (Markdown.rewind trimmed text rest))
             else Option.none
     }
 
-def Markdown.bare_scheme (s : String) : Option (Pair String String) :=
+def Markdown.bare_scheme (s : String) : Option Markdown.Bare :=
     match Markdown.linkish_go s List.empty {
         Pair.pair text rest =>
             let trimmed : String := Markdown.trim_end_punct text in
             if I64.gt (String.length trimmed) 7i64
-            then Option.some (Pair.pair trimmed (Markdown.rewind trimmed text rest))
+            then Option.some (Markdown.mk_bare trimmed trimmed (Markdown.rewind trimmed text rest))
             else Option.none
     }
 
@@ -116,7 +130,7 @@ def Markdown.is_email_local (b : U8) : Bool :=
                 (Bool.and (U8.lt 96u8 b) (U8.lt b 123u8))
                 (Bool.or (U8.beq b 46u8) (Bool.or (U8.beq b 95u8) (U8.beq b 43u8)))))
 
-def Markdown.bare_email (s : String) : Option (Pair String String) :=
+def Markdown.bare_email (s : String) : Option Markdown.Bare :=
     match Markdown.linkish_go s List.empty {
         Pair.pair text rest =>
             let trimmed : String := Markdown.trim_end_punct text in
@@ -124,7 +138,9 @@ def Markdown.bare_email (s : String) : Option (Pair String String) :=
             if String.contains trimmed at
             then
                 if Markdown.looks_like_email trimmed
-                then Option.some (Pair.pair (String.concat "mailto:" trimmed) (Markdown.rewind trimmed text rest))
+                then Option.some
+                    (Markdown.mk_bare (String.concat "mailto:" trimmed) trimmed
+                        (Markdown.rewind trimmed text rest))
                 else Option.none
             else Option.none
     }

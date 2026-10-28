@@ -11,7 +11,7 @@ use lib::scan {
     Markdown.list_take, Markdown.utf8_of_codepoint,
 }
 use lib::entities {Markdown.entity_lookup}
-use lib::gfm_autolink {Markdown.scan_bare}
+use lib::gfm_autolink {Markdown.Bare, Markdown.scan_bare}
 use lib::unicode {Markdown.is_unicode_punctuation, Markdown.is_unicode_whitespace}
 use lib::link_syntax {
     Markdown.is_ascii_punct,
@@ -445,14 +445,6 @@ pub def Markdown.inline_parse_opts
         Markdown.flush (Markdown.inline_loop (Markdown.inline_start opts refs) src) in
     List.reverse done.nodes
 
-#[partial]
-pub def Markdown.inline_parse_with (refs : List Markdown.LinkRef) (src : String) : List Markdown.Inline :=
-    Markdown.inline_parse_opts Markdown.default_options refs src
-
-#[partial]
-pub def Markdown.inline_parse (src : String) : List Markdown.Inline :=
-    Markdown.inline_parse_with List.empty src
-
 /// Resolve backslash escapes and character references, and nothing else: the
 /// rule for a link destination, a title, or a code fence's info string.
 /// Reference LABELS are deliberately not unescaped (`[foo\!]` does not match
@@ -515,26 +507,20 @@ def Markdown.is_alpha_byte (b : U8) : Bool :=
 #[partial]
 def Markdown.scan_autolink (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBuild :=
     match Markdown.scan_bare s {
-        Option.some found =>
-            match found {
-                Pair.pair dest rest =>
-                    let label : String :=
-                        if String.starts_with "mailto:" dest
-                        then String.drop 7i64 dest
-                        else if String.starts_with "http://" dest
-                        then String.drop 7i64 dest
-                        else dest in
-                    let node : Markdown.Inline :=
-                        inline_link dest Option.none (List.cons (inline_text label) List.empty) in
-                    Markdown.inline_loop
-                        (Markdown.prev_of s rest (Markdown.push_node node b)) rest
-            },
+        Option.some link => Markdown.bare_node link s b,
         Option.none =>
             let w : I64 := Markdown.char_width s in
             let piece : String := String.slice s 0 w in
             let b2 : Markdown.InlineBuild := { b with prev := Markdown.codepoint_at piece } in
             Markdown.inline_loop (Markdown.push_piece piece b2) (String.drop w s)
     }
+
+#[partial]
+def Markdown.bare_node (link : Markdown.Bare) (s : String) (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
+    let node : Markdown.Inline :=
+        inline_link link.dest Option.none (List.cons (inline_text link.label) List.empty) in
+    Markdown.inline_loop
+        (Markdown.prev_of s link.rest (Markdown.push_node node b)) link.rest
 
 // ─── Links and images ───
 
@@ -745,11 +731,16 @@ def Markdown.resolved_tail (tail : Markdown.LinkTail) : Option Markdown.Resolved
 /// Emit a link or an image, or fall back to a literal opener. A link whose
 /// label already contains a link is not formed (links cannot nest).
 #[partial]
-#[partial]
 def Markdown.emit_link (b : Markdown.InlineBuild) (image : Bool) (label : String) (resolved : Markdown.Resolved)
     (whole : String) : Markdown.InlineBuild :=
-    let children : List Markdown.Inline := Markdown.inline_parse_opts b.opts b.refs label in
-    if Bool.and (Bool.not image) (Markdown.has_link children)
+    // `max_depth` doubles as the inline nesting budget: each link or image
+    // label parses against one less, and at zero the construct stays text.
+    let base_opts : Markdown.Options := b.opts in
+    let inner_opts : Markdown.Options :=
+        { base_opts with max_depth := I64.sub b.opts.max_depth 1i64 } in
+    let children : List Markdown.Inline := Markdown.inline_parse_opts inner_opts b.refs label in
+    let over_depth : Bool := I64.lt b.opts.max_depth 1i64 in
+    if Bool.or over_depth (Bool.and (Bool.not image) (Markdown.has_link children))
     then
         // Links cannot nest: the outer opener is literal and the label is
         // rescanned, which is what lets the inner one form.
@@ -764,13 +755,24 @@ def Markdown.emit_link (b : Markdown.InlineBuild) (image : Bool) (label : String
             (Markdown.prev_of whole resolved.rest (Markdown.push_node node b)) resolved.rest
 
 #[partial]
-#[partial]
 def Markdown.scan_bracket (b : Markdown.InlineBuild) (s : String) (image : Bool) : Markdown.InlineBuild :=
     let opener : I64 := if image then 2i64 else 1i64 in
     let inner : String := String.drop opener s in
+    if I64.lt b.opts.max_depth 1i64
+    then
+        // The nesting budget is spent: the opener is text, and NOT looking
+        // for its `]` is what keeps deep nesting linear instead of quadratic.
+        Markdown.inline_loop (Markdown.push_piece (String.slice s 0 opener) b) inner
+    else
     match Markdown.find_bracket_close inner inner 0i64 1i64 {
         Option.none =>
-            Markdown.inline_loop (Markdown.push_piece (String.slice s 0 opener) b) inner,
+            // No `]` closes this label. When the remainder holds no `]` at
+            // all, no later bracket can close either: taking the rest as text
+            // once keeps pathological input linear instead of rescanning the
+            // tail for every `[`.
+            if String.contains inner "]"
+            then Markdown.inline_loop (Markdown.push_piece (String.slice s 0 opener) b) inner
+            else Markdown.inline_loop (Markdown.push_piece (String.concat (String.slice s 0 opener) inner) b) "",
         Option.some found =>
             match found {
                 Pair.pair label after =>

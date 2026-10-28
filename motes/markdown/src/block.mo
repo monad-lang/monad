@@ -514,12 +514,6 @@ def Markdown.accepts_line (b : Markdown.OpenBlock) (has_child : Bool) (c : Markd
             if Markdown.Cursor.blank c then Option.none else Option.some c,
         // An indented code block continues on a blank line or four columns of
         // indent; anything else closes it and the line is re-examined.
-        open_table _ _ _ =>
-            if Markdown.Cursor.blank c
-            then Option.none
-            else if Markdown.starts_interrupting_block c
-            then Option.none
-            else Option.some c,
         open_indented_code _ =>
             if Markdown.Cursor.blank c
             then Option.some c
@@ -860,10 +854,14 @@ def Markdown.tip_paragraph_lines (state : Markdown.BlockState) : List String :=
 /// paragraph: an indented code block may not open in that case.
 #[partial]
 pub def Markdown.open_new
-    (state : Markdown.BlockState) (c : Markdown.Cursor) (all_matched : Bool) (maybe_lazy : Bool)
-    : Markdown.Started :=
+    (state : Markdown.BlockState) (c : Markdown.Cursor) (maybe_lazy : Bool) : Markdown.Started :=
     if Markdown.Cursor.blank c
     then Markdown.Started.started_none state c false
+    else if Bool.not (I64.lt (Markdown.stack_len state.stack) state.opts.max_depth)
+    then
+        // Depth cap: the remainder of the line stays literal text in the
+        // current container instead of nesting further.
+        Markdown.Started.started_none state c false
     else
         let base : I64 := c.column in
         let first : Markdown.Cursor := Markdown.Cursor.skip_spaces c in
@@ -874,61 +872,61 @@ pub def Markdown.open_new
             Markdown.mark_opened
                 (Markdown.open_new
                     (Markdown.open_leaf (Markdown.OpenBlock.open_blockquote List.empty) prepared)
-                    (Markdown.consume_blockquote first) all_matched maybe_lazy)
+                    (Markdown.consume_blockquote first) maybe_lazy)
         else
-            Markdown.open_new_atx state first base c all_matched maybe_lazy prepared
+            Markdown.open_new_atx state first base c maybe_lazy prepared
 
 #[partial]
 def Markdown.open_new_atx
     (state : Markdown.BlockState) (first : Markdown.Cursor) (base : I64) (c : Markdown.Cursor)
-    (all_matched : Bool) (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
+    (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
     match Markdown.try_atx first base {
         Option.some h =>
             Markdown.Started.started_consumed
                 (Markdown.push_into (raw_heading h.level false [h.text]) false prepared),
-        Option.none => Markdown.open_new_fence state first base c all_matched maybe_lazy prepared
+        Option.none => Markdown.open_new_fence state first base c maybe_lazy prepared
     }
 
 #[partial]
 def Markdown.open_new_fence
     (state : Markdown.BlockState) (first : Markdown.Cursor) (base : I64) (c : Markdown.Cursor)
-    (all_matched : Bool) (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
+    (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
     match Markdown.try_fence first base {
         Option.some f =>
             Markdown.Started.started_opened
                 (Markdown.open_leaf
                     (Markdown.OpenBlock.open_fence f.info f.fence_char f.fence_len f.indent List.empty)
                     prepared),
-        Option.none => Markdown.open_new_html state first base c all_matched maybe_lazy prepared
+        Option.none => Markdown.open_new_html state first base c maybe_lazy prepared
     }
 
 #[partial]
 def Markdown.open_new_html
     (state : Markdown.BlockState) (first : Markdown.Cursor) (base : I64) (c : Markdown.Cursor)
-    (all_matched : Bool) (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
+    (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
     match Markdown.html_block_start first base (Bool.or maybe_lazy (Markdown.tip_is_paragraph state)) {
         Option.some html_type =>
             Markdown.Started.started_line
                 (Markdown.open_leaf (Markdown.OpenBlock.open_html html_type List.empty) prepared) c,
-        Option.none => Markdown.open_new_table state first base c all_matched maybe_lazy prepared
+        Option.none => Markdown.open_new_table state first base c maybe_lazy prepared
     }
 
 #[partial]
 def Markdown.open_new_table
     (state : Markdown.BlockState) (first : Markdown.Cursor) (base : I64) (c : Markdown.Cursor)
-    (all_matched : Bool) (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
+    (maybe_lazy : Bool) (prepared : Markdown.BlockState) : Markdown.Started :=
     if Markdown.tip_is_paragraph state
     then
         match Markdown.try_table state first {
             Option.some table_state => Markdown.Started.started_consumed table_state,
-            Option.none => Markdown.open_new_setext state first base c all_matched maybe_lazy
+            Option.none => Markdown.open_new_setext state first base c maybe_lazy
         }
-    else Markdown.open_new_setext state first base c all_matched maybe_lazy
+    else Markdown.open_new_setext state first base c maybe_lazy
 
 #[partial]
 def Markdown.open_new_setext
     (state : Markdown.BlockState) (first : Markdown.Cursor) (base : I64) (c : Markdown.Cursor)
-    (all_matched : Bool) (maybe_lazy : Bool) : Markdown.Started :=
+    (maybe_lazy : Bool) : Markdown.Started :=
     if Markdown.tip_is_paragraph state
     then
         match Markdown.try_setext first base {
@@ -944,9 +942,9 @@ def Markdown.open_new_setext
                         else Markdown.Started.started_consumed
                             (Markdown.to_heading level (Markdown.tip_paragraph_lines state) state)
                 },
-            Option.none => Markdown.open_new_after_setext state first base c all_matched maybe_lazy
+            Option.none => Markdown.open_new_after_setext state first base c maybe_lazy
         }
-    else Markdown.open_new_after_setext state first base c all_matched maybe_lazy
+    else Markdown.open_new_after_setext state first base c maybe_lazy
 
 /// Thematic break, list item, indented code -- the starts that do not
 /// interrupt a paragraph in the same way (a list item can, with its own
@@ -954,7 +952,7 @@ def Markdown.open_new_setext
 #[partial]
 def Markdown.open_new_after_setext
     (state : Markdown.BlockState) (first : Markdown.Cursor) (base : I64) (c : Markdown.Cursor)
-    (all_matched : Bool) (maybe_lazy : Bool) : Markdown.Started :=
+    (maybe_lazy : Bool) : Markdown.Started :=
     if Markdown.is_thematic first base
     then
         Markdown.Started.started_consumed
@@ -967,7 +965,7 @@ def Markdown.open_new_after_setext
                     (Markdown.open_new
                         (Markdown.open_item_for ls
                             (Markdown.open_list_for ls (Markdown.close_paragraph_tip state)))
-                        ls.content all_matched false),
+                        ls.content false),
             Option.none =>
                 if Bool.and (Bool.not maybe_lazy) (I64.lt 3i64 (I64.sub first.column base))
                 then
@@ -1165,7 +1163,7 @@ def Markdown.incorporate_line (state : Markdown.BlockState) (line : String) : Ma
     if Markdown.tip_is_code_or_html closed
     then Markdown.add_content closed m.cursor
     else
-        match Markdown.open_new closed m.cursor all_matched maybe_lazy {
+        match Markdown.open_new closed m.cursor maybe_lazy {
             Markdown.Started.started_consumed consumed => consumed,
             Markdown.Started.started_opened opened => opened,
             Markdown.Started.started_line opened cursor => Markdown.add_content opened cursor,

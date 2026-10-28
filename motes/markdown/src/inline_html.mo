@@ -4,7 +4,6 @@
 /// pass can fall back to a literal `<` in order: autolink, raw HTML, text.
 use init::string {}
 use parsec::core {is_empty}
-use lib::scan {Markdown.char_width}
 
 def Markdown.is_uri_char (b : U8) : Bool :=
     Bool.not

@@ -133,7 +133,6 @@ def Markdown.task_item (blocks : List Markdown.Block) : Markdown.ListItem :=
     }
 
 #[partial]
-#[partial]
 def Markdown.task_paragraph (inlines : List Markdown.Inline) (rest : List Markdown.Block) : Markdown.ListItem :=
     match inlines {
         List.cons first more =>

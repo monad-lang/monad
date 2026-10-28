@@ -4,10 +4,9 @@
 // The printed report is the iteration loop -- see `conformance_support.mo`.
 use lib::tests::conformance_support {
     Markdown.SpecExample, Markdown.SpecReport, Markdown.load_spec,
-    Markdown.print_report, Markdown.report_failed, Markdown.report_ok,
+    Markdown.print_report, Markdown.report_ok,
     Markdown.phase1_sections, Markdown.phase2_sections, Markdown.phase3_sections,
-    Markdown.report_total, Markdown.run_examples,
-    Markdown.run_sections, Markdown.section_counts, Markdown.spec_path,
+    Markdown.run_examples, Markdown.run_sections, Markdown.spec_path,
 }
 
 def Markdown.run_spec (r : Result String (List Markdown.SpecExample)) : IO Bool :=

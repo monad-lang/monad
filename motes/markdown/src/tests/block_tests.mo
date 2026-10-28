@@ -4,7 +4,7 @@ use lib::parse {Markdown.parse_with, Markdown.split_frontmatter}
 use lib::types {
     Markdown.Document, Markdown.FrontFormat, Markdown.FrontSplit, Markdown.Frontmatter,
 }
-use lib::options {Markdown.Options, Markdown.site_options}
+use lib::options {Markdown.site_options}
 
 def is (src : String) (want : String) : Bool :=
     String.beq (Markdown.render src) want
@@ -38,6 +38,16 @@ def test_paragraph_backslash_hard_break : Bool :=
 #[test]
 def test_empty_input_is_empty : Bool :=
     is "" ""
+
+/// CommonMark ends a line at `\n`, `\r` or `\r\n`; the next line continues
+/// the paragraph with a soft break, so the CR never reaches the text.
+#[test]
+def test_lone_cr_ends_a_line : Bool :=
+    is "a\rb\n" "<p>a\nb</p>\n"
+
+#[test]
+def test_crlf_ends_a_line : Bool :=
+    is "a\r\nb\r\n" "<p>a\nb</p>\n"
 
 #[test]
 def test_blank_lines_only : Bool :=
