@@ -12,8 +12,8 @@ use xml_html::html {Html.Attr, Html.Node}
 use lib::options {Markdown.HtmlOptions, Markdown.default_html_options}
 use lib::href {Markdown.escape_href}
 use lib::types {
-    Markdown.Block, Markdown.Document, Markdown.Inline, Markdown.ListItem,
-    Markdown.ListKind,
+    Markdown.Align, Markdown.Block, Markdown.Document, Markdown.Inline,
+    Markdown.ListItem, Markdown.ListKind, Markdown.TableRow,
 }
 
 open Markdown.Block {
@@ -137,9 +137,18 @@ def Markdown.block_nodes (opts : Markdown.HtmlOptions) (b : Markdown.Block) : Li
             [ Markdown.el (Markdown.list_tag kind) (Markdown.list_attrs kind)
                 (List.cons (Markdown.txt "\n") (Markdown.items_nodes opts tight items)),
               Markdown.txt "\n" ],
-        block_table _aligns _head _rows =>
-            // Phase 4 owns tables; an unrendered table must not crash.
-            [Markdown.txt "\n"]
+        block_table aligns head rows =>
+            [ Markdown.el "table" List.empty
+                [ Markdown.txt "\n",
+                  Markdown.el "thead" List.empty
+                    [ Markdown.txt "\n",
+                      Markdown.row_node opts "th" aligns head.cells,
+                      Markdown.txt "\n" ],
+                  Markdown.txt "\n",
+                  Markdown.el "tbody" List.empty
+                    (List.cons (Markdown.txt "\n") (Markdown.rows_nodes opts aligns rows)),
+                  Markdown.txt "\n" ],
+              Markdown.txt "\n" ]
     }
 
 def Markdown.list_tag (kind : Markdown.ListKind) : String :=
@@ -248,6 +257,85 @@ def Markdown.first_word (s : String) (acc : List String) : String :=
 
 pub def Markdown.first_word_of (s : String) : String :=
     Markdown.first_word s List.empty
+
+// ─── Tables (GFM) ───
+
+#[partial]
+def Markdown.aligns_len (aligns : List Markdown.Align) : I64 :=
+    match aligns {
+        List.empty => 0i64,
+        List.cons _ rest => I64.add 1i64 (Markdown.aligns_len rest)
+    }
+
+/// A row is padded with empty cells and extra cells are dropped, so every
+/// row has the header's width.
+#[partial]
+def Markdown.normalize_row (n : I64) (cells : List (List Markdown.Inline)) : List (List Markdown.Inline) :=
+    if I64.lt n 1i64
+    then List.empty
+    else
+        match cells {
+            List.empty => List.cons List.empty (Markdown.normalize_row (I64.sub n 1i64) List.empty),
+            List.cons c rest => List.cons c (Markdown.normalize_row (I64.sub n 1i64) rest)
+        }
+
+def Markdown.align_attr (align : Markdown.Align) : List Html.Attr :=
+    match align {
+        Markdown.Align.align_left => [Markdown.at "align" "left"],
+        Markdown.Align.align_center => [Markdown.at "align" "center"],
+        Markdown.Align.align_right => [Markdown.at "align" "right"],
+        Markdown.Align.align_none => List.empty
+    }
+
+#[partial]
+def Markdown.cell_nodes
+    (opts : Markdown.HtmlOptions) (tag : String) (aligns : List Markdown.Align)
+    (cells : List (List Markdown.Inline)) : List Html.Node :=
+    match cells {
+        List.empty => List.empty,
+        List.cons c rest =>
+            let align : Markdown.Align :=
+                match aligns {
+                    List.empty => Markdown.Align.align_none,
+                    List.cons a _ => a
+                } in
+            let align_rest : List Markdown.Align :=
+                match aligns {
+                    List.empty => List.empty,
+                    List.cons _ more => more
+                } in
+            List.cons (Markdown.el tag (Markdown.align_attr align) (Markdown.inline_nodes opts c))
+                (List.cons (Markdown.txt "\n")
+                    (Markdown.cell_nodes opts tag align_rest rest))
+    }
+
+def Markdown.row_node
+    (opts : Markdown.HtmlOptions) (tag : String) (aligns : List Markdown.Align)
+    (cells : List (List Markdown.Inline)) : Html.Node :=
+    Markdown.el "tr" List.empty
+        (List.cons (Markdown.txt "\n") (Markdown.cell_nodes opts tag aligns cells))
+
+#[partial]
+def Markdown.rows_nodes
+    (opts : Markdown.HtmlOptions) (aligns : List Markdown.Align)
+    (rows : List Markdown.TableRow) : List Html.Node :=
+    List.reverse (Markdown.rows_nodes_rev opts aligns rows List.empty)
+
+#[partial]
+def Markdown.rows_nodes_rev
+    (opts : Markdown.HtmlOptions) (aligns : List Markdown.Align)
+    (rows : List Markdown.TableRow) (acc : List Html.Node) : List Html.Node :=
+    match rows {
+        List.empty => acc,
+        List.cons r rest =>
+            let n : I64 := Markdown.aligns_len aligns in
+            let cells : List (List Markdown.Inline) := Markdown.normalize_row n r.cells in
+            let nodes : List Html.Node :=
+                List.cons (Markdown.el "tr" List.empty
+                        (List.cons (Markdown.txt "\n") (Markdown.cell_nodes opts "td" aligns cells)))
+                    (List.cons (Markdown.txt "\n") List.empty) in
+            Markdown.rows_nodes_rev opts aligns rest (Markdown.nodes_rev nodes acc)
+    }
 
 // ─── Entry points ───
 
