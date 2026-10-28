@@ -500,13 +500,10 @@ def Markdown.accepts_line (b : Markdown.OpenBlock) (has_child : Bool) (c : Markd
     match b {
         open_doc _ => Option.some c,
         open_blockquote _ =>
-            if Markdown.Cursor.blank c
-            then Option.some c
-            else
-                let started : Markdown.Cursor := Markdown.Cursor.skip_spaces c in
-                if Markdown.is_blockquote started c.column
-                then Option.some (Markdown.consume_blockquote started)
-                else Option.none,
+            let started : Markdown.Cursor := Markdown.Cursor.skip_spaces c in
+            if Markdown.is_blockquote started c.column
+            then Option.some (Markdown.consume_blockquote started)
+            else Option.none,
         open_list _ _ _ _ => Option.some c,
         open_item content_indent _ blocks _ _ => Markdown.accepts_item content_indent blocks has_child c,
         open_paragraph _ =>
@@ -808,7 +805,7 @@ def Markdown.open_new
             match Markdown.try_atx first base {
                 Option.some h =>
                     Markdown.Started.started_consumed
-                        (Markdown.push_into (raw_heading h.level [h.text]) prepared),
+                        (Markdown.push_into (raw_heading h.level false [h.text]) prepared),
                 Option.none =>
                     match Markdown.try_fence first base {
                         Option.some f =>
@@ -930,7 +927,7 @@ pub def Markdown.to_heading (level : I64) (lines : List String) (state : Markdow
     match state.stack {
         List.empty => state,
         List.cons _ rest =>
-            Markdown.push_into (raw_heading level (List.reverse lines)) (Markdown.with_stack rest state)
+            Markdown.push_into (raw_heading level true (List.reverse lines)) (Markdown.with_stack rest state)
     }
 
 /// Fold a blank line into the innermost open list item.

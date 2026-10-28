@@ -86,7 +86,7 @@ pub def Markdown.inline_of_lines (refs : List Markdown.LinkRef) (lines : List St
 pub def Markdown.resolve_block (refs : List Markdown.LinkRef) (b : Markdown.RawBlock) : Markdown.Block :=
     match b {
         raw_paragraph lines => block_paragraph (Markdown.inline_of_lines refs lines),
-        raw_heading level lines => block_heading level (Markdown.inline_of_lines refs lines),
+        raw_heading level _ lines => block_heading level (Markdown.inline_of_lines refs lines),
         raw_thematic_break => block_thematic_break,
         raw_code_block info literal => block_code_block info literal,
         raw_block_quote blocks => block_quote (Markdown.resolve_blocks refs blocks),

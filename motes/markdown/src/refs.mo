@@ -146,6 +146,19 @@ def Markdown.collect_block
                     then Pair.pair all Option.none
                     else Pair.pair all (Option.some (raw_paragraph [remaining]))
             },
+        // A setext heading was a paragraph until its underline arrived, so it
+        // can still start with reference definitions.
+        raw_heading level setext lines =>
+            if setext
+            then
+                match Markdown.refs_of_text (Markdown.join_lines lines) {
+                    Pair.pair found remaining =>
+                        let all : List Markdown.LinkRef := Markdown.refs_onto found refs in
+                        if String.beq (Markdown.trim_space remaining) ""
+                        then Pair.pair all Option.none
+                        else Pair.pair all (Option.some (raw_heading level setext [remaining]))
+                }
+            else Pair.pair refs (Option.some b),
         raw_block_quote blocks =>
             match Markdown.collect_refs blocks {
                 Pair.pair found rewritten =>

@@ -100,7 +100,7 @@ pub type Markdown.Inline {
 
 pub type Markdown.RawBlock {
     raw_paragraph (lines : List String),
-    raw_heading (level : I64) (lines : List String),
+    raw_heading (level : I64) (setext : Bool) (lines : List String),
     raw_thematic_break,
     raw_code_block (info : Option String) (literal : String),
     raw_block_quote (blocks : List Markdown.RawBlock),
