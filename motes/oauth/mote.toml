@@ -1,0 +1,31 @@
+# The oauth mote: OAuth 2.1 / OpenID Connect CLIENT and resource-server
+# helpers, Phases 0-1 of `plans/library-ideas/oauth.md`.
+#
+# No `moon` and no `eclipse`: every handler-shaped API here has the bare
+# `Request -> IO (Result String Response)` type, so an application wires
+# this into Moon (or anything else) without this mote depending on it.
+#
+# Sub-table dependencies, not inline tables: the self-hosted TOML reader
+# supports headers only (see motes/moose/mote.toml).
+[mote]
+name = "oauth"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.crypto]
+path = "../crypto"
+
+[dependencies.http]
+path = "../http"
+
+[dependencies.json]
+path = "../json"
+
+[dependencies.moose]
+path = "../moose"
+
+# Affine-by-default migration exception, the same one every mote carries.
+# The shapes here are `Ref`-carried mutable state (the state store and the
+# fake transport), where a handle must be read and then updated.
+[affine]
+mode = "warn"
