@@ -131,10 +131,7 @@ def Markdown.parse_pointy_destination (c : Markdown.Cursor) (acc : List String) 
         Option.none => Option.none,
         Option.some b =>
             if U8.beq b 62u8
-            then
-                if List.is_empty acc
-                then Option.none
-                else Option.some (Pair.pair (String.concat_list (List.reverse acc)) (Markdown.Cursor.step c))
+            then Option.some (Pair.pair (String.concat_list (List.reverse acc)) (Markdown.Cursor.step c))
             else if Bool.or (U8.beq b 60u8) (Bool.or (U8.beq b 10u8) (U8.beq b 13u8))
             then Option.none
             else Markdown.pointy_char c acc
@@ -198,7 +195,22 @@ def Markdown.parse_bare_destination (c : Markdown.Cursor) (acc : List String) (d
 
 // ─── Titles ───
 
+/// A title must be separated from the destination by whitespace.
+pub def Markdown.title_separated (c : Markdown.Cursor) : Bool :=
+    match Markdown.Cursor.peek c {
+        Option.some b =>
+            if U8.beq b 10u8
+            then true
+            else if Bool.or (U8.beq b 32u8) (U8.beq b 9u8)
+            then true
+            else false,
+        Option.none => false
+    }
+
 pub def Markdown.parse_title (c : Markdown.Cursor) : Option (Pair String Markdown.Cursor) :=
+    if Markdown.title_separated c then Markdown.parse_title_at c else Option.none
+
+pub def Markdown.parse_title_at (c : Markdown.Cursor) : Option (Pair String Markdown.Cursor) :=
     let started : Markdown.Cursor := Markdown.skip_spnl c in
     match Markdown.Cursor.peek started {
         Option.none => Option.none,

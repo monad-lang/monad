@@ -56,10 +56,23 @@ def Markdown.escape_href_go (s : String) (acc : List String) : String :=
             Option.none => String.concat_list (List.reverse acc),
             Option.some b =>
                 let w : I64 := Markdown.char_width s in
-                if Markdown.href_safe b
-                then Markdown.escape_href_go (String.drop 1i64 s) (List.cons (String.slice s 0 1i64) acc)
-                else Markdown.escape_href_go (String.drop 1i64 s) (List.cons (Markdown.byte_hex b) acc)
+                let piece : String := String.slice s 0 w in
+                if Bool.and (Markdown.href_safe b) (I64.beq w 1i64)
+                then Markdown.escape_href_go (String.drop 1i64 s) (List.cons piece acc)
+                else
+                    // A multi-byte character is encoded byte by byte, and the
+                    // whole character is consumed: dropping one BYTE into a
+                    // continuation byte would truncate the string.
+                    Markdown.escape_href_go (String.drop w s)
+                        (List.cons (Markdown.encode_bytes (String.to_list piece) List.empty) acc)
         }
+
+#[partial]
+def Markdown.encode_bytes (bytes : List U8) (acc : List String) : String :=
+    match bytes {
+        List.empty => String.concat_list (List.reverse acc),
+        List.cons b rest => Markdown.encode_bytes rest (List.cons (Markdown.byte_hex b) acc)
+    }
 
 pub def Markdown.escape_href (s : String) : String :=
     Markdown.escape_href_go s List.empty

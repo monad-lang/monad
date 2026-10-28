@@ -951,18 +951,24 @@ def Markdown.mark_blank (state : Markdown.BlockState) : Markdown.BlockState :=
 /// A blank line: closes the open paragraph, keeps containers open, and marks
 /// the innermost item.
 #[partial]
-def Markdown.blank_line (state : Markdown.BlockState) : Markdown.BlockState :=
+def Markdown.blank_line (state : Markdown.BlockState) (c : Markdown.Cursor) : Markdown.BlockState :=
     match state.stack {
         List.empty => state,
         List.cons top rest =>
             match top {
                 open_paragraph _ => Markdown.mark_blank (Markdown.close_tip state),
                 open_fence info fence_char fence_len indent lines =>
+                    let cleared : Markdown.Cursor := Markdown.Cursor.strip_up_to indent c in
                     Markdown.replace_tip
-                        (Markdown.OpenBlock.open_fence info fence_char fence_len indent (List.cons "" lines))
+                        (Markdown.OpenBlock.open_fence info fence_char fence_len indent
+                            (List.cons (Markdown.Cursor.materialize cleared) lines))
                         state,
                 open_indented_code lines =>
-                    Markdown.replace_tip (Markdown.OpenBlock.open_indented_code (List.cons "" lines)) state,
+                    let content : Markdown.Cursor := Markdown.Cursor.step_many 4i64 c in
+                    Markdown.replace_tip
+                        (Markdown.OpenBlock.open_indented_code
+                            (List.cons (Markdown.Cursor.materialize content) lines))
+                        state,
                 open_html html_type lines =>
                     if I64.lt html_type 6i64
                     then Markdown.replace_tip (Markdown.OpenBlock.open_html html_type (List.cons "" lines)) state
@@ -977,7 +983,7 @@ def Markdown.blank_line (state : Markdown.BlockState) : Markdown.BlockState :=
 #[partial]
 def Markdown.add_content (state : Markdown.BlockState) (c : Markdown.Cursor) : Markdown.BlockState :=
     if Markdown.Cursor.blank c
-    then Markdown.blank_line state
+    then Markdown.blank_line state c
     else
         match state.stack {
             List.empty => state,

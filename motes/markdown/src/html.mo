@@ -6,6 +6,8 @@
 /// normalising whitespace. Text goes through `Html.Node.node_text`, so the
 /// shared escaper owns `& < >`.
 use init::string {}
+use parsec::core {is_empty}
+use lib::scan {Markdown.char_width}
 use xml_html::html {Html.Attr, Html.Node}
 use lib::options {Markdown.HtmlOptions, Markdown.default_html_options}
 use lib::href {Markdown.escape_href}
@@ -116,7 +118,8 @@ def Markdown.block_nodes (opts : Markdown.HtmlOptions) (b : Markdown.Block) : Li
             let attrs : List Html.Attr :=
                 match info {
                     Option.some language =>
-                        List.cons (Markdown.at "class" (String.concat "language-" language)) List.empty,
+                        List.cons (Markdown.at "class"
+                            (String.concat "language-" (Markdown.first_word_of language))) List.empty,
                     Option.none => List.empty
                 } in
             [ Markdown.el "pre" List.empty
@@ -210,6 +213,25 @@ def Markdown.tight_children_rev (opts : Markdown.HtmlOptions) (blocks : List Mar
                 } in
             Markdown.tight_children_rev opts rest (Markdown.nodes_rev nodes acc)
     }
+
+/// cmark uses the info string's first word as the language class.
+#[partial]
+def Markdown.first_word (s : String) (acc : List String) : String :=
+    if is_empty s
+    then String.concat_list (List.reverse acc)
+    else
+        match String.get s 0 {
+            Option.some b =>
+                if Bool.or (U8.beq b 32u8) (U8.beq b 9u8)
+                then String.concat_list (List.reverse acc)
+                else
+                    let w : I64 := Markdown.char_width s in
+                    Markdown.first_word (String.drop w s) (List.cons (String.slice s 0 w) acc),
+            Option.none => String.concat_list (List.reverse acc)
+        }
+
+pub def Markdown.first_word_of (s : String) : String :=
+    Markdown.first_word s List.empty
 
 // ─── Entry points ───
 

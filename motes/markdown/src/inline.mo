@@ -116,7 +116,7 @@ def Markdown.take_alnum (s : String) (acc : List String) (n : I64) : Pair String
 /// no codepoint is that large, and the caller maps out-of-range to U+FFFD.
 #[partial]
 def Markdown.take_digits (s : String) (acc : I64) (n : I64) : Pair I64 String :=
-    if I64.lt 7i64 n
+    if I64.lt 6i64 n
     then Pair.pair acc s
     else
         match String.get s 0 {
@@ -168,7 +168,7 @@ def Markdown.hex_value (b : U8) : I64 :=
 
 #[partial]
 def Markdown.take_hex (s : String) (acc : I64) (n : I64) : Pair I64 String :=
-    if I64.lt 6i64 n
+    if I64.lt 5i64 n
     then Pair.pair acc s
     else
         match String.get s 0 {
@@ -217,12 +217,15 @@ def Markdown.try_numeric (s : String) : Option (Pair String String) :=
         Option.some b =>
             if Bool.or (U8.beq b 120u8) (U8.beq b 88u8)
             then
-                match Markdown.take_hex (String.drop 1i64 s) 0i64 0i64 {
-                    Pair.pair v rest => Markdown.numeric_tail v rest
+                let after : String := String.drop 1i64 s in
+                match Markdown.take_hex after 0i64 0i64 {
+                    Pair.pair v rest =>
+                        if String.beq rest after then Option.none else Markdown.numeric_tail v rest
                 }
             else
                 match Markdown.take_digits s 0i64 0i64 {
-                    Pair.pair v rest => Markdown.numeric_tail v rest
+                    Pair.pair v rest =>
+                        if String.beq rest s then Option.none else Markdown.numeric_tail v rest
                 }
     }
 
