@@ -183,10 +183,12 @@ def Markdown.item_node (opts : Markdown.HtmlOptions) (tight : Bool) (item : Mark
     Markdown.el "li" List.empty (Markdown.item_children opts tight item.blocks)
 
 #[partial]
+/// cmark's `cr()`: a block child starts on its own line, so a loose item opens
+/// with a newline and a tight item puts one before any non-paragraph child.
 def Markdown.item_children (opts : Markdown.HtmlOptions) (tight : Bool) (blocks : List Markdown.Block) : List Html.Node :=
     if tight
     then Markdown.tight_children opts blocks
-    else Markdown.blocks_nodes opts blocks
+    else List.cons (Markdown.txt "\n") (Markdown.blocks_nodes opts blocks)
 
 /// A tight list item renders paragraphs without their `<p>` wrapper.
 #[partial]
@@ -202,7 +204,7 @@ def Markdown.tight_children_rev (opts : Markdown.HtmlOptions) (blocks : List Mar
             let nodes : List Html.Node :=
                 match b {
                     block_paragraph inlines => Markdown.inline_nodes opts inlines,
-                    _ => Markdown.block_nodes opts b
+                    _ => List.cons (Markdown.txt "\n") (Markdown.block_nodes opts b)
                 } in
             Markdown.tight_children_rev opts rest (Markdown.nodes_rev nodes acc)
     }
