@@ -41,7 +41,7 @@ struct Markdown.DelimRec {
     outer_len : I64
 }
 
-def Markdown.mk_delim_rec (ch : U8) (count : I64) (orig : I64) (can_open : Bool) (can_close : Bool)
+pub def Markdown.mk_delim_rec (ch : U8) (count : I64) (orig : I64) (can_open : Bool) (can_close : Bool)
     (outer_len : I64) : Markdown.DelimRec :=
     let d : Markdown.DelimRec :=
         { ch := ch, count := count, orig := orig, can_open := can_open, can_close := can_close,
@@ -859,7 +859,7 @@ def Markdown.mod3 (n : I64) : I64 :=
     I64.sub n (I64.mul 3i64 (I64.div n 3i64))
 
 /// cmark's rule of three.
-def Markdown.rule_of_three (opener : Markdown.DelimRec) (closer_count : I64) (closer_orig : I64)
+pub def Markdown.rule_of_three (opener : Markdown.DelimRec) (closer_count : I64) (closer_orig : I64)
     (closer_can_open : Bool) : Bool :=
     if Bool.or closer_can_open opener.can_close
     then
@@ -912,21 +912,21 @@ def Markdown.finish_delim
 /// Match as many closers as possible against this run, then push the rest.
 #[partial]
 def Markdown.match_closers
-    (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool) (rest : String)
-    : Markdown.InlineBuild :=
+    (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool)
+    (can_close : Bool) (rest : String) : Markdown.InlineBuild :=
     if I64.lt remaining 1i64
     then Markdown.inline_loop b rest
-    else Markdown.match_one b ch remaining orig can_open rest
+    else Markdown.match_one b ch remaining orig can_open can_close rest
 
 #[partial]
 def Markdown.match_one
-    (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool) (rest : String)
-    : Markdown.InlineBuild :=
+    (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool)
+    (can_close : Bool) (rest : String) : Markdown.InlineBuild :=
     match Markdown.find_opener b.delims ch remaining orig can_open 0i64 {
-        Option.none => Markdown.finish_delim b ch remaining orig can_open false rest,
+        Option.none => Markdown.finish_delim b ch remaining orig can_open can_close rest,
         Option.some index =>
             match List.get index b.delims {
-                Option.none => Markdown.finish_delim b ch remaining orig can_open false rest,
+                Option.none => Markdown.finish_delim b ch remaining orig can_open can_close rest,
                 Option.some opener =>
                     let width : I64 :=
                         if Bool.and (Bool.not (I64.lt remaining 2i64)) (Bool.not (I64.lt opener.count 2i64))
@@ -958,7 +958,7 @@ def Markdown.match_one
                         { pieces := List.empty, nodes := nodes1, refs := b.refs, len := len1,
                           delims := delims1, prev := b.prev } in
                     let remaining1 : I64 := I64.sub remaining width in
-                    Markdown.match_closers b1 ch remaining1 orig can_open rest
+                    Markdown.match_closers b1 ch remaining1 orig can_open can_close rest
             }
     }
 
@@ -977,7 +977,7 @@ def Markdown.scan_delim (b : Markdown.InlineBuild) (s : String) (ch : U8) : Mark
                         { pieces := settled.pieces, nodes := settled.nodes, refs := settled.refs,
                           len := settled.len, delims := settled.delims, prev := Option.some (U8.to_u32 ch) } in
                     if can_close
-                    then Markdown.match_closers b1 ch n n can_open rest
+                    then Markdown.match_closers b1 ch n n can_open can_close rest
                     else Markdown.finish_delim b1 ch n n can_open can_close rest
             }
     }

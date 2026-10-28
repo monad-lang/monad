@@ -195,9 +195,9 @@ def Markdown.is_attr_name_char (b : U8) : Bool :=
 /// the remainder.
 pub def Markdown.scan_html_tag (s : String) : Option (Pair String String) :=
     if String.starts_with "<!-->" s
-    then Option.some (Pair.pair "<!-->" (String.drop 4i64 s))
+    then Option.some (Pair.pair "<!-->" (String.drop 5i64 s))
     else if String.starts_with "<!--->" s
-    then Option.some (Pair.pair "<!--->" (String.drop 5i64 s))
+    then Option.some (Pair.pair "<!--->" (String.drop 6i64 s))
     else if String.starts_with "<!--" s
     then Markdown.html_span "<!--" "-->" s
     else if String.starts_with "<![CDATA[" s
