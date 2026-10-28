@@ -181,11 +181,25 @@ def Markdown.skip_past (needle : String) (s : String) (n : I64) : Option String 
             Option.none => Option.none
         }
 
+/// An attribute name starts with a letter, `_` or `:`, and continues with
+/// letters, digits, `_`, `.`, `:` or `-`.
+def Markdown.is_attr_start (b : U8) : Bool :=
+    Bool.or (Markdown.is_alpha b) (Bool.or (U8.beq b 95u8) (U8.beq b 58u8))
+
+def Markdown.is_attr_name_char (b : U8) : Bool :=
+    Bool.or (Markdown.is_attr_start b)
+        (Bool.or (Bool.and (U8.lt 47u8 b) (U8.lt b 58u8))
+            (Bool.or (U8.beq b 46u8) (U8.beq b 45u8)))
+
 /// A raw inline HTML construct at `s` (which starts with `<`): the literal and
 /// the remainder.
 pub def Markdown.scan_html_tag (s : String) : Option (Pair String String) :=
     if String.starts_with "<!--" s
-    then Markdown.html_span "<!--" "-->" s
+    then
+        // A comment's content may not start with `>` or `->`.
+        if Bool.or (String.starts_with "<!-->" s) (String.starts_with "<!--->" s)
+        then Option.none
+        else Markdown.html_span "<!--" "-->" s
     else if String.starts_with "<![CDATA[" s
     then Markdown.html_span "<![CDATA[" "]]>" s
     else if String.starts_with "<?" s
@@ -282,13 +296,26 @@ def Markdown.open_tag_tail (orig : String) (s : String) : Option (Pair String St
     match String.get s 0 {
         Option.none => Option.none,
         Option.some b =>
-            if Markdown.is_tag_ws b
-            then Markdown.open_tag_tail orig (String.drop 1i64 s)
-            else if U8.beq b 62u8
+            if U8.beq b 62u8
             then Markdown.finish_span orig (String.drop 1i64 s)
             else if U8.beq b 47u8
             then Markdown.self_closing_tail orig s
-            else if Markdown.is_tag_name_char b
+            else if Markdown.is_tag_ws b
+            then Markdown.after_tag_space orig (Markdown.skip_ws s)
+            else Option.none
+    }
+
+/// After whitespace inside a tag: another attribute, `>` or `/>`.
+#[partial]
+def Markdown.after_tag_space (orig : String) (s : String) : Option (Pair String String) :=
+    match String.get s 0 {
+        Option.none => Option.none,
+        Option.some b =>
+            if U8.beq b 62u8
+            then Markdown.finish_span orig (String.drop 1i64 s)
+            else if U8.beq b 47u8
+            then Markdown.self_closing_tail orig s
+            else if Markdown.is_attr_start b
             then
                 match Markdown.attr_name_end s {
                     Option.some after_name => Markdown.attr_tail orig after_name,
@@ -311,7 +338,7 @@ def Markdown.self_closing_tail (orig : String) (s : String) : Option (Pair Strin
 def Markdown.attr_name_end (s : String) : Option String :=
     match String.get s 0 {
         Option.some b =>
-            if Markdown.is_tag_name_char b
+            if Markdown.is_attr_name_char b
             then Markdown.attr_name_end (String.drop 1i64 s)
             else Option.some s,
         Option.none => Option.none
@@ -353,7 +380,7 @@ def Markdown.skip_to_char (closing : U8) (s : String) (orig : String) : Option (
         Option.none => Option.none,
         Option.some b =>
             if U8.beq b closing
-            then Markdown.open_tag_tail orig (String.drop 1i64 s)
+            then Markdown.after_quoted orig (String.drop 1i64 s)
             else Markdown.skip_to_char closing (String.drop 1i64 s) orig
     }
 
@@ -364,7 +391,28 @@ def Markdown.unquoted_end (s : String) (orig : String) : Option (Pair String Str
         Option.some b =>
             if Markdown.is_tag_ws b then Markdown.open_tag_tail orig s
             else if U8.beq b 62u8 then Markdown.finish_span orig (String.drop 1i64 s)
+            else if U8.beq b 34u8 then Option.none
+            else if U8.beq b 39u8 then Option.none
+            else if U8.beq b 60u8 then Option.none
+            else if U8.beq b 61u8 then Option.none
+            else if U8.beq b 96u8 then Option.none
             else Markdown.unquoted_end (String.drop 1i64 s) orig
+    }
+
+/// After a quoted attribute value: whitespace, `>` or `/>` -- another
+/// attribute must be separated by whitespace.
+#[partial]
+def Markdown.after_quoted (orig : String) (s : String) : Option (Pair String String) :=
+    match String.get s 0 {
+        Option.none => Option.none,
+        Option.some b =>
+            if Markdown.is_tag_ws b
+            then Markdown.open_tag_tail orig s
+            else if U8.beq b 62u8
+            then Markdown.finish_span orig (String.drop 1i64 s)
+            else if U8.beq b 47u8
+            then Markdown.self_closing_tail orig s
+            else Option.none
     }
 
 #[partial]
