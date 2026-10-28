@@ -436,7 +436,7 @@ pub def Markdown.try_list_item (c : Markdown.Cursor) (in_paragraph : Bool) (base
             Option.some b =>
                 if Bool.or (Bool.or (U8.beq b 45u8) (U8.beq b 43u8)) (U8.beq b 42u8)
                 then
-                    Markdown.finish_list_item c (list_bullet (String.slice c.text 0 1i64)) 1i64
+                    Markdown.finish_list_item c base (list_bullet (String.slice c.text 0 1i64)) 1i64
                         in_paragraph Option.none
                 else if Bool.and (U8.lt 47u8 b) (U8.lt b 58u8)
                 then
@@ -449,7 +449,7 @@ pub def Markdown.try_list_item (c : Markdown.Cursor) (in_paragraph : Bool) (base
                                     then
                                         let kind : Markdown.ListKind :=
                                             list_ordered start (String.slice delim.text 0 1i64) in
-                                        Markdown.finish_list_item c kind (I64.add digits 1i64)
+                                        Markdown.finish_list_item c base kind (I64.add digits 1i64)
                                             in_paragraph (Option.some start)
                                     else Option.none,
                                 Option.none => Option.none
@@ -460,7 +460,7 @@ pub def Markdown.try_list_item (c : Markdown.Cursor) (in_paragraph : Bool) (base
 
 /// Shared tail of list-marker parsing. `ordered_start` is `none` for bullets.
 def Markdown.finish_list_item
-    (c : Markdown.Cursor) (kind : Markdown.ListKind) (marker_len : I64)
+    (c : Markdown.Cursor) (base : I64) (kind : Markdown.ListKind) (marker_len : I64)
     (in_paragraph : Bool) (ordered_start : Option I64) : Option Markdown.ListStart :=
     let after_marker : Markdown.Cursor := Markdown.Cursor.step_many marker_len c in
     let space_end : Markdown.Cursor := Markdown.Cursor.skip_spaces after_marker in
@@ -484,9 +484,9 @@ def Markdown.finish_list_item
     else
         let padding : I64 :=
             if Bool.or (I64.lt 4i64 padding_raw) blank_item then 1i64 else padding_raw in
-        let content_indent : I64 := I64.add marker_end padding in
+        let content_indent : I64 := I64.sub (I64.add marker_end padding) base in
         let content : Markdown.Cursor :=
-            Markdown.Cursor.step_many (I64.sub content_indent c.column) c in
+            Markdown.Cursor.step_many (I64.sub (I64.add base content_indent) c.column) c in
         let start : Markdown.ListStart :=
             { kind := kind, content_indent := content_indent, content := content } in
         Option.some start
@@ -511,6 +511,14 @@ def Markdown.accepts_line (b : Markdown.OpenBlock) (has_child : Bool) (c : Markd
         open_item content_indent _ blocks _ _ => Markdown.accepts_item content_indent blocks has_child c,
         open_paragraph _ =>
             if Markdown.Cursor.blank c then Option.none else Option.some c,
+        // An indented code block continues on a blank line or four columns of
+        // indent; anything else closes it and the line is re-examined.
+        open_indented_code _ =>
+            if Markdown.Cursor.blank c
+            then Option.some c
+            else if I64.lt 3i64 (I64.sub (Markdown.Cursor.first_nonspace_column c) c.column)
+            then Option.some c
+            else Option.none,
         open_html html_type _ =>
             if Markdown.Cursor.blank c
             then (if I64.lt html_type 6i64 then Option.some c else Option.none)
@@ -525,8 +533,8 @@ def Markdown.accepts_item
     (content_indent : I64) (blocks : List Markdown.RawBlock) (has_child : Bool) (c : Markdown.Cursor)
     : Option Markdown.Cursor :=
     let first : Markdown.Cursor := Markdown.Cursor.skip_spaces c in
-    if Bool.not (I64.lt first.column content_indent)
-    then Option.some (Markdown.Cursor.step_many (I64.sub content_indent c.column) c)
+    if Bool.not (I64.lt (I64.sub first.column c.column) content_indent)
+    then Option.some (Markdown.Cursor.step_many content_indent c)
     else if Bool.and (Markdown.Cursor.blank c)
             (Bool.or (Bool.not (List.is_empty blocks)) has_child)
     then Option.some first
