@@ -8,6 +8,7 @@
 use init::string {}
 use xml_html::html {Html.Attr, Html.Node}
 use lib::options {Markdown.HtmlOptions, Markdown.default_html_options}
+use lib::href {Markdown.escape_href}
 use lib::types {
     Markdown.Block, Markdown.Document, Markdown.Inline, Markdown.ListItem,
     Markdown.ListKind,
@@ -83,19 +84,20 @@ def Markdown.inline_node (opts : Markdown.HtmlOptions) (i : Markdown.Inline) : L
 /// cmark's attribute order: `href`, then `title`.
 def Markdown.link_attrs (dest : String) (title : Option String) : List Html.Attr :=
     match title {
-        Option.some t => [Markdown.at "href" dest, Markdown.at "title" t],
-        Option.none => [Markdown.at "href" dest]
+        Option.some t => [Markdown.at "href" (Markdown.escape_href dest), Markdown.at "title" t],
+        Option.none => [Markdown.at "href" (Markdown.escape_href dest)]
     }
 
 /// cmark's attribute order: `src`, `alt`, then `title`.
 def Markdown.image_attrs (dest : String) (title : Option String) (alt : String) : List Html.Attr :=
     match title {
-        Option.some t => [Markdown.at "src" dest, Markdown.at "alt" alt, Markdown.at "title" t],
-        Option.none => [Markdown.at "src" dest, Markdown.at "alt" alt]
+        Option.some t =>
+            [Markdown.at "src" (Markdown.escape_href dest), Markdown.at "alt" alt, Markdown.at "title" t],
+        Option.none => [Markdown.at "src" (Markdown.escape_href dest), Markdown.at "alt" alt]
     }
 
 def Markdown.autolink_attrs (dest : String) : List Html.Attr :=
-    List.cons (Markdown.at "href" dest) List.empty
+    List.cons (Markdown.at "href" (Markdown.escape_href dest)) List.empty
 
 // ─── Blocks ───
 

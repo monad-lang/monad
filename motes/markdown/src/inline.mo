@@ -516,6 +516,15 @@ def Markdown.find_bracket_close (text : String) (rest : String) (pos : I64) (dep
                                     Markdown.find_bracket_close text (String.drop n rest) (I64.add pos n) depth
                             }
                     }
+                else if U8.beq b 60u8
+                then
+                    match Markdown.skip_inline_angle rest {
+                        Option.some after_angle =>
+                            let consumed : I64 := I64.sub (String.length rest) (String.length after_angle) in
+                            Markdown.find_bracket_close text after_angle (I64.add pos consumed) depth,
+                        Option.none =>
+                            Markdown.find_bracket_close text (String.drop 1i64 rest) (I64.add pos 1i64) depth
+                    }
                 else if U8.beq b 91u8
                 then Markdown.find_bracket_close text (String.drop 1i64 rest) (I64.add pos 1i64) (I64.add depth 1i64)
                 else if U8.beq b 93u8
@@ -542,6 +551,31 @@ def Markdown.has_link (nodes : List Markdown.Inline) : Bool :=
                     _ => false
                 })
                 (Markdown.has_link rest)
+    }
+
+/// A `<`-construct inside a label (autolink or raw HTML) is skipped whole; a
+/// `]` inside it must not close the label.
+pub def Markdown.skip_inline_angle (s : String) : Option String :=
+    match Markdown.scan_uri_autolink s {
+        Option.some found =>
+            match found {
+                Pair.pair _ rest => Option.some rest
+            },
+        Option.none =>
+            match Markdown.scan_email_autolink s {
+                Option.some found =>
+                    match found {
+                        Pair.pair _ rest => Option.some rest
+                    },
+                Option.none =>
+                    match Markdown.scan_html_tag s {
+                        Option.some found =>
+                            match found {
+                                Pair.pair _ rest => Option.some rest
+                            },
+                        Option.none => Option.none
+                    }
+            }
     }
 
 /// Flatten nodes to plain text: what an image's `alt` is.
@@ -653,7 +687,7 @@ def Markdown.emit_link (b : Markdown.InlineBuild) (image : Bool) (label : String
         // Links cannot nest: the outer opener is literal and the label is
         // rescanned, which is what lets the inner one form.
         Markdown.inline_loop (Markdown.push_piece (if image then "![" else "[") b)
-            (String.drop (if image then 2i64 else 1i64) label)
+            (String.drop (if image then 2i64 else 1i64) whole)
     else
         let node : Markdown.Inline :=
             if image
