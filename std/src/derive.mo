@@ -333,18 +333,24 @@ def bord_outer_arm (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (al
             match_arm ctor_a_name a_binders (e_match (e_var "b") inner_arms)
     }
 
-/// One of `derive_bord`'s two methods (`lt`/`gt`), built from its own
-/// field-priority chain function and declaration-order tiebreak sense.
-def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (type_name : String) (ctors : List CtorInfo) : MetaDecl :=
+/// One of `derive_bord`'s four methods (`lt`/`gt`/`lte`/`gte`), built from its
+/// own field-priority chain function and declaration-order tiebreak sense.
+/// `negate` wraps the finished Bool body in `Bool.not`, which is how `lte`
+/// and `gte` are derived: `lte = not gt`, `gte = not lt` (matching
+/// `init/prelude.mo`'s `BOrd` contract).
+def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_true : Bool) (negate : Bool) (type_name : String) (ctors : List CtorInfo) : MetaDecl :=
     let arms := map_indexed_ctor_arms 0 (bord_outer_arm chain_fn diff_lt_is_true ctors) ctors in
+    let raw_body := e_match (e_var "a") arms in
+    let body := if negate then e_app (e_var "Bool.not") raw_body else raw_body in
     d_def name [meta_param "a" (e_var type_name), meta_param "b" (e_var type_name)] (e_var "Bool")
-        (e_match (e_var "a") arms)
+        body
 
 /// `#[derive BOrd] struct Point { x : I64, y : I64 }` (or, called
 /// directly, `derive_bord! Point`) generates a structural `BOrd Point`
 /// instance: constructors ordered by declaration position (first sorts
 /// lowest), fields within the same constructor compared lexicographically
-/// in declared order.
+/// in declared order. All four `BOrd` methods are emitted because the class
+/// declares no defaults (`lte`/`gte` are required).
 ///
 /// Every field's own type must have a `BOrd` instance in scope, same
 /// requirement as `derive_beq`'s `BEq` above.
@@ -352,8 +358,10 @@ pub def derive_bord_meta (info : TypeInfo) : List MetaDecl :=
     match info {
         type_info type_name ctors =>
             [d_instance "BOrd" (e_var type_name)
-                [bord_method "lt" lt_chain true type_name ctors,
-                 bord_method "gt" gt_chain false type_name ctors]]
+                [bord_method "lt" lt_chain true false type_name ctors,
+                 bord_method "gt" gt_chain false false type_name ctors,
+                 bord_method "lte" gt_chain false true type_name ctors,
+                 bord_method "gte" lt_chain true true type_name ctors]]
     }
 
 #[derive_handler BOrd]

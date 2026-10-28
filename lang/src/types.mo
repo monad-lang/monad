@@ -327,11 +327,15 @@ pub instance Show NamePath {
 pub instance BOrd Identifier {
     def lt (a b : Identifier) : Bool := BOrd.lt (show_identifier a) (show_identifier b)
     def gt (a b : Identifier) : Bool := BOrd.gt (show_identifier a) (show_identifier b)
+    def lte (a b : Identifier) : Bool := Bool.not (BOrd.gt (show_identifier a) (show_identifier b))
+    def gte (a b : Identifier) : Bool := Bool.not (BOrd.lt (show_identifier a) (show_identifier b))
 }
 
 pub instance BOrd ModulePath {
     def lt (a b : ModulePath) : Bool := BOrd.lt (show_module_path a) (show_module_path b)
     def gt (a b : ModulePath) : Bool := BOrd.gt (show_module_path a) (show_module_path b)
+    def lte (a b : ModulePath) : Bool := Bool.not (BOrd.gt (show_module_path a) (show_module_path b))
+    def gte (a b : ModulePath) : Bool := Bool.not (BOrd.lt (show_module_path a) (show_module_path b))
 }
 
 /// Same "collision-free as a string key" property `BOrd`'s own

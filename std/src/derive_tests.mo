@@ -168,3 +168,22 @@ def test_derive_bord_first_deciding_field_wins_lexicographic_priority : Bool :=
     let p1 : Triple := { a := 1, b := 5, c := 100 } in
     let p2 : Triple := { a := 2, b := 5, c := 1 } in
     p1 < p2 && p2 > p1 && Bool.not (p1 > p2) && Bool.not (p2 < p1)
+
+/// `lte`/`gte` are derived as `not gt` / `not lt`, so they must agree with
+/// `lt`/`gt` — including the both-equal case that neither `<` nor `>`
+/// decides.
+#[test]
+def test_derive_bord_lte_gte_agree_with_lt_gt : Bool :=
+    let p1 : Triple := { a := 1, b := 5, c := 100 } in
+    let p2 : Triple := { a := 2, b := 5, c := 1 } in
+    p1 <= p2 && p2 >= p1 && Bool.not (p2 <= p1) && Bool.not (p1 >= p2)
+        && p1 <= p1 && p1 >= p1
+
+/// Constructor declaration order must decide `<=`/`>=` the same way it
+/// decides `<`/`>`.
+#[test]
+def test_derive_bord_lte_gte_constructor_order : Bool :=
+    Suit.hearts <= Suit.spades && Suit.spades >= Suit.hearts
+        && Bool.not (Suit.spades <= Suit.hearts)
+        && Bool.not (Suit.hearts >= Suit.spades)
+        && Suit.number 3 <= Suit.number 3

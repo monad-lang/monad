@@ -211,20 +211,28 @@ pub instance BEq Bool {
 pub infix (==) := BEq.beq
 // infix (!=) := BEq.not_beq
 
-/// Ordered comparison
+/// Ordered comparison.
+///
+/// `lte`/`gte` are required methods rather than class defaults: the Rust
+/// host's checked dictionary path refuses an instance that omits a declared
+/// method whose implementation is a default (`check_one_instance_new` in
+/// core/src/core_check_module.rs), falling back to an unchecked path. Every
+/// instance therefore states both. They mean `not gt` / `not lt`, the
+/// total-order reading `BOrd` already assumes.
 pub class BOrd A {
   def lt (a b : A) : Bool
   def gt (a b : A) : Bool
-	// TODO fix default implementations
-  // def lte (a b : A) : Bool := not (BOrd.gt a b)
-  // def gte (a b : A) : Bool := not (BOrd.lt a b)
+  def lte (a b : A) : Bool
+  def gte (a b : A) : Bool
 }
 
 pub infix (<) := BOrd.lt
 
-// TODO
-// infix (<=) := BOrd.lte
-// infix (>=) := BOrd.gte
+/// `a <= b`, i.e. `not (a > b)`.
+pub infix (<=) := BOrd.lte
+
+/// `a >= b`, i.e. `not (a < b)`.
+pub infix (>=) := BOrd.gte
 
 pub infix (>) := BOrd.gt
 
@@ -236,6 +244,16 @@ pub instance BOrd Bool {
   def gt (a b : Bool) : Bool :=
     if a then Bool.not b
     else false
+
+  // false <= anything; true <= b exactly when b is true.
+  def lte (a b : Bool) : Bool :=
+    if a then b
+    else true
+
+  // true >= anything; false >= b exactly when b is false.
+  def gte (a b : Bool) : Bool :=
+    if a then true
+    else Bool.not b
 }
 
 /// Hashable: produce a hash value for an element.

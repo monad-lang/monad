@@ -168,6 +168,8 @@ pub def String.gt (a b : String) : Bool
 pub instance BOrd String {
 	def lt (a b : String) : Bool := String.lt a b
 	def gt (a b : String) : Bool := String.gt a b
+	def lte (a b : String) : Bool := Bool.not (String.gt a b)
+	def gte (a b : String) : Bool := Bool.not (String.lt a b)
 }
 
 pub instance ToString String {

@@ -317,13 +317,13 @@ any type with the right instance:
 | `++` | `Append.append` | Append (strings, lists, …) |
 | `&&`, `\|\|` | `Bool.and`, `Bool.or` | Boolean and / or |
 | `==` | `BEq.beq` | Equality |
-| `<`, `>` | `BOrd.lt`, `BOrd.gt` | Ordering |
+| `<`, `>`, `<=`, `>=` | `BOrd.lt`, `BOrd.gt`, `BOrd.lte`, `BOrd.gte` | Ordering |
 | `>>=` | `Monad.bind` | Monadic bind |
 | `\|>` | `apply_fun` | Forward pipe (`x \|> f`) |
 | `<\|` | `fun_apply` | Backward pipe (`f <\| x`) |
 
 A handful of operator *tokens* have a precedence but no binding in the prelude
-yet, so using them is an error: `!=`, `<=`, `>=`, `<*>`, `<\|>`, `>>`, `<<`, and
+yet, so using them is an error: `!=`, `<*>`, `<\|>`, `>>`, `<<`, and
 `@`. The [Reference](./reference.md#built-in-operators) has the full precedence
 table, and you can bind any of them yourself with `infix (op) := someFunction`.
 

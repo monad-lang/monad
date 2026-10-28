@@ -50,6 +50,8 @@ pub instance BEq I8 {
 pub instance BOrd I8 {
 	def lt (a b : I8) : Bool := I8.lt a b
 	def gt (a b : I8) : Bool := I8.gt a b
+	def lte (a b : I8) : Bool := Bool.not (I8.gt a b)
+	def gte (a b : I8) : Bool := Bool.not (I8.lt a b)
 }
 
 pub instance ToString I8 {
@@ -105,6 +107,8 @@ pub instance BEq I16 {
 pub instance BOrd I16 {
 	def lt (a b : I16) : Bool := I16.lt a b
 	def gt (a b : I16) : Bool := I16.gt a b
+	def lte (a b : I16) : Bool := Bool.not (I16.gt a b)
+	def gte (a b : I16) : Bool := Bool.not (I16.lt a b)
 }
 
 pub instance ToString I16 {
@@ -163,6 +167,8 @@ pub instance BEq I32 {
 pub instance BOrd I32 {
 	def lt (a b : I32) : Bool := I32.lt a b
 	def gt (a b : I32) : Bool := I32.gt a b
+	def lte (a b : I32) : Bool := Bool.not (I32.gt a b)
+	def gte (a b : I32) : Bool := Bool.not (I32.lt a b)
 }
 
 pub instance ToString I32 {
@@ -237,6 +243,8 @@ pub instance BEq I64 {
 pub instance BOrd I64 {
 	def lt (a b : I64) : Bool := I64.lt a b
 	def gt (a b : I64) : Bool := I64.gt a b
+	def lte (a b : I64) : Bool := Bool.not (I64.gt a b)
+	def gte (a b : I64) : Bool := Bool.not (I64.lt a b)
 }
 
 pub instance ToString I64 {
@@ -302,6 +310,8 @@ pub instance BEq U8 {
 pub instance BOrd U8 {
 	def lt (a b : U8) : Bool := U8.lt a b
 	def gt (a b : U8) : Bool := U8.gt a b
+	def lte (a b : U8) : Bool := Bool.not (U8.gt a b)
+	def gte (a b : U8) : Bool := Bool.not (U8.lt a b)
 }
 
 pub instance ToString U8 {
@@ -357,6 +367,8 @@ pub instance BEq U16 {
 pub instance BOrd U16 {
 	def lt (a b : U16) : Bool := U16.lt a b
 	def gt (a b : U16) : Bool := U16.gt a b
+	def lte (a b : U16) : Bool := Bool.not (U16.gt a b)
+	def gte (a b : U16) : Bool := Bool.not (U16.lt a b)
 }
 
 pub instance ToString U16 {
@@ -412,6 +424,8 @@ pub instance BEq U32 {
 pub instance BOrd U32 {
 	def lt (a b : U32) : Bool := U32.lt a b
 	def gt (a b : U32) : Bool := U32.gt a b
+	def lte (a b : U32) : Bool := Bool.not (U32.gt a b)
+	def gte (a b : U32) : Bool := Bool.not (U32.lt a b)
 }
 
 pub instance ToString U32 {
@@ -500,6 +514,8 @@ pub instance BEq U64 {
 pub instance BOrd U64 {
 	def lt (a b : U64) : Bool := U64.lt a b
 	def gt (a b : U64) : Bool := U64.gt a b
+	def lte (a b : U64) : Bool := Bool.not (U64.gt a b)
+	def gte (a b : U64) : Bool := Bool.not (U64.lt a b)
 }
 
 pub instance ToString U64 {
@@ -555,6 +571,8 @@ pub instance BEq F32 {
 pub instance BOrd F32 {
 	def lt (a b : F32) : Bool := F32.lt a b
 	def gt (a b : F32) : Bool := F32.gt a b
+	def lte (a b : F32) : Bool := Bool.not (F32.gt a b)
+	def gte (a b : F32) : Bool := Bool.not (F32.lt a b)
 }
 
 pub instance ToString F32 {
@@ -630,6 +648,8 @@ pub instance BEq F64 {
 pub instance BOrd F64 {
 	def lt (a b : F64) : Bool := F64.lt a b
 	def gt (a b : F64) : Bool := F64.gt a b
+	def lte (a b : F64) : Bool := Bool.not (F64.gt a b)
+	def gte (a b : F64) : Bool := Bool.not (F64.lt a b)
 }
 
 pub instance ToString F64 {

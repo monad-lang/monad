@@ -376,7 +376,9 @@ infix (operator) := functionName
 | `==` | 40 | Left | `BEq.beq` |
 | `<` | 40 | Left | `BOrd.lt` |
 | `>` | 40 | Left | `BOrd.gt` |
-| `!=`, `=`, `<=`, `>=` | 40 | Left | — |
+| `<=` | 40 | Left | `BOrd.lte` |
+| `>=` | 40 | Left | `BOrd.gte` |
+| `!=`, `=` | 40 | Left | — |
 | `++` | 50 | Right | `Append.append` |
 | `@` | 50 | Right | — |
 | `>>`, `<<` | 60 | Left | — |
@@ -386,8 +388,9 @@ infix (operator) := functionName
 | `/` | 70 | Left | `Div.div` |
 
 Operators marked — have a precedence but no binding in the prelude, so using
-them is an error until you bind one yourself. `!=`, `<=`, and `>=` are commented
-out in `init/prelude.mo` pending default-method support on `BEq`/`BOrd`.
+them is an error until you bind one yourself. `!=` and `=` are commented out
+in `init/prelude.mo` pending default-method support on `BEq`. `<=` and `>=`
+are bound to `BOrd.lte`/`BOrd.gte`, which mean `not gt` / `not lt`.
 
 `@` is deliberately left free for libraries to claim.
 

@@ -625,6 +625,62 @@ def test_bord_bool_gt_true_true : Bool :=
 def test_bord_bool_gt_false_false : Bool :=
     Bool.not (BOrd.gt false false)
 
+// `<=` / `>=` operator tests (`BOrd.lte` / `BOrd.gte`)
+
+#[test]
+def test_le_bool_false_true : Bool := false <= true
+
+#[test]
+def test_le_bool_true_true : Bool := true <= true
+
+#[test]
+def test_le_bool_true_false : Bool := Bool.not (true <= false)
+
+#[test]
+def test_ge_bool_true_false : Bool := true >= false
+
+#[test]
+def test_ge_bool_false_false : Bool := false >= false
+
+#[test]
+def test_ge_bool_false_true : Bool := Bool.not (false >= true)
+
+#[test]
+def test_le_i64_less : Bool := 1 <= 2
+
+#[test]
+def test_le_i64_equal : Bool := 2 <= 2
+
+#[test]
+def test_le_i64_greater : Bool := Bool.not (3 <= 2)
+
+#[test]
+def test_ge_i64_greater : Bool := 3 >= 2
+
+#[test]
+def test_ge_i64_equal : Bool := 2 >= 2
+
+#[test]
+def test_ge_i64_less : Bool := Bool.not (1 >= 2)
+
+#[test]
+def test_le_string_less : Bool := "a" <= "b"
+
+#[test]
+def test_le_string_equal : Bool := "ab" <= "ab"
+
+#[test]
+def test_le_string_greater : Bool := Bool.not ("b" <= "a")
+
+#[test]
+def test_ge_string_greater : Bool := "b" >= "a"
+
+#[test]
+def test_ge_string_equal : Bool := "ab" >= "ab"
+
+#[test]
+def test_ge_string_less : Bool := Bool.not ("a" >= "b")
+
 // -- Type propagation tests --
 
 #[test]
