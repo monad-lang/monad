@@ -10,6 +10,8 @@ use lib::scan {
     Markdown.Cursor, Markdown.char_width, Markdown.codepoint_at, Markdown.list_drop,
     Markdown.list_take, Markdown.utf8_of_codepoint,
 }
+use lib::entities {Markdown.entity_lookup}
+use lib::unicode {Markdown.is_unicode_punctuation, Markdown.is_unicode_whitespace}
 use lib::link_syntax {
     Markdown.LinkTail, Markdown.normalize_label, Markdown.parse_link_tail,
     Markdown.parse_ref_label,
@@ -95,16 +97,7 @@ def Markdown.is_ascii_punct (b : U8) : Bool :=
 
 // ─── Character references ───
 
-/// A short named table for Phase 1; Phase 3 replaces it with the generated
-/// HTML5 table.
-def Markdown.named_entity (name : String) : Option String :=
-    if String.beq name "amp" then Option.some "&"
-    else if String.beq name "lt" then Option.some "<"
-    else if String.beq name "gt" then Option.some ">"
-    else if String.beq name "quot" then Option.some "\""
-    else if String.beq name "apos" then Option.some "'"
-    else if String.beq name "nbsp" then Option.some "\u{a0}"
-    else Option.none
+
 
 /// Read up to `max` ASCII alphanumerics, returning (name, rest).
 #[partial]
@@ -215,7 +208,7 @@ pub def Markdown.try_entity (s : String) : Option (Pair String String) :=
                             Option.some semi =>
                                 if Bool.and (U8.beq semi 59u8) (Bool.not (String.beq name ""))
                                 then
-                                    match Markdown.named_entity name {
+                                    match Markdown.entity_lookup name {
                                         Option.some text => Option.some (Pair.pair text (String.drop 1i64 rest)),
                                         Option.none => Option.none
                                     }
@@ -758,25 +751,13 @@ pub def Markdown.prev_of (whole : String) (rest : String) (b : Markdown.InlineBu
 def Markdown.is_space_cp (cp : Option U32) : Bool :=
     match cp {
         Option.none => true,
-        Option.some c =>
-            Bool.or (U32.beq c 32u32)
-                (Bool.or (U32.beq c 9u32)
-                    (Bool.or (U32.beq c 10u32) (U32.beq c 13u32)))
+        Option.some c => Markdown.is_unicode_whitespace c
     }
 
-/// ASCII punctuation plus the ranges CommonMark treats as punctuation; the
-/// generated Unicode table replaces this in the label-folding pass.
 def Markdown.is_punct_cp (cp : Option U32) : Bool :=
     match cp {
         Option.none => false,
-        Option.some c =>
-            Bool.or
-                (Bool.and (U32.lt 32u32 c) (U32.lt c 48u32))
-                (Bool.or
-                    (Bool.and (U32.lt 57u32 c) (U32.lt c 65u32))
-                    (Bool.or
-                        (Bool.and (U32.lt 90u32 c) (U32.lt c 97u32))
-                        (Bool.and (U32.lt 122u32 c) (U32.lt c 127u32))))
+        Option.some c => Markdown.is_unicode_punctuation c
     }
 
 /// (left-flanking, right-flanking).
