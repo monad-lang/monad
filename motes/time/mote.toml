@@ -1,0 +1,30 @@
+# The `time` mote: Instants, Durations, calendar dates/times and ISO-8601.
+#
+# Sub-table headers rather than inline tables, like every manifest here: the
+# self-hosted reader (lang/src/toml.mo) supports headers and not inline
+# tables, and an unparseable manifest makes `Mote.discover` return none,
+# silently disabling the declared-dependency check.
+#
+# `parsec` is the one load-bearing dependency (the ISO-8601 scanners);
+# `init`/`std` are ambient and declared as documentation, matching every
+# other mote in this tree.
+[mote]
+name = "time"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.parsec]
+path = "../parsec"
+
+# Affine-by-default migration exception, like every sibling mote. The code is
+# written affine-friendly (positional `mk` destructuring, no reused struct
+# binders), so this can be deleted once the whole mote measures clean.
+# See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"

@@ -95,6 +95,29 @@ echo "== web: log mote (Json.to_string through the log path) =="
     -o "$tmp/log-web.wasm" --no-cache
 node wasm/web/smoke.mjs "$tmp/log-web.wasm" ok
 
+echo "== web: time mote (ISO-8601 parse/show + browser clock) =="
+# The time mote is pure except `Instant.now` (available on every profile).
+# The ISO offset range checks exercise the BOrd <=/>= bindings in wasm
+# codegen. Native and wasi must agree byte for byte: the clock contributes
+# only a non-negativity flag, never its value (web is epoch-based, wasi and
+# native compiled binaries are monotonic).
+expected_time='2024-01-15T10:30:00.123+02:00 true true'
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/time_iso.mo \
+    -o "$tmp/time-web.wasm" --no-cache
+node wasm/web/smoke.mjs "$tmp/time-web.wasm" "$expected_time"
+
+"$MONAD" build --target wasm32-unknown-wasip1 fixtures/wasm/time_iso.mo \
+    -o "$tmp/time-wasi.wasm" --no-cache
+wasmtime "$tmp/time-wasi.wasm" >"$tmp/time-wasi.out" 2>"$tmp/time-wasi.err" \
+    || fail "wasmtime failed on time_iso: $(cat "$tmp/time-wasi.err")"
+"$MONAD" build fixtures/wasm/time_iso.mo -o "$tmp/time-native" --no-cache
+"$tmp/time-native" >"$tmp/time-native.out" \
+    || fail "native time_iso crashed"
+grep -Fqx "$expected_time" "$tmp/time-native.out" \
+    || fail "unexpected time_iso stdout: $(cat "$tmp/time-native.out")"
+diff -u "$tmp/time-native.out" "$tmp/time-wasi.out" \
+    || fail "time_iso: wasi and native stdout differ"
+
 echo "== web: dictionary-capturing closure in a constructor =="
 # The lifted lambda captures the implicit `[Monad M]` dictionary. It used
 # to resolve to the prelude's catch-all bridge, whose layout does not match

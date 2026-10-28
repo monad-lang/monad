@@ -64,6 +64,7 @@ members = [
   "motes/oak",
   "motes/oak_wasm",
   "motes/yaml",
+  "motes/time",
 ]
 
 # Affine-by-default migration fallback (measured 2026-10-22). This is a
