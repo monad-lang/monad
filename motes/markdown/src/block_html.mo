@@ -15,6 +15,7 @@
 use init::string {}
 use parsec::core {is_empty}
 use lib::scan {Markdown.Cursor, Markdown.char_width}
+use lib::inline_html {Markdown.scan_html_tag}
 
 /// ASCII-only case-insensitive prefix test (`String.to_lowercase` is ASCII).
 pub def Markdown.ci_prefix (prefix : String) (s : String) : Bool :=
@@ -129,26 +130,30 @@ def Markdown.html_type_tag (c : Markdown.Cursor) (in_paragraph : Bool) : Option 
             else Option.none
     }
 
-/// A complete open or closing tag, with nothing but spaces after it.
-def Markdown.complete_tag (c : Markdown.Cursor) : Bool :=
-    let after_lt : Markdown.Cursor := Markdown.Cursor.step c in
-    match Markdown.Cursor.peek after_lt {
-        Option.some b =>
-            if U8.beq b 47u8
-            then Markdown.complete_tag_named true (Markdown.Cursor.step after_lt)
-            else Markdown.complete_tag_named false after_lt,
+/// A complete open or closing tag, with nothing but spaces after it. The
+/// inline scanner owns the tag grammar, so the two cannot drift.
+pub def Markdown.complete_tag (c : Markdown.Cursor) : Bool :=
+    match Markdown.scan_html_tag c.text {
+        Option.some found =>
+            match found {
+                Pair.pair _ rest => Markdown.is_blank_line_text rest
+            },
         Option.none => false
     }
 
-def Markdown.complete_tag_named (closing : Bool) (c : Markdown.Cursor) : Bool :=
-    match Markdown.take_tag_name c List.empty {
-        Pair.pair name after_name =>
-            if String.beq name ""
-            then false
-            else if closing
-            then Markdown.close_tag_tail after_name
-            else Markdown.open_tag_tail after_name
-    }
+/// Only spaces and tabs remain.
+#[partial]
+def Markdown.is_blank_line_text (s : String) : Bool :=
+    if is_empty s
+    then true
+    else
+        match String.get s 0 {
+            Option.some b =>
+                if Bool.or (U8.beq b 32u8) (U8.beq b 9u8)
+                then Markdown.is_blank_line_text (String.drop 1i64 s)
+                else false,
+            Option.none => true
+        }
 
 /// A closing tag's tail: whitespace then `>`, then only whitespace.
 #[partial]

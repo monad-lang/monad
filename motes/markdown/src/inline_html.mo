@@ -194,12 +194,12 @@ def Markdown.is_attr_name_char (b : U8) : Bool :=
 /// A raw inline HTML construct at `s` (which starts with `<`): the literal and
 /// the remainder.
 pub def Markdown.scan_html_tag (s : String) : Option (Pair String String) :=
-    if String.starts_with "<!--" s
-    then
-        // A comment's content may not start with `>` or `->`.
-        if Bool.or (String.starts_with "<!-->" s) (String.starts_with "<!--->" s)
-        then Option.none
-        else Markdown.html_span "<!--" "-->" s
+    if String.starts_with "<!-->" s
+    then Option.some (Pair.pair "<!-->" (String.drop 4i64 s))
+    else if String.starts_with "<!--->" s
+    then Option.some (Pair.pair "<!--->" (String.drop 5i64 s))
+    else if String.starts_with "<!--" s
+    then Markdown.html_span "<!--" "-->" s
     else if String.starts_with "<![CDATA[" s
     then Markdown.html_span "<![CDATA[" "]]>" s
     else if String.starts_with "<?" s
@@ -353,7 +353,7 @@ def Markdown.attr_tail (orig : String) (s : String) : Option (Pair String String
             then
                 let after_eq : String := Markdown.skip_ws (String.drop 1i64 skipped) in
                 Markdown.attr_value orig after_eq
-            else Markdown.open_tag_tail orig skipped,
+            else Markdown.after_tag_space orig skipped,
         Option.none => Option.none
     }
 
