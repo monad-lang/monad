@@ -1,0 +1,41 @@
+# The markdown mote's manifest.
+#
+# A pure library mote, like `motes/yaml`: a value type with a parser and
+# renderers, no compiler input, so no `nix/monad.nix` entry.
+#
+# Sub-table headers rather than inline tables, which the self-hosted reader
+# supports and the house style uses (see motes/parsec/mote.toml).
+#
+# `xml_html` supplies the `Html.Node` target; `parsec` is used ONLY for its
+# O(1) UTF-8 width probe and whitespace predicate -- the block and inline
+# core is a suffix cursor, never the suffix-threading combinators (their
+# `strlen` quadratics are recorded in that mote's own comments).
+#
+# `json` is a test-only dependency (the CommonMark spec fixture). Both
+# manifest readers merge `[dev-dependencies]` into `[dependencies]`, so the
+# table documents intent rather than enforcing a target split.
+[mote]
+name = "markdown"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.init]
+path = "../../init"
+
+[dependencies.std]
+path = "../../std"
+
+[dependencies.parsec]
+path = "../parsec"
+
+[dependencies.xml_html]
+path = "../xml_html"
+
+[dev-dependencies.json]
+path = "../json"
+
+# Affine-by-default migration exception (measured 2026-10-22). Delete this
+# table when the mote reaches zero violations; the default (no table) is
+# `mode = "error"`. See plans/type-system/quantitative-types.md.
+[affine]
+mode = "warn"
