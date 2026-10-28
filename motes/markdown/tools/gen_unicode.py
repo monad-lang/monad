@@ -84,24 +84,109 @@ def parse_folding(path):
     return folding
 
 
+def _tree(rs):
+    """Balanced split of sorted ranges: (lo, hi, left, right) or None."""
+    if not rs:
+        return None
+    if len(rs) == 1:
+        return ("leaf", rs[0][0], rs[0][1], None, None)
+    mid = len(rs) // 2
+    left = _tree(rs[:mid])
+    right = _tree(rs[mid:])
+    return ("node", rs[mid][0], 0, left, right)
+
+
+def _flatten(tree, nodes):
+    """Post-order ids for a tree, returning the id of this node."""
+    if tree is None:
+        return None
+    kind = tree[0]
+    lid = _flatten(tree[3], nodes) if len(tree) > 3 else None
+    rid = _flatten(tree[4], nodes) if len(tree) > 4 else None
+    idx = len(nodes)
+    nodes.append((tree, lid, rid))
+    return idx
+
+
 def emit_range_fn(name, ranges, doc):
-    lines = []
-    lines.append("/// %s" % doc)
-    lines.append("pub def %s (cp : U32) : Bool :=" % name)
-    if not ranges:
+    """Balanced decision tree: one function per node, depth ~log2(ranges).
+
+    A linear `else if` chain would nest the expression once per range, and the
+    Rust host elaborates that recursion on the stack -- a 339-range chain
+    overflowed the 8 MB stack in CI when the whole corpus was checked.
+    """
+    tree = _tree(ranges)
+    lines = ["/// %s" % doc]
+    if tree is None:
+        lines.append("pub def %s (cp : U32) : Bool :=" % name)
         lines.append("    false")
         return lines
-    first = True
-    for lo, hi in ranges:
-        kw = "if" if first else "else if"
-        first = False
-        if lo == hi:
-            lines.append("    %s U32.beq cp %du32 then true" % (kw, lo))
-        else:
-            lines.append("    %s Bool.and (U32.lt %du32 cp) (U32.lt cp %du32) then true"
-                         % (kw, lo - 1, hi + 1))
-    lines.append("    else false")
+    nodes = []
+    root = _flatten(tree, nodes)
+    for idx, (spec, lid, rid) in enumerate(nodes):
+        lines.append("#[partial]")
+        lines.append("def %s_%d (cp : U32) : Bool :=" % (name, idx))
+        if spec[0] == "leaf":
+            lo, hi = spec[1], spec[2]
+            if lo == hi:
+                lines.append("    U32.beq cp %du32" % lo)
+            else:
+                lines.append("    if U32.lt %du32 cp then U32.lt cp %du32 else false" % (lo - 1, hi + 1))
+            continue
+        pivot = spec[1]
+        left = ("%s_%d cp" % (name, lid)) if lid is not None else "false"
+        right = ("%s_%d cp" % (name, rid)) if rid is not None else "false"
+        lines.append("    if U32.lt cp %du32 then %s else %s" % (pivot, left, right))
+    lines.append("")
+    lines.append("pub def %s (cp : U32) : Bool := %s_%d cp" % (name, name, root))
     return lines
+
+
+def emit_fold_fn(name, folding):
+    """Balanced tree over the folding table, one function per node."""
+    entries = sorted(folding.items())
+    tree = _tree_entries(entries)
+    nodes = []
+    root = _flatten_entries(tree, nodes)
+    lines = []
+    lines.append("/// The full case folding of one codepoint (statuses C and F), or none.")
+    for idx, (spec, lid, rid) in enumerate(nodes):
+        lines.append("#[partial]")
+        lines.append("def %s_%d (cp : U32) : Option String :=" % (name, idx))
+        if spec[0] == "entry":
+            lines.append("    if U32.beq cp %du32 then Option.some %s else %s"
+                         % (spec[1], monad_string(spec[2]), _child(name, "Option.none", spec[3], spec[4])))
+            continue
+        pivot = spec[1]
+        left = _child(name, "Option.none", lid, None)
+        right = _child(name, "Option.none", rid, None)
+        lines.append("    if U32.lt cp %du32 then %s else %s" % (pivot, left, right))
+    lines.append("")
+    lines.append("pub def %s (cp : U32) : Option String := %s_%d cp" % (name, name, root))
+    return lines
+
+
+def _child(name, fallback, idx, _unused):
+    return ("%s_%d cp" % (name, idx)) if idx is not None else fallback
+
+
+def _tree_entries(entries):
+    if not entries:
+        return None
+    if len(entries) == 1:
+        return ("entry", entries[0][0], entries[0][1], None, None)
+    mid = len(entries) // 2
+    return ("node", entries[mid][0], None, _tree_entries(entries[:mid]), _tree_entries(entries[mid:]))
+
+
+def _flatten_entries(tree, nodes):
+    if tree is None:
+        return None
+    lid = _flatten_entries(tree[3], nodes)
+    rid = _flatten_entries(tree[4], nodes)
+    idx = len(nodes)
+    nodes.append((tree, lid, rid))
+    return idx
 
 
 def main() -> int:
@@ -145,12 +230,7 @@ def main() -> int:
     lines.extend(emit_range_fn("Markdown.is_unicode_punctuation", merge_ranges(punct),
                                "Unicode punctuation: categories P and S, matching what\n/// cmark treats as punctuation for emphasis flanking."))
     lines.append("")
-    lines.append("/// The full case folding of one codepoint (statuses C and F), or none.")
-    lines.append("pub def Markdown.case_fold_cp (cp : U32) : Option String :=")
-    for i, cp in enumerate(sorted(folding)):
-        kw = "if" if i == 0 else "else if"
-        lines.append("    %s U32.beq cp %du32 then Option.some %s" % (kw, cp, monad_string(folding[cp])))
-    lines.append("    else Option.none")
+    lines.extend(emit_fold_fn("Markdown.case_fold_cp", folding))
     lines.append("")
     lines.append("/// Case-fold a string for reference-label comparison.")
     lines.append("#[partial]")

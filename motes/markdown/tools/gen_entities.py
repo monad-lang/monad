@@ -34,6 +34,57 @@ def monad_string(value: str) -> str:
     return '"' + "".join(out) + '"'
 
 
+def emit_name_tree(fn, names, table):
+    """A balanced tree over `names`, one function per node.
+
+    A linear `else if` chain nests the expression once per name; the Rust
+    host elaborates that on the stack, so a 300-name chain is a real risk in
+    the whole-corpus check.
+    """
+    tree = _tree_names(names)
+    nodes = []
+    root = _flatten(tree, nodes)
+    lines = []
+    for idx, (spec, lid, rid) in enumerate(nodes):
+        lines.append("#[partial]")
+        lines.append("def %s_%d (name : String) : Option String :=" % (fn, idx))
+        if spec[0] == "entry":
+            lines.append("    if String.beq name %s then Option.some %s else %s"
+                         % (monad_string(spec[1]), monad_string(table[spec[1]]),
+                            _kid(fn, lid)))
+            continue
+        pivot = spec[1]
+        lines.append("    if String.lt name %s then %s else %s"
+                     % (monad_string(pivot), _kid(fn, lid), _kid(fn, rid)))
+    lines.append("")
+    lines.append("def %s (name : String) : Option String := %s_%d name" % (fn, fn, root))
+    return lines
+
+
+def _kid(fn, idx):
+    return ("%s_%d name" % (fn, idx)) if idx is not None else "Option.none"
+
+
+def _tree_names(names):
+    if not names:
+        return None
+    if len(names) == 1:
+        return ("entry", names[0], None, None, None)
+    mid = len(names) // 2
+    return ("node", names[mid], None,
+            _tree_names(names[:mid]), _tree_names(names[mid:]))
+
+
+def _flatten(tree, nodes):
+    if tree is None:
+        return None
+    lid = _flatten(tree[3], nodes)
+    rid = _flatten(tree[4], nodes)
+    idx = len(nodes)
+    nodes.append((tree, lid, rid))
+    return idx
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--entities", required=True)
@@ -87,13 +138,7 @@ def main() -> int:
     lines.append("")
 
     for ch in sorted(chunks):
-        lines.append("#[partial]")
-        lines.append("def Markdown.entity_%s (name : String) : Option String :=" % ch)
-        for i, name in enumerate(chunks[ch]):
-            kw = "if" if i == 0 else "else if"
-            lines.append('    %s String.beq name %s then Option.some %s'
-                         % (kw, monad_string(name), monad_string(table[name])))
-        lines.append("    else Option.none")
+        lines.extend(emit_name_tree("Markdown.entity_%s" % ch, chunks[ch], table))
         lines.append("")
 
     text = "\n".join(lines)

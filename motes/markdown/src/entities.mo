@@ -70,2334 +70,12751 @@ pub def Markdown.entity_lookup (name : String) : Option String :=
     }
 
 #[partial]
-def Markdown.entity_A (name : String) : Option String :=
-    if String.beq name "AElig" then Option.some "Æ"
-    else if String.beq name "AMP" then Option.some "&"
-    else if String.beq name "Aacute" then Option.some "Á"
-    else if String.beq name "Abreve" then Option.some "Ă"
-    else if String.beq name "Acirc" then Option.some "Â"
-    else if String.beq name "Acy" then Option.some "А"
-    else if String.beq name "Afr" then Option.some "𝔄"
-    else if String.beq name "Agrave" then Option.some "À"
-    else if String.beq name "Alpha" then Option.some "Α"
-    else if String.beq name "Amacr" then Option.some "Ā"
-    else if String.beq name "And" then Option.some "⩓"
-    else if String.beq name "Aogon" then Option.some "Ą"
-    else if String.beq name "Aopf" then Option.some "𝔸"
-    else if String.beq name "ApplyFunction" then Option.some "⁡"
-    else if String.beq name "Aring" then Option.some "Å"
-    else if String.beq name "Ascr" then Option.some "𝒜"
-    else if String.beq name "Assign" then Option.some "≔"
-    else if String.beq name "Atilde" then Option.some "Ã"
-    else if String.beq name "Auml" then Option.some "Ä"
-    else Option.none
+def Markdown.entity_A_0 (name : String) : Option String :=
+    if String.beq name "AElig" then Option.some "Æ" else Option.none
+#[partial]
+def Markdown.entity_A_1 (name : String) : Option String :=
+    if String.beq name "AMP" then Option.some "&" else Option.none
+#[partial]
+def Markdown.entity_A_2 (name : String) : Option String :=
+    if String.lt name "AMP" then Markdown.entity_A_0 name else Markdown.entity_A_1 name
+#[partial]
+def Markdown.entity_A_3 (name : String) : Option String :=
+    if String.beq name "Aacute" then Option.some "Á" else Option.none
+#[partial]
+def Markdown.entity_A_4 (name : String) : Option String :=
+    if String.beq name "Abreve" then Option.some "Ă" else Option.none
+#[partial]
+def Markdown.entity_A_5 (name : String) : Option String :=
+    if String.lt name "Abreve" then Markdown.entity_A_3 name else Markdown.entity_A_4 name
+#[partial]
+def Markdown.entity_A_6 (name : String) : Option String :=
+    if String.lt name "Aacute" then Markdown.entity_A_2 name else Markdown.entity_A_5 name
+#[partial]
+def Markdown.entity_A_7 (name : String) : Option String :=
+    if String.beq name "Acirc" then Option.some "Â" else Option.none
+#[partial]
+def Markdown.entity_A_8 (name : String) : Option String :=
+    if String.beq name "Acy" then Option.some "А" else Option.none
+#[partial]
+def Markdown.entity_A_9 (name : String) : Option String :=
+    if String.lt name "Acy" then Markdown.entity_A_7 name else Markdown.entity_A_8 name
+#[partial]
+def Markdown.entity_A_10 (name : String) : Option String :=
+    if String.beq name "Afr" then Option.some "𝔄" else Option.none
+#[partial]
+def Markdown.entity_A_11 (name : String) : Option String :=
+    if String.beq name "Agrave" then Option.some "À" else Option.none
+#[partial]
+def Markdown.entity_A_12 (name : String) : Option String :=
+    if String.beq name "Alpha" then Option.some "Α" else Option.none
+#[partial]
+def Markdown.entity_A_13 (name : String) : Option String :=
+    if String.lt name "Alpha" then Markdown.entity_A_11 name else Markdown.entity_A_12 name
+#[partial]
+def Markdown.entity_A_14 (name : String) : Option String :=
+    if String.lt name "Agrave" then Markdown.entity_A_10 name else Markdown.entity_A_13 name
+#[partial]
+def Markdown.entity_A_15 (name : String) : Option String :=
+    if String.lt name "Afr" then Markdown.entity_A_9 name else Markdown.entity_A_14 name
+#[partial]
+def Markdown.entity_A_16 (name : String) : Option String :=
+    if String.lt name "Acirc" then Markdown.entity_A_6 name else Markdown.entity_A_15 name
+#[partial]
+def Markdown.entity_A_17 (name : String) : Option String :=
+    if String.beq name "Amacr" then Option.some "Ā" else Option.none
+#[partial]
+def Markdown.entity_A_18 (name : String) : Option String :=
+    if String.beq name "And" then Option.some "⩓" else Option.none
+#[partial]
+def Markdown.entity_A_19 (name : String) : Option String :=
+    if String.lt name "And" then Markdown.entity_A_17 name else Markdown.entity_A_18 name
+#[partial]
+def Markdown.entity_A_20 (name : String) : Option String :=
+    if String.beq name "Aogon" then Option.some "Ą" else Option.none
+#[partial]
+def Markdown.entity_A_21 (name : String) : Option String :=
+    if String.beq name "Aopf" then Option.some "𝔸" else Option.none
+#[partial]
+def Markdown.entity_A_22 (name : String) : Option String :=
+    if String.beq name "ApplyFunction" then Option.some "⁡" else Option.none
+#[partial]
+def Markdown.entity_A_23 (name : String) : Option String :=
+    if String.lt name "ApplyFunction" then Markdown.entity_A_21 name else Markdown.entity_A_22 name
+#[partial]
+def Markdown.entity_A_24 (name : String) : Option String :=
+    if String.lt name "Aopf" then Markdown.entity_A_20 name else Markdown.entity_A_23 name
+#[partial]
+def Markdown.entity_A_25 (name : String) : Option String :=
+    if String.lt name "Aogon" then Markdown.entity_A_19 name else Markdown.entity_A_24 name
+#[partial]
+def Markdown.entity_A_26 (name : String) : Option String :=
+    if String.beq name "Aring" then Option.some "Å" else Option.none
+#[partial]
+def Markdown.entity_A_27 (name : String) : Option String :=
+    if String.beq name "Ascr" then Option.some "𝒜" else Option.none
+#[partial]
+def Markdown.entity_A_28 (name : String) : Option String :=
+    if String.lt name "Ascr" then Markdown.entity_A_26 name else Markdown.entity_A_27 name
+#[partial]
+def Markdown.entity_A_29 (name : String) : Option String :=
+    if String.beq name "Assign" then Option.some "≔" else Option.none
+#[partial]
+def Markdown.entity_A_30 (name : String) : Option String :=
+    if String.beq name "Atilde" then Option.some "Ã" else Option.none
+#[partial]
+def Markdown.entity_A_31 (name : String) : Option String :=
+    if String.beq name "Auml" then Option.some "Ä" else Option.none
+#[partial]
+def Markdown.entity_A_32 (name : String) : Option String :=
+    if String.lt name "Auml" then Markdown.entity_A_30 name else Markdown.entity_A_31 name
+#[partial]
+def Markdown.entity_A_33 (name : String) : Option String :=
+    if String.lt name "Atilde" then Markdown.entity_A_29 name else Markdown.entity_A_32 name
+#[partial]
+def Markdown.entity_A_34 (name : String) : Option String :=
+    if String.lt name "Assign" then Markdown.entity_A_28 name else Markdown.entity_A_33 name
+#[partial]
+def Markdown.entity_A_35 (name : String) : Option String :=
+    if String.lt name "Aring" then Markdown.entity_A_25 name else Markdown.entity_A_34 name
+#[partial]
+def Markdown.entity_A_36 (name : String) : Option String :=
+    if String.lt name "Amacr" then Markdown.entity_A_16 name else Markdown.entity_A_35 name
+
+def Markdown.entity_A (name : String) : Option String := Markdown.entity_A_36 name
 
 #[partial]
-def Markdown.entity_B (name : String) : Option String :=
-    if String.beq name "Backslash" then Option.some "∖"
-    else if String.beq name "Barv" then Option.some "⫧"
-    else if String.beq name "Barwed" then Option.some "⌆"
-    else if String.beq name "Bcy" then Option.some "Б"
-    else if String.beq name "Because" then Option.some "∵"
-    else if String.beq name "Bernoullis" then Option.some "ℬ"
-    else if String.beq name "Beta" then Option.some "Β"
-    else if String.beq name "Bfr" then Option.some "𝔅"
-    else if String.beq name "Bopf" then Option.some "𝔹"
-    else if String.beq name "Breve" then Option.some "˘"
-    else if String.beq name "Bscr" then Option.some "ℬ"
-    else if String.beq name "Bumpeq" then Option.some "≎"
-    else Option.none
+def Markdown.entity_B_0 (name : String) : Option String :=
+    if String.beq name "Backslash" then Option.some "∖" else Option.none
+#[partial]
+def Markdown.entity_B_1 (name : String) : Option String :=
+    if String.beq name "Barv" then Option.some "⫧" else Option.none
+#[partial]
+def Markdown.entity_B_2 (name : String) : Option String :=
+    if String.beq name "Barwed" then Option.some "⌆" else Option.none
+#[partial]
+def Markdown.entity_B_3 (name : String) : Option String :=
+    if String.lt name "Barwed" then Markdown.entity_B_1 name else Markdown.entity_B_2 name
+#[partial]
+def Markdown.entity_B_4 (name : String) : Option String :=
+    if String.lt name "Barv" then Markdown.entity_B_0 name else Markdown.entity_B_3 name
+#[partial]
+def Markdown.entity_B_5 (name : String) : Option String :=
+    if String.beq name "Bcy" then Option.some "Б" else Option.none
+#[partial]
+def Markdown.entity_B_6 (name : String) : Option String :=
+    if String.beq name "Because" then Option.some "∵" else Option.none
+#[partial]
+def Markdown.entity_B_7 (name : String) : Option String :=
+    if String.beq name "Bernoullis" then Option.some "ℬ" else Option.none
+#[partial]
+def Markdown.entity_B_8 (name : String) : Option String :=
+    if String.lt name "Bernoullis" then Markdown.entity_B_6 name else Markdown.entity_B_7 name
+#[partial]
+def Markdown.entity_B_9 (name : String) : Option String :=
+    if String.lt name "Because" then Markdown.entity_B_5 name else Markdown.entity_B_8 name
+#[partial]
+def Markdown.entity_B_10 (name : String) : Option String :=
+    if String.lt name "Bcy" then Markdown.entity_B_4 name else Markdown.entity_B_9 name
+#[partial]
+def Markdown.entity_B_11 (name : String) : Option String :=
+    if String.beq name "Beta" then Option.some "Β" else Option.none
+#[partial]
+def Markdown.entity_B_12 (name : String) : Option String :=
+    if String.beq name "Bfr" then Option.some "𝔅" else Option.none
+#[partial]
+def Markdown.entity_B_13 (name : String) : Option String :=
+    if String.beq name "Bopf" then Option.some "𝔹" else Option.none
+#[partial]
+def Markdown.entity_B_14 (name : String) : Option String :=
+    if String.lt name "Bopf" then Markdown.entity_B_12 name else Markdown.entity_B_13 name
+#[partial]
+def Markdown.entity_B_15 (name : String) : Option String :=
+    if String.lt name "Bfr" then Markdown.entity_B_11 name else Markdown.entity_B_14 name
+#[partial]
+def Markdown.entity_B_16 (name : String) : Option String :=
+    if String.beq name "Breve" then Option.some "˘" else Option.none
+#[partial]
+def Markdown.entity_B_17 (name : String) : Option String :=
+    if String.beq name "Bscr" then Option.some "ℬ" else Option.none
+#[partial]
+def Markdown.entity_B_18 (name : String) : Option String :=
+    if String.beq name "Bumpeq" then Option.some "≎" else Option.none
+#[partial]
+def Markdown.entity_B_19 (name : String) : Option String :=
+    if String.lt name "Bumpeq" then Markdown.entity_B_17 name else Markdown.entity_B_18 name
+#[partial]
+def Markdown.entity_B_20 (name : String) : Option String :=
+    if String.lt name "Bscr" then Markdown.entity_B_16 name else Markdown.entity_B_19 name
+#[partial]
+def Markdown.entity_B_21 (name : String) : Option String :=
+    if String.lt name "Breve" then Markdown.entity_B_15 name else Markdown.entity_B_20 name
+#[partial]
+def Markdown.entity_B_22 (name : String) : Option String :=
+    if String.lt name "Beta" then Markdown.entity_B_10 name else Markdown.entity_B_21 name
+
+def Markdown.entity_B (name : String) : Option String := Markdown.entity_B_22 name
 
 #[partial]
-def Markdown.entity_C (name : String) : Option String :=
-    if String.beq name "CHcy" then Option.some "Ч"
-    else if String.beq name "COPY" then Option.some "©"
-    else if String.beq name "Cacute" then Option.some "Ć"
-    else if String.beq name "Cap" then Option.some "⋒"
-    else if String.beq name "CapitalDifferentialD" then Option.some "ⅅ"
-    else if String.beq name "Cayleys" then Option.some "ℭ"
-    else if String.beq name "Ccaron" then Option.some "Č"
-    else if String.beq name "Ccedil" then Option.some "Ç"
-    else if String.beq name "Ccirc" then Option.some "Ĉ"
-    else if String.beq name "Cconint" then Option.some "∰"
-    else if String.beq name "Cdot" then Option.some "Ċ"
-    else if String.beq name "Cedilla" then Option.some "¸"
-    else if String.beq name "CenterDot" then Option.some "·"
-    else if String.beq name "Cfr" then Option.some "ℭ"
-    else if String.beq name "Chi" then Option.some "Χ"
-    else if String.beq name "CircleDot" then Option.some "⊙"
-    else if String.beq name "CircleMinus" then Option.some "⊖"
-    else if String.beq name "CirclePlus" then Option.some "⊕"
-    else if String.beq name "CircleTimes" then Option.some "⊗"
-    else if String.beq name "ClockwiseContourIntegral" then Option.some "∲"
-    else if String.beq name "CloseCurlyDoubleQuote" then Option.some "”"
-    else if String.beq name "CloseCurlyQuote" then Option.some "’"
-    else if String.beq name "Colon" then Option.some "∷"
-    else if String.beq name "Colone" then Option.some "⩴"
-    else if String.beq name "Congruent" then Option.some "≡"
-    else if String.beq name "Conint" then Option.some "∯"
-    else if String.beq name "ContourIntegral" then Option.some "∮"
-    else if String.beq name "Copf" then Option.some "ℂ"
-    else if String.beq name "Coproduct" then Option.some "∐"
-    else if String.beq name "CounterClockwiseContourIntegral" then Option.some "∳"
-    else if String.beq name "Cross" then Option.some "⨯"
-    else if String.beq name "Cscr" then Option.some "𝒞"
-    else if String.beq name "Cup" then Option.some "⋓"
-    else if String.beq name "CupCap" then Option.some "≍"
-    else Option.none
+def Markdown.entity_C_0 (name : String) : Option String :=
+    if String.beq name "CHcy" then Option.some "Ч" else Option.none
+#[partial]
+def Markdown.entity_C_1 (name : String) : Option String :=
+    if String.beq name "COPY" then Option.some "©" else Option.none
+#[partial]
+def Markdown.entity_C_2 (name : String) : Option String :=
+    if String.lt name "COPY" then Markdown.entity_C_0 name else Markdown.entity_C_1 name
+#[partial]
+def Markdown.entity_C_3 (name : String) : Option String :=
+    if String.beq name "Cacute" then Option.some "Ć" else Option.none
+#[partial]
+def Markdown.entity_C_4 (name : String) : Option String :=
+    if String.beq name "Cap" then Option.some "⋒" else Option.none
+#[partial]
+def Markdown.entity_C_5 (name : String) : Option String :=
+    if String.lt name "Cap" then Markdown.entity_C_3 name else Markdown.entity_C_4 name
+#[partial]
+def Markdown.entity_C_6 (name : String) : Option String :=
+    if String.lt name "Cacute" then Markdown.entity_C_2 name else Markdown.entity_C_5 name
+#[partial]
+def Markdown.entity_C_7 (name : String) : Option String :=
+    if String.beq name "CapitalDifferentialD" then Option.some "ⅅ" else Option.none
+#[partial]
+def Markdown.entity_C_8 (name : String) : Option String :=
+    if String.beq name "Cayleys" then Option.some "ℭ" else Option.none
+#[partial]
+def Markdown.entity_C_9 (name : String) : Option String :=
+    if String.lt name "Cayleys" then Markdown.entity_C_7 name else Markdown.entity_C_8 name
+#[partial]
+def Markdown.entity_C_10 (name : String) : Option String :=
+    if String.beq name "Ccaron" then Option.some "Č" else Option.none
+#[partial]
+def Markdown.entity_C_11 (name : String) : Option String :=
+    if String.beq name "Ccedil" then Option.some "Ç" else Option.none
+#[partial]
+def Markdown.entity_C_12 (name : String) : Option String :=
+    if String.lt name "Ccedil" then Markdown.entity_C_10 name else Markdown.entity_C_11 name
+#[partial]
+def Markdown.entity_C_13 (name : String) : Option String :=
+    if String.lt name "Ccaron" then Markdown.entity_C_9 name else Markdown.entity_C_12 name
+#[partial]
+def Markdown.entity_C_14 (name : String) : Option String :=
+    if String.lt name "CapitalDifferentialD" then Markdown.entity_C_6 name else Markdown.entity_C_13 name
+#[partial]
+def Markdown.entity_C_15 (name : String) : Option String :=
+    if String.beq name "Ccirc" then Option.some "Ĉ" else Option.none
+#[partial]
+def Markdown.entity_C_16 (name : String) : Option String :=
+    if String.beq name "Cconint" then Option.some "∰" else Option.none
+#[partial]
+def Markdown.entity_C_17 (name : String) : Option String :=
+    if String.lt name "Cconint" then Markdown.entity_C_15 name else Markdown.entity_C_16 name
+#[partial]
+def Markdown.entity_C_18 (name : String) : Option String :=
+    if String.beq name "Cdot" then Option.some "Ċ" else Option.none
+#[partial]
+def Markdown.entity_C_19 (name : String) : Option String :=
+    if String.beq name "Cedilla" then Option.some "¸" else Option.none
+#[partial]
+def Markdown.entity_C_20 (name : String) : Option String :=
+    if String.lt name "Cedilla" then Markdown.entity_C_18 name else Markdown.entity_C_19 name
+#[partial]
+def Markdown.entity_C_21 (name : String) : Option String :=
+    if String.lt name "Cdot" then Markdown.entity_C_17 name else Markdown.entity_C_20 name
+#[partial]
+def Markdown.entity_C_22 (name : String) : Option String :=
+    if String.beq name "CenterDot" then Option.some "·" else Option.none
+#[partial]
+def Markdown.entity_C_23 (name : String) : Option String :=
+    if String.beq name "Cfr" then Option.some "ℭ" else Option.none
+#[partial]
+def Markdown.entity_C_24 (name : String) : Option String :=
+    if String.lt name "Cfr" then Markdown.entity_C_22 name else Markdown.entity_C_23 name
+#[partial]
+def Markdown.entity_C_25 (name : String) : Option String :=
+    if String.beq name "Chi" then Option.some "Χ" else Option.none
+#[partial]
+def Markdown.entity_C_26 (name : String) : Option String :=
+    if String.beq name "CircleDot" then Option.some "⊙" else Option.none
+#[partial]
+def Markdown.entity_C_27 (name : String) : Option String :=
+    if String.beq name "CircleMinus" then Option.some "⊖" else Option.none
+#[partial]
+def Markdown.entity_C_28 (name : String) : Option String :=
+    if String.lt name "CircleMinus" then Markdown.entity_C_26 name else Markdown.entity_C_27 name
+#[partial]
+def Markdown.entity_C_29 (name : String) : Option String :=
+    if String.lt name "CircleDot" then Markdown.entity_C_25 name else Markdown.entity_C_28 name
+#[partial]
+def Markdown.entity_C_30 (name : String) : Option String :=
+    if String.lt name "Chi" then Markdown.entity_C_24 name else Markdown.entity_C_29 name
+#[partial]
+def Markdown.entity_C_31 (name : String) : Option String :=
+    if String.lt name "CenterDot" then Markdown.entity_C_21 name else Markdown.entity_C_30 name
+#[partial]
+def Markdown.entity_C_32 (name : String) : Option String :=
+    if String.lt name "Ccirc" then Markdown.entity_C_14 name else Markdown.entity_C_31 name
+#[partial]
+def Markdown.entity_C_33 (name : String) : Option String :=
+    if String.beq name "CirclePlus" then Option.some "⊕" else Option.none
+#[partial]
+def Markdown.entity_C_34 (name : String) : Option String :=
+    if String.beq name "CircleTimes" then Option.some "⊗" else Option.none
+#[partial]
+def Markdown.entity_C_35 (name : String) : Option String :=
+    if String.lt name "CircleTimes" then Markdown.entity_C_33 name else Markdown.entity_C_34 name
+#[partial]
+def Markdown.entity_C_36 (name : String) : Option String :=
+    if String.beq name "ClockwiseContourIntegral" then Option.some "∲" else Option.none
+#[partial]
+def Markdown.entity_C_37 (name : String) : Option String :=
+    if String.beq name "CloseCurlyDoubleQuote" then Option.some "”" else Option.none
+#[partial]
+def Markdown.entity_C_38 (name : String) : Option String :=
+    if String.lt name "CloseCurlyDoubleQuote" then Markdown.entity_C_36 name else Markdown.entity_C_37 name
+#[partial]
+def Markdown.entity_C_39 (name : String) : Option String :=
+    if String.lt name "ClockwiseContourIntegral" then Markdown.entity_C_35 name else Markdown.entity_C_38 name
+#[partial]
+def Markdown.entity_C_40 (name : String) : Option String :=
+    if String.beq name "CloseCurlyQuote" then Option.some "’" else Option.none
+#[partial]
+def Markdown.entity_C_41 (name : String) : Option String :=
+    if String.beq name "Colon" then Option.some "∷" else Option.none
+#[partial]
+def Markdown.entity_C_42 (name : String) : Option String :=
+    if String.lt name "Colon" then Markdown.entity_C_40 name else Markdown.entity_C_41 name
+#[partial]
+def Markdown.entity_C_43 (name : String) : Option String :=
+    if String.beq name "Colone" then Option.some "⩴" else Option.none
+#[partial]
+def Markdown.entity_C_44 (name : String) : Option String :=
+    if String.beq name "Congruent" then Option.some "≡" else Option.none
+#[partial]
+def Markdown.entity_C_45 (name : String) : Option String :=
+    if String.lt name "Congruent" then Markdown.entity_C_43 name else Markdown.entity_C_44 name
+#[partial]
+def Markdown.entity_C_46 (name : String) : Option String :=
+    if String.lt name "Colone" then Markdown.entity_C_42 name else Markdown.entity_C_45 name
+#[partial]
+def Markdown.entity_C_47 (name : String) : Option String :=
+    if String.lt name "CloseCurlyQuote" then Markdown.entity_C_39 name else Markdown.entity_C_46 name
+#[partial]
+def Markdown.entity_C_48 (name : String) : Option String :=
+    if String.beq name "Conint" then Option.some "∯" else Option.none
+#[partial]
+def Markdown.entity_C_49 (name : String) : Option String :=
+    if String.beq name "ContourIntegral" then Option.some "∮" else Option.none
+#[partial]
+def Markdown.entity_C_50 (name : String) : Option String :=
+    if String.lt name "ContourIntegral" then Markdown.entity_C_48 name else Markdown.entity_C_49 name
+#[partial]
+def Markdown.entity_C_51 (name : String) : Option String :=
+    if String.beq name "Copf" then Option.some "ℂ" else Option.none
+#[partial]
+def Markdown.entity_C_52 (name : String) : Option String :=
+    if String.beq name "Coproduct" then Option.some "∐" else Option.none
+#[partial]
+def Markdown.entity_C_53 (name : String) : Option String :=
+    if String.lt name "Coproduct" then Markdown.entity_C_51 name else Markdown.entity_C_52 name
+#[partial]
+def Markdown.entity_C_54 (name : String) : Option String :=
+    if String.lt name "Copf" then Markdown.entity_C_50 name else Markdown.entity_C_53 name
+#[partial]
+def Markdown.entity_C_55 (name : String) : Option String :=
+    if String.beq name "CounterClockwiseContourIntegral" then Option.some "∳" else Option.none
+#[partial]
+def Markdown.entity_C_56 (name : String) : Option String :=
+    if String.beq name "Cross" then Option.some "⨯" else Option.none
+#[partial]
+def Markdown.entity_C_57 (name : String) : Option String :=
+    if String.lt name "Cross" then Markdown.entity_C_55 name else Markdown.entity_C_56 name
+#[partial]
+def Markdown.entity_C_58 (name : String) : Option String :=
+    if String.beq name "Cscr" then Option.some "𝒞" else Option.none
+#[partial]
+def Markdown.entity_C_59 (name : String) : Option String :=
+    if String.beq name "Cup" then Option.some "⋓" else Option.none
+#[partial]
+def Markdown.entity_C_60 (name : String) : Option String :=
+    if String.beq name "CupCap" then Option.some "≍" else Option.none
+#[partial]
+def Markdown.entity_C_61 (name : String) : Option String :=
+    if String.lt name "CupCap" then Markdown.entity_C_59 name else Markdown.entity_C_60 name
+#[partial]
+def Markdown.entity_C_62 (name : String) : Option String :=
+    if String.lt name "Cup" then Markdown.entity_C_58 name else Markdown.entity_C_61 name
+#[partial]
+def Markdown.entity_C_63 (name : String) : Option String :=
+    if String.lt name "Cscr" then Markdown.entity_C_57 name else Markdown.entity_C_62 name
+#[partial]
+def Markdown.entity_C_64 (name : String) : Option String :=
+    if String.lt name "CounterClockwiseContourIntegral" then Markdown.entity_C_54 name else Markdown.entity_C_63 name
+#[partial]
+def Markdown.entity_C_65 (name : String) : Option String :=
+    if String.lt name "Conint" then Markdown.entity_C_47 name else Markdown.entity_C_64 name
+#[partial]
+def Markdown.entity_C_66 (name : String) : Option String :=
+    if String.lt name "CirclePlus" then Markdown.entity_C_32 name else Markdown.entity_C_65 name
+
+def Markdown.entity_C (name : String) : Option String := Markdown.entity_C_66 name
 
 #[partial]
-def Markdown.entity_D (name : String) : Option String :=
-    if String.beq name "DD" then Option.some "ⅅ"
-    else if String.beq name "DDotrahd" then Option.some "⤑"
-    else if String.beq name "DJcy" then Option.some "Ђ"
-    else if String.beq name "DScy" then Option.some "Ѕ"
-    else if String.beq name "DZcy" then Option.some "Џ"
-    else if String.beq name "Dagger" then Option.some "‡"
-    else if String.beq name "Darr" then Option.some "↡"
-    else if String.beq name "Dashv" then Option.some "⫤"
-    else if String.beq name "Dcaron" then Option.some "Ď"
-    else if String.beq name "Dcy" then Option.some "Д"
-    else if String.beq name "Del" then Option.some "∇"
-    else if String.beq name "Delta" then Option.some "Δ"
-    else if String.beq name "Dfr" then Option.some "𝔇"
-    else if String.beq name "DiacriticalAcute" then Option.some "´"
-    else if String.beq name "DiacriticalDot" then Option.some "˙"
-    else if String.beq name "DiacriticalDoubleAcute" then Option.some "˝"
-    else if String.beq name "DiacriticalGrave" then Option.some "`"
-    else if String.beq name "DiacriticalTilde" then Option.some "˜"
-    else if String.beq name "Diamond" then Option.some "⋄"
-    else if String.beq name "DifferentialD" then Option.some "ⅆ"
-    else if String.beq name "Dopf" then Option.some "𝔻"
-    else if String.beq name "Dot" then Option.some "¨"
-    else if String.beq name "DotDot" then Option.some "⃜"
-    else if String.beq name "DotEqual" then Option.some "≐"
-    else if String.beq name "DoubleContourIntegral" then Option.some "∯"
-    else if String.beq name "DoubleDot" then Option.some "¨"
-    else if String.beq name "DoubleDownArrow" then Option.some "⇓"
-    else if String.beq name "DoubleLeftArrow" then Option.some "⇐"
-    else if String.beq name "DoubleLeftRightArrow" then Option.some "⇔"
-    else if String.beq name "DoubleLeftTee" then Option.some "⫤"
-    else if String.beq name "DoubleLongLeftArrow" then Option.some "⟸"
-    else if String.beq name "DoubleLongLeftRightArrow" then Option.some "⟺"
-    else if String.beq name "DoubleLongRightArrow" then Option.some "⟹"
-    else if String.beq name "DoubleRightArrow" then Option.some "⇒"
-    else if String.beq name "DoubleRightTee" then Option.some "⊨"
-    else if String.beq name "DoubleUpArrow" then Option.some "⇑"
-    else if String.beq name "DoubleUpDownArrow" then Option.some "⇕"
-    else if String.beq name "DoubleVerticalBar" then Option.some "∥"
-    else if String.beq name "DownArrow" then Option.some "↓"
-    else if String.beq name "DownArrowBar" then Option.some "⤓"
-    else if String.beq name "DownArrowUpArrow" then Option.some "⇵"
-    else if String.beq name "DownBreve" then Option.some "̑"
-    else if String.beq name "DownLeftRightVector" then Option.some "⥐"
-    else if String.beq name "DownLeftTeeVector" then Option.some "⥞"
-    else if String.beq name "DownLeftVector" then Option.some "↽"
-    else if String.beq name "DownLeftVectorBar" then Option.some "⥖"
-    else if String.beq name "DownRightTeeVector" then Option.some "⥟"
-    else if String.beq name "DownRightVector" then Option.some "⇁"
-    else if String.beq name "DownRightVectorBar" then Option.some "⥗"
-    else if String.beq name "DownTee" then Option.some "⊤"
-    else if String.beq name "DownTeeArrow" then Option.some "↧"
-    else if String.beq name "Downarrow" then Option.some "⇓"
-    else if String.beq name "Dscr" then Option.some "𝒟"
-    else if String.beq name "Dstrok" then Option.some "Đ"
-    else Option.none
+def Markdown.entity_D_0 (name : String) : Option String :=
+    if String.beq name "DD" then Option.some "ⅅ" else Option.none
+#[partial]
+def Markdown.entity_D_1 (name : String) : Option String :=
+    if String.beq name "DDotrahd" then Option.some "⤑" else Option.none
+#[partial]
+def Markdown.entity_D_2 (name : String) : Option String :=
+    if String.beq name "DJcy" then Option.some "Ђ" else Option.none
+#[partial]
+def Markdown.entity_D_3 (name : String) : Option String :=
+    if String.lt name "DJcy" then Markdown.entity_D_1 name else Markdown.entity_D_2 name
+#[partial]
+def Markdown.entity_D_4 (name : String) : Option String :=
+    if String.lt name "DDotrahd" then Markdown.entity_D_0 name else Markdown.entity_D_3 name
+#[partial]
+def Markdown.entity_D_5 (name : String) : Option String :=
+    if String.beq name "DScy" then Option.some "Ѕ" else Option.none
+#[partial]
+def Markdown.entity_D_6 (name : String) : Option String :=
+    if String.beq name "DZcy" then Option.some "Џ" else Option.none
+#[partial]
+def Markdown.entity_D_7 (name : String) : Option String :=
+    if String.beq name "Dagger" then Option.some "‡" else Option.none
+#[partial]
+def Markdown.entity_D_8 (name : String) : Option String :=
+    if String.lt name "Dagger" then Markdown.entity_D_6 name else Markdown.entity_D_7 name
+#[partial]
+def Markdown.entity_D_9 (name : String) : Option String :=
+    if String.lt name "DZcy" then Markdown.entity_D_5 name else Markdown.entity_D_8 name
+#[partial]
+def Markdown.entity_D_10 (name : String) : Option String :=
+    if String.lt name "DScy" then Markdown.entity_D_4 name else Markdown.entity_D_9 name
+#[partial]
+def Markdown.entity_D_11 (name : String) : Option String :=
+    if String.beq name "Darr" then Option.some "↡" else Option.none
+#[partial]
+def Markdown.entity_D_12 (name : String) : Option String :=
+    if String.beq name "Dashv" then Option.some "⫤" else Option.none
+#[partial]
+def Markdown.entity_D_13 (name : String) : Option String :=
+    if String.beq name "Dcaron" then Option.some "Ď" else Option.none
+#[partial]
+def Markdown.entity_D_14 (name : String) : Option String :=
+    if String.lt name "Dcaron" then Markdown.entity_D_12 name else Markdown.entity_D_13 name
+#[partial]
+def Markdown.entity_D_15 (name : String) : Option String :=
+    if String.lt name "Dashv" then Markdown.entity_D_11 name else Markdown.entity_D_14 name
+#[partial]
+def Markdown.entity_D_16 (name : String) : Option String :=
+    if String.beq name "Dcy" then Option.some "Д" else Option.none
+#[partial]
+def Markdown.entity_D_17 (name : String) : Option String :=
+    if String.beq name "Del" then Option.some "∇" else Option.none
+#[partial]
+def Markdown.entity_D_18 (name : String) : Option String :=
+    if String.lt name "Del" then Markdown.entity_D_16 name else Markdown.entity_D_17 name
+#[partial]
+def Markdown.entity_D_19 (name : String) : Option String :=
+    if String.beq name "Delta" then Option.some "Δ" else Option.none
+#[partial]
+def Markdown.entity_D_20 (name : String) : Option String :=
+    if String.beq name "Dfr" then Option.some "𝔇" else Option.none
+#[partial]
+def Markdown.entity_D_21 (name : String) : Option String :=
+    if String.lt name "Dfr" then Markdown.entity_D_19 name else Markdown.entity_D_20 name
+#[partial]
+def Markdown.entity_D_22 (name : String) : Option String :=
+    if String.lt name "Delta" then Markdown.entity_D_18 name else Markdown.entity_D_21 name
+#[partial]
+def Markdown.entity_D_23 (name : String) : Option String :=
+    if String.lt name "Dcy" then Markdown.entity_D_15 name else Markdown.entity_D_22 name
+#[partial]
+def Markdown.entity_D_24 (name : String) : Option String :=
+    if String.lt name "Darr" then Markdown.entity_D_10 name else Markdown.entity_D_23 name
+#[partial]
+def Markdown.entity_D_25 (name : String) : Option String :=
+    if String.beq name "DiacriticalAcute" then Option.some "´" else Option.none
+#[partial]
+def Markdown.entity_D_26 (name : String) : Option String :=
+    if String.beq name "DiacriticalDot" then Option.some "˙" else Option.none
+#[partial]
+def Markdown.entity_D_27 (name : String) : Option String :=
+    if String.beq name "DiacriticalDoubleAcute" then Option.some "˝" else Option.none
+#[partial]
+def Markdown.entity_D_28 (name : String) : Option String :=
+    if String.lt name "DiacriticalDoubleAcute" then Markdown.entity_D_26 name else Markdown.entity_D_27 name
+#[partial]
+def Markdown.entity_D_29 (name : String) : Option String :=
+    if String.lt name "DiacriticalDot" then Markdown.entity_D_25 name else Markdown.entity_D_28 name
+#[partial]
+def Markdown.entity_D_30 (name : String) : Option String :=
+    if String.beq name "DiacriticalGrave" then Option.some "`" else Option.none
+#[partial]
+def Markdown.entity_D_31 (name : String) : Option String :=
+    if String.beq name "DiacriticalTilde" then Option.some "˜" else Option.none
+#[partial]
+def Markdown.entity_D_32 (name : String) : Option String :=
+    if String.lt name "DiacriticalTilde" then Markdown.entity_D_30 name else Markdown.entity_D_31 name
+#[partial]
+def Markdown.entity_D_33 (name : String) : Option String :=
+    if String.beq name "Diamond" then Option.some "⋄" else Option.none
+#[partial]
+def Markdown.entity_D_34 (name : String) : Option String :=
+    if String.beq name "DifferentialD" then Option.some "ⅆ" else Option.none
+#[partial]
+def Markdown.entity_D_35 (name : String) : Option String :=
+    if String.lt name "DifferentialD" then Markdown.entity_D_33 name else Markdown.entity_D_34 name
+#[partial]
+def Markdown.entity_D_36 (name : String) : Option String :=
+    if String.lt name "Diamond" then Markdown.entity_D_32 name else Markdown.entity_D_35 name
+#[partial]
+def Markdown.entity_D_37 (name : String) : Option String :=
+    if String.lt name "DiacriticalGrave" then Markdown.entity_D_29 name else Markdown.entity_D_36 name
+#[partial]
+def Markdown.entity_D_38 (name : String) : Option String :=
+    if String.beq name "Dopf" then Option.some "𝔻" else Option.none
+#[partial]
+def Markdown.entity_D_39 (name : String) : Option String :=
+    if String.beq name "Dot" then Option.some "¨" else Option.none
+#[partial]
+def Markdown.entity_D_40 (name : String) : Option String :=
+    if String.beq name "DotDot" then Option.some "⃜" else Option.none
+#[partial]
+def Markdown.entity_D_41 (name : String) : Option String :=
+    if String.lt name "DotDot" then Markdown.entity_D_39 name else Markdown.entity_D_40 name
+#[partial]
+def Markdown.entity_D_42 (name : String) : Option String :=
+    if String.lt name "Dot" then Markdown.entity_D_38 name else Markdown.entity_D_41 name
+#[partial]
+def Markdown.entity_D_43 (name : String) : Option String :=
+    if String.beq name "DotEqual" then Option.some "≐" else Option.none
+#[partial]
+def Markdown.entity_D_44 (name : String) : Option String :=
+    if String.beq name "DoubleContourIntegral" then Option.some "∯" else Option.none
+#[partial]
+def Markdown.entity_D_45 (name : String) : Option String :=
+    if String.lt name "DoubleContourIntegral" then Markdown.entity_D_43 name else Markdown.entity_D_44 name
+#[partial]
+def Markdown.entity_D_46 (name : String) : Option String :=
+    if String.beq name "DoubleDot" then Option.some "¨" else Option.none
+#[partial]
+def Markdown.entity_D_47 (name : String) : Option String :=
+    if String.beq name "DoubleDownArrow" then Option.some "⇓" else Option.none
+#[partial]
+def Markdown.entity_D_48 (name : String) : Option String :=
+    if String.lt name "DoubleDownArrow" then Markdown.entity_D_46 name else Markdown.entity_D_47 name
+#[partial]
+def Markdown.entity_D_49 (name : String) : Option String :=
+    if String.lt name "DoubleDot" then Markdown.entity_D_45 name else Markdown.entity_D_48 name
+#[partial]
+def Markdown.entity_D_50 (name : String) : Option String :=
+    if String.lt name "DotEqual" then Markdown.entity_D_42 name else Markdown.entity_D_49 name
+#[partial]
+def Markdown.entity_D_51 (name : String) : Option String :=
+    if String.lt name "Dopf" then Markdown.entity_D_37 name else Markdown.entity_D_50 name
+#[partial]
+def Markdown.entity_D_52 (name : String) : Option String :=
+    if String.lt name "DiacriticalAcute" then Markdown.entity_D_24 name else Markdown.entity_D_51 name
+#[partial]
+def Markdown.entity_D_53 (name : String) : Option String :=
+    if String.beq name "DoubleLeftArrow" then Option.some "⇐" else Option.none
+#[partial]
+def Markdown.entity_D_54 (name : String) : Option String :=
+    if String.beq name "DoubleLeftRightArrow" then Option.some "⇔" else Option.none
+#[partial]
+def Markdown.entity_D_55 (name : String) : Option String :=
+    if String.beq name "DoubleLeftTee" then Option.some "⫤" else Option.none
+#[partial]
+def Markdown.entity_D_56 (name : String) : Option String :=
+    if String.lt name "DoubleLeftTee" then Markdown.entity_D_54 name else Markdown.entity_D_55 name
+#[partial]
+def Markdown.entity_D_57 (name : String) : Option String :=
+    if String.lt name "DoubleLeftRightArrow" then Markdown.entity_D_53 name else Markdown.entity_D_56 name
+#[partial]
+def Markdown.entity_D_58 (name : String) : Option String :=
+    if String.beq name "DoubleLongLeftArrow" then Option.some "⟸" else Option.none
+#[partial]
+def Markdown.entity_D_59 (name : String) : Option String :=
+    if String.beq name "DoubleLongLeftRightArrow" then Option.some "⟺" else Option.none
+#[partial]
+def Markdown.entity_D_60 (name : String) : Option String :=
+    if String.beq name "DoubleLongRightArrow" then Option.some "⟹" else Option.none
+#[partial]
+def Markdown.entity_D_61 (name : String) : Option String :=
+    if String.lt name "DoubleLongRightArrow" then Markdown.entity_D_59 name else Markdown.entity_D_60 name
+#[partial]
+def Markdown.entity_D_62 (name : String) : Option String :=
+    if String.lt name "DoubleLongLeftRightArrow" then Markdown.entity_D_58 name else Markdown.entity_D_61 name
+#[partial]
+def Markdown.entity_D_63 (name : String) : Option String :=
+    if String.lt name "DoubleLongLeftArrow" then Markdown.entity_D_57 name else Markdown.entity_D_62 name
+#[partial]
+def Markdown.entity_D_64 (name : String) : Option String :=
+    if String.beq name "DoubleRightArrow" then Option.some "⇒" else Option.none
+#[partial]
+def Markdown.entity_D_65 (name : String) : Option String :=
+    if String.beq name "DoubleRightTee" then Option.some "⊨" else Option.none
+#[partial]
+def Markdown.entity_D_66 (name : String) : Option String :=
+    if String.beq name "DoubleUpArrow" then Option.some "⇑" else Option.none
+#[partial]
+def Markdown.entity_D_67 (name : String) : Option String :=
+    if String.lt name "DoubleUpArrow" then Markdown.entity_D_65 name else Markdown.entity_D_66 name
+#[partial]
+def Markdown.entity_D_68 (name : String) : Option String :=
+    if String.lt name "DoubleRightTee" then Markdown.entity_D_64 name else Markdown.entity_D_67 name
+#[partial]
+def Markdown.entity_D_69 (name : String) : Option String :=
+    if String.beq name "DoubleUpDownArrow" then Option.some "⇕" else Option.none
+#[partial]
+def Markdown.entity_D_70 (name : String) : Option String :=
+    if String.beq name "DoubleVerticalBar" then Option.some "∥" else Option.none
+#[partial]
+def Markdown.entity_D_71 (name : String) : Option String :=
+    if String.lt name "DoubleVerticalBar" then Markdown.entity_D_69 name else Markdown.entity_D_70 name
+#[partial]
+def Markdown.entity_D_72 (name : String) : Option String :=
+    if String.beq name "DownArrow" then Option.some "↓" else Option.none
+#[partial]
+def Markdown.entity_D_73 (name : String) : Option String :=
+    if String.beq name "DownArrowBar" then Option.some "⤓" else Option.none
+#[partial]
+def Markdown.entity_D_74 (name : String) : Option String :=
+    if String.lt name "DownArrowBar" then Markdown.entity_D_72 name else Markdown.entity_D_73 name
+#[partial]
+def Markdown.entity_D_75 (name : String) : Option String :=
+    if String.lt name "DownArrow" then Markdown.entity_D_71 name else Markdown.entity_D_74 name
+#[partial]
+def Markdown.entity_D_76 (name : String) : Option String :=
+    if String.lt name "DoubleUpDownArrow" then Markdown.entity_D_68 name else Markdown.entity_D_75 name
+#[partial]
+def Markdown.entity_D_77 (name : String) : Option String :=
+    if String.lt name "DoubleRightArrow" then Markdown.entity_D_63 name else Markdown.entity_D_76 name
+#[partial]
+def Markdown.entity_D_78 (name : String) : Option String :=
+    if String.beq name "DownArrowUpArrow" then Option.some "⇵" else Option.none
+#[partial]
+def Markdown.entity_D_79 (name : String) : Option String :=
+    if String.beq name "DownBreve" then Option.some "̑" else Option.none
+#[partial]
+def Markdown.entity_D_80 (name : String) : Option String :=
+    if String.beq name "DownLeftRightVector" then Option.some "⥐" else Option.none
+#[partial]
+def Markdown.entity_D_81 (name : String) : Option String :=
+    if String.lt name "DownLeftRightVector" then Markdown.entity_D_79 name else Markdown.entity_D_80 name
+#[partial]
+def Markdown.entity_D_82 (name : String) : Option String :=
+    if String.lt name "DownBreve" then Markdown.entity_D_78 name else Markdown.entity_D_81 name
+#[partial]
+def Markdown.entity_D_83 (name : String) : Option String :=
+    if String.beq name "DownLeftTeeVector" then Option.some "⥞" else Option.none
+#[partial]
+def Markdown.entity_D_84 (name : String) : Option String :=
+    if String.beq name "DownLeftVector" then Option.some "↽" else Option.none
+#[partial]
+def Markdown.entity_D_85 (name : String) : Option String :=
+    if String.lt name "DownLeftVector" then Markdown.entity_D_83 name else Markdown.entity_D_84 name
+#[partial]
+def Markdown.entity_D_86 (name : String) : Option String :=
+    if String.beq name "DownLeftVectorBar" then Option.some "⥖" else Option.none
+#[partial]
+def Markdown.entity_D_87 (name : String) : Option String :=
+    if String.beq name "DownRightTeeVector" then Option.some "⥟" else Option.none
+#[partial]
+def Markdown.entity_D_88 (name : String) : Option String :=
+    if String.lt name "DownRightTeeVector" then Markdown.entity_D_86 name else Markdown.entity_D_87 name
+#[partial]
+def Markdown.entity_D_89 (name : String) : Option String :=
+    if String.lt name "DownLeftVectorBar" then Markdown.entity_D_85 name else Markdown.entity_D_88 name
+#[partial]
+def Markdown.entity_D_90 (name : String) : Option String :=
+    if String.lt name "DownLeftTeeVector" then Markdown.entity_D_82 name else Markdown.entity_D_89 name
+#[partial]
+def Markdown.entity_D_91 (name : String) : Option String :=
+    if String.beq name "DownRightVector" then Option.some "⇁" else Option.none
+#[partial]
+def Markdown.entity_D_92 (name : String) : Option String :=
+    if String.beq name "DownRightVectorBar" then Option.some "⥗" else Option.none
+#[partial]
+def Markdown.entity_D_93 (name : String) : Option String :=
+    if String.beq name "DownTee" then Option.some "⊤" else Option.none
+#[partial]
+def Markdown.entity_D_94 (name : String) : Option String :=
+    if String.lt name "DownTee" then Markdown.entity_D_92 name else Markdown.entity_D_93 name
+#[partial]
+def Markdown.entity_D_95 (name : String) : Option String :=
+    if String.lt name "DownRightVectorBar" then Markdown.entity_D_91 name else Markdown.entity_D_94 name
+#[partial]
+def Markdown.entity_D_96 (name : String) : Option String :=
+    if String.beq name "DownTeeArrow" then Option.some "↧" else Option.none
+#[partial]
+def Markdown.entity_D_97 (name : String) : Option String :=
+    if String.beq name "Downarrow" then Option.some "⇓" else Option.none
+#[partial]
+def Markdown.entity_D_98 (name : String) : Option String :=
+    if String.lt name "Downarrow" then Markdown.entity_D_96 name else Markdown.entity_D_97 name
+#[partial]
+def Markdown.entity_D_99 (name : String) : Option String :=
+    if String.beq name "Dscr" then Option.some "𝒟" else Option.none
+#[partial]
+def Markdown.entity_D_100 (name : String) : Option String :=
+    if String.beq name "Dstrok" then Option.some "Đ" else Option.none
+#[partial]
+def Markdown.entity_D_101 (name : String) : Option String :=
+    if String.lt name "Dstrok" then Markdown.entity_D_99 name else Markdown.entity_D_100 name
+#[partial]
+def Markdown.entity_D_102 (name : String) : Option String :=
+    if String.lt name "Dscr" then Markdown.entity_D_98 name else Markdown.entity_D_101 name
+#[partial]
+def Markdown.entity_D_103 (name : String) : Option String :=
+    if String.lt name "DownTeeArrow" then Markdown.entity_D_95 name else Markdown.entity_D_102 name
+#[partial]
+def Markdown.entity_D_104 (name : String) : Option String :=
+    if String.lt name "DownRightVector" then Markdown.entity_D_90 name else Markdown.entity_D_103 name
+#[partial]
+def Markdown.entity_D_105 (name : String) : Option String :=
+    if String.lt name "DownArrowUpArrow" then Markdown.entity_D_77 name else Markdown.entity_D_104 name
+#[partial]
+def Markdown.entity_D_106 (name : String) : Option String :=
+    if String.lt name "DoubleLeftArrow" then Markdown.entity_D_52 name else Markdown.entity_D_105 name
+
+def Markdown.entity_D (name : String) : Option String := Markdown.entity_D_106 name
 
 #[partial]
-def Markdown.entity_E (name : String) : Option String :=
-    if String.beq name "ENG" then Option.some "Ŋ"
-    else if String.beq name "ETH" then Option.some "Ð"
-    else if String.beq name "Eacute" then Option.some "É"
-    else if String.beq name "Ecaron" then Option.some "Ě"
-    else if String.beq name "Ecirc" then Option.some "Ê"
-    else if String.beq name "Ecy" then Option.some "Э"
-    else if String.beq name "Edot" then Option.some "Ė"
-    else if String.beq name "Efr" then Option.some "𝔈"
-    else if String.beq name "Egrave" then Option.some "È"
-    else if String.beq name "Element" then Option.some "∈"
-    else if String.beq name "Emacr" then Option.some "Ē"
-    else if String.beq name "EmptySmallSquare" then Option.some "◻"
-    else if String.beq name "EmptyVerySmallSquare" then Option.some "▫"
-    else if String.beq name "Eogon" then Option.some "Ę"
-    else if String.beq name "Eopf" then Option.some "𝔼"
-    else if String.beq name "Epsilon" then Option.some "Ε"
-    else if String.beq name "Equal" then Option.some "⩵"
-    else if String.beq name "EqualTilde" then Option.some "≂"
-    else if String.beq name "Equilibrium" then Option.some "⇌"
-    else if String.beq name "Escr" then Option.some "ℰ"
-    else if String.beq name "Esim" then Option.some "⩳"
-    else if String.beq name "Eta" then Option.some "Η"
-    else if String.beq name "Euml" then Option.some "Ë"
-    else if String.beq name "Exists" then Option.some "∃"
-    else if String.beq name "ExponentialE" then Option.some "ⅇ"
-    else Option.none
+def Markdown.entity_E_0 (name : String) : Option String :=
+    if String.beq name "ENG" then Option.some "Ŋ" else Option.none
+#[partial]
+def Markdown.entity_E_1 (name : String) : Option String :=
+    if String.beq name "ETH" then Option.some "Ð" else Option.none
+#[partial]
+def Markdown.entity_E_2 (name : String) : Option String :=
+    if String.beq name "Eacute" then Option.some "É" else Option.none
+#[partial]
+def Markdown.entity_E_3 (name : String) : Option String :=
+    if String.lt name "Eacute" then Markdown.entity_E_1 name else Markdown.entity_E_2 name
+#[partial]
+def Markdown.entity_E_4 (name : String) : Option String :=
+    if String.lt name "ETH" then Markdown.entity_E_0 name else Markdown.entity_E_3 name
+#[partial]
+def Markdown.entity_E_5 (name : String) : Option String :=
+    if String.beq name "Ecaron" then Option.some "Ě" else Option.none
+#[partial]
+def Markdown.entity_E_6 (name : String) : Option String :=
+    if String.beq name "Ecirc" then Option.some "Ê" else Option.none
+#[partial]
+def Markdown.entity_E_7 (name : String) : Option String :=
+    if String.beq name "Ecy" then Option.some "Э" else Option.none
+#[partial]
+def Markdown.entity_E_8 (name : String) : Option String :=
+    if String.lt name "Ecy" then Markdown.entity_E_6 name else Markdown.entity_E_7 name
+#[partial]
+def Markdown.entity_E_9 (name : String) : Option String :=
+    if String.lt name "Ecirc" then Markdown.entity_E_5 name else Markdown.entity_E_8 name
+#[partial]
+def Markdown.entity_E_10 (name : String) : Option String :=
+    if String.lt name "Ecaron" then Markdown.entity_E_4 name else Markdown.entity_E_9 name
+#[partial]
+def Markdown.entity_E_11 (name : String) : Option String :=
+    if String.beq name "Edot" then Option.some "Ė" else Option.none
+#[partial]
+def Markdown.entity_E_12 (name : String) : Option String :=
+    if String.beq name "Efr" then Option.some "𝔈" else Option.none
+#[partial]
+def Markdown.entity_E_13 (name : String) : Option String :=
+    if String.beq name "Egrave" then Option.some "È" else Option.none
+#[partial]
+def Markdown.entity_E_14 (name : String) : Option String :=
+    if String.lt name "Egrave" then Markdown.entity_E_12 name else Markdown.entity_E_13 name
+#[partial]
+def Markdown.entity_E_15 (name : String) : Option String :=
+    if String.lt name "Efr" then Markdown.entity_E_11 name else Markdown.entity_E_14 name
+#[partial]
+def Markdown.entity_E_16 (name : String) : Option String :=
+    if String.beq name "Element" then Option.some "∈" else Option.none
+#[partial]
+def Markdown.entity_E_17 (name : String) : Option String :=
+    if String.beq name "Emacr" then Option.some "Ē" else Option.none
+#[partial]
+def Markdown.entity_E_18 (name : String) : Option String :=
+    if String.beq name "EmptySmallSquare" then Option.some "◻" else Option.none
+#[partial]
+def Markdown.entity_E_19 (name : String) : Option String :=
+    if String.lt name "EmptySmallSquare" then Markdown.entity_E_17 name else Markdown.entity_E_18 name
+#[partial]
+def Markdown.entity_E_20 (name : String) : Option String :=
+    if String.lt name "Emacr" then Markdown.entity_E_16 name else Markdown.entity_E_19 name
+#[partial]
+def Markdown.entity_E_21 (name : String) : Option String :=
+    if String.lt name "Element" then Markdown.entity_E_15 name else Markdown.entity_E_20 name
+#[partial]
+def Markdown.entity_E_22 (name : String) : Option String :=
+    if String.lt name "Edot" then Markdown.entity_E_10 name else Markdown.entity_E_21 name
+#[partial]
+def Markdown.entity_E_23 (name : String) : Option String :=
+    if String.beq name "EmptyVerySmallSquare" then Option.some "▫" else Option.none
+#[partial]
+def Markdown.entity_E_24 (name : String) : Option String :=
+    if String.beq name "Eogon" then Option.some "Ę" else Option.none
+#[partial]
+def Markdown.entity_E_25 (name : String) : Option String :=
+    if String.beq name "Eopf" then Option.some "𝔼" else Option.none
+#[partial]
+def Markdown.entity_E_26 (name : String) : Option String :=
+    if String.lt name "Eopf" then Markdown.entity_E_24 name else Markdown.entity_E_25 name
+#[partial]
+def Markdown.entity_E_27 (name : String) : Option String :=
+    if String.lt name "Eogon" then Markdown.entity_E_23 name else Markdown.entity_E_26 name
+#[partial]
+def Markdown.entity_E_28 (name : String) : Option String :=
+    if String.beq name "Epsilon" then Option.some "Ε" else Option.none
+#[partial]
+def Markdown.entity_E_29 (name : String) : Option String :=
+    if String.beq name "Equal" then Option.some "⩵" else Option.none
+#[partial]
+def Markdown.entity_E_30 (name : String) : Option String :=
+    if String.beq name "EqualTilde" then Option.some "≂" else Option.none
+#[partial]
+def Markdown.entity_E_31 (name : String) : Option String :=
+    if String.lt name "EqualTilde" then Markdown.entity_E_29 name else Markdown.entity_E_30 name
+#[partial]
+def Markdown.entity_E_32 (name : String) : Option String :=
+    if String.lt name "Equal" then Markdown.entity_E_28 name else Markdown.entity_E_31 name
+#[partial]
+def Markdown.entity_E_33 (name : String) : Option String :=
+    if String.lt name "Epsilon" then Markdown.entity_E_27 name else Markdown.entity_E_32 name
+#[partial]
+def Markdown.entity_E_34 (name : String) : Option String :=
+    if String.beq name "Equilibrium" then Option.some "⇌" else Option.none
+#[partial]
+def Markdown.entity_E_35 (name : String) : Option String :=
+    if String.beq name "Escr" then Option.some "ℰ" else Option.none
+#[partial]
+def Markdown.entity_E_36 (name : String) : Option String :=
+    if String.beq name "Esim" then Option.some "⩳" else Option.none
+#[partial]
+def Markdown.entity_E_37 (name : String) : Option String :=
+    if String.lt name "Esim" then Markdown.entity_E_35 name else Markdown.entity_E_36 name
+#[partial]
+def Markdown.entity_E_38 (name : String) : Option String :=
+    if String.lt name "Escr" then Markdown.entity_E_34 name else Markdown.entity_E_37 name
+#[partial]
+def Markdown.entity_E_39 (name : String) : Option String :=
+    if String.beq name "Eta" then Option.some "Η" else Option.none
+#[partial]
+def Markdown.entity_E_40 (name : String) : Option String :=
+    if String.beq name "Euml" then Option.some "Ë" else Option.none
+#[partial]
+def Markdown.entity_E_41 (name : String) : Option String :=
+    if String.lt name "Euml" then Markdown.entity_E_39 name else Markdown.entity_E_40 name
+#[partial]
+def Markdown.entity_E_42 (name : String) : Option String :=
+    if String.beq name "Exists" then Option.some "∃" else Option.none
+#[partial]
+def Markdown.entity_E_43 (name : String) : Option String :=
+    if String.beq name "ExponentialE" then Option.some "ⅇ" else Option.none
+#[partial]
+def Markdown.entity_E_44 (name : String) : Option String :=
+    if String.lt name "ExponentialE" then Markdown.entity_E_42 name else Markdown.entity_E_43 name
+#[partial]
+def Markdown.entity_E_45 (name : String) : Option String :=
+    if String.lt name "Exists" then Markdown.entity_E_41 name else Markdown.entity_E_44 name
+#[partial]
+def Markdown.entity_E_46 (name : String) : Option String :=
+    if String.lt name "Eta" then Markdown.entity_E_38 name else Markdown.entity_E_45 name
+#[partial]
+def Markdown.entity_E_47 (name : String) : Option String :=
+    if String.lt name "Equilibrium" then Markdown.entity_E_33 name else Markdown.entity_E_46 name
+#[partial]
+def Markdown.entity_E_48 (name : String) : Option String :=
+    if String.lt name "EmptyVerySmallSquare" then Markdown.entity_E_22 name else Markdown.entity_E_47 name
+
+def Markdown.entity_E (name : String) : Option String := Markdown.entity_E_48 name
 
 #[partial]
-def Markdown.entity_F (name : String) : Option String :=
-    if String.beq name "Fcy" then Option.some "Ф"
-    else if String.beq name "Ffr" then Option.some "𝔉"
-    else if String.beq name "FilledSmallSquare" then Option.some "◼"
-    else if String.beq name "FilledVerySmallSquare" then Option.some "▪"
-    else if String.beq name "Fopf" then Option.some "𝔽"
-    else if String.beq name "ForAll" then Option.some "∀"
-    else if String.beq name "Fouriertrf" then Option.some "ℱ"
-    else if String.beq name "Fscr" then Option.some "ℱ"
-    else Option.none
+def Markdown.entity_F_0 (name : String) : Option String :=
+    if String.beq name "Fcy" then Option.some "Ф" else Option.none
+#[partial]
+def Markdown.entity_F_1 (name : String) : Option String :=
+    if String.beq name "Ffr" then Option.some "𝔉" else Option.none
+#[partial]
+def Markdown.entity_F_2 (name : String) : Option String :=
+    if String.lt name "Ffr" then Markdown.entity_F_0 name else Markdown.entity_F_1 name
+#[partial]
+def Markdown.entity_F_3 (name : String) : Option String :=
+    if String.beq name "FilledSmallSquare" then Option.some "◼" else Option.none
+#[partial]
+def Markdown.entity_F_4 (name : String) : Option String :=
+    if String.beq name "FilledVerySmallSquare" then Option.some "▪" else Option.none
+#[partial]
+def Markdown.entity_F_5 (name : String) : Option String :=
+    if String.lt name "FilledVerySmallSquare" then Markdown.entity_F_3 name else Markdown.entity_F_4 name
+#[partial]
+def Markdown.entity_F_6 (name : String) : Option String :=
+    if String.lt name "FilledSmallSquare" then Markdown.entity_F_2 name else Markdown.entity_F_5 name
+#[partial]
+def Markdown.entity_F_7 (name : String) : Option String :=
+    if String.beq name "Fopf" then Option.some "𝔽" else Option.none
+#[partial]
+def Markdown.entity_F_8 (name : String) : Option String :=
+    if String.beq name "ForAll" then Option.some "∀" else Option.none
+#[partial]
+def Markdown.entity_F_9 (name : String) : Option String :=
+    if String.lt name "ForAll" then Markdown.entity_F_7 name else Markdown.entity_F_8 name
+#[partial]
+def Markdown.entity_F_10 (name : String) : Option String :=
+    if String.beq name "Fouriertrf" then Option.some "ℱ" else Option.none
+#[partial]
+def Markdown.entity_F_11 (name : String) : Option String :=
+    if String.beq name "Fscr" then Option.some "ℱ" else Option.none
+#[partial]
+def Markdown.entity_F_12 (name : String) : Option String :=
+    if String.lt name "Fscr" then Markdown.entity_F_10 name else Markdown.entity_F_11 name
+#[partial]
+def Markdown.entity_F_13 (name : String) : Option String :=
+    if String.lt name "Fouriertrf" then Markdown.entity_F_9 name else Markdown.entity_F_12 name
+#[partial]
+def Markdown.entity_F_14 (name : String) : Option String :=
+    if String.lt name "Fopf" then Markdown.entity_F_6 name else Markdown.entity_F_13 name
+
+def Markdown.entity_F (name : String) : Option String := Markdown.entity_F_14 name
 
 #[partial]
-def Markdown.entity_G (name : String) : Option String :=
-    if String.beq name "GJcy" then Option.some "Ѓ"
-    else if String.beq name "GT" then Option.some ">"
-    else if String.beq name "Gamma" then Option.some "Γ"
-    else if String.beq name "Gammad" then Option.some "Ϝ"
-    else if String.beq name "Gbreve" then Option.some "Ğ"
-    else if String.beq name "Gcedil" then Option.some "Ģ"
-    else if String.beq name "Gcirc" then Option.some "Ĝ"
-    else if String.beq name "Gcy" then Option.some "Г"
-    else if String.beq name "Gdot" then Option.some "Ġ"
-    else if String.beq name "Gfr" then Option.some "𝔊"
-    else if String.beq name "Gg" then Option.some "⋙"
-    else if String.beq name "Gopf" then Option.some "𝔾"
-    else if String.beq name "GreaterEqual" then Option.some "≥"
-    else if String.beq name "GreaterEqualLess" then Option.some "⋛"
-    else if String.beq name "GreaterFullEqual" then Option.some "≧"
-    else if String.beq name "GreaterGreater" then Option.some "⪢"
-    else if String.beq name "GreaterLess" then Option.some "≷"
-    else if String.beq name "GreaterSlantEqual" then Option.some "⩾"
-    else if String.beq name "GreaterTilde" then Option.some "≳"
-    else if String.beq name "Gscr" then Option.some "𝒢"
-    else if String.beq name "Gt" then Option.some "≫"
-    else Option.none
+def Markdown.entity_G_0 (name : String) : Option String :=
+    if String.beq name "GJcy" then Option.some "Ѓ" else Option.none
+#[partial]
+def Markdown.entity_G_1 (name : String) : Option String :=
+    if String.beq name "GT" then Option.some ">" else Option.none
+#[partial]
+def Markdown.entity_G_2 (name : String) : Option String :=
+    if String.lt name "GT" then Markdown.entity_G_0 name else Markdown.entity_G_1 name
+#[partial]
+def Markdown.entity_G_3 (name : String) : Option String :=
+    if String.beq name "Gamma" then Option.some "Γ" else Option.none
+#[partial]
+def Markdown.entity_G_4 (name : String) : Option String :=
+    if String.beq name "Gammad" then Option.some "Ϝ" else Option.none
+#[partial]
+def Markdown.entity_G_5 (name : String) : Option String :=
+    if String.beq name "Gbreve" then Option.some "Ğ" else Option.none
+#[partial]
+def Markdown.entity_G_6 (name : String) : Option String :=
+    if String.lt name "Gbreve" then Markdown.entity_G_4 name else Markdown.entity_G_5 name
+#[partial]
+def Markdown.entity_G_7 (name : String) : Option String :=
+    if String.lt name "Gammad" then Markdown.entity_G_3 name else Markdown.entity_G_6 name
+#[partial]
+def Markdown.entity_G_8 (name : String) : Option String :=
+    if String.lt name "Gamma" then Markdown.entity_G_2 name else Markdown.entity_G_7 name
+#[partial]
+def Markdown.entity_G_9 (name : String) : Option String :=
+    if String.beq name "Gcedil" then Option.some "Ģ" else Option.none
+#[partial]
+def Markdown.entity_G_10 (name : String) : Option String :=
+    if String.beq name "Gcirc" then Option.some "Ĝ" else Option.none
+#[partial]
+def Markdown.entity_G_11 (name : String) : Option String :=
+    if String.lt name "Gcirc" then Markdown.entity_G_9 name else Markdown.entity_G_10 name
+#[partial]
+def Markdown.entity_G_12 (name : String) : Option String :=
+    if String.beq name "Gcy" then Option.some "Г" else Option.none
+#[partial]
+def Markdown.entity_G_13 (name : String) : Option String :=
+    if String.beq name "Gdot" then Option.some "Ġ" else Option.none
+#[partial]
+def Markdown.entity_G_14 (name : String) : Option String :=
+    if String.beq name "Gfr" then Option.some "𝔊" else Option.none
+#[partial]
+def Markdown.entity_G_15 (name : String) : Option String :=
+    if String.lt name "Gfr" then Markdown.entity_G_13 name else Markdown.entity_G_14 name
+#[partial]
+def Markdown.entity_G_16 (name : String) : Option String :=
+    if String.lt name "Gdot" then Markdown.entity_G_12 name else Markdown.entity_G_15 name
+#[partial]
+def Markdown.entity_G_17 (name : String) : Option String :=
+    if String.lt name "Gcy" then Markdown.entity_G_11 name else Markdown.entity_G_16 name
+#[partial]
+def Markdown.entity_G_18 (name : String) : Option String :=
+    if String.lt name "Gcedil" then Markdown.entity_G_8 name else Markdown.entity_G_17 name
+#[partial]
+def Markdown.entity_G_19 (name : String) : Option String :=
+    if String.beq name "Gg" then Option.some "⋙" else Option.none
+#[partial]
+def Markdown.entity_G_20 (name : String) : Option String :=
+    if String.beq name "Gopf" then Option.some "𝔾" else Option.none
+#[partial]
+def Markdown.entity_G_21 (name : String) : Option String :=
+    if String.lt name "Gopf" then Markdown.entity_G_19 name else Markdown.entity_G_20 name
+#[partial]
+def Markdown.entity_G_22 (name : String) : Option String :=
+    if String.beq name "GreaterEqual" then Option.some "≥" else Option.none
+#[partial]
+def Markdown.entity_G_23 (name : String) : Option String :=
+    if String.beq name "GreaterEqualLess" then Option.some "⋛" else Option.none
+#[partial]
+def Markdown.entity_G_24 (name : String) : Option String :=
+    if String.beq name "GreaterFullEqual" then Option.some "≧" else Option.none
+#[partial]
+def Markdown.entity_G_25 (name : String) : Option String :=
+    if String.lt name "GreaterFullEqual" then Markdown.entity_G_23 name else Markdown.entity_G_24 name
+#[partial]
+def Markdown.entity_G_26 (name : String) : Option String :=
+    if String.lt name "GreaterEqualLess" then Markdown.entity_G_22 name else Markdown.entity_G_25 name
+#[partial]
+def Markdown.entity_G_27 (name : String) : Option String :=
+    if String.lt name "GreaterEqual" then Markdown.entity_G_21 name else Markdown.entity_G_26 name
+#[partial]
+def Markdown.entity_G_28 (name : String) : Option String :=
+    if String.beq name "GreaterGreater" then Option.some "⪢" else Option.none
+#[partial]
+def Markdown.entity_G_29 (name : String) : Option String :=
+    if String.beq name "GreaterLess" then Option.some "≷" else Option.none
+#[partial]
+def Markdown.entity_G_30 (name : String) : Option String :=
+    if String.beq name "GreaterSlantEqual" then Option.some "⩾" else Option.none
+#[partial]
+def Markdown.entity_G_31 (name : String) : Option String :=
+    if String.lt name "GreaterSlantEqual" then Markdown.entity_G_29 name else Markdown.entity_G_30 name
+#[partial]
+def Markdown.entity_G_32 (name : String) : Option String :=
+    if String.lt name "GreaterLess" then Markdown.entity_G_28 name else Markdown.entity_G_31 name
+#[partial]
+def Markdown.entity_G_33 (name : String) : Option String :=
+    if String.beq name "GreaterTilde" then Option.some "≳" else Option.none
+#[partial]
+def Markdown.entity_G_34 (name : String) : Option String :=
+    if String.beq name "Gscr" then Option.some "𝒢" else Option.none
+#[partial]
+def Markdown.entity_G_35 (name : String) : Option String :=
+    if String.beq name "Gt" then Option.some "≫" else Option.none
+#[partial]
+def Markdown.entity_G_36 (name : String) : Option String :=
+    if String.lt name "Gt" then Markdown.entity_G_34 name else Markdown.entity_G_35 name
+#[partial]
+def Markdown.entity_G_37 (name : String) : Option String :=
+    if String.lt name "Gscr" then Markdown.entity_G_33 name else Markdown.entity_G_36 name
+#[partial]
+def Markdown.entity_G_38 (name : String) : Option String :=
+    if String.lt name "GreaterTilde" then Markdown.entity_G_32 name else Markdown.entity_G_37 name
+#[partial]
+def Markdown.entity_G_39 (name : String) : Option String :=
+    if String.lt name "GreaterGreater" then Markdown.entity_G_27 name else Markdown.entity_G_38 name
+#[partial]
+def Markdown.entity_G_40 (name : String) : Option String :=
+    if String.lt name "Gg" then Markdown.entity_G_18 name else Markdown.entity_G_39 name
+
+def Markdown.entity_G (name : String) : Option String := Markdown.entity_G_40 name
 
 #[partial]
-def Markdown.entity_H (name : String) : Option String :=
-    if String.beq name "HARDcy" then Option.some "Ъ"
-    else if String.beq name "Hacek" then Option.some "ˇ"
-    else if String.beq name "Hat" then Option.some "^"
-    else if String.beq name "Hcirc" then Option.some "Ĥ"
-    else if String.beq name "Hfr" then Option.some "ℌ"
-    else if String.beq name "HilbertSpace" then Option.some "ℋ"
-    else if String.beq name "Hopf" then Option.some "ℍ"
-    else if String.beq name "HorizontalLine" then Option.some "─"
-    else if String.beq name "Hscr" then Option.some "ℋ"
-    else if String.beq name "Hstrok" then Option.some "Ħ"
-    else if String.beq name "HumpDownHump" then Option.some "≎"
-    else if String.beq name "HumpEqual" then Option.some "≏"
-    else Option.none
+def Markdown.entity_H_0 (name : String) : Option String :=
+    if String.beq name "HARDcy" then Option.some "Ъ" else Option.none
+#[partial]
+def Markdown.entity_H_1 (name : String) : Option String :=
+    if String.beq name "Hacek" then Option.some "ˇ" else Option.none
+#[partial]
+def Markdown.entity_H_2 (name : String) : Option String :=
+    if String.beq name "Hat" then Option.some "^" else Option.none
+#[partial]
+def Markdown.entity_H_3 (name : String) : Option String :=
+    if String.lt name "Hat" then Markdown.entity_H_1 name else Markdown.entity_H_2 name
+#[partial]
+def Markdown.entity_H_4 (name : String) : Option String :=
+    if String.lt name "Hacek" then Markdown.entity_H_0 name else Markdown.entity_H_3 name
+#[partial]
+def Markdown.entity_H_5 (name : String) : Option String :=
+    if String.beq name "Hcirc" then Option.some "Ĥ" else Option.none
+#[partial]
+def Markdown.entity_H_6 (name : String) : Option String :=
+    if String.beq name "Hfr" then Option.some "ℌ" else Option.none
+#[partial]
+def Markdown.entity_H_7 (name : String) : Option String :=
+    if String.beq name "HilbertSpace" then Option.some "ℋ" else Option.none
+#[partial]
+def Markdown.entity_H_8 (name : String) : Option String :=
+    if String.lt name "HilbertSpace" then Markdown.entity_H_6 name else Markdown.entity_H_7 name
+#[partial]
+def Markdown.entity_H_9 (name : String) : Option String :=
+    if String.lt name "Hfr" then Markdown.entity_H_5 name else Markdown.entity_H_8 name
+#[partial]
+def Markdown.entity_H_10 (name : String) : Option String :=
+    if String.lt name "Hcirc" then Markdown.entity_H_4 name else Markdown.entity_H_9 name
+#[partial]
+def Markdown.entity_H_11 (name : String) : Option String :=
+    if String.beq name "Hopf" then Option.some "ℍ" else Option.none
+#[partial]
+def Markdown.entity_H_12 (name : String) : Option String :=
+    if String.beq name "HorizontalLine" then Option.some "─" else Option.none
+#[partial]
+def Markdown.entity_H_13 (name : String) : Option String :=
+    if String.beq name "Hscr" then Option.some "ℋ" else Option.none
+#[partial]
+def Markdown.entity_H_14 (name : String) : Option String :=
+    if String.lt name "Hscr" then Markdown.entity_H_12 name else Markdown.entity_H_13 name
+#[partial]
+def Markdown.entity_H_15 (name : String) : Option String :=
+    if String.lt name "HorizontalLine" then Markdown.entity_H_11 name else Markdown.entity_H_14 name
+#[partial]
+def Markdown.entity_H_16 (name : String) : Option String :=
+    if String.beq name "Hstrok" then Option.some "Ħ" else Option.none
+#[partial]
+def Markdown.entity_H_17 (name : String) : Option String :=
+    if String.beq name "HumpDownHump" then Option.some "≎" else Option.none
+#[partial]
+def Markdown.entity_H_18 (name : String) : Option String :=
+    if String.beq name "HumpEqual" then Option.some "≏" else Option.none
+#[partial]
+def Markdown.entity_H_19 (name : String) : Option String :=
+    if String.lt name "HumpEqual" then Markdown.entity_H_17 name else Markdown.entity_H_18 name
+#[partial]
+def Markdown.entity_H_20 (name : String) : Option String :=
+    if String.lt name "HumpDownHump" then Markdown.entity_H_16 name else Markdown.entity_H_19 name
+#[partial]
+def Markdown.entity_H_21 (name : String) : Option String :=
+    if String.lt name "Hstrok" then Markdown.entity_H_15 name else Markdown.entity_H_20 name
+#[partial]
+def Markdown.entity_H_22 (name : String) : Option String :=
+    if String.lt name "Hopf" then Markdown.entity_H_10 name else Markdown.entity_H_21 name
+
+def Markdown.entity_H (name : String) : Option String := Markdown.entity_H_22 name
 
 #[partial]
-def Markdown.entity_I (name : String) : Option String :=
-    if String.beq name "IEcy" then Option.some "Е"
-    else if String.beq name "IJlig" then Option.some "Ĳ"
-    else if String.beq name "IOcy" then Option.some "Ё"
-    else if String.beq name "Iacute" then Option.some "Í"
-    else if String.beq name "Icirc" then Option.some "Î"
-    else if String.beq name "Icy" then Option.some "И"
-    else if String.beq name "Idot" then Option.some "İ"
-    else if String.beq name "Ifr" then Option.some "ℑ"
-    else if String.beq name "Igrave" then Option.some "Ì"
-    else if String.beq name "Im" then Option.some "ℑ"
-    else if String.beq name "Imacr" then Option.some "Ī"
-    else if String.beq name "ImaginaryI" then Option.some "ⅈ"
-    else if String.beq name "Implies" then Option.some "⇒"
-    else if String.beq name "Int" then Option.some "∬"
-    else if String.beq name "Integral" then Option.some "∫"
-    else if String.beq name "Intersection" then Option.some "⋂"
-    else if String.beq name "InvisibleComma" then Option.some "⁣"
-    else if String.beq name "InvisibleTimes" then Option.some "⁢"
-    else if String.beq name "Iogon" then Option.some "Į"
-    else if String.beq name "Iopf" then Option.some "𝕀"
-    else if String.beq name "Iota" then Option.some "Ι"
-    else if String.beq name "Iscr" then Option.some "ℐ"
-    else if String.beq name "Itilde" then Option.some "Ĩ"
-    else if String.beq name "Iukcy" then Option.some "І"
-    else if String.beq name "Iuml" then Option.some "Ï"
-    else Option.none
+def Markdown.entity_I_0 (name : String) : Option String :=
+    if String.beq name "IEcy" then Option.some "Е" else Option.none
+#[partial]
+def Markdown.entity_I_1 (name : String) : Option String :=
+    if String.beq name "IJlig" then Option.some "Ĳ" else Option.none
+#[partial]
+def Markdown.entity_I_2 (name : String) : Option String :=
+    if String.beq name "IOcy" then Option.some "Ё" else Option.none
+#[partial]
+def Markdown.entity_I_3 (name : String) : Option String :=
+    if String.lt name "IOcy" then Markdown.entity_I_1 name else Markdown.entity_I_2 name
+#[partial]
+def Markdown.entity_I_4 (name : String) : Option String :=
+    if String.lt name "IJlig" then Markdown.entity_I_0 name else Markdown.entity_I_3 name
+#[partial]
+def Markdown.entity_I_5 (name : String) : Option String :=
+    if String.beq name "Iacute" then Option.some "Í" else Option.none
+#[partial]
+def Markdown.entity_I_6 (name : String) : Option String :=
+    if String.beq name "Icirc" then Option.some "Î" else Option.none
+#[partial]
+def Markdown.entity_I_7 (name : String) : Option String :=
+    if String.beq name "Icy" then Option.some "И" else Option.none
+#[partial]
+def Markdown.entity_I_8 (name : String) : Option String :=
+    if String.lt name "Icy" then Markdown.entity_I_6 name else Markdown.entity_I_7 name
+#[partial]
+def Markdown.entity_I_9 (name : String) : Option String :=
+    if String.lt name "Icirc" then Markdown.entity_I_5 name else Markdown.entity_I_8 name
+#[partial]
+def Markdown.entity_I_10 (name : String) : Option String :=
+    if String.lt name "Iacute" then Markdown.entity_I_4 name else Markdown.entity_I_9 name
+#[partial]
+def Markdown.entity_I_11 (name : String) : Option String :=
+    if String.beq name "Idot" then Option.some "İ" else Option.none
+#[partial]
+def Markdown.entity_I_12 (name : String) : Option String :=
+    if String.beq name "Ifr" then Option.some "ℑ" else Option.none
+#[partial]
+def Markdown.entity_I_13 (name : String) : Option String :=
+    if String.beq name "Igrave" then Option.some "Ì" else Option.none
+#[partial]
+def Markdown.entity_I_14 (name : String) : Option String :=
+    if String.lt name "Igrave" then Markdown.entity_I_12 name else Markdown.entity_I_13 name
+#[partial]
+def Markdown.entity_I_15 (name : String) : Option String :=
+    if String.lt name "Ifr" then Markdown.entity_I_11 name else Markdown.entity_I_14 name
+#[partial]
+def Markdown.entity_I_16 (name : String) : Option String :=
+    if String.beq name "Im" then Option.some "ℑ" else Option.none
+#[partial]
+def Markdown.entity_I_17 (name : String) : Option String :=
+    if String.beq name "Imacr" then Option.some "Ī" else Option.none
+#[partial]
+def Markdown.entity_I_18 (name : String) : Option String :=
+    if String.beq name "ImaginaryI" then Option.some "ⅈ" else Option.none
+#[partial]
+def Markdown.entity_I_19 (name : String) : Option String :=
+    if String.lt name "ImaginaryI" then Markdown.entity_I_17 name else Markdown.entity_I_18 name
+#[partial]
+def Markdown.entity_I_20 (name : String) : Option String :=
+    if String.lt name "Imacr" then Markdown.entity_I_16 name else Markdown.entity_I_19 name
+#[partial]
+def Markdown.entity_I_21 (name : String) : Option String :=
+    if String.lt name "Im" then Markdown.entity_I_15 name else Markdown.entity_I_20 name
+#[partial]
+def Markdown.entity_I_22 (name : String) : Option String :=
+    if String.lt name "Idot" then Markdown.entity_I_10 name else Markdown.entity_I_21 name
+#[partial]
+def Markdown.entity_I_23 (name : String) : Option String :=
+    if String.beq name "Implies" then Option.some "⇒" else Option.none
+#[partial]
+def Markdown.entity_I_24 (name : String) : Option String :=
+    if String.beq name "Int" then Option.some "∬" else Option.none
+#[partial]
+def Markdown.entity_I_25 (name : String) : Option String :=
+    if String.beq name "Integral" then Option.some "∫" else Option.none
+#[partial]
+def Markdown.entity_I_26 (name : String) : Option String :=
+    if String.lt name "Integral" then Markdown.entity_I_24 name else Markdown.entity_I_25 name
+#[partial]
+def Markdown.entity_I_27 (name : String) : Option String :=
+    if String.lt name "Int" then Markdown.entity_I_23 name else Markdown.entity_I_26 name
+#[partial]
+def Markdown.entity_I_28 (name : String) : Option String :=
+    if String.beq name "Intersection" then Option.some "⋂" else Option.none
+#[partial]
+def Markdown.entity_I_29 (name : String) : Option String :=
+    if String.beq name "InvisibleComma" then Option.some "⁣" else Option.none
+#[partial]
+def Markdown.entity_I_30 (name : String) : Option String :=
+    if String.beq name "InvisibleTimes" then Option.some "⁢" else Option.none
+#[partial]
+def Markdown.entity_I_31 (name : String) : Option String :=
+    if String.lt name "InvisibleTimes" then Markdown.entity_I_29 name else Markdown.entity_I_30 name
+#[partial]
+def Markdown.entity_I_32 (name : String) : Option String :=
+    if String.lt name "InvisibleComma" then Markdown.entity_I_28 name else Markdown.entity_I_31 name
+#[partial]
+def Markdown.entity_I_33 (name : String) : Option String :=
+    if String.lt name "Intersection" then Markdown.entity_I_27 name else Markdown.entity_I_32 name
+#[partial]
+def Markdown.entity_I_34 (name : String) : Option String :=
+    if String.beq name "Iogon" then Option.some "Į" else Option.none
+#[partial]
+def Markdown.entity_I_35 (name : String) : Option String :=
+    if String.beq name "Iopf" then Option.some "𝕀" else Option.none
+#[partial]
+def Markdown.entity_I_36 (name : String) : Option String :=
+    if String.beq name "Iota" then Option.some "Ι" else Option.none
+#[partial]
+def Markdown.entity_I_37 (name : String) : Option String :=
+    if String.lt name "Iota" then Markdown.entity_I_35 name else Markdown.entity_I_36 name
+#[partial]
+def Markdown.entity_I_38 (name : String) : Option String :=
+    if String.lt name "Iopf" then Markdown.entity_I_34 name else Markdown.entity_I_37 name
+#[partial]
+def Markdown.entity_I_39 (name : String) : Option String :=
+    if String.beq name "Iscr" then Option.some "ℐ" else Option.none
+#[partial]
+def Markdown.entity_I_40 (name : String) : Option String :=
+    if String.beq name "Itilde" then Option.some "Ĩ" else Option.none
+#[partial]
+def Markdown.entity_I_41 (name : String) : Option String :=
+    if String.lt name "Itilde" then Markdown.entity_I_39 name else Markdown.entity_I_40 name
+#[partial]
+def Markdown.entity_I_42 (name : String) : Option String :=
+    if String.beq name "Iukcy" then Option.some "І" else Option.none
+#[partial]
+def Markdown.entity_I_43 (name : String) : Option String :=
+    if String.beq name "Iuml" then Option.some "Ï" else Option.none
+#[partial]
+def Markdown.entity_I_44 (name : String) : Option String :=
+    if String.lt name "Iuml" then Markdown.entity_I_42 name else Markdown.entity_I_43 name
+#[partial]
+def Markdown.entity_I_45 (name : String) : Option String :=
+    if String.lt name "Iukcy" then Markdown.entity_I_41 name else Markdown.entity_I_44 name
+#[partial]
+def Markdown.entity_I_46 (name : String) : Option String :=
+    if String.lt name "Iscr" then Markdown.entity_I_38 name else Markdown.entity_I_45 name
+#[partial]
+def Markdown.entity_I_47 (name : String) : Option String :=
+    if String.lt name "Iogon" then Markdown.entity_I_33 name else Markdown.entity_I_46 name
+#[partial]
+def Markdown.entity_I_48 (name : String) : Option String :=
+    if String.lt name "Implies" then Markdown.entity_I_22 name else Markdown.entity_I_47 name
+
+def Markdown.entity_I (name : String) : Option String := Markdown.entity_I_48 name
 
 #[partial]
-def Markdown.entity_J (name : String) : Option String :=
-    if String.beq name "Jcirc" then Option.some "Ĵ"
-    else if String.beq name "Jcy" then Option.some "Й"
-    else if String.beq name "Jfr" then Option.some "𝔍"
-    else if String.beq name "Jopf" then Option.some "𝕁"
-    else if String.beq name "Jscr" then Option.some "𝒥"
-    else if String.beq name "Jsercy" then Option.some "Ј"
-    else if String.beq name "Jukcy" then Option.some "Є"
-    else Option.none
+def Markdown.entity_J_0 (name : String) : Option String :=
+    if String.beq name "Jcirc" then Option.some "Ĵ" else Option.none
+#[partial]
+def Markdown.entity_J_1 (name : String) : Option String :=
+    if String.beq name "Jcy" then Option.some "Й" else Option.none
+#[partial]
+def Markdown.entity_J_2 (name : String) : Option String :=
+    if String.beq name "Jfr" then Option.some "𝔍" else Option.none
+#[partial]
+def Markdown.entity_J_3 (name : String) : Option String :=
+    if String.lt name "Jfr" then Markdown.entity_J_1 name else Markdown.entity_J_2 name
+#[partial]
+def Markdown.entity_J_4 (name : String) : Option String :=
+    if String.lt name "Jcy" then Markdown.entity_J_0 name else Markdown.entity_J_3 name
+#[partial]
+def Markdown.entity_J_5 (name : String) : Option String :=
+    if String.beq name "Jopf" then Option.some "𝕁" else Option.none
+#[partial]
+def Markdown.entity_J_6 (name : String) : Option String :=
+    if String.beq name "Jscr" then Option.some "𝒥" else Option.none
+#[partial]
+def Markdown.entity_J_7 (name : String) : Option String :=
+    if String.lt name "Jscr" then Markdown.entity_J_5 name else Markdown.entity_J_6 name
+#[partial]
+def Markdown.entity_J_8 (name : String) : Option String :=
+    if String.beq name "Jsercy" then Option.some "Ј" else Option.none
+#[partial]
+def Markdown.entity_J_9 (name : String) : Option String :=
+    if String.beq name "Jukcy" then Option.some "Є" else Option.none
+#[partial]
+def Markdown.entity_J_10 (name : String) : Option String :=
+    if String.lt name "Jukcy" then Markdown.entity_J_8 name else Markdown.entity_J_9 name
+#[partial]
+def Markdown.entity_J_11 (name : String) : Option String :=
+    if String.lt name "Jsercy" then Markdown.entity_J_7 name else Markdown.entity_J_10 name
+#[partial]
+def Markdown.entity_J_12 (name : String) : Option String :=
+    if String.lt name "Jopf" then Markdown.entity_J_4 name else Markdown.entity_J_11 name
+
+def Markdown.entity_J (name : String) : Option String := Markdown.entity_J_12 name
 
 #[partial]
-def Markdown.entity_K (name : String) : Option String :=
-    if String.beq name "KHcy" then Option.some "Х"
-    else if String.beq name "KJcy" then Option.some "Ќ"
-    else if String.beq name "Kappa" then Option.some "Κ"
-    else if String.beq name "Kcedil" then Option.some "Ķ"
-    else if String.beq name "Kcy" then Option.some "К"
-    else if String.beq name "Kfr" then Option.some "𝔎"
-    else if String.beq name "Kopf" then Option.some "𝕂"
-    else if String.beq name "Kscr" then Option.some "𝒦"
-    else Option.none
+def Markdown.entity_K_0 (name : String) : Option String :=
+    if String.beq name "KHcy" then Option.some "Х" else Option.none
+#[partial]
+def Markdown.entity_K_1 (name : String) : Option String :=
+    if String.beq name "KJcy" then Option.some "Ќ" else Option.none
+#[partial]
+def Markdown.entity_K_2 (name : String) : Option String :=
+    if String.lt name "KJcy" then Markdown.entity_K_0 name else Markdown.entity_K_1 name
+#[partial]
+def Markdown.entity_K_3 (name : String) : Option String :=
+    if String.beq name "Kappa" then Option.some "Κ" else Option.none
+#[partial]
+def Markdown.entity_K_4 (name : String) : Option String :=
+    if String.beq name "Kcedil" then Option.some "Ķ" else Option.none
+#[partial]
+def Markdown.entity_K_5 (name : String) : Option String :=
+    if String.lt name "Kcedil" then Markdown.entity_K_3 name else Markdown.entity_K_4 name
+#[partial]
+def Markdown.entity_K_6 (name : String) : Option String :=
+    if String.lt name "Kappa" then Markdown.entity_K_2 name else Markdown.entity_K_5 name
+#[partial]
+def Markdown.entity_K_7 (name : String) : Option String :=
+    if String.beq name "Kcy" then Option.some "К" else Option.none
+#[partial]
+def Markdown.entity_K_8 (name : String) : Option String :=
+    if String.beq name "Kfr" then Option.some "𝔎" else Option.none
+#[partial]
+def Markdown.entity_K_9 (name : String) : Option String :=
+    if String.lt name "Kfr" then Markdown.entity_K_7 name else Markdown.entity_K_8 name
+#[partial]
+def Markdown.entity_K_10 (name : String) : Option String :=
+    if String.beq name "Kopf" then Option.some "𝕂" else Option.none
+#[partial]
+def Markdown.entity_K_11 (name : String) : Option String :=
+    if String.beq name "Kscr" then Option.some "𝒦" else Option.none
+#[partial]
+def Markdown.entity_K_12 (name : String) : Option String :=
+    if String.lt name "Kscr" then Markdown.entity_K_10 name else Markdown.entity_K_11 name
+#[partial]
+def Markdown.entity_K_13 (name : String) : Option String :=
+    if String.lt name "Kopf" then Markdown.entity_K_9 name else Markdown.entity_K_12 name
+#[partial]
+def Markdown.entity_K_14 (name : String) : Option String :=
+    if String.lt name "Kcy" then Markdown.entity_K_6 name else Markdown.entity_K_13 name
+
+def Markdown.entity_K (name : String) : Option String := Markdown.entity_K_14 name
 
 #[partial]
-def Markdown.entity_L (name : String) : Option String :=
-    if String.beq name "LJcy" then Option.some "Љ"
-    else if String.beq name "LT" then Option.some "<"
-    else if String.beq name "Lacute" then Option.some "Ĺ"
-    else if String.beq name "Lambda" then Option.some "Λ"
-    else if String.beq name "Lang" then Option.some "⟪"
-    else if String.beq name "Laplacetrf" then Option.some "ℒ"
-    else if String.beq name "Larr" then Option.some "↞"
-    else if String.beq name "Lcaron" then Option.some "Ľ"
-    else if String.beq name "Lcedil" then Option.some "Ļ"
-    else if String.beq name "Lcy" then Option.some "Л"
-    else if String.beq name "LeftAngleBracket" then Option.some "⟨"
-    else if String.beq name "LeftArrow" then Option.some "←"
-    else if String.beq name "LeftArrowBar" then Option.some "⇤"
-    else if String.beq name "LeftArrowRightArrow" then Option.some "⇆"
-    else if String.beq name "LeftCeiling" then Option.some "⌈"
-    else if String.beq name "LeftDoubleBracket" then Option.some "⟦"
-    else if String.beq name "LeftDownTeeVector" then Option.some "⥡"
-    else if String.beq name "LeftDownVector" then Option.some "⇃"
-    else if String.beq name "LeftDownVectorBar" then Option.some "⥙"
-    else if String.beq name "LeftFloor" then Option.some "⌊"
-    else if String.beq name "LeftRightArrow" then Option.some "↔"
-    else if String.beq name "LeftRightVector" then Option.some "⥎"
-    else if String.beq name "LeftTee" then Option.some "⊣"
-    else if String.beq name "LeftTeeArrow" then Option.some "↤"
-    else if String.beq name "LeftTeeVector" then Option.some "⥚"
-    else if String.beq name "LeftTriangle" then Option.some "⊲"
-    else if String.beq name "LeftTriangleBar" then Option.some "⧏"
-    else if String.beq name "LeftTriangleEqual" then Option.some "⊴"
-    else if String.beq name "LeftUpDownVector" then Option.some "⥑"
-    else if String.beq name "LeftUpTeeVector" then Option.some "⥠"
-    else if String.beq name "LeftUpVector" then Option.some "↿"
-    else if String.beq name "LeftUpVectorBar" then Option.some "⥘"
-    else if String.beq name "LeftVector" then Option.some "↼"
-    else if String.beq name "LeftVectorBar" then Option.some "⥒"
-    else if String.beq name "Leftarrow" then Option.some "⇐"
-    else if String.beq name "Leftrightarrow" then Option.some "⇔"
-    else if String.beq name "LessEqualGreater" then Option.some "⋚"
-    else if String.beq name "LessFullEqual" then Option.some "≦"
-    else if String.beq name "LessGreater" then Option.some "≶"
-    else if String.beq name "LessLess" then Option.some "⪡"
-    else if String.beq name "LessSlantEqual" then Option.some "⩽"
-    else if String.beq name "LessTilde" then Option.some "≲"
-    else if String.beq name "Lfr" then Option.some "𝔏"
-    else if String.beq name "Ll" then Option.some "⋘"
-    else if String.beq name "Lleftarrow" then Option.some "⇚"
-    else if String.beq name "Lmidot" then Option.some "Ŀ"
-    else if String.beq name "LongLeftArrow" then Option.some "⟵"
-    else if String.beq name "LongLeftRightArrow" then Option.some "⟷"
-    else if String.beq name "LongRightArrow" then Option.some "⟶"
-    else if String.beq name "Longleftarrow" then Option.some "⟸"
-    else if String.beq name "Longleftrightarrow" then Option.some "⟺"
-    else if String.beq name "Longrightarrow" then Option.some "⟹"
-    else if String.beq name "Lopf" then Option.some "𝕃"
-    else if String.beq name "LowerLeftArrow" then Option.some "↙"
-    else if String.beq name "LowerRightArrow" then Option.some "↘"
-    else if String.beq name "Lscr" then Option.some "ℒ"
-    else if String.beq name "Lsh" then Option.some "↰"
-    else if String.beq name "Lstrok" then Option.some "Ł"
-    else if String.beq name "Lt" then Option.some "≪"
-    else Option.none
+def Markdown.entity_L_0 (name : String) : Option String :=
+    if String.beq name "LJcy" then Option.some "Љ" else Option.none
+#[partial]
+def Markdown.entity_L_1 (name : String) : Option String :=
+    if String.beq name "LT" then Option.some "<" else Option.none
+#[partial]
+def Markdown.entity_L_2 (name : String) : Option String :=
+    if String.beq name "Lacute" then Option.some "Ĺ" else Option.none
+#[partial]
+def Markdown.entity_L_3 (name : String) : Option String :=
+    if String.lt name "Lacute" then Markdown.entity_L_1 name else Markdown.entity_L_2 name
+#[partial]
+def Markdown.entity_L_4 (name : String) : Option String :=
+    if String.lt name "LT" then Markdown.entity_L_0 name else Markdown.entity_L_3 name
+#[partial]
+def Markdown.entity_L_5 (name : String) : Option String :=
+    if String.beq name "Lambda" then Option.some "Λ" else Option.none
+#[partial]
+def Markdown.entity_L_6 (name : String) : Option String :=
+    if String.beq name "Lang" then Option.some "⟪" else Option.none
+#[partial]
+def Markdown.entity_L_7 (name : String) : Option String :=
+    if String.lt name "Lang" then Markdown.entity_L_5 name else Markdown.entity_L_6 name
+#[partial]
+def Markdown.entity_L_8 (name : String) : Option String :=
+    if String.beq name "Laplacetrf" then Option.some "ℒ" else Option.none
+#[partial]
+def Markdown.entity_L_9 (name : String) : Option String :=
+    if String.beq name "Larr" then Option.some "↞" else Option.none
+#[partial]
+def Markdown.entity_L_10 (name : String) : Option String :=
+    if String.lt name "Larr" then Markdown.entity_L_8 name else Markdown.entity_L_9 name
+#[partial]
+def Markdown.entity_L_11 (name : String) : Option String :=
+    if String.lt name "Laplacetrf" then Markdown.entity_L_7 name else Markdown.entity_L_10 name
+#[partial]
+def Markdown.entity_L_12 (name : String) : Option String :=
+    if String.lt name "Lambda" then Markdown.entity_L_4 name else Markdown.entity_L_11 name
+#[partial]
+def Markdown.entity_L_13 (name : String) : Option String :=
+    if String.beq name "Lcaron" then Option.some "Ľ" else Option.none
+#[partial]
+def Markdown.entity_L_14 (name : String) : Option String :=
+    if String.beq name "Lcedil" then Option.some "Ļ" else Option.none
+#[partial]
+def Markdown.entity_L_15 (name : String) : Option String :=
+    if String.beq name "Lcy" then Option.some "Л" else Option.none
+#[partial]
+def Markdown.entity_L_16 (name : String) : Option String :=
+    if String.lt name "Lcy" then Markdown.entity_L_14 name else Markdown.entity_L_15 name
+#[partial]
+def Markdown.entity_L_17 (name : String) : Option String :=
+    if String.lt name "Lcedil" then Markdown.entity_L_13 name else Markdown.entity_L_16 name
+#[partial]
+def Markdown.entity_L_18 (name : String) : Option String :=
+    if String.beq name "LeftAngleBracket" then Option.some "⟨" else Option.none
+#[partial]
+def Markdown.entity_L_19 (name : String) : Option String :=
+    if String.beq name "LeftArrow" then Option.some "←" else Option.none
+#[partial]
+def Markdown.entity_L_20 (name : String) : Option String :=
+    if String.lt name "LeftArrow" then Markdown.entity_L_18 name else Markdown.entity_L_19 name
+#[partial]
+def Markdown.entity_L_21 (name : String) : Option String :=
+    if String.beq name "LeftArrowBar" then Option.some "⇤" else Option.none
+#[partial]
+def Markdown.entity_L_22 (name : String) : Option String :=
+    if String.beq name "LeftArrowRightArrow" then Option.some "⇆" else Option.none
+#[partial]
+def Markdown.entity_L_23 (name : String) : Option String :=
+    if String.lt name "LeftArrowRightArrow" then Markdown.entity_L_21 name else Markdown.entity_L_22 name
+#[partial]
+def Markdown.entity_L_24 (name : String) : Option String :=
+    if String.lt name "LeftArrowBar" then Markdown.entity_L_20 name else Markdown.entity_L_23 name
+#[partial]
+def Markdown.entity_L_25 (name : String) : Option String :=
+    if String.lt name "LeftAngleBracket" then Markdown.entity_L_17 name else Markdown.entity_L_24 name
+#[partial]
+def Markdown.entity_L_26 (name : String) : Option String :=
+    if String.lt name "Lcaron" then Markdown.entity_L_12 name else Markdown.entity_L_25 name
+#[partial]
+def Markdown.entity_L_27 (name : String) : Option String :=
+    if String.beq name "LeftCeiling" then Option.some "⌈" else Option.none
+#[partial]
+def Markdown.entity_L_28 (name : String) : Option String :=
+    if String.beq name "LeftDoubleBracket" then Option.some "⟦" else Option.none
+#[partial]
+def Markdown.entity_L_29 (name : String) : Option String :=
+    if String.beq name "LeftDownTeeVector" then Option.some "⥡" else Option.none
+#[partial]
+def Markdown.entity_L_30 (name : String) : Option String :=
+    if String.lt name "LeftDownTeeVector" then Markdown.entity_L_28 name else Markdown.entity_L_29 name
+#[partial]
+def Markdown.entity_L_31 (name : String) : Option String :=
+    if String.lt name "LeftDoubleBracket" then Markdown.entity_L_27 name else Markdown.entity_L_30 name
+#[partial]
+def Markdown.entity_L_32 (name : String) : Option String :=
+    if String.beq name "LeftDownVector" then Option.some "⇃" else Option.none
+#[partial]
+def Markdown.entity_L_33 (name : String) : Option String :=
+    if String.beq name "LeftDownVectorBar" then Option.some "⥙" else Option.none
+#[partial]
+def Markdown.entity_L_34 (name : String) : Option String :=
+    if String.lt name "LeftDownVectorBar" then Markdown.entity_L_32 name else Markdown.entity_L_33 name
+#[partial]
+def Markdown.entity_L_35 (name : String) : Option String :=
+    if String.beq name "LeftFloor" then Option.some "⌊" else Option.none
+#[partial]
+def Markdown.entity_L_36 (name : String) : Option String :=
+    if String.beq name "LeftRightArrow" then Option.some "↔" else Option.none
+#[partial]
+def Markdown.entity_L_37 (name : String) : Option String :=
+    if String.lt name "LeftRightArrow" then Markdown.entity_L_35 name else Markdown.entity_L_36 name
+#[partial]
+def Markdown.entity_L_38 (name : String) : Option String :=
+    if String.lt name "LeftFloor" then Markdown.entity_L_34 name else Markdown.entity_L_37 name
+#[partial]
+def Markdown.entity_L_39 (name : String) : Option String :=
+    if String.lt name "LeftDownVector" then Markdown.entity_L_31 name else Markdown.entity_L_38 name
+#[partial]
+def Markdown.entity_L_40 (name : String) : Option String :=
+    if String.beq name "LeftRightVector" then Option.some "⥎" else Option.none
+#[partial]
+def Markdown.entity_L_41 (name : String) : Option String :=
+    if String.beq name "LeftTee" then Option.some "⊣" else Option.none
+#[partial]
+def Markdown.entity_L_42 (name : String) : Option String :=
+    if String.lt name "LeftTee" then Markdown.entity_L_40 name else Markdown.entity_L_41 name
+#[partial]
+def Markdown.entity_L_43 (name : String) : Option String :=
+    if String.beq name "LeftTeeArrow" then Option.some "↤" else Option.none
+#[partial]
+def Markdown.entity_L_44 (name : String) : Option String :=
+    if String.beq name "LeftTeeVector" then Option.some "⥚" else Option.none
+#[partial]
+def Markdown.entity_L_45 (name : String) : Option String :=
+    if String.lt name "LeftTeeVector" then Markdown.entity_L_43 name else Markdown.entity_L_44 name
+#[partial]
+def Markdown.entity_L_46 (name : String) : Option String :=
+    if String.lt name "LeftTeeArrow" then Markdown.entity_L_42 name else Markdown.entity_L_45 name
+#[partial]
+def Markdown.entity_L_47 (name : String) : Option String :=
+    if String.beq name "LeftTriangle" then Option.some "⊲" else Option.none
+#[partial]
+def Markdown.entity_L_48 (name : String) : Option String :=
+    if String.beq name "LeftTriangleBar" then Option.some "⧏" else Option.none
+#[partial]
+def Markdown.entity_L_49 (name : String) : Option String :=
+    if String.lt name "LeftTriangleBar" then Markdown.entity_L_47 name else Markdown.entity_L_48 name
+#[partial]
+def Markdown.entity_L_50 (name : String) : Option String :=
+    if String.beq name "LeftTriangleEqual" then Option.some "⊴" else Option.none
+#[partial]
+def Markdown.entity_L_51 (name : String) : Option String :=
+    if String.beq name "LeftUpDownVector" then Option.some "⥑" else Option.none
+#[partial]
+def Markdown.entity_L_52 (name : String) : Option String :=
+    if String.lt name "LeftUpDownVector" then Markdown.entity_L_50 name else Markdown.entity_L_51 name
+#[partial]
+def Markdown.entity_L_53 (name : String) : Option String :=
+    if String.lt name "LeftTriangleEqual" then Markdown.entity_L_49 name else Markdown.entity_L_52 name
+#[partial]
+def Markdown.entity_L_54 (name : String) : Option String :=
+    if String.lt name "LeftTriangle" then Markdown.entity_L_46 name else Markdown.entity_L_53 name
+#[partial]
+def Markdown.entity_L_55 (name : String) : Option String :=
+    if String.lt name "LeftRightVector" then Markdown.entity_L_39 name else Markdown.entity_L_54 name
+#[partial]
+def Markdown.entity_L_56 (name : String) : Option String :=
+    if String.lt name "LeftCeiling" then Markdown.entity_L_26 name else Markdown.entity_L_55 name
+#[partial]
+def Markdown.entity_L_57 (name : String) : Option String :=
+    if String.beq name "LeftUpTeeVector" then Option.some "⥠" else Option.none
+#[partial]
+def Markdown.entity_L_58 (name : String) : Option String :=
+    if String.beq name "LeftUpVector" then Option.some "↿" else Option.none
+#[partial]
+def Markdown.entity_L_59 (name : String) : Option String :=
+    if String.beq name "LeftUpVectorBar" then Option.some "⥘" else Option.none
+#[partial]
+def Markdown.entity_L_60 (name : String) : Option String :=
+    if String.lt name "LeftUpVectorBar" then Markdown.entity_L_58 name else Markdown.entity_L_59 name
+#[partial]
+def Markdown.entity_L_61 (name : String) : Option String :=
+    if String.lt name "LeftUpVector" then Markdown.entity_L_57 name else Markdown.entity_L_60 name
+#[partial]
+def Markdown.entity_L_62 (name : String) : Option String :=
+    if String.beq name "LeftVector" then Option.some "↼" else Option.none
+#[partial]
+def Markdown.entity_L_63 (name : String) : Option String :=
+    if String.beq name "LeftVectorBar" then Option.some "⥒" else Option.none
+#[partial]
+def Markdown.entity_L_64 (name : String) : Option String :=
+    if String.lt name "LeftVectorBar" then Markdown.entity_L_62 name else Markdown.entity_L_63 name
+#[partial]
+def Markdown.entity_L_65 (name : String) : Option String :=
+    if String.beq name "Leftarrow" then Option.some "⇐" else Option.none
+#[partial]
+def Markdown.entity_L_66 (name : String) : Option String :=
+    if String.beq name "Leftrightarrow" then Option.some "⇔" else Option.none
+#[partial]
+def Markdown.entity_L_67 (name : String) : Option String :=
+    if String.lt name "Leftrightarrow" then Markdown.entity_L_65 name else Markdown.entity_L_66 name
+#[partial]
+def Markdown.entity_L_68 (name : String) : Option String :=
+    if String.lt name "Leftarrow" then Markdown.entity_L_64 name else Markdown.entity_L_67 name
+#[partial]
+def Markdown.entity_L_69 (name : String) : Option String :=
+    if String.lt name "LeftVector" then Markdown.entity_L_61 name else Markdown.entity_L_68 name
+#[partial]
+def Markdown.entity_L_70 (name : String) : Option String :=
+    if String.beq name "LessEqualGreater" then Option.some "⋚" else Option.none
+#[partial]
+def Markdown.entity_L_71 (name : String) : Option String :=
+    if String.beq name "LessFullEqual" then Option.some "≦" else Option.none
+#[partial]
+def Markdown.entity_L_72 (name : String) : Option String :=
+    if String.lt name "LessFullEqual" then Markdown.entity_L_70 name else Markdown.entity_L_71 name
+#[partial]
+def Markdown.entity_L_73 (name : String) : Option String :=
+    if String.beq name "LessGreater" then Option.some "≶" else Option.none
+#[partial]
+def Markdown.entity_L_74 (name : String) : Option String :=
+    if String.beq name "LessLess" then Option.some "⪡" else Option.none
+#[partial]
+def Markdown.entity_L_75 (name : String) : Option String :=
+    if String.lt name "LessLess" then Markdown.entity_L_73 name else Markdown.entity_L_74 name
+#[partial]
+def Markdown.entity_L_76 (name : String) : Option String :=
+    if String.lt name "LessGreater" then Markdown.entity_L_72 name else Markdown.entity_L_75 name
+#[partial]
+def Markdown.entity_L_77 (name : String) : Option String :=
+    if String.beq name "LessSlantEqual" then Option.some "⩽" else Option.none
+#[partial]
+def Markdown.entity_L_78 (name : String) : Option String :=
+    if String.beq name "LessTilde" then Option.some "≲" else Option.none
+#[partial]
+def Markdown.entity_L_79 (name : String) : Option String :=
+    if String.lt name "LessTilde" then Markdown.entity_L_77 name else Markdown.entity_L_78 name
+#[partial]
+def Markdown.entity_L_80 (name : String) : Option String :=
+    if String.beq name "Lfr" then Option.some "𝔏" else Option.none
+#[partial]
+def Markdown.entity_L_81 (name : String) : Option String :=
+    if String.beq name "Ll" then Option.some "⋘" else Option.none
+#[partial]
+def Markdown.entity_L_82 (name : String) : Option String :=
+    if String.lt name "Ll" then Markdown.entity_L_80 name else Markdown.entity_L_81 name
+#[partial]
+def Markdown.entity_L_83 (name : String) : Option String :=
+    if String.lt name "Lfr" then Markdown.entity_L_79 name else Markdown.entity_L_82 name
+#[partial]
+def Markdown.entity_L_84 (name : String) : Option String :=
+    if String.lt name "LessSlantEqual" then Markdown.entity_L_76 name else Markdown.entity_L_83 name
+#[partial]
+def Markdown.entity_L_85 (name : String) : Option String :=
+    if String.lt name "LessEqualGreater" then Markdown.entity_L_69 name else Markdown.entity_L_84 name
+#[partial]
+def Markdown.entity_L_86 (name : String) : Option String :=
+    if String.beq name "Lleftarrow" then Option.some "⇚" else Option.none
+#[partial]
+def Markdown.entity_L_87 (name : String) : Option String :=
+    if String.beq name "Lmidot" then Option.some "Ŀ" else Option.none
+#[partial]
+def Markdown.entity_L_88 (name : String) : Option String :=
+    if String.beq name "LongLeftArrow" then Option.some "⟵" else Option.none
+#[partial]
+def Markdown.entity_L_89 (name : String) : Option String :=
+    if String.lt name "LongLeftArrow" then Markdown.entity_L_87 name else Markdown.entity_L_88 name
+#[partial]
+def Markdown.entity_L_90 (name : String) : Option String :=
+    if String.lt name "Lmidot" then Markdown.entity_L_86 name else Markdown.entity_L_89 name
+#[partial]
+def Markdown.entity_L_91 (name : String) : Option String :=
+    if String.beq name "LongLeftRightArrow" then Option.some "⟷" else Option.none
+#[partial]
+def Markdown.entity_L_92 (name : String) : Option String :=
+    if String.beq name "LongRightArrow" then Option.some "⟶" else Option.none
+#[partial]
+def Markdown.entity_L_93 (name : String) : Option String :=
+    if String.lt name "LongRightArrow" then Markdown.entity_L_91 name else Markdown.entity_L_92 name
+#[partial]
+def Markdown.entity_L_94 (name : String) : Option String :=
+    if String.beq name "Longleftarrow" then Option.some "⟸" else Option.none
+#[partial]
+def Markdown.entity_L_95 (name : String) : Option String :=
+    if String.beq name "Longleftrightarrow" then Option.some "⟺" else Option.none
+#[partial]
+def Markdown.entity_L_96 (name : String) : Option String :=
+    if String.lt name "Longleftrightarrow" then Markdown.entity_L_94 name else Markdown.entity_L_95 name
+#[partial]
+def Markdown.entity_L_97 (name : String) : Option String :=
+    if String.lt name "Longleftarrow" then Markdown.entity_L_93 name else Markdown.entity_L_96 name
+#[partial]
+def Markdown.entity_L_98 (name : String) : Option String :=
+    if String.lt name "LongLeftRightArrow" then Markdown.entity_L_90 name else Markdown.entity_L_97 name
+#[partial]
+def Markdown.entity_L_99 (name : String) : Option String :=
+    if String.beq name "Longrightarrow" then Option.some "⟹" else Option.none
+#[partial]
+def Markdown.entity_L_100 (name : String) : Option String :=
+    if String.beq name "Lopf" then Option.some "𝕃" else Option.none
+#[partial]
+def Markdown.entity_L_101 (name : String) : Option String :=
+    if String.lt name "Lopf" then Markdown.entity_L_99 name else Markdown.entity_L_100 name
+#[partial]
+def Markdown.entity_L_102 (name : String) : Option String :=
+    if String.beq name "LowerLeftArrow" then Option.some "↙" else Option.none
+#[partial]
+def Markdown.entity_L_103 (name : String) : Option String :=
+    if String.beq name "LowerRightArrow" then Option.some "↘" else Option.none
+#[partial]
+def Markdown.entity_L_104 (name : String) : Option String :=
+    if String.lt name "LowerRightArrow" then Markdown.entity_L_102 name else Markdown.entity_L_103 name
+#[partial]
+def Markdown.entity_L_105 (name : String) : Option String :=
+    if String.lt name "LowerLeftArrow" then Markdown.entity_L_101 name else Markdown.entity_L_104 name
+#[partial]
+def Markdown.entity_L_106 (name : String) : Option String :=
+    if String.beq name "Lscr" then Option.some "ℒ" else Option.none
+#[partial]
+def Markdown.entity_L_107 (name : String) : Option String :=
+    if String.beq name "Lsh" then Option.some "↰" else Option.none
+#[partial]
+def Markdown.entity_L_108 (name : String) : Option String :=
+    if String.lt name "Lsh" then Markdown.entity_L_106 name else Markdown.entity_L_107 name
+#[partial]
+def Markdown.entity_L_109 (name : String) : Option String :=
+    if String.beq name "Lstrok" then Option.some "Ł" else Option.none
+#[partial]
+def Markdown.entity_L_110 (name : String) : Option String :=
+    if String.beq name "Lt" then Option.some "≪" else Option.none
+#[partial]
+def Markdown.entity_L_111 (name : String) : Option String :=
+    if String.lt name "Lt" then Markdown.entity_L_109 name else Markdown.entity_L_110 name
+#[partial]
+def Markdown.entity_L_112 (name : String) : Option String :=
+    if String.lt name "Lstrok" then Markdown.entity_L_108 name else Markdown.entity_L_111 name
+#[partial]
+def Markdown.entity_L_113 (name : String) : Option String :=
+    if String.lt name "Lscr" then Markdown.entity_L_105 name else Markdown.entity_L_112 name
+#[partial]
+def Markdown.entity_L_114 (name : String) : Option String :=
+    if String.lt name "Longrightarrow" then Markdown.entity_L_98 name else Markdown.entity_L_113 name
+#[partial]
+def Markdown.entity_L_115 (name : String) : Option String :=
+    if String.lt name "Lleftarrow" then Markdown.entity_L_85 name else Markdown.entity_L_114 name
+#[partial]
+def Markdown.entity_L_116 (name : String) : Option String :=
+    if String.lt name "LeftUpTeeVector" then Markdown.entity_L_56 name else Markdown.entity_L_115 name
+
+def Markdown.entity_L (name : String) : Option String := Markdown.entity_L_116 name
 
 #[partial]
-def Markdown.entity_M (name : String) : Option String :=
-    if String.beq name "Map" then Option.some "⤅"
-    else if String.beq name "Mcy" then Option.some "М"
-    else if String.beq name "MediumSpace" then Option.some " "
-    else if String.beq name "Mellintrf" then Option.some "ℳ"
-    else if String.beq name "Mfr" then Option.some "𝔐"
-    else if String.beq name "MinusPlus" then Option.some "∓"
-    else if String.beq name "Mopf" then Option.some "𝕄"
-    else if String.beq name "Mscr" then Option.some "ℳ"
-    else if String.beq name "Mu" then Option.some "Μ"
-    else Option.none
+def Markdown.entity_M_0 (name : String) : Option String :=
+    if String.beq name "Map" then Option.some "⤅" else Option.none
+#[partial]
+def Markdown.entity_M_1 (name : String) : Option String :=
+    if String.beq name "Mcy" then Option.some "М" else Option.none
+#[partial]
+def Markdown.entity_M_2 (name : String) : Option String :=
+    if String.lt name "Mcy" then Markdown.entity_M_0 name else Markdown.entity_M_1 name
+#[partial]
+def Markdown.entity_M_3 (name : String) : Option String :=
+    if String.beq name "MediumSpace" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_M_4 (name : String) : Option String :=
+    if String.beq name "Mellintrf" then Option.some "ℳ" else Option.none
+#[partial]
+def Markdown.entity_M_5 (name : String) : Option String :=
+    if String.lt name "Mellintrf" then Markdown.entity_M_3 name else Markdown.entity_M_4 name
+#[partial]
+def Markdown.entity_M_6 (name : String) : Option String :=
+    if String.lt name "MediumSpace" then Markdown.entity_M_2 name else Markdown.entity_M_5 name
+#[partial]
+def Markdown.entity_M_7 (name : String) : Option String :=
+    if String.beq name "Mfr" then Option.some "𝔐" else Option.none
+#[partial]
+def Markdown.entity_M_8 (name : String) : Option String :=
+    if String.beq name "MinusPlus" then Option.some "∓" else Option.none
+#[partial]
+def Markdown.entity_M_9 (name : String) : Option String :=
+    if String.lt name "MinusPlus" then Markdown.entity_M_7 name else Markdown.entity_M_8 name
+#[partial]
+def Markdown.entity_M_10 (name : String) : Option String :=
+    if String.beq name "Mopf" then Option.some "𝕄" else Option.none
+#[partial]
+def Markdown.entity_M_11 (name : String) : Option String :=
+    if String.beq name "Mscr" then Option.some "ℳ" else Option.none
+#[partial]
+def Markdown.entity_M_12 (name : String) : Option String :=
+    if String.beq name "Mu" then Option.some "Μ" else Option.none
+#[partial]
+def Markdown.entity_M_13 (name : String) : Option String :=
+    if String.lt name "Mu" then Markdown.entity_M_11 name else Markdown.entity_M_12 name
+#[partial]
+def Markdown.entity_M_14 (name : String) : Option String :=
+    if String.lt name "Mscr" then Markdown.entity_M_10 name else Markdown.entity_M_13 name
+#[partial]
+def Markdown.entity_M_15 (name : String) : Option String :=
+    if String.lt name "Mopf" then Markdown.entity_M_9 name else Markdown.entity_M_14 name
+#[partial]
+def Markdown.entity_M_16 (name : String) : Option String :=
+    if String.lt name "Mfr" then Markdown.entity_M_6 name else Markdown.entity_M_15 name
+
+def Markdown.entity_M (name : String) : Option String := Markdown.entity_M_16 name
 
 #[partial]
-def Markdown.entity_N (name : String) : Option String :=
-    if String.beq name "NJcy" then Option.some "Њ"
-    else if String.beq name "Nacute" then Option.some "Ń"
-    else if String.beq name "Ncaron" then Option.some "Ň"
-    else if String.beq name "Ncedil" then Option.some "Ņ"
-    else if String.beq name "Ncy" then Option.some "Н"
-    else if String.beq name "NegativeMediumSpace" then Option.some "​"
-    else if String.beq name "NegativeThickSpace" then Option.some "​"
-    else if String.beq name "NegativeThinSpace" then Option.some "​"
-    else if String.beq name "NegativeVeryThinSpace" then Option.some "​"
-    else if String.beq name "NestedGreaterGreater" then Option.some "≫"
-    else if String.beq name "NestedLessLess" then Option.some "≪"
-    else if String.beq name "NewLine" then Option.some "\n"
-    else if String.beq name "Nfr" then Option.some "𝔑"
-    else if String.beq name "NoBreak" then Option.some "⁠"
-    else if String.beq name "NonBreakingSpace" then Option.some " "
-    else if String.beq name "Nopf" then Option.some "ℕ"
-    else if String.beq name "Not" then Option.some "⫬"
-    else if String.beq name "NotCongruent" then Option.some "≢"
-    else if String.beq name "NotCupCap" then Option.some "≭"
-    else if String.beq name "NotDoubleVerticalBar" then Option.some "∦"
-    else if String.beq name "NotElement" then Option.some "∉"
-    else if String.beq name "NotEqual" then Option.some "≠"
-    else if String.beq name "NotEqualTilde" then Option.some "≂̸"
-    else if String.beq name "NotExists" then Option.some "∄"
-    else if String.beq name "NotGreater" then Option.some "≯"
-    else if String.beq name "NotGreaterEqual" then Option.some "≱"
-    else if String.beq name "NotGreaterFullEqual" then Option.some "≧̸"
-    else if String.beq name "NotGreaterGreater" then Option.some "≫̸"
-    else if String.beq name "NotGreaterLess" then Option.some "≹"
-    else if String.beq name "NotGreaterSlantEqual" then Option.some "⩾̸"
-    else if String.beq name "NotGreaterTilde" then Option.some "≵"
-    else if String.beq name "NotHumpDownHump" then Option.some "≎̸"
-    else if String.beq name "NotHumpEqual" then Option.some "≏̸"
-    else if String.beq name "NotLeftTriangle" then Option.some "⋪"
-    else if String.beq name "NotLeftTriangleBar" then Option.some "⧏̸"
-    else if String.beq name "NotLeftTriangleEqual" then Option.some "⋬"
-    else if String.beq name "NotLess" then Option.some "≮"
-    else if String.beq name "NotLessEqual" then Option.some "≰"
-    else if String.beq name "NotLessGreater" then Option.some "≸"
-    else if String.beq name "NotLessLess" then Option.some "≪̸"
-    else if String.beq name "NotLessSlantEqual" then Option.some "⩽̸"
-    else if String.beq name "NotLessTilde" then Option.some "≴"
-    else if String.beq name "NotNestedGreaterGreater" then Option.some "⪢̸"
-    else if String.beq name "NotNestedLessLess" then Option.some "⪡̸"
-    else if String.beq name "NotPrecedes" then Option.some "⊀"
-    else if String.beq name "NotPrecedesEqual" then Option.some "⪯̸"
-    else if String.beq name "NotPrecedesSlantEqual" then Option.some "⋠"
-    else if String.beq name "NotReverseElement" then Option.some "∌"
-    else if String.beq name "NotRightTriangle" then Option.some "⋫"
-    else if String.beq name "NotRightTriangleBar" then Option.some "⧐̸"
-    else if String.beq name "NotRightTriangleEqual" then Option.some "⋭"
-    else if String.beq name "NotSquareSubset" then Option.some "⊏̸"
-    else if String.beq name "NotSquareSubsetEqual" then Option.some "⋢"
-    else if String.beq name "NotSquareSuperset" then Option.some "⊐̸"
-    else if String.beq name "NotSquareSupersetEqual" then Option.some "⋣"
-    else if String.beq name "NotSubset" then Option.some "⊂⃒"
-    else if String.beq name "NotSubsetEqual" then Option.some "⊈"
-    else if String.beq name "NotSucceeds" then Option.some "⊁"
-    else if String.beq name "NotSucceedsEqual" then Option.some "⪰̸"
-    else if String.beq name "NotSucceedsSlantEqual" then Option.some "⋡"
-    else if String.beq name "NotSucceedsTilde" then Option.some "≿̸"
-    else if String.beq name "NotSuperset" then Option.some "⊃⃒"
-    else if String.beq name "NotSupersetEqual" then Option.some "⊉"
-    else if String.beq name "NotTilde" then Option.some "≁"
-    else if String.beq name "NotTildeEqual" then Option.some "≄"
-    else if String.beq name "NotTildeFullEqual" then Option.some "≇"
-    else if String.beq name "NotTildeTilde" then Option.some "≉"
-    else if String.beq name "NotVerticalBar" then Option.some "∤"
-    else if String.beq name "Nscr" then Option.some "𝒩"
-    else if String.beq name "Ntilde" then Option.some "Ñ"
-    else if String.beq name "Nu" then Option.some "Ν"
-    else Option.none
+def Markdown.entity_N_0 (name : String) : Option String :=
+    if String.beq name "NJcy" then Option.some "Њ" else Option.none
+#[partial]
+def Markdown.entity_N_1 (name : String) : Option String :=
+    if String.beq name "Nacute" then Option.some "Ń" else Option.none
+#[partial]
+def Markdown.entity_N_2 (name : String) : Option String :=
+    if String.lt name "Nacute" then Markdown.entity_N_0 name else Markdown.entity_N_1 name
+#[partial]
+def Markdown.entity_N_3 (name : String) : Option String :=
+    if String.beq name "Ncaron" then Option.some "Ň" else Option.none
+#[partial]
+def Markdown.entity_N_4 (name : String) : Option String :=
+    if String.beq name "Ncedil" then Option.some "Ņ" else Option.none
+#[partial]
+def Markdown.entity_N_5 (name : String) : Option String :=
+    if String.lt name "Ncedil" then Markdown.entity_N_3 name else Markdown.entity_N_4 name
+#[partial]
+def Markdown.entity_N_6 (name : String) : Option String :=
+    if String.lt name "Ncaron" then Markdown.entity_N_2 name else Markdown.entity_N_5 name
+#[partial]
+def Markdown.entity_N_7 (name : String) : Option String :=
+    if String.beq name "Ncy" then Option.some "Н" else Option.none
+#[partial]
+def Markdown.entity_N_8 (name : String) : Option String :=
+    if String.beq name "NegativeMediumSpace" then Option.some "​" else Option.none
+#[partial]
+def Markdown.entity_N_9 (name : String) : Option String :=
+    if String.lt name "NegativeMediumSpace" then Markdown.entity_N_7 name else Markdown.entity_N_8 name
+#[partial]
+def Markdown.entity_N_10 (name : String) : Option String :=
+    if String.beq name "NegativeThickSpace" then Option.some "​" else Option.none
+#[partial]
+def Markdown.entity_N_11 (name : String) : Option String :=
+    if String.beq name "NegativeThinSpace" then Option.some "​" else Option.none
+#[partial]
+def Markdown.entity_N_12 (name : String) : Option String :=
+    if String.lt name "NegativeThinSpace" then Markdown.entity_N_10 name else Markdown.entity_N_11 name
+#[partial]
+def Markdown.entity_N_13 (name : String) : Option String :=
+    if String.lt name "NegativeThickSpace" then Markdown.entity_N_9 name else Markdown.entity_N_12 name
+#[partial]
+def Markdown.entity_N_14 (name : String) : Option String :=
+    if String.lt name "Ncy" then Markdown.entity_N_6 name else Markdown.entity_N_13 name
+#[partial]
+def Markdown.entity_N_15 (name : String) : Option String :=
+    if String.beq name "NegativeVeryThinSpace" then Option.some "​" else Option.none
+#[partial]
+def Markdown.entity_N_16 (name : String) : Option String :=
+    if String.beq name "NestedGreaterGreater" then Option.some "≫" else Option.none
+#[partial]
+def Markdown.entity_N_17 (name : String) : Option String :=
+    if String.lt name "NestedGreaterGreater" then Markdown.entity_N_15 name else Markdown.entity_N_16 name
+#[partial]
+def Markdown.entity_N_18 (name : String) : Option String :=
+    if String.beq name "NestedLessLess" then Option.some "≪" else Option.none
+#[partial]
+def Markdown.entity_N_19 (name : String) : Option String :=
+    if String.beq name "NewLine" then Option.some "\n" else Option.none
+#[partial]
+def Markdown.entity_N_20 (name : String) : Option String :=
+    if String.lt name "NewLine" then Markdown.entity_N_18 name else Markdown.entity_N_19 name
+#[partial]
+def Markdown.entity_N_21 (name : String) : Option String :=
+    if String.lt name "NestedLessLess" then Markdown.entity_N_17 name else Markdown.entity_N_20 name
+#[partial]
+def Markdown.entity_N_22 (name : String) : Option String :=
+    if String.beq name "Nfr" then Option.some "𝔑" else Option.none
+#[partial]
+def Markdown.entity_N_23 (name : String) : Option String :=
+    if String.beq name "NoBreak" then Option.some "⁠" else Option.none
+#[partial]
+def Markdown.entity_N_24 (name : String) : Option String :=
+    if String.lt name "NoBreak" then Markdown.entity_N_22 name else Markdown.entity_N_23 name
+#[partial]
+def Markdown.entity_N_25 (name : String) : Option String :=
+    if String.beq name "NonBreakingSpace" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_N_26 (name : String) : Option String :=
+    if String.beq name "Nopf" then Option.some "ℕ" else Option.none
+#[partial]
+def Markdown.entity_N_27 (name : String) : Option String :=
+    if String.beq name "Not" then Option.some "⫬" else Option.none
+#[partial]
+def Markdown.entity_N_28 (name : String) : Option String :=
+    if String.lt name "Not" then Markdown.entity_N_26 name else Markdown.entity_N_27 name
+#[partial]
+def Markdown.entity_N_29 (name : String) : Option String :=
+    if String.lt name "Nopf" then Markdown.entity_N_25 name else Markdown.entity_N_28 name
+#[partial]
+def Markdown.entity_N_30 (name : String) : Option String :=
+    if String.lt name "NonBreakingSpace" then Markdown.entity_N_24 name else Markdown.entity_N_29 name
+#[partial]
+def Markdown.entity_N_31 (name : String) : Option String :=
+    if String.lt name "Nfr" then Markdown.entity_N_21 name else Markdown.entity_N_30 name
+#[partial]
+def Markdown.entity_N_32 (name : String) : Option String :=
+    if String.lt name "NegativeVeryThinSpace" then Markdown.entity_N_14 name else Markdown.entity_N_31 name
+#[partial]
+def Markdown.entity_N_33 (name : String) : Option String :=
+    if String.beq name "NotCongruent" then Option.some "≢" else Option.none
+#[partial]
+def Markdown.entity_N_34 (name : String) : Option String :=
+    if String.beq name "NotCupCap" then Option.some "≭" else Option.none
+#[partial]
+def Markdown.entity_N_35 (name : String) : Option String :=
+    if String.lt name "NotCupCap" then Markdown.entity_N_33 name else Markdown.entity_N_34 name
+#[partial]
+def Markdown.entity_N_36 (name : String) : Option String :=
+    if String.beq name "NotDoubleVerticalBar" then Option.some "∦" else Option.none
+#[partial]
+def Markdown.entity_N_37 (name : String) : Option String :=
+    if String.beq name "NotElement" then Option.some "∉" else Option.none
+#[partial]
+def Markdown.entity_N_38 (name : String) : Option String :=
+    if String.lt name "NotElement" then Markdown.entity_N_36 name else Markdown.entity_N_37 name
+#[partial]
+def Markdown.entity_N_39 (name : String) : Option String :=
+    if String.lt name "NotDoubleVerticalBar" then Markdown.entity_N_35 name else Markdown.entity_N_38 name
+#[partial]
+def Markdown.entity_N_40 (name : String) : Option String :=
+    if String.beq name "NotEqual" then Option.some "≠" else Option.none
+#[partial]
+def Markdown.entity_N_41 (name : String) : Option String :=
+    if String.beq name "NotEqualTilde" then Option.some "≂̸" else Option.none
+#[partial]
+def Markdown.entity_N_42 (name : String) : Option String :=
+    if String.lt name "NotEqualTilde" then Markdown.entity_N_40 name else Markdown.entity_N_41 name
+#[partial]
+def Markdown.entity_N_43 (name : String) : Option String :=
+    if String.beq name "NotExists" then Option.some "∄" else Option.none
+#[partial]
+def Markdown.entity_N_44 (name : String) : Option String :=
+    if String.beq name "NotGreater" then Option.some "≯" else Option.none
+#[partial]
+def Markdown.entity_N_45 (name : String) : Option String :=
+    if String.beq name "NotGreaterEqual" then Option.some "≱" else Option.none
+#[partial]
+def Markdown.entity_N_46 (name : String) : Option String :=
+    if String.lt name "NotGreaterEqual" then Markdown.entity_N_44 name else Markdown.entity_N_45 name
+#[partial]
+def Markdown.entity_N_47 (name : String) : Option String :=
+    if String.lt name "NotGreater" then Markdown.entity_N_43 name else Markdown.entity_N_46 name
+#[partial]
+def Markdown.entity_N_48 (name : String) : Option String :=
+    if String.lt name "NotExists" then Markdown.entity_N_42 name else Markdown.entity_N_47 name
+#[partial]
+def Markdown.entity_N_49 (name : String) : Option String :=
+    if String.lt name "NotEqual" then Markdown.entity_N_39 name else Markdown.entity_N_48 name
+#[partial]
+def Markdown.entity_N_50 (name : String) : Option String :=
+    if String.beq name "NotGreaterFullEqual" then Option.some "≧̸" else Option.none
+#[partial]
+def Markdown.entity_N_51 (name : String) : Option String :=
+    if String.beq name "NotGreaterGreater" then Option.some "≫̸" else Option.none
+#[partial]
+def Markdown.entity_N_52 (name : String) : Option String :=
+    if String.lt name "NotGreaterGreater" then Markdown.entity_N_50 name else Markdown.entity_N_51 name
+#[partial]
+def Markdown.entity_N_53 (name : String) : Option String :=
+    if String.beq name "NotGreaterLess" then Option.some "≹" else Option.none
+#[partial]
+def Markdown.entity_N_54 (name : String) : Option String :=
+    if String.beq name "NotGreaterSlantEqual" then Option.some "⩾̸" else Option.none
+#[partial]
+def Markdown.entity_N_55 (name : String) : Option String :=
+    if String.lt name "NotGreaterSlantEqual" then Markdown.entity_N_53 name else Markdown.entity_N_54 name
+#[partial]
+def Markdown.entity_N_56 (name : String) : Option String :=
+    if String.lt name "NotGreaterLess" then Markdown.entity_N_52 name else Markdown.entity_N_55 name
+#[partial]
+def Markdown.entity_N_57 (name : String) : Option String :=
+    if String.beq name "NotGreaterTilde" then Option.some "≵" else Option.none
+#[partial]
+def Markdown.entity_N_58 (name : String) : Option String :=
+    if String.beq name "NotHumpDownHump" then Option.some "≎̸" else Option.none
+#[partial]
+def Markdown.entity_N_59 (name : String) : Option String :=
+    if String.lt name "NotHumpDownHump" then Markdown.entity_N_57 name else Markdown.entity_N_58 name
+#[partial]
+def Markdown.entity_N_60 (name : String) : Option String :=
+    if String.beq name "NotHumpEqual" then Option.some "≏̸" else Option.none
+#[partial]
+def Markdown.entity_N_61 (name : String) : Option String :=
+    if String.beq name "NotLeftTriangle" then Option.some "⋪" else Option.none
+#[partial]
+def Markdown.entity_N_62 (name : String) : Option String :=
+    if String.beq name "NotLeftTriangleBar" then Option.some "⧏̸" else Option.none
+#[partial]
+def Markdown.entity_N_63 (name : String) : Option String :=
+    if String.lt name "NotLeftTriangleBar" then Markdown.entity_N_61 name else Markdown.entity_N_62 name
+#[partial]
+def Markdown.entity_N_64 (name : String) : Option String :=
+    if String.lt name "NotLeftTriangle" then Markdown.entity_N_60 name else Markdown.entity_N_63 name
+#[partial]
+def Markdown.entity_N_65 (name : String) : Option String :=
+    if String.lt name "NotHumpEqual" then Markdown.entity_N_59 name else Markdown.entity_N_64 name
+#[partial]
+def Markdown.entity_N_66 (name : String) : Option String :=
+    if String.lt name "NotGreaterTilde" then Markdown.entity_N_56 name else Markdown.entity_N_65 name
+#[partial]
+def Markdown.entity_N_67 (name : String) : Option String :=
+    if String.lt name "NotGreaterFullEqual" then Markdown.entity_N_49 name else Markdown.entity_N_66 name
+#[partial]
+def Markdown.entity_N_68 (name : String) : Option String :=
+    if String.lt name "NotCongruent" then Markdown.entity_N_32 name else Markdown.entity_N_67 name
+#[partial]
+def Markdown.entity_N_69 (name : String) : Option String :=
+    if String.beq name "NotLeftTriangleEqual" then Option.some "⋬" else Option.none
+#[partial]
+def Markdown.entity_N_70 (name : String) : Option String :=
+    if String.beq name "NotLess" then Option.some "≮" else Option.none
+#[partial]
+def Markdown.entity_N_71 (name : String) : Option String :=
+    if String.lt name "NotLess" then Markdown.entity_N_69 name else Markdown.entity_N_70 name
+#[partial]
+def Markdown.entity_N_72 (name : String) : Option String :=
+    if String.beq name "NotLessEqual" then Option.some "≰" else Option.none
+#[partial]
+def Markdown.entity_N_73 (name : String) : Option String :=
+    if String.beq name "NotLessGreater" then Option.some "≸" else Option.none
+#[partial]
+def Markdown.entity_N_74 (name : String) : Option String :=
+    if String.lt name "NotLessGreater" then Markdown.entity_N_72 name else Markdown.entity_N_73 name
+#[partial]
+def Markdown.entity_N_75 (name : String) : Option String :=
+    if String.lt name "NotLessEqual" then Markdown.entity_N_71 name else Markdown.entity_N_74 name
+#[partial]
+def Markdown.entity_N_76 (name : String) : Option String :=
+    if String.beq name "NotLessLess" then Option.some "≪̸" else Option.none
+#[partial]
+def Markdown.entity_N_77 (name : String) : Option String :=
+    if String.beq name "NotLessSlantEqual" then Option.some "⩽̸" else Option.none
+#[partial]
+def Markdown.entity_N_78 (name : String) : Option String :=
+    if String.lt name "NotLessSlantEqual" then Markdown.entity_N_76 name else Markdown.entity_N_77 name
+#[partial]
+def Markdown.entity_N_79 (name : String) : Option String :=
+    if String.beq name "NotLessTilde" then Option.some "≴" else Option.none
+#[partial]
+def Markdown.entity_N_80 (name : String) : Option String :=
+    if String.beq name "NotNestedGreaterGreater" then Option.some "⪢̸" else Option.none
+#[partial]
+def Markdown.entity_N_81 (name : String) : Option String :=
+    if String.beq name "NotNestedLessLess" then Option.some "⪡̸" else Option.none
+#[partial]
+def Markdown.entity_N_82 (name : String) : Option String :=
+    if String.lt name "NotNestedLessLess" then Markdown.entity_N_80 name else Markdown.entity_N_81 name
+#[partial]
+def Markdown.entity_N_83 (name : String) : Option String :=
+    if String.lt name "NotNestedGreaterGreater" then Markdown.entity_N_79 name else Markdown.entity_N_82 name
+#[partial]
+def Markdown.entity_N_84 (name : String) : Option String :=
+    if String.lt name "NotLessTilde" then Markdown.entity_N_78 name else Markdown.entity_N_83 name
+#[partial]
+def Markdown.entity_N_85 (name : String) : Option String :=
+    if String.lt name "NotLessLess" then Markdown.entity_N_75 name else Markdown.entity_N_84 name
+#[partial]
+def Markdown.entity_N_86 (name : String) : Option String :=
+    if String.beq name "NotPrecedes" then Option.some "⊀" else Option.none
+#[partial]
+def Markdown.entity_N_87 (name : String) : Option String :=
+    if String.beq name "NotPrecedesEqual" then Option.some "⪯̸" else Option.none
+#[partial]
+def Markdown.entity_N_88 (name : String) : Option String :=
+    if String.lt name "NotPrecedesEqual" then Markdown.entity_N_86 name else Markdown.entity_N_87 name
+#[partial]
+def Markdown.entity_N_89 (name : String) : Option String :=
+    if String.beq name "NotPrecedesSlantEqual" then Option.some "⋠" else Option.none
+#[partial]
+def Markdown.entity_N_90 (name : String) : Option String :=
+    if String.beq name "NotReverseElement" then Option.some "∌" else Option.none
+#[partial]
+def Markdown.entity_N_91 (name : String) : Option String :=
+    if String.lt name "NotReverseElement" then Markdown.entity_N_89 name else Markdown.entity_N_90 name
+#[partial]
+def Markdown.entity_N_92 (name : String) : Option String :=
+    if String.lt name "NotPrecedesSlantEqual" then Markdown.entity_N_88 name else Markdown.entity_N_91 name
+#[partial]
+def Markdown.entity_N_93 (name : String) : Option String :=
+    if String.beq name "NotRightTriangle" then Option.some "⋫" else Option.none
+#[partial]
+def Markdown.entity_N_94 (name : String) : Option String :=
+    if String.beq name "NotRightTriangleBar" then Option.some "⧐̸" else Option.none
+#[partial]
+def Markdown.entity_N_95 (name : String) : Option String :=
+    if String.lt name "NotRightTriangleBar" then Markdown.entity_N_93 name else Markdown.entity_N_94 name
+#[partial]
+def Markdown.entity_N_96 (name : String) : Option String :=
+    if String.beq name "NotRightTriangleEqual" then Option.some "⋭" else Option.none
+#[partial]
+def Markdown.entity_N_97 (name : String) : Option String :=
+    if String.beq name "NotSquareSubset" then Option.some "⊏̸" else Option.none
+#[partial]
+def Markdown.entity_N_98 (name : String) : Option String :=
+    if String.beq name "NotSquareSubsetEqual" then Option.some "⋢" else Option.none
+#[partial]
+def Markdown.entity_N_99 (name : String) : Option String :=
+    if String.lt name "NotSquareSubsetEqual" then Markdown.entity_N_97 name else Markdown.entity_N_98 name
+#[partial]
+def Markdown.entity_N_100 (name : String) : Option String :=
+    if String.lt name "NotSquareSubset" then Markdown.entity_N_96 name else Markdown.entity_N_99 name
+#[partial]
+def Markdown.entity_N_101 (name : String) : Option String :=
+    if String.lt name "NotRightTriangleEqual" then Markdown.entity_N_95 name else Markdown.entity_N_100 name
+#[partial]
+def Markdown.entity_N_102 (name : String) : Option String :=
+    if String.lt name "NotRightTriangle" then Markdown.entity_N_92 name else Markdown.entity_N_101 name
+#[partial]
+def Markdown.entity_N_103 (name : String) : Option String :=
+    if String.lt name "NotPrecedes" then Markdown.entity_N_85 name else Markdown.entity_N_102 name
+#[partial]
+def Markdown.entity_N_104 (name : String) : Option String :=
+    if String.beq name "NotSquareSuperset" then Option.some "⊐̸" else Option.none
+#[partial]
+def Markdown.entity_N_105 (name : String) : Option String :=
+    if String.beq name "NotSquareSupersetEqual" then Option.some "⋣" else Option.none
+#[partial]
+def Markdown.entity_N_106 (name : String) : Option String :=
+    if String.lt name "NotSquareSupersetEqual" then Markdown.entity_N_104 name else Markdown.entity_N_105 name
+#[partial]
+def Markdown.entity_N_107 (name : String) : Option String :=
+    if String.beq name "NotSubset" then Option.some "⊂⃒" else Option.none
+#[partial]
+def Markdown.entity_N_108 (name : String) : Option String :=
+    if String.beq name "NotSubsetEqual" then Option.some "⊈" else Option.none
+#[partial]
+def Markdown.entity_N_109 (name : String) : Option String :=
+    if String.lt name "NotSubsetEqual" then Markdown.entity_N_107 name else Markdown.entity_N_108 name
+#[partial]
+def Markdown.entity_N_110 (name : String) : Option String :=
+    if String.lt name "NotSubset" then Markdown.entity_N_106 name else Markdown.entity_N_109 name
+#[partial]
+def Markdown.entity_N_111 (name : String) : Option String :=
+    if String.beq name "NotSucceeds" then Option.some "⊁" else Option.none
+#[partial]
+def Markdown.entity_N_112 (name : String) : Option String :=
+    if String.beq name "NotSucceedsEqual" then Option.some "⪰̸" else Option.none
+#[partial]
+def Markdown.entity_N_113 (name : String) : Option String :=
+    if String.lt name "NotSucceedsEqual" then Markdown.entity_N_111 name else Markdown.entity_N_112 name
+#[partial]
+def Markdown.entity_N_114 (name : String) : Option String :=
+    if String.beq name "NotSucceedsSlantEqual" then Option.some "⋡" else Option.none
+#[partial]
+def Markdown.entity_N_115 (name : String) : Option String :=
+    if String.beq name "NotSucceedsTilde" then Option.some "≿̸" else Option.none
+#[partial]
+def Markdown.entity_N_116 (name : String) : Option String :=
+    if String.beq name "NotSuperset" then Option.some "⊃⃒" else Option.none
+#[partial]
+def Markdown.entity_N_117 (name : String) : Option String :=
+    if String.lt name "NotSuperset" then Markdown.entity_N_115 name else Markdown.entity_N_116 name
+#[partial]
+def Markdown.entity_N_118 (name : String) : Option String :=
+    if String.lt name "NotSucceedsTilde" then Markdown.entity_N_114 name else Markdown.entity_N_117 name
+#[partial]
+def Markdown.entity_N_119 (name : String) : Option String :=
+    if String.lt name "NotSucceedsSlantEqual" then Markdown.entity_N_113 name else Markdown.entity_N_118 name
+#[partial]
+def Markdown.entity_N_120 (name : String) : Option String :=
+    if String.lt name "NotSucceeds" then Markdown.entity_N_110 name else Markdown.entity_N_119 name
+#[partial]
+def Markdown.entity_N_121 (name : String) : Option String :=
+    if String.beq name "NotSupersetEqual" then Option.some "⊉" else Option.none
+#[partial]
+def Markdown.entity_N_122 (name : String) : Option String :=
+    if String.beq name "NotTilde" then Option.some "≁" else Option.none
+#[partial]
+def Markdown.entity_N_123 (name : String) : Option String :=
+    if String.lt name "NotTilde" then Markdown.entity_N_121 name else Markdown.entity_N_122 name
+#[partial]
+def Markdown.entity_N_124 (name : String) : Option String :=
+    if String.beq name "NotTildeEqual" then Option.some "≄" else Option.none
+#[partial]
+def Markdown.entity_N_125 (name : String) : Option String :=
+    if String.beq name "NotTildeFullEqual" then Option.some "≇" else Option.none
+#[partial]
+def Markdown.entity_N_126 (name : String) : Option String :=
+    if String.lt name "NotTildeFullEqual" then Markdown.entity_N_124 name else Markdown.entity_N_125 name
+#[partial]
+def Markdown.entity_N_127 (name : String) : Option String :=
+    if String.lt name "NotTildeEqual" then Markdown.entity_N_123 name else Markdown.entity_N_126 name
+#[partial]
+def Markdown.entity_N_128 (name : String) : Option String :=
+    if String.beq name "NotTildeTilde" then Option.some "≉" else Option.none
+#[partial]
+def Markdown.entity_N_129 (name : String) : Option String :=
+    if String.beq name "NotVerticalBar" then Option.some "∤" else Option.none
+#[partial]
+def Markdown.entity_N_130 (name : String) : Option String :=
+    if String.lt name "NotVerticalBar" then Markdown.entity_N_128 name else Markdown.entity_N_129 name
+#[partial]
+def Markdown.entity_N_131 (name : String) : Option String :=
+    if String.beq name "Nscr" then Option.some "𝒩" else Option.none
+#[partial]
+def Markdown.entity_N_132 (name : String) : Option String :=
+    if String.beq name "Ntilde" then Option.some "Ñ" else Option.none
+#[partial]
+def Markdown.entity_N_133 (name : String) : Option String :=
+    if String.beq name "Nu" then Option.some "Ν" else Option.none
+#[partial]
+def Markdown.entity_N_134 (name : String) : Option String :=
+    if String.lt name "Nu" then Markdown.entity_N_132 name else Markdown.entity_N_133 name
+#[partial]
+def Markdown.entity_N_135 (name : String) : Option String :=
+    if String.lt name "Ntilde" then Markdown.entity_N_131 name else Markdown.entity_N_134 name
+#[partial]
+def Markdown.entity_N_136 (name : String) : Option String :=
+    if String.lt name "Nscr" then Markdown.entity_N_130 name else Markdown.entity_N_135 name
+#[partial]
+def Markdown.entity_N_137 (name : String) : Option String :=
+    if String.lt name "NotTildeTilde" then Markdown.entity_N_127 name else Markdown.entity_N_136 name
+#[partial]
+def Markdown.entity_N_138 (name : String) : Option String :=
+    if String.lt name "NotSupersetEqual" then Markdown.entity_N_120 name else Markdown.entity_N_137 name
+#[partial]
+def Markdown.entity_N_139 (name : String) : Option String :=
+    if String.lt name "NotSquareSuperset" then Markdown.entity_N_103 name else Markdown.entity_N_138 name
+#[partial]
+def Markdown.entity_N_140 (name : String) : Option String :=
+    if String.lt name "NotLeftTriangleEqual" then Markdown.entity_N_68 name else Markdown.entity_N_139 name
+
+def Markdown.entity_N (name : String) : Option String := Markdown.entity_N_140 name
 
 #[partial]
-def Markdown.entity_O (name : String) : Option String :=
-    if String.beq name "OElig" then Option.some "Œ"
-    else if String.beq name "Oacute" then Option.some "Ó"
-    else if String.beq name "Ocirc" then Option.some "Ô"
-    else if String.beq name "Ocy" then Option.some "О"
-    else if String.beq name "Odblac" then Option.some "Ő"
-    else if String.beq name "Ofr" then Option.some "𝔒"
-    else if String.beq name "Ograve" then Option.some "Ò"
-    else if String.beq name "Omacr" then Option.some "Ō"
-    else if String.beq name "Omega" then Option.some "Ω"
-    else if String.beq name "Omicron" then Option.some "Ο"
-    else if String.beq name "Oopf" then Option.some "𝕆"
-    else if String.beq name "OpenCurlyDoubleQuote" then Option.some "“"
-    else if String.beq name "OpenCurlyQuote" then Option.some "‘"
-    else if String.beq name "Or" then Option.some "⩔"
-    else if String.beq name "Oscr" then Option.some "𝒪"
-    else if String.beq name "Oslash" then Option.some "Ø"
-    else if String.beq name "Otilde" then Option.some "Õ"
-    else if String.beq name "Otimes" then Option.some "⨷"
-    else if String.beq name "Ouml" then Option.some "Ö"
-    else if String.beq name "OverBar" then Option.some "‾"
-    else if String.beq name "OverBrace" then Option.some "⏞"
-    else if String.beq name "OverBracket" then Option.some "⎴"
-    else if String.beq name "OverParenthesis" then Option.some "⏜"
-    else Option.none
+def Markdown.entity_O_0 (name : String) : Option String :=
+    if String.beq name "OElig" then Option.some "Œ" else Option.none
+#[partial]
+def Markdown.entity_O_1 (name : String) : Option String :=
+    if String.beq name "Oacute" then Option.some "Ó" else Option.none
+#[partial]
+def Markdown.entity_O_2 (name : String) : Option String :=
+    if String.lt name "Oacute" then Markdown.entity_O_0 name else Markdown.entity_O_1 name
+#[partial]
+def Markdown.entity_O_3 (name : String) : Option String :=
+    if String.beq name "Ocirc" then Option.some "Ô" else Option.none
+#[partial]
+def Markdown.entity_O_4 (name : String) : Option String :=
+    if String.beq name "Ocy" then Option.some "О" else Option.none
+#[partial]
+def Markdown.entity_O_5 (name : String) : Option String :=
+    if String.beq name "Odblac" then Option.some "Ő" else Option.none
+#[partial]
+def Markdown.entity_O_6 (name : String) : Option String :=
+    if String.lt name "Odblac" then Markdown.entity_O_4 name else Markdown.entity_O_5 name
+#[partial]
+def Markdown.entity_O_7 (name : String) : Option String :=
+    if String.lt name "Ocy" then Markdown.entity_O_3 name else Markdown.entity_O_6 name
+#[partial]
+def Markdown.entity_O_8 (name : String) : Option String :=
+    if String.lt name "Ocirc" then Markdown.entity_O_2 name else Markdown.entity_O_7 name
+#[partial]
+def Markdown.entity_O_9 (name : String) : Option String :=
+    if String.beq name "Ofr" then Option.some "𝔒" else Option.none
+#[partial]
+def Markdown.entity_O_10 (name : String) : Option String :=
+    if String.beq name "Ograve" then Option.some "Ò" else Option.none
+#[partial]
+def Markdown.entity_O_11 (name : String) : Option String :=
+    if String.beq name "Omacr" then Option.some "Ō" else Option.none
+#[partial]
+def Markdown.entity_O_12 (name : String) : Option String :=
+    if String.lt name "Omacr" then Markdown.entity_O_10 name else Markdown.entity_O_11 name
+#[partial]
+def Markdown.entity_O_13 (name : String) : Option String :=
+    if String.lt name "Ograve" then Markdown.entity_O_9 name else Markdown.entity_O_12 name
+#[partial]
+def Markdown.entity_O_14 (name : String) : Option String :=
+    if String.beq name "Omega" then Option.some "Ω" else Option.none
+#[partial]
+def Markdown.entity_O_15 (name : String) : Option String :=
+    if String.beq name "Omicron" then Option.some "Ο" else Option.none
+#[partial]
+def Markdown.entity_O_16 (name : String) : Option String :=
+    if String.beq name "Oopf" then Option.some "𝕆" else Option.none
+#[partial]
+def Markdown.entity_O_17 (name : String) : Option String :=
+    if String.lt name "Oopf" then Markdown.entity_O_15 name else Markdown.entity_O_16 name
+#[partial]
+def Markdown.entity_O_18 (name : String) : Option String :=
+    if String.lt name "Omicron" then Markdown.entity_O_14 name else Markdown.entity_O_17 name
+#[partial]
+def Markdown.entity_O_19 (name : String) : Option String :=
+    if String.lt name "Omega" then Markdown.entity_O_13 name else Markdown.entity_O_18 name
+#[partial]
+def Markdown.entity_O_20 (name : String) : Option String :=
+    if String.lt name "Ofr" then Markdown.entity_O_8 name else Markdown.entity_O_19 name
+#[partial]
+def Markdown.entity_O_21 (name : String) : Option String :=
+    if String.beq name "OpenCurlyDoubleQuote" then Option.some "“" else Option.none
+#[partial]
+def Markdown.entity_O_22 (name : String) : Option String :=
+    if String.beq name "OpenCurlyQuote" then Option.some "‘" else Option.none
+#[partial]
+def Markdown.entity_O_23 (name : String) : Option String :=
+    if String.beq name "Or" then Option.some "⩔" else Option.none
+#[partial]
+def Markdown.entity_O_24 (name : String) : Option String :=
+    if String.lt name "Or" then Markdown.entity_O_22 name else Markdown.entity_O_23 name
+#[partial]
+def Markdown.entity_O_25 (name : String) : Option String :=
+    if String.lt name "OpenCurlyQuote" then Markdown.entity_O_21 name else Markdown.entity_O_24 name
+#[partial]
+def Markdown.entity_O_26 (name : String) : Option String :=
+    if String.beq name "Oscr" then Option.some "𝒪" else Option.none
+#[partial]
+def Markdown.entity_O_27 (name : String) : Option String :=
+    if String.beq name "Oslash" then Option.some "Ø" else Option.none
+#[partial]
+def Markdown.entity_O_28 (name : String) : Option String :=
+    if String.beq name "Otilde" then Option.some "Õ" else Option.none
+#[partial]
+def Markdown.entity_O_29 (name : String) : Option String :=
+    if String.lt name "Otilde" then Markdown.entity_O_27 name else Markdown.entity_O_28 name
+#[partial]
+def Markdown.entity_O_30 (name : String) : Option String :=
+    if String.lt name "Oslash" then Markdown.entity_O_26 name else Markdown.entity_O_29 name
+#[partial]
+def Markdown.entity_O_31 (name : String) : Option String :=
+    if String.lt name "Oscr" then Markdown.entity_O_25 name else Markdown.entity_O_30 name
+#[partial]
+def Markdown.entity_O_32 (name : String) : Option String :=
+    if String.beq name "Otimes" then Option.some "⨷" else Option.none
+#[partial]
+def Markdown.entity_O_33 (name : String) : Option String :=
+    if String.beq name "Ouml" then Option.some "Ö" else Option.none
+#[partial]
+def Markdown.entity_O_34 (name : String) : Option String :=
+    if String.beq name "OverBar" then Option.some "‾" else Option.none
+#[partial]
+def Markdown.entity_O_35 (name : String) : Option String :=
+    if String.lt name "OverBar" then Markdown.entity_O_33 name else Markdown.entity_O_34 name
+#[partial]
+def Markdown.entity_O_36 (name : String) : Option String :=
+    if String.lt name "Ouml" then Markdown.entity_O_32 name else Markdown.entity_O_35 name
+#[partial]
+def Markdown.entity_O_37 (name : String) : Option String :=
+    if String.beq name "OverBrace" then Option.some "⏞" else Option.none
+#[partial]
+def Markdown.entity_O_38 (name : String) : Option String :=
+    if String.beq name "OverBracket" then Option.some "⎴" else Option.none
+#[partial]
+def Markdown.entity_O_39 (name : String) : Option String :=
+    if String.beq name "OverParenthesis" then Option.some "⏜" else Option.none
+#[partial]
+def Markdown.entity_O_40 (name : String) : Option String :=
+    if String.lt name "OverParenthesis" then Markdown.entity_O_38 name else Markdown.entity_O_39 name
+#[partial]
+def Markdown.entity_O_41 (name : String) : Option String :=
+    if String.lt name "OverBracket" then Markdown.entity_O_37 name else Markdown.entity_O_40 name
+#[partial]
+def Markdown.entity_O_42 (name : String) : Option String :=
+    if String.lt name "OverBrace" then Markdown.entity_O_36 name else Markdown.entity_O_41 name
+#[partial]
+def Markdown.entity_O_43 (name : String) : Option String :=
+    if String.lt name "Otimes" then Markdown.entity_O_31 name else Markdown.entity_O_42 name
+#[partial]
+def Markdown.entity_O_44 (name : String) : Option String :=
+    if String.lt name "OpenCurlyDoubleQuote" then Markdown.entity_O_20 name else Markdown.entity_O_43 name
+
+def Markdown.entity_O (name : String) : Option String := Markdown.entity_O_44 name
 
 #[partial]
-def Markdown.entity_P (name : String) : Option String :=
-    if String.beq name "PartialD" then Option.some "∂"
-    else if String.beq name "Pcy" then Option.some "П"
-    else if String.beq name "Pfr" then Option.some "𝔓"
-    else if String.beq name "Phi" then Option.some "Φ"
-    else if String.beq name "Pi" then Option.some "Π"
-    else if String.beq name "PlusMinus" then Option.some "±"
-    else if String.beq name "Poincareplane" then Option.some "ℌ"
-    else if String.beq name "Popf" then Option.some "ℙ"
-    else if String.beq name "Pr" then Option.some "⪻"
-    else if String.beq name "Precedes" then Option.some "≺"
-    else if String.beq name "PrecedesEqual" then Option.some "⪯"
-    else if String.beq name "PrecedesSlantEqual" then Option.some "≼"
-    else if String.beq name "PrecedesTilde" then Option.some "≾"
-    else if String.beq name "Prime" then Option.some "″"
-    else if String.beq name "Product" then Option.some "∏"
-    else if String.beq name "Proportion" then Option.some "∷"
-    else if String.beq name "Proportional" then Option.some "∝"
-    else if String.beq name "Pscr" then Option.some "𝒫"
-    else if String.beq name "Psi" then Option.some "Ψ"
-    else Option.none
+def Markdown.entity_P_0 (name : String) : Option String :=
+    if String.beq name "PartialD" then Option.some "∂" else Option.none
+#[partial]
+def Markdown.entity_P_1 (name : String) : Option String :=
+    if String.beq name "Pcy" then Option.some "П" else Option.none
+#[partial]
+def Markdown.entity_P_2 (name : String) : Option String :=
+    if String.lt name "Pcy" then Markdown.entity_P_0 name else Markdown.entity_P_1 name
+#[partial]
+def Markdown.entity_P_3 (name : String) : Option String :=
+    if String.beq name "Pfr" then Option.some "𝔓" else Option.none
+#[partial]
+def Markdown.entity_P_4 (name : String) : Option String :=
+    if String.beq name "Phi" then Option.some "Φ" else Option.none
+#[partial]
+def Markdown.entity_P_5 (name : String) : Option String :=
+    if String.lt name "Phi" then Markdown.entity_P_3 name else Markdown.entity_P_4 name
+#[partial]
+def Markdown.entity_P_6 (name : String) : Option String :=
+    if String.lt name "Pfr" then Markdown.entity_P_2 name else Markdown.entity_P_5 name
+#[partial]
+def Markdown.entity_P_7 (name : String) : Option String :=
+    if String.beq name "Pi" then Option.some "Π" else Option.none
+#[partial]
+def Markdown.entity_P_8 (name : String) : Option String :=
+    if String.beq name "PlusMinus" then Option.some "±" else Option.none
+#[partial]
+def Markdown.entity_P_9 (name : String) : Option String :=
+    if String.lt name "PlusMinus" then Markdown.entity_P_7 name else Markdown.entity_P_8 name
+#[partial]
+def Markdown.entity_P_10 (name : String) : Option String :=
+    if String.beq name "Poincareplane" then Option.some "ℌ" else Option.none
+#[partial]
+def Markdown.entity_P_11 (name : String) : Option String :=
+    if String.beq name "Popf" then Option.some "ℙ" else Option.none
+#[partial]
+def Markdown.entity_P_12 (name : String) : Option String :=
+    if String.beq name "Pr" then Option.some "⪻" else Option.none
+#[partial]
+def Markdown.entity_P_13 (name : String) : Option String :=
+    if String.lt name "Pr" then Markdown.entity_P_11 name else Markdown.entity_P_12 name
+#[partial]
+def Markdown.entity_P_14 (name : String) : Option String :=
+    if String.lt name "Popf" then Markdown.entity_P_10 name else Markdown.entity_P_13 name
+#[partial]
+def Markdown.entity_P_15 (name : String) : Option String :=
+    if String.lt name "Poincareplane" then Markdown.entity_P_9 name else Markdown.entity_P_14 name
+#[partial]
+def Markdown.entity_P_16 (name : String) : Option String :=
+    if String.lt name "Pi" then Markdown.entity_P_6 name else Markdown.entity_P_15 name
+#[partial]
+def Markdown.entity_P_17 (name : String) : Option String :=
+    if String.beq name "Precedes" then Option.some "≺" else Option.none
+#[partial]
+def Markdown.entity_P_18 (name : String) : Option String :=
+    if String.beq name "PrecedesEqual" then Option.some "⪯" else Option.none
+#[partial]
+def Markdown.entity_P_19 (name : String) : Option String :=
+    if String.lt name "PrecedesEqual" then Markdown.entity_P_17 name else Markdown.entity_P_18 name
+#[partial]
+def Markdown.entity_P_20 (name : String) : Option String :=
+    if String.beq name "PrecedesSlantEqual" then Option.some "≼" else Option.none
+#[partial]
+def Markdown.entity_P_21 (name : String) : Option String :=
+    if String.beq name "PrecedesTilde" then Option.some "≾" else Option.none
+#[partial]
+def Markdown.entity_P_22 (name : String) : Option String :=
+    if String.beq name "Prime" then Option.some "″" else Option.none
+#[partial]
+def Markdown.entity_P_23 (name : String) : Option String :=
+    if String.lt name "Prime" then Markdown.entity_P_21 name else Markdown.entity_P_22 name
+#[partial]
+def Markdown.entity_P_24 (name : String) : Option String :=
+    if String.lt name "PrecedesTilde" then Markdown.entity_P_20 name else Markdown.entity_P_23 name
+#[partial]
+def Markdown.entity_P_25 (name : String) : Option String :=
+    if String.lt name "PrecedesSlantEqual" then Markdown.entity_P_19 name else Markdown.entity_P_24 name
+#[partial]
+def Markdown.entity_P_26 (name : String) : Option String :=
+    if String.beq name "Product" then Option.some "∏" else Option.none
+#[partial]
+def Markdown.entity_P_27 (name : String) : Option String :=
+    if String.beq name "Proportion" then Option.some "∷" else Option.none
+#[partial]
+def Markdown.entity_P_28 (name : String) : Option String :=
+    if String.lt name "Proportion" then Markdown.entity_P_26 name else Markdown.entity_P_27 name
+#[partial]
+def Markdown.entity_P_29 (name : String) : Option String :=
+    if String.beq name "Proportional" then Option.some "∝" else Option.none
+#[partial]
+def Markdown.entity_P_30 (name : String) : Option String :=
+    if String.beq name "Pscr" then Option.some "𝒫" else Option.none
+#[partial]
+def Markdown.entity_P_31 (name : String) : Option String :=
+    if String.beq name "Psi" then Option.some "Ψ" else Option.none
+#[partial]
+def Markdown.entity_P_32 (name : String) : Option String :=
+    if String.lt name "Psi" then Markdown.entity_P_30 name else Markdown.entity_P_31 name
+#[partial]
+def Markdown.entity_P_33 (name : String) : Option String :=
+    if String.lt name "Pscr" then Markdown.entity_P_29 name else Markdown.entity_P_32 name
+#[partial]
+def Markdown.entity_P_34 (name : String) : Option String :=
+    if String.lt name "Proportional" then Markdown.entity_P_28 name else Markdown.entity_P_33 name
+#[partial]
+def Markdown.entity_P_35 (name : String) : Option String :=
+    if String.lt name "Product" then Markdown.entity_P_25 name else Markdown.entity_P_34 name
+#[partial]
+def Markdown.entity_P_36 (name : String) : Option String :=
+    if String.lt name "Precedes" then Markdown.entity_P_16 name else Markdown.entity_P_35 name
+
+def Markdown.entity_P (name : String) : Option String := Markdown.entity_P_36 name
 
 #[partial]
-def Markdown.entity_Q (name : String) : Option String :=
-    if String.beq name "QUOT" then Option.some "\""
-    else if String.beq name "Qfr" then Option.some "𝔔"
-    else if String.beq name "Qopf" then Option.some "ℚ"
-    else if String.beq name "Qscr" then Option.some "𝒬"
-    else Option.none
+def Markdown.entity_Q_0 (name : String) : Option String :=
+    if String.beq name "QUOT" then Option.some "\"" else Option.none
+#[partial]
+def Markdown.entity_Q_1 (name : String) : Option String :=
+    if String.beq name "Qfr" then Option.some "𝔔" else Option.none
+#[partial]
+def Markdown.entity_Q_2 (name : String) : Option String :=
+    if String.lt name "Qfr" then Markdown.entity_Q_0 name else Markdown.entity_Q_1 name
+#[partial]
+def Markdown.entity_Q_3 (name : String) : Option String :=
+    if String.beq name "Qopf" then Option.some "ℚ" else Option.none
+#[partial]
+def Markdown.entity_Q_4 (name : String) : Option String :=
+    if String.beq name "Qscr" then Option.some "𝒬" else Option.none
+#[partial]
+def Markdown.entity_Q_5 (name : String) : Option String :=
+    if String.lt name "Qscr" then Markdown.entity_Q_3 name else Markdown.entity_Q_4 name
+#[partial]
+def Markdown.entity_Q_6 (name : String) : Option String :=
+    if String.lt name "Qopf" then Markdown.entity_Q_2 name else Markdown.entity_Q_5 name
+
+def Markdown.entity_Q (name : String) : Option String := Markdown.entity_Q_6 name
 
 #[partial]
-def Markdown.entity_R (name : String) : Option String :=
-    if String.beq name "RBarr" then Option.some "⤐"
-    else if String.beq name "REG" then Option.some "®"
-    else if String.beq name "Racute" then Option.some "Ŕ"
-    else if String.beq name "Rang" then Option.some "⟫"
-    else if String.beq name "Rarr" then Option.some "↠"
-    else if String.beq name "Rarrtl" then Option.some "⤖"
-    else if String.beq name "Rcaron" then Option.some "Ř"
-    else if String.beq name "Rcedil" then Option.some "Ŗ"
-    else if String.beq name "Rcy" then Option.some "Р"
-    else if String.beq name "Re" then Option.some "ℜ"
-    else if String.beq name "ReverseElement" then Option.some "∋"
-    else if String.beq name "ReverseEquilibrium" then Option.some "⇋"
-    else if String.beq name "ReverseUpEquilibrium" then Option.some "⥯"
-    else if String.beq name "Rfr" then Option.some "ℜ"
-    else if String.beq name "Rho" then Option.some "Ρ"
-    else if String.beq name "RightAngleBracket" then Option.some "⟩"
-    else if String.beq name "RightArrow" then Option.some "→"
-    else if String.beq name "RightArrowBar" then Option.some "⇥"
-    else if String.beq name "RightArrowLeftArrow" then Option.some "⇄"
-    else if String.beq name "RightCeiling" then Option.some "⌉"
-    else if String.beq name "RightDoubleBracket" then Option.some "⟧"
-    else if String.beq name "RightDownTeeVector" then Option.some "⥝"
-    else if String.beq name "RightDownVector" then Option.some "⇂"
-    else if String.beq name "RightDownVectorBar" then Option.some "⥕"
-    else if String.beq name "RightFloor" then Option.some "⌋"
-    else if String.beq name "RightTee" then Option.some "⊢"
-    else if String.beq name "RightTeeArrow" then Option.some "↦"
-    else if String.beq name "RightTeeVector" then Option.some "⥛"
-    else if String.beq name "RightTriangle" then Option.some "⊳"
-    else if String.beq name "RightTriangleBar" then Option.some "⧐"
-    else if String.beq name "RightTriangleEqual" then Option.some "⊵"
-    else if String.beq name "RightUpDownVector" then Option.some "⥏"
-    else if String.beq name "RightUpTeeVector" then Option.some "⥜"
-    else if String.beq name "RightUpVector" then Option.some "↾"
-    else if String.beq name "RightUpVectorBar" then Option.some "⥔"
-    else if String.beq name "RightVector" then Option.some "⇀"
-    else if String.beq name "RightVectorBar" then Option.some "⥓"
-    else if String.beq name "Rightarrow" then Option.some "⇒"
-    else if String.beq name "Ropf" then Option.some "ℝ"
-    else if String.beq name "RoundImplies" then Option.some "⥰"
-    else if String.beq name "Rrightarrow" then Option.some "⇛"
-    else if String.beq name "Rscr" then Option.some "ℛ"
-    else if String.beq name "Rsh" then Option.some "↱"
-    else if String.beq name "RuleDelayed" then Option.some "⧴"
-    else Option.none
+def Markdown.entity_R_0 (name : String) : Option String :=
+    if String.beq name "RBarr" then Option.some "⤐" else Option.none
+#[partial]
+def Markdown.entity_R_1 (name : String) : Option String :=
+    if String.beq name "REG" then Option.some "®" else Option.none
+#[partial]
+def Markdown.entity_R_2 (name : String) : Option String :=
+    if String.lt name "REG" then Markdown.entity_R_0 name else Markdown.entity_R_1 name
+#[partial]
+def Markdown.entity_R_3 (name : String) : Option String :=
+    if String.beq name "Racute" then Option.some "Ŕ" else Option.none
+#[partial]
+def Markdown.entity_R_4 (name : String) : Option String :=
+    if String.beq name "Rang" then Option.some "⟫" else Option.none
+#[partial]
+def Markdown.entity_R_5 (name : String) : Option String :=
+    if String.beq name "Rarr" then Option.some "↠" else Option.none
+#[partial]
+def Markdown.entity_R_6 (name : String) : Option String :=
+    if String.lt name "Rarr" then Markdown.entity_R_4 name else Markdown.entity_R_5 name
+#[partial]
+def Markdown.entity_R_7 (name : String) : Option String :=
+    if String.lt name "Rang" then Markdown.entity_R_3 name else Markdown.entity_R_6 name
+#[partial]
+def Markdown.entity_R_8 (name : String) : Option String :=
+    if String.lt name "Racute" then Markdown.entity_R_2 name else Markdown.entity_R_7 name
+#[partial]
+def Markdown.entity_R_9 (name : String) : Option String :=
+    if String.beq name "Rarrtl" then Option.some "⤖" else Option.none
+#[partial]
+def Markdown.entity_R_10 (name : String) : Option String :=
+    if String.beq name "Rcaron" then Option.some "Ř" else Option.none
+#[partial]
+def Markdown.entity_R_11 (name : String) : Option String :=
+    if String.beq name "Rcedil" then Option.some "Ŗ" else Option.none
+#[partial]
+def Markdown.entity_R_12 (name : String) : Option String :=
+    if String.lt name "Rcedil" then Markdown.entity_R_10 name else Markdown.entity_R_11 name
+#[partial]
+def Markdown.entity_R_13 (name : String) : Option String :=
+    if String.lt name "Rcaron" then Markdown.entity_R_9 name else Markdown.entity_R_12 name
+#[partial]
+def Markdown.entity_R_14 (name : String) : Option String :=
+    if String.beq name "Rcy" then Option.some "Р" else Option.none
+#[partial]
+def Markdown.entity_R_15 (name : String) : Option String :=
+    if String.beq name "Re" then Option.some "ℜ" else Option.none
+#[partial]
+def Markdown.entity_R_16 (name : String) : Option String :=
+    if String.beq name "ReverseElement" then Option.some "∋" else Option.none
+#[partial]
+def Markdown.entity_R_17 (name : String) : Option String :=
+    if String.lt name "ReverseElement" then Markdown.entity_R_15 name else Markdown.entity_R_16 name
+#[partial]
+def Markdown.entity_R_18 (name : String) : Option String :=
+    if String.lt name "Re" then Markdown.entity_R_14 name else Markdown.entity_R_17 name
+#[partial]
+def Markdown.entity_R_19 (name : String) : Option String :=
+    if String.lt name "Rcy" then Markdown.entity_R_13 name else Markdown.entity_R_18 name
+#[partial]
+def Markdown.entity_R_20 (name : String) : Option String :=
+    if String.lt name "Rarrtl" then Markdown.entity_R_8 name else Markdown.entity_R_19 name
+#[partial]
+def Markdown.entity_R_21 (name : String) : Option String :=
+    if String.beq name "ReverseEquilibrium" then Option.some "⇋" else Option.none
+#[partial]
+def Markdown.entity_R_22 (name : String) : Option String :=
+    if String.beq name "ReverseUpEquilibrium" then Option.some "⥯" else Option.none
+#[partial]
+def Markdown.entity_R_23 (name : String) : Option String :=
+    if String.lt name "ReverseUpEquilibrium" then Markdown.entity_R_21 name else Markdown.entity_R_22 name
+#[partial]
+def Markdown.entity_R_24 (name : String) : Option String :=
+    if String.beq name "Rfr" then Option.some "ℜ" else Option.none
+#[partial]
+def Markdown.entity_R_25 (name : String) : Option String :=
+    if String.beq name "Rho" then Option.some "Ρ" else Option.none
+#[partial]
+def Markdown.entity_R_26 (name : String) : Option String :=
+    if String.beq name "RightAngleBracket" then Option.some "⟩" else Option.none
+#[partial]
+def Markdown.entity_R_27 (name : String) : Option String :=
+    if String.lt name "RightAngleBracket" then Markdown.entity_R_25 name else Markdown.entity_R_26 name
+#[partial]
+def Markdown.entity_R_28 (name : String) : Option String :=
+    if String.lt name "Rho" then Markdown.entity_R_24 name else Markdown.entity_R_27 name
+#[partial]
+def Markdown.entity_R_29 (name : String) : Option String :=
+    if String.lt name "Rfr" then Markdown.entity_R_23 name else Markdown.entity_R_28 name
+#[partial]
+def Markdown.entity_R_30 (name : String) : Option String :=
+    if String.beq name "RightArrow" then Option.some "→" else Option.none
+#[partial]
+def Markdown.entity_R_31 (name : String) : Option String :=
+    if String.beq name "RightArrowBar" then Option.some "⇥" else Option.none
+#[partial]
+def Markdown.entity_R_32 (name : String) : Option String :=
+    if String.beq name "RightArrowLeftArrow" then Option.some "⇄" else Option.none
+#[partial]
+def Markdown.entity_R_33 (name : String) : Option String :=
+    if String.lt name "RightArrowLeftArrow" then Markdown.entity_R_31 name else Markdown.entity_R_32 name
+#[partial]
+def Markdown.entity_R_34 (name : String) : Option String :=
+    if String.lt name "RightArrowBar" then Markdown.entity_R_30 name else Markdown.entity_R_33 name
+#[partial]
+def Markdown.entity_R_35 (name : String) : Option String :=
+    if String.beq name "RightCeiling" then Option.some "⌉" else Option.none
+#[partial]
+def Markdown.entity_R_36 (name : String) : Option String :=
+    if String.beq name "RightDoubleBracket" then Option.some "⟧" else Option.none
+#[partial]
+def Markdown.entity_R_37 (name : String) : Option String :=
+    if String.beq name "RightDownTeeVector" then Option.some "⥝" else Option.none
+#[partial]
+def Markdown.entity_R_38 (name : String) : Option String :=
+    if String.lt name "RightDownTeeVector" then Markdown.entity_R_36 name else Markdown.entity_R_37 name
+#[partial]
+def Markdown.entity_R_39 (name : String) : Option String :=
+    if String.lt name "RightDoubleBracket" then Markdown.entity_R_35 name else Markdown.entity_R_38 name
+#[partial]
+def Markdown.entity_R_40 (name : String) : Option String :=
+    if String.lt name "RightCeiling" then Markdown.entity_R_34 name else Markdown.entity_R_39 name
+#[partial]
+def Markdown.entity_R_41 (name : String) : Option String :=
+    if String.lt name "RightArrow" then Markdown.entity_R_29 name else Markdown.entity_R_40 name
+#[partial]
+def Markdown.entity_R_42 (name : String) : Option String :=
+    if String.lt name "ReverseEquilibrium" then Markdown.entity_R_20 name else Markdown.entity_R_41 name
+#[partial]
+def Markdown.entity_R_43 (name : String) : Option String :=
+    if String.beq name "RightDownVector" then Option.some "⇂" else Option.none
+#[partial]
+def Markdown.entity_R_44 (name : String) : Option String :=
+    if String.beq name "RightDownVectorBar" then Option.some "⥕" else Option.none
+#[partial]
+def Markdown.entity_R_45 (name : String) : Option String :=
+    if String.lt name "RightDownVectorBar" then Markdown.entity_R_43 name else Markdown.entity_R_44 name
+#[partial]
+def Markdown.entity_R_46 (name : String) : Option String :=
+    if String.beq name "RightFloor" then Option.some "⌋" else Option.none
+#[partial]
+def Markdown.entity_R_47 (name : String) : Option String :=
+    if String.beq name "RightTee" then Option.some "⊢" else Option.none
+#[partial]
+def Markdown.entity_R_48 (name : String) : Option String :=
+    if String.beq name "RightTeeArrow" then Option.some "↦" else Option.none
+#[partial]
+def Markdown.entity_R_49 (name : String) : Option String :=
+    if String.lt name "RightTeeArrow" then Markdown.entity_R_47 name else Markdown.entity_R_48 name
+#[partial]
+def Markdown.entity_R_50 (name : String) : Option String :=
+    if String.lt name "RightTee" then Markdown.entity_R_46 name else Markdown.entity_R_49 name
+#[partial]
+def Markdown.entity_R_51 (name : String) : Option String :=
+    if String.lt name "RightFloor" then Markdown.entity_R_45 name else Markdown.entity_R_50 name
+#[partial]
+def Markdown.entity_R_52 (name : String) : Option String :=
+    if String.beq name "RightTeeVector" then Option.some "⥛" else Option.none
+#[partial]
+def Markdown.entity_R_53 (name : String) : Option String :=
+    if String.beq name "RightTriangle" then Option.some "⊳" else Option.none
+#[partial]
+def Markdown.entity_R_54 (name : String) : Option String :=
+    if String.beq name "RightTriangleBar" then Option.some "⧐" else Option.none
+#[partial]
+def Markdown.entity_R_55 (name : String) : Option String :=
+    if String.lt name "RightTriangleBar" then Markdown.entity_R_53 name else Markdown.entity_R_54 name
+#[partial]
+def Markdown.entity_R_56 (name : String) : Option String :=
+    if String.lt name "RightTriangle" then Markdown.entity_R_52 name else Markdown.entity_R_55 name
+#[partial]
+def Markdown.entity_R_57 (name : String) : Option String :=
+    if String.beq name "RightTriangleEqual" then Option.some "⊵" else Option.none
+#[partial]
+def Markdown.entity_R_58 (name : String) : Option String :=
+    if String.beq name "RightUpDownVector" then Option.some "⥏" else Option.none
+#[partial]
+def Markdown.entity_R_59 (name : String) : Option String :=
+    if String.beq name "RightUpTeeVector" then Option.some "⥜" else Option.none
+#[partial]
+def Markdown.entity_R_60 (name : String) : Option String :=
+    if String.lt name "RightUpTeeVector" then Markdown.entity_R_58 name else Markdown.entity_R_59 name
+#[partial]
+def Markdown.entity_R_61 (name : String) : Option String :=
+    if String.lt name "RightUpDownVector" then Markdown.entity_R_57 name else Markdown.entity_R_60 name
+#[partial]
+def Markdown.entity_R_62 (name : String) : Option String :=
+    if String.lt name "RightTriangleEqual" then Markdown.entity_R_56 name else Markdown.entity_R_61 name
+#[partial]
+def Markdown.entity_R_63 (name : String) : Option String :=
+    if String.lt name "RightTeeVector" then Markdown.entity_R_51 name else Markdown.entity_R_62 name
+#[partial]
+def Markdown.entity_R_64 (name : String) : Option String :=
+    if String.beq name "RightUpVector" then Option.some "↾" else Option.none
+#[partial]
+def Markdown.entity_R_65 (name : String) : Option String :=
+    if String.beq name "RightUpVectorBar" then Option.some "⥔" else Option.none
+#[partial]
+def Markdown.entity_R_66 (name : String) : Option String :=
+    if String.lt name "RightUpVectorBar" then Markdown.entity_R_64 name else Markdown.entity_R_65 name
+#[partial]
+def Markdown.entity_R_67 (name : String) : Option String :=
+    if String.beq name "RightVector" then Option.some "⇀" else Option.none
+#[partial]
+def Markdown.entity_R_68 (name : String) : Option String :=
+    if String.beq name "RightVectorBar" then Option.some "⥓" else Option.none
+#[partial]
+def Markdown.entity_R_69 (name : String) : Option String :=
+    if String.beq name "Rightarrow" then Option.some "⇒" else Option.none
+#[partial]
+def Markdown.entity_R_70 (name : String) : Option String :=
+    if String.lt name "Rightarrow" then Markdown.entity_R_68 name else Markdown.entity_R_69 name
+#[partial]
+def Markdown.entity_R_71 (name : String) : Option String :=
+    if String.lt name "RightVectorBar" then Markdown.entity_R_67 name else Markdown.entity_R_70 name
+#[partial]
+def Markdown.entity_R_72 (name : String) : Option String :=
+    if String.lt name "RightVector" then Markdown.entity_R_66 name else Markdown.entity_R_71 name
+#[partial]
+def Markdown.entity_R_73 (name : String) : Option String :=
+    if String.beq name "Ropf" then Option.some "ℝ" else Option.none
+#[partial]
+def Markdown.entity_R_74 (name : String) : Option String :=
+    if String.beq name "RoundImplies" then Option.some "⥰" else Option.none
+#[partial]
+def Markdown.entity_R_75 (name : String) : Option String :=
+    if String.beq name "Rrightarrow" then Option.some "⇛" else Option.none
+#[partial]
+def Markdown.entity_R_76 (name : String) : Option String :=
+    if String.lt name "Rrightarrow" then Markdown.entity_R_74 name else Markdown.entity_R_75 name
+#[partial]
+def Markdown.entity_R_77 (name : String) : Option String :=
+    if String.lt name "RoundImplies" then Markdown.entity_R_73 name else Markdown.entity_R_76 name
+#[partial]
+def Markdown.entity_R_78 (name : String) : Option String :=
+    if String.beq name "Rscr" then Option.some "ℛ" else Option.none
+#[partial]
+def Markdown.entity_R_79 (name : String) : Option String :=
+    if String.beq name "Rsh" then Option.some "↱" else Option.none
+#[partial]
+def Markdown.entity_R_80 (name : String) : Option String :=
+    if String.beq name "RuleDelayed" then Option.some "⧴" else Option.none
+#[partial]
+def Markdown.entity_R_81 (name : String) : Option String :=
+    if String.lt name "RuleDelayed" then Markdown.entity_R_79 name else Markdown.entity_R_80 name
+#[partial]
+def Markdown.entity_R_82 (name : String) : Option String :=
+    if String.lt name "Rsh" then Markdown.entity_R_78 name else Markdown.entity_R_81 name
+#[partial]
+def Markdown.entity_R_83 (name : String) : Option String :=
+    if String.lt name "Rscr" then Markdown.entity_R_77 name else Markdown.entity_R_82 name
+#[partial]
+def Markdown.entity_R_84 (name : String) : Option String :=
+    if String.lt name "Ropf" then Markdown.entity_R_72 name else Markdown.entity_R_83 name
+#[partial]
+def Markdown.entity_R_85 (name : String) : Option String :=
+    if String.lt name "RightUpVector" then Markdown.entity_R_63 name else Markdown.entity_R_84 name
+#[partial]
+def Markdown.entity_R_86 (name : String) : Option String :=
+    if String.lt name "RightDownVector" then Markdown.entity_R_42 name else Markdown.entity_R_85 name
+
+def Markdown.entity_R (name : String) : Option String := Markdown.entity_R_86 name
 
 #[partial]
-def Markdown.entity_S (name : String) : Option String :=
-    if String.beq name "SHCHcy" then Option.some "Щ"
-    else if String.beq name "SHcy" then Option.some "Ш"
-    else if String.beq name "SOFTcy" then Option.some "Ь"
-    else if String.beq name "Sacute" then Option.some "Ś"
-    else if String.beq name "Sc" then Option.some "⪼"
-    else if String.beq name "Scaron" then Option.some "Š"
-    else if String.beq name "Scedil" then Option.some "Ş"
-    else if String.beq name "Scirc" then Option.some "Ŝ"
-    else if String.beq name "Scy" then Option.some "С"
-    else if String.beq name "Sfr" then Option.some "𝔖"
-    else if String.beq name "ShortDownArrow" then Option.some "↓"
-    else if String.beq name "ShortLeftArrow" then Option.some "←"
-    else if String.beq name "ShortRightArrow" then Option.some "→"
-    else if String.beq name "ShortUpArrow" then Option.some "↑"
-    else if String.beq name "Sigma" then Option.some "Σ"
-    else if String.beq name "SmallCircle" then Option.some "∘"
-    else if String.beq name "Sopf" then Option.some "𝕊"
-    else if String.beq name "Sqrt" then Option.some "√"
-    else if String.beq name "Square" then Option.some "□"
-    else if String.beq name "SquareIntersection" then Option.some "⊓"
-    else if String.beq name "SquareSubset" then Option.some "⊏"
-    else if String.beq name "SquareSubsetEqual" then Option.some "⊑"
-    else if String.beq name "SquareSuperset" then Option.some "⊐"
-    else if String.beq name "SquareSupersetEqual" then Option.some "⊒"
-    else if String.beq name "SquareUnion" then Option.some "⊔"
-    else if String.beq name "Sscr" then Option.some "𝒮"
-    else if String.beq name "Star" then Option.some "⋆"
-    else if String.beq name "Sub" then Option.some "⋐"
-    else if String.beq name "Subset" then Option.some "⋐"
-    else if String.beq name "SubsetEqual" then Option.some "⊆"
-    else if String.beq name "Succeeds" then Option.some "≻"
-    else if String.beq name "SucceedsEqual" then Option.some "⪰"
-    else if String.beq name "SucceedsSlantEqual" then Option.some "≽"
-    else if String.beq name "SucceedsTilde" then Option.some "≿"
-    else if String.beq name "SuchThat" then Option.some "∋"
-    else if String.beq name "Sum" then Option.some "∑"
-    else if String.beq name "Sup" then Option.some "⋑"
-    else if String.beq name "Superset" then Option.some "⊃"
-    else if String.beq name "SupersetEqual" then Option.some "⊇"
-    else if String.beq name "Supset" then Option.some "⋑"
-    else Option.none
+def Markdown.entity_S_0 (name : String) : Option String :=
+    if String.beq name "SHCHcy" then Option.some "Щ" else Option.none
+#[partial]
+def Markdown.entity_S_1 (name : String) : Option String :=
+    if String.beq name "SHcy" then Option.some "Ш" else Option.none
+#[partial]
+def Markdown.entity_S_2 (name : String) : Option String :=
+    if String.lt name "SHcy" then Markdown.entity_S_0 name else Markdown.entity_S_1 name
+#[partial]
+def Markdown.entity_S_3 (name : String) : Option String :=
+    if String.beq name "SOFTcy" then Option.some "Ь" else Option.none
+#[partial]
+def Markdown.entity_S_4 (name : String) : Option String :=
+    if String.beq name "Sacute" then Option.some "Ś" else Option.none
+#[partial]
+def Markdown.entity_S_5 (name : String) : Option String :=
+    if String.beq name "Sc" then Option.some "⪼" else Option.none
+#[partial]
+def Markdown.entity_S_6 (name : String) : Option String :=
+    if String.lt name "Sc" then Markdown.entity_S_4 name else Markdown.entity_S_5 name
+#[partial]
+def Markdown.entity_S_7 (name : String) : Option String :=
+    if String.lt name "Sacute" then Markdown.entity_S_3 name else Markdown.entity_S_6 name
+#[partial]
+def Markdown.entity_S_8 (name : String) : Option String :=
+    if String.lt name "SOFTcy" then Markdown.entity_S_2 name else Markdown.entity_S_7 name
+#[partial]
+def Markdown.entity_S_9 (name : String) : Option String :=
+    if String.beq name "Scaron" then Option.some "Š" else Option.none
+#[partial]
+def Markdown.entity_S_10 (name : String) : Option String :=
+    if String.beq name "Scedil" then Option.some "Ş" else Option.none
+#[partial]
+def Markdown.entity_S_11 (name : String) : Option String :=
+    if String.lt name "Scedil" then Markdown.entity_S_9 name else Markdown.entity_S_10 name
+#[partial]
+def Markdown.entity_S_12 (name : String) : Option String :=
+    if String.beq name "Scirc" then Option.some "Ŝ" else Option.none
+#[partial]
+def Markdown.entity_S_13 (name : String) : Option String :=
+    if String.beq name "Scy" then Option.some "С" else Option.none
+#[partial]
+def Markdown.entity_S_14 (name : String) : Option String :=
+    if String.beq name "Sfr" then Option.some "𝔖" else Option.none
+#[partial]
+def Markdown.entity_S_15 (name : String) : Option String :=
+    if String.lt name "Sfr" then Markdown.entity_S_13 name else Markdown.entity_S_14 name
+#[partial]
+def Markdown.entity_S_16 (name : String) : Option String :=
+    if String.lt name "Scy" then Markdown.entity_S_12 name else Markdown.entity_S_15 name
+#[partial]
+def Markdown.entity_S_17 (name : String) : Option String :=
+    if String.lt name "Scirc" then Markdown.entity_S_11 name else Markdown.entity_S_16 name
+#[partial]
+def Markdown.entity_S_18 (name : String) : Option String :=
+    if String.lt name "Scaron" then Markdown.entity_S_8 name else Markdown.entity_S_17 name
+#[partial]
+def Markdown.entity_S_19 (name : String) : Option String :=
+    if String.beq name "ShortDownArrow" then Option.some "↓" else Option.none
+#[partial]
+def Markdown.entity_S_20 (name : String) : Option String :=
+    if String.beq name "ShortLeftArrow" then Option.some "←" else Option.none
+#[partial]
+def Markdown.entity_S_21 (name : String) : Option String :=
+    if String.lt name "ShortLeftArrow" then Markdown.entity_S_19 name else Markdown.entity_S_20 name
+#[partial]
+def Markdown.entity_S_22 (name : String) : Option String :=
+    if String.beq name "ShortRightArrow" then Option.some "→" else Option.none
+#[partial]
+def Markdown.entity_S_23 (name : String) : Option String :=
+    if String.beq name "ShortUpArrow" then Option.some "↑" else Option.none
+#[partial]
+def Markdown.entity_S_24 (name : String) : Option String :=
+    if String.beq name "Sigma" then Option.some "Σ" else Option.none
+#[partial]
+def Markdown.entity_S_25 (name : String) : Option String :=
+    if String.lt name "Sigma" then Markdown.entity_S_23 name else Markdown.entity_S_24 name
+#[partial]
+def Markdown.entity_S_26 (name : String) : Option String :=
+    if String.lt name "ShortUpArrow" then Markdown.entity_S_22 name else Markdown.entity_S_25 name
+#[partial]
+def Markdown.entity_S_27 (name : String) : Option String :=
+    if String.lt name "ShortRightArrow" then Markdown.entity_S_21 name else Markdown.entity_S_26 name
+#[partial]
+def Markdown.entity_S_28 (name : String) : Option String :=
+    if String.beq name "SmallCircle" then Option.some "∘" else Option.none
+#[partial]
+def Markdown.entity_S_29 (name : String) : Option String :=
+    if String.beq name "Sopf" then Option.some "𝕊" else Option.none
+#[partial]
+def Markdown.entity_S_30 (name : String) : Option String :=
+    if String.lt name "Sopf" then Markdown.entity_S_28 name else Markdown.entity_S_29 name
+#[partial]
+def Markdown.entity_S_31 (name : String) : Option String :=
+    if String.beq name "Sqrt" then Option.some "√" else Option.none
+#[partial]
+def Markdown.entity_S_32 (name : String) : Option String :=
+    if String.beq name "Square" then Option.some "□" else Option.none
+#[partial]
+def Markdown.entity_S_33 (name : String) : Option String :=
+    if String.beq name "SquareIntersection" then Option.some "⊓" else Option.none
+#[partial]
+def Markdown.entity_S_34 (name : String) : Option String :=
+    if String.lt name "SquareIntersection" then Markdown.entity_S_32 name else Markdown.entity_S_33 name
+#[partial]
+def Markdown.entity_S_35 (name : String) : Option String :=
+    if String.lt name "Square" then Markdown.entity_S_31 name else Markdown.entity_S_34 name
+#[partial]
+def Markdown.entity_S_36 (name : String) : Option String :=
+    if String.lt name "Sqrt" then Markdown.entity_S_30 name else Markdown.entity_S_35 name
+#[partial]
+def Markdown.entity_S_37 (name : String) : Option String :=
+    if String.lt name "SmallCircle" then Markdown.entity_S_27 name else Markdown.entity_S_36 name
+#[partial]
+def Markdown.entity_S_38 (name : String) : Option String :=
+    if String.lt name "ShortDownArrow" then Markdown.entity_S_18 name else Markdown.entity_S_37 name
+#[partial]
+def Markdown.entity_S_39 (name : String) : Option String :=
+    if String.beq name "SquareSubset" then Option.some "⊏" else Option.none
+#[partial]
+def Markdown.entity_S_40 (name : String) : Option String :=
+    if String.beq name "SquareSubsetEqual" then Option.some "⊑" else Option.none
+#[partial]
+def Markdown.entity_S_41 (name : String) : Option String :=
+    if String.lt name "SquareSubsetEqual" then Markdown.entity_S_39 name else Markdown.entity_S_40 name
+#[partial]
+def Markdown.entity_S_42 (name : String) : Option String :=
+    if String.beq name "SquareSuperset" then Option.some "⊐" else Option.none
+#[partial]
+def Markdown.entity_S_43 (name : String) : Option String :=
+    if String.beq name "SquareSupersetEqual" then Option.some "⊒" else Option.none
+#[partial]
+def Markdown.entity_S_44 (name : String) : Option String :=
+    if String.beq name "SquareUnion" then Option.some "⊔" else Option.none
+#[partial]
+def Markdown.entity_S_45 (name : String) : Option String :=
+    if String.lt name "SquareUnion" then Markdown.entity_S_43 name else Markdown.entity_S_44 name
+#[partial]
+def Markdown.entity_S_46 (name : String) : Option String :=
+    if String.lt name "SquareSupersetEqual" then Markdown.entity_S_42 name else Markdown.entity_S_45 name
+#[partial]
+def Markdown.entity_S_47 (name : String) : Option String :=
+    if String.lt name "SquareSuperset" then Markdown.entity_S_41 name else Markdown.entity_S_46 name
+#[partial]
+def Markdown.entity_S_48 (name : String) : Option String :=
+    if String.beq name "Sscr" then Option.some "𝒮" else Option.none
+#[partial]
+def Markdown.entity_S_49 (name : String) : Option String :=
+    if String.beq name "Star" then Option.some "⋆" else Option.none
+#[partial]
+def Markdown.entity_S_50 (name : String) : Option String :=
+    if String.lt name "Star" then Markdown.entity_S_48 name else Markdown.entity_S_49 name
+#[partial]
+def Markdown.entity_S_51 (name : String) : Option String :=
+    if String.beq name "Sub" then Option.some "⋐" else Option.none
+#[partial]
+def Markdown.entity_S_52 (name : String) : Option String :=
+    if String.beq name "Subset" then Option.some "⋐" else Option.none
+#[partial]
+def Markdown.entity_S_53 (name : String) : Option String :=
+    if String.beq name "SubsetEqual" then Option.some "⊆" else Option.none
+#[partial]
+def Markdown.entity_S_54 (name : String) : Option String :=
+    if String.lt name "SubsetEqual" then Markdown.entity_S_52 name else Markdown.entity_S_53 name
+#[partial]
+def Markdown.entity_S_55 (name : String) : Option String :=
+    if String.lt name "Subset" then Markdown.entity_S_51 name else Markdown.entity_S_54 name
+#[partial]
+def Markdown.entity_S_56 (name : String) : Option String :=
+    if String.lt name "Sub" then Markdown.entity_S_50 name else Markdown.entity_S_55 name
+#[partial]
+def Markdown.entity_S_57 (name : String) : Option String :=
+    if String.lt name "Sscr" then Markdown.entity_S_47 name else Markdown.entity_S_56 name
+#[partial]
+def Markdown.entity_S_58 (name : String) : Option String :=
+    if String.beq name "Succeeds" then Option.some "≻" else Option.none
+#[partial]
+def Markdown.entity_S_59 (name : String) : Option String :=
+    if String.beq name "SucceedsEqual" then Option.some "⪰" else Option.none
+#[partial]
+def Markdown.entity_S_60 (name : String) : Option String :=
+    if String.lt name "SucceedsEqual" then Markdown.entity_S_58 name else Markdown.entity_S_59 name
+#[partial]
+def Markdown.entity_S_61 (name : String) : Option String :=
+    if String.beq name "SucceedsSlantEqual" then Option.some "≽" else Option.none
+#[partial]
+def Markdown.entity_S_62 (name : String) : Option String :=
+    if String.beq name "SucceedsTilde" then Option.some "≿" else Option.none
+#[partial]
+def Markdown.entity_S_63 (name : String) : Option String :=
+    if String.beq name "SuchThat" then Option.some "∋" else Option.none
+#[partial]
+def Markdown.entity_S_64 (name : String) : Option String :=
+    if String.lt name "SuchThat" then Markdown.entity_S_62 name else Markdown.entity_S_63 name
+#[partial]
+def Markdown.entity_S_65 (name : String) : Option String :=
+    if String.lt name "SucceedsTilde" then Markdown.entity_S_61 name else Markdown.entity_S_64 name
+#[partial]
+def Markdown.entity_S_66 (name : String) : Option String :=
+    if String.lt name "SucceedsSlantEqual" then Markdown.entity_S_60 name else Markdown.entity_S_65 name
+#[partial]
+def Markdown.entity_S_67 (name : String) : Option String :=
+    if String.beq name "Sum" then Option.some "∑" else Option.none
+#[partial]
+def Markdown.entity_S_68 (name : String) : Option String :=
+    if String.beq name "Sup" then Option.some "⋑" else Option.none
+#[partial]
+def Markdown.entity_S_69 (name : String) : Option String :=
+    if String.lt name "Sup" then Markdown.entity_S_67 name else Markdown.entity_S_68 name
+#[partial]
+def Markdown.entity_S_70 (name : String) : Option String :=
+    if String.beq name "Superset" then Option.some "⊃" else Option.none
+#[partial]
+def Markdown.entity_S_71 (name : String) : Option String :=
+    if String.beq name "SupersetEqual" then Option.some "⊇" else Option.none
+#[partial]
+def Markdown.entity_S_72 (name : String) : Option String :=
+    if String.beq name "Supset" then Option.some "⋑" else Option.none
+#[partial]
+def Markdown.entity_S_73 (name : String) : Option String :=
+    if String.lt name "Supset" then Markdown.entity_S_71 name else Markdown.entity_S_72 name
+#[partial]
+def Markdown.entity_S_74 (name : String) : Option String :=
+    if String.lt name "SupersetEqual" then Markdown.entity_S_70 name else Markdown.entity_S_73 name
+#[partial]
+def Markdown.entity_S_75 (name : String) : Option String :=
+    if String.lt name "Superset" then Markdown.entity_S_69 name else Markdown.entity_S_74 name
+#[partial]
+def Markdown.entity_S_76 (name : String) : Option String :=
+    if String.lt name "Sum" then Markdown.entity_S_66 name else Markdown.entity_S_75 name
+#[partial]
+def Markdown.entity_S_77 (name : String) : Option String :=
+    if String.lt name "Succeeds" then Markdown.entity_S_57 name else Markdown.entity_S_76 name
+#[partial]
+def Markdown.entity_S_78 (name : String) : Option String :=
+    if String.lt name "SquareSubset" then Markdown.entity_S_38 name else Markdown.entity_S_77 name
+
+def Markdown.entity_S (name : String) : Option String := Markdown.entity_S_78 name
 
 #[partial]
-def Markdown.entity_T (name : String) : Option String :=
-    if String.beq name "THORN" then Option.some "Þ"
-    else if String.beq name "TRADE" then Option.some "™"
-    else if String.beq name "TSHcy" then Option.some "Ћ"
-    else if String.beq name "TScy" then Option.some "Ц"
-    else if String.beq name "Tab" then Option.some "\t"
-    else if String.beq name "Tau" then Option.some "Τ"
-    else if String.beq name "Tcaron" then Option.some "Ť"
-    else if String.beq name "Tcedil" then Option.some "Ţ"
-    else if String.beq name "Tcy" then Option.some "Т"
-    else if String.beq name "Tfr" then Option.some "𝔗"
-    else if String.beq name "Therefore" then Option.some "∴"
-    else if String.beq name "Theta" then Option.some "Θ"
-    else if String.beq name "ThickSpace" then Option.some "  "
-    else if String.beq name "ThinSpace" then Option.some " "
-    else if String.beq name "Tilde" then Option.some "∼"
-    else if String.beq name "TildeEqual" then Option.some "≃"
-    else if String.beq name "TildeFullEqual" then Option.some "≅"
-    else if String.beq name "TildeTilde" then Option.some "≈"
-    else if String.beq name "Topf" then Option.some "𝕋"
-    else if String.beq name "TripleDot" then Option.some "⃛"
-    else if String.beq name "Tscr" then Option.some "𝒯"
-    else if String.beq name "Tstrok" then Option.some "Ŧ"
-    else Option.none
+def Markdown.entity_T_0 (name : String) : Option String :=
+    if String.beq name "THORN" then Option.some "Þ" else Option.none
+#[partial]
+def Markdown.entity_T_1 (name : String) : Option String :=
+    if String.beq name "TRADE" then Option.some "™" else Option.none
+#[partial]
+def Markdown.entity_T_2 (name : String) : Option String :=
+    if String.lt name "TRADE" then Markdown.entity_T_0 name else Markdown.entity_T_1 name
+#[partial]
+def Markdown.entity_T_3 (name : String) : Option String :=
+    if String.beq name "TSHcy" then Option.some "Ћ" else Option.none
+#[partial]
+def Markdown.entity_T_4 (name : String) : Option String :=
+    if String.beq name "TScy" then Option.some "Ц" else Option.none
+#[partial]
+def Markdown.entity_T_5 (name : String) : Option String :=
+    if String.beq name "Tab" then Option.some "\t" else Option.none
+#[partial]
+def Markdown.entity_T_6 (name : String) : Option String :=
+    if String.lt name "Tab" then Markdown.entity_T_4 name else Markdown.entity_T_5 name
+#[partial]
+def Markdown.entity_T_7 (name : String) : Option String :=
+    if String.lt name "TScy" then Markdown.entity_T_3 name else Markdown.entity_T_6 name
+#[partial]
+def Markdown.entity_T_8 (name : String) : Option String :=
+    if String.lt name "TSHcy" then Markdown.entity_T_2 name else Markdown.entity_T_7 name
+#[partial]
+def Markdown.entity_T_9 (name : String) : Option String :=
+    if String.beq name "Tau" then Option.some "Τ" else Option.none
+#[partial]
+def Markdown.entity_T_10 (name : String) : Option String :=
+    if String.beq name "Tcaron" then Option.some "Ť" else Option.none
+#[partial]
+def Markdown.entity_T_11 (name : String) : Option String :=
+    if String.beq name "Tcedil" then Option.some "Ţ" else Option.none
+#[partial]
+def Markdown.entity_T_12 (name : String) : Option String :=
+    if String.lt name "Tcedil" then Markdown.entity_T_10 name else Markdown.entity_T_11 name
+#[partial]
+def Markdown.entity_T_13 (name : String) : Option String :=
+    if String.lt name "Tcaron" then Markdown.entity_T_9 name else Markdown.entity_T_12 name
+#[partial]
+def Markdown.entity_T_14 (name : String) : Option String :=
+    if String.beq name "Tcy" then Option.some "Т" else Option.none
+#[partial]
+def Markdown.entity_T_15 (name : String) : Option String :=
+    if String.beq name "Tfr" then Option.some "𝔗" else Option.none
+#[partial]
+def Markdown.entity_T_16 (name : String) : Option String :=
+    if String.beq name "Therefore" then Option.some "∴" else Option.none
+#[partial]
+def Markdown.entity_T_17 (name : String) : Option String :=
+    if String.lt name "Therefore" then Markdown.entity_T_15 name else Markdown.entity_T_16 name
+#[partial]
+def Markdown.entity_T_18 (name : String) : Option String :=
+    if String.lt name "Tfr" then Markdown.entity_T_14 name else Markdown.entity_T_17 name
+#[partial]
+def Markdown.entity_T_19 (name : String) : Option String :=
+    if String.lt name "Tcy" then Markdown.entity_T_13 name else Markdown.entity_T_18 name
+#[partial]
+def Markdown.entity_T_20 (name : String) : Option String :=
+    if String.lt name "Tau" then Markdown.entity_T_8 name else Markdown.entity_T_19 name
+#[partial]
+def Markdown.entity_T_21 (name : String) : Option String :=
+    if String.beq name "Theta" then Option.some "Θ" else Option.none
+#[partial]
+def Markdown.entity_T_22 (name : String) : Option String :=
+    if String.beq name "ThickSpace" then Option.some "  " else Option.none
+#[partial]
+def Markdown.entity_T_23 (name : String) : Option String :=
+    if String.lt name "ThickSpace" then Markdown.entity_T_21 name else Markdown.entity_T_22 name
+#[partial]
+def Markdown.entity_T_24 (name : String) : Option String :=
+    if String.beq name "ThinSpace" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_T_25 (name : String) : Option String :=
+    if String.beq name "Tilde" then Option.some "∼" else Option.none
+#[partial]
+def Markdown.entity_T_26 (name : String) : Option String :=
+    if String.beq name "TildeEqual" then Option.some "≃" else Option.none
+#[partial]
+def Markdown.entity_T_27 (name : String) : Option String :=
+    if String.lt name "TildeEqual" then Markdown.entity_T_25 name else Markdown.entity_T_26 name
+#[partial]
+def Markdown.entity_T_28 (name : String) : Option String :=
+    if String.lt name "Tilde" then Markdown.entity_T_24 name else Markdown.entity_T_27 name
+#[partial]
+def Markdown.entity_T_29 (name : String) : Option String :=
+    if String.lt name "ThinSpace" then Markdown.entity_T_23 name else Markdown.entity_T_28 name
+#[partial]
+def Markdown.entity_T_30 (name : String) : Option String :=
+    if String.beq name "TildeFullEqual" then Option.some "≅" else Option.none
+#[partial]
+def Markdown.entity_T_31 (name : String) : Option String :=
+    if String.beq name "TildeTilde" then Option.some "≈" else Option.none
+#[partial]
+def Markdown.entity_T_32 (name : String) : Option String :=
+    if String.beq name "Topf" then Option.some "𝕋" else Option.none
+#[partial]
+def Markdown.entity_T_33 (name : String) : Option String :=
+    if String.lt name "Topf" then Markdown.entity_T_31 name else Markdown.entity_T_32 name
+#[partial]
+def Markdown.entity_T_34 (name : String) : Option String :=
+    if String.lt name "TildeTilde" then Markdown.entity_T_30 name else Markdown.entity_T_33 name
+#[partial]
+def Markdown.entity_T_35 (name : String) : Option String :=
+    if String.beq name "TripleDot" then Option.some "⃛" else Option.none
+#[partial]
+def Markdown.entity_T_36 (name : String) : Option String :=
+    if String.beq name "Tscr" then Option.some "𝒯" else Option.none
+#[partial]
+def Markdown.entity_T_37 (name : String) : Option String :=
+    if String.beq name "Tstrok" then Option.some "Ŧ" else Option.none
+#[partial]
+def Markdown.entity_T_38 (name : String) : Option String :=
+    if String.lt name "Tstrok" then Markdown.entity_T_36 name else Markdown.entity_T_37 name
+#[partial]
+def Markdown.entity_T_39 (name : String) : Option String :=
+    if String.lt name "Tscr" then Markdown.entity_T_35 name else Markdown.entity_T_38 name
+#[partial]
+def Markdown.entity_T_40 (name : String) : Option String :=
+    if String.lt name "TripleDot" then Markdown.entity_T_34 name else Markdown.entity_T_39 name
+#[partial]
+def Markdown.entity_T_41 (name : String) : Option String :=
+    if String.lt name "TildeFullEqual" then Markdown.entity_T_29 name else Markdown.entity_T_40 name
+#[partial]
+def Markdown.entity_T_42 (name : String) : Option String :=
+    if String.lt name "Theta" then Markdown.entity_T_20 name else Markdown.entity_T_41 name
+
+def Markdown.entity_T (name : String) : Option String := Markdown.entity_T_42 name
 
 #[partial]
-def Markdown.entity_U (name : String) : Option String :=
-    if String.beq name "Uacute" then Option.some "Ú"
-    else if String.beq name "Uarr" then Option.some "↟"
-    else if String.beq name "Uarrocir" then Option.some "⥉"
-    else if String.beq name "Ubrcy" then Option.some "Ў"
-    else if String.beq name "Ubreve" then Option.some "Ŭ"
-    else if String.beq name "Ucirc" then Option.some "Û"
-    else if String.beq name "Ucy" then Option.some "У"
-    else if String.beq name "Udblac" then Option.some "Ű"
-    else if String.beq name "Ufr" then Option.some "𝔘"
-    else if String.beq name "Ugrave" then Option.some "Ù"
-    else if String.beq name "Umacr" then Option.some "Ū"
-    else if String.beq name "UnderBar" then Option.some "_"
-    else if String.beq name "UnderBrace" then Option.some "⏟"
-    else if String.beq name "UnderBracket" then Option.some "⎵"
-    else if String.beq name "UnderParenthesis" then Option.some "⏝"
-    else if String.beq name "Union" then Option.some "⋃"
-    else if String.beq name "UnionPlus" then Option.some "⊎"
-    else if String.beq name "Uogon" then Option.some "Ų"
-    else if String.beq name "Uopf" then Option.some "𝕌"
-    else if String.beq name "UpArrow" then Option.some "↑"
-    else if String.beq name "UpArrowBar" then Option.some "⤒"
-    else if String.beq name "UpArrowDownArrow" then Option.some "⇅"
-    else if String.beq name "UpDownArrow" then Option.some "↕"
-    else if String.beq name "UpEquilibrium" then Option.some "⥮"
-    else if String.beq name "UpTee" then Option.some "⊥"
-    else if String.beq name "UpTeeArrow" then Option.some "↥"
-    else if String.beq name "Uparrow" then Option.some "⇑"
-    else if String.beq name "Updownarrow" then Option.some "⇕"
-    else if String.beq name "UpperLeftArrow" then Option.some "↖"
-    else if String.beq name "UpperRightArrow" then Option.some "↗"
-    else if String.beq name "Upsi" then Option.some "ϒ"
-    else if String.beq name "Upsilon" then Option.some "Υ"
-    else if String.beq name "Uring" then Option.some "Ů"
-    else if String.beq name "Uscr" then Option.some "𝒰"
-    else if String.beq name "Utilde" then Option.some "Ũ"
-    else if String.beq name "Uuml" then Option.some "Ü"
-    else Option.none
+def Markdown.entity_U_0 (name : String) : Option String :=
+    if String.beq name "Uacute" then Option.some "Ú" else Option.none
+#[partial]
+def Markdown.entity_U_1 (name : String) : Option String :=
+    if String.beq name "Uarr" then Option.some "↟" else Option.none
+#[partial]
+def Markdown.entity_U_2 (name : String) : Option String :=
+    if String.lt name "Uarr" then Markdown.entity_U_0 name else Markdown.entity_U_1 name
+#[partial]
+def Markdown.entity_U_3 (name : String) : Option String :=
+    if String.beq name "Uarrocir" then Option.some "⥉" else Option.none
+#[partial]
+def Markdown.entity_U_4 (name : String) : Option String :=
+    if String.beq name "Ubrcy" then Option.some "Ў" else Option.none
+#[partial]
+def Markdown.entity_U_5 (name : String) : Option String :=
+    if String.lt name "Ubrcy" then Markdown.entity_U_3 name else Markdown.entity_U_4 name
+#[partial]
+def Markdown.entity_U_6 (name : String) : Option String :=
+    if String.lt name "Uarrocir" then Markdown.entity_U_2 name else Markdown.entity_U_5 name
+#[partial]
+def Markdown.entity_U_7 (name : String) : Option String :=
+    if String.beq name "Ubreve" then Option.some "Ŭ" else Option.none
+#[partial]
+def Markdown.entity_U_8 (name : String) : Option String :=
+    if String.beq name "Ucirc" then Option.some "Û" else Option.none
+#[partial]
+def Markdown.entity_U_9 (name : String) : Option String :=
+    if String.lt name "Ucirc" then Markdown.entity_U_7 name else Markdown.entity_U_8 name
+#[partial]
+def Markdown.entity_U_10 (name : String) : Option String :=
+    if String.beq name "Ucy" then Option.some "У" else Option.none
+#[partial]
+def Markdown.entity_U_11 (name : String) : Option String :=
+    if String.beq name "Udblac" then Option.some "Ű" else Option.none
+#[partial]
+def Markdown.entity_U_12 (name : String) : Option String :=
+    if String.beq name "Ufr" then Option.some "𝔘" else Option.none
+#[partial]
+def Markdown.entity_U_13 (name : String) : Option String :=
+    if String.lt name "Ufr" then Markdown.entity_U_11 name else Markdown.entity_U_12 name
+#[partial]
+def Markdown.entity_U_14 (name : String) : Option String :=
+    if String.lt name "Udblac" then Markdown.entity_U_10 name else Markdown.entity_U_13 name
+#[partial]
+def Markdown.entity_U_15 (name : String) : Option String :=
+    if String.lt name "Ucy" then Markdown.entity_U_9 name else Markdown.entity_U_14 name
+#[partial]
+def Markdown.entity_U_16 (name : String) : Option String :=
+    if String.lt name "Ubreve" then Markdown.entity_U_6 name else Markdown.entity_U_15 name
+#[partial]
+def Markdown.entity_U_17 (name : String) : Option String :=
+    if String.beq name "Ugrave" then Option.some "Ù" else Option.none
+#[partial]
+def Markdown.entity_U_18 (name : String) : Option String :=
+    if String.beq name "Umacr" then Option.some "Ū" else Option.none
+#[partial]
+def Markdown.entity_U_19 (name : String) : Option String :=
+    if String.lt name "Umacr" then Markdown.entity_U_17 name else Markdown.entity_U_18 name
+#[partial]
+def Markdown.entity_U_20 (name : String) : Option String :=
+    if String.beq name "UnderBar" then Option.some "_" else Option.none
+#[partial]
+def Markdown.entity_U_21 (name : String) : Option String :=
+    if String.beq name "UnderBrace" then Option.some "⏟" else Option.none
+#[partial]
+def Markdown.entity_U_22 (name : String) : Option String :=
+    if String.lt name "UnderBrace" then Markdown.entity_U_20 name else Markdown.entity_U_21 name
+#[partial]
+def Markdown.entity_U_23 (name : String) : Option String :=
+    if String.lt name "UnderBar" then Markdown.entity_U_19 name else Markdown.entity_U_22 name
+#[partial]
+def Markdown.entity_U_24 (name : String) : Option String :=
+    if String.beq name "UnderBracket" then Option.some "⎵" else Option.none
+#[partial]
+def Markdown.entity_U_25 (name : String) : Option String :=
+    if String.beq name "UnderParenthesis" then Option.some "⏝" else Option.none
+#[partial]
+def Markdown.entity_U_26 (name : String) : Option String :=
+    if String.lt name "UnderParenthesis" then Markdown.entity_U_24 name else Markdown.entity_U_25 name
+#[partial]
+def Markdown.entity_U_27 (name : String) : Option String :=
+    if String.beq name "Union" then Option.some "⋃" else Option.none
+#[partial]
+def Markdown.entity_U_28 (name : String) : Option String :=
+    if String.beq name "UnionPlus" then Option.some "⊎" else Option.none
+#[partial]
+def Markdown.entity_U_29 (name : String) : Option String :=
+    if String.beq name "Uogon" then Option.some "Ų" else Option.none
+#[partial]
+def Markdown.entity_U_30 (name : String) : Option String :=
+    if String.lt name "Uogon" then Markdown.entity_U_28 name else Markdown.entity_U_29 name
+#[partial]
+def Markdown.entity_U_31 (name : String) : Option String :=
+    if String.lt name "UnionPlus" then Markdown.entity_U_27 name else Markdown.entity_U_30 name
+#[partial]
+def Markdown.entity_U_32 (name : String) : Option String :=
+    if String.lt name "Union" then Markdown.entity_U_26 name else Markdown.entity_U_31 name
+#[partial]
+def Markdown.entity_U_33 (name : String) : Option String :=
+    if String.lt name "UnderBracket" then Markdown.entity_U_23 name else Markdown.entity_U_32 name
+#[partial]
+def Markdown.entity_U_34 (name : String) : Option String :=
+    if String.lt name "Ugrave" then Markdown.entity_U_16 name else Markdown.entity_U_33 name
+#[partial]
+def Markdown.entity_U_35 (name : String) : Option String :=
+    if String.beq name "Uopf" then Option.some "𝕌" else Option.none
+#[partial]
+def Markdown.entity_U_36 (name : String) : Option String :=
+    if String.beq name "UpArrow" then Option.some "↑" else Option.none
+#[partial]
+def Markdown.entity_U_37 (name : String) : Option String :=
+    if String.lt name "UpArrow" then Markdown.entity_U_35 name else Markdown.entity_U_36 name
+#[partial]
+def Markdown.entity_U_38 (name : String) : Option String :=
+    if String.beq name "UpArrowBar" then Option.some "⤒" else Option.none
+#[partial]
+def Markdown.entity_U_39 (name : String) : Option String :=
+    if String.beq name "UpArrowDownArrow" then Option.some "⇅" else Option.none
+#[partial]
+def Markdown.entity_U_40 (name : String) : Option String :=
+    if String.lt name "UpArrowDownArrow" then Markdown.entity_U_38 name else Markdown.entity_U_39 name
+#[partial]
+def Markdown.entity_U_41 (name : String) : Option String :=
+    if String.lt name "UpArrowBar" then Markdown.entity_U_37 name else Markdown.entity_U_40 name
+#[partial]
+def Markdown.entity_U_42 (name : String) : Option String :=
+    if String.beq name "UpDownArrow" then Option.some "↕" else Option.none
+#[partial]
+def Markdown.entity_U_43 (name : String) : Option String :=
+    if String.beq name "UpEquilibrium" then Option.some "⥮" else Option.none
+#[partial]
+def Markdown.entity_U_44 (name : String) : Option String :=
+    if String.lt name "UpEquilibrium" then Markdown.entity_U_42 name else Markdown.entity_U_43 name
+#[partial]
+def Markdown.entity_U_45 (name : String) : Option String :=
+    if String.beq name "UpTee" then Option.some "⊥" else Option.none
+#[partial]
+def Markdown.entity_U_46 (name : String) : Option String :=
+    if String.beq name "UpTeeArrow" then Option.some "↥" else Option.none
+#[partial]
+def Markdown.entity_U_47 (name : String) : Option String :=
+    if String.beq name "Uparrow" then Option.some "⇑" else Option.none
+#[partial]
+def Markdown.entity_U_48 (name : String) : Option String :=
+    if String.lt name "Uparrow" then Markdown.entity_U_46 name else Markdown.entity_U_47 name
+#[partial]
+def Markdown.entity_U_49 (name : String) : Option String :=
+    if String.lt name "UpTeeArrow" then Markdown.entity_U_45 name else Markdown.entity_U_48 name
+#[partial]
+def Markdown.entity_U_50 (name : String) : Option String :=
+    if String.lt name "UpTee" then Markdown.entity_U_44 name else Markdown.entity_U_49 name
+#[partial]
+def Markdown.entity_U_51 (name : String) : Option String :=
+    if String.lt name "UpDownArrow" then Markdown.entity_U_41 name else Markdown.entity_U_50 name
+#[partial]
+def Markdown.entity_U_52 (name : String) : Option String :=
+    if String.beq name "Updownarrow" then Option.some "⇕" else Option.none
+#[partial]
+def Markdown.entity_U_53 (name : String) : Option String :=
+    if String.beq name "UpperLeftArrow" then Option.some "↖" else Option.none
+#[partial]
+def Markdown.entity_U_54 (name : String) : Option String :=
+    if String.lt name "UpperLeftArrow" then Markdown.entity_U_52 name else Markdown.entity_U_53 name
+#[partial]
+def Markdown.entity_U_55 (name : String) : Option String :=
+    if String.beq name "UpperRightArrow" then Option.some "↗" else Option.none
+#[partial]
+def Markdown.entity_U_56 (name : String) : Option String :=
+    if String.beq name "Upsi" then Option.some "ϒ" else Option.none
+#[partial]
+def Markdown.entity_U_57 (name : String) : Option String :=
+    if String.lt name "Upsi" then Markdown.entity_U_55 name else Markdown.entity_U_56 name
+#[partial]
+def Markdown.entity_U_58 (name : String) : Option String :=
+    if String.lt name "UpperRightArrow" then Markdown.entity_U_54 name else Markdown.entity_U_57 name
+#[partial]
+def Markdown.entity_U_59 (name : String) : Option String :=
+    if String.beq name "Upsilon" then Option.some "Υ" else Option.none
+#[partial]
+def Markdown.entity_U_60 (name : String) : Option String :=
+    if String.beq name "Uring" then Option.some "Ů" else Option.none
+#[partial]
+def Markdown.entity_U_61 (name : String) : Option String :=
+    if String.lt name "Uring" then Markdown.entity_U_59 name else Markdown.entity_U_60 name
+#[partial]
+def Markdown.entity_U_62 (name : String) : Option String :=
+    if String.beq name "Uscr" then Option.some "𝒰" else Option.none
+#[partial]
+def Markdown.entity_U_63 (name : String) : Option String :=
+    if String.beq name "Utilde" then Option.some "Ũ" else Option.none
+#[partial]
+def Markdown.entity_U_64 (name : String) : Option String :=
+    if String.beq name "Uuml" then Option.some "Ü" else Option.none
+#[partial]
+def Markdown.entity_U_65 (name : String) : Option String :=
+    if String.lt name "Uuml" then Markdown.entity_U_63 name else Markdown.entity_U_64 name
+#[partial]
+def Markdown.entity_U_66 (name : String) : Option String :=
+    if String.lt name "Utilde" then Markdown.entity_U_62 name else Markdown.entity_U_65 name
+#[partial]
+def Markdown.entity_U_67 (name : String) : Option String :=
+    if String.lt name "Uscr" then Markdown.entity_U_61 name else Markdown.entity_U_66 name
+#[partial]
+def Markdown.entity_U_68 (name : String) : Option String :=
+    if String.lt name "Upsilon" then Markdown.entity_U_58 name else Markdown.entity_U_67 name
+#[partial]
+def Markdown.entity_U_69 (name : String) : Option String :=
+    if String.lt name "Updownarrow" then Markdown.entity_U_51 name else Markdown.entity_U_68 name
+#[partial]
+def Markdown.entity_U_70 (name : String) : Option String :=
+    if String.lt name "Uopf" then Markdown.entity_U_34 name else Markdown.entity_U_69 name
+
+def Markdown.entity_U (name : String) : Option String := Markdown.entity_U_70 name
 
 #[partial]
-def Markdown.entity_V (name : String) : Option String :=
-    if String.beq name "VDash" then Option.some "⊫"
-    else if String.beq name "Vbar" then Option.some "⫫"
-    else if String.beq name "Vcy" then Option.some "В"
-    else if String.beq name "Vdash" then Option.some "⊩"
-    else if String.beq name "Vdashl" then Option.some "⫦"
-    else if String.beq name "Vee" then Option.some "⋁"
-    else if String.beq name "Verbar" then Option.some "‖"
-    else if String.beq name "Vert" then Option.some "‖"
-    else if String.beq name "VerticalBar" then Option.some "∣"
-    else if String.beq name "VerticalLine" then Option.some "|"
-    else if String.beq name "VerticalSeparator" then Option.some "❘"
-    else if String.beq name "VerticalTilde" then Option.some "≀"
-    else if String.beq name "VeryThinSpace" then Option.some " "
-    else if String.beq name "Vfr" then Option.some "𝔙"
-    else if String.beq name "Vopf" then Option.some "𝕍"
-    else if String.beq name "Vscr" then Option.some "𝒱"
-    else if String.beq name "Vvdash" then Option.some "⊪"
-    else Option.none
+def Markdown.entity_V_0 (name : String) : Option String :=
+    if String.beq name "VDash" then Option.some "⊫" else Option.none
+#[partial]
+def Markdown.entity_V_1 (name : String) : Option String :=
+    if String.beq name "Vbar" then Option.some "⫫" else Option.none
+#[partial]
+def Markdown.entity_V_2 (name : String) : Option String :=
+    if String.lt name "Vbar" then Markdown.entity_V_0 name else Markdown.entity_V_1 name
+#[partial]
+def Markdown.entity_V_3 (name : String) : Option String :=
+    if String.beq name "Vcy" then Option.some "В" else Option.none
+#[partial]
+def Markdown.entity_V_4 (name : String) : Option String :=
+    if String.beq name "Vdash" then Option.some "⊩" else Option.none
+#[partial]
+def Markdown.entity_V_5 (name : String) : Option String :=
+    if String.lt name "Vdash" then Markdown.entity_V_3 name else Markdown.entity_V_4 name
+#[partial]
+def Markdown.entity_V_6 (name : String) : Option String :=
+    if String.lt name "Vcy" then Markdown.entity_V_2 name else Markdown.entity_V_5 name
+#[partial]
+def Markdown.entity_V_7 (name : String) : Option String :=
+    if String.beq name "Vdashl" then Option.some "⫦" else Option.none
+#[partial]
+def Markdown.entity_V_8 (name : String) : Option String :=
+    if String.beq name "Vee" then Option.some "⋁" else Option.none
+#[partial]
+def Markdown.entity_V_9 (name : String) : Option String :=
+    if String.lt name "Vee" then Markdown.entity_V_7 name else Markdown.entity_V_8 name
+#[partial]
+def Markdown.entity_V_10 (name : String) : Option String :=
+    if String.beq name "Verbar" then Option.some "‖" else Option.none
+#[partial]
+def Markdown.entity_V_11 (name : String) : Option String :=
+    if String.beq name "Vert" then Option.some "‖" else Option.none
+#[partial]
+def Markdown.entity_V_12 (name : String) : Option String :=
+    if String.lt name "Vert" then Markdown.entity_V_10 name else Markdown.entity_V_11 name
+#[partial]
+def Markdown.entity_V_13 (name : String) : Option String :=
+    if String.lt name "Verbar" then Markdown.entity_V_9 name else Markdown.entity_V_12 name
+#[partial]
+def Markdown.entity_V_14 (name : String) : Option String :=
+    if String.lt name "Vdashl" then Markdown.entity_V_6 name else Markdown.entity_V_13 name
+#[partial]
+def Markdown.entity_V_15 (name : String) : Option String :=
+    if String.beq name "VerticalBar" then Option.some "∣" else Option.none
+#[partial]
+def Markdown.entity_V_16 (name : String) : Option String :=
+    if String.beq name "VerticalLine" then Option.some "|" else Option.none
+#[partial]
+def Markdown.entity_V_17 (name : String) : Option String :=
+    if String.lt name "VerticalLine" then Markdown.entity_V_15 name else Markdown.entity_V_16 name
+#[partial]
+def Markdown.entity_V_18 (name : String) : Option String :=
+    if String.beq name "VerticalSeparator" then Option.some "❘" else Option.none
+#[partial]
+def Markdown.entity_V_19 (name : String) : Option String :=
+    if String.beq name "VerticalTilde" then Option.some "≀" else Option.none
+#[partial]
+def Markdown.entity_V_20 (name : String) : Option String :=
+    if String.lt name "VerticalTilde" then Markdown.entity_V_18 name else Markdown.entity_V_19 name
+#[partial]
+def Markdown.entity_V_21 (name : String) : Option String :=
+    if String.lt name "VerticalSeparator" then Markdown.entity_V_17 name else Markdown.entity_V_20 name
+#[partial]
+def Markdown.entity_V_22 (name : String) : Option String :=
+    if String.beq name "VeryThinSpace" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_V_23 (name : String) : Option String :=
+    if String.beq name "Vfr" then Option.some "𝔙" else Option.none
+#[partial]
+def Markdown.entity_V_24 (name : String) : Option String :=
+    if String.lt name "Vfr" then Markdown.entity_V_22 name else Markdown.entity_V_23 name
+#[partial]
+def Markdown.entity_V_25 (name : String) : Option String :=
+    if String.beq name "Vopf" then Option.some "𝕍" else Option.none
+#[partial]
+def Markdown.entity_V_26 (name : String) : Option String :=
+    if String.beq name "Vscr" then Option.some "𝒱" else Option.none
+#[partial]
+def Markdown.entity_V_27 (name : String) : Option String :=
+    if String.beq name "Vvdash" then Option.some "⊪" else Option.none
+#[partial]
+def Markdown.entity_V_28 (name : String) : Option String :=
+    if String.lt name "Vvdash" then Markdown.entity_V_26 name else Markdown.entity_V_27 name
+#[partial]
+def Markdown.entity_V_29 (name : String) : Option String :=
+    if String.lt name "Vscr" then Markdown.entity_V_25 name else Markdown.entity_V_28 name
+#[partial]
+def Markdown.entity_V_30 (name : String) : Option String :=
+    if String.lt name "Vopf" then Markdown.entity_V_24 name else Markdown.entity_V_29 name
+#[partial]
+def Markdown.entity_V_31 (name : String) : Option String :=
+    if String.lt name "VeryThinSpace" then Markdown.entity_V_21 name else Markdown.entity_V_30 name
+#[partial]
+def Markdown.entity_V_32 (name : String) : Option String :=
+    if String.lt name "VerticalBar" then Markdown.entity_V_14 name else Markdown.entity_V_31 name
+
+def Markdown.entity_V (name : String) : Option String := Markdown.entity_V_32 name
 
 #[partial]
-def Markdown.entity_W (name : String) : Option String :=
-    if String.beq name "Wcirc" then Option.some "Ŵ"
-    else if String.beq name "Wedge" then Option.some "⋀"
-    else if String.beq name "Wfr" then Option.some "𝔚"
-    else if String.beq name "Wopf" then Option.some "𝕎"
-    else if String.beq name "Wscr" then Option.some "𝒲"
-    else Option.none
+def Markdown.entity_W_0 (name : String) : Option String :=
+    if String.beq name "Wcirc" then Option.some "Ŵ" else Option.none
+#[partial]
+def Markdown.entity_W_1 (name : String) : Option String :=
+    if String.beq name "Wedge" then Option.some "⋀" else Option.none
+#[partial]
+def Markdown.entity_W_2 (name : String) : Option String :=
+    if String.lt name "Wedge" then Markdown.entity_W_0 name else Markdown.entity_W_1 name
+#[partial]
+def Markdown.entity_W_3 (name : String) : Option String :=
+    if String.beq name "Wfr" then Option.some "𝔚" else Option.none
+#[partial]
+def Markdown.entity_W_4 (name : String) : Option String :=
+    if String.beq name "Wopf" then Option.some "𝕎" else Option.none
+#[partial]
+def Markdown.entity_W_5 (name : String) : Option String :=
+    if String.beq name "Wscr" then Option.some "𝒲" else Option.none
+#[partial]
+def Markdown.entity_W_6 (name : String) : Option String :=
+    if String.lt name "Wscr" then Markdown.entity_W_4 name else Markdown.entity_W_5 name
+#[partial]
+def Markdown.entity_W_7 (name : String) : Option String :=
+    if String.lt name "Wopf" then Markdown.entity_W_3 name else Markdown.entity_W_6 name
+#[partial]
+def Markdown.entity_W_8 (name : String) : Option String :=
+    if String.lt name "Wfr" then Markdown.entity_W_2 name else Markdown.entity_W_7 name
+
+def Markdown.entity_W (name : String) : Option String := Markdown.entity_W_8 name
 
 #[partial]
-def Markdown.entity_X (name : String) : Option String :=
-    if String.beq name "Xfr" then Option.some "𝔛"
-    else if String.beq name "Xi" then Option.some "Ξ"
-    else if String.beq name "Xopf" then Option.some "𝕏"
-    else if String.beq name "Xscr" then Option.some "𝒳"
-    else Option.none
+def Markdown.entity_X_0 (name : String) : Option String :=
+    if String.beq name "Xfr" then Option.some "𝔛" else Option.none
+#[partial]
+def Markdown.entity_X_1 (name : String) : Option String :=
+    if String.beq name "Xi" then Option.some "Ξ" else Option.none
+#[partial]
+def Markdown.entity_X_2 (name : String) : Option String :=
+    if String.lt name "Xi" then Markdown.entity_X_0 name else Markdown.entity_X_1 name
+#[partial]
+def Markdown.entity_X_3 (name : String) : Option String :=
+    if String.beq name "Xopf" then Option.some "𝕏" else Option.none
+#[partial]
+def Markdown.entity_X_4 (name : String) : Option String :=
+    if String.beq name "Xscr" then Option.some "𝒳" else Option.none
+#[partial]
+def Markdown.entity_X_5 (name : String) : Option String :=
+    if String.lt name "Xscr" then Markdown.entity_X_3 name else Markdown.entity_X_4 name
+#[partial]
+def Markdown.entity_X_6 (name : String) : Option String :=
+    if String.lt name "Xopf" then Markdown.entity_X_2 name else Markdown.entity_X_5 name
+
+def Markdown.entity_X (name : String) : Option String := Markdown.entity_X_6 name
 
 #[partial]
-def Markdown.entity_Y (name : String) : Option String :=
-    if String.beq name "YAcy" then Option.some "Я"
-    else if String.beq name "YIcy" then Option.some "Ї"
-    else if String.beq name "YUcy" then Option.some "Ю"
-    else if String.beq name "Yacute" then Option.some "Ý"
-    else if String.beq name "Ycirc" then Option.some "Ŷ"
-    else if String.beq name "Ycy" then Option.some "Ы"
-    else if String.beq name "Yfr" then Option.some "𝔜"
-    else if String.beq name "Yopf" then Option.some "𝕐"
-    else if String.beq name "Yscr" then Option.some "𝒴"
-    else if String.beq name "Yuml" then Option.some "Ÿ"
-    else Option.none
+def Markdown.entity_Y_0 (name : String) : Option String :=
+    if String.beq name "YAcy" then Option.some "Я" else Option.none
+#[partial]
+def Markdown.entity_Y_1 (name : String) : Option String :=
+    if String.beq name "YIcy" then Option.some "Ї" else Option.none
+#[partial]
+def Markdown.entity_Y_2 (name : String) : Option String :=
+    if String.lt name "YIcy" then Markdown.entity_Y_0 name else Markdown.entity_Y_1 name
+#[partial]
+def Markdown.entity_Y_3 (name : String) : Option String :=
+    if String.beq name "YUcy" then Option.some "Ю" else Option.none
+#[partial]
+def Markdown.entity_Y_4 (name : String) : Option String :=
+    if String.beq name "Yacute" then Option.some "Ý" else Option.none
+#[partial]
+def Markdown.entity_Y_5 (name : String) : Option String :=
+    if String.beq name "Ycirc" then Option.some "Ŷ" else Option.none
+#[partial]
+def Markdown.entity_Y_6 (name : String) : Option String :=
+    if String.lt name "Ycirc" then Markdown.entity_Y_4 name else Markdown.entity_Y_5 name
+#[partial]
+def Markdown.entity_Y_7 (name : String) : Option String :=
+    if String.lt name "Yacute" then Markdown.entity_Y_3 name else Markdown.entity_Y_6 name
+#[partial]
+def Markdown.entity_Y_8 (name : String) : Option String :=
+    if String.lt name "YUcy" then Markdown.entity_Y_2 name else Markdown.entity_Y_7 name
+#[partial]
+def Markdown.entity_Y_9 (name : String) : Option String :=
+    if String.beq name "Ycy" then Option.some "Ы" else Option.none
+#[partial]
+def Markdown.entity_Y_10 (name : String) : Option String :=
+    if String.beq name "Yfr" then Option.some "𝔜" else Option.none
+#[partial]
+def Markdown.entity_Y_11 (name : String) : Option String :=
+    if String.lt name "Yfr" then Markdown.entity_Y_9 name else Markdown.entity_Y_10 name
+#[partial]
+def Markdown.entity_Y_12 (name : String) : Option String :=
+    if String.beq name "Yopf" then Option.some "𝕐" else Option.none
+#[partial]
+def Markdown.entity_Y_13 (name : String) : Option String :=
+    if String.beq name "Yscr" then Option.some "𝒴" else Option.none
+#[partial]
+def Markdown.entity_Y_14 (name : String) : Option String :=
+    if String.beq name "Yuml" then Option.some "Ÿ" else Option.none
+#[partial]
+def Markdown.entity_Y_15 (name : String) : Option String :=
+    if String.lt name "Yuml" then Markdown.entity_Y_13 name else Markdown.entity_Y_14 name
+#[partial]
+def Markdown.entity_Y_16 (name : String) : Option String :=
+    if String.lt name "Yscr" then Markdown.entity_Y_12 name else Markdown.entity_Y_15 name
+#[partial]
+def Markdown.entity_Y_17 (name : String) : Option String :=
+    if String.lt name "Yopf" then Markdown.entity_Y_11 name else Markdown.entity_Y_16 name
+#[partial]
+def Markdown.entity_Y_18 (name : String) : Option String :=
+    if String.lt name "Ycy" then Markdown.entity_Y_8 name else Markdown.entity_Y_17 name
+
+def Markdown.entity_Y (name : String) : Option String := Markdown.entity_Y_18 name
 
 #[partial]
-def Markdown.entity_Z (name : String) : Option String :=
-    if String.beq name "ZHcy" then Option.some "Ж"
-    else if String.beq name "Zacute" then Option.some "Ź"
-    else if String.beq name "Zcaron" then Option.some "Ž"
-    else if String.beq name "Zcy" then Option.some "З"
-    else if String.beq name "Zdot" then Option.some "Ż"
-    else if String.beq name "ZeroWidthSpace" then Option.some "​"
-    else if String.beq name "Zeta" then Option.some "Ζ"
-    else if String.beq name "Zfr" then Option.some "ℨ"
-    else if String.beq name "Zopf" then Option.some "ℤ"
-    else if String.beq name "Zscr" then Option.some "𝒵"
-    else Option.none
+def Markdown.entity_Z_0 (name : String) : Option String :=
+    if String.beq name "ZHcy" then Option.some "Ж" else Option.none
+#[partial]
+def Markdown.entity_Z_1 (name : String) : Option String :=
+    if String.beq name "Zacute" then Option.some "Ź" else Option.none
+#[partial]
+def Markdown.entity_Z_2 (name : String) : Option String :=
+    if String.lt name "Zacute" then Markdown.entity_Z_0 name else Markdown.entity_Z_1 name
+#[partial]
+def Markdown.entity_Z_3 (name : String) : Option String :=
+    if String.beq name "Zcaron" then Option.some "Ž" else Option.none
+#[partial]
+def Markdown.entity_Z_4 (name : String) : Option String :=
+    if String.beq name "Zcy" then Option.some "З" else Option.none
+#[partial]
+def Markdown.entity_Z_5 (name : String) : Option String :=
+    if String.beq name "Zdot" then Option.some "Ż" else Option.none
+#[partial]
+def Markdown.entity_Z_6 (name : String) : Option String :=
+    if String.lt name "Zdot" then Markdown.entity_Z_4 name else Markdown.entity_Z_5 name
+#[partial]
+def Markdown.entity_Z_7 (name : String) : Option String :=
+    if String.lt name "Zcy" then Markdown.entity_Z_3 name else Markdown.entity_Z_6 name
+#[partial]
+def Markdown.entity_Z_8 (name : String) : Option String :=
+    if String.lt name "Zcaron" then Markdown.entity_Z_2 name else Markdown.entity_Z_7 name
+#[partial]
+def Markdown.entity_Z_9 (name : String) : Option String :=
+    if String.beq name "ZeroWidthSpace" then Option.some "​" else Option.none
+#[partial]
+def Markdown.entity_Z_10 (name : String) : Option String :=
+    if String.beq name "Zeta" then Option.some "Ζ" else Option.none
+#[partial]
+def Markdown.entity_Z_11 (name : String) : Option String :=
+    if String.lt name "Zeta" then Markdown.entity_Z_9 name else Markdown.entity_Z_10 name
+#[partial]
+def Markdown.entity_Z_12 (name : String) : Option String :=
+    if String.beq name "Zfr" then Option.some "ℨ" else Option.none
+#[partial]
+def Markdown.entity_Z_13 (name : String) : Option String :=
+    if String.beq name "Zopf" then Option.some "ℤ" else Option.none
+#[partial]
+def Markdown.entity_Z_14 (name : String) : Option String :=
+    if String.beq name "Zscr" then Option.some "𝒵" else Option.none
+#[partial]
+def Markdown.entity_Z_15 (name : String) : Option String :=
+    if String.lt name "Zscr" then Markdown.entity_Z_13 name else Markdown.entity_Z_14 name
+#[partial]
+def Markdown.entity_Z_16 (name : String) : Option String :=
+    if String.lt name "Zopf" then Markdown.entity_Z_12 name else Markdown.entity_Z_15 name
+#[partial]
+def Markdown.entity_Z_17 (name : String) : Option String :=
+    if String.lt name "Zfr" then Markdown.entity_Z_11 name else Markdown.entity_Z_16 name
+#[partial]
+def Markdown.entity_Z_18 (name : String) : Option String :=
+    if String.lt name "ZeroWidthSpace" then Markdown.entity_Z_8 name else Markdown.entity_Z_17 name
+
+def Markdown.entity_Z (name : String) : Option String := Markdown.entity_Z_18 name
 
 #[partial]
-def Markdown.entity_a (name : String) : Option String :=
-    if String.beq name "aacute" then Option.some "á"
-    else if String.beq name "abreve" then Option.some "ă"
-    else if String.beq name "ac" then Option.some "∾"
-    else if String.beq name "acE" then Option.some "∾̳"
-    else if String.beq name "acd" then Option.some "∿"
-    else if String.beq name "acirc" then Option.some "â"
-    else if String.beq name "acute" then Option.some "´"
-    else if String.beq name "acy" then Option.some "а"
-    else if String.beq name "aelig" then Option.some "æ"
-    else if String.beq name "af" then Option.some "⁡"
-    else if String.beq name "afr" then Option.some "𝔞"
-    else if String.beq name "agrave" then Option.some "à"
-    else if String.beq name "alefsym" then Option.some "ℵ"
-    else if String.beq name "aleph" then Option.some "ℵ"
-    else if String.beq name "alpha" then Option.some "α"
-    else if String.beq name "amacr" then Option.some "ā"
-    else if String.beq name "amalg" then Option.some "⨿"
-    else if String.beq name "amp" then Option.some "&"
-    else if String.beq name "and" then Option.some "∧"
-    else if String.beq name "andand" then Option.some "⩕"
-    else if String.beq name "andd" then Option.some "⩜"
-    else if String.beq name "andslope" then Option.some "⩘"
-    else if String.beq name "andv" then Option.some "⩚"
-    else if String.beq name "ang" then Option.some "∠"
-    else if String.beq name "ange" then Option.some "⦤"
-    else if String.beq name "angle" then Option.some "∠"
-    else if String.beq name "angmsd" then Option.some "∡"
-    else if String.beq name "angmsdaa" then Option.some "⦨"
-    else if String.beq name "angmsdab" then Option.some "⦩"
-    else if String.beq name "angmsdac" then Option.some "⦪"
-    else if String.beq name "angmsdad" then Option.some "⦫"
-    else if String.beq name "angmsdae" then Option.some "⦬"
-    else if String.beq name "angmsdaf" then Option.some "⦭"
-    else if String.beq name "angmsdag" then Option.some "⦮"
-    else if String.beq name "angmsdah" then Option.some "⦯"
-    else if String.beq name "angrt" then Option.some "∟"
-    else if String.beq name "angrtvb" then Option.some "⊾"
-    else if String.beq name "angrtvbd" then Option.some "⦝"
-    else if String.beq name "angsph" then Option.some "∢"
-    else if String.beq name "angst" then Option.some "Å"
-    else if String.beq name "angzarr" then Option.some "⍼"
-    else if String.beq name "aogon" then Option.some "ą"
-    else if String.beq name "aopf" then Option.some "𝕒"
-    else if String.beq name "ap" then Option.some "≈"
-    else if String.beq name "apE" then Option.some "⩰"
-    else if String.beq name "apacir" then Option.some "⩯"
-    else if String.beq name "ape" then Option.some "≊"
-    else if String.beq name "apid" then Option.some "≋"
-    else if String.beq name "apos" then Option.some "'"
-    else if String.beq name "approx" then Option.some "≈"
-    else if String.beq name "approxeq" then Option.some "≊"
-    else if String.beq name "aring" then Option.some "å"
-    else if String.beq name "ascr" then Option.some "𝒶"
-    else if String.beq name "ast" then Option.some "*"
-    else if String.beq name "asymp" then Option.some "≈"
-    else if String.beq name "asympeq" then Option.some "≍"
-    else if String.beq name "atilde" then Option.some "ã"
-    else if String.beq name "auml" then Option.some "ä"
-    else if String.beq name "awconint" then Option.some "∳"
-    else if String.beq name "awint" then Option.some "⨑"
-    else Option.none
+def Markdown.entity_a_0 (name : String) : Option String :=
+    if String.beq name "aacute" then Option.some "á" else Option.none
+#[partial]
+def Markdown.entity_a_1 (name : String) : Option String :=
+    if String.beq name "abreve" then Option.some "ă" else Option.none
+#[partial]
+def Markdown.entity_a_2 (name : String) : Option String :=
+    if String.beq name "ac" then Option.some "∾" else Option.none
+#[partial]
+def Markdown.entity_a_3 (name : String) : Option String :=
+    if String.lt name "ac" then Markdown.entity_a_1 name else Markdown.entity_a_2 name
+#[partial]
+def Markdown.entity_a_4 (name : String) : Option String :=
+    if String.lt name "abreve" then Markdown.entity_a_0 name else Markdown.entity_a_3 name
+#[partial]
+def Markdown.entity_a_5 (name : String) : Option String :=
+    if String.beq name "acE" then Option.some "∾̳" else Option.none
+#[partial]
+def Markdown.entity_a_6 (name : String) : Option String :=
+    if String.beq name "acd" then Option.some "∿" else Option.none
+#[partial]
+def Markdown.entity_a_7 (name : String) : Option String :=
+    if String.lt name "acd" then Markdown.entity_a_5 name else Markdown.entity_a_6 name
+#[partial]
+def Markdown.entity_a_8 (name : String) : Option String :=
+    if String.beq name "acirc" then Option.some "â" else Option.none
+#[partial]
+def Markdown.entity_a_9 (name : String) : Option String :=
+    if String.beq name "acute" then Option.some "´" else Option.none
+#[partial]
+def Markdown.entity_a_10 (name : String) : Option String :=
+    if String.lt name "acute" then Markdown.entity_a_8 name else Markdown.entity_a_9 name
+#[partial]
+def Markdown.entity_a_11 (name : String) : Option String :=
+    if String.lt name "acirc" then Markdown.entity_a_7 name else Markdown.entity_a_10 name
+#[partial]
+def Markdown.entity_a_12 (name : String) : Option String :=
+    if String.lt name "acE" then Markdown.entity_a_4 name else Markdown.entity_a_11 name
+#[partial]
+def Markdown.entity_a_13 (name : String) : Option String :=
+    if String.beq name "acy" then Option.some "а" else Option.none
+#[partial]
+def Markdown.entity_a_14 (name : String) : Option String :=
+    if String.beq name "aelig" then Option.some "æ" else Option.none
+#[partial]
+def Markdown.entity_a_15 (name : String) : Option String :=
+    if String.lt name "aelig" then Markdown.entity_a_13 name else Markdown.entity_a_14 name
+#[partial]
+def Markdown.entity_a_16 (name : String) : Option String :=
+    if String.beq name "af" then Option.some "⁡" else Option.none
+#[partial]
+def Markdown.entity_a_17 (name : String) : Option String :=
+    if String.beq name "afr" then Option.some "𝔞" else Option.none
+#[partial]
+def Markdown.entity_a_18 (name : String) : Option String :=
+    if String.lt name "afr" then Markdown.entity_a_16 name else Markdown.entity_a_17 name
+#[partial]
+def Markdown.entity_a_19 (name : String) : Option String :=
+    if String.lt name "af" then Markdown.entity_a_15 name else Markdown.entity_a_18 name
+#[partial]
+def Markdown.entity_a_20 (name : String) : Option String :=
+    if String.beq name "agrave" then Option.some "à" else Option.none
+#[partial]
+def Markdown.entity_a_21 (name : String) : Option String :=
+    if String.beq name "alefsym" then Option.some "ℵ" else Option.none
+#[partial]
+def Markdown.entity_a_22 (name : String) : Option String :=
+    if String.lt name "alefsym" then Markdown.entity_a_20 name else Markdown.entity_a_21 name
+#[partial]
+def Markdown.entity_a_23 (name : String) : Option String :=
+    if String.beq name "aleph" then Option.some "ℵ" else Option.none
+#[partial]
+def Markdown.entity_a_24 (name : String) : Option String :=
+    if String.beq name "alpha" then Option.some "α" else Option.none
+#[partial]
+def Markdown.entity_a_25 (name : String) : Option String :=
+    if String.lt name "alpha" then Markdown.entity_a_23 name else Markdown.entity_a_24 name
+#[partial]
+def Markdown.entity_a_26 (name : String) : Option String :=
+    if String.lt name "aleph" then Markdown.entity_a_22 name else Markdown.entity_a_25 name
+#[partial]
+def Markdown.entity_a_27 (name : String) : Option String :=
+    if String.lt name "agrave" then Markdown.entity_a_19 name else Markdown.entity_a_26 name
+#[partial]
+def Markdown.entity_a_28 (name : String) : Option String :=
+    if String.lt name "acy" then Markdown.entity_a_12 name else Markdown.entity_a_27 name
+#[partial]
+def Markdown.entity_a_29 (name : String) : Option String :=
+    if String.beq name "amacr" then Option.some "ā" else Option.none
+#[partial]
+def Markdown.entity_a_30 (name : String) : Option String :=
+    if String.beq name "amalg" then Option.some "⨿" else Option.none
+#[partial]
+def Markdown.entity_a_31 (name : String) : Option String :=
+    if String.beq name "amp" then Option.some "&" else Option.none
+#[partial]
+def Markdown.entity_a_32 (name : String) : Option String :=
+    if String.lt name "amp" then Markdown.entity_a_30 name else Markdown.entity_a_31 name
+#[partial]
+def Markdown.entity_a_33 (name : String) : Option String :=
+    if String.lt name "amalg" then Markdown.entity_a_29 name else Markdown.entity_a_32 name
+#[partial]
+def Markdown.entity_a_34 (name : String) : Option String :=
+    if String.beq name "and" then Option.some "∧" else Option.none
+#[partial]
+def Markdown.entity_a_35 (name : String) : Option String :=
+    if String.beq name "andand" then Option.some "⩕" else Option.none
+#[partial]
+def Markdown.entity_a_36 (name : String) : Option String :=
+    if String.lt name "andand" then Markdown.entity_a_34 name else Markdown.entity_a_35 name
+#[partial]
+def Markdown.entity_a_37 (name : String) : Option String :=
+    if String.beq name "andd" then Option.some "⩜" else Option.none
+#[partial]
+def Markdown.entity_a_38 (name : String) : Option String :=
+    if String.beq name "andslope" then Option.some "⩘" else Option.none
+#[partial]
+def Markdown.entity_a_39 (name : String) : Option String :=
+    if String.lt name "andslope" then Markdown.entity_a_37 name else Markdown.entity_a_38 name
+#[partial]
+def Markdown.entity_a_40 (name : String) : Option String :=
+    if String.lt name "andd" then Markdown.entity_a_36 name else Markdown.entity_a_39 name
+#[partial]
+def Markdown.entity_a_41 (name : String) : Option String :=
+    if String.lt name "and" then Markdown.entity_a_33 name else Markdown.entity_a_40 name
+#[partial]
+def Markdown.entity_a_42 (name : String) : Option String :=
+    if String.beq name "andv" then Option.some "⩚" else Option.none
+#[partial]
+def Markdown.entity_a_43 (name : String) : Option String :=
+    if String.beq name "ang" then Option.some "∠" else Option.none
+#[partial]
+def Markdown.entity_a_44 (name : String) : Option String :=
+    if String.lt name "ang" then Markdown.entity_a_42 name else Markdown.entity_a_43 name
+#[partial]
+def Markdown.entity_a_45 (name : String) : Option String :=
+    if String.beq name "ange" then Option.some "⦤" else Option.none
+#[partial]
+def Markdown.entity_a_46 (name : String) : Option String :=
+    if String.beq name "angle" then Option.some "∠" else Option.none
+#[partial]
+def Markdown.entity_a_47 (name : String) : Option String :=
+    if String.lt name "angle" then Markdown.entity_a_45 name else Markdown.entity_a_46 name
+#[partial]
+def Markdown.entity_a_48 (name : String) : Option String :=
+    if String.lt name "ange" then Markdown.entity_a_44 name else Markdown.entity_a_47 name
+#[partial]
+def Markdown.entity_a_49 (name : String) : Option String :=
+    if String.beq name "angmsd" then Option.some "∡" else Option.none
+#[partial]
+def Markdown.entity_a_50 (name : String) : Option String :=
+    if String.beq name "angmsdaa" then Option.some "⦨" else Option.none
+#[partial]
+def Markdown.entity_a_51 (name : String) : Option String :=
+    if String.lt name "angmsdaa" then Markdown.entity_a_49 name else Markdown.entity_a_50 name
+#[partial]
+def Markdown.entity_a_52 (name : String) : Option String :=
+    if String.beq name "angmsdab" then Option.some "⦩" else Option.none
+#[partial]
+def Markdown.entity_a_53 (name : String) : Option String :=
+    if String.beq name "angmsdac" then Option.some "⦪" else Option.none
+#[partial]
+def Markdown.entity_a_54 (name : String) : Option String :=
+    if String.lt name "angmsdac" then Markdown.entity_a_52 name else Markdown.entity_a_53 name
+#[partial]
+def Markdown.entity_a_55 (name : String) : Option String :=
+    if String.lt name "angmsdab" then Markdown.entity_a_51 name else Markdown.entity_a_54 name
+#[partial]
+def Markdown.entity_a_56 (name : String) : Option String :=
+    if String.lt name "angmsd" then Markdown.entity_a_48 name else Markdown.entity_a_55 name
+#[partial]
+def Markdown.entity_a_57 (name : String) : Option String :=
+    if String.lt name "andv" then Markdown.entity_a_41 name else Markdown.entity_a_56 name
+#[partial]
+def Markdown.entity_a_58 (name : String) : Option String :=
+    if String.lt name "amacr" then Markdown.entity_a_28 name else Markdown.entity_a_57 name
+#[partial]
+def Markdown.entity_a_59 (name : String) : Option String :=
+    if String.beq name "angmsdad" then Option.some "⦫" else Option.none
+#[partial]
+def Markdown.entity_a_60 (name : String) : Option String :=
+    if String.beq name "angmsdae" then Option.some "⦬" else Option.none
+#[partial]
+def Markdown.entity_a_61 (name : String) : Option String :=
+    if String.beq name "angmsdaf" then Option.some "⦭" else Option.none
+#[partial]
+def Markdown.entity_a_62 (name : String) : Option String :=
+    if String.lt name "angmsdaf" then Markdown.entity_a_60 name else Markdown.entity_a_61 name
+#[partial]
+def Markdown.entity_a_63 (name : String) : Option String :=
+    if String.lt name "angmsdae" then Markdown.entity_a_59 name else Markdown.entity_a_62 name
+#[partial]
+def Markdown.entity_a_64 (name : String) : Option String :=
+    if String.beq name "angmsdag" then Option.some "⦮" else Option.none
+#[partial]
+def Markdown.entity_a_65 (name : String) : Option String :=
+    if String.beq name "angmsdah" then Option.some "⦯" else Option.none
+#[partial]
+def Markdown.entity_a_66 (name : String) : Option String :=
+    if String.lt name "angmsdah" then Markdown.entity_a_64 name else Markdown.entity_a_65 name
+#[partial]
+def Markdown.entity_a_67 (name : String) : Option String :=
+    if String.beq name "angrt" then Option.some "∟" else Option.none
+#[partial]
+def Markdown.entity_a_68 (name : String) : Option String :=
+    if String.beq name "angrtvb" then Option.some "⊾" else Option.none
+#[partial]
+def Markdown.entity_a_69 (name : String) : Option String :=
+    if String.lt name "angrtvb" then Markdown.entity_a_67 name else Markdown.entity_a_68 name
+#[partial]
+def Markdown.entity_a_70 (name : String) : Option String :=
+    if String.lt name "angrt" then Markdown.entity_a_66 name else Markdown.entity_a_69 name
+#[partial]
+def Markdown.entity_a_71 (name : String) : Option String :=
+    if String.lt name "angmsdag" then Markdown.entity_a_63 name else Markdown.entity_a_70 name
+#[partial]
+def Markdown.entity_a_72 (name : String) : Option String :=
+    if String.beq name "angrtvbd" then Option.some "⦝" else Option.none
+#[partial]
+def Markdown.entity_a_73 (name : String) : Option String :=
+    if String.beq name "angsph" then Option.some "∢" else Option.none
+#[partial]
+def Markdown.entity_a_74 (name : String) : Option String :=
+    if String.lt name "angsph" then Markdown.entity_a_72 name else Markdown.entity_a_73 name
+#[partial]
+def Markdown.entity_a_75 (name : String) : Option String :=
+    if String.beq name "angst" then Option.some "Å" else Option.none
+#[partial]
+def Markdown.entity_a_76 (name : String) : Option String :=
+    if String.beq name "angzarr" then Option.some "⍼" else Option.none
+#[partial]
+def Markdown.entity_a_77 (name : String) : Option String :=
+    if String.lt name "angzarr" then Markdown.entity_a_75 name else Markdown.entity_a_76 name
+#[partial]
+def Markdown.entity_a_78 (name : String) : Option String :=
+    if String.lt name "angst" then Markdown.entity_a_74 name else Markdown.entity_a_77 name
+#[partial]
+def Markdown.entity_a_79 (name : String) : Option String :=
+    if String.beq name "aogon" then Option.some "ą" else Option.none
+#[partial]
+def Markdown.entity_a_80 (name : String) : Option String :=
+    if String.beq name "aopf" then Option.some "𝕒" else Option.none
+#[partial]
+def Markdown.entity_a_81 (name : String) : Option String :=
+    if String.lt name "aopf" then Markdown.entity_a_79 name else Markdown.entity_a_80 name
+#[partial]
+def Markdown.entity_a_82 (name : String) : Option String :=
+    if String.beq name "ap" then Option.some "≈" else Option.none
+#[partial]
+def Markdown.entity_a_83 (name : String) : Option String :=
+    if String.beq name "apE" then Option.some "⩰" else Option.none
+#[partial]
+def Markdown.entity_a_84 (name : String) : Option String :=
+    if String.lt name "apE" then Markdown.entity_a_82 name else Markdown.entity_a_83 name
+#[partial]
+def Markdown.entity_a_85 (name : String) : Option String :=
+    if String.lt name "ap" then Markdown.entity_a_81 name else Markdown.entity_a_84 name
+#[partial]
+def Markdown.entity_a_86 (name : String) : Option String :=
+    if String.lt name "aogon" then Markdown.entity_a_78 name else Markdown.entity_a_85 name
+#[partial]
+def Markdown.entity_a_87 (name : String) : Option String :=
+    if String.lt name "angrtvbd" then Markdown.entity_a_71 name else Markdown.entity_a_86 name
+#[partial]
+def Markdown.entity_a_88 (name : String) : Option String :=
+    if String.beq name "apacir" then Option.some "⩯" else Option.none
+#[partial]
+def Markdown.entity_a_89 (name : String) : Option String :=
+    if String.beq name "ape" then Option.some "≊" else Option.none
+#[partial]
+def Markdown.entity_a_90 (name : String) : Option String :=
+    if String.beq name "apid" then Option.some "≋" else Option.none
+#[partial]
+def Markdown.entity_a_91 (name : String) : Option String :=
+    if String.lt name "apid" then Markdown.entity_a_89 name else Markdown.entity_a_90 name
+#[partial]
+def Markdown.entity_a_92 (name : String) : Option String :=
+    if String.lt name "ape" then Markdown.entity_a_88 name else Markdown.entity_a_91 name
+#[partial]
+def Markdown.entity_a_93 (name : String) : Option String :=
+    if String.beq name "apos" then Option.some "'" else Option.none
+#[partial]
+def Markdown.entity_a_94 (name : String) : Option String :=
+    if String.beq name "approx" then Option.some "≈" else Option.none
+#[partial]
+def Markdown.entity_a_95 (name : String) : Option String :=
+    if String.lt name "approx" then Markdown.entity_a_93 name else Markdown.entity_a_94 name
+#[partial]
+def Markdown.entity_a_96 (name : String) : Option String :=
+    if String.beq name "approxeq" then Option.some "≊" else Option.none
+#[partial]
+def Markdown.entity_a_97 (name : String) : Option String :=
+    if String.beq name "aring" then Option.some "å" else Option.none
+#[partial]
+def Markdown.entity_a_98 (name : String) : Option String :=
+    if String.lt name "aring" then Markdown.entity_a_96 name else Markdown.entity_a_97 name
+#[partial]
+def Markdown.entity_a_99 (name : String) : Option String :=
+    if String.lt name "approxeq" then Markdown.entity_a_95 name else Markdown.entity_a_98 name
+#[partial]
+def Markdown.entity_a_100 (name : String) : Option String :=
+    if String.lt name "apos" then Markdown.entity_a_92 name else Markdown.entity_a_99 name
+#[partial]
+def Markdown.entity_a_101 (name : String) : Option String :=
+    if String.beq name "ascr" then Option.some "𝒶" else Option.none
+#[partial]
+def Markdown.entity_a_102 (name : String) : Option String :=
+    if String.beq name "ast" then Option.some "*" else Option.none
+#[partial]
+def Markdown.entity_a_103 (name : String) : Option String :=
+    if String.lt name "ast" then Markdown.entity_a_101 name else Markdown.entity_a_102 name
+#[partial]
+def Markdown.entity_a_104 (name : String) : Option String :=
+    if String.beq name "asymp" then Option.some "≈" else Option.none
+#[partial]
+def Markdown.entity_a_105 (name : String) : Option String :=
+    if String.beq name "asympeq" then Option.some "≍" else Option.none
+#[partial]
+def Markdown.entity_a_106 (name : String) : Option String :=
+    if String.lt name "asympeq" then Markdown.entity_a_104 name else Markdown.entity_a_105 name
+#[partial]
+def Markdown.entity_a_107 (name : String) : Option String :=
+    if String.lt name "asymp" then Markdown.entity_a_103 name else Markdown.entity_a_106 name
+#[partial]
+def Markdown.entity_a_108 (name : String) : Option String :=
+    if String.beq name "atilde" then Option.some "ã" else Option.none
+#[partial]
+def Markdown.entity_a_109 (name : String) : Option String :=
+    if String.beq name "auml" then Option.some "ä" else Option.none
+#[partial]
+def Markdown.entity_a_110 (name : String) : Option String :=
+    if String.lt name "auml" then Markdown.entity_a_108 name else Markdown.entity_a_109 name
+#[partial]
+def Markdown.entity_a_111 (name : String) : Option String :=
+    if String.beq name "awconint" then Option.some "∳" else Option.none
+#[partial]
+def Markdown.entity_a_112 (name : String) : Option String :=
+    if String.beq name "awint" then Option.some "⨑" else Option.none
+#[partial]
+def Markdown.entity_a_113 (name : String) : Option String :=
+    if String.lt name "awint" then Markdown.entity_a_111 name else Markdown.entity_a_112 name
+#[partial]
+def Markdown.entity_a_114 (name : String) : Option String :=
+    if String.lt name "awconint" then Markdown.entity_a_110 name else Markdown.entity_a_113 name
+#[partial]
+def Markdown.entity_a_115 (name : String) : Option String :=
+    if String.lt name "atilde" then Markdown.entity_a_107 name else Markdown.entity_a_114 name
+#[partial]
+def Markdown.entity_a_116 (name : String) : Option String :=
+    if String.lt name "ascr" then Markdown.entity_a_100 name else Markdown.entity_a_115 name
+#[partial]
+def Markdown.entity_a_117 (name : String) : Option String :=
+    if String.lt name "apacir" then Markdown.entity_a_87 name else Markdown.entity_a_116 name
+#[partial]
+def Markdown.entity_a_118 (name : String) : Option String :=
+    if String.lt name "angmsdad" then Markdown.entity_a_58 name else Markdown.entity_a_117 name
+
+def Markdown.entity_a (name : String) : Option String := Markdown.entity_a_118 name
 
 #[partial]
-def Markdown.entity_b (name : String) : Option String :=
-    if String.beq name "bNot" then Option.some "⫭"
-    else if String.beq name "backcong" then Option.some "≌"
-    else if String.beq name "backepsilon" then Option.some "϶"
-    else if String.beq name "backprime" then Option.some "‵"
-    else if String.beq name "backsim" then Option.some "∽"
-    else if String.beq name "backsimeq" then Option.some "⋍"
-    else if String.beq name "barvee" then Option.some "⊽"
-    else if String.beq name "barwed" then Option.some "⌅"
-    else if String.beq name "barwedge" then Option.some "⌅"
-    else if String.beq name "bbrk" then Option.some "⎵"
-    else if String.beq name "bbrktbrk" then Option.some "⎶"
-    else if String.beq name "bcong" then Option.some "≌"
-    else if String.beq name "bcy" then Option.some "б"
-    else if String.beq name "bdquo" then Option.some "„"
-    else if String.beq name "becaus" then Option.some "∵"
-    else if String.beq name "because" then Option.some "∵"
-    else if String.beq name "bemptyv" then Option.some "⦰"
-    else if String.beq name "bepsi" then Option.some "϶"
-    else if String.beq name "bernou" then Option.some "ℬ"
-    else if String.beq name "beta" then Option.some "β"
-    else if String.beq name "beth" then Option.some "ℶ"
-    else if String.beq name "between" then Option.some "≬"
-    else if String.beq name "bfr" then Option.some "𝔟"
-    else if String.beq name "bigcap" then Option.some "⋂"
-    else if String.beq name "bigcirc" then Option.some "◯"
-    else if String.beq name "bigcup" then Option.some "⋃"
-    else if String.beq name "bigodot" then Option.some "⨀"
-    else if String.beq name "bigoplus" then Option.some "⨁"
-    else if String.beq name "bigotimes" then Option.some "⨂"
-    else if String.beq name "bigsqcup" then Option.some "⨆"
-    else if String.beq name "bigstar" then Option.some "★"
-    else if String.beq name "bigtriangledown" then Option.some "▽"
-    else if String.beq name "bigtriangleup" then Option.some "△"
-    else if String.beq name "biguplus" then Option.some "⨄"
-    else if String.beq name "bigvee" then Option.some "⋁"
-    else if String.beq name "bigwedge" then Option.some "⋀"
-    else if String.beq name "bkarow" then Option.some "⤍"
-    else if String.beq name "blacklozenge" then Option.some "⧫"
-    else if String.beq name "blacksquare" then Option.some "▪"
-    else if String.beq name "blacktriangle" then Option.some "▴"
-    else if String.beq name "blacktriangledown" then Option.some "▾"
-    else if String.beq name "blacktriangleleft" then Option.some "◂"
-    else if String.beq name "blacktriangleright" then Option.some "▸"
-    else if String.beq name "blank" then Option.some "␣"
-    else if String.beq name "blk12" then Option.some "▒"
-    else if String.beq name "blk14" then Option.some "░"
-    else if String.beq name "blk34" then Option.some "▓"
-    else if String.beq name "block" then Option.some "█"
-    else if String.beq name "bne" then Option.some "=⃥"
-    else if String.beq name "bnequiv" then Option.some "≡⃥"
-    else if String.beq name "bnot" then Option.some "⌐"
-    else if String.beq name "bopf" then Option.some "𝕓"
-    else if String.beq name "bot" then Option.some "⊥"
-    else if String.beq name "bottom" then Option.some "⊥"
-    else if String.beq name "bowtie" then Option.some "⋈"
-    else if String.beq name "boxDL" then Option.some "╗"
-    else if String.beq name "boxDR" then Option.some "╔"
-    else if String.beq name "boxDl" then Option.some "╖"
-    else if String.beq name "boxDr" then Option.some "╓"
-    else if String.beq name "boxH" then Option.some "═"
-    else if String.beq name "boxHD" then Option.some "╦"
-    else if String.beq name "boxHU" then Option.some "╩"
-    else if String.beq name "boxHd" then Option.some "╤"
-    else if String.beq name "boxHu" then Option.some "╧"
-    else if String.beq name "boxUL" then Option.some "╝"
-    else if String.beq name "boxUR" then Option.some "╚"
-    else if String.beq name "boxUl" then Option.some "╜"
-    else if String.beq name "boxUr" then Option.some "╙"
-    else if String.beq name "boxV" then Option.some "║"
-    else if String.beq name "boxVH" then Option.some "╬"
-    else if String.beq name "boxVL" then Option.some "╣"
-    else if String.beq name "boxVR" then Option.some "╠"
-    else if String.beq name "boxVh" then Option.some "╫"
-    else if String.beq name "boxVl" then Option.some "╢"
-    else if String.beq name "boxVr" then Option.some "╟"
-    else if String.beq name "boxbox" then Option.some "⧉"
-    else if String.beq name "boxdL" then Option.some "╕"
-    else if String.beq name "boxdR" then Option.some "╒"
-    else if String.beq name "boxdl" then Option.some "┐"
-    else if String.beq name "boxdr" then Option.some "┌"
-    else if String.beq name "boxh" then Option.some "─"
-    else if String.beq name "boxhD" then Option.some "╥"
-    else if String.beq name "boxhU" then Option.some "╨"
-    else if String.beq name "boxhd" then Option.some "┬"
-    else if String.beq name "boxhu" then Option.some "┴"
-    else if String.beq name "boxminus" then Option.some "⊟"
-    else if String.beq name "boxplus" then Option.some "⊞"
-    else if String.beq name "boxtimes" then Option.some "⊠"
-    else if String.beq name "boxuL" then Option.some "╛"
-    else if String.beq name "boxuR" then Option.some "╘"
-    else if String.beq name "boxul" then Option.some "┘"
-    else if String.beq name "boxur" then Option.some "└"
-    else if String.beq name "boxv" then Option.some "│"
-    else if String.beq name "boxvH" then Option.some "╪"
-    else if String.beq name "boxvL" then Option.some "╡"
-    else if String.beq name "boxvR" then Option.some "╞"
-    else if String.beq name "boxvh" then Option.some "┼"
-    else if String.beq name "boxvl" then Option.some "┤"
-    else if String.beq name "boxvr" then Option.some "├"
-    else if String.beq name "bprime" then Option.some "‵"
-    else if String.beq name "breve" then Option.some "˘"
-    else if String.beq name "brvbar" then Option.some "¦"
-    else if String.beq name "bscr" then Option.some "𝒷"
-    else if String.beq name "bsemi" then Option.some "⁏"
-    else if String.beq name "bsim" then Option.some "∽"
-    else if String.beq name "bsime" then Option.some "⋍"
-    else if String.beq name "bsol" then Option.some "\\"
-    else if String.beq name "bsolb" then Option.some "⧅"
-    else if String.beq name "bsolhsub" then Option.some "⟈"
-    else if String.beq name "bull" then Option.some "•"
-    else if String.beq name "bullet" then Option.some "•"
-    else if String.beq name "bump" then Option.some "≎"
-    else if String.beq name "bumpE" then Option.some "⪮"
-    else if String.beq name "bumpe" then Option.some "≏"
-    else if String.beq name "bumpeq" then Option.some "≏"
-    else Option.none
+def Markdown.entity_b_0 (name : String) : Option String :=
+    if String.beq name "bNot" then Option.some "⫭" else Option.none
+#[partial]
+def Markdown.entity_b_1 (name : String) : Option String :=
+    if String.beq name "backcong" then Option.some "≌" else Option.none
+#[partial]
+def Markdown.entity_b_2 (name : String) : Option String :=
+    if String.beq name "backepsilon" then Option.some "϶" else Option.none
+#[partial]
+def Markdown.entity_b_3 (name : String) : Option String :=
+    if String.lt name "backepsilon" then Markdown.entity_b_1 name else Markdown.entity_b_2 name
+#[partial]
+def Markdown.entity_b_4 (name : String) : Option String :=
+    if String.lt name "backcong" then Markdown.entity_b_0 name else Markdown.entity_b_3 name
+#[partial]
+def Markdown.entity_b_5 (name : String) : Option String :=
+    if String.beq name "backprime" then Option.some "‵" else Option.none
+#[partial]
+def Markdown.entity_b_6 (name : String) : Option String :=
+    if String.beq name "backsim" then Option.some "∽" else Option.none
+#[partial]
+def Markdown.entity_b_7 (name : String) : Option String :=
+    if String.lt name "backsim" then Markdown.entity_b_5 name else Markdown.entity_b_6 name
+#[partial]
+def Markdown.entity_b_8 (name : String) : Option String :=
+    if String.beq name "backsimeq" then Option.some "⋍" else Option.none
+#[partial]
+def Markdown.entity_b_9 (name : String) : Option String :=
+    if String.beq name "barvee" then Option.some "⊽" else Option.none
+#[partial]
+def Markdown.entity_b_10 (name : String) : Option String :=
+    if String.lt name "barvee" then Markdown.entity_b_8 name else Markdown.entity_b_9 name
+#[partial]
+def Markdown.entity_b_11 (name : String) : Option String :=
+    if String.lt name "backsimeq" then Markdown.entity_b_7 name else Markdown.entity_b_10 name
+#[partial]
+def Markdown.entity_b_12 (name : String) : Option String :=
+    if String.lt name "backprime" then Markdown.entity_b_4 name else Markdown.entity_b_11 name
+#[partial]
+def Markdown.entity_b_13 (name : String) : Option String :=
+    if String.beq name "barwed" then Option.some "⌅" else Option.none
+#[partial]
+def Markdown.entity_b_14 (name : String) : Option String :=
+    if String.beq name "barwedge" then Option.some "⌅" else Option.none
+#[partial]
+def Markdown.entity_b_15 (name : String) : Option String :=
+    if String.beq name "bbrk" then Option.some "⎵" else Option.none
+#[partial]
+def Markdown.entity_b_16 (name : String) : Option String :=
+    if String.lt name "bbrk" then Markdown.entity_b_14 name else Markdown.entity_b_15 name
+#[partial]
+def Markdown.entity_b_17 (name : String) : Option String :=
+    if String.lt name "barwedge" then Markdown.entity_b_13 name else Markdown.entity_b_16 name
+#[partial]
+def Markdown.entity_b_18 (name : String) : Option String :=
+    if String.beq name "bbrktbrk" then Option.some "⎶" else Option.none
+#[partial]
+def Markdown.entity_b_19 (name : String) : Option String :=
+    if String.beq name "bcong" then Option.some "≌" else Option.none
+#[partial]
+def Markdown.entity_b_20 (name : String) : Option String :=
+    if String.lt name "bcong" then Markdown.entity_b_18 name else Markdown.entity_b_19 name
+#[partial]
+def Markdown.entity_b_21 (name : String) : Option String :=
+    if String.beq name "bcy" then Option.some "б" else Option.none
+#[partial]
+def Markdown.entity_b_22 (name : String) : Option String :=
+    if String.beq name "bdquo" then Option.some "„" else Option.none
+#[partial]
+def Markdown.entity_b_23 (name : String) : Option String :=
+    if String.lt name "bdquo" then Markdown.entity_b_21 name else Markdown.entity_b_22 name
+#[partial]
+def Markdown.entity_b_24 (name : String) : Option String :=
+    if String.lt name "bcy" then Markdown.entity_b_20 name else Markdown.entity_b_23 name
+#[partial]
+def Markdown.entity_b_25 (name : String) : Option String :=
+    if String.lt name "bbrktbrk" then Markdown.entity_b_17 name else Markdown.entity_b_24 name
+#[partial]
+def Markdown.entity_b_26 (name : String) : Option String :=
+    if String.lt name "barwed" then Markdown.entity_b_12 name else Markdown.entity_b_25 name
+#[partial]
+def Markdown.entity_b_27 (name : String) : Option String :=
+    if String.beq name "becaus" then Option.some "∵" else Option.none
+#[partial]
+def Markdown.entity_b_28 (name : String) : Option String :=
+    if String.beq name "because" then Option.some "∵" else Option.none
+#[partial]
+def Markdown.entity_b_29 (name : String) : Option String :=
+    if String.beq name "bemptyv" then Option.some "⦰" else Option.none
+#[partial]
+def Markdown.entity_b_30 (name : String) : Option String :=
+    if String.lt name "bemptyv" then Markdown.entity_b_28 name else Markdown.entity_b_29 name
+#[partial]
+def Markdown.entity_b_31 (name : String) : Option String :=
+    if String.lt name "because" then Markdown.entity_b_27 name else Markdown.entity_b_30 name
+#[partial]
+def Markdown.entity_b_32 (name : String) : Option String :=
+    if String.beq name "bepsi" then Option.some "϶" else Option.none
+#[partial]
+def Markdown.entity_b_33 (name : String) : Option String :=
+    if String.beq name "bernou" then Option.some "ℬ" else Option.none
+#[partial]
+def Markdown.entity_b_34 (name : String) : Option String :=
+    if String.lt name "bernou" then Markdown.entity_b_32 name else Markdown.entity_b_33 name
+#[partial]
+def Markdown.entity_b_35 (name : String) : Option String :=
+    if String.beq name "beta" then Option.some "β" else Option.none
+#[partial]
+def Markdown.entity_b_36 (name : String) : Option String :=
+    if String.beq name "beth" then Option.some "ℶ" else Option.none
+#[partial]
+def Markdown.entity_b_37 (name : String) : Option String :=
+    if String.lt name "beth" then Markdown.entity_b_35 name else Markdown.entity_b_36 name
+#[partial]
+def Markdown.entity_b_38 (name : String) : Option String :=
+    if String.lt name "beta" then Markdown.entity_b_34 name else Markdown.entity_b_37 name
+#[partial]
+def Markdown.entity_b_39 (name : String) : Option String :=
+    if String.lt name "bepsi" then Markdown.entity_b_31 name else Markdown.entity_b_38 name
+#[partial]
+def Markdown.entity_b_40 (name : String) : Option String :=
+    if String.beq name "between" then Option.some "≬" else Option.none
+#[partial]
+def Markdown.entity_b_41 (name : String) : Option String :=
+    if String.beq name "bfr" then Option.some "𝔟" else Option.none
+#[partial]
+def Markdown.entity_b_42 (name : String) : Option String :=
+    if String.beq name "bigcap" then Option.some "⋂" else Option.none
+#[partial]
+def Markdown.entity_b_43 (name : String) : Option String :=
+    if String.lt name "bigcap" then Markdown.entity_b_41 name else Markdown.entity_b_42 name
+#[partial]
+def Markdown.entity_b_44 (name : String) : Option String :=
+    if String.lt name "bfr" then Markdown.entity_b_40 name else Markdown.entity_b_43 name
+#[partial]
+def Markdown.entity_b_45 (name : String) : Option String :=
+    if String.beq name "bigcirc" then Option.some "◯" else Option.none
+#[partial]
+def Markdown.entity_b_46 (name : String) : Option String :=
+    if String.beq name "bigcup" then Option.some "⋃" else Option.none
+#[partial]
+def Markdown.entity_b_47 (name : String) : Option String :=
+    if String.lt name "bigcup" then Markdown.entity_b_45 name else Markdown.entity_b_46 name
+#[partial]
+def Markdown.entity_b_48 (name : String) : Option String :=
+    if String.beq name "bigodot" then Option.some "⨀" else Option.none
+#[partial]
+def Markdown.entity_b_49 (name : String) : Option String :=
+    if String.beq name "bigoplus" then Option.some "⨁" else Option.none
+#[partial]
+def Markdown.entity_b_50 (name : String) : Option String :=
+    if String.lt name "bigoplus" then Markdown.entity_b_48 name else Markdown.entity_b_49 name
+#[partial]
+def Markdown.entity_b_51 (name : String) : Option String :=
+    if String.lt name "bigodot" then Markdown.entity_b_47 name else Markdown.entity_b_50 name
+#[partial]
+def Markdown.entity_b_52 (name : String) : Option String :=
+    if String.lt name "bigcirc" then Markdown.entity_b_44 name else Markdown.entity_b_51 name
+#[partial]
+def Markdown.entity_b_53 (name : String) : Option String :=
+    if String.lt name "between" then Markdown.entity_b_39 name else Markdown.entity_b_52 name
+#[partial]
+def Markdown.entity_b_54 (name : String) : Option String :=
+    if String.lt name "becaus" then Markdown.entity_b_26 name else Markdown.entity_b_53 name
+#[partial]
+def Markdown.entity_b_55 (name : String) : Option String :=
+    if String.beq name "bigotimes" then Option.some "⨂" else Option.none
+#[partial]
+def Markdown.entity_b_56 (name : String) : Option String :=
+    if String.beq name "bigsqcup" then Option.some "⨆" else Option.none
+#[partial]
+def Markdown.entity_b_57 (name : String) : Option String :=
+    if String.beq name "bigstar" then Option.some "★" else Option.none
+#[partial]
+def Markdown.entity_b_58 (name : String) : Option String :=
+    if String.lt name "bigstar" then Markdown.entity_b_56 name else Markdown.entity_b_57 name
+#[partial]
+def Markdown.entity_b_59 (name : String) : Option String :=
+    if String.lt name "bigsqcup" then Markdown.entity_b_55 name else Markdown.entity_b_58 name
+#[partial]
+def Markdown.entity_b_60 (name : String) : Option String :=
+    if String.beq name "bigtriangledown" then Option.some "▽" else Option.none
+#[partial]
+def Markdown.entity_b_61 (name : String) : Option String :=
+    if String.beq name "bigtriangleup" then Option.some "△" else Option.none
+#[partial]
+def Markdown.entity_b_62 (name : String) : Option String :=
+    if String.lt name "bigtriangleup" then Markdown.entity_b_60 name else Markdown.entity_b_61 name
+#[partial]
+def Markdown.entity_b_63 (name : String) : Option String :=
+    if String.beq name "biguplus" then Option.some "⨄" else Option.none
+#[partial]
+def Markdown.entity_b_64 (name : String) : Option String :=
+    if String.beq name "bigvee" then Option.some "⋁" else Option.none
+#[partial]
+def Markdown.entity_b_65 (name : String) : Option String :=
+    if String.lt name "bigvee" then Markdown.entity_b_63 name else Markdown.entity_b_64 name
+#[partial]
+def Markdown.entity_b_66 (name : String) : Option String :=
+    if String.lt name "biguplus" then Markdown.entity_b_62 name else Markdown.entity_b_65 name
+#[partial]
+def Markdown.entity_b_67 (name : String) : Option String :=
+    if String.lt name "bigtriangledown" then Markdown.entity_b_59 name else Markdown.entity_b_66 name
+#[partial]
+def Markdown.entity_b_68 (name : String) : Option String :=
+    if String.beq name "bigwedge" then Option.some "⋀" else Option.none
+#[partial]
+def Markdown.entity_b_69 (name : String) : Option String :=
+    if String.beq name "bkarow" then Option.some "⤍" else Option.none
+#[partial]
+def Markdown.entity_b_70 (name : String) : Option String :=
+    if String.beq name "blacklozenge" then Option.some "⧫" else Option.none
+#[partial]
+def Markdown.entity_b_71 (name : String) : Option String :=
+    if String.lt name "blacklozenge" then Markdown.entity_b_69 name else Markdown.entity_b_70 name
+#[partial]
+def Markdown.entity_b_72 (name : String) : Option String :=
+    if String.lt name "bkarow" then Markdown.entity_b_68 name else Markdown.entity_b_71 name
+#[partial]
+def Markdown.entity_b_73 (name : String) : Option String :=
+    if String.beq name "blacksquare" then Option.some "▪" else Option.none
+#[partial]
+def Markdown.entity_b_74 (name : String) : Option String :=
+    if String.beq name "blacktriangle" then Option.some "▴" else Option.none
+#[partial]
+def Markdown.entity_b_75 (name : String) : Option String :=
+    if String.lt name "blacktriangle" then Markdown.entity_b_73 name else Markdown.entity_b_74 name
+#[partial]
+def Markdown.entity_b_76 (name : String) : Option String :=
+    if String.beq name "blacktriangledown" then Option.some "▾" else Option.none
+#[partial]
+def Markdown.entity_b_77 (name : String) : Option String :=
+    if String.beq name "blacktriangleleft" then Option.some "◂" else Option.none
+#[partial]
+def Markdown.entity_b_78 (name : String) : Option String :=
+    if String.lt name "blacktriangleleft" then Markdown.entity_b_76 name else Markdown.entity_b_77 name
+#[partial]
+def Markdown.entity_b_79 (name : String) : Option String :=
+    if String.lt name "blacktriangledown" then Markdown.entity_b_75 name else Markdown.entity_b_78 name
+#[partial]
+def Markdown.entity_b_80 (name : String) : Option String :=
+    if String.lt name "blacksquare" then Markdown.entity_b_72 name else Markdown.entity_b_79 name
+#[partial]
+def Markdown.entity_b_81 (name : String) : Option String :=
+    if String.lt name "bigwedge" then Markdown.entity_b_67 name else Markdown.entity_b_80 name
+#[partial]
+def Markdown.entity_b_82 (name : String) : Option String :=
+    if String.beq name "blacktriangleright" then Option.some "▸" else Option.none
+#[partial]
+def Markdown.entity_b_83 (name : String) : Option String :=
+    if String.beq name "blank" then Option.some "␣" else Option.none
+#[partial]
+def Markdown.entity_b_84 (name : String) : Option String :=
+    if String.beq name "blk12" then Option.some "▒" else Option.none
+#[partial]
+def Markdown.entity_b_85 (name : String) : Option String :=
+    if String.lt name "blk12" then Markdown.entity_b_83 name else Markdown.entity_b_84 name
+#[partial]
+def Markdown.entity_b_86 (name : String) : Option String :=
+    if String.lt name "blank" then Markdown.entity_b_82 name else Markdown.entity_b_85 name
+#[partial]
+def Markdown.entity_b_87 (name : String) : Option String :=
+    if String.beq name "blk14" then Option.some "░" else Option.none
+#[partial]
+def Markdown.entity_b_88 (name : String) : Option String :=
+    if String.beq name "blk34" then Option.some "▓" else Option.none
+#[partial]
+def Markdown.entity_b_89 (name : String) : Option String :=
+    if String.lt name "blk34" then Markdown.entity_b_87 name else Markdown.entity_b_88 name
+#[partial]
+def Markdown.entity_b_90 (name : String) : Option String :=
+    if String.beq name "block" then Option.some "█" else Option.none
+#[partial]
+def Markdown.entity_b_91 (name : String) : Option String :=
+    if String.beq name "bne" then Option.some "=⃥" else Option.none
+#[partial]
+def Markdown.entity_b_92 (name : String) : Option String :=
+    if String.lt name "bne" then Markdown.entity_b_90 name else Markdown.entity_b_91 name
+#[partial]
+def Markdown.entity_b_93 (name : String) : Option String :=
+    if String.lt name "block" then Markdown.entity_b_89 name else Markdown.entity_b_92 name
+#[partial]
+def Markdown.entity_b_94 (name : String) : Option String :=
+    if String.lt name "blk14" then Markdown.entity_b_86 name else Markdown.entity_b_93 name
+#[partial]
+def Markdown.entity_b_95 (name : String) : Option String :=
+    if String.beq name "bnequiv" then Option.some "≡⃥" else Option.none
+#[partial]
+def Markdown.entity_b_96 (name : String) : Option String :=
+    if String.beq name "bnot" then Option.some "⌐" else Option.none
+#[partial]
+def Markdown.entity_b_97 (name : String) : Option String :=
+    if String.lt name "bnot" then Markdown.entity_b_95 name else Markdown.entity_b_96 name
+#[partial]
+def Markdown.entity_b_98 (name : String) : Option String :=
+    if String.beq name "bopf" then Option.some "𝕓" else Option.none
+#[partial]
+def Markdown.entity_b_99 (name : String) : Option String :=
+    if String.beq name "bot" then Option.some "⊥" else Option.none
+#[partial]
+def Markdown.entity_b_100 (name : String) : Option String :=
+    if String.lt name "bot" then Markdown.entity_b_98 name else Markdown.entity_b_99 name
+#[partial]
+def Markdown.entity_b_101 (name : String) : Option String :=
+    if String.lt name "bopf" then Markdown.entity_b_97 name else Markdown.entity_b_100 name
+#[partial]
+def Markdown.entity_b_102 (name : String) : Option String :=
+    if String.beq name "bottom" then Option.some "⊥" else Option.none
+#[partial]
+def Markdown.entity_b_103 (name : String) : Option String :=
+    if String.beq name "bowtie" then Option.some "⋈" else Option.none
+#[partial]
+def Markdown.entity_b_104 (name : String) : Option String :=
+    if String.lt name "bowtie" then Markdown.entity_b_102 name else Markdown.entity_b_103 name
+#[partial]
+def Markdown.entity_b_105 (name : String) : Option String :=
+    if String.beq name "boxDL" then Option.some "╗" else Option.none
+#[partial]
+def Markdown.entity_b_106 (name : String) : Option String :=
+    if String.beq name "boxDR" then Option.some "╔" else Option.none
+#[partial]
+def Markdown.entity_b_107 (name : String) : Option String :=
+    if String.lt name "boxDR" then Markdown.entity_b_105 name else Markdown.entity_b_106 name
+#[partial]
+def Markdown.entity_b_108 (name : String) : Option String :=
+    if String.lt name "boxDL" then Markdown.entity_b_104 name else Markdown.entity_b_107 name
+#[partial]
+def Markdown.entity_b_109 (name : String) : Option String :=
+    if String.lt name "bottom" then Markdown.entity_b_101 name else Markdown.entity_b_108 name
+#[partial]
+def Markdown.entity_b_110 (name : String) : Option String :=
+    if String.lt name "bnequiv" then Markdown.entity_b_94 name else Markdown.entity_b_109 name
+#[partial]
+def Markdown.entity_b_111 (name : String) : Option String :=
+    if String.lt name "blacktriangleright" then Markdown.entity_b_81 name else Markdown.entity_b_110 name
+#[partial]
+def Markdown.entity_b_112 (name : String) : Option String :=
+    if String.lt name "bigotimes" then Markdown.entity_b_54 name else Markdown.entity_b_111 name
+#[partial]
+def Markdown.entity_b_113 (name : String) : Option String :=
+    if String.beq name "boxDl" then Option.some "╖" else Option.none
+#[partial]
+def Markdown.entity_b_114 (name : String) : Option String :=
+    if String.beq name "boxDr" then Option.some "╓" else Option.none
+#[partial]
+def Markdown.entity_b_115 (name : String) : Option String :=
+    if String.beq name "boxH" then Option.some "═" else Option.none
+#[partial]
+def Markdown.entity_b_116 (name : String) : Option String :=
+    if String.lt name "boxH" then Markdown.entity_b_114 name else Markdown.entity_b_115 name
+#[partial]
+def Markdown.entity_b_117 (name : String) : Option String :=
+    if String.lt name "boxDr" then Markdown.entity_b_113 name else Markdown.entity_b_116 name
+#[partial]
+def Markdown.entity_b_118 (name : String) : Option String :=
+    if String.beq name "boxHD" then Option.some "╦" else Option.none
+#[partial]
+def Markdown.entity_b_119 (name : String) : Option String :=
+    if String.beq name "boxHU" then Option.some "╩" else Option.none
+#[partial]
+def Markdown.entity_b_120 (name : String) : Option String :=
+    if String.lt name "boxHU" then Markdown.entity_b_118 name else Markdown.entity_b_119 name
+#[partial]
+def Markdown.entity_b_121 (name : String) : Option String :=
+    if String.beq name "boxHd" then Option.some "╤" else Option.none
+#[partial]
+def Markdown.entity_b_122 (name : String) : Option String :=
+    if String.beq name "boxHu" then Option.some "╧" else Option.none
+#[partial]
+def Markdown.entity_b_123 (name : String) : Option String :=
+    if String.lt name "boxHu" then Markdown.entity_b_121 name else Markdown.entity_b_122 name
+#[partial]
+def Markdown.entity_b_124 (name : String) : Option String :=
+    if String.lt name "boxHd" then Markdown.entity_b_120 name else Markdown.entity_b_123 name
+#[partial]
+def Markdown.entity_b_125 (name : String) : Option String :=
+    if String.lt name "boxHD" then Markdown.entity_b_117 name else Markdown.entity_b_124 name
+#[partial]
+def Markdown.entity_b_126 (name : String) : Option String :=
+    if String.beq name "boxUL" then Option.some "╝" else Option.none
+#[partial]
+def Markdown.entity_b_127 (name : String) : Option String :=
+    if String.beq name "boxUR" then Option.some "╚" else Option.none
+#[partial]
+def Markdown.entity_b_128 (name : String) : Option String :=
+    if String.beq name "boxUl" then Option.some "╜" else Option.none
+#[partial]
+def Markdown.entity_b_129 (name : String) : Option String :=
+    if String.lt name "boxUl" then Markdown.entity_b_127 name else Markdown.entity_b_128 name
+#[partial]
+def Markdown.entity_b_130 (name : String) : Option String :=
+    if String.lt name "boxUR" then Markdown.entity_b_126 name else Markdown.entity_b_129 name
+#[partial]
+def Markdown.entity_b_131 (name : String) : Option String :=
+    if String.beq name "boxUr" then Option.some "╙" else Option.none
+#[partial]
+def Markdown.entity_b_132 (name : String) : Option String :=
+    if String.beq name "boxV" then Option.some "║" else Option.none
+#[partial]
+def Markdown.entity_b_133 (name : String) : Option String :=
+    if String.lt name "boxV" then Markdown.entity_b_131 name else Markdown.entity_b_132 name
+#[partial]
+def Markdown.entity_b_134 (name : String) : Option String :=
+    if String.beq name "boxVH" then Option.some "╬" else Option.none
+#[partial]
+def Markdown.entity_b_135 (name : String) : Option String :=
+    if String.beq name "boxVL" then Option.some "╣" else Option.none
+#[partial]
+def Markdown.entity_b_136 (name : String) : Option String :=
+    if String.lt name "boxVL" then Markdown.entity_b_134 name else Markdown.entity_b_135 name
+#[partial]
+def Markdown.entity_b_137 (name : String) : Option String :=
+    if String.lt name "boxVH" then Markdown.entity_b_133 name else Markdown.entity_b_136 name
+#[partial]
+def Markdown.entity_b_138 (name : String) : Option String :=
+    if String.lt name "boxUr" then Markdown.entity_b_130 name else Markdown.entity_b_137 name
+#[partial]
+def Markdown.entity_b_139 (name : String) : Option String :=
+    if String.lt name "boxUL" then Markdown.entity_b_125 name else Markdown.entity_b_138 name
+#[partial]
+def Markdown.entity_b_140 (name : String) : Option String :=
+    if String.beq name "boxVR" then Option.some "╠" else Option.none
+#[partial]
+def Markdown.entity_b_141 (name : String) : Option String :=
+    if String.beq name "boxVh" then Option.some "╫" else Option.none
+#[partial]
+def Markdown.entity_b_142 (name : String) : Option String :=
+    if String.beq name "boxVl" then Option.some "╢" else Option.none
+#[partial]
+def Markdown.entity_b_143 (name : String) : Option String :=
+    if String.lt name "boxVl" then Markdown.entity_b_141 name else Markdown.entity_b_142 name
+#[partial]
+def Markdown.entity_b_144 (name : String) : Option String :=
+    if String.lt name "boxVh" then Markdown.entity_b_140 name else Markdown.entity_b_143 name
+#[partial]
+def Markdown.entity_b_145 (name : String) : Option String :=
+    if String.beq name "boxVr" then Option.some "╟" else Option.none
+#[partial]
+def Markdown.entity_b_146 (name : String) : Option String :=
+    if String.beq name "boxbox" then Option.some "⧉" else Option.none
+#[partial]
+def Markdown.entity_b_147 (name : String) : Option String :=
+    if String.lt name "boxbox" then Markdown.entity_b_145 name else Markdown.entity_b_146 name
+#[partial]
+def Markdown.entity_b_148 (name : String) : Option String :=
+    if String.beq name "boxdL" then Option.some "╕" else Option.none
+#[partial]
+def Markdown.entity_b_149 (name : String) : Option String :=
+    if String.beq name "boxdR" then Option.some "╒" else Option.none
+#[partial]
+def Markdown.entity_b_150 (name : String) : Option String :=
+    if String.lt name "boxdR" then Markdown.entity_b_148 name else Markdown.entity_b_149 name
+#[partial]
+def Markdown.entity_b_151 (name : String) : Option String :=
+    if String.lt name "boxdL" then Markdown.entity_b_147 name else Markdown.entity_b_150 name
+#[partial]
+def Markdown.entity_b_152 (name : String) : Option String :=
+    if String.lt name "boxVr" then Markdown.entity_b_144 name else Markdown.entity_b_151 name
+#[partial]
+def Markdown.entity_b_153 (name : String) : Option String :=
+    if String.beq name "boxdl" then Option.some "┐" else Option.none
+#[partial]
+def Markdown.entity_b_154 (name : String) : Option String :=
+    if String.beq name "boxdr" then Option.some "┌" else Option.none
+#[partial]
+def Markdown.entity_b_155 (name : String) : Option String :=
+    if String.lt name "boxdr" then Markdown.entity_b_153 name else Markdown.entity_b_154 name
+#[partial]
+def Markdown.entity_b_156 (name : String) : Option String :=
+    if String.beq name "boxh" then Option.some "─" else Option.none
+#[partial]
+def Markdown.entity_b_157 (name : String) : Option String :=
+    if String.beq name "boxhD" then Option.some "╥" else Option.none
+#[partial]
+def Markdown.entity_b_158 (name : String) : Option String :=
+    if String.lt name "boxhD" then Markdown.entity_b_156 name else Markdown.entity_b_157 name
+#[partial]
+def Markdown.entity_b_159 (name : String) : Option String :=
+    if String.lt name "boxh" then Markdown.entity_b_155 name else Markdown.entity_b_158 name
+#[partial]
+def Markdown.entity_b_160 (name : String) : Option String :=
+    if String.beq name "boxhU" then Option.some "╨" else Option.none
+#[partial]
+def Markdown.entity_b_161 (name : String) : Option String :=
+    if String.beq name "boxhd" then Option.some "┬" else Option.none
+#[partial]
+def Markdown.entity_b_162 (name : String) : Option String :=
+    if String.lt name "boxhd" then Markdown.entity_b_160 name else Markdown.entity_b_161 name
+#[partial]
+def Markdown.entity_b_163 (name : String) : Option String :=
+    if String.beq name "boxhu" then Option.some "┴" else Option.none
+#[partial]
+def Markdown.entity_b_164 (name : String) : Option String :=
+    if String.beq name "boxminus" then Option.some "⊟" else Option.none
+#[partial]
+def Markdown.entity_b_165 (name : String) : Option String :=
+    if String.lt name "boxminus" then Markdown.entity_b_163 name else Markdown.entity_b_164 name
+#[partial]
+def Markdown.entity_b_166 (name : String) : Option String :=
+    if String.lt name "boxhu" then Markdown.entity_b_162 name else Markdown.entity_b_165 name
+#[partial]
+def Markdown.entity_b_167 (name : String) : Option String :=
+    if String.lt name "boxhU" then Markdown.entity_b_159 name else Markdown.entity_b_166 name
+#[partial]
+def Markdown.entity_b_168 (name : String) : Option String :=
+    if String.lt name "boxdl" then Markdown.entity_b_152 name else Markdown.entity_b_167 name
+#[partial]
+def Markdown.entity_b_169 (name : String) : Option String :=
+    if String.lt name "boxVR" then Markdown.entity_b_139 name else Markdown.entity_b_168 name
+#[partial]
+def Markdown.entity_b_170 (name : String) : Option String :=
+    if String.beq name "boxplus" then Option.some "⊞" else Option.none
+#[partial]
+def Markdown.entity_b_171 (name : String) : Option String :=
+    if String.beq name "boxtimes" then Option.some "⊠" else Option.none
+#[partial]
+def Markdown.entity_b_172 (name : String) : Option String :=
+    if String.beq name "boxuL" then Option.some "╛" else Option.none
+#[partial]
+def Markdown.entity_b_173 (name : String) : Option String :=
+    if String.lt name "boxuL" then Markdown.entity_b_171 name else Markdown.entity_b_172 name
+#[partial]
+def Markdown.entity_b_174 (name : String) : Option String :=
+    if String.lt name "boxtimes" then Markdown.entity_b_170 name else Markdown.entity_b_173 name
+#[partial]
+def Markdown.entity_b_175 (name : String) : Option String :=
+    if String.beq name "boxuR" then Option.some "╘" else Option.none
+#[partial]
+def Markdown.entity_b_176 (name : String) : Option String :=
+    if String.beq name "boxul" then Option.some "┘" else Option.none
+#[partial]
+def Markdown.entity_b_177 (name : String) : Option String :=
+    if String.lt name "boxul" then Markdown.entity_b_175 name else Markdown.entity_b_176 name
+#[partial]
+def Markdown.entity_b_178 (name : String) : Option String :=
+    if String.beq name "boxur" then Option.some "└" else Option.none
+#[partial]
+def Markdown.entity_b_179 (name : String) : Option String :=
+    if String.beq name "boxv" then Option.some "│" else Option.none
+#[partial]
+def Markdown.entity_b_180 (name : String) : Option String :=
+    if String.lt name "boxv" then Markdown.entity_b_178 name else Markdown.entity_b_179 name
+#[partial]
+def Markdown.entity_b_181 (name : String) : Option String :=
+    if String.lt name "boxur" then Markdown.entity_b_177 name else Markdown.entity_b_180 name
+#[partial]
+def Markdown.entity_b_182 (name : String) : Option String :=
+    if String.lt name "boxuR" then Markdown.entity_b_174 name else Markdown.entity_b_181 name
+#[partial]
+def Markdown.entity_b_183 (name : String) : Option String :=
+    if String.beq name "boxvH" then Option.some "╪" else Option.none
+#[partial]
+def Markdown.entity_b_184 (name : String) : Option String :=
+    if String.beq name "boxvL" then Option.some "╡" else Option.none
+#[partial]
+def Markdown.entity_b_185 (name : String) : Option String :=
+    if String.beq name "boxvR" then Option.some "╞" else Option.none
+#[partial]
+def Markdown.entity_b_186 (name : String) : Option String :=
+    if String.lt name "boxvR" then Markdown.entity_b_184 name else Markdown.entity_b_185 name
+#[partial]
+def Markdown.entity_b_187 (name : String) : Option String :=
+    if String.lt name "boxvL" then Markdown.entity_b_183 name else Markdown.entity_b_186 name
+#[partial]
+def Markdown.entity_b_188 (name : String) : Option String :=
+    if String.beq name "boxvh" then Option.some "┼" else Option.none
+#[partial]
+def Markdown.entity_b_189 (name : String) : Option String :=
+    if String.beq name "boxvl" then Option.some "┤" else Option.none
+#[partial]
+def Markdown.entity_b_190 (name : String) : Option String :=
+    if String.lt name "boxvl" then Markdown.entity_b_188 name else Markdown.entity_b_189 name
+#[partial]
+def Markdown.entity_b_191 (name : String) : Option String :=
+    if String.beq name "boxvr" then Option.some "├" else Option.none
+#[partial]
+def Markdown.entity_b_192 (name : String) : Option String :=
+    if String.beq name "bprime" then Option.some "‵" else Option.none
+#[partial]
+def Markdown.entity_b_193 (name : String) : Option String :=
+    if String.lt name "bprime" then Markdown.entity_b_191 name else Markdown.entity_b_192 name
+#[partial]
+def Markdown.entity_b_194 (name : String) : Option String :=
+    if String.lt name "boxvr" then Markdown.entity_b_190 name else Markdown.entity_b_193 name
+#[partial]
+def Markdown.entity_b_195 (name : String) : Option String :=
+    if String.lt name "boxvh" then Markdown.entity_b_187 name else Markdown.entity_b_194 name
+#[partial]
+def Markdown.entity_b_196 (name : String) : Option String :=
+    if String.lt name "boxvH" then Markdown.entity_b_182 name else Markdown.entity_b_195 name
+#[partial]
+def Markdown.entity_b_197 (name : String) : Option String :=
+    if String.beq name "breve" then Option.some "˘" else Option.none
+#[partial]
+def Markdown.entity_b_198 (name : String) : Option String :=
+    if String.beq name "brvbar" then Option.some "¦" else Option.none
+#[partial]
+def Markdown.entity_b_199 (name : String) : Option String :=
+    if String.beq name "bscr" then Option.some "𝒷" else Option.none
+#[partial]
+def Markdown.entity_b_200 (name : String) : Option String :=
+    if String.lt name "bscr" then Markdown.entity_b_198 name else Markdown.entity_b_199 name
+#[partial]
+def Markdown.entity_b_201 (name : String) : Option String :=
+    if String.lt name "brvbar" then Markdown.entity_b_197 name else Markdown.entity_b_200 name
+#[partial]
+def Markdown.entity_b_202 (name : String) : Option String :=
+    if String.beq name "bsemi" then Option.some "⁏" else Option.none
+#[partial]
+def Markdown.entity_b_203 (name : String) : Option String :=
+    if String.beq name "bsim" then Option.some "∽" else Option.none
+#[partial]
+def Markdown.entity_b_204 (name : String) : Option String :=
+    if String.lt name "bsim" then Markdown.entity_b_202 name else Markdown.entity_b_203 name
+#[partial]
+def Markdown.entity_b_205 (name : String) : Option String :=
+    if String.beq name "bsime" then Option.some "⋍" else Option.none
+#[partial]
+def Markdown.entity_b_206 (name : String) : Option String :=
+    if String.beq name "bsol" then Option.some "\\" else Option.none
+#[partial]
+def Markdown.entity_b_207 (name : String) : Option String :=
+    if String.lt name "bsol" then Markdown.entity_b_205 name else Markdown.entity_b_206 name
+#[partial]
+def Markdown.entity_b_208 (name : String) : Option String :=
+    if String.lt name "bsime" then Markdown.entity_b_204 name else Markdown.entity_b_207 name
+#[partial]
+def Markdown.entity_b_209 (name : String) : Option String :=
+    if String.lt name "bsemi" then Markdown.entity_b_201 name else Markdown.entity_b_208 name
+#[partial]
+def Markdown.entity_b_210 (name : String) : Option String :=
+    if String.beq name "bsolb" then Option.some "⧅" else Option.none
+#[partial]
+def Markdown.entity_b_211 (name : String) : Option String :=
+    if String.beq name "bsolhsub" then Option.some "⟈" else Option.none
+#[partial]
+def Markdown.entity_b_212 (name : String) : Option String :=
+    if String.lt name "bsolhsub" then Markdown.entity_b_210 name else Markdown.entity_b_211 name
+#[partial]
+def Markdown.entity_b_213 (name : String) : Option String :=
+    if String.beq name "bull" then Option.some "•" else Option.none
+#[partial]
+def Markdown.entity_b_214 (name : String) : Option String :=
+    if String.beq name "bullet" then Option.some "•" else Option.none
+#[partial]
+def Markdown.entity_b_215 (name : String) : Option String :=
+    if String.lt name "bullet" then Markdown.entity_b_213 name else Markdown.entity_b_214 name
+#[partial]
+def Markdown.entity_b_216 (name : String) : Option String :=
+    if String.lt name "bull" then Markdown.entity_b_212 name else Markdown.entity_b_215 name
+#[partial]
+def Markdown.entity_b_217 (name : String) : Option String :=
+    if String.beq name "bump" then Option.some "≎" else Option.none
+#[partial]
+def Markdown.entity_b_218 (name : String) : Option String :=
+    if String.beq name "bumpE" then Option.some "⪮" else Option.none
+#[partial]
+def Markdown.entity_b_219 (name : String) : Option String :=
+    if String.lt name "bumpE" then Markdown.entity_b_217 name else Markdown.entity_b_218 name
+#[partial]
+def Markdown.entity_b_220 (name : String) : Option String :=
+    if String.beq name "bumpe" then Option.some "≏" else Option.none
+#[partial]
+def Markdown.entity_b_221 (name : String) : Option String :=
+    if String.beq name "bumpeq" then Option.some "≏" else Option.none
+#[partial]
+def Markdown.entity_b_222 (name : String) : Option String :=
+    if String.lt name "bumpeq" then Markdown.entity_b_220 name else Markdown.entity_b_221 name
+#[partial]
+def Markdown.entity_b_223 (name : String) : Option String :=
+    if String.lt name "bumpe" then Markdown.entity_b_219 name else Markdown.entity_b_222 name
+#[partial]
+def Markdown.entity_b_224 (name : String) : Option String :=
+    if String.lt name "bump" then Markdown.entity_b_216 name else Markdown.entity_b_223 name
+#[partial]
+def Markdown.entity_b_225 (name : String) : Option String :=
+    if String.lt name "bsolb" then Markdown.entity_b_209 name else Markdown.entity_b_224 name
+#[partial]
+def Markdown.entity_b_226 (name : String) : Option String :=
+    if String.lt name "breve" then Markdown.entity_b_196 name else Markdown.entity_b_225 name
+#[partial]
+def Markdown.entity_b_227 (name : String) : Option String :=
+    if String.lt name "boxplus" then Markdown.entity_b_169 name else Markdown.entity_b_226 name
+#[partial]
+def Markdown.entity_b_228 (name : String) : Option String :=
+    if String.lt name "boxDl" then Markdown.entity_b_112 name else Markdown.entity_b_227 name
+
+def Markdown.entity_b (name : String) : Option String := Markdown.entity_b_228 name
 
 #[partial]
-def Markdown.entity_c (name : String) : Option String :=
-    if String.beq name "cacute" then Option.some "ć"
-    else if String.beq name "cap" then Option.some "∩"
-    else if String.beq name "capand" then Option.some "⩄"
-    else if String.beq name "capbrcup" then Option.some "⩉"
-    else if String.beq name "capcap" then Option.some "⩋"
-    else if String.beq name "capcup" then Option.some "⩇"
-    else if String.beq name "capdot" then Option.some "⩀"
-    else if String.beq name "caps" then Option.some "∩︀"
-    else if String.beq name "caret" then Option.some "⁁"
-    else if String.beq name "caron" then Option.some "ˇ"
-    else if String.beq name "ccaps" then Option.some "⩍"
-    else if String.beq name "ccaron" then Option.some "č"
-    else if String.beq name "ccedil" then Option.some "ç"
-    else if String.beq name "ccirc" then Option.some "ĉ"
-    else if String.beq name "ccups" then Option.some "⩌"
-    else if String.beq name "ccupssm" then Option.some "⩐"
-    else if String.beq name "cdot" then Option.some "ċ"
-    else if String.beq name "cedil" then Option.some "¸"
-    else if String.beq name "cemptyv" then Option.some "⦲"
-    else if String.beq name "cent" then Option.some "¢"
-    else if String.beq name "centerdot" then Option.some "·"
-    else if String.beq name "cfr" then Option.some "𝔠"
-    else if String.beq name "chcy" then Option.some "ч"
-    else if String.beq name "check" then Option.some "✓"
-    else if String.beq name "checkmark" then Option.some "✓"
-    else if String.beq name "chi" then Option.some "χ"
-    else if String.beq name "cir" then Option.some "○"
-    else if String.beq name "cirE" then Option.some "⧃"
-    else if String.beq name "circ" then Option.some "ˆ"
-    else if String.beq name "circeq" then Option.some "≗"
-    else if String.beq name "circlearrowleft" then Option.some "↺"
-    else if String.beq name "circlearrowright" then Option.some "↻"
-    else if String.beq name "circledR" then Option.some "®"
-    else if String.beq name "circledS" then Option.some "Ⓢ"
-    else if String.beq name "circledast" then Option.some "⊛"
-    else if String.beq name "circledcirc" then Option.some "⊚"
-    else if String.beq name "circleddash" then Option.some "⊝"
-    else if String.beq name "cire" then Option.some "≗"
-    else if String.beq name "cirfnint" then Option.some "⨐"
-    else if String.beq name "cirmid" then Option.some "⫯"
-    else if String.beq name "cirscir" then Option.some "⧂"
-    else if String.beq name "clubs" then Option.some "♣"
-    else if String.beq name "clubsuit" then Option.some "♣"
-    else if String.beq name "colon" then Option.some ":"
-    else if String.beq name "colone" then Option.some "≔"
-    else if String.beq name "coloneq" then Option.some "≔"
-    else if String.beq name "comma" then Option.some ","
-    else if String.beq name "commat" then Option.some "@"
-    else if String.beq name "comp" then Option.some "∁"
-    else if String.beq name "compfn" then Option.some "∘"
-    else if String.beq name "complement" then Option.some "∁"
-    else if String.beq name "complexes" then Option.some "ℂ"
-    else if String.beq name "cong" then Option.some "≅"
-    else if String.beq name "congdot" then Option.some "⩭"
-    else if String.beq name "conint" then Option.some "∮"
-    else if String.beq name "copf" then Option.some "𝕔"
-    else if String.beq name "coprod" then Option.some "∐"
-    else if String.beq name "copy" then Option.some "©"
-    else if String.beq name "copysr" then Option.some "℗"
-    else if String.beq name "crarr" then Option.some "↵"
-    else if String.beq name "cross" then Option.some "✗"
-    else if String.beq name "cscr" then Option.some "𝒸"
-    else if String.beq name "csub" then Option.some "⫏"
-    else if String.beq name "csube" then Option.some "⫑"
-    else if String.beq name "csup" then Option.some "⫐"
-    else if String.beq name "csupe" then Option.some "⫒"
-    else if String.beq name "ctdot" then Option.some "⋯"
-    else if String.beq name "cudarrl" then Option.some "⤸"
-    else if String.beq name "cudarrr" then Option.some "⤵"
-    else if String.beq name "cuepr" then Option.some "⋞"
-    else if String.beq name "cuesc" then Option.some "⋟"
-    else if String.beq name "cularr" then Option.some "↶"
-    else if String.beq name "cularrp" then Option.some "⤽"
-    else if String.beq name "cup" then Option.some "∪"
-    else if String.beq name "cupbrcap" then Option.some "⩈"
-    else if String.beq name "cupcap" then Option.some "⩆"
-    else if String.beq name "cupcup" then Option.some "⩊"
-    else if String.beq name "cupdot" then Option.some "⊍"
-    else if String.beq name "cupor" then Option.some "⩅"
-    else if String.beq name "cups" then Option.some "∪︀"
-    else if String.beq name "curarr" then Option.some "↷"
-    else if String.beq name "curarrm" then Option.some "⤼"
-    else if String.beq name "curlyeqprec" then Option.some "⋞"
-    else if String.beq name "curlyeqsucc" then Option.some "⋟"
-    else if String.beq name "curlyvee" then Option.some "⋎"
-    else if String.beq name "curlywedge" then Option.some "⋏"
-    else if String.beq name "curren" then Option.some "¤"
-    else if String.beq name "curvearrowleft" then Option.some "↶"
-    else if String.beq name "curvearrowright" then Option.some "↷"
-    else if String.beq name "cuvee" then Option.some "⋎"
-    else if String.beq name "cuwed" then Option.some "⋏"
-    else if String.beq name "cwconint" then Option.some "∲"
-    else if String.beq name "cwint" then Option.some "∱"
-    else if String.beq name "cylcty" then Option.some "⌭"
-    else Option.none
+def Markdown.entity_c_0 (name : String) : Option String :=
+    if String.beq name "cacute" then Option.some "ć" else Option.none
+#[partial]
+def Markdown.entity_c_1 (name : String) : Option String :=
+    if String.beq name "cap" then Option.some "∩" else Option.none
+#[partial]
+def Markdown.entity_c_2 (name : String) : Option String :=
+    if String.lt name "cap" then Markdown.entity_c_0 name else Markdown.entity_c_1 name
+#[partial]
+def Markdown.entity_c_3 (name : String) : Option String :=
+    if String.beq name "capand" then Option.some "⩄" else Option.none
+#[partial]
+def Markdown.entity_c_4 (name : String) : Option String :=
+    if String.beq name "capbrcup" then Option.some "⩉" else Option.none
+#[partial]
+def Markdown.entity_c_5 (name : String) : Option String :=
+    if String.beq name "capcap" then Option.some "⩋" else Option.none
+#[partial]
+def Markdown.entity_c_6 (name : String) : Option String :=
+    if String.lt name "capcap" then Markdown.entity_c_4 name else Markdown.entity_c_5 name
+#[partial]
+def Markdown.entity_c_7 (name : String) : Option String :=
+    if String.lt name "capbrcup" then Markdown.entity_c_3 name else Markdown.entity_c_6 name
+#[partial]
+def Markdown.entity_c_8 (name : String) : Option String :=
+    if String.lt name "capand" then Markdown.entity_c_2 name else Markdown.entity_c_7 name
+#[partial]
+def Markdown.entity_c_9 (name : String) : Option String :=
+    if String.beq name "capcup" then Option.some "⩇" else Option.none
+#[partial]
+def Markdown.entity_c_10 (name : String) : Option String :=
+    if String.beq name "capdot" then Option.some "⩀" else Option.none
+#[partial]
+def Markdown.entity_c_11 (name : String) : Option String :=
+    if String.beq name "caps" then Option.some "∩︀" else Option.none
+#[partial]
+def Markdown.entity_c_12 (name : String) : Option String :=
+    if String.lt name "caps" then Markdown.entity_c_10 name else Markdown.entity_c_11 name
+#[partial]
+def Markdown.entity_c_13 (name : String) : Option String :=
+    if String.lt name "capdot" then Markdown.entity_c_9 name else Markdown.entity_c_12 name
+#[partial]
+def Markdown.entity_c_14 (name : String) : Option String :=
+    if String.beq name "caret" then Option.some "⁁" else Option.none
+#[partial]
+def Markdown.entity_c_15 (name : String) : Option String :=
+    if String.beq name "caron" then Option.some "ˇ" else Option.none
+#[partial]
+def Markdown.entity_c_16 (name : String) : Option String :=
+    if String.beq name "ccaps" then Option.some "⩍" else Option.none
+#[partial]
+def Markdown.entity_c_17 (name : String) : Option String :=
+    if String.lt name "ccaps" then Markdown.entity_c_15 name else Markdown.entity_c_16 name
+#[partial]
+def Markdown.entity_c_18 (name : String) : Option String :=
+    if String.lt name "caron" then Markdown.entity_c_14 name else Markdown.entity_c_17 name
+#[partial]
+def Markdown.entity_c_19 (name : String) : Option String :=
+    if String.lt name "caret" then Markdown.entity_c_13 name else Markdown.entity_c_18 name
+#[partial]
+def Markdown.entity_c_20 (name : String) : Option String :=
+    if String.lt name "capcup" then Markdown.entity_c_8 name else Markdown.entity_c_19 name
+#[partial]
+def Markdown.entity_c_21 (name : String) : Option String :=
+    if String.beq name "ccaron" then Option.some "č" else Option.none
+#[partial]
+def Markdown.entity_c_22 (name : String) : Option String :=
+    if String.beq name "ccedil" then Option.some "ç" else Option.none
+#[partial]
+def Markdown.entity_c_23 (name : String) : Option String :=
+    if String.beq name "ccirc" then Option.some "ĉ" else Option.none
+#[partial]
+def Markdown.entity_c_24 (name : String) : Option String :=
+    if String.lt name "ccirc" then Markdown.entity_c_22 name else Markdown.entity_c_23 name
+#[partial]
+def Markdown.entity_c_25 (name : String) : Option String :=
+    if String.lt name "ccedil" then Markdown.entity_c_21 name else Markdown.entity_c_24 name
+#[partial]
+def Markdown.entity_c_26 (name : String) : Option String :=
+    if String.beq name "ccups" then Option.some "⩌" else Option.none
+#[partial]
+def Markdown.entity_c_27 (name : String) : Option String :=
+    if String.beq name "ccupssm" then Option.some "⩐" else Option.none
+#[partial]
+def Markdown.entity_c_28 (name : String) : Option String :=
+    if String.beq name "cdot" then Option.some "ċ" else Option.none
+#[partial]
+def Markdown.entity_c_29 (name : String) : Option String :=
+    if String.lt name "cdot" then Markdown.entity_c_27 name else Markdown.entity_c_28 name
+#[partial]
+def Markdown.entity_c_30 (name : String) : Option String :=
+    if String.lt name "ccupssm" then Markdown.entity_c_26 name else Markdown.entity_c_29 name
+#[partial]
+def Markdown.entity_c_31 (name : String) : Option String :=
+    if String.lt name "ccups" then Markdown.entity_c_25 name else Markdown.entity_c_30 name
+#[partial]
+def Markdown.entity_c_32 (name : String) : Option String :=
+    if String.beq name "cedil" then Option.some "¸" else Option.none
+#[partial]
+def Markdown.entity_c_33 (name : String) : Option String :=
+    if String.beq name "cemptyv" then Option.some "⦲" else Option.none
+#[partial]
+def Markdown.entity_c_34 (name : String) : Option String :=
+    if String.beq name "cent" then Option.some "¢" else Option.none
+#[partial]
+def Markdown.entity_c_35 (name : String) : Option String :=
+    if String.lt name "cent" then Markdown.entity_c_33 name else Markdown.entity_c_34 name
+#[partial]
+def Markdown.entity_c_36 (name : String) : Option String :=
+    if String.lt name "cemptyv" then Markdown.entity_c_32 name else Markdown.entity_c_35 name
+#[partial]
+def Markdown.entity_c_37 (name : String) : Option String :=
+    if String.beq name "centerdot" then Option.some "·" else Option.none
+#[partial]
+def Markdown.entity_c_38 (name : String) : Option String :=
+    if String.beq name "cfr" then Option.some "𝔠" else Option.none
+#[partial]
+def Markdown.entity_c_39 (name : String) : Option String :=
+    if String.beq name "chcy" then Option.some "ч" else Option.none
+#[partial]
+def Markdown.entity_c_40 (name : String) : Option String :=
+    if String.lt name "chcy" then Markdown.entity_c_38 name else Markdown.entity_c_39 name
+#[partial]
+def Markdown.entity_c_41 (name : String) : Option String :=
+    if String.lt name "cfr" then Markdown.entity_c_37 name else Markdown.entity_c_40 name
+#[partial]
+def Markdown.entity_c_42 (name : String) : Option String :=
+    if String.lt name "centerdot" then Markdown.entity_c_36 name else Markdown.entity_c_41 name
+#[partial]
+def Markdown.entity_c_43 (name : String) : Option String :=
+    if String.lt name "cedil" then Markdown.entity_c_31 name else Markdown.entity_c_42 name
+#[partial]
+def Markdown.entity_c_44 (name : String) : Option String :=
+    if String.lt name "ccaron" then Markdown.entity_c_20 name else Markdown.entity_c_43 name
+#[partial]
+def Markdown.entity_c_45 (name : String) : Option String :=
+    if String.beq name "check" then Option.some "✓" else Option.none
+#[partial]
+def Markdown.entity_c_46 (name : String) : Option String :=
+    if String.beq name "checkmark" then Option.some "✓" else Option.none
+#[partial]
+def Markdown.entity_c_47 (name : String) : Option String :=
+    if String.beq name "chi" then Option.some "χ" else Option.none
+#[partial]
+def Markdown.entity_c_48 (name : String) : Option String :=
+    if String.lt name "chi" then Markdown.entity_c_46 name else Markdown.entity_c_47 name
+#[partial]
+def Markdown.entity_c_49 (name : String) : Option String :=
+    if String.lt name "checkmark" then Markdown.entity_c_45 name else Markdown.entity_c_48 name
+#[partial]
+def Markdown.entity_c_50 (name : String) : Option String :=
+    if String.beq name "cir" then Option.some "○" else Option.none
+#[partial]
+def Markdown.entity_c_51 (name : String) : Option String :=
+    if String.beq name "cirE" then Option.some "⧃" else Option.none
+#[partial]
+def Markdown.entity_c_52 (name : String) : Option String :=
+    if String.beq name "circ" then Option.some "ˆ" else Option.none
+#[partial]
+def Markdown.entity_c_53 (name : String) : Option String :=
+    if String.lt name "circ" then Markdown.entity_c_51 name else Markdown.entity_c_52 name
+#[partial]
+def Markdown.entity_c_54 (name : String) : Option String :=
+    if String.lt name "cirE" then Markdown.entity_c_50 name else Markdown.entity_c_53 name
+#[partial]
+def Markdown.entity_c_55 (name : String) : Option String :=
+    if String.lt name "cir" then Markdown.entity_c_49 name else Markdown.entity_c_54 name
+#[partial]
+def Markdown.entity_c_56 (name : String) : Option String :=
+    if String.beq name "circeq" then Option.some "≗" else Option.none
+#[partial]
+def Markdown.entity_c_57 (name : String) : Option String :=
+    if String.beq name "circlearrowleft" then Option.some "↺" else Option.none
+#[partial]
+def Markdown.entity_c_58 (name : String) : Option String :=
+    if String.beq name "circlearrowright" then Option.some "↻" else Option.none
+#[partial]
+def Markdown.entity_c_59 (name : String) : Option String :=
+    if String.lt name "circlearrowright" then Markdown.entity_c_57 name else Markdown.entity_c_58 name
+#[partial]
+def Markdown.entity_c_60 (name : String) : Option String :=
+    if String.lt name "circlearrowleft" then Markdown.entity_c_56 name else Markdown.entity_c_59 name
+#[partial]
+def Markdown.entity_c_61 (name : String) : Option String :=
+    if String.beq name "circledR" then Option.some "®" else Option.none
+#[partial]
+def Markdown.entity_c_62 (name : String) : Option String :=
+    if String.beq name "circledS" then Option.some "Ⓢ" else Option.none
+#[partial]
+def Markdown.entity_c_63 (name : String) : Option String :=
+    if String.beq name "circledast" then Option.some "⊛" else Option.none
+#[partial]
+def Markdown.entity_c_64 (name : String) : Option String :=
+    if String.lt name "circledast" then Markdown.entity_c_62 name else Markdown.entity_c_63 name
+#[partial]
+def Markdown.entity_c_65 (name : String) : Option String :=
+    if String.lt name "circledS" then Markdown.entity_c_61 name else Markdown.entity_c_64 name
+#[partial]
+def Markdown.entity_c_66 (name : String) : Option String :=
+    if String.lt name "circledR" then Markdown.entity_c_60 name else Markdown.entity_c_65 name
+#[partial]
+def Markdown.entity_c_67 (name : String) : Option String :=
+    if String.lt name "circeq" then Markdown.entity_c_55 name else Markdown.entity_c_66 name
+#[partial]
+def Markdown.entity_c_68 (name : String) : Option String :=
+    if String.beq name "circledcirc" then Option.some "⊚" else Option.none
+#[partial]
+def Markdown.entity_c_69 (name : String) : Option String :=
+    if String.beq name "circleddash" then Option.some "⊝" else Option.none
+#[partial]
+def Markdown.entity_c_70 (name : String) : Option String :=
+    if String.beq name "cire" then Option.some "≗" else Option.none
+#[partial]
+def Markdown.entity_c_71 (name : String) : Option String :=
+    if String.lt name "cire" then Markdown.entity_c_69 name else Markdown.entity_c_70 name
+#[partial]
+def Markdown.entity_c_72 (name : String) : Option String :=
+    if String.lt name "circleddash" then Markdown.entity_c_68 name else Markdown.entity_c_71 name
+#[partial]
+def Markdown.entity_c_73 (name : String) : Option String :=
+    if String.beq name "cirfnint" then Option.some "⨐" else Option.none
+#[partial]
+def Markdown.entity_c_74 (name : String) : Option String :=
+    if String.beq name "cirmid" then Option.some "⫯" else Option.none
+#[partial]
+def Markdown.entity_c_75 (name : String) : Option String :=
+    if String.beq name "cirscir" then Option.some "⧂" else Option.none
+#[partial]
+def Markdown.entity_c_76 (name : String) : Option String :=
+    if String.lt name "cirscir" then Markdown.entity_c_74 name else Markdown.entity_c_75 name
+#[partial]
+def Markdown.entity_c_77 (name : String) : Option String :=
+    if String.lt name "cirmid" then Markdown.entity_c_73 name else Markdown.entity_c_76 name
+#[partial]
+def Markdown.entity_c_78 (name : String) : Option String :=
+    if String.lt name "cirfnint" then Markdown.entity_c_72 name else Markdown.entity_c_77 name
+#[partial]
+def Markdown.entity_c_79 (name : String) : Option String :=
+    if String.beq name "clubs" then Option.some "♣" else Option.none
+#[partial]
+def Markdown.entity_c_80 (name : String) : Option String :=
+    if String.beq name "clubsuit" then Option.some "♣" else Option.none
+#[partial]
+def Markdown.entity_c_81 (name : String) : Option String :=
+    if String.beq name "colon" then Option.some ":" else Option.none
+#[partial]
+def Markdown.entity_c_82 (name : String) : Option String :=
+    if String.lt name "colon" then Markdown.entity_c_80 name else Markdown.entity_c_81 name
+#[partial]
+def Markdown.entity_c_83 (name : String) : Option String :=
+    if String.lt name "clubsuit" then Markdown.entity_c_79 name else Markdown.entity_c_82 name
+#[partial]
+def Markdown.entity_c_84 (name : String) : Option String :=
+    if String.beq name "colone" then Option.some "≔" else Option.none
+#[partial]
+def Markdown.entity_c_85 (name : String) : Option String :=
+    if String.beq name "coloneq" then Option.some "≔" else Option.none
+#[partial]
+def Markdown.entity_c_86 (name : String) : Option String :=
+    if String.beq name "comma" then Option.some "," else Option.none
+#[partial]
+def Markdown.entity_c_87 (name : String) : Option String :=
+    if String.lt name "comma" then Markdown.entity_c_85 name else Markdown.entity_c_86 name
+#[partial]
+def Markdown.entity_c_88 (name : String) : Option String :=
+    if String.lt name "coloneq" then Markdown.entity_c_84 name else Markdown.entity_c_87 name
+#[partial]
+def Markdown.entity_c_89 (name : String) : Option String :=
+    if String.lt name "colone" then Markdown.entity_c_83 name else Markdown.entity_c_88 name
+#[partial]
+def Markdown.entity_c_90 (name : String) : Option String :=
+    if String.lt name "clubs" then Markdown.entity_c_78 name else Markdown.entity_c_89 name
+#[partial]
+def Markdown.entity_c_91 (name : String) : Option String :=
+    if String.lt name "circledcirc" then Markdown.entity_c_67 name else Markdown.entity_c_90 name
+#[partial]
+def Markdown.entity_c_92 (name : String) : Option String :=
+    if String.lt name "check" then Markdown.entity_c_44 name else Markdown.entity_c_91 name
+#[partial]
+def Markdown.entity_c_93 (name : String) : Option String :=
+    if String.beq name "commat" then Option.some "@" else Option.none
+#[partial]
+def Markdown.entity_c_94 (name : String) : Option String :=
+    if String.beq name "comp" then Option.some "∁" else Option.none
+#[partial]
+def Markdown.entity_c_95 (name : String) : Option String :=
+    if String.lt name "comp" then Markdown.entity_c_93 name else Markdown.entity_c_94 name
+#[partial]
+def Markdown.entity_c_96 (name : String) : Option String :=
+    if String.beq name "compfn" then Option.some "∘" else Option.none
+#[partial]
+def Markdown.entity_c_97 (name : String) : Option String :=
+    if String.beq name "complement" then Option.some "∁" else Option.none
+#[partial]
+def Markdown.entity_c_98 (name : String) : Option String :=
+    if String.beq name "complexes" then Option.some "ℂ" else Option.none
+#[partial]
+def Markdown.entity_c_99 (name : String) : Option String :=
+    if String.lt name "complexes" then Markdown.entity_c_97 name else Markdown.entity_c_98 name
+#[partial]
+def Markdown.entity_c_100 (name : String) : Option String :=
+    if String.lt name "complement" then Markdown.entity_c_96 name else Markdown.entity_c_99 name
+#[partial]
+def Markdown.entity_c_101 (name : String) : Option String :=
+    if String.lt name "compfn" then Markdown.entity_c_95 name else Markdown.entity_c_100 name
+#[partial]
+def Markdown.entity_c_102 (name : String) : Option String :=
+    if String.beq name "cong" then Option.some "≅" else Option.none
+#[partial]
+def Markdown.entity_c_103 (name : String) : Option String :=
+    if String.beq name "congdot" then Option.some "⩭" else Option.none
+#[partial]
+def Markdown.entity_c_104 (name : String) : Option String :=
+    if String.beq name "conint" then Option.some "∮" else Option.none
+#[partial]
+def Markdown.entity_c_105 (name : String) : Option String :=
+    if String.lt name "conint" then Markdown.entity_c_103 name else Markdown.entity_c_104 name
+#[partial]
+def Markdown.entity_c_106 (name : String) : Option String :=
+    if String.lt name "congdot" then Markdown.entity_c_102 name else Markdown.entity_c_105 name
+#[partial]
+def Markdown.entity_c_107 (name : String) : Option String :=
+    if String.beq name "copf" then Option.some "𝕔" else Option.none
+#[partial]
+def Markdown.entity_c_108 (name : String) : Option String :=
+    if String.beq name "coprod" then Option.some "∐" else Option.none
+#[partial]
+def Markdown.entity_c_109 (name : String) : Option String :=
+    if String.beq name "copy" then Option.some "©" else Option.none
+#[partial]
+def Markdown.entity_c_110 (name : String) : Option String :=
+    if String.lt name "copy" then Markdown.entity_c_108 name else Markdown.entity_c_109 name
+#[partial]
+def Markdown.entity_c_111 (name : String) : Option String :=
+    if String.lt name "coprod" then Markdown.entity_c_107 name else Markdown.entity_c_110 name
+#[partial]
+def Markdown.entity_c_112 (name : String) : Option String :=
+    if String.lt name "copf" then Markdown.entity_c_106 name else Markdown.entity_c_111 name
+#[partial]
+def Markdown.entity_c_113 (name : String) : Option String :=
+    if String.lt name "cong" then Markdown.entity_c_101 name else Markdown.entity_c_112 name
+#[partial]
+def Markdown.entity_c_114 (name : String) : Option String :=
+    if String.beq name "copysr" then Option.some "℗" else Option.none
+#[partial]
+def Markdown.entity_c_115 (name : String) : Option String :=
+    if String.beq name "crarr" then Option.some "↵" else Option.none
+#[partial]
+def Markdown.entity_c_116 (name : String) : Option String :=
+    if String.beq name "cross" then Option.some "✗" else Option.none
+#[partial]
+def Markdown.entity_c_117 (name : String) : Option String :=
+    if String.lt name "cross" then Markdown.entity_c_115 name else Markdown.entity_c_116 name
+#[partial]
+def Markdown.entity_c_118 (name : String) : Option String :=
+    if String.lt name "crarr" then Markdown.entity_c_114 name else Markdown.entity_c_117 name
+#[partial]
+def Markdown.entity_c_119 (name : String) : Option String :=
+    if String.beq name "cscr" then Option.some "𝒸" else Option.none
+#[partial]
+def Markdown.entity_c_120 (name : String) : Option String :=
+    if String.beq name "csub" then Option.some "⫏" else Option.none
+#[partial]
+def Markdown.entity_c_121 (name : String) : Option String :=
+    if String.beq name "csube" then Option.some "⫑" else Option.none
+#[partial]
+def Markdown.entity_c_122 (name : String) : Option String :=
+    if String.lt name "csube" then Markdown.entity_c_120 name else Markdown.entity_c_121 name
+#[partial]
+def Markdown.entity_c_123 (name : String) : Option String :=
+    if String.lt name "csub" then Markdown.entity_c_119 name else Markdown.entity_c_122 name
+#[partial]
+def Markdown.entity_c_124 (name : String) : Option String :=
+    if String.lt name "cscr" then Markdown.entity_c_118 name else Markdown.entity_c_123 name
+#[partial]
+def Markdown.entity_c_125 (name : String) : Option String :=
+    if String.beq name "csup" then Option.some "⫐" else Option.none
+#[partial]
+def Markdown.entity_c_126 (name : String) : Option String :=
+    if String.beq name "csupe" then Option.some "⫒" else Option.none
+#[partial]
+def Markdown.entity_c_127 (name : String) : Option String :=
+    if String.beq name "ctdot" then Option.some "⋯" else Option.none
+#[partial]
+def Markdown.entity_c_128 (name : String) : Option String :=
+    if String.lt name "ctdot" then Markdown.entity_c_126 name else Markdown.entity_c_127 name
+#[partial]
+def Markdown.entity_c_129 (name : String) : Option String :=
+    if String.lt name "csupe" then Markdown.entity_c_125 name else Markdown.entity_c_128 name
+#[partial]
+def Markdown.entity_c_130 (name : String) : Option String :=
+    if String.beq name "cudarrl" then Option.some "⤸" else Option.none
+#[partial]
+def Markdown.entity_c_131 (name : String) : Option String :=
+    if String.beq name "cudarrr" then Option.some "⤵" else Option.none
+#[partial]
+def Markdown.entity_c_132 (name : String) : Option String :=
+    if String.beq name "cuepr" then Option.some "⋞" else Option.none
+#[partial]
+def Markdown.entity_c_133 (name : String) : Option String :=
+    if String.lt name "cuepr" then Markdown.entity_c_131 name else Markdown.entity_c_132 name
+#[partial]
+def Markdown.entity_c_134 (name : String) : Option String :=
+    if String.lt name "cudarrr" then Markdown.entity_c_130 name else Markdown.entity_c_133 name
+#[partial]
+def Markdown.entity_c_135 (name : String) : Option String :=
+    if String.lt name "cudarrl" then Markdown.entity_c_129 name else Markdown.entity_c_134 name
+#[partial]
+def Markdown.entity_c_136 (name : String) : Option String :=
+    if String.lt name "csup" then Markdown.entity_c_124 name else Markdown.entity_c_135 name
+#[partial]
+def Markdown.entity_c_137 (name : String) : Option String :=
+    if String.lt name "copysr" then Markdown.entity_c_113 name else Markdown.entity_c_136 name
+#[partial]
+def Markdown.entity_c_138 (name : String) : Option String :=
+    if String.beq name "cuesc" then Option.some "⋟" else Option.none
+#[partial]
+def Markdown.entity_c_139 (name : String) : Option String :=
+    if String.beq name "cularr" then Option.some "↶" else Option.none
+#[partial]
+def Markdown.entity_c_140 (name : String) : Option String :=
+    if String.beq name "cularrp" then Option.some "⤽" else Option.none
+#[partial]
+def Markdown.entity_c_141 (name : String) : Option String :=
+    if String.lt name "cularrp" then Markdown.entity_c_139 name else Markdown.entity_c_140 name
+#[partial]
+def Markdown.entity_c_142 (name : String) : Option String :=
+    if String.lt name "cularr" then Markdown.entity_c_138 name else Markdown.entity_c_141 name
+#[partial]
+def Markdown.entity_c_143 (name : String) : Option String :=
+    if String.beq name "cup" then Option.some "∪" else Option.none
+#[partial]
+def Markdown.entity_c_144 (name : String) : Option String :=
+    if String.beq name "cupbrcap" then Option.some "⩈" else Option.none
+#[partial]
+def Markdown.entity_c_145 (name : String) : Option String :=
+    if String.beq name "cupcap" then Option.some "⩆" else Option.none
+#[partial]
+def Markdown.entity_c_146 (name : String) : Option String :=
+    if String.lt name "cupcap" then Markdown.entity_c_144 name else Markdown.entity_c_145 name
+#[partial]
+def Markdown.entity_c_147 (name : String) : Option String :=
+    if String.lt name "cupbrcap" then Markdown.entity_c_143 name else Markdown.entity_c_146 name
+#[partial]
+def Markdown.entity_c_148 (name : String) : Option String :=
+    if String.lt name "cup" then Markdown.entity_c_142 name else Markdown.entity_c_147 name
+#[partial]
+def Markdown.entity_c_149 (name : String) : Option String :=
+    if String.beq name "cupcup" then Option.some "⩊" else Option.none
+#[partial]
+def Markdown.entity_c_150 (name : String) : Option String :=
+    if String.beq name "cupdot" then Option.some "⊍" else Option.none
+#[partial]
+def Markdown.entity_c_151 (name : String) : Option String :=
+    if String.beq name "cupor" then Option.some "⩅" else Option.none
+#[partial]
+def Markdown.entity_c_152 (name : String) : Option String :=
+    if String.lt name "cupor" then Markdown.entity_c_150 name else Markdown.entity_c_151 name
+#[partial]
+def Markdown.entity_c_153 (name : String) : Option String :=
+    if String.lt name "cupdot" then Markdown.entity_c_149 name else Markdown.entity_c_152 name
+#[partial]
+def Markdown.entity_c_154 (name : String) : Option String :=
+    if String.beq name "cups" then Option.some "∪︀" else Option.none
+#[partial]
+def Markdown.entity_c_155 (name : String) : Option String :=
+    if String.beq name "curarr" then Option.some "↷" else Option.none
+#[partial]
+def Markdown.entity_c_156 (name : String) : Option String :=
+    if String.beq name "curarrm" then Option.some "⤼" else Option.none
+#[partial]
+def Markdown.entity_c_157 (name : String) : Option String :=
+    if String.lt name "curarrm" then Markdown.entity_c_155 name else Markdown.entity_c_156 name
+#[partial]
+def Markdown.entity_c_158 (name : String) : Option String :=
+    if String.lt name "curarr" then Markdown.entity_c_154 name else Markdown.entity_c_157 name
+#[partial]
+def Markdown.entity_c_159 (name : String) : Option String :=
+    if String.lt name "cups" then Markdown.entity_c_153 name else Markdown.entity_c_158 name
+#[partial]
+def Markdown.entity_c_160 (name : String) : Option String :=
+    if String.lt name "cupcup" then Markdown.entity_c_148 name else Markdown.entity_c_159 name
+#[partial]
+def Markdown.entity_c_161 (name : String) : Option String :=
+    if String.beq name "curlyeqprec" then Option.some "⋞" else Option.none
+#[partial]
+def Markdown.entity_c_162 (name : String) : Option String :=
+    if String.beq name "curlyeqsucc" then Option.some "⋟" else Option.none
+#[partial]
+def Markdown.entity_c_163 (name : String) : Option String :=
+    if String.beq name "curlyvee" then Option.some "⋎" else Option.none
+#[partial]
+def Markdown.entity_c_164 (name : String) : Option String :=
+    if String.lt name "curlyvee" then Markdown.entity_c_162 name else Markdown.entity_c_163 name
+#[partial]
+def Markdown.entity_c_165 (name : String) : Option String :=
+    if String.lt name "curlyeqsucc" then Markdown.entity_c_161 name else Markdown.entity_c_164 name
+#[partial]
+def Markdown.entity_c_166 (name : String) : Option String :=
+    if String.beq name "curlywedge" then Option.some "⋏" else Option.none
+#[partial]
+def Markdown.entity_c_167 (name : String) : Option String :=
+    if String.beq name "curren" then Option.some "¤" else Option.none
+#[partial]
+def Markdown.entity_c_168 (name : String) : Option String :=
+    if String.beq name "curvearrowleft" then Option.some "↶" else Option.none
+#[partial]
+def Markdown.entity_c_169 (name : String) : Option String :=
+    if String.lt name "curvearrowleft" then Markdown.entity_c_167 name else Markdown.entity_c_168 name
+#[partial]
+def Markdown.entity_c_170 (name : String) : Option String :=
+    if String.lt name "curren" then Markdown.entity_c_166 name else Markdown.entity_c_169 name
+#[partial]
+def Markdown.entity_c_171 (name : String) : Option String :=
+    if String.lt name "curlywedge" then Markdown.entity_c_165 name else Markdown.entity_c_170 name
+#[partial]
+def Markdown.entity_c_172 (name : String) : Option String :=
+    if String.beq name "curvearrowright" then Option.some "↷" else Option.none
+#[partial]
+def Markdown.entity_c_173 (name : String) : Option String :=
+    if String.beq name "cuvee" then Option.some "⋎" else Option.none
+#[partial]
+def Markdown.entity_c_174 (name : String) : Option String :=
+    if String.beq name "cuwed" then Option.some "⋏" else Option.none
+#[partial]
+def Markdown.entity_c_175 (name : String) : Option String :=
+    if String.lt name "cuwed" then Markdown.entity_c_173 name else Markdown.entity_c_174 name
+#[partial]
+def Markdown.entity_c_176 (name : String) : Option String :=
+    if String.lt name "cuvee" then Markdown.entity_c_172 name else Markdown.entity_c_175 name
+#[partial]
+def Markdown.entity_c_177 (name : String) : Option String :=
+    if String.beq name "cwconint" then Option.some "∲" else Option.none
+#[partial]
+def Markdown.entity_c_178 (name : String) : Option String :=
+    if String.beq name "cwint" then Option.some "∱" else Option.none
+#[partial]
+def Markdown.entity_c_179 (name : String) : Option String :=
+    if String.beq name "cylcty" then Option.some "⌭" else Option.none
+#[partial]
+def Markdown.entity_c_180 (name : String) : Option String :=
+    if String.lt name "cylcty" then Markdown.entity_c_178 name else Markdown.entity_c_179 name
+#[partial]
+def Markdown.entity_c_181 (name : String) : Option String :=
+    if String.lt name "cwint" then Markdown.entity_c_177 name else Markdown.entity_c_180 name
+#[partial]
+def Markdown.entity_c_182 (name : String) : Option String :=
+    if String.lt name "cwconint" then Markdown.entity_c_176 name else Markdown.entity_c_181 name
+#[partial]
+def Markdown.entity_c_183 (name : String) : Option String :=
+    if String.lt name "curvearrowright" then Markdown.entity_c_171 name else Markdown.entity_c_182 name
+#[partial]
+def Markdown.entity_c_184 (name : String) : Option String :=
+    if String.lt name "curlyeqprec" then Markdown.entity_c_160 name else Markdown.entity_c_183 name
+#[partial]
+def Markdown.entity_c_185 (name : String) : Option String :=
+    if String.lt name "cuesc" then Markdown.entity_c_137 name else Markdown.entity_c_184 name
+#[partial]
+def Markdown.entity_c_186 (name : String) : Option String :=
+    if String.lt name "commat" then Markdown.entity_c_92 name else Markdown.entity_c_185 name
+
+def Markdown.entity_c (name : String) : Option String := Markdown.entity_c_186 name
 
 #[partial]
-def Markdown.entity_d (name : String) : Option String :=
-    if String.beq name "dArr" then Option.some "⇓"
-    else if String.beq name "dHar" then Option.some "⥥"
-    else if String.beq name "dagger" then Option.some "†"
-    else if String.beq name "daleth" then Option.some "ℸ"
-    else if String.beq name "darr" then Option.some "↓"
-    else if String.beq name "dash" then Option.some "‐"
-    else if String.beq name "dashv" then Option.some "⊣"
-    else if String.beq name "dbkarow" then Option.some "⤏"
-    else if String.beq name "dblac" then Option.some "˝"
-    else if String.beq name "dcaron" then Option.some "ď"
-    else if String.beq name "dcy" then Option.some "д"
-    else if String.beq name "dd" then Option.some "ⅆ"
-    else if String.beq name "ddagger" then Option.some "‡"
-    else if String.beq name "ddarr" then Option.some "⇊"
-    else if String.beq name "ddotseq" then Option.some "⩷"
-    else if String.beq name "deg" then Option.some "°"
-    else if String.beq name "delta" then Option.some "δ"
-    else if String.beq name "demptyv" then Option.some "⦱"
-    else if String.beq name "dfisht" then Option.some "⥿"
-    else if String.beq name "dfr" then Option.some "𝔡"
-    else if String.beq name "dharl" then Option.some "⇃"
-    else if String.beq name "dharr" then Option.some "⇂"
-    else if String.beq name "diam" then Option.some "⋄"
-    else if String.beq name "diamond" then Option.some "⋄"
-    else if String.beq name "diamondsuit" then Option.some "♦"
-    else if String.beq name "diams" then Option.some "♦"
-    else if String.beq name "die" then Option.some "¨"
-    else if String.beq name "digamma" then Option.some "ϝ"
-    else if String.beq name "disin" then Option.some "⋲"
-    else if String.beq name "div" then Option.some "÷"
-    else if String.beq name "divide" then Option.some "÷"
-    else if String.beq name "divideontimes" then Option.some "⋇"
-    else if String.beq name "divonx" then Option.some "⋇"
-    else if String.beq name "djcy" then Option.some "ђ"
-    else if String.beq name "dlcorn" then Option.some "⌞"
-    else if String.beq name "dlcrop" then Option.some "⌍"
-    else if String.beq name "dollar" then Option.some "$"
-    else if String.beq name "dopf" then Option.some "𝕕"
-    else if String.beq name "dot" then Option.some "˙"
-    else if String.beq name "doteq" then Option.some "≐"
-    else if String.beq name "doteqdot" then Option.some "≑"
-    else if String.beq name "dotminus" then Option.some "∸"
-    else if String.beq name "dotplus" then Option.some "∔"
-    else if String.beq name "dotsquare" then Option.some "⊡"
-    else if String.beq name "doublebarwedge" then Option.some "⌆"
-    else if String.beq name "downarrow" then Option.some "↓"
-    else if String.beq name "downdownarrows" then Option.some "⇊"
-    else if String.beq name "downharpoonleft" then Option.some "⇃"
-    else if String.beq name "downharpoonright" then Option.some "⇂"
-    else if String.beq name "drbkarow" then Option.some "⤐"
-    else if String.beq name "drcorn" then Option.some "⌟"
-    else if String.beq name "drcrop" then Option.some "⌌"
-    else if String.beq name "dscr" then Option.some "𝒹"
-    else if String.beq name "dscy" then Option.some "ѕ"
-    else if String.beq name "dsol" then Option.some "⧶"
-    else if String.beq name "dstrok" then Option.some "đ"
-    else if String.beq name "dtdot" then Option.some "⋱"
-    else if String.beq name "dtri" then Option.some "▿"
-    else if String.beq name "dtrif" then Option.some "▾"
-    else if String.beq name "duarr" then Option.some "⇵"
-    else if String.beq name "duhar" then Option.some "⥯"
-    else if String.beq name "dwangle" then Option.some "⦦"
-    else if String.beq name "dzcy" then Option.some "џ"
-    else if String.beq name "dzigrarr" then Option.some "⟿"
-    else Option.none
+def Markdown.entity_d_0 (name : String) : Option String :=
+    if String.beq name "dArr" then Option.some "⇓" else Option.none
+#[partial]
+def Markdown.entity_d_1 (name : String) : Option String :=
+    if String.beq name "dHar" then Option.some "⥥" else Option.none
+#[partial]
+def Markdown.entity_d_2 (name : String) : Option String :=
+    if String.lt name "dHar" then Markdown.entity_d_0 name else Markdown.entity_d_1 name
+#[partial]
+def Markdown.entity_d_3 (name : String) : Option String :=
+    if String.beq name "dagger" then Option.some "†" else Option.none
+#[partial]
+def Markdown.entity_d_4 (name : String) : Option String :=
+    if String.beq name "daleth" then Option.some "ℸ" else Option.none
+#[partial]
+def Markdown.entity_d_5 (name : String) : Option String :=
+    if String.lt name "daleth" then Markdown.entity_d_3 name else Markdown.entity_d_4 name
+#[partial]
+def Markdown.entity_d_6 (name : String) : Option String :=
+    if String.lt name "dagger" then Markdown.entity_d_2 name else Markdown.entity_d_5 name
+#[partial]
+def Markdown.entity_d_7 (name : String) : Option String :=
+    if String.beq name "darr" then Option.some "↓" else Option.none
+#[partial]
+def Markdown.entity_d_8 (name : String) : Option String :=
+    if String.beq name "dash" then Option.some "‐" else Option.none
+#[partial]
+def Markdown.entity_d_9 (name : String) : Option String :=
+    if String.lt name "dash" then Markdown.entity_d_7 name else Markdown.entity_d_8 name
+#[partial]
+def Markdown.entity_d_10 (name : String) : Option String :=
+    if String.beq name "dashv" then Option.some "⊣" else Option.none
+#[partial]
+def Markdown.entity_d_11 (name : String) : Option String :=
+    if String.beq name "dbkarow" then Option.some "⤏" else Option.none
+#[partial]
+def Markdown.entity_d_12 (name : String) : Option String :=
+    if String.lt name "dbkarow" then Markdown.entity_d_10 name else Markdown.entity_d_11 name
+#[partial]
+def Markdown.entity_d_13 (name : String) : Option String :=
+    if String.lt name "dashv" then Markdown.entity_d_9 name else Markdown.entity_d_12 name
+#[partial]
+def Markdown.entity_d_14 (name : String) : Option String :=
+    if String.lt name "darr" then Markdown.entity_d_6 name else Markdown.entity_d_13 name
+#[partial]
+def Markdown.entity_d_15 (name : String) : Option String :=
+    if String.beq name "dblac" then Option.some "˝" else Option.none
+#[partial]
+def Markdown.entity_d_16 (name : String) : Option String :=
+    if String.beq name "dcaron" then Option.some "ď" else Option.none
+#[partial]
+def Markdown.entity_d_17 (name : String) : Option String :=
+    if String.lt name "dcaron" then Markdown.entity_d_15 name else Markdown.entity_d_16 name
+#[partial]
+def Markdown.entity_d_18 (name : String) : Option String :=
+    if String.beq name "dcy" then Option.some "д" else Option.none
+#[partial]
+def Markdown.entity_d_19 (name : String) : Option String :=
+    if String.beq name "dd" then Option.some "ⅆ" else Option.none
+#[partial]
+def Markdown.entity_d_20 (name : String) : Option String :=
+    if String.lt name "dd" then Markdown.entity_d_18 name else Markdown.entity_d_19 name
+#[partial]
+def Markdown.entity_d_21 (name : String) : Option String :=
+    if String.lt name "dcy" then Markdown.entity_d_17 name else Markdown.entity_d_20 name
+#[partial]
+def Markdown.entity_d_22 (name : String) : Option String :=
+    if String.beq name "ddagger" then Option.some "‡" else Option.none
+#[partial]
+def Markdown.entity_d_23 (name : String) : Option String :=
+    if String.beq name "ddarr" then Option.some "⇊" else Option.none
+#[partial]
+def Markdown.entity_d_24 (name : String) : Option String :=
+    if String.lt name "ddarr" then Markdown.entity_d_22 name else Markdown.entity_d_23 name
+#[partial]
+def Markdown.entity_d_25 (name : String) : Option String :=
+    if String.beq name "ddotseq" then Option.some "⩷" else Option.none
+#[partial]
+def Markdown.entity_d_26 (name : String) : Option String :=
+    if String.beq name "deg" then Option.some "°" else Option.none
+#[partial]
+def Markdown.entity_d_27 (name : String) : Option String :=
+    if String.lt name "deg" then Markdown.entity_d_25 name else Markdown.entity_d_26 name
+#[partial]
+def Markdown.entity_d_28 (name : String) : Option String :=
+    if String.lt name "ddotseq" then Markdown.entity_d_24 name else Markdown.entity_d_27 name
+#[partial]
+def Markdown.entity_d_29 (name : String) : Option String :=
+    if String.lt name "ddagger" then Markdown.entity_d_21 name else Markdown.entity_d_28 name
+#[partial]
+def Markdown.entity_d_30 (name : String) : Option String :=
+    if String.lt name "dblac" then Markdown.entity_d_14 name else Markdown.entity_d_29 name
+#[partial]
+def Markdown.entity_d_31 (name : String) : Option String :=
+    if String.beq name "delta" then Option.some "δ" else Option.none
+#[partial]
+def Markdown.entity_d_32 (name : String) : Option String :=
+    if String.beq name "demptyv" then Option.some "⦱" else Option.none
+#[partial]
+def Markdown.entity_d_33 (name : String) : Option String :=
+    if String.lt name "demptyv" then Markdown.entity_d_31 name else Markdown.entity_d_32 name
+#[partial]
+def Markdown.entity_d_34 (name : String) : Option String :=
+    if String.beq name "dfisht" then Option.some "⥿" else Option.none
+#[partial]
+def Markdown.entity_d_35 (name : String) : Option String :=
+    if String.beq name "dfr" then Option.some "𝔡" else Option.none
+#[partial]
+def Markdown.entity_d_36 (name : String) : Option String :=
+    if String.lt name "dfr" then Markdown.entity_d_34 name else Markdown.entity_d_35 name
+#[partial]
+def Markdown.entity_d_37 (name : String) : Option String :=
+    if String.lt name "dfisht" then Markdown.entity_d_33 name else Markdown.entity_d_36 name
+#[partial]
+def Markdown.entity_d_38 (name : String) : Option String :=
+    if String.beq name "dharl" then Option.some "⇃" else Option.none
+#[partial]
+def Markdown.entity_d_39 (name : String) : Option String :=
+    if String.beq name "dharr" then Option.some "⇂" else Option.none
+#[partial]
+def Markdown.entity_d_40 (name : String) : Option String :=
+    if String.lt name "dharr" then Markdown.entity_d_38 name else Markdown.entity_d_39 name
+#[partial]
+def Markdown.entity_d_41 (name : String) : Option String :=
+    if String.beq name "diam" then Option.some "⋄" else Option.none
+#[partial]
+def Markdown.entity_d_42 (name : String) : Option String :=
+    if String.beq name "diamond" then Option.some "⋄" else Option.none
+#[partial]
+def Markdown.entity_d_43 (name : String) : Option String :=
+    if String.lt name "diamond" then Markdown.entity_d_41 name else Markdown.entity_d_42 name
+#[partial]
+def Markdown.entity_d_44 (name : String) : Option String :=
+    if String.lt name "diam" then Markdown.entity_d_40 name else Markdown.entity_d_43 name
+#[partial]
+def Markdown.entity_d_45 (name : String) : Option String :=
+    if String.lt name "dharl" then Markdown.entity_d_37 name else Markdown.entity_d_44 name
+#[partial]
+def Markdown.entity_d_46 (name : String) : Option String :=
+    if String.beq name "diamondsuit" then Option.some "♦" else Option.none
+#[partial]
+def Markdown.entity_d_47 (name : String) : Option String :=
+    if String.beq name "diams" then Option.some "♦" else Option.none
+#[partial]
+def Markdown.entity_d_48 (name : String) : Option String :=
+    if String.lt name "diams" then Markdown.entity_d_46 name else Markdown.entity_d_47 name
+#[partial]
+def Markdown.entity_d_49 (name : String) : Option String :=
+    if String.beq name "die" then Option.some "¨" else Option.none
+#[partial]
+def Markdown.entity_d_50 (name : String) : Option String :=
+    if String.beq name "digamma" then Option.some "ϝ" else Option.none
+#[partial]
+def Markdown.entity_d_51 (name : String) : Option String :=
+    if String.lt name "digamma" then Markdown.entity_d_49 name else Markdown.entity_d_50 name
+#[partial]
+def Markdown.entity_d_52 (name : String) : Option String :=
+    if String.lt name "die" then Markdown.entity_d_48 name else Markdown.entity_d_51 name
+#[partial]
+def Markdown.entity_d_53 (name : String) : Option String :=
+    if String.beq name "disin" then Option.some "⋲" else Option.none
+#[partial]
+def Markdown.entity_d_54 (name : String) : Option String :=
+    if String.beq name "div" then Option.some "÷" else Option.none
+#[partial]
+def Markdown.entity_d_55 (name : String) : Option String :=
+    if String.lt name "div" then Markdown.entity_d_53 name else Markdown.entity_d_54 name
+#[partial]
+def Markdown.entity_d_56 (name : String) : Option String :=
+    if String.beq name "divide" then Option.some "÷" else Option.none
+#[partial]
+def Markdown.entity_d_57 (name : String) : Option String :=
+    if String.beq name "divideontimes" then Option.some "⋇" else Option.none
+#[partial]
+def Markdown.entity_d_58 (name : String) : Option String :=
+    if String.lt name "divideontimes" then Markdown.entity_d_56 name else Markdown.entity_d_57 name
+#[partial]
+def Markdown.entity_d_59 (name : String) : Option String :=
+    if String.lt name "divide" then Markdown.entity_d_55 name else Markdown.entity_d_58 name
+#[partial]
+def Markdown.entity_d_60 (name : String) : Option String :=
+    if String.lt name "disin" then Markdown.entity_d_52 name else Markdown.entity_d_59 name
+#[partial]
+def Markdown.entity_d_61 (name : String) : Option String :=
+    if String.lt name "diamondsuit" then Markdown.entity_d_45 name else Markdown.entity_d_60 name
+#[partial]
+def Markdown.entity_d_62 (name : String) : Option String :=
+    if String.lt name "delta" then Markdown.entity_d_30 name else Markdown.entity_d_61 name
+#[partial]
+def Markdown.entity_d_63 (name : String) : Option String :=
+    if String.beq name "divonx" then Option.some "⋇" else Option.none
+#[partial]
+def Markdown.entity_d_64 (name : String) : Option String :=
+    if String.beq name "djcy" then Option.some "ђ" else Option.none
+#[partial]
+def Markdown.entity_d_65 (name : String) : Option String :=
+    if String.lt name "djcy" then Markdown.entity_d_63 name else Markdown.entity_d_64 name
+#[partial]
+def Markdown.entity_d_66 (name : String) : Option String :=
+    if String.beq name "dlcorn" then Option.some "⌞" else Option.none
+#[partial]
+def Markdown.entity_d_67 (name : String) : Option String :=
+    if String.beq name "dlcrop" then Option.some "⌍" else Option.none
+#[partial]
+def Markdown.entity_d_68 (name : String) : Option String :=
+    if String.lt name "dlcrop" then Markdown.entity_d_66 name else Markdown.entity_d_67 name
+#[partial]
+def Markdown.entity_d_69 (name : String) : Option String :=
+    if String.lt name "dlcorn" then Markdown.entity_d_65 name else Markdown.entity_d_68 name
+#[partial]
+def Markdown.entity_d_70 (name : String) : Option String :=
+    if String.beq name "dollar" then Option.some "$" else Option.none
+#[partial]
+def Markdown.entity_d_71 (name : String) : Option String :=
+    if String.beq name "dopf" then Option.some "𝕕" else Option.none
+#[partial]
+def Markdown.entity_d_72 (name : String) : Option String :=
+    if String.lt name "dopf" then Markdown.entity_d_70 name else Markdown.entity_d_71 name
+#[partial]
+def Markdown.entity_d_73 (name : String) : Option String :=
+    if String.beq name "dot" then Option.some "˙" else Option.none
+#[partial]
+def Markdown.entity_d_74 (name : String) : Option String :=
+    if String.beq name "doteq" then Option.some "≐" else Option.none
+#[partial]
+def Markdown.entity_d_75 (name : String) : Option String :=
+    if String.lt name "doteq" then Markdown.entity_d_73 name else Markdown.entity_d_74 name
+#[partial]
+def Markdown.entity_d_76 (name : String) : Option String :=
+    if String.lt name "dot" then Markdown.entity_d_72 name else Markdown.entity_d_75 name
+#[partial]
+def Markdown.entity_d_77 (name : String) : Option String :=
+    if String.lt name "dollar" then Markdown.entity_d_69 name else Markdown.entity_d_76 name
+#[partial]
+def Markdown.entity_d_78 (name : String) : Option String :=
+    if String.beq name "doteqdot" then Option.some "≑" else Option.none
+#[partial]
+def Markdown.entity_d_79 (name : String) : Option String :=
+    if String.beq name "dotminus" then Option.some "∸" else Option.none
+#[partial]
+def Markdown.entity_d_80 (name : String) : Option String :=
+    if String.lt name "dotminus" then Markdown.entity_d_78 name else Markdown.entity_d_79 name
+#[partial]
+def Markdown.entity_d_81 (name : String) : Option String :=
+    if String.beq name "dotplus" then Option.some "∔" else Option.none
+#[partial]
+def Markdown.entity_d_82 (name : String) : Option String :=
+    if String.beq name "dotsquare" then Option.some "⊡" else Option.none
+#[partial]
+def Markdown.entity_d_83 (name : String) : Option String :=
+    if String.lt name "dotsquare" then Markdown.entity_d_81 name else Markdown.entity_d_82 name
+#[partial]
+def Markdown.entity_d_84 (name : String) : Option String :=
+    if String.lt name "dotplus" then Markdown.entity_d_80 name else Markdown.entity_d_83 name
+#[partial]
+def Markdown.entity_d_85 (name : String) : Option String :=
+    if String.beq name "doublebarwedge" then Option.some "⌆" else Option.none
+#[partial]
+def Markdown.entity_d_86 (name : String) : Option String :=
+    if String.beq name "downarrow" then Option.some "↓" else Option.none
+#[partial]
+def Markdown.entity_d_87 (name : String) : Option String :=
+    if String.lt name "downarrow" then Markdown.entity_d_85 name else Markdown.entity_d_86 name
+#[partial]
+def Markdown.entity_d_88 (name : String) : Option String :=
+    if String.beq name "downdownarrows" then Option.some "⇊" else Option.none
+#[partial]
+def Markdown.entity_d_89 (name : String) : Option String :=
+    if String.beq name "downharpoonleft" then Option.some "⇃" else Option.none
+#[partial]
+def Markdown.entity_d_90 (name : String) : Option String :=
+    if String.lt name "downharpoonleft" then Markdown.entity_d_88 name else Markdown.entity_d_89 name
+#[partial]
+def Markdown.entity_d_91 (name : String) : Option String :=
+    if String.lt name "downdownarrows" then Markdown.entity_d_87 name else Markdown.entity_d_90 name
+#[partial]
+def Markdown.entity_d_92 (name : String) : Option String :=
+    if String.lt name "doublebarwedge" then Markdown.entity_d_84 name else Markdown.entity_d_91 name
+#[partial]
+def Markdown.entity_d_93 (name : String) : Option String :=
+    if String.lt name "doteqdot" then Markdown.entity_d_77 name else Markdown.entity_d_92 name
+#[partial]
+def Markdown.entity_d_94 (name : String) : Option String :=
+    if String.beq name "downharpoonright" then Option.some "⇂" else Option.none
+#[partial]
+def Markdown.entity_d_95 (name : String) : Option String :=
+    if String.beq name "drbkarow" then Option.some "⤐" else Option.none
+#[partial]
+def Markdown.entity_d_96 (name : String) : Option String :=
+    if String.lt name "drbkarow" then Markdown.entity_d_94 name else Markdown.entity_d_95 name
+#[partial]
+def Markdown.entity_d_97 (name : String) : Option String :=
+    if String.beq name "drcorn" then Option.some "⌟" else Option.none
+#[partial]
+def Markdown.entity_d_98 (name : String) : Option String :=
+    if String.beq name "drcrop" then Option.some "⌌" else Option.none
+#[partial]
+def Markdown.entity_d_99 (name : String) : Option String :=
+    if String.lt name "drcrop" then Markdown.entity_d_97 name else Markdown.entity_d_98 name
+#[partial]
+def Markdown.entity_d_100 (name : String) : Option String :=
+    if String.lt name "drcorn" then Markdown.entity_d_96 name else Markdown.entity_d_99 name
+#[partial]
+def Markdown.entity_d_101 (name : String) : Option String :=
+    if String.beq name "dscr" then Option.some "𝒹" else Option.none
+#[partial]
+def Markdown.entity_d_102 (name : String) : Option String :=
+    if String.beq name "dscy" then Option.some "ѕ" else Option.none
+#[partial]
+def Markdown.entity_d_103 (name : String) : Option String :=
+    if String.lt name "dscy" then Markdown.entity_d_101 name else Markdown.entity_d_102 name
+#[partial]
+def Markdown.entity_d_104 (name : String) : Option String :=
+    if String.beq name "dsol" then Option.some "⧶" else Option.none
+#[partial]
+def Markdown.entity_d_105 (name : String) : Option String :=
+    if String.beq name "dstrok" then Option.some "đ" else Option.none
+#[partial]
+def Markdown.entity_d_106 (name : String) : Option String :=
+    if String.lt name "dstrok" then Markdown.entity_d_104 name else Markdown.entity_d_105 name
+#[partial]
+def Markdown.entity_d_107 (name : String) : Option String :=
+    if String.lt name "dsol" then Markdown.entity_d_103 name else Markdown.entity_d_106 name
+#[partial]
+def Markdown.entity_d_108 (name : String) : Option String :=
+    if String.lt name "dscr" then Markdown.entity_d_100 name else Markdown.entity_d_107 name
+#[partial]
+def Markdown.entity_d_109 (name : String) : Option String :=
+    if String.beq name "dtdot" then Option.some "⋱" else Option.none
+#[partial]
+def Markdown.entity_d_110 (name : String) : Option String :=
+    if String.beq name "dtri" then Option.some "▿" else Option.none
+#[partial]
+def Markdown.entity_d_111 (name : String) : Option String :=
+    if String.lt name "dtri" then Markdown.entity_d_109 name else Markdown.entity_d_110 name
+#[partial]
+def Markdown.entity_d_112 (name : String) : Option String :=
+    if String.beq name "dtrif" then Option.some "▾" else Option.none
+#[partial]
+def Markdown.entity_d_113 (name : String) : Option String :=
+    if String.beq name "duarr" then Option.some "⇵" else Option.none
+#[partial]
+def Markdown.entity_d_114 (name : String) : Option String :=
+    if String.lt name "duarr" then Markdown.entity_d_112 name else Markdown.entity_d_113 name
+#[partial]
+def Markdown.entity_d_115 (name : String) : Option String :=
+    if String.lt name "dtrif" then Markdown.entity_d_111 name else Markdown.entity_d_114 name
+#[partial]
+def Markdown.entity_d_116 (name : String) : Option String :=
+    if String.beq name "duhar" then Option.some "⥯" else Option.none
+#[partial]
+def Markdown.entity_d_117 (name : String) : Option String :=
+    if String.beq name "dwangle" then Option.some "⦦" else Option.none
+#[partial]
+def Markdown.entity_d_118 (name : String) : Option String :=
+    if String.lt name "dwangle" then Markdown.entity_d_116 name else Markdown.entity_d_117 name
+#[partial]
+def Markdown.entity_d_119 (name : String) : Option String :=
+    if String.beq name "dzcy" then Option.some "џ" else Option.none
+#[partial]
+def Markdown.entity_d_120 (name : String) : Option String :=
+    if String.beq name "dzigrarr" then Option.some "⟿" else Option.none
+#[partial]
+def Markdown.entity_d_121 (name : String) : Option String :=
+    if String.lt name "dzigrarr" then Markdown.entity_d_119 name else Markdown.entity_d_120 name
+#[partial]
+def Markdown.entity_d_122 (name : String) : Option String :=
+    if String.lt name "dzcy" then Markdown.entity_d_118 name else Markdown.entity_d_121 name
+#[partial]
+def Markdown.entity_d_123 (name : String) : Option String :=
+    if String.lt name "duhar" then Markdown.entity_d_115 name else Markdown.entity_d_122 name
+#[partial]
+def Markdown.entity_d_124 (name : String) : Option String :=
+    if String.lt name "dtdot" then Markdown.entity_d_108 name else Markdown.entity_d_123 name
+#[partial]
+def Markdown.entity_d_125 (name : String) : Option String :=
+    if String.lt name "downharpoonright" then Markdown.entity_d_93 name else Markdown.entity_d_124 name
+#[partial]
+def Markdown.entity_d_126 (name : String) : Option String :=
+    if String.lt name "divonx" then Markdown.entity_d_62 name else Markdown.entity_d_125 name
+
+def Markdown.entity_d (name : String) : Option String := Markdown.entity_d_126 name
 
 #[partial]
-def Markdown.entity_e (name : String) : Option String :=
-    if String.beq name "eDDot" then Option.some "⩷"
-    else if String.beq name "eDot" then Option.some "≑"
-    else if String.beq name "eacute" then Option.some "é"
-    else if String.beq name "easter" then Option.some "⩮"
-    else if String.beq name "ecaron" then Option.some "ě"
-    else if String.beq name "ecir" then Option.some "≖"
-    else if String.beq name "ecirc" then Option.some "ê"
-    else if String.beq name "ecolon" then Option.some "≕"
-    else if String.beq name "ecy" then Option.some "э"
-    else if String.beq name "edot" then Option.some "ė"
-    else if String.beq name "ee" then Option.some "ⅇ"
-    else if String.beq name "efDot" then Option.some "≒"
-    else if String.beq name "efr" then Option.some "𝔢"
-    else if String.beq name "eg" then Option.some "⪚"
-    else if String.beq name "egrave" then Option.some "è"
-    else if String.beq name "egs" then Option.some "⪖"
-    else if String.beq name "egsdot" then Option.some "⪘"
-    else if String.beq name "el" then Option.some "⪙"
-    else if String.beq name "elinters" then Option.some "⏧"
-    else if String.beq name "ell" then Option.some "ℓ"
-    else if String.beq name "els" then Option.some "⪕"
-    else if String.beq name "elsdot" then Option.some "⪗"
-    else if String.beq name "emacr" then Option.some "ē"
-    else if String.beq name "empty" then Option.some "∅"
-    else if String.beq name "emptyset" then Option.some "∅"
-    else if String.beq name "emptyv" then Option.some "∅"
-    else if String.beq name "emsp" then Option.some " "
-    else if String.beq name "emsp13" then Option.some " "
-    else if String.beq name "emsp14" then Option.some " "
-    else if String.beq name "eng" then Option.some "ŋ"
-    else if String.beq name "ensp" then Option.some " "
-    else if String.beq name "eogon" then Option.some "ę"
-    else if String.beq name "eopf" then Option.some "𝕖"
-    else if String.beq name "epar" then Option.some "⋕"
-    else if String.beq name "eparsl" then Option.some "⧣"
-    else if String.beq name "eplus" then Option.some "⩱"
-    else if String.beq name "epsi" then Option.some "ε"
-    else if String.beq name "epsilon" then Option.some "ε"
-    else if String.beq name "epsiv" then Option.some "ϵ"
-    else if String.beq name "eqcirc" then Option.some "≖"
-    else if String.beq name "eqcolon" then Option.some "≕"
-    else if String.beq name "eqsim" then Option.some "≂"
-    else if String.beq name "eqslantgtr" then Option.some "⪖"
-    else if String.beq name "eqslantless" then Option.some "⪕"
-    else if String.beq name "equals" then Option.some "="
-    else if String.beq name "equest" then Option.some "≟"
-    else if String.beq name "equiv" then Option.some "≡"
-    else if String.beq name "equivDD" then Option.some "⩸"
-    else if String.beq name "eqvparsl" then Option.some "⧥"
-    else if String.beq name "erDot" then Option.some "≓"
-    else if String.beq name "erarr" then Option.some "⥱"
-    else if String.beq name "escr" then Option.some "ℯ"
-    else if String.beq name "esdot" then Option.some "≐"
-    else if String.beq name "esim" then Option.some "≂"
-    else if String.beq name "eta" then Option.some "η"
-    else if String.beq name "eth" then Option.some "ð"
-    else if String.beq name "euml" then Option.some "ë"
-    else if String.beq name "euro" then Option.some "€"
-    else if String.beq name "excl" then Option.some "!"
-    else if String.beq name "exist" then Option.some "∃"
-    else if String.beq name "expectation" then Option.some "ℰ"
-    else if String.beq name "exponentiale" then Option.some "ⅇ"
-    else Option.none
+def Markdown.entity_e_0 (name : String) : Option String :=
+    if String.beq name "eDDot" then Option.some "⩷" else Option.none
+#[partial]
+def Markdown.entity_e_1 (name : String) : Option String :=
+    if String.beq name "eDot" then Option.some "≑" else Option.none
+#[partial]
+def Markdown.entity_e_2 (name : String) : Option String :=
+    if String.beq name "eacute" then Option.some "é" else Option.none
+#[partial]
+def Markdown.entity_e_3 (name : String) : Option String :=
+    if String.lt name "eacute" then Markdown.entity_e_1 name else Markdown.entity_e_2 name
+#[partial]
+def Markdown.entity_e_4 (name : String) : Option String :=
+    if String.lt name "eDot" then Markdown.entity_e_0 name else Markdown.entity_e_3 name
+#[partial]
+def Markdown.entity_e_5 (name : String) : Option String :=
+    if String.beq name "easter" then Option.some "⩮" else Option.none
+#[partial]
+def Markdown.entity_e_6 (name : String) : Option String :=
+    if String.beq name "ecaron" then Option.some "ě" else Option.none
+#[partial]
+def Markdown.entity_e_7 (name : String) : Option String :=
+    if String.lt name "ecaron" then Markdown.entity_e_5 name else Markdown.entity_e_6 name
+#[partial]
+def Markdown.entity_e_8 (name : String) : Option String :=
+    if String.beq name "ecir" then Option.some "≖" else Option.none
+#[partial]
+def Markdown.entity_e_9 (name : String) : Option String :=
+    if String.beq name "ecirc" then Option.some "ê" else Option.none
+#[partial]
+def Markdown.entity_e_10 (name : String) : Option String :=
+    if String.lt name "ecirc" then Markdown.entity_e_8 name else Markdown.entity_e_9 name
+#[partial]
+def Markdown.entity_e_11 (name : String) : Option String :=
+    if String.lt name "ecir" then Markdown.entity_e_7 name else Markdown.entity_e_10 name
+#[partial]
+def Markdown.entity_e_12 (name : String) : Option String :=
+    if String.lt name "easter" then Markdown.entity_e_4 name else Markdown.entity_e_11 name
+#[partial]
+def Markdown.entity_e_13 (name : String) : Option String :=
+    if String.beq name "ecolon" then Option.some "≕" else Option.none
+#[partial]
+def Markdown.entity_e_14 (name : String) : Option String :=
+    if String.beq name "ecy" then Option.some "э" else Option.none
+#[partial]
+def Markdown.entity_e_15 (name : String) : Option String :=
+    if String.lt name "ecy" then Markdown.entity_e_13 name else Markdown.entity_e_14 name
+#[partial]
+def Markdown.entity_e_16 (name : String) : Option String :=
+    if String.beq name "edot" then Option.some "ė" else Option.none
+#[partial]
+def Markdown.entity_e_17 (name : String) : Option String :=
+    if String.beq name "ee" then Option.some "ⅇ" else Option.none
+#[partial]
+def Markdown.entity_e_18 (name : String) : Option String :=
+    if String.lt name "ee" then Markdown.entity_e_16 name else Markdown.entity_e_17 name
+#[partial]
+def Markdown.entity_e_19 (name : String) : Option String :=
+    if String.lt name "edot" then Markdown.entity_e_15 name else Markdown.entity_e_18 name
+#[partial]
+def Markdown.entity_e_20 (name : String) : Option String :=
+    if String.beq name "efDot" then Option.some "≒" else Option.none
+#[partial]
+def Markdown.entity_e_21 (name : String) : Option String :=
+    if String.beq name "efr" then Option.some "𝔢" else Option.none
+#[partial]
+def Markdown.entity_e_22 (name : String) : Option String :=
+    if String.lt name "efr" then Markdown.entity_e_20 name else Markdown.entity_e_21 name
+#[partial]
+def Markdown.entity_e_23 (name : String) : Option String :=
+    if String.beq name "eg" then Option.some "⪚" else Option.none
+#[partial]
+def Markdown.entity_e_24 (name : String) : Option String :=
+    if String.beq name "egrave" then Option.some "è" else Option.none
+#[partial]
+def Markdown.entity_e_25 (name : String) : Option String :=
+    if String.lt name "egrave" then Markdown.entity_e_23 name else Markdown.entity_e_24 name
+#[partial]
+def Markdown.entity_e_26 (name : String) : Option String :=
+    if String.lt name "eg" then Markdown.entity_e_22 name else Markdown.entity_e_25 name
+#[partial]
+def Markdown.entity_e_27 (name : String) : Option String :=
+    if String.lt name "efDot" then Markdown.entity_e_19 name else Markdown.entity_e_26 name
+#[partial]
+def Markdown.entity_e_28 (name : String) : Option String :=
+    if String.lt name "ecolon" then Markdown.entity_e_12 name else Markdown.entity_e_27 name
+#[partial]
+def Markdown.entity_e_29 (name : String) : Option String :=
+    if String.beq name "egs" then Option.some "⪖" else Option.none
+#[partial]
+def Markdown.entity_e_30 (name : String) : Option String :=
+    if String.beq name "egsdot" then Option.some "⪘" else Option.none
+#[partial]
+def Markdown.entity_e_31 (name : String) : Option String :=
+    if String.lt name "egsdot" then Markdown.entity_e_29 name else Markdown.entity_e_30 name
+#[partial]
+def Markdown.entity_e_32 (name : String) : Option String :=
+    if String.beq name "el" then Option.some "⪙" else Option.none
+#[partial]
+def Markdown.entity_e_33 (name : String) : Option String :=
+    if String.beq name "elinters" then Option.some "⏧" else Option.none
+#[partial]
+def Markdown.entity_e_34 (name : String) : Option String :=
+    if String.lt name "elinters" then Markdown.entity_e_32 name else Markdown.entity_e_33 name
+#[partial]
+def Markdown.entity_e_35 (name : String) : Option String :=
+    if String.lt name "el" then Markdown.entity_e_31 name else Markdown.entity_e_34 name
+#[partial]
+def Markdown.entity_e_36 (name : String) : Option String :=
+    if String.beq name "ell" then Option.some "ℓ" else Option.none
+#[partial]
+def Markdown.entity_e_37 (name : String) : Option String :=
+    if String.beq name "els" then Option.some "⪕" else Option.none
+#[partial]
+def Markdown.entity_e_38 (name : String) : Option String :=
+    if String.lt name "els" then Markdown.entity_e_36 name else Markdown.entity_e_37 name
+#[partial]
+def Markdown.entity_e_39 (name : String) : Option String :=
+    if String.beq name "elsdot" then Option.some "⪗" else Option.none
+#[partial]
+def Markdown.entity_e_40 (name : String) : Option String :=
+    if String.beq name "emacr" then Option.some "ē" else Option.none
+#[partial]
+def Markdown.entity_e_41 (name : String) : Option String :=
+    if String.lt name "emacr" then Markdown.entity_e_39 name else Markdown.entity_e_40 name
+#[partial]
+def Markdown.entity_e_42 (name : String) : Option String :=
+    if String.lt name "elsdot" then Markdown.entity_e_38 name else Markdown.entity_e_41 name
+#[partial]
+def Markdown.entity_e_43 (name : String) : Option String :=
+    if String.lt name "ell" then Markdown.entity_e_35 name else Markdown.entity_e_42 name
+#[partial]
+def Markdown.entity_e_44 (name : String) : Option String :=
+    if String.beq name "empty" then Option.some "∅" else Option.none
+#[partial]
+def Markdown.entity_e_45 (name : String) : Option String :=
+    if String.beq name "emptyset" then Option.some "∅" else Option.none
+#[partial]
+def Markdown.entity_e_46 (name : String) : Option String :=
+    if String.lt name "emptyset" then Markdown.entity_e_44 name else Markdown.entity_e_45 name
+#[partial]
+def Markdown.entity_e_47 (name : String) : Option String :=
+    if String.beq name "emptyv" then Option.some "∅" else Option.none
+#[partial]
+def Markdown.entity_e_48 (name : String) : Option String :=
+    if String.beq name "emsp" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_e_49 (name : String) : Option String :=
+    if String.lt name "emsp" then Markdown.entity_e_47 name else Markdown.entity_e_48 name
+#[partial]
+def Markdown.entity_e_50 (name : String) : Option String :=
+    if String.lt name "emptyv" then Markdown.entity_e_46 name else Markdown.entity_e_49 name
+#[partial]
+def Markdown.entity_e_51 (name : String) : Option String :=
+    if String.beq name "emsp13" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_e_52 (name : String) : Option String :=
+    if String.beq name "emsp14" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_e_53 (name : String) : Option String :=
+    if String.lt name "emsp14" then Markdown.entity_e_51 name else Markdown.entity_e_52 name
+#[partial]
+def Markdown.entity_e_54 (name : String) : Option String :=
+    if String.beq name "eng" then Option.some "ŋ" else Option.none
+#[partial]
+def Markdown.entity_e_55 (name : String) : Option String :=
+    if String.beq name "ensp" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_e_56 (name : String) : Option String :=
+    if String.lt name "ensp" then Markdown.entity_e_54 name else Markdown.entity_e_55 name
+#[partial]
+def Markdown.entity_e_57 (name : String) : Option String :=
+    if String.lt name "eng" then Markdown.entity_e_53 name else Markdown.entity_e_56 name
+#[partial]
+def Markdown.entity_e_58 (name : String) : Option String :=
+    if String.lt name "emsp13" then Markdown.entity_e_50 name else Markdown.entity_e_57 name
+#[partial]
+def Markdown.entity_e_59 (name : String) : Option String :=
+    if String.lt name "empty" then Markdown.entity_e_43 name else Markdown.entity_e_58 name
+#[partial]
+def Markdown.entity_e_60 (name : String) : Option String :=
+    if String.lt name "egs" then Markdown.entity_e_28 name else Markdown.entity_e_59 name
+#[partial]
+def Markdown.entity_e_61 (name : String) : Option String :=
+    if String.beq name "eogon" then Option.some "ę" else Option.none
+#[partial]
+def Markdown.entity_e_62 (name : String) : Option String :=
+    if String.beq name "eopf" then Option.some "𝕖" else Option.none
+#[partial]
+def Markdown.entity_e_63 (name : String) : Option String :=
+    if String.beq name "epar" then Option.some "⋕" else Option.none
+#[partial]
+def Markdown.entity_e_64 (name : String) : Option String :=
+    if String.lt name "epar" then Markdown.entity_e_62 name else Markdown.entity_e_63 name
+#[partial]
+def Markdown.entity_e_65 (name : String) : Option String :=
+    if String.lt name "eopf" then Markdown.entity_e_61 name else Markdown.entity_e_64 name
+#[partial]
+def Markdown.entity_e_66 (name : String) : Option String :=
+    if String.beq name "eparsl" then Option.some "⧣" else Option.none
+#[partial]
+def Markdown.entity_e_67 (name : String) : Option String :=
+    if String.beq name "eplus" then Option.some "⩱" else Option.none
+#[partial]
+def Markdown.entity_e_68 (name : String) : Option String :=
+    if String.lt name "eplus" then Markdown.entity_e_66 name else Markdown.entity_e_67 name
+#[partial]
+def Markdown.entity_e_69 (name : String) : Option String :=
+    if String.beq name "epsi" then Option.some "ε" else Option.none
+#[partial]
+def Markdown.entity_e_70 (name : String) : Option String :=
+    if String.beq name "epsilon" then Option.some "ε" else Option.none
+#[partial]
+def Markdown.entity_e_71 (name : String) : Option String :=
+    if String.lt name "epsilon" then Markdown.entity_e_69 name else Markdown.entity_e_70 name
+#[partial]
+def Markdown.entity_e_72 (name : String) : Option String :=
+    if String.lt name "epsi" then Markdown.entity_e_68 name else Markdown.entity_e_71 name
+#[partial]
+def Markdown.entity_e_73 (name : String) : Option String :=
+    if String.lt name "eparsl" then Markdown.entity_e_65 name else Markdown.entity_e_72 name
+#[partial]
+def Markdown.entity_e_74 (name : String) : Option String :=
+    if String.beq name "epsiv" then Option.some "ϵ" else Option.none
+#[partial]
+def Markdown.entity_e_75 (name : String) : Option String :=
+    if String.beq name "eqcirc" then Option.some "≖" else Option.none
+#[partial]
+def Markdown.entity_e_76 (name : String) : Option String :=
+    if String.lt name "eqcirc" then Markdown.entity_e_74 name else Markdown.entity_e_75 name
+#[partial]
+def Markdown.entity_e_77 (name : String) : Option String :=
+    if String.beq name "eqcolon" then Option.some "≕" else Option.none
+#[partial]
+def Markdown.entity_e_78 (name : String) : Option String :=
+    if String.beq name "eqsim" then Option.some "≂" else Option.none
+#[partial]
+def Markdown.entity_e_79 (name : String) : Option String :=
+    if String.lt name "eqsim" then Markdown.entity_e_77 name else Markdown.entity_e_78 name
+#[partial]
+def Markdown.entity_e_80 (name : String) : Option String :=
+    if String.lt name "eqcolon" then Markdown.entity_e_76 name else Markdown.entity_e_79 name
+#[partial]
+def Markdown.entity_e_81 (name : String) : Option String :=
+    if String.beq name "eqslantgtr" then Option.some "⪖" else Option.none
+#[partial]
+def Markdown.entity_e_82 (name : String) : Option String :=
+    if String.beq name "eqslantless" then Option.some "⪕" else Option.none
+#[partial]
+def Markdown.entity_e_83 (name : String) : Option String :=
+    if String.lt name "eqslantless" then Markdown.entity_e_81 name else Markdown.entity_e_82 name
+#[partial]
+def Markdown.entity_e_84 (name : String) : Option String :=
+    if String.beq name "equals" then Option.some "=" else Option.none
+#[partial]
+def Markdown.entity_e_85 (name : String) : Option String :=
+    if String.beq name "equest" then Option.some "≟" else Option.none
+#[partial]
+def Markdown.entity_e_86 (name : String) : Option String :=
+    if String.lt name "equest" then Markdown.entity_e_84 name else Markdown.entity_e_85 name
+#[partial]
+def Markdown.entity_e_87 (name : String) : Option String :=
+    if String.lt name "equals" then Markdown.entity_e_83 name else Markdown.entity_e_86 name
+#[partial]
+def Markdown.entity_e_88 (name : String) : Option String :=
+    if String.lt name "eqslantgtr" then Markdown.entity_e_80 name else Markdown.entity_e_87 name
+#[partial]
+def Markdown.entity_e_89 (name : String) : Option String :=
+    if String.lt name "epsiv" then Markdown.entity_e_73 name else Markdown.entity_e_88 name
+#[partial]
+def Markdown.entity_e_90 (name : String) : Option String :=
+    if String.beq name "equiv" then Option.some "≡" else Option.none
+#[partial]
+def Markdown.entity_e_91 (name : String) : Option String :=
+    if String.beq name "equivDD" then Option.some "⩸" else Option.none
+#[partial]
+def Markdown.entity_e_92 (name : String) : Option String :=
+    if String.lt name "equivDD" then Markdown.entity_e_90 name else Markdown.entity_e_91 name
+#[partial]
+def Markdown.entity_e_93 (name : String) : Option String :=
+    if String.beq name "eqvparsl" then Option.some "⧥" else Option.none
+#[partial]
+def Markdown.entity_e_94 (name : String) : Option String :=
+    if String.beq name "erDot" then Option.some "≓" else Option.none
+#[partial]
+def Markdown.entity_e_95 (name : String) : Option String :=
+    if String.lt name "erDot" then Markdown.entity_e_93 name else Markdown.entity_e_94 name
+#[partial]
+def Markdown.entity_e_96 (name : String) : Option String :=
+    if String.lt name "eqvparsl" then Markdown.entity_e_92 name else Markdown.entity_e_95 name
+#[partial]
+def Markdown.entity_e_97 (name : String) : Option String :=
+    if String.beq name "erarr" then Option.some "⥱" else Option.none
+#[partial]
+def Markdown.entity_e_98 (name : String) : Option String :=
+    if String.beq name "escr" then Option.some "ℯ" else Option.none
+#[partial]
+def Markdown.entity_e_99 (name : String) : Option String :=
+    if String.lt name "escr" then Markdown.entity_e_97 name else Markdown.entity_e_98 name
+#[partial]
+def Markdown.entity_e_100 (name : String) : Option String :=
+    if String.beq name "esdot" then Option.some "≐" else Option.none
+#[partial]
+def Markdown.entity_e_101 (name : String) : Option String :=
+    if String.beq name "esim" then Option.some "≂" else Option.none
+#[partial]
+def Markdown.entity_e_102 (name : String) : Option String :=
+    if String.lt name "esim" then Markdown.entity_e_100 name else Markdown.entity_e_101 name
+#[partial]
+def Markdown.entity_e_103 (name : String) : Option String :=
+    if String.lt name "esdot" then Markdown.entity_e_99 name else Markdown.entity_e_102 name
+#[partial]
+def Markdown.entity_e_104 (name : String) : Option String :=
+    if String.lt name "erarr" then Markdown.entity_e_96 name else Markdown.entity_e_103 name
+#[partial]
+def Markdown.entity_e_105 (name : String) : Option String :=
+    if String.beq name "eta" then Option.some "η" else Option.none
+#[partial]
+def Markdown.entity_e_106 (name : String) : Option String :=
+    if String.beq name "eth" then Option.some "ð" else Option.none
+#[partial]
+def Markdown.entity_e_107 (name : String) : Option String :=
+    if String.lt name "eth" then Markdown.entity_e_105 name else Markdown.entity_e_106 name
+#[partial]
+def Markdown.entity_e_108 (name : String) : Option String :=
+    if String.beq name "euml" then Option.some "ë" else Option.none
+#[partial]
+def Markdown.entity_e_109 (name : String) : Option String :=
+    if String.beq name "euro" then Option.some "€" else Option.none
+#[partial]
+def Markdown.entity_e_110 (name : String) : Option String :=
+    if String.lt name "euro" then Markdown.entity_e_108 name else Markdown.entity_e_109 name
+#[partial]
+def Markdown.entity_e_111 (name : String) : Option String :=
+    if String.lt name "euml" then Markdown.entity_e_107 name else Markdown.entity_e_110 name
+#[partial]
+def Markdown.entity_e_112 (name : String) : Option String :=
+    if String.beq name "excl" then Option.some "!" else Option.none
+#[partial]
+def Markdown.entity_e_113 (name : String) : Option String :=
+    if String.beq name "exist" then Option.some "∃" else Option.none
+#[partial]
+def Markdown.entity_e_114 (name : String) : Option String :=
+    if String.lt name "exist" then Markdown.entity_e_112 name else Markdown.entity_e_113 name
+#[partial]
+def Markdown.entity_e_115 (name : String) : Option String :=
+    if String.beq name "expectation" then Option.some "ℰ" else Option.none
+#[partial]
+def Markdown.entity_e_116 (name : String) : Option String :=
+    if String.beq name "exponentiale" then Option.some "ⅇ" else Option.none
+#[partial]
+def Markdown.entity_e_117 (name : String) : Option String :=
+    if String.lt name "exponentiale" then Markdown.entity_e_115 name else Markdown.entity_e_116 name
+#[partial]
+def Markdown.entity_e_118 (name : String) : Option String :=
+    if String.lt name "expectation" then Markdown.entity_e_114 name else Markdown.entity_e_117 name
+#[partial]
+def Markdown.entity_e_119 (name : String) : Option String :=
+    if String.lt name "excl" then Markdown.entity_e_111 name else Markdown.entity_e_118 name
+#[partial]
+def Markdown.entity_e_120 (name : String) : Option String :=
+    if String.lt name "eta" then Markdown.entity_e_104 name else Markdown.entity_e_119 name
+#[partial]
+def Markdown.entity_e_121 (name : String) : Option String :=
+    if String.lt name "equiv" then Markdown.entity_e_89 name else Markdown.entity_e_120 name
+#[partial]
+def Markdown.entity_e_122 (name : String) : Option String :=
+    if String.lt name "eogon" then Markdown.entity_e_60 name else Markdown.entity_e_121 name
+
+def Markdown.entity_e (name : String) : Option String := Markdown.entity_e_122 name
 
 #[partial]
-def Markdown.entity_f (name : String) : Option String :=
-    if String.beq name "fallingdotseq" then Option.some "≒"
-    else if String.beq name "fcy" then Option.some "ф"
-    else if String.beq name "female" then Option.some "♀"
-    else if String.beq name "ffilig" then Option.some "ﬃ"
-    else if String.beq name "fflig" then Option.some "ﬀ"
-    else if String.beq name "ffllig" then Option.some "ﬄ"
-    else if String.beq name "ffr" then Option.some "𝔣"
-    else if String.beq name "filig" then Option.some "ﬁ"
-    else if String.beq name "fjlig" then Option.some "fj"
-    else if String.beq name "flat" then Option.some "♭"
-    else if String.beq name "fllig" then Option.some "ﬂ"
-    else if String.beq name "fltns" then Option.some "▱"
-    else if String.beq name "fnof" then Option.some "ƒ"
-    else if String.beq name "fopf" then Option.some "𝕗"
-    else if String.beq name "forall" then Option.some "∀"
-    else if String.beq name "fork" then Option.some "⋔"
-    else if String.beq name "forkv" then Option.some "⫙"
-    else if String.beq name "fpartint" then Option.some "⨍"
-    else if String.beq name "frac12" then Option.some "½"
-    else if String.beq name "frac13" then Option.some "⅓"
-    else if String.beq name "frac14" then Option.some "¼"
-    else if String.beq name "frac15" then Option.some "⅕"
-    else if String.beq name "frac16" then Option.some "⅙"
-    else if String.beq name "frac18" then Option.some "⅛"
-    else if String.beq name "frac23" then Option.some "⅔"
-    else if String.beq name "frac25" then Option.some "⅖"
-    else if String.beq name "frac34" then Option.some "¾"
-    else if String.beq name "frac35" then Option.some "⅗"
-    else if String.beq name "frac38" then Option.some "⅜"
-    else if String.beq name "frac45" then Option.some "⅘"
-    else if String.beq name "frac56" then Option.some "⅚"
-    else if String.beq name "frac58" then Option.some "⅝"
-    else if String.beq name "frac78" then Option.some "⅞"
-    else if String.beq name "frasl" then Option.some "⁄"
-    else if String.beq name "frown" then Option.some "⌢"
-    else if String.beq name "fscr" then Option.some "𝒻"
-    else Option.none
+def Markdown.entity_f_0 (name : String) : Option String :=
+    if String.beq name "fallingdotseq" then Option.some "≒" else Option.none
+#[partial]
+def Markdown.entity_f_1 (name : String) : Option String :=
+    if String.beq name "fcy" then Option.some "ф" else Option.none
+#[partial]
+def Markdown.entity_f_2 (name : String) : Option String :=
+    if String.lt name "fcy" then Markdown.entity_f_0 name else Markdown.entity_f_1 name
+#[partial]
+def Markdown.entity_f_3 (name : String) : Option String :=
+    if String.beq name "female" then Option.some "♀" else Option.none
+#[partial]
+def Markdown.entity_f_4 (name : String) : Option String :=
+    if String.beq name "ffilig" then Option.some "ﬃ" else Option.none
+#[partial]
+def Markdown.entity_f_5 (name : String) : Option String :=
+    if String.lt name "ffilig" then Markdown.entity_f_3 name else Markdown.entity_f_4 name
+#[partial]
+def Markdown.entity_f_6 (name : String) : Option String :=
+    if String.lt name "female" then Markdown.entity_f_2 name else Markdown.entity_f_5 name
+#[partial]
+def Markdown.entity_f_7 (name : String) : Option String :=
+    if String.beq name "fflig" then Option.some "ﬀ" else Option.none
+#[partial]
+def Markdown.entity_f_8 (name : String) : Option String :=
+    if String.beq name "ffllig" then Option.some "ﬄ" else Option.none
+#[partial]
+def Markdown.entity_f_9 (name : String) : Option String :=
+    if String.lt name "ffllig" then Markdown.entity_f_7 name else Markdown.entity_f_8 name
+#[partial]
+def Markdown.entity_f_10 (name : String) : Option String :=
+    if String.beq name "ffr" then Option.some "𝔣" else Option.none
+#[partial]
+def Markdown.entity_f_11 (name : String) : Option String :=
+    if String.beq name "filig" then Option.some "ﬁ" else Option.none
+#[partial]
+def Markdown.entity_f_12 (name : String) : Option String :=
+    if String.beq name "fjlig" then Option.some "fj" else Option.none
+#[partial]
+def Markdown.entity_f_13 (name : String) : Option String :=
+    if String.lt name "fjlig" then Markdown.entity_f_11 name else Markdown.entity_f_12 name
+#[partial]
+def Markdown.entity_f_14 (name : String) : Option String :=
+    if String.lt name "filig" then Markdown.entity_f_10 name else Markdown.entity_f_13 name
+#[partial]
+def Markdown.entity_f_15 (name : String) : Option String :=
+    if String.lt name "ffr" then Markdown.entity_f_9 name else Markdown.entity_f_14 name
+#[partial]
+def Markdown.entity_f_16 (name : String) : Option String :=
+    if String.lt name "fflig" then Markdown.entity_f_6 name else Markdown.entity_f_15 name
+#[partial]
+def Markdown.entity_f_17 (name : String) : Option String :=
+    if String.beq name "flat" then Option.some "♭" else Option.none
+#[partial]
+def Markdown.entity_f_18 (name : String) : Option String :=
+    if String.beq name "fllig" then Option.some "ﬂ" else Option.none
+#[partial]
+def Markdown.entity_f_19 (name : String) : Option String :=
+    if String.lt name "fllig" then Markdown.entity_f_17 name else Markdown.entity_f_18 name
+#[partial]
+def Markdown.entity_f_20 (name : String) : Option String :=
+    if String.beq name "fltns" then Option.some "▱" else Option.none
+#[partial]
+def Markdown.entity_f_21 (name : String) : Option String :=
+    if String.beq name "fnof" then Option.some "ƒ" else Option.none
+#[partial]
+def Markdown.entity_f_22 (name : String) : Option String :=
+    if String.lt name "fnof" then Markdown.entity_f_20 name else Markdown.entity_f_21 name
+#[partial]
+def Markdown.entity_f_23 (name : String) : Option String :=
+    if String.lt name "fltns" then Markdown.entity_f_19 name else Markdown.entity_f_22 name
+#[partial]
+def Markdown.entity_f_24 (name : String) : Option String :=
+    if String.beq name "fopf" then Option.some "𝕗" else Option.none
+#[partial]
+def Markdown.entity_f_25 (name : String) : Option String :=
+    if String.beq name "forall" then Option.some "∀" else Option.none
+#[partial]
+def Markdown.entity_f_26 (name : String) : Option String :=
+    if String.lt name "forall" then Markdown.entity_f_24 name else Markdown.entity_f_25 name
+#[partial]
+def Markdown.entity_f_27 (name : String) : Option String :=
+    if String.beq name "fork" then Option.some "⋔" else Option.none
+#[partial]
+def Markdown.entity_f_28 (name : String) : Option String :=
+    if String.beq name "forkv" then Option.some "⫙" else Option.none
+#[partial]
+def Markdown.entity_f_29 (name : String) : Option String :=
+    if String.beq name "fpartint" then Option.some "⨍" else Option.none
+#[partial]
+def Markdown.entity_f_30 (name : String) : Option String :=
+    if String.lt name "fpartint" then Markdown.entity_f_28 name else Markdown.entity_f_29 name
+#[partial]
+def Markdown.entity_f_31 (name : String) : Option String :=
+    if String.lt name "forkv" then Markdown.entity_f_27 name else Markdown.entity_f_30 name
+#[partial]
+def Markdown.entity_f_32 (name : String) : Option String :=
+    if String.lt name "fork" then Markdown.entity_f_26 name else Markdown.entity_f_31 name
+#[partial]
+def Markdown.entity_f_33 (name : String) : Option String :=
+    if String.lt name "fopf" then Markdown.entity_f_23 name else Markdown.entity_f_32 name
+#[partial]
+def Markdown.entity_f_34 (name : String) : Option String :=
+    if String.lt name "flat" then Markdown.entity_f_16 name else Markdown.entity_f_33 name
+#[partial]
+def Markdown.entity_f_35 (name : String) : Option String :=
+    if String.beq name "frac12" then Option.some "½" else Option.none
+#[partial]
+def Markdown.entity_f_36 (name : String) : Option String :=
+    if String.beq name "frac13" then Option.some "⅓" else Option.none
+#[partial]
+def Markdown.entity_f_37 (name : String) : Option String :=
+    if String.lt name "frac13" then Markdown.entity_f_35 name else Markdown.entity_f_36 name
+#[partial]
+def Markdown.entity_f_38 (name : String) : Option String :=
+    if String.beq name "frac14" then Option.some "¼" else Option.none
+#[partial]
+def Markdown.entity_f_39 (name : String) : Option String :=
+    if String.beq name "frac15" then Option.some "⅕" else Option.none
+#[partial]
+def Markdown.entity_f_40 (name : String) : Option String :=
+    if String.lt name "frac15" then Markdown.entity_f_38 name else Markdown.entity_f_39 name
+#[partial]
+def Markdown.entity_f_41 (name : String) : Option String :=
+    if String.lt name "frac14" then Markdown.entity_f_37 name else Markdown.entity_f_40 name
+#[partial]
+def Markdown.entity_f_42 (name : String) : Option String :=
+    if String.beq name "frac16" then Option.some "⅙" else Option.none
+#[partial]
+def Markdown.entity_f_43 (name : String) : Option String :=
+    if String.beq name "frac18" then Option.some "⅛" else Option.none
+#[partial]
+def Markdown.entity_f_44 (name : String) : Option String :=
+    if String.lt name "frac18" then Markdown.entity_f_42 name else Markdown.entity_f_43 name
+#[partial]
+def Markdown.entity_f_45 (name : String) : Option String :=
+    if String.beq name "frac23" then Option.some "⅔" else Option.none
+#[partial]
+def Markdown.entity_f_46 (name : String) : Option String :=
+    if String.beq name "frac25" then Option.some "⅖" else Option.none
+#[partial]
+def Markdown.entity_f_47 (name : String) : Option String :=
+    if String.beq name "frac34" then Option.some "¾" else Option.none
+#[partial]
+def Markdown.entity_f_48 (name : String) : Option String :=
+    if String.lt name "frac34" then Markdown.entity_f_46 name else Markdown.entity_f_47 name
+#[partial]
+def Markdown.entity_f_49 (name : String) : Option String :=
+    if String.lt name "frac25" then Markdown.entity_f_45 name else Markdown.entity_f_48 name
+#[partial]
+def Markdown.entity_f_50 (name : String) : Option String :=
+    if String.lt name "frac23" then Markdown.entity_f_44 name else Markdown.entity_f_49 name
+#[partial]
+def Markdown.entity_f_51 (name : String) : Option String :=
+    if String.lt name "frac16" then Markdown.entity_f_41 name else Markdown.entity_f_50 name
+#[partial]
+def Markdown.entity_f_52 (name : String) : Option String :=
+    if String.beq name "frac35" then Option.some "⅗" else Option.none
+#[partial]
+def Markdown.entity_f_53 (name : String) : Option String :=
+    if String.beq name "frac38" then Option.some "⅜" else Option.none
+#[partial]
+def Markdown.entity_f_54 (name : String) : Option String :=
+    if String.lt name "frac38" then Markdown.entity_f_52 name else Markdown.entity_f_53 name
+#[partial]
+def Markdown.entity_f_55 (name : String) : Option String :=
+    if String.beq name "frac45" then Option.some "⅘" else Option.none
+#[partial]
+def Markdown.entity_f_56 (name : String) : Option String :=
+    if String.beq name "frac56" then Option.some "⅚" else Option.none
+#[partial]
+def Markdown.entity_f_57 (name : String) : Option String :=
+    if String.lt name "frac56" then Markdown.entity_f_55 name else Markdown.entity_f_56 name
+#[partial]
+def Markdown.entity_f_58 (name : String) : Option String :=
+    if String.lt name "frac45" then Markdown.entity_f_54 name else Markdown.entity_f_57 name
+#[partial]
+def Markdown.entity_f_59 (name : String) : Option String :=
+    if String.beq name "frac58" then Option.some "⅝" else Option.none
+#[partial]
+def Markdown.entity_f_60 (name : String) : Option String :=
+    if String.beq name "frac78" then Option.some "⅞" else Option.none
+#[partial]
+def Markdown.entity_f_61 (name : String) : Option String :=
+    if String.lt name "frac78" then Markdown.entity_f_59 name else Markdown.entity_f_60 name
+#[partial]
+def Markdown.entity_f_62 (name : String) : Option String :=
+    if String.beq name "frasl" then Option.some "⁄" else Option.none
+#[partial]
+def Markdown.entity_f_63 (name : String) : Option String :=
+    if String.beq name "frown" then Option.some "⌢" else Option.none
+#[partial]
+def Markdown.entity_f_64 (name : String) : Option String :=
+    if String.beq name "fscr" then Option.some "𝒻" else Option.none
+#[partial]
+def Markdown.entity_f_65 (name : String) : Option String :=
+    if String.lt name "fscr" then Markdown.entity_f_63 name else Markdown.entity_f_64 name
+#[partial]
+def Markdown.entity_f_66 (name : String) : Option String :=
+    if String.lt name "frown" then Markdown.entity_f_62 name else Markdown.entity_f_65 name
+#[partial]
+def Markdown.entity_f_67 (name : String) : Option String :=
+    if String.lt name "frasl" then Markdown.entity_f_61 name else Markdown.entity_f_66 name
+#[partial]
+def Markdown.entity_f_68 (name : String) : Option String :=
+    if String.lt name "frac58" then Markdown.entity_f_58 name else Markdown.entity_f_67 name
+#[partial]
+def Markdown.entity_f_69 (name : String) : Option String :=
+    if String.lt name "frac35" then Markdown.entity_f_51 name else Markdown.entity_f_68 name
+#[partial]
+def Markdown.entity_f_70 (name : String) : Option String :=
+    if String.lt name "frac12" then Markdown.entity_f_34 name else Markdown.entity_f_69 name
+
+def Markdown.entity_f (name : String) : Option String := Markdown.entity_f_70 name
 
 #[partial]
-def Markdown.entity_g (name : String) : Option String :=
-    if String.beq name "gE" then Option.some "≧"
-    else if String.beq name "gEl" then Option.some "⪌"
-    else if String.beq name "gacute" then Option.some "ǵ"
-    else if String.beq name "gamma" then Option.some "γ"
-    else if String.beq name "gammad" then Option.some "ϝ"
-    else if String.beq name "gap" then Option.some "⪆"
-    else if String.beq name "gbreve" then Option.some "ğ"
-    else if String.beq name "gcirc" then Option.some "ĝ"
-    else if String.beq name "gcy" then Option.some "г"
-    else if String.beq name "gdot" then Option.some "ġ"
-    else if String.beq name "ge" then Option.some "≥"
-    else if String.beq name "gel" then Option.some "⋛"
-    else if String.beq name "geq" then Option.some "≥"
-    else if String.beq name "geqq" then Option.some "≧"
-    else if String.beq name "geqslant" then Option.some "⩾"
-    else if String.beq name "ges" then Option.some "⩾"
-    else if String.beq name "gescc" then Option.some "⪩"
-    else if String.beq name "gesdot" then Option.some "⪀"
-    else if String.beq name "gesdoto" then Option.some "⪂"
-    else if String.beq name "gesdotol" then Option.some "⪄"
-    else if String.beq name "gesl" then Option.some "⋛︀"
-    else if String.beq name "gesles" then Option.some "⪔"
-    else if String.beq name "gfr" then Option.some "𝔤"
-    else if String.beq name "gg" then Option.some "≫"
-    else if String.beq name "ggg" then Option.some "⋙"
-    else if String.beq name "gimel" then Option.some "ℷ"
-    else if String.beq name "gjcy" then Option.some "ѓ"
-    else if String.beq name "gl" then Option.some "≷"
-    else if String.beq name "glE" then Option.some "⪒"
-    else if String.beq name "gla" then Option.some "⪥"
-    else if String.beq name "glj" then Option.some "⪤"
-    else if String.beq name "gnE" then Option.some "≩"
-    else if String.beq name "gnap" then Option.some "⪊"
-    else if String.beq name "gnapprox" then Option.some "⪊"
-    else if String.beq name "gne" then Option.some "⪈"
-    else if String.beq name "gneq" then Option.some "⪈"
-    else if String.beq name "gneqq" then Option.some "≩"
-    else if String.beq name "gnsim" then Option.some "⋧"
-    else if String.beq name "gopf" then Option.some "𝕘"
-    else if String.beq name "grave" then Option.some "`"
-    else if String.beq name "gscr" then Option.some "ℊ"
-    else if String.beq name "gsim" then Option.some "≳"
-    else if String.beq name "gsime" then Option.some "⪎"
-    else if String.beq name "gsiml" then Option.some "⪐"
-    else if String.beq name "gt" then Option.some ">"
-    else if String.beq name "gtcc" then Option.some "⪧"
-    else if String.beq name "gtcir" then Option.some "⩺"
-    else if String.beq name "gtdot" then Option.some "⋗"
-    else if String.beq name "gtlPar" then Option.some "⦕"
-    else if String.beq name "gtquest" then Option.some "⩼"
-    else if String.beq name "gtrapprox" then Option.some "⪆"
-    else if String.beq name "gtrarr" then Option.some "⥸"
-    else if String.beq name "gtrdot" then Option.some "⋗"
-    else if String.beq name "gtreqless" then Option.some "⋛"
-    else if String.beq name "gtreqqless" then Option.some "⪌"
-    else if String.beq name "gtrless" then Option.some "≷"
-    else if String.beq name "gtrsim" then Option.some "≳"
-    else if String.beq name "gvertneqq" then Option.some "≩︀"
-    else if String.beq name "gvnE" then Option.some "≩︀"
-    else Option.none
+def Markdown.entity_g_0 (name : String) : Option String :=
+    if String.beq name "gE" then Option.some "≧" else Option.none
+#[partial]
+def Markdown.entity_g_1 (name : String) : Option String :=
+    if String.beq name "gEl" then Option.some "⪌" else Option.none
+#[partial]
+def Markdown.entity_g_2 (name : String) : Option String :=
+    if String.beq name "gacute" then Option.some "ǵ" else Option.none
+#[partial]
+def Markdown.entity_g_3 (name : String) : Option String :=
+    if String.lt name "gacute" then Markdown.entity_g_1 name else Markdown.entity_g_2 name
+#[partial]
+def Markdown.entity_g_4 (name : String) : Option String :=
+    if String.lt name "gEl" then Markdown.entity_g_0 name else Markdown.entity_g_3 name
+#[partial]
+def Markdown.entity_g_5 (name : String) : Option String :=
+    if String.beq name "gamma" then Option.some "γ" else Option.none
+#[partial]
+def Markdown.entity_g_6 (name : String) : Option String :=
+    if String.beq name "gammad" then Option.some "ϝ" else Option.none
+#[partial]
+def Markdown.entity_g_7 (name : String) : Option String :=
+    if String.lt name "gammad" then Markdown.entity_g_5 name else Markdown.entity_g_6 name
+#[partial]
+def Markdown.entity_g_8 (name : String) : Option String :=
+    if String.beq name "gap" then Option.some "⪆" else Option.none
+#[partial]
+def Markdown.entity_g_9 (name : String) : Option String :=
+    if String.beq name "gbreve" then Option.some "ğ" else Option.none
+#[partial]
+def Markdown.entity_g_10 (name : String) : Option String :=
+    if String.lt name "gbreve" then Markdown.entity_g_8 name else Markdown.entity_g_9 name
+#[partial]
+def Markdown.entity_g_11 (name : String) : Option String :=
+    if String.lt name "gap" then Markdown.entity_g_7 name else Markdown.entity_g_10 name
+#[partial]
+def Markdown.entity_g_12 (name : String) : Option String :=
+    if String.lt name "gamma" then Markdown.entity_g_4 name else Markdown.entity_g_11 name
+#[partial]
+def Markdown.entity_g_13 (name : String) : Option String :=
+    if String.beq name "gcirc" then Option.some "ĝ" else Option.none
+#[partial]
+def Markdown.entity_g_14 (name : String) : Option String :=
+    if String.beq name "gcy" then Option.some "г" else Option.none
+#[partial]
+def Markdown.entity_g_15 (name : String) : Option String :=
+    if String.beq name "gdot" then Option.some "ġ" else Option.none
+#[partial]
+def Markdown.entity_g_16 (name : String) : Option String :=
+    if String.lt name "gdot" then Markdown.entity_g_14 name else Markdown.entity_g_15 name
+#[partial]
+def Markdown.entity_g_17 (name : String) : Option String :=
+    if String.lt name "gcy" then Markdown.entity_g_13 name else Markdown.entity_g_16 name
+#[partial]
+def Markdown.entity_g_18 (name : String) : Option String :=
+    if String.beq name "ge" then Option.some "≥" else Option.none
+#[partial]
+def Markdown.entity_g_19 (name : String) : Option String :=
+    if String.beq name "gel" then Option.some "⋛" else Option.none
+#[partial]
+def Markdown.entity_g_20 (name : String) : Option String :=
+    if String.lt name "gel" then Markdown.entity_g_18 name else Markdown.entity_g_19 name
+#[partial]
+def Markdown.entity_g_21 (name : String) : Option String :=
+    if String.beq name "geq" then Option.some "≥" else Option.none
+#[partial]
+def Markdown.entity_g_22 (name : String) : Option String :=
+    if String.beq name "geqq" then Option.some "≧" else Option.none
+#[partial]
+def Markdown.entity_g_23 (name : String) : Option String :=
+    if String.lt name "geqq" then Markdown.entity_g_21 name else Markdown.entity_g_22 name
+#[partial]
+def Markdown.entity_g_24 (name : String) : Option String :=
+    if String.lt name "geq" then Markdown.entity_g_20 name else Markdown.entity_g_23 name
+#[partial]
+def Markdown.entity_g_25 (name : String) : Option String :=
+    if String.lt name "ge" then Markdown.entity_g_17 name else Markdown.entity_g_24 name
+#[partial]
+def Markdown.entity_g_26 (name : String) : Option String :=
+    if String.lt name "gcirc" then Markdown.entity_g_12 name else Markdown.entity_g_25 name
+#[partial]
+def Markdown.entity_g_27 (name : String) : Option String :=
+    if String.beq name "geqslant" then Option.some "⩾" else Option.none
+#[partial]
+def Markdown.entity_g_28 (name : String) : Option String :=
+    if String.beq name "ges" then Option.some "⩾" else Option.none
+#[partial]
+def Markdown.entity_g_29 (name : String) : Option String :=
+    if String.beq name "gescc" then Option.some "⪩" else Option.none
+#[partial]
+def Markdown.entity_g_30 (name : String) : Option String :=
+    if String.lt name "gescc" then Markdown.entity_g_28 name else Markdown.entity_g_29 name
+#[partial]
+def Markdown.entity_g_31 (name : String) : Option String :=
+    if String.lt name "ges" then Markdown.entity_g_27 name else Markdown.entity_g_30 name
+#[partial]
+def Markdown.entity_g_32 (name : String) : Option String :=
+    if String.beq name "gesdot" then Option.some "⪀" else Option.none
+#[partial]
+def Markdown.entity_g_33 (name : String) : Option String :=
+    if String.beq name "gesdoto" then Option.some "⪂" else Option.none
+#[partial]
+def Markdown.entity_g_34 (name : String) : Option String :=
+    if String.lt name "gesdoto" then Markdown.entity_g_32 name else Markdown.entity_g_33 name
+#[partial]
+def Markdown.entity_g_35 (name : String) : Option String :=
+    if String.beq name "gesdotol" then Option.some "⪄" else Option.none
+#[partial]
+def Markdown.entity_g_36 (name : String) : Option String :=
+    if String.beq name "gesl" then Option.some "⋛︀" else Option.none
+#[partial]
+def Markdown.entity_g_37 (name : String) : Option String :=
+    if String.lt name "gesl" then Markdown.entity_g_35 name else Markdown.entity_g_36 name
+#[partial]
+def Markdown.entity_g_38 (name : String) : Option String :=
+    if String.lt name "gesdotol" then Markdown.entity_g_34 name else Markdown.entity_g_37 name
+#[partial]
+def Markdown.entity_g_39 (name : String) : Option String :=
+    if String.lt name "gesdot" then Markdown.entity_g_31 name else Markdown.entity_g_38 name
+#[partial]
+def Markdown.entity_g_40 (name : String) : Option String :=
+    if String.beq name "gesles" then Option.some "⪔" else Option.none
+#[partial]
+def Markdown.entity_g_41 (name : String) : Option String :=
+    if String.beq name "gfr" then Option.some "𝔤" else Option.none
+#[partial]
+def Markdown.entity_g_42 (name : String) : Option String :=
+    if String.lt name "gfr" then Markdown.entity_g_40 name else Markdown.entity_g_41 name
+#[partial]
+def Markdown.entity_g_43 (name : String) : Option String :=
+    if String.beq name "gg" then Option.some "≫" else Option.none
+#[partial]
+def Markdown.entity_g_44 (name : String) : Option String :=
+    if String.beq name "ggg" then Option.some "⋙" else Option.none
+#[partial]
+def Markdown.entity_g_45 (name : String) : Option String :=
+    if String.lt name "ggg" then Markdown.entity_g_43 name else Markdown.entity_g_44 name
+#[partial]
+def Markdown.entity_g_46 (name : String) : Option String :=
+    if String.lt name "gg" then Markdown.entity_g_42 name else Markdown.entity_g_45 name
+#[partial]
+def Markdown.entity_g_47 (name : String) : Option String :=
+    if String.beq name "gimel" then Option.some "ℷ" else Option.none
+#[partial]
+def Markdown.entity_g_48 (name : String) : Option String :=
+    if String.beq name "gjcy" then Option.some "ѓ" else Option.none
+#[partial]
+def Markdown.entity_g_49 (name : String) : Option String :=
+    if String.lt name "gjcy" then Markdown.entity_g_47 name else Markdown.entity_g_48 name
+#[partial]
+def Markdown.entity_g_50 (name : String) : Option String :=
+    if String.beq name "gl" then Option.some "≷" else Option.none
+#[partial]
+def Markdown.entity_g_51 (name : String) : Option String :=
+    if String.beq name "glE" then Option.some "⪒" else Option.none
+#[partial]
+def Markdown.entity_g_52 (name : String) : Option String :=
+    if String.lt name "glE" then Markdown.entity_g_50 name else Markdown.entity_g_51 name
+#[partial]
+def Markdown.entity_g_53 (name : String) : Option String :=
+    if String.lt name "gl" then Markdown.entity_g_49 name else Markdown.entity_g_52 name
+#[partial]
+def Markdown.entity_g_54 (name : String) : Option String :=
+    if String.lt name "gimel" then Markdown.entity_g_46 name else Markdown.entity_g_53 name
+#[partial]
+def Markdown.entity_g_55 (name : String) : Option String :=
+    if String.lt name "gesles" then Markdown.entity_g_39 name else Markdown.entity_g_54 name
+#[partial]
+def Markdown.entity_g_56 (name : String) : Option String :=
+    if String.lt name "geqslant" then Markdown.entity_g_26 name else Markdown.entity_g_55 name
+#[partial]
+def Markdown.entity_g_57 (name : String) : Option String :=
+    if String.beq name "gla" then Option.some "⪥" else Option.none
+#[partial]
+def Markdown.entity_g_58 (name : String) : Option String :=
+    if String.beq name "glj" then Option.some "⪤" else Option.none
+#[partial]
+def Markdown.entity_g_59 (name : String) : Option String :=
+    if String.beq name "gnE" then Option.some "≩" else Option.none
+#[partial]
+def Markdown.entity_g_60 (name : String) : Option String :=
+    if String.lt name "gnE" then Markdown.entity_g_58 name else Markdown.entity_g_59 name
+#[partial]
+def Markdown.entity_g_61 (name : String) : Option String :=
+    if String.lt name "glj" then Markdown.entity_g_57 name else Markdown.entity_g_60 name
+#[partial]
+def Markdown.entity_g_62 (name : String) : Option String :=
+    if String.beq name "gnap" then Option.some "⪊" else Option.none
+#[partial]
+def Markdown.entity_g_63 (name : String) : Option String :=
+    if String.beq name "gnapprox" then Option.some "⪊" else Option.none
+#[partial]
+def Markdown.entity_g_64 (name : String) : Option String :=
+    if String.lt name "gnapprox" then Markdown.entity_g_62 name else Markdown.entity_g_63 name
+#[partial]
+def Markdown.entity_g_65 (name : String) : Option String :=
+    if String.beq name "gne" then Option.some "⪈" else Option.none
+#[partial]
+def Markdown.entity_g_66 (name : String) : Option String :=
+    if String.beq name "gneq" then Option.some "⪈" else Option.none
+#[partial]
+def Markdown.entity_g_67 (name : String) : Option String :=
+    if String.lt name "gneq" then Markdown.entity_g_65 name else Markdown.entity_g_66 name
+#[partial]
+def Markdown.entity_g_68 (name : String) : Option String :=
+    if String.lt name "gne" then Markdown.entity_g_64 name else Markdown.entity_g_67 name
+#[partial]
+def Markdown.entity_g_69 (name : String) : Option String :=
+    if String.lt name "gnap" then Markdown.entity_g_61 name else Markdown.entity_g_68 name
+#[partial]
+def Markdown.entity_g_70 (name : String) : Option String :=
+    if String.beq name "gneqq" then Option.some "≩" else Option.none
+#[partial]
+def Markdown.entity_g_71 (name : String) : Option String :=
+    if String.beq name "gnsim" then Option.some "⋧" else Option.none
+#[partial]
+def Markdown.entity_g_72 (name : String) : Option String :=
+    if String.lt name "gnsim" then Markdown.entity_g_70 name else Markdown.entity_g_71 name
+#[partial]
+def Markdown.entity_g_73 (name : String) : Option String :=
+    if String.beq name "gopf" then Option.some "𝕘" else Option.none
+#[partial]
+def Markdown.entity_g_74 (name : String) : Option String :=
+    if String.beq name "grave" then Option.some "`" else Option.none
+#[partial]
+def Markdown.entity_g_75 (name : String) : Option String :=
+    if String.lt name "grave" then Markdown.entity_g_73 name else Markdown.entity_g_74 name
+#[partial]
+def Markdown.entity_g_76 (name : String) : Option String :=
+    if String.lt name "gopf" then Markdown.entity_g_72 name else Markdown.entity_g_75 name
+#[partial]
+def Markdown.entity_g_77 (name : String) : Option String :=
+    if String.beq name "gscr" then Option.some "ℊ" else Option.none
+#[partial]
+def Markdown.entity_g_78 (name : String) : Option String :=
+    if String.beq name "gsim" then Option.some "≳" else Option.none
+#[partial]
+def Markdown.entity_g_79 (name : String) : Option String :=
+    if String.lt name "gsim" then Markdown.entity_g_77 name else Markdown.entity_g_78 name
+#[partial]
+def Markdown.entity_g_80 (name : String) : Option String :=
+    if String.beq name "gsime" then Option.some "⪎" else Option.none
+#[partial]
+def Markdown.entity_g_81 (name : String) : Option String :=
+    if String.beq name "gsiml" then Option.some "⪐" else Option.none
+#[partial]
+def Markdown.entity_g_82 (name : String) : Option String :=
+    if String.lt name "gsiml" then Markdown.entity_g_80 name else Markdown.entity_g_81 name
+#[partial]
+def Markdown.entity_g_83 (name : String) : Option String :=
+    if String.lt name "gsime" then Markdown.entity_g_79 name else Markdown.entity_g_82 name
+#[partial]
+def Markdown.entity_g_84 (name : String) : Option String :=
+    if String.lt name "gscr" then Markdown.entity_g_76 name else Markdown.entity_g_83 name
+#[partial]
+def Markdown.entity_g_85 (name : String) : Option String :=
+    if String.lt name "gneqq" then Markdown.entity_g_69 name else Markdown.entity_g_84 name
+#[partial]
+def Markdown.entity_g_86 (name : String) : Option String :=
+    if String.beq name "gt" then Option.some ">" else Option.none
+#[partial]
+def Markdown.entity_g_87 (name : String) : Option String :=
+    if String.beq name "gtcc" then Option.some "⪧" else Option.none
+#[partial]
+def Markdown.entity_g_88 (name : String) : Option String :=
+    if String.beq name "gtcir" then Option.some "⩺" else Option.none
+#[partial]
+def Markdown.entity_g_89 (name : String) : Option String :=
+    if String.lt name "gtcir" then Markdown.entity_g_87 name else Markdown.entity_g_88 name
+#[partial]
+def Markdown.entity_g_90 (name : String) : Option String :=
+    if String.lt name "gtcc" then Markdown.entity_g_86 name else Markdown.entity_g_89 name
+#[partial]
+def Markdown.entity_g_91 (name : String) : Option String :=
+    if String.beq name "gtdot" then Option.some "⋗" else Option.none
+#[partial]
+def Markdown.entity_g_92 (name : String) : Option String :=
+    if String.beq name "gtlPar" then Option.some "⦕" else Option.none
+#[partial]
+def Markdown.entity_g_93 (name : String) : Option String :=
+    if String.lt name "gtlPar" then Markdown.entity_g_91 name else Markdown.entity_g_92 name
+#[partial]
+def Markdown.entity_g_94 (name : String) : Option String :=
+    if String.beq name "gtquest" then Option.some "⩼" else Option.none
+#[partial]
+def Markdown.entity_g_95 (name : String) : Option String :=
+    if String.beq name "gtrapprox" then Option.some "⪆" else Option.none
+#[partial]
+def Markdown.entity_g_96 (name : String) : Option String :=
+    if String.lt name "gtrapprox" then Markdown.entity_g_94 name else Markdown.entity_g_95 name
+#[partial]
+def Markdown.entity_g_97 (name : String) : Option String :=
+    if String.lt name "gtquest" then Markdown.entity_g_93 name else Markdown.entity_g_96 name
+#[partial]
+def Markdown.entity_g_98 (name : String) : Option String :=
+    if String.lt name "gtdot" then Markdown.entity_g_90 name else Markdown.entity_g_97 name
+#[partial]
+def Markdown.entity_g_99 (name : String) : Option String :=
+    if String.beq name "gtrarr" then Option.some "⥸" else Option.none
+#[partial]
+def Markdown.entity_g_100 (name : String) : Option String :=
+    if String.beq name "gtrdot" then Option.some "⋗" else Option.none
+#[partial]
+def Markdown.entity_g_101 (name : String) : Option String :=
+    if String.lt name "gtrdot" then Markdown.entity_g_99 name else Markdown.entity_g_100 name
+#[partial]
+def Markdown.entity_g_102 (name : String) : Option String :=
+    if String.beq name "gtreqless" then Option.some "⋛" else Option.none
+#[partial]
+def Markdown.entity_g_103 (name : String) : Option String :=
+    if String.beq name "gtreqqless" then Option.some "⪌" else Option.none
+#[partial]
+def Markdown.entity_g_104 (name : String) : Option String :=
+    if String.lt name "gtreqqless" then Markdown.entity_g_102 name else Markdown.entity_g_103 name
+#[partial]
+def Markdown.entity_g_105 (name : String) : Option String :=
+    if String.lt name "gtreqless" then Markdown.entity_g_101 name else Markdown.entity_g_104 name
+#[partial]
+def Markdown.entity_g_106 (name : String) : Option String :=
+    if String.beq name "gtrless" then Option.some "≷" else Option.none
+#[partial]
+def Markdown.entity_g_107 (name : String) : Option String :=
+    if String.beq name "gtrsim" then Option.some "≳" else Option.none
+#[partial]
+def Markdown.entity_g_108 (name : String) : Option String :=
+    if String.lt name "gtrsim" then Markdown.entity_g_106 name else Markdown.entity_g_107 name
+#[partial]
+def Markdown.entity_g_109 (name : String) : Option String :=
+    if String.beq name "gvertneqq" then Option.some "≩︀" else Option.none
+#[partial]
+def Markdown.entity_g_110 (name : String) : Option String :=
+    if String.beq name "gvnE" then Option.some "≩︀" else Option.none
+#[partial]
+def Markdown.entity_g_111 (name : String) : Option String :=
+    if String.lt name "gvnE" then Markdown.entity_g_109 name else Markdown.entity_g_110 name
+#[partial]
+def Markdown.entity_g_112 (name : String) : Option String :=
+    if String.lt name "gvertneqq" then Markdown.entity_g_108 name else Markdown.entity_g_111 name
+#[partial]
+def Markdown.entity_g_113 (name : String) : Option String :=
+    if String.lt name "gtrless" then Markdown.entity_g_105 name else Markdown.entity_g_112 name
+#[partial]
+def Markdown.entity_g_114 (name : String) : Option String :=
+    if String.lt name "gtrarr" then Markdown.entity_g_98 name else Markdown.entity_g_113 name
+#[partial]
+def Markdown.entity_g_115 (name : String) : Option String :=
+    if String.lt name "gt" then Markdown.entity_g_85 name else Markdown.entity_g_114 name
+#[partial]
+def Markdown.entity_g_116 (name : String) : Option String :=
+    if String.lt name "gla" then Markdown.entity_g_56 name else Markdown.entity_g_115 name
+
+def Markdown.entity_g (name : String) : Option String := Markdown.entity_g_116 name
 
 #[partial]
-def Markdown.entity_h (name : String) : Option String :=
-    if String.beq name "hArr" then Option.some "⇔"
-    else if String.beq name "hairsp" then Option.some " "
-    else if String.beq name "half" then Option.some "½"
-    else if String.beq name "hamilt" then Option.some "ℋ"
-    else if String.beq name "hardcy" then Option.some "ъ"
-    else if String.beq name "harr" then Option.some "↔"
-    else if String.beq name "harrcir" then Option.some "⥈"
-    else if String.beq name "harrw" then Option.some "↭"
-    else if String.beq name "hbar" then Option.some "ℏ"
-    else if String.beq name "hcirc" then Option.some "ĥ"
-    else if String.beq name "hearts" then Option.some "♥"
-    else if String.beq name "heartsuit" then Option.some "♥"
-    else if String.beq name "hellip" then Option.some "…"
-    else if String.beq name "hercon" then Option.some "⊹"
-    else if String.beq name "hfr" then Option.some "𝔥"
-    else if String.beq name "hksearow" then Option.some "⤥"
-    else if String.beq name "hkswarow" then Option.some "⤦"
-    else if String.beq name "hoarr" then Option.some "⇿"
-    else if String.beq name "homtht" then Option.some "∻"
-    else if String.beq name "hookleftarrow" then Option.some "↩"
-    else if String.beq name "hookrightarrow" then Option.some "↪"
-    else if String.beq name "hopf" then Option.some "𝕙"
-    else if String.beq name "horbar" then Option.some "―"
-    else if String.beq name "hscr" then Option.some "𝒽"
-    else if String.beq name "hslash" then Option.some "ℏ"
-    else if String.beq name "hstrok" then Option.some "ħ"
-    else if String.beq name "hybull" then Option.some "⁃"
-    else if String.beq name "hyphen" then Option.some "‐"
-    else Option.none
+def Markdown.entity_h_0 (name : String) : Option String :=
+    if String.beq name "hArr" then Option.some "⇔" else Option.none
+#[partial]
+def Markdown.entity_h_1 (name : String) : Option String :=
+    if String.beq name "hairsp" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_h_2 (name : String) : Option String :=
+    if String.beq name "half" then Option.some "½" else Option.none
+#[partial]
+def Markdown.entity_h_3 (name : String) : Option String :=
+    if String.lt name "half" then Markdown.entity_h_1 name else Markdown.entity_h_2 name
+#[partial]
+def Markdown.entity_h_4 (name : String) : Option String :=
+    if String.lt name "hairsp" then Markdown.entity_h_0 name else Markdown.entity_h_3 name
+#[partial]
+def Markdown.entity_h_5 (name : String) : Option String :=
+    if String.beq name "hamilt" then Option.some "ℋ" else Option.none
+#[partial]
+def Markdown.entity_h_6 (name : String) : Option String :=
+    if String.beq name "hardcy" then Option.some "ъ" else Option.none
+#[partial]
+def Markdown.entity_h_7 (name : String) : Option String :=
+    if String.lt name "hardcy" then Markdown.entity_h_5 name else Markdown.entity_h_6 name
+#[partial]
+def Markdown.entity_h_8 (name : String) : Option String :=
+    if String.beq name "harr" then Option.some "↔" else Option.none
+#[partial]
+def Markdown.entity_h_9 (name : String) : Option String :=
+    if String.beq name "harrcir" then Option.some "⥈" else Option.none
+#[partial]
+def Markdown.entity_h_10 (name : String) : Option String :=
+    if String.lt name "harrcir" then Markdown.entity_h_8 name else Markdown.entity_h_9 name
+#[partial]
+def Markdown.entity_h_11 (name : String) : Option String :=
+    if String.lt name "harr" then Markdown.entity_h_7 name else Markdown.entity_h_10 name
+#[partial]
+def Markdown.entity_h_12 (name : String) : Option String :=
+    if String.lt name "hamilt" then Markdown.entity_h_4 name else Markdown.entity_h_11 name
+#[partial]
+def Markdown.entity_h_13 (name : String) : Option String :=
+    if String.beq name "harrw" then Option.some "↭" else Option.none
+#[partial]
+def Markdown.entity_h_14 (name : String) : Option String :=
+    if String.beq name "hbar" then Option.some "ℏ" else Option.none
+#[partial]
+def Markdown.entity_h_15 (name : String) : Option String :=
+    if String.beq name "hcirc" then Option.some "ĥ" else Option.none
+#[partial]
+def Markdown.entity_h_16 (name : String) : Option String :=
+    if String.lt name "hcirc" then Markdown.entity_h_14 name else Markdown.entity_h_15 name
+#[partial]
+def Markdown.entity_h_17 (name : String) : Option String :=
+    if String.lt name "hbar" then Markdown.entity_h_13 name else Markdown.entity_h_16 name
+#[partial]
+def Markdown.entity_h_18 (name : String) : Option String :=
+    if String.beq name "hearts" then Option.some "♥" else Option.none
+#[partial]
+def Markdown.entity_h_19 (name : String) : Option String :=
+    if String.beq name "heartsuit" then Option.some "♥" else Option.none
+#[partial]
+def Markdown.entity_h_20 (name : String) : Option String :=
+    if String.lt name "heartsuit" then Markdown.entity_h_18 name else Markdown.entity_h_19 name
+#[partial]
+def Markdown.entity_h_21 (name : String) : Option String :=
+    if String.beq name "hellip" then Option.some "…" else Option.none
+#[partial]
+def Markdown.entity_h_22 (name : String) : Option String :=
+    if String.beq name "hercon" then Option.some "⊹" else Option.none
+#[partial]
+def Markdown.entity_h_23 (name : String) : Option String :=
+    if String.lt name "hercon" then Markdown.entity_h_21 name else Markdown.entity_h_22 name
+#[partial]
+def Markdown.entity_h_24 (name : String) : Option String :=
+    if String.lt name "hellip" then Markdown.entity_h_20 name else Markdown.entity_h_23 name
+#[partial]
+def Markdown.entity_h_25 (name : String) : Option String :=
+    if String.lt name "hearts" then Markdown.entity_h_17 name else Markdown.entity_h_24 name
+#[partial]
+def Markdown.entity_h_26 (name : String) : Option String :=
+    if String.lt name "harrw" then Markdown.entity_h_12 name else Markdown.entity_h_25 name
+#[partial]
+def Markdown.entity_h_27 (name : String) : Option String :=
+    if String.beq name "hfr" then Option.some "𝔥" else Option.none
+#[partial]
+def Markdown.entity_h_28 (name : String) : Option String :=
+    if String.beq name "hksearow" then Option.some "⤥" else Option.none
+#[partial]
+def Markdown.entity_h_29 (name : String) : Option String :=
+    if String.beq name "hkswarow" then Option.some "⤦" else Option.none
+#[partial]
+def Markdown.entity_h_30 (name : String) : Option String :=
+    if String.lt name "hkswarow" then Markdown.entity_h_28 name else Markdown.entity_h_29 name
+#[partial]
+def Markdown.entity_h_31 (name : String) : Option String :=
+    if String.lt name "hksearow" then Markdown.entity_h_27 name else Markdown.entity_h_30 name
+#[partial]
+def Markdown.entity_h_32 (name : String) : Option String :=
+    if String.beq name "hoarr" then Option.some "⇿" else Option.none
+#[partial]
+def Markdown.entity_h_33 (name : String) : Option String :=
+    if String.beq name "homtht" then Option.some "∻" else Option.none
+#[partial]
+def Markdown.entity_h_34 (name : String) : Option String :=
+    if String.lt name "homtht" then Markdown.entity_h_32 name else Markdown.entity_h_33 name
+#[partial]
+def Markdown.entity_h_35 (name : String) : Option String :=
+    if String.beq name "hookleftarrow" then Option.some "↩" else Option.none
+#[partial]
+def Markdown.entity_h_36 (name : String) : Option String :=
+    if String.beq name "hookrightarrow" then Option.some "↪" else Option.none
+#[partial]
+def Markdown.entity_h_37 (name : String) : Option String :=
+    if String.lt name "hookrightarrow" then Markdown.entity_h_35 name else Markdown.entity_h_36 name
+#[partial]
+def Markdown.entity_h_38 (name : String) : Option String :=
+    if String.lt name "hookleftarrow" then Markdown.entity_h_34 name else Markdown.entity_h_37 name
+#[partial]
+def Markdown.entity_h_39 (name : String) : Option String :=
+    if String.lt name "hoarr" then Markdown.entity_h_31 name else Markdown.entity_h_38 name
+#[partial]
+def Markdown.entity_h_40 (name : String) : Option String :=
+    if String.beq name "hopf" then Option.some "𝕙" else Option.none
+#[partial]
+def Markdown.entity_h_41 (name : String) : Option String :=
+    if String.beq name "horbar" then Option.some "―" else Option.none
+#[partial]
+def Markdown.entity_h_42 (name : String) : Option String :=
+    if String.beq name "hscr" then Option.some "𝒽" else Option.none
+#[partial]
+def Markdown.entity_h_43 (name : String) : Option String :=
+    if String.lt name "hscr" then Markdown.entity_h_41 name else Markdown.entity_h_42 name
+#[partial]
+def Markdown.entity_h_44 (name : String) : Option String :=
+    if String.lt name "horbar" then Markdown.entity_h_40 name else Markdown.entity_h_43 name
+#[partial]
+def Markdown.entity_h_45 (name : String) : Option String :=
+    if String.beq name "hslash" then Option.some "ℏ" else Option.none
+#[partial]
+def Markdown.entity_h_46 (name : String) : Option String :=
+    if String.beq name "hstrok" then Option.some "ħ" else Option.none
+#[partial]
+def Markdown.entity_h_47 (name : String) : Option String :=
+    if String.lt name "hstrok" then Markdown.entity_h_45 name else Markdown.entity_h_46 name
+#[partial]
+def Markdown.entity_h_48 (name : String) : Option String :=
+    if String.beq name "hybull" then Option.some "⁃" else Option.none
+#[partial]
+def Markdown.entity_h_49 (name : String) : Option String :=
+    if String.beq name "hyphen" then Option.some "‐" else Option.none
+#[partial]
+def Markdown.entity_h_50 (name : String) : Option String :=
+    if String.lt name "hyphen" then Markdown.entity_h_48 name else Markdown.entity_h_49 name
+#[partial]
+def Markdown.entity_h_51 (name : String) : Option String :=
+    if String.lt name "hybull" then Markdown.entity_h_47 name else Markdown.entity_h_50 name
+#[partial]
+def Markdown.entity_h_52 (name : String) : Option String :=
+    if String.lt name "hslash" then Markdown.entity_h_44 name else Markdown.entity_h_51 name
+#[partial]
+def Markdown.entity_h_53 (name : String) : Option String :=
+    if String.lt name "hopf" then Markdown.entity_h_39 name else Markdown.entity_h_52 name
+#[partial]
+def Markdown.entity_h_54 (name : String) : Option String :=
+    if String.lt name "hfr" then Markdown.entity_h_26 name else Markdown.entity_h_53 name
+
+def Markdown.entity_h (name : String) : Option String := Markdown.entity_h_54 name
 
 #[partial]
-def Markdown.entity_i (name : String) : Option String :=
-    if String.beq name "iacute" then Option.some "í"
-    else if String.beq name "ic" then Option.some "⁣"
-    else if String.beq name "icirc" then Option.some "î"
-    else if String.beq name "icy" then Option.some "и"
-    else if String.beq name "iecy" then Option.some "е"
-    else if String.beq name "iexcl" then Option.some "¡"
-    else if String.beq name "iff" then Option.some "⇔"
-    else if String.beq name "ifr" then Option.some "𝔦"
-    else if String.beq name "igrave" then Option.some "ì"
-    else if String.beq name "ii" then Option.some "ⅈ"
-    else if String.beq name "iiiint" then Option.some "⨌"
-    else if String.beq name "iiint" then Option.some "∭"
-    else if String.beq name "iinfin" then Option.some "⧜"
-    else if String.beq name "iiota" then Option.some "℩"
-    else if String.beq name "ijlig" then Option.some "ĳ"
-    else if String.beq name "imacr" then Option.some "ī"
-    else if String.beq name "image" then Option.some "ℑ"
-    else if String.beq name "imagline" then Option.some "ℐ"
-    else if String.beq name "imagpart" then Option.some "ℑ"
-    else if String.beq name "imath" then Option.some "ı"
-    else if String.beq name "imof" then Option.some "⊷"
-    else if String.beq name "imped" then Option.some "Ƶ"
-    else if String.beq name "in" then Option.some "∈"
-    else if String.beq name "incare" then Option.some "℅"
-    else if String.beq name "infin" then Option.some "∞"
-    else if String.beq name "infintie" then Option.some "⧝"
-    else if String.beq name "inodot" then Option.some "ı"
-    else if String.beq name "int" then Option.some "∫"
-    else if String.beq name "intcal" then Option.some "⊺"
-    else if String.beq name "integers" then Option.some "ℤ"
-    else if String.beq name "intercal" then Option.some "⊺"
-    else if String.beq name "intlarhk" then Option.some "⨗"
-    else if String.beq name "intprod" then Option.some "⨼"
-    else if String.beq name "iocy" then Option.some "ё"
-    else if String.beq name "iogon" then Option.some "į"
-    else if String.beq name "iopf" then Option.some "𝕚"
-    else if String.beq name "iota" then Option.some "ι"
-    else if String.beq name "iprod" then Option.some "⨼"
-    else if String.beq name "iquest" then Option.some "¿"
-    else if String.beq name "iscr" then Option.some "𝒾"
-    else if String.beq name "isin" then Option.some "∈"
-    else if String.beq name "isinE" then Option.some "⋹"
-    else if String.beq name "isindot" then Option.some "⋵"
-    else if String.beq name "isins" then Option.some "⋴"
-    else if String.beq name "isinsv" then Option.some "⋳"
-    else if String.beq name "isinv" then Option.some "∈"
-    else if String.beq name "it" then Option.some "⁢"
-    else if String.beq name "itilde" then Option.some "ĩ"
-    else if String.beq name "iukcy" then Option.some "і"
-    else if String.beq name "iuml" then Option.some "ï"
-    else Option.none
+def Markdown.entity_i_0 (name : String) : Option String :=
+    if String.beq name "iacute" then Option.some "í" else Option.none
+#[partial]
+def Markdown.entity_i_1 (name : String) : Option String :=
+    if String.beq name "ic" then Option.some "⁣" else Option.none
+#[partial]
+def Markdown.entity_i_2 (name : String) : Option String :=
+    if String.beq name "icirc" then Option.some "î" else Option.none
+#[partial]
+def Markdown.entity_i_3 (name : String) : Option String :=
+    if String.lt name "icirc" then Markdown.entity_i_1 name else Markdown.entity_i_2 name
+#[partial]
+def Markdown.entity_i_4 (name : String) : Option String :=
+    if String.lt name "ic" then Markdown.entity_i_0 name else Markdown.entity_i_3 name
+#[partial]
+def Markdown.entity_i_5 (name : String) : Option String :=
+    if String.beq name "icy" then Option.some "и" else Option.none
+#[partial]
+def Markdown.entity_i_6 (name : String) : Option String :=
+    if String.beq name "iecy" then Option.some "е" else Option.none
+#[partial]
+def Markdown.entity_i_7 (name : String) : Option String :=
+    if String.beq name "iexcl" then Option.some "¡" else Option.none
+#[partial]
+def Markdown.entity_i_8 (name : String) : Option String :=
+    if String.lt name "iexcl" then Markdown.entity_i_6 name else Markdown.entity_i_7 name
+#[partial]
+def Markdown.entity_i_9 (name : String) : Option String :=
+    if String.lt name "iecy" then Markdown.entity_i_5 name else Markdown.entity_i_8 name
+#[partial]
+def Markdown.entity_i_10 (name : String) : Option String :=
+    if String.lt name "icy" then Markdown.entity_i_4 name else Markdown.entity_i_9 name
+#[partial]
+def Markdown.entity_i_11 (name : String) : Option String :=
+    if String.beq name "iff" then Option.some "⇔" else Option.none
+#[partial]
+def Markdown.entity_i_12 (name : String) : Option String :=
+    if String.beq name "ifr" then Option.some "𝔦" else Option.none
+#[partial]
+def Markdown.entity_i_13 (name : String) : Option String :=
+    if String.beq name "igrave" then Option.some "ì" else Option.none
+#[partial]
+def Markdown.entity_i_14 (name : String) : Option String :=
+    if String.lt name "igrave" then Markdown.entity_i_12 name else Markdown.entity_i_13 name
+#[partial]
+def Markdown.entity_i_15 (name : String) : Option String :=
+    if String.lt name "ifr" then Markdown.entity_i_11 name else Markdown.entity_i_14 name
+#[partial]
+def Markdown.entity_i_16 (name : String) : Option String :=
+    if String.beq name "ii" then Option.some "ⅈ" else Option.none
+#[partial]
+def Markdown.entity_i_17 (name : String) : Option String :=
+    if String.beq name "iiiint" then Option.some "⨌" else Option.none
+#[partial]
+def Markdown.entity_i_18 (name : String) : Option String :=
+    if String.beq name "iiint" then Option.some "∭" else Option.none
+#[partial]
+def Markdown.entity_i_19 (name : String) : Option String :=
+    if String.lt name "iiint" then Markdown.entity_i_17 name else Markdown.entity_i_18 name
+#[partial]
+def Markdown.entity_i_20 (name : String) : Option String :=
+    if String.lt name "iiiint" then Markdown.entity_i_16 name else Markdown.entity_i_19 name
+#[partial]
+def Markdown.entity_i_21 (name : String) : Option String :=
+    if String.lt name "ii" then Markdown.entity_i_15 name else Markdown.entity_i_20 name
+#[partial]
+def Markdown.entity_i_22 (name : String) : Option String :=
+    if String.lt name "iff" then Markdown.entity_i_10 name else Markdown.entity_i_21 name
+#[partial]
+def Markdown.entity_i_23 (name : String) : Option String :=
+    if String.beq name "iinfin" then Option.some "⧜" else Option.none
+#[partial]
+def Markdown.entity_i_24 (name : String) : Option String :=
+    if String.beq name "iiota" then Option.some "℩" else Option.none
+#[partial]
+def Markdown.entity_i_25 (name : String) : Option String :=
+    if String.beq name "ijlig" then Option.some "ĳ" else Option.none
+#[partial]
+def Markdown.entity_i_26 (name : String) : Option String :=
+    if String.lt name "ijlig" then Markdown.entity_i_24 name else Markdown.entity_i_25 name
+#[partial]
+def Markdown.entity_i_27 (name : String) : Option String :=
+    if String.lt name "iiota" then Markdown.entity_i_23 name else Markdown.entity_i_26 name
+#[partial]
+def Markdown.entity_i_28 (name : String) : Option String :=
+    if String.beq name "imacr" then Option.some "ī" else Option.none
+#[partial]
+def Markdown.entity_i_29 (name : String) : Option String :=
+    if String.beq name "image" then Option.some "ℑ" else Option.none
+#[partial]
+def Markdown.entity_i_30 (name : String) : Option String :=
+    if String.beq name "imagline" then Option.some "ℐ" else Option.none
+#[partial]
+def Markdown.entity_i_31 (name : String) : Option String :=
+    if String.lt name "imagline" then Markdown.entity_i_29 name else Markdown.entity_i_30 name
+#[partial]
+def Markdown.entity_i_32 (name : String) : Option String :=
+    if String.lt name "image" then Markdown.entity_i_28 name else Markdown.entity_i_31 name
+#[partial]
+def Markdown.entity_i_33 (name : String) : Option String :=
+    if String.lt name "imacr" then Markdown.entity_i_27 name else Markdown.entity_i_32 name
+#[partial]
+def Markdown.entity_i_34 (name : String) : Option String :=
+    if String.beq name "imagpart" then Option.some "ℑ" else Option.none
+#[partial]
+def Markdown.entity_i_35 (name : String) : Option String :=
+    if String.beq name "imath" then Option.some "ı" else Option.none
+#[partial]
+def Markdown.entity_i_36 (name : String) : Option String :=
+    if String.beq name "imof" then Option.some "⊷" else Option.none
+#[partial]
+def Markdown.entity_i_37 (name : String) : Option String :=
+    if String.lt name "imof" then Markdown.entity_i_35 name else Markdown.entity_i_36 name
+#[partial]
+def Markdown.entity_i_38 (name : String) : Option String :=
+    if String.lt name "imath" then Markdown.entity_i_34 name else Markdown.entity_i_37 name
+#[partial]
+def Markdown.entity_i_39 (name : String) : Option String :=
+    if String.beq name "imped" then Option.some "Ƶ" else Option.none
+#[partial]
+def Markdown.entity_i_40 (name : String) : Option String :=
+    if String.beq name "in" then Option.some "∈" else Option.none
+#[partial]
+def Markdown.entity_i_41 (name : String) : Option String :=
+    if String.lt name "in" then Markdown.entity_i_39 name else Markdown.entity_i_40 name
+#[partial]
+def Markdown.entity_i_42 (name : String) : Option String :=
+    if String.beq name "incare" then Option.some "℅" else Option.none
+#[partial]
+def Markdown.entity_i_43 (name : String) : Option String :=
+    if String.beq name "infin" then Option.some "∞" else Option.none
+#[partial]
+def Markdown.entity_i_44 (name : String) : Option String :=
+    if String.lt name "infin" then Markdown.entity_i_42 name else Markdown.entity_i_43 name
+#[partial]
+def Markdown.entity_i_45 (name : String) : Option String :=
+    if String.lt name "incare" then Markdown.entity_i_41 name else Markdown.entity_i_44 name
+#[partial]
+def Markdown.entity_i_46 (name : String) : Option String :=
+    if String.lt name "imped" then Markdown.entity_i_38 name else Markdown.entity_i_45 name
+#[partial]
+def Markdown.entity_i_47 (name : String) : Option String :=
+    if String.lt name "imagpart" then Markdown.entity_i_33 name else Markdown.entity_i_46 name
+#[partial]
+def Markdown.entity_i_48 (name : String) : Option String :=
+    if String.lt name "iinfin" then Markdown.entity_i_22 name else Markdown.entity_i_47 name
+#[partial]
+def Markdown.entity_i_49 (name : String) : Option String :=
+    if String.beq name "infintie" then Option.some "⧝" else Option.none
+#[partial]
+def Markdown.entity_i_50 (name : String) : Option String :=
+    if String.beq name "inodot" then Option.some "ı" else Option.none
+#[partial]
+def Markdown.entity_i_51 (name : String) : Option String :=
+    if String.beq name "int" then Option.some "∫" else Option.none
+#[partial]
+def Markdown.entity_i_52 (name : String) : Option String :=
+    if String.lt name "int" then Markdown.entity_i_50 name else Markdown.entity_i_51 name
+#[partial]
+def Markdown.entity_i_53 (name : String) : Option String :=
+    if String.lt name "inodot" then Markdown.entity_i_49 name else Markdown.entity_i_52 name
+#[partial]
+def Markdown.entity_i_54 (name : String) : Option String :=
+    if String.beq name "intcal" then Option.some "⊺" else Option.none
+#[partial]
+def Markdown.entity_i_55 (name : String) : Option String :=
+    if String.beq name "integers" then Option.some "ℤ" else Option.none
+#[partial]
+def Markdown.entity_i_56 (name : String) : Option String :=
+    if String.beq name "intercal" then Option.some "⊺" else Option.none
+#[partial]
+def Markdown.entity_i_57 (name : String) : Option String :=
+    if String.lt name "intercal" then Markdown.entity_i_55 name else Markdown.entity_i_56 name
+#[partial]
+def Markdown.entity_i_58 (name : String) : Option String :=
+    if String.lt name "integers" then Markdown.entity_i_54 name else Markdown.entity_i_57 name
+#[partial]
+def Markdown.entity_i_59 (name : String) : Option String :=
+    if String.lt name "intcal" then Markdown.entity_i_53 name else Markdown.entity_i_58 name
+#[partial]
+def Markdown.entity_i_60 (name : String) : Option String :=
+    if String.beq name "intlarhk" then Option.some "⨗" else Option.none
+#[partial]
+def Markdown.entity_i_61 (name : String) : Option String :=
+    if String.beq name "intprod" then Option.some "⨼" else Option.none
+#[partial]
+def Markdown.entity_i_62 (name : String) : Option String :=
+    if String.beq name "iocy" then Option.some "ё" else Option.none
+#[partial]
+def Markdown.entity_i_63 (name : String) : Option String :=
+    if String.lt name "iocy" then Markdown.entity_i_61 name else Markdown.entity_i_62 name
+#[partial]
+def Markdown.entity_i_64 (name : String) : Option String :=
+    if String.lt name "intprod" then Markdown.entity_i_60 name else Markdown.entity_i_63 name
+#[partial]
+def Markdown.entity_i_65 (name : String) : Option String :=
+    if String.beq name "iogon" then Option.some "į" else Option.none
+#[partial]
+def Markdown.entity_i_66 (name : String) : Option String :=
+    if String.beq name "iopf" then Option.some "𝕚" else Option.none
+#[partial]
+def Markdown.entity_i_67 (name : String) : Option String :=
+    if String.beq name "iota" then Option.some "ι" else Option.none
+#[partial]
+def Markdown.entity_i_68 (name : String) : Option String :=
+    if String.lt name "iota" then Markdown.entity_i_66 name else Markdown.entity_i_67 name
+#[partial]
+def Markdown.entity_i_69 (name : String) : Option String :=
+    if String.lt name "iopf" then Markdown.entity_i_65 name else Markdown.entity_i_68 name
+#[partial]
+def Markdown.entity_i_70 (name : String) : Option String :=
+    if String.lt name "iogon" then Markdown.entity_i_64 name else Markdown.entity_i_69 name
+#[partial]
+def Markdown.entity_i_71 (name : String) : Option String :=
+    if String.lt name "intlarhk" then Markdown.entity_i_59 name else Markdown.entity_i_70 name
+#[partial]
+def Markdown.entity_i_72 (name : String) : Option String :=
+    if String.beq name "iprod" then Option.some "⨼" else Option.none
+#[partial]
+def Markdown.entity_i_73 (name : String) : Option String :=
+    if String.beq name "iquest" then Option.some "¿" else Option.none
+#[partial]
+def Markdown.entity_i_74 (name : String) : Option String :=
+    if String.beq name "iscr" then Option.some "𝒾" else Option.none
+#[partial]
+def Markdown.entity_i_75 (name : String) : Option String :=
+    if String.lt name "iscr" then Markdown.entity_i_73 name else Markdown.entity_i_74 name
+#[partial]
+def Markdown.entity_i_76 (name : String) : Option String :=
+    if String.lt name "iquest" then Markdown.entity_i_72 name else Markdown.entity_i_75 name
+#[partial]
+def Markdown.entity_i_77 (name : String) : Option String :=
+    if String.beq name "isin" then Option.some "∈" else Option.none
+#[partial]
+def Markdown.entity_i_78 (name : String) : Option String :=
+    if String.beq name "isinE" then Option.some "⋹" else Option.none
+#[partial]
+def Markdown.entity_i_79 (name : String) : Option String :=
+    if String.beq name "isindot" then Option.some "⋵" else Option.none
+#[partial]
+def Markdown.entity_i_80 (name : String) : Option String :=
+    if String.lt name "isindot" then Markdown.entity_i_78 name else Markdown.entity_i_79 name
+#[partial]
+def Markdown.entity_i_81 (name : String) : Option String :=
+    if String.lt name "isinE" then Markdown.entity_i_77 name else Markdown.entity_i_80 name
+#[partial]
+def Markdown.entity_i_82 (name : String) : Option String :=
+    if String.lt name "isin" then Markdown.entity_i_76 name else Markdown.entity_i_81 name
+#[partial]
+def Markdown.entity_i_83 (name : String) : Option String :=
+    if String.beq name "isins" then Option.some "⋴" else Option.none
+#[partial]
+def Markdown.entity_i_84 (name : String) : Option String :=
+    if String.beq name "isinsv" then Option.some "⋳" else Option.none
+#[partial]
+def Markdown.entity_i_85 (name : String) : Option String :=
+    if String.beq name "isinv" then Option.some "∈" else Option.none
+#[partial]
+def Markdown.entity_i_86 (name : String) : Option String :=
+    if String.lt name "isinv" then Markdown.entity_i_84 name else Markdown.entity_i_85 name
+#[partial]
+def Markdown.entity_i_87 (name : String) : Option String :=
+    if String.lt name "isinsv" then Markdown.entity_i_83 name else Markdown.entity_i_86 name
+#[partial]
+def Markdown.entity_i_88 (name : String) : Option String :=
+    if String.beq name "it" then Option.some "⁢" else Option.none
+#[partial]
+def Markdown.entity_i_89 (name : String) : Option String :=
+    if String.beq name "itilde" then Option.some "ĩ" else Option.none
+#[partial]
+def Markdown.entity_i_90 (name : String) : Option String :=
+    if String.lt name "itilde" then Markdown.entity_i_88 name else Markdown.entity_i_89 name
+#[partial]
+def Markdown.entity_i_91 (name : String) : Option String :=
+    if String.beq name "iukcy" then Option.some "і" else Option.none
+#[partial]
+def Markdown.entity_i_92 (name : String) : Option String :=
+    if String.beq name "iuml" then Option.some "ï" else Option.none
+#[partial]
+def Markdown.entity_i_93 (name : String) : Option String :=
+    if String.lt name "iuml" then Markdown.entity_i_91 name else Markdown.entity_i_92 name
+#[partial]
+def Markdown.entity_i_94 (name : String) : Option String :=
+    if String.lt name "iukcy" then Markdown.entity_i_90 name else Markdown.entity_i_93 name
+#[partial]
+def Markdown.entity_i_95 (name : String) : Option String :=
+    if String.lt name "it" then Markdown.entity_i_87 name else Markdown.entity_i_94 name
+#[partial]
+def Markdown.entity_i_96 (name : String) : Option String :=
+    if String.lt name "isins" then Markdown.entity_i_82 name else Markdown.entity_i_95 name
+#[partial]
+def Markdown.entity_i_97 (name : String) : Option String :=
+    if String.lt name "iprod" then Markdown.entity_i_71 name else Markdown.entity_i_96 name
+#[partial]
+def Markdown.entity_i_98 (name : String) : Option String :=
+    if String.lt name "infintie" then Markdown.entity_i_48 name else Markdown.entity_i_97 name
+
+def Markdown.entity_i (name : String) : Option String := Markdown.entity_i_98 name
 
 #[partial]
-def Markdown.entity_j (name : String) : Option String :=
-    if String.beq name "jcirc" then Option.some "ĵ"
-    else if String.beq name "jcy" then Option.some "й"
-    else if String.beq name "jfr" then Option.some "𝔧"
-    else if String.beq name "jmath" then Option.some "ȷ"
-    else if String.beq name "jopf" then Option.some "𝕛"
-    else if String.beq name "jscr" then Option.some "𝒿"
-    else if String.beq name "jsercy" then Option.some "ј"
-    else if String.beq name "jukcy" then Option.some "є"
-    else Option.none
+def Markdown.entity_j_0 (name : String) : Option String :=
+    if String.beq name "jcirc" then Option.some "ĵ" else Option.none
+#[partial]
+def Markdown.entity_j_1 (name : String) : Option String :=
+    if String.beq name "jcy" then Option.some "й" else Option.none
+#[partial]
+def Markdown.entity_j_2 (name : String) : Option String :=
+    if String.lt name "jcy" then Markdown.entity_j_0 name else Markdown.entity_j_1 name
+#[partial]
+def Markdown.entity_j_3 (name : String) : Option String :=
+    if String.beq name "jfr" then Option.some "𝔧" else Option.none
+#[partial]
+def Markdown.entity_j_4 (name : String) : Option String :=
+    if String.beq name "jmath" then Option.some "ȷ" else Option.none
+#[partial]
+def Markdown.entity_j_5 (name : String) : Option String :=
+    if String.lt name "jmath" then Markdown.entity_j_3 name else Markdown.entity_j_4 name
+#[partial]
+def Markdown.entity_j_6 (name : String) : Option String :=
+    if String.lt name "jfr" then Markdown.entity_j_2 name else Markdown.entity_j_5 name
+#[partial]
+def Markdown.entity_j_7 (name : String) : Option String :=
+    if String.beq name "jopf" then Option.some "𝕛" else Option.none
+#[partial]
+def Markdown.entity_j_8 (name : String) : Option String :=
+    if String.beq name "jscr" then Option.some "𝒿" else Option.none
+#[partial]
+def Markdown.entity_j_9 (name : String) : Option String :=
+    if String.lt name "jscr" then Markdown.entity_j_7 name else Markdown.entity_j_8 name
+#[partial]
+def Markdown.entity_j_10 (name : String) : Option String :=
+    if String.beq name "jsercy" then Option.some "ј" else Option.none
+#[partial]
+def Markdown.entity_j_11 (name : String) : Option String :=
+    if String.beq name "jukcy" then Option.some "є" else Option.none
+#[partial]
+def Markdown.entity_j_12 (name : String) : Option String :=
+    if String.lt name "jukcy" then Markdown.entity_j_10 name else Markdown.entity_j_11 name
+#[partial]
+def Markdown.entity_j_13 (name : String) : Option String :=
+    if String.lt name "jsercy" then Markdown.entity_j_9 name else Markdown.entity_j_12 name
+#[partial]
+def Markdown.entity_j_14 (name : String) : Option String :=
+    if String.lt name "jopf" then Markdown.entity_j_6 name else Markdown.entity_j_13 name
+
+def Markdown.entity_j (name : String) : Option String := Markdown.entity_j_14 name
 
 #[partial]
-def Markdown.entity_k (name : String) : Option String :=
-    if String.beq name "kappa" then Option.some "κ"
-    else if String.beq name "kappav" then Option.some "ϰ"
-    else if String.beq name "kcedil" then Option.some "ķ"
-    else if String.beq name "kcy" then Option.some "к"
-    else if String.beq name "kfr" then Option.some "𝔨"
-    else if String.beq name "kgreen" then Option.some "ĸ"
-    else if String.beq name "khcy" then Option.some "х"
-    else if String.beq name "kjcy" then Option.some "ќ"
-    else if String.beq name "kopf" then Option.some "𝕜"
-    else if String.beq name "kscr" then Option.some "𝓀"
-    else Option.none
+def Markdown.entity_k_0 (name : String) : Option String :=
+    if String.beq name "kappa" then Option.some "κ" else Option.none
+#[partial]
+def Markdown.entity_k_1 (name : String) : Option String :=
+    if String.beq name "kappav" then Option.some "ϰ" else Option.none
+#[partial]
+def Markdown.entity_k_2 (name : String) : Option String :=
+    if String.lt name "kappav" then Markdown.entity_k_0 name else Markdown.entity_k_1 name
+#[partial]
+def Markdown.entity_k_3 (name : String) : Option String :=
+    if String.beq name "kcedil" then Option.some "ķ" else Option.none
+#[partial]
+def Markdown.entity_k_4 (name : String) : Option String :=
+    if String.beq name "kcy" then Option.some "к" else Option.none
+#[partial]
+def Markdown.entity_k_5 (name : String) : Option String :=
+    if String.beq name "kfr" then Option.some "𝔨" else Option.none
+#[partial]
+def Markdown.entity_k_6 (name : String) : Option String :=
+    if String.lt name "kfr" then Markdown.entity_k_4 name else Markdown.entity_k_5 name
+#[partial]
+def Markdown.entity_k_7 (name : String) : Option String :=
+    if String.lt name "kcy" then Markdown.entity_k_3 name else Markdown.entity_k_6 name
+#[partial]
+def Markdown.entity_k_8 (name : String) : Option String :=
+    if String.lt name "kcedil" then Markdown.entity_k_2 name else Markdown.entity_k_7 name
+#[partial]
+def Markdown.entity_k_9 (name : String) : Option String :=
+    if String.beq name "kgreen" then Option.some "ĸ" else Option.none
+#[partial]
+def Markdown.entity_k_10 (name : String) : Option String :=
+    if String.beq name "khcy" then Option.some "х" else Option.none
+#[partial]
+def Markdown.entity_k_11 (name : String) : Option String :=
+    if String.lt name "khcy" then Markdown.entity_k_9 name else Markdown.entity_k_10 name
+#[partial]
+def Markdown.entity_k_12 (name : String) : Option String :=
+    if String.beq name "kjcy" then Option.some "ќ" else Option.none
+#[partial]
+def Markdown.entity_k_13 (name : String) : Option String :=
+    if String.beq name "kopf" then Option.some "𝕜" else Option.none
+#[partial]
+def Markdown.entity_k_14 (name : String) : Option String :=
+    if String.beq name "kscr" then Option.some "𝓀" else Option.none
+#[partial]
+def Markdown.entity_k_15 (name : String) : Option String :=
+    if String.lt name "kscr" then Markdown.entity_k_13 name else Markdown.entity_k_14 name
+#[partial]
+def Markdown.entity_k_16 (name : String) : Option String :=
+    if String.lt name "kopf" then Markdown.entity_k_12 name else Markdown.entity_k_15 name
+#[partial]
+def Markdown.entity_k_17 (name : String) : Option String :=
+    if String.lt name "kjcy" then Markdown.entity_k_11 name else Markdown.entity_k_16 name
+#[partial]
+def Markdown.entity_k_18 (name : String) : Option String :=
+    if String.lt name "kgreen" then Markdown.entity_k_8 name else Markdown.entity_k_17 name
+
+def Markdown.entity_k (name : String) : Option String := Markdown.entity_k_18 name
 
 #[partial]
-def Markdown.entity_l (name : String) : Option String :=
-    if String.beq name "lAarr" then Option.some "⇚"
-    else if String.beq name "lArr" then Option.some "⇐"
-    else if String.beq name "lAtail" then Option.some "⤛"
-    else if String.beq name "lBarr" then Option.some "⤎"
-    else if String.beq name "lE" then Option.some "≦"
-    else if String.beq name "lEg" then Option.some "⪋"
-    else if String.beq name "lHar" then Option.some "⥢"
-    else if String.beq name "lacute" then Option.some "ĺ"
-    else if String.beq name "laemptyv" then Option.some "⦴"
-    else if String.beq name "lagran" then Option.some "ℒ"
-    else if String.beq name "lambda" then Option.some "λ"
-    else if String.beq name "lang" then Option.some "⟨"
-    else if String.beq name "langd" then Option.some "⦑"
-    else if String.beq name "langle" then Option.some "⟨"
-    else if String.beq name "lap" then Option.some "⪅"
-    else if String.beq name "laquo" then Option.some "«"
-    else if String.beq name "larr" then Option.some "←"
-    else if String.beq name "larrb" then Option.some "⇤"
-    else if String.beq name "larrbfs" then Option.some "⤟"
-    else if String.beq name "larrfs" then Option.some "⤝"
-    else if String.beq name "larrhk" then Option.some "↩"
-    else if String.beq name "larrlp" then Option.some "↫"
-    else if String.beq name "larrpl" then Option.some "⤹"
-    else if String.beq name "larrsim" then Option.some "⥳"
-    else if String.beq name "larrtl" then Option.some "↢"
-    else if String.beq name "lat" then Option.some "⪫"
-    else if String.beq name "latail" then Option.some "⤙"
-    else if String.beq name "late" then Option.some "⪭"
-    else if String.beq name "lates" then Option.some "⪭︀"
-    else if String.beq name "lbarr" then Option.some "⤌"
-    else if String.beq name "lbbrk" then Option.some "❲"
-    else if String.beq name "lbrace" then Option.some "{"
-    else if String.beq name "lbrack" then Option.some "["
-    else if String.beq name "lbrke" then Option.some "⦋"
-    else if String.beq name "lbrksld" then Option.some "⦏"
-    else if String.beq name "lbrkslu" then Option.some "⦍"
-    else if String.beq name "lcaron" then Option.some "ľ"
-    else if String.beq name "lcedil" then Option.some "ļ"
-    else if String.beq name "lceil" then Option.some "⌈"
-    else if String.beq name "lcub" then Option.some "{"
-    else if String.beq name "lcy" then Option.some "л"
-    else if String.beq name "ldca" then Option.some "⤶"
-    else if String.beq name "ldquo" then Option.some "“"
-    else if String.beq name "ldquor" then Option.some "„"
-    else if String.beq name "ldrdhar" then Option.some "⥧"
-    else if String.beq name "ldrushar" then Option.some "⥋"
-    else if String.beq name "ldsh" then Option.some "↲"
-    else if String.beq name "le" then Option.some "≤"
-    else if String.beq name "leftarrow" then Option.some "←"
-    else if String.beq name "leftarrowtail" then Option.some "↢"
-    else if String.beq name "leftharpoondown" then Option.some "↽"
-    else if String.beq name "leftharpoonup" then Option.some "↼"
-    else if String.beq name "leftleftarrows" then Option.some "⇇"
-    else if String.beq name "leftrightarrow" then Option.some "↔"
-    else if String.beq name "leftrightarrows" then Option.some "⇆"
-    else if String.beq name "leftrightharpoons" then Option.some "⇋"
-    else if String.beq name "leftrightsquigarrow" then Option.some "↭"
-    else if String.beq name "leftthreetimes" then Option.some "⋋"
-    else if String.beq name "leg" then Option.some "⋚"
-    else if String.beq name "leq" then Option.some "≤"
-    else if String.beq name "leqq" then Option.some "≦"
-    else if String.beq name "leqslant" then Option.some "⩽"
-    else if String.beq name "les" then Option.some "⩽"
-    else if String.beq name "lescc" then Option.some "⪨"
-    else if String.beq name "lesdot" then Option.some "⩿"
-    else if String.beq name "lesdoto" then Option.some "⪁"
-    else if String.beq name "lesdotor" then Option.some "⪃"
-    else if String.beq name "lesg" then Option.some "⋚︀"
-    else if String.beq name "lesges" then Option.some "⪓"
-    else if String.beq name "lessapprox" then Option.some "⪅"
-    else if String.beq name "lessdot" then Option.some "⋖"
-    else if String.beq name "lesseqgtr" then Option.some "⋚"
-    else if String.beq name "lesseqqgtr" then Option.some "⪋"
-    else if String.beq name "lessgtr" then Option.some "≶"
-    else if String.beq name "lesssim" then Option.some "≲"
-    else if String.beq name "lfisht" then Option.some "⥼"
-    else if String.beq name "lfloor" then Option.some "⌊"
-    else if String.beq name "lfr" then Option.some "𝔩"
-    else if String.beq name "lg" then Option.some "≶"
-    else if String.beq name "lgE" then Option.some "⪑"
-    else if String.beq name "lhard" then Option.some "↽"
-    else if String.beq name "lharu" then Option.some "↼"
-    else if String.beq name "lharul" then Option.some "⥪"
-    else if String.beq name "lhblk" then Option.some "▄"
-    else if String.beq name "ljcy" then Option.some "љ"
-    else if String.beq name "ll" then Option.some "≪"
-    else if String.beq name "llarr" then Option.some "⇇"
-    else if String.beq name "llcorner" then Option.some "⌞"
-    else if String.beq name "llhard" then Option.some "⥫"
-    else if String.beq name "lltri" then Option.some "◺"
-    else if String.beq name "lmidot" then Option.some "ŀ"
-    else if String.beq name "lmoust" then Option.some "⎰"
-    else if String.beq name "lmoustache" then Option.some "⎰"
-    else if String.beq name "lnE" then Option.some "≨"
-    else if String.beq name "lnap" then Option.some "⪉"
-    else if String.beq name "lnapprox" then Option.some "⪉"
-    else if String.beq name "lne" then Option.some "⪇"
-    else if String.beq name "lneq" then Option.some "⪇"
-    else if String.beq name "lneqq" then Option.some "≨"
-    else if String.beq name "lnsim" then Option.some "⋦"
-    else if String.beq name "loang" then Option.some "⟬"
-    else if String.beq name "loarr" then Option.some "⇽"
-    else if String.beq name "lobrk" then Option.some "⟦"
-    else if String.beq name "longleftarrow" then Option.some "⟵"
-    else if String.beq name "longleftrightarrow" then Option.some "⟷"
-    else if String.beq name "longmapsto" then Option.some "⟼"
-    else if String.beq name "longrightarrow" then Option.some "⟶"
-    else if String.beq name "looparrowleft" then Option.some "↫"
-    else if String.beq name "looparrowright" then Option.some "↬"
-    else if String.beq name "lopar" then Option.some "⦅"
-    else if String.beq name "lopf" then Option.some "𝕝"
-    else if String.beq name "loplus" then Option.some "⨭"
-    else if String.beq name "lotimes" then Option.some "⨴"
-    else if String.beq name "lowast" then Option.some "∗"
-    else if String.beq name "lowbar" then Option.some "_"
-    else if String.beq name "loz" then Option.some "◊"
-    else if String.beq name "lozenge" then Option.some "◊"
-    else if String.beq name "lozf" then Option.some "⧫"
-    else if String.beq name "lpar" then Option.some "("
-    else if String.beq name "lparlt" then Option.some "⦓"
-    else if String.beq name "lrarr" then Option.some "⇆"
-    else if String.beq name "lrcorner" then Option.some "⌟"
-    else if String.beq name "lrhar" then Option.some "⇋"
-    else if String.beq name "lrhard" then Option.some "⥭"
-    else if String.beq name "lrm" then Option.some "‎"
-    else if String.beq name "lrtri" then Option.some "⊿"
-    else if String.beq name "lsaquo" then Option.some "‹"
-    else if String.beq name "lscr" then Option.some "𝓁"
-    else if String.beq name "lsh" then Option.some "↰"
-    else if String.beq name "lsim" then Option.some "≲"
-    else if String.beq name "lsime" then Option.some "⪍"
-    else if String.beq name "lsimg" then Option.some "⪏"
-    else if String.beq name "lsqb" then Option.some "["
-    else if String.beq name "lsquo" then Option.some "‘"
-    else if String.beq name "lsquor" then Option.some "‚"
-    else if String.beq name "lstrok" then Option.some "ł"
-    else if String.beq name "lt" then Option.some "<"
-    else if String.beq name "ltcc" then Option.some "⪦"
-    else if String.beq name "ltcir" then Option.some "⩹"
-    else if String.beq name "ltdot" then Option.some "⋖"
-    else if String.beq name "lthree" then Option.some "⋋"
-    else if String.beq name "ltimes" then Option.some "⋉"
-    else if String.beq name "ltlarr" then Option.some "⥶"
-    else if String.beq name "ltquest" then Option.some "⩻"
-    else if String.beq name "ltrPar" then Option.some "⦖"
-    else if String.beq name "ltri" then Option.some "◃"
-    else if String.beq name "ltrie" then Option.some "⊴"
-    else if String.beq name "ltrif" then Option.some "◂"
-    else if String.beq name "lurdshar" then Option.some "⥊"
-    else if String.beq name "luruhar" then Option.some "⥦"
-    else if String.beq name "lvertneqq" then Option.some "≨︀"
-    else if String.beq name "lvnE" then Option.some "≨︀"
-    else Option.none
+def Markdown.entity_l_0 (name : String) : Option String :=
+    if String.beq name "lAarr" then Option.some "⇚" else Option.none
+#[partial]
+def Markdown.entity_l_1 (name : String) : Option String :=
+    if String.beq name "lArr" then Option.some "⇐" else Option.none
+#[partial]
+def Markdown.entity_l_2 (name : String) : Option String :=
+    if String.lt name "lArr" then Markdown.entity_l_0 name else Markdown.entity_l_1 name
+#[partial]
+def Markdown.entity_l_3 (name : String) : Option String :=
+    if String.beq name "lAtail" then Option.some "⤛" else Option.none
+#[partial]
+def Markdown.entity_l_4 (name : String) : Option String :=
+    if String.beq name "lBarr" then Option.some "⤎" else Option.none
+#[partial]
+def Markdown.entity_l_5 (name : String) : Option String :=
+    if String.lt name "lBarr" then Markdown.entity_l_3 name else Markdown.entity_l_4 name
+#[partial]
+def Markdown.entity_l_6 (name : String) : Option String :=
+    if String.lt name "lAtail" then Markdown.entity_l_2 name else Markdown.entity_l_5 name
+#[partial]
+def Markdown.entity_l_7 (name : String) : Option String :=
+    if String.beq name "lE" then Option.some "≦" else Option.none
+#[partial]
+def Markdown.entity_l_8 (name : String) : Option String :=
+    if String.beq name "lEg" then Option.some "⪋" else Option.none
+#[partial]
+def Markdown.entity_l_9 (name : String) : Option String :=
+    if String.lt name "lEg" then Markdown.entity_l_7 name else Markdown.entity_l_8 name
+#[partial]
+def Markdown.entity_l_10 (name : String) : Option String :=
+    if String.beq name "lHar" then Option.some "⥢" else Option.none
+#[partial]
+def Markdown.entity_l_11 (name : String) : Option String :=
+    if String.beq name "lacute" then Option.some "ĺ" else Option.none
+#[partial]
+def Markdown.entity_l_12 (name : String) : Option String :=
+    if String.beq name "laemptyv" then Option.some "⦴" else Option.none
+#[partial]
+def Markdown.entity_l_13 (name : String) : Option String :=
+    if String.lt name "laemptyv" then Markdown.entity_l_11 name else Markdown.entity_l_12 name
+#[partial]
+def Markdown.entity_l_14 (name : String) : Option String :=
+    if String.lt name "lacute" then Markdown.entity_l_10 name else Markdown.entity_l_13 name
+#[partial]
+def Markdown.entity_l_15 (name : String) : Option String :=
+    if String.lt name "lHar" then Markdown.entity_l_9 name else Markdown.entity_l_14 name
+#[partial]
+def Markdown.entity_l_16 (name : String) : Option String :=
+    if String.lt name "lE" then Markdown.entity_l_6 name else Markdown.entity_l_15 name
+#[partial]
+def Markdown.entity_l_17 (name : String) : Option String :=
+    if String.beq name "lagran" then Option.some "ℒ" else Option.none
+#[partial]
+def Markdown.entity_l_18 (name : String) : Option String :=
+    if String.beq name "lambda" then Option.some "λ" else Option.none
+#[partial]
+def Markdown.entity_l_19 (name : String) : Option String :=
+    if String.lt name "lambda" then Markdown.entity_l_17 name else Markdown.entity_l_18 name
+#[partial]
+def Markdown.entity_l_20 (name : String) : Option String :=
+    if String.beq name "lang" then Option.some "⟨" else Option.none
+#[partial]
+def Markdown.entity_l_21 (name : String) : Option String :=
+    if String.beq name "langd" then Option.some "⦑" else Option.none
+#[partial]
+def Markdown.entity_l_22 (name : String) : Option String :=
+    if String.beq name "langle" then Option.some "⟨" else Option.none
+#[partial]
+def Markdown.entity_l_23 (name : String) : Option String :=
+    if String.lt name "langle" then Markdown.entity_l_21 name else Markdown.entity_l_22 name
+#[partial]
+def Markdown.entity_l_24 (name : String) : Option String :=
+    if String.lt name "langd" then Markdown.entity_l_20 name else Markdown.entity_l_23 name
+#[partial]
+def Markdown.entity_l_25 (name : String) : Option String :=
+    if String.lt name "lang" then Markdown.entity_l_19 name else Markdown.entity_l_24 name
+#[partial]
+def Markdown.entity_l_26 (name : String) : Option String :=
+    if String.beq name "lap" then Option.some "⪅" else Option.none
+#[partial]
+def Markdown.entity_l_27 (name : String) : Option String :=
+    if String.beq name "laquo" then Option.some "«" else Option.none
+#[partial]
+def Markdown.entity_l_28 (name : String) : Option String :=
+    if String.lt name "laquo" then Markdown.entity_l_26 name else Markdown.entity_l_27 name
+#[partial]
+def Markdown.entity_l_29 (name : String) : Option String :=
+    if String.beq name "larr" then Option.some "←" else Option.none
+#[partial]
+def Markdown.entity_l_30 (name : String) : Option String :=
+    if String.beq name "larrb" then Option.some "⇤" else Option.none
+#[partial]
+def Markdown.entity_l_31 (name : String) : Option String :=
+    if String.beq name "larrbfs" then Option.some "⤟" else Option.none
+#[partial]
+def Markdown.entity_l_32 (name : String) : Option String :=
+    if String.lt name "larrbfs" then Markdown.entity_l_30 name else Markdown.entity_l_31 name
+#[partial]
+def Markdown.entity_l_33 (name : String) : Option String :=
+    if String.lt name "larrb" then Markdown.entity_l_29 name else Markdown.entity_l_32 name
+#[partial]
+def Markdown.entity_l_34 (name : String) : Option String :=
+    if String.lt name "larr" then Markdown.entity_l_28 name else Markdown.entity_l_33 name
+#[partial]
+def Markdown.entity_l_35 (name : String) : Option String :=
+    if String.lt name "lap" then Markdown.entity_l_25 name else Markdown.entity_l_34 name
+#[partial]
+def Markdown.entity_l_36 (name : String) : Option String :=
+    if String.lt name "lagran" then Markdown.entity_l_16 name else Markdown.entity_l_35 name
+#[partial]
+def Markdown.entity_l_37 (name : String) : Option String :=
+    if String.beq name "larrfs" then Option.some "⤝" else Option.none
+#[partial]
+def Markdown.entity_l_38 (name : String) : Option String :=
+    if String.beq name "larrhk" then Option.some "↩" else Option.none
+#[partial]
+def Markdown.entity_l_39 (name : String) : Option String :=
+    if String.lt name "larrhk" then Markdown.entity_l_37 name else Markdown.entity_l_38 name
+#[partial]
+def Markdown.entity_l_40 (name : String) : Option String :=
+    if String.beq name "larrlp" then Option.some "↫" else Option.none
+#[partial]
+def Markdown.entity_l_41 (name : String) : Option String :=
+    if String.beq name "larrpl" then Option.some "⤹" else Option.none
+#[partial]
+def Markdown.entity_l_42 (name : String) : Option String :=
+    if String.lt name "larrpl" then Markdown.entity_l_40 name else Markdown.entity_l_41 name
+#[partial]
+def Markdown.entity_l_43 (name : String) : Option String :=
+    if String.lt name "larrlp" then Markdown.entity_l_39 name else Markdown.entity_l_42 name
+#[partial]
+def Markdown.entity_l_44 (name : String) : Option String :=
+    if String.beq name "larrsim" then Option.some "⥳" else Option.none
+#[partial]
+def Markdown.entity_l_45 (name : String) : Option String :=
+    if String.beq name "larrtl" then Option.some "↢" else Option.none
+#[partial]
+def Markdown.entity_l_46 (name : String) : Option String :=
+    if String.lt name "larrtl" then Markdown.entity_l_44 name else Markdown.entity_l_45 name
+#[partial]
+def Markdown.entity_l_47 (name : String) : Option String :=
+    if String.beq name "lat" then Option.some "⪫" else Option.none
+#[partial]
+def Markdown.entity_l_48 (name : String) : Option String :=
+    if String.beq name "latail" then Option.some "⤙" else Option.none
+#[partial]
+def Markdown.entity_l_49 (name : String) : Option String :=
+    if String.beq name "late" then Option.some "⪭" else Option.none
+#[partial]
+def Markdown.entity_l_50 (name : String) : Option String :=
+    if String.lt name "late" then Markdown.entity_l_48 name else Markdown.entity_l_49 name
+#[partial]
+def Markdown.entity_l_51 (name : String) : Option String :=
+    if String.lt name "latail" then Markdown.entity_l_47 name else Markdown.entity_l_50 name
+#[partial]
+def Markdown.entity_l_52 (name : String) : Option String :=
+    if String.lt name "lat" then Markdown.entity_l_46 name else Markdown.entity_l_51 name
+#[partial]
+def Markdown.entity_l_53 (name : String) : Option String :=
+    if String.lt name "larrsim" then Markdown.entity_l_43 name else Markdown.entity_l_52 name
+#[partial]
+def Markdown.entity_l_54 (name : String) : Option String :=
+    if String.beq name "lates" then Option.some "⪭︀" else Option.none
+#[partial]
+def Markdown.entity_l_55 (name : String) : Option String :=
+    if String.beq name "lbarr" then Option.some "⤌" else Option.none
+#[partial]
+def Markdown.entity_l_56 (name : String) : Option String :=
+    if String.lt name "lbarr" then Markdown.entity_l_54 name else Markdown.entity_l_55 name
+#[partial]
+def Markdown.entity_l_57 (name : String) : Option String :=
+    if String.beq name "lbbrk" then Option.some "❲" else Option.none
+#[partial]
+def Markdown.entity_l_58 (name : String) : Option String :=
+    if String.beq name "lbrace" then Option.some "{" else Option.none
+#[partial]
+def Markdown.entity_l_59 (name : String) : Option String :=
+    if String.beq name "lbrack" then Option.some "[" else Option.none
+#[partial]
+def Markdown.entity_l_60 (name : String) : Option String :=
+    if String.lt name "lbrack" then Markdown.entity_l_58 name else Markdown.entity_l_59 name
+#[partial]
+def Markdown.entity_l_61 (name : String) : Option String :=
+    if String.lt name "lbrace" then Markdown.entity_l_57 name else Markdown.entity_l_60 name
+#[partial]
+def Markdown.entity_l_62 (name : String) : Option String :=
+    if String.lt name "lbbrk" then Markdown.entity_l_56 name else Markdown.entity_l_61 name
+#[partial]
+def Markdown.entity_l_63 (name : String) : Option String :=
+    if String.beq name "lbrke" then Option.some "⦋" else Option.none
+#[partial]
+def Markdown.entity_l_64 (name : String) : Option String :=
+    if String.beq name "lbrksld" then Option.some "⦏" else Option.none
+#[partial]
+def Markdown.entity_l_65 (name : String) : Option String :=
+    if String.lt name "lbrksld" then Markdown.entity_l_63 name else Markdown.entity_l_64 name
+#[partial]
+def Markdown.entity_l_66 (name : String) : Option String :=
+    if String.beq name "lbrkslu" then Option.some "⦍" else Option.none
+#[partial]
+def Markdown.entity_l_67 (name : String) : Option String :=
+    if String.beq name "lcaron" then Option.some "ľ" else Option.none
+#[partial]
+def Markdown.entity_l_68 (name : String) : Option String :=
+    if String.beq name "lcedil" then Option.some "ļ" else Option.none
+#[partial]
+def Markdown.entity_l_69 (name : String) : Option String :=
+    if String.lt name "lcedil" then Markdown.entity_l_67 name else Markdown.entity_l_68 name
+#[partial]
+def Markdown.entity_l_70 (name : String) : Option String :=
+    if String.lt name "lcaron" then Markdown.entity_l_66 name else Markdown.entity_l_69 name
+#[partial]
+def Markdown.entity_l_71 (name : String) : Option String :=
+    if String.lt name "lbrkslu" then Markdown.entity_l_65 name else Markdown.entity_l_70 name
+#[partial]
+def Markdown.entity_l_72 (name : String) : Option String :=
+    if String.lt name "lbrke" then Markdown.entity_l_62 name else Markdown.entity_l_71 name
+#[partial]
+def Markdown.entity_l_73 (name : String) : Option String :=
+    if String.lt name "lates" then Markdown.entity_l_53 name else Markdown.entity_l_72 name
+#[partial]
+def Markdown.entity_l_74 (name : String) : Option String :=
+    if String.lt name "larrfs" then Markdown.entity_l_36 name else Markdown.entity_l_73 name
+#[partial]
+def Markdown.entity_l_75 (name : String) : Option String :=
+    if String.beq name "lceil" then Option.some "⌈" else Option.none
+#[partial]
+def Markdown.entity_l_76 (name : String) : Option String :=
+    if String.beq name "lcub" then Option.some "{" else Option.none
+#[partial]
+def Markdown.entity_l_77 (name : String) : Option String :=
+    if String.lt name "lcub" then Markdown.entity_l_75 name else Markdown.entity_l_76 name
+#[partial]
+def Markdown.entity_l_78 (name : String) : Option String :=
+    if String.beq name "lcy" then Option.some "л" else Option.none
+#[partial]
+def Markdown.entity_l_79 (name : String) : Option String :=
+    if String.beq name "ldca" then Option.some "⤶" else Option.none
+#[partial]
+def Markdown.entity_l_80 (name : String) : Option String :=
+    if String.lt name "ldca" then Markdown.entity_l_78 name else Markdown.entity_l_79 name
+#[partial]
+def Markdown.entity_l_81 (name : String) : Option String :=
+    if String.lt name "lcy" then Markdown.entity_l_77 name else Markdown.entity_l_80 name
+#[partial]
+def Markdown.entity_l_82 (name : String) : Option String :=
+    if String.beq name "ldquo" then Option.some "“" else Option.none
+#[partial]
+def Markdown.entity_l_83 (name : String) : Option String :=
+    if String.beq name "ldquor" then Option.some "„" else Option.none
+#[partial]
+def Markdown.entity_l_84 (name : String) : Option String :=
+    if String.lt name "ldquor" then Markdown.entity_l_82 name else Markdown.entity_l_83 name
+#[partial]
+def Markdown.entity_l_85 (name : String) : Option String :=
+    if String.beq name "ldrdhar" then Option.some "⥧" else Option.none
+#[partial]
+def Markdown.entity_l_86 (name : String) : Option String :=
+    if String.beq name "ldrushar" then Option.some "⥋" else Option.none
+#[partial]
+def Markdown.entity_l_87 (name : String) : Option String :=
+    if String.beq name "ldsh" then Option.some "↲" else Option.none
+#[partial]
+def Markdown.entity_l_88 (name : String) : Option String :=
+    if String.lt name "ldsh" then Markdown.entity_l_86 name else Markdown.entity_l_87 name
+#[partial]
+def Markdown.entity_l_89 (name : String) : Option String :=
+    if String.lt name "ldrushar" then Markdown.entity_l_85 name else Markdown.entity_l_88 name
+#[partial]
+def Markdown.entity_l_90 (name : String) : Option String :=
+    if String.lt name "ldrdhar" then Markdown.entity_l_84 name else Markdown.entity_l_89 name
+#[partial]
+def Markdown.entity_l_91 (name : String) : Option String :=
+    if String.lt name "ldquo" then Markdown.entity_l_81 name else Markdown.entity_l_90 name
+#[partial]
+def Markdown.entity_l_92 (name : String) : Option String :=
+    if String.beq name "le" then Option.some "≤" else Option.none
+#[partial]
+def Markdown.entity_l_93 (name : String) : Option String :=
+    if String.beq name "leftarrow" then Option.some "←" else Option.none
+#[partial]
+def Markdown.entity_l_94 (name : String) : Option String :=
+    if String.lt name "leftarrow" then Markdown.entity_l_92 name else Markdown.entity_l_93 name
+#[partial]
+def Markdown.entity_l_95 (name : String) : Option String :=
+    if String.beq name "leftarrowtail" then Option.some "↢" else Option.none
+#[partial]
+def Markdown.entity_l_96 (name : String) : Option String :=
+    if String.beq name "leftharpoondown" then Option.some "↽" else Option.none
+#[partial]
+def Markdown.entity_l_97 (name : String) : Option String :=
+    if String.beq name "leftharpoonup" then Option.some "↼" else Option.none
+#[partial]
+def Markdown.entity_l_98 (name : String) : Option String :=
+    if String.lt name "leftharpoonup" then Markdown.entity_l_96 name else Markdown.entity_l_97 name
+#[partial]
+def Markdown.entity_l_99 (name : String) : Option String :=
+    if String.lt name "leftharpoondown" then Markdown.entity_l_95 name else Markdown.entity_l_98 name
+#[partial]
+def Markdown.entity_l_100 (name : String) : Option String :=
+    if String.lt name "leftarrowtail" then Markdown.entity_l_94 name else Markdown.entity_l_99 name
+#[partial]
+def Markdown.entity_l_101 (name : String) : Option String :=
+    if String.beq name "leftleftarrows" then Option.some "⇇" else Option.none
+#[partial]
+def Markdown.entity_l_102 (name : String) : Option String :=
+    if String.beq name "leftrightarrow" then Option.some "↔" else Option.none
+#[partial]
+def Markdown.entity_l_103 (name : String) : Option String :=
+    if String.lt name "leftrightarrow" then Markdown.entity_l_101 name else Markdown.entity_l_102 name
+#[partial]
+def Markdown.entity_l_104 (name : String) : Option String :=
+    if String.beq name "leftrightarrows" then Option.some "⇆" else Option.none
+#[partial]
+def Markdown.entity_l_105 (name : String) : Option String :=
+    if String.beq name "leftrightharpoons" then Option.some "⇋" else Option.none
+#[partial]
+def Markdown.entity_l_106 (name : String) : Option String :=
+    if String.beq name "leftrightsquigarrow" then Option.some "↭" else Option.none
+#[partial]
+def Markdown.entity_l_107 (name : String) : Option String :=
+    if String.lt name "leftrightsquigarrow" then Markdown.entity_l_105 name else Markdown.entity_l_106 name
+#[partial]
+def Markdown.entity_l_108 (name : String) : Option String :=
+    if String.lt name "leftrightharpoons" then Markdown.entity_l_104 name else Markdown.entity_l_107 name
+#[partial]
+def Markdown.entity_l_109 (name : String) : Option String :=
+    if String.lt name "leftrightarrows" then Markdown.entity_l_103 name else Markdown.entity_l_108 name
+#[partial]
+def Markdown.entity_l_110 (name : String) : Option String :=
+    if String.lt name "leftleftarrows" then Markdown.entity_l_100 name else Markdown.entity_l_109 name
+#[partial]
+def Markdown.entity_l_111 (name : String) : Option String :=
+    if String.lt name "le" then Markdown.entity_l_91 name else Markdown.entity_l_110 name
+#[partial]
+def Markdown.entity_l_112 (name : String) : Option String :=
+    if String.beq name "leftthreetimes" then Option.some "⋋" else Option.none
+#[partial]
+def Markdown.entity_l_113 (name : String) : Option String :=
+    if String.beq name "leg" then Option.some "⋚" else Option.none
+#[partial]
+def Markdown.entity_l_114 (name : String) : Option String :=
+    if String.lt name "leg" then Markdown.entity_l_112 name else Markdown.entity_l_113 name
+#[partial]
+def Markdown.entity_l_115 (name : String) : Option String :=
+    if String.beq name "leq" then Option.some "≤" else Option.none
+#[partial]
+def Markdown.entity_l_116 (name : String) : Option String :=
+    if String.beq name "leqq" then Option.some "≦" else Option.none
+#[partial]
+def Markdown.entity_l_117 (name : String) : Option String :=
+    if String.lt name "leqq" then Markdown.entity_l_115 name else Markdown.entity_l_116 name
+#[partial]
+def Markdown.entity_l_118 (name : String) : Option String :=
+    if String.lt name "leq" then Markdown.entity_l_114 name else Markdown.entity_l_117 name
+#[partial]
+def Markdown.entity_l_119 (name : String) : Option String :=
+    if String.beq name "leqslant" then Option.some "⩽" else Option.none
+#[partial]
+def Markdown.entity_l_120 (name : String) : Option String :=
+    if String.beq name "les" then Option.some "⩽" else Option.none
+#[partial]
+def Markdown.entity_l_121 (name : String) : Option String :=
+    if String.lt name "les" then Markdown.entity_l_119 name else Markdown.entity_l_120 name
+#[partial]
+def Markdown.entity_l_122 (name : String) : Option String :=
+    if String.beq name "lescc" then Option.some "⪨" else Option.none
+#[partial]
+def Markdown.entity_l_123 (name : String) : Option String :=
+    if String.beq name "lesdot" then Option.some "⩿" else Option.none
+#[partial]
+def Markdown.entity_l_124 (name : String) : Option String :=
+    if String.beq name "lesdoto" then Option.some "⪁" else Option.none
+#[partial]
+def Markdown.entity_l_125 (name : String) : Option String :=
+    if String.lt name "lesdoto" then Markdown.entity_l_123 name else Markdown.entity_l_124 name
+#[partial]
+def Markdown.entity_l_126 (name : String) : Option String :=
+    if String.lt name "lesdot" then Markdown.entity_l_122 name else Markdown.entity_l_125 name
+#[partial]
+def Markdown.entity_l_127 (name : String) : Option String :=
+    if String.lt name "lescc" then Markdown.entity_l_121 name else Markdown.entity_l_126 name
+#[partial]
+def Markdown.entity_l_128 (name : String) : Option String :=
+    if String.lt name "leqslant" then Markdown.entity_l_118 name else Markdown.entity_l_127 name
+#[partial]
+def Markdown.entity_l_129 (name : String) : Option String :=
+    if String.beq name "lesdotor" then Option.some "⪃" else Option.none
+#[partial]
+def Markdown.entity_l_130 (name : String) : Option String :=
+    if String.beq name "lesg" then Option.some "⋚︀" else Option.none
+#[partial]
+def Markdown.entity_l_131 (name : String) : Option String :=
+    if String.lt name "lesg" then Markdown.entity_l_129 name else Markdown.entity_l_130 name
+#[partial]
+def Markdown.entity_l_132 (name : String) : Option String :=
+    if String.beq name "lesges" then Option.some "⪓" else Option.none
+#[partial]
+def Markdown.entity_l_133 (name : String) : Option String :=
+    if String.beq name "lessapprox" then Option.some "⪅" else Option.none
+#[partial]
+def Markdown.entity_l_134 (name : String) : Option String :=
+    if String.beq name "lessdot" then Option.some "⋖" else Option.none
+#[partial]
+def Markdown.entity_l_135 (name : String) : Option String :=
+    if String.lt name "lessdot" then Markdown.entity_l_133 name else Markdown.entity_l_134 name
+#[partial]
+def Markdown.entity_l_136 (name : String) : Option String :=
+    if String.lt name "lessapprox" then Markdown.entity_l_132 name else Markdown.entity_l_135 name
+#[partial]
+def Markdown.entity_l_137 (name : String) : Option String :=
+    if String.lt name "lesges" then Markdown.entity_l_131 name else Markdown.entity_l_136 name
+#[partial]
+def Markdown.entity_l_138 (name : String) : Option String :=
+    if String.beq name "lesseqgtr" then Option.some "⋚" else Option.none
+#[partial]
+def Markdown.entity_l_139 (name : String) : Option String :=
+    if String.beq name "lesseqqgtr" then Option.some "⪋" else Option.none
+#[partial]
+def Markdown.entity_l_140 (name : String) : Option String :=
+    if String.lt name "lesseqqgtr" then Markdown.entity_l_138 name else Markdown.entity_l_139 name
+#[partial]
+def Markdown.entity_l_141 (name : String) : Option String :=
+    if String.beq name "lessgtr" then Option.some "≶" else Option.none
+#[partial]
+def Markdown.entity_l_142 (name : String) : Option String :=
+    if String.beq name "lesssim" then Option.some "≲" else Option.none
+#[partial]
+def Markdown.entity_l_143 (name : String) : Option String :=
+    if String.beq name "lfisht" then Option.some "⥼" else Option.none
+#[partial]
+def Markdown.entity_l_144 (name : String) : Option String :=
+    if String.lt name "lfisht" then Markdown.entity_l_142 name else Markdown.entity_l_143 name
+#[partial]
+def Markdown.entity_l_145 (name : String) : Option String :=
+    if String.lt name "lesssim" then Markdown.entity_l_141 name else Markdown.entity_l_144 name
+#[partial]
+def Markdown.entity_l_146 (name : String) : Option String :=
+    if String.lt name "lessgtr" then Markdown.entity_l_140 name else Markdown.entity_l_145 name
+#[partial]
+def Markdown.entity_l_147 (name : String) : Option String :=
+    if String.lt name "lesseqgtr" then Markdown.entity_l_137 name else Markdown.entity_l_146 name
+#[partial]
+def Markdown.entity_l_148 (name : String) : Option String :=
+    if String.lt name "lesdotor" then Markdown.entity_l_128 name else Markdown.entity_l_147 name
+#[partial]
+def Markdown.entity_l_149 (name : String) : Option String :=
+    if String.lt name "leftthreetimes" then Markdown.entity_l_111 name else Markdown.entity_l_148 name
+#[partial]
+def Markdown.entity_l_150 (name : String) : Option String :=
+    if String.lt name "lceil" then Markdown.entity_l_74 name else Markdown.entity_l_149 name
+#[partial]
+def Markdown.entity_l_151 (name : String) : Option String :=
+    if String.beq name "lfloor" then Option.some "⌊" else Option.none
+#[partial]
+def Markdown.entity_l_152 (name : String) : Option String :=
+    if String.beq name "lfr" then Option.some "𝔩" else Option.none
+#[partial]
+def Markdown.entity_l_153 (name : String) : Option String :=
+    if String.lt name "lfr" then Markdown.entity_l_151 name else Markdown.entity_l_152 name
+#[partial]
+def Markdown.entity_l_154 (name : String) : Option String :=
+    if String.beq name "lg" then Option.some "≶" else Option.none
+#[partial]
+def Markdown.entity_l_155 (name : String) : Option String :=
+    if String.beq name "lgE" then Option.some "⪑" else Option.none
+#[partial]
+def Markdown.entity_l_156 (name : String) : Option String :=
+    if String.lt name "lgE" then Markdown.entity_l_154 name else Markdown.entity_l_155 name
+#[partial]
+def Markdown.entity_l_157 (name : String) : Option String :=
+    if String.lt name "lg" then Markdown.entity_l_153 name else Markdown.entity_l_156 name
+#[partial]
+def Markdown.entity_l_158 (name : String) : Option String :=
+    if String.beq name "lhard" then Option.some "↽" else Option.none
+#[partial]
+def Markdown.entity_l_159 (name : String) : Option String :=
+    if String.beq name "lharu" then Option.some "↼" else Option.none
+#[partial]
+def Markdown.entity_l_160 (name : String) : Option String :=
+    if String.lt name "lharu" then Markdown.entity_l_158 name else Markdown.entity_l_159 name
+#[partial]
+def Markdown.entity_l_161 (name : String) : Option String :=
+    if String.beq name "lharul" then Option.some "⥪" else Option.none
+#[partial]
+def Markdown.entity_l_162 (name : String) : Option String :=
+    if String.beq name "lhblk" then Option.some "▄" else Option.none
+#[partial]
+def Markdown.entity_l_163 (name : String) : Option String :=
+    if String.beq name "ljcy" then Option.some "љ" else Option.none
+#[partial]
+def Markdown.entity_l_164 (name : String) : Option String :=
+    if String.lt name "ljcy" then Markdown.entity_l_162 name else Markdown.entity_l_163 name
+#[partial]
+def Markdown.entity_l_165 (name : String) : Option String :=
+    if String.lt name "lhblk" then Markdown.entity_l_161 name else Markdown.entity_l_164 name
+#[partial]
+def Markdown.entity_l_166 (name : String) : Option String :=
+    if String.lt name "lharul" then Markdown.entity_l_160 name else Markdown.entity_l_165 name
+#[partial]
+def Markdown.entity_l_167 (name : String) : Option String :=
+    if String.lt name "lhard" then Markdown.entity_l_157 name else Markdown.entity_l_166 name
+#[partial]
+def Markdown.entity_l_168 (name : String) : Option String :=
+    if String.beq name "ll" then Option.some "≪" else Option.none
+#[partial]
+def Markdown.entity_l_169 (name : String) : Option String :=
+    if String.beq name "llarr" then Option.some "⇇" else Option.none
+#[partial]
+def Markdown.entity_l_170 (name : String) : Option String :=
+    if String.lt name "llarr" then Markdown.entity_l_168 name else Markdown.entity_l_169 name
+#[partial]
+def Markdown.entity_l_171 (name : String) : Option String :=
+    if String.beq name "llcorner" then Option.some "⌞" else Option.none
+#[partial]
+def Markdown.entity_l_172 (name : String) : Option String :=
+    if String.beq name "llhard" then Option.some "⥫" else Option.none
+#[partial]
+def Markdown.entity_l_173 (name : String) : Option String :=
+    if String.beq name "lltri" then Option.some "◺" else Option.none
+#[partial]
+def Markdown.entity_l_174 (name : String) : Option String :=
+    if String.lt name "lltri" then Markdown.entity_l_172 name else Markdown.entity_l_173 name
+#[partial]
+def Markdown.entity_l_175 (name : String) : Option String :=
+    if String.lt name "llhard" then Markdown.entity_l_171 name else Markdown.entity_l_174 name
+#[partial]
+def Markdown.entity_l_176 (name : String) : Option String :=
+    if String.lt name "llcorner" then Markdown.entity_l_170 name else Markdown.entity_l_175 name
+#[partial]
+def Markdown.entity_l_177 (name : String) : Option String :=
+    if String.beq name "lmidot" then Option.some "ŀ" else Option.none
+#[partial]
+def Markdown.entity_l_178 (name : String) : Option String :=
+    if String.beq name "lmoust" then Option.some "⎰" else Option.none
+#[partial]
+def Markdown.entity_l_179 (name : String) : Option String :=
+    if String.lt name "lmoust" then Markdown.entity_l_177 name else Markdown.entity_l_178 name
+#[partial]
+def Markdown.entity_l_180 (name : String) : Option String :=
+    if String.beq name "lmoustache" then Option.some "⎰" else Option.none
+#[partial]
+def Markdown.entity_l_181 (name : String) : Option String :=
+    if String.beq name "lnE" then Option.some "≨" else Option.none
+#[partial]
+def Markdown.entity_l_182 (name : String) : Option String :=
+    if String.beq name "lnap" then Option.some "⪉" else Option.none
+#[partial]
+def Markdown.entity_l_183 (name : String) : Option String :=
+    if String.lt name "lnap" then Markdown.entity_l_181 name else Markdown.entity_l_182 name
+#[partial]
+def Markdown.entity_l_184 (name : String) : Option String :=
+    if String.lt name "lnE" then Markdown.entity_l_180 name else Markdown.entity_l_183 name
+#[partial]
+def Markdown.entity_l_185 (name : String) : Option String :=
+    if String.lt name "lmoustache" then Markdown.entity_l_179 name else Markdown.entity_l_184 name
+#[partial]
+def Markdown.entity_l_186 (name : String) : Option String :=
+    if String.lt name "lmidot" then Markdown.entity_l_176 name else Markdown.entity_l_185 name
+#[partial]
+def Markdown.entity_l_187 (name : String) : Option String :=
+    if String.lt name "ll" then Markdown.entity_l_167 name else Markdown.entity_l_186 name
+#[partial]
+def Markdown.entity_l_188 (name : String) : Option String :=
+    if String.beq name "lnapprox" then Option.some "⪉" else Option.none
+#[partial]
+def Markdown.entity_l_189 (name : String) : Option String :=
+    if String.beq name "lne" then Option.some "⪇" else Option.none
+#[partial]
+def Markdown.entity_l_190 (name : String) : Option String :=
+    if String.lt name "lne" then Markdown.entity_l_188 name else Markdown.entity_l_189 name
+#[partial]
+def Markdown.entity_l_191 (name : String) : Option String :=
+    if String.beq name "lneq" then Option.some "⪇" else Option.none
+#[partial]
+def Markdown.entity_l_192 (name : String) : Option String :=
+    if String.beq name "lneqq" then Option.some "≨" else Option.none
+#[partial]
+def Markdown.entity_l_193 (name : String) : Option String :=
+    if String.lt name "lneqq" then Markdown.entity_l_191 name else Markdown.entity_l_192 name
+#[partial]
+def Markdown.entity_l_194 (name : String) : Option String :=
+    if String.lt name "lneq" then Markdown.entity_l_190 name else Markdown.entity_l_193 name
+#[partial]
+def Markdown.entity_l_195 (name : String) : Option String :=
+    if String.beq name "lnsim" then Option.some "⋦" else Option.none
+#[partial]
+def Markdown.entity_l_196 (name : String) : Option String :=
+    if String.beq name "loang" then Option.some "⟬" else Option.none
+#[partial]
+def Markdown.entity_l_197 (name : String) : Option String :=
+    if String.lt name "loang" then Markdown.entity_l_195 name else Markdown.entity_l_196 name
+#[partial]
+def Markdown.entity_l_198 (name : String) : Option String :=
+    if String.beq name "loarr" then Option.some "⇽" else Option.none
+#[partial]
+def Markdown.entity_l_199 (name : String) : Option String :=
+    if String.beq name "lobrk" then Option.some "⟦" else Option.none
+#[partial]
+def Markdown.entity_l_200 (name : String) : Option String :=
+    if String.beq name "longleftarrow" then Option.some "⟵" else Option.none
+#[partial]
+def Markdown.entity_l_201 (name : String) : Option String :=
+    if String.lt name "longleftarrow" then Markdown.entity_l_199 name else Markdown.entity_l_200 name
+#[partial]
+def Markdown.entity_l_202 (name : String) : Option String :=
+    if String.lt name "lobrk" then Markdown.entity_l_198 name else Markdown.entity_l_201 name
+#[partial]
+def Markdown.entity_l_203 (name : String) : Option String :=
+    if String.lt name "loarr" then Markdown.entity_l_197 name else Markdown.entity_l_202 name
+#[partial]
+def Markdown.entity_l_204 (name : String) : Option String :=
+    if String.lt name "lnsim" then Markdown.entity_l_194 name else Markdown.entity_l_203 name
+#[partial]
+def Markdown.entity_l_205 (name : String) : Option String :=
+    if String.beq name "longleftrightarrow" then Option.some "⟷" else Option.none
+#[partial]
+def Markdown.entity_l_206 (name : String) : Option String :=
+    if String.beq name "longmapsto" then Option.some "⟼" else Option.none
+#[partial]
+def Markdown.entity_l_207 (name : String) : Option String :=
+    if String.lt name "longmapsto" then Markdown.entity_l_205 name else Markdown.entity_l_206 name
+#[partial]
+def Markdown.entity_l_208 (name : String) : Option String :=
+    if String.beq name "longrightarrow" then Option.some "⟶" else Option.none
+#[partial]
+def Markdown.entity_l_209 (name : String) : Option String :=
+    if String.beq name "looparrowleft" then Option.some "↫" else Option.none
+#[partial]
+def Markdown.entity_l_210 (name : String) : Option String :=
+    if String.beq name "looparrowright" then Option.some "↬" else Option.none
+#[partial]
+def Markdown.entity_l_211 (name : String) : Option String :=
+    if String.lt name "looparrowright" then Markdown.entity_l_209 name else Markdown.entity_l_210 name
+#[partial]
+def Markdown.entity_l_212 (name : String) : Option String :=
+    if String.lt name "looparrowleft" then Markdown.entity_l_208 name else Markdown.entity_l_211 name
+#[partial]
+def Markdown.entity_l_213 (name : String) : Option String :=
+    if String.lt name "longrightarrow" then Markdown.entity_l_207 name else Markdown.entity_l_212 name
+#[partial]
+def Markdown.entity_l_214 (name : String) : Option String :=
+    if String.beq name "lopar" then Option.some "⦅" else Option.none
+#[partial]
+def Markdown.entity_l_215 (name : String) : Option String :=
+    if String.beq name "lopf" then Option.some "𝕝" else Option.none
+#[partial]
+def Markdown.entity_l_216 (name : String) : Option String :=
+    if String.lt name "lopf" then Markdown.entity_l_214 name else Markdown.entity_l_215 name
+#[partial]
+def Markdown.entity_l_217 (name : String) : Option String :=
+    if String.beq name "loplus" then Option.some "⨭" else Option.none
+#[partial]
+def Markdown.entity_l_218 (name : String) : Option String :=
+    if String.beq name "lotimes" then Option.some "⨴" else Option.none
+#[partial]
+def Markdown.entity_l_219 (name : String) : Option String :=
+    if String.beq name "lowast" then Option.some "∗" else Option.none
+#[partial]
+def Markdown.entity_l_220 (name : String) : Option String :=
+    if String.lt name "lowast" then Markdown.entity_l_218 name else Markdown.entity_l_219 name
+#[partial]
+def Markdown.entity_l_221 (name : String) : Option String :=
+    if String.lt name "lotimes" then Markdown.entity_l_217 name else Markdown.entity_l_220 name
+#[partial]
+def Markdown.entity_l_222 (name : String) : Option String :=
+    if String.lt name "loplus" then Markdown.entity_l_216 name else Markdown.entity_l_221 name
+#[partial]
+def Markdown.entity_l_223 (name : String) : Option String :=
+    if String.lt name "lopar" then Markdown.entity_l_213 name else Markdown.entity_l_222 name
+#[partial]
+def Markdown.entity_l_224 (name : String) : Option String :=
+    if String.lt name "longleftrightarrow" then Markdown.entity_l_204 name else Markdown.entity_l_223 name
+#[partial]
+def Markdown.entity_l_225 (name : String) : Option String :=
+    if String.lt name "lnapprox" then Markdown.entity_l_187 name else Markdown.entity_l_224 name
+#[partial]
+def Markdown.entity_l_226 (name : String) : Option String :=
+    if String.beq name "lowbar" then Option.some "_" else Option.none
+#[partial]
+def Markdown.entity_l_227 (name : String) : Option String :=
+    if String.beq name "loz" then Option.some "◊" else Option.none
+#[partial]
+def Markdown.entity_l_228 (name : String) : Option String :=
+    if String.lt name "loz" then Markdown.entity_l_226 name else Markdown.entity_l_227 name
+#[partial]
+def Markdown.entity_l_229 (name : String) : Option String :=
+    if String.beq name "lozenge" then Option.some "◊" else Option.none
+#[partial]
+def Markdown.entity_l_230 (name : String) : Option String :=
+    if String.beq name "lozf" then Option.some "⧫" else Option.none
+#[partial]
+def Markdown.entity_l_231 (name : String) : Option String :=
+    if String.lt name "lozf" then Markdown.entity_l_229 name else Markdown.entity_l_230 name
+#[partial]
+def Markdown.entity_l_232 (name : String) : Option String :=
+    if String.lt name "lozenge" then Markdown.entity_l_228 name else Markdown.entity_l_231 name
+#[partial]
+def Markdown.entity_l_233 (name : String) : Option String :=
+    if String.beq name "lpar" then Option.some "(" else Option.none
+#[partial]
+def Markdown.entity_l_234 (name : String) : Option String :=
+    if String.beq name "lparlt" then Option.some "⦓" else Option.none
+#[partial]
+def Markdown.entity_l_235 (name : String) : Option String :=
+    if String.lt name "lparlt" then Markdown.entity_l_233 name else Markdown.entity_l_234 name
+#[partial]
+def Markdown.entity_l_236 (name : String) : Option String :=
+    if String.beq name "lrarr" then Option.some "⇆" else Option.none
+#[partial]
+def Markdown.entity_l_237 (name : String) : Option String :=
+    if String.beq name "lrcorner" then Option.some "⌟" else Option.none
+#[partial]
+def Markdown.entity_l_238 (name : String) : Option String :=
+    if String.beq name "lrhar" then Option.some "⇋" else Option.none
+#[partial]
+def Markdown.entity_l_239 (name : String) : Option String :=
+    if String.lt name "lrhar" then Markdown.entity_l_237 name else Markdown.entity_l_238 name
+#[partial]
+def Markdown.entity_l_240 (name : String) : Option String :=
+    if String.lt name "lrcorner" then Markdown.entity_l_236 name else Markdown.entity_l_239 name
+#[partial]
+def Markdown.entity_l_241 (name : String) : Option String :=
+    if String.lt name "lrarr" then Markdown.entity_l_235 name else Markdown.entity_l_240 name
+#[partial]
+def Markdown.entity_l_242 (name : String) : Option String :=
+    if String.lt name "lpar" then Markdown.entity_l_232 name else Markdown.entity_l_241 name
+#[partial]
+def Markdown.entity_l_243 (name : String) : Option String :=
+    if String.beq name "lrhard" then Option.some "⥭" else Option.none
+#[partial]
+def Markdown.entity_l_244 (name : String) : Option String :=
+    if String.beq name "lrm" then Option.some "‎" else Option.none
+#[partial]
+def Markdown.entity_l_245 (name : String) : Option String :=
+    if String.lt name "lrm" then Markdown.entity_l_243 name else Markdown.entity_l_244 name
+#[partial]
+def Markdown.entity_l_246 (name : String) : Option String :=
+    if String.beq name "lrtri" then Option.some "⊿" else Option.none
+#[partial]
+def Markdown.entity_l_247 (name : String) : Option String :=
+    if String.beq name "lsaquo" then Option.some "‹" else Option.none
+#[partial]
+def Markdown.entity_l_248 (name : String) : Option String :=
+    if String.beq name "lscr" then Option.some "𝓁" else Option.none
+#[partial]
+def Markdown.entity_l_249 (name : String) : Option String :=
+    if String.lt name "lscr" then Markdown.entity_l_247 name else Markdown.entity_l_248 name
+#[partial]
+def Markdown.entity_l_250 (name : String) : Option String :=
+    if String.lt name "lsaquo" then Markdown.entity_l_246 name else Markdown.entity_l_249 name
+#[partial]
+def Markdown.entity_l_251 (name : String) : Option String :=
+    if String.lt name "lrtri" then Markdown.entity_l_245 name else Markdown.entity_l_250 name
+#[partial]
+def Markdown.entity_l_252 (name : String) : Option String :=
+    if String.beq name "lsh" then Option.some "↰" else Option.none
+#[partial]
+def Markdown.entity_l_253 (name : String) : Option String :=
+    if String.beq name "lsim" then Option.some "≲" else Option.none
+#[partial]
+def Markdown.entity_l_254 (name : String) : Option String :=
+    if String.lt name "lsim" then Markdown.entity_l_252 name else Markdown.entity_l_253 name
+#[partial]
+def Markdown.entity_l_255 (name : String) : Option String :=
+    if String.beq name "lsime" then Option.some "⪍" else Option.none
+#[partial]
+def Markdown.entity_l_256 (name : String) : Option String :=
+    if String.beq name "lsimg" then Option.some "⪏" else Option.none
+#[partial]
+def Markdown.entity_l_257 (name : String) : Option String :=
+    if String.beq name "lsqb" then Option.some "[" else Option.none
+#[partial]
+def Markdown.entity_l_258 (name : String) : Option String :=
+    if String.lt name "lsqb" then Markdown.entity_l_256 name else Markdown.entity_l_257 name
+#[partial]
+def Markdown.entity_l_259 (name : String) : Option String :=
+    if String.lt name "lsimg" then Markdown.entity_l_255 name else Markdown.entity_l_258 name
+#[partial]
+def Markdown.entity_l_260 (name : String) : Option String :=
+    if String.lt name "lsime" then Markdown.entity_l_254 name else Markdown.entity_l_259 name
+#[partial]
+def Markdown.entity_l_261 (name : String) : Option String :=
+    if String.lt name "lsh" then Markdown.entity_l_251 name else Markdown.entity_l_260 name
+#[partial]
+def Markdown.entity_l_262 (name : String) : Option String :=
+    if String.lt name "lrhard" then Markdown.entity_l_242 name else Markdown.entity_l_261 name
+#[partial]
+def Markdown.entity_l_263 (name : String) : Option String :=
+    if String.beq name "lsquo" then Option.some "‘" else Option.none
+#[partial]
+def Markdown.entity_l_264 (name : String) : Option String :=
+    if String.beq name "lsquor" then Option.some "‚" else Option.none
+#[partial]
+def Markdown.entity_l_265 (name : String) : Option String :=
+    if String.lt name "lsquor" then Markdown.entity_l_263 name else Markdown.entity_l_264 name
+#[partial]
+def Markdown.entity_l_266 (name : String) : Option String :=
+    if String.beq name "lstrok" then Option.some "ł" else Option.none
+#[partial]
+def Markdown.entity_l_267 (name : String) : Option String :=
+    if String.beq name "lt" then Option.some "<" else Option.none
+#[partial]
+def Markdown.entity_l_268 (name : String) : Option String :=
+    if String.lt name "lt" then Markdown.entity_l_266 name else Markdown.entity_l_267 name
+#[partial]
+def Markdown.entity_l_269 (name : String) : Option String :=
+    if String.lt name "lstrok" then Markdown.entity_l_265 name else Markdown.entity_l_268 name
+#[partial]
+def Markdown.entity_l_270 (name : String) : Option String :=
+    if String.beq name "ltcc" then Option.some "⪦" else Option.none
+#[partial]
+def Markdown.entity_l_271 (name : String) : Option String :=
+    if String.beq name "ltcir" then Option.some "⩹" else Option.none
+#[partial]
+def Markdown.entity_l_272 (name : String) : Option String :=
+    if String.lt name "ltcir" then Markdown.entity_l_270 name else Markdown.entity_l_271 name
+#[partial]
+def Markdown.entity_l_273 (name : String) : Option String :=
+    if String.beq name "ltdot" then Option.some "⋖" else Option.none
+#[partial]
+def Markdown.entity_l_274 (name : String) : Option String :=
+    if String.beq name "lthree" then Option.some "⋋" else Option.none
+#[partial]
+def Markdown.entity_l_275 (name : String) : Option String :=
+    if String.beq name "ltimes" then Option.some "⋉" else Option.none
+#[partial]
+def Markdown.entity_l_276 (name : String) : Option String :=
+    if String.lt name "ltimes" then Markdown.entity_l_274 name else Markdown.entity_l_275 name
+#[partial]
+def Markdown.entity_l_277 (name : String) : Option String :=
+    if String.lt name "lthree" then Markdown.entity_l_273 name else Markdown.entity_l_276 name
+#[partial]
+def Markdown.entity_l_278 (name : String) : Option String :=
+    if String.lt name "ltdot" then Markdown.entity_l_272 name else Markdown.entity_l_277 name
+#[partial]
+def Markdown.entity_l_279 (name : String) : Option String :=
+    if String.lt name "ltcc" then Markdown.entity_l_269 name else Markdown.entity_l_278 name
+#[partial]
+def Markdown.entity_l_280 (name : String) : Option String :=
+    if String.beq name "ltlarr" then Option.some "⥶" else Option.none
+#[partial]
+def Markdown.entity_l_281 (name : String) : Option String :=
+    if String.beq name "ltquest" then Option.some "⩻" else Option.none
+#[partial]
+def Markdown.entity_l_282 (name : String) : Option String :=
+    if String.lt name "ltquest" then Markdown.entity_l_280 name else Markdown.entity_l_281 name
+#[partial]
+def Markdown.entity_l_283 (name : String) : Option String :=
+    if String.beq name "ltrPar" then Option.some "⦖" else Option.none
+#[partial]
+def Markdown.entity_l_284 (name : String) : Option String :=
+    if String.beq name "ltri" then Option.some "◃" else Option.none
+#[partial]
+def Markdown.entity_l_285 (name : String) : Option String :=
+    if String.beq name "ltrie" then Option.some "⊴" else Option.none
+#[partial]
+def Markdown.entity_l_286 (name : String) : Option String :=
+    if String.lt name "ltrie" then Markdown.entity_l_284 name else Markdown.entity_l_285 name
+#[partial]
+def Markdown.entity_l_287 (name : String) : Option String :=
+    if String.lt name "ltri" then Markdown.entity_l_283 name else Markdown.entity_l_286 name
+#[partial]
+def Markdown.entity_l_288 (name : String) : Option String :=
+    if String.lt name "ltrPar" then Markdown.entity_l_282 name else Markdown.entity_l_287 name
+#[partial]
+def Markdown.entity_l_289 (name : String) : Option String :=
+    if String.beq name "ltrif" then Option.some "◂" else Option.none
+#[partial]
+def Markdown.entity_l_290 (name : String) : Option String :=
+    if String.beq name "lurdshar" then Option.some "⥊" else Option.none
+#[partial]
+def Markdown.entity_l_291 (name : String) : Option String :=
+    if String.lt name "lurdshar" then Markdown.entity_l_289 name else Markdown.entity_l_290 name
+#[partial]
+def Markdown.entity_l_292 (name : String) : Option String :=
+    if String.beq name "luruhar" then Option.some "⥦" else Option.none
+#[partial]
+def Markdown.entity_l_293 (name : String) : Option String :=
+    if String.beq name "lvertneqq" then Option.some "≨︀" else Option.none
+#[partial]
+def Markdown.entity_l_294 (name : String) : Option String :=
+    if String.beq name "lvnE" then Option.some "≨︀" else Option.none
+#[partial]
+def Markdown.entity_l_295 (name : String) : Option String :=
+    if String.lt name "lvnE" then Markdown.entity_l_293 name else Markdown.entity_l_294 name
+#[partial]
+def Markdown.entity_l_296 (name : String) : Option String :=
+    if String.lt name "lvertneqq" then Markdown.entity_l_292 name else Markdown.entity_l_295 name
+#[partial]
+def Markdown.entity_l_297 (name : String) : Option String :=
+    if String.lt name "luruhar" then Markdown.entity_l_291 name else Markdown.entity_l_296 name
+#[partial]
+def Markdown.entity_l_298 (name : String) : Option String :=
+    if String.lt name "ltrif" then Markdown.entity_l_288 name else Markdown.entity_l_297 name
+#[partial]
+def Markdown.entity_l_299 (name : String) : Option String :=
+    if String.lt name "ltlarr" then Markdown.entity_l_279 name else Markdown.entity_l_298 name
+#[partial]
+def Markdown.entity_l_300 (name : String) : Option String :=
+    if String.lt name "lsquo" then Markdown.entity_l_262 name else Markdown.entity_l_299 name
+#[partial]
+def Markdown.entity_l_301 (name : String) : Option String :=
+    if String.lt name "lowbar" then Markdown.entity_l_225 name else Markdown.entity_l_300 name
+#[partial]
+def Markdown.entity_l_302 (name : String) : Option String :=
+    if String.lt name "lfloor" then Markdown.entity_l_150 name else Markdown.entity_l_301 name
+
+def Markdown.entity_l (name : String) : Option String := Markdown.entity_l_302 name
 
 #[partial]
-def Markdown.entity_m (name : String) : Option String :=
-    if String.beq name "mDDot" then Option.some "∺"
-    else if String.beq name "macr" then Option.some "¯"
-    else if String.beq name "male" then Option.some "♂"
-    else if String.beq name "malt" then Option.some "✠"
-    else if String.beq name "maltese" then Option.some "✠"
-    else if String.beq name "map" then Option.some "↦"
-    else if String.beq name "mapsto" then Option.some "↦"
-    else if String.beq name "mapstodown" then Option.some "↧"
-    else if String.beq name "mapstoleft" then Option.some "↤"
-    else if String.beq name "mapstoup" then Option.some "↥"
-    else if String.beq name "marker" then Option.some "▮"
-    else if String.beq name "mcomma" then Option.some "⨩"
-    else if String.beq name "mcy" then Option.some "м"
-    else if String.beq name "mdash" then Option.some "—"
-    else if String.beq name "measuredangle" then Option.some "∡"
-    else if String.beq name "mfr" then Option.some "𝔪"
-    else if String.beq name "mho" then Option.some "℧"
-    else if String.beq name "micro" then Option.some "µ"
-    else if String.beq name "mid" then Option.some "∣"
-    else if String.beq name "midast" then Option.some "*"
-    else if String.beq name "midcir" then Option.some "⫰"
-    else if String.beq name "middot" then Option.some "·"
-    else if String.beq name "minus" then Option.some "−"
-    else if String.beq name "minusb" then Option.some "⊟"
-    else if String.beq name "minusd" then Option.some "∸"
-    else if String.beq name "minusdu" then Option.some "⨪"
-    else if String.beq name "mlcp" then Option.some "⫛"
-    else if String.beq name "mldr" then Option.some "…"
-    else if String.beq name "mnplus" then Option.some "∓"
-    else if String.beq name "models" then Option.some "⊧"
-    else if String.beq name "mopf" then Option.some "𝕞"
-    else if String.beq name "mp" then Option.some "∓"
-    else if String.beq name "mscr" then Option.some "𝓂"
-    else if String.beq name "mstpos" then Option.some "∾"
-    else if String.beq name "mu" then Option.some "μ"
-    else if String.beq name "multimap" then Option.some "⊸"
-    else if String.beq name "mumap" then Option.some "⊸"
-    else Option.none
+def Markdown.entity_m_0 (name : String) : Option String :=
+    if String.beq name "mDDot" then Option.some "∺" else Option.none
+#[partial]
+def Markdown.entity_m_1 (name : String) : Option String :=
+    if String.beq name "macr" then Option.some "¯" else Option.none
+#[partial]
+def Markdown.entity_m_2 (name : String) : Option String :=
+    if String.lt name "macr" then Markdown.entity_m_0 name else Markdown.entity_m_1 name
+#[partial]
+def Markdown.entity_m_3 (name : String) : Option String :=
+    if String.beq name "male" then Option.some "♂" else Option.none
+#[partial]
+def Markdown.entity_m_4 (name : String) : Option String :=
+    if String.beq name "malt" then Option.some "✠" else Option.none
+#[partial]
+def Markdown.entity_m_5 (name : String) : Option String :=
+    if String.lt name "malt" then Markdown.entity_m_3 name else Markdown.entity_m_4 name
+#[partial]
+def Markdown.entity_m_6 (name : String) : Option String :=
+    if String.lt name "male" then Markdown.entity_m_2 name else Markdown.entity_m_5 name
+#[partial]
+def Markdown.entity_m_7 (name : String) : Option String :=
+    if String.beq name "maltese" then Option.some "✠" else Option.none
+#[partial]
+def Markdown.entity_m_8 (name : String) : Option String :=
+    if String.beq name "map" then Option.some "↦" else Option.none
+#[partial]
+def Markdown.entity_m_9 (name : String) : Option String :=
+    if String.lt name "map" then Markdown.entity_m_7 name else Markdown.entity_m_8 name
+#[partial]
+def Markdown.entity_m_10 (name : String) : Option String :=
+    if String.beq name "mapsto" then Option.some "↦" else Option.none
+#[partial]
+def Markdown.entity_m_11 (name : String) : Option String :=
+    if String.beq name "mapstodown" then Option.some "↧" else Option.none
+#[partial]
+def Markdown.entity_m_12 (name : String) : Option String :=
+    if String.beq name "mapstoleft" then Option.some "↤" else Option.none
+#[partial]
+def Markdown.entity_m_13 (name : String) : Option String :=
+    if String.lt name "mapstoleft" then Markdown.entity_m_11 name else Markdown.entity_m_12 name
+#[partial]
+def Markdown.entity_m_14 (name : String) : Option String :=
+    if String.lt name "mapstodown" then Markdown.entity_m_10 name else Markdown.entity_m_13 name
+#[partial]
+def Markdown.entity_m_15 (name : String) : Option String :=
+    if String.lt name "mapsto" then Markdown.entity_m_9 name else Markdown.entity_m_14 name
+#[partial]
+def Markdown.entity_m_16 (name : String) : Option String :=
+    if String.lt name "maltese" then Markdown.entity_m_6 name else Markdown.entity_m_15 name
+#[partial]
+def Markdown.entity_m_17 (name : String) : Option String :=
+    if String.beq name "mapstoup" then Option.some "↥" else Option.none
+#[partial]
+def Markdown.entity_m_18 (name : String) : Option String :=
+    if String.beq name "marker" then Option.some "▮" else Option.none
+#[partial]
+def Markdown.entity_m_19 (name : String) : Option String :=
+    if String.lt name "marker" then Markdown.entity_m_17 name else Markdown.entity_m_18 name
+#[partial]
+def Markdown.entity_m_20 (name : String) : Option String :=
+    if String.beq name "mcomma" then Option.some "⨩" else Option.none
+#[partial]
+def Markdown.entity_m_21 (name : String) : Option String :=
+    if String.beq name "mcy" then Option.some "м" else Option.none
+#[partial]
+def Markdown.entity_m_22 (name : String) : Option String :=
+    if String.lt name "mcy" then Markdown.entity_m_20 name else Markdown.entity_m_21 name
+#[partial]
+def Markdown.entity_m_23 (name : String) : Option String :=
+    if String.lt name "mcomma" then Markdown.entity_m_19 name else Markdown.entity_m_22 name
+#[partial]
+def Markdown.entity_m_24 (name : String) : Option String :=
+    if String.beq name "mdash" then Option.some "—" else Option.none
+#[partial]
+def Markdown.entity_m_25 (name : String) : Option String :=
+    if String.beq name "measuredangle" then Option.some "∡" else Option.none
+#[partial]
+def Markdown.entity_m_26 (name : String) : Option String :=
+    if String.lt name "measuredangle" then Markdown.entity_m_24 name else Markdown.entity_m_25 name
+#[partial]
+def Markdown.entity_m_27 (name : String) : Option String :=
+    if String.beq name "mfr" then Option.some "𝔪" else Option.none
+#[partial]
+def Markdown.entity_m_28 (name : String) : Option String :=
+    if String.beq name "mho" then Option.some "℧" else Option.none
+#[partial]
+def Markdown.entity_m_29 (name : String) : Option String :=
+    if String.beq name "micro" then Option.some "µ" else Option.none
+#[partial]
+def Markdown.entity_m_30 (name : String) : Option String :=
+    if String.lt name "micro" then Markdown.entity_m_28 name else Markdown.entity_m_29 name
+#[partial]
+def Markdown.entity_m_31 (name : String) : Option String :=
+    if String.lt name "mho" then Markdown.entity_m_27 name else Markdown.entity_m_30 name
+#[partial]
+def Markdown.entity_m_32 (name : String) : Option String :=
+    if String.lt name "mfr" then Markdown.entity_m_26 name else Markdown.entity_m_31 name
+#[partial]
+def Markdown.entity_m_33 (name : String) : Option String :=
+    if String.lt name "mdash" then Markdown.entity_m_23 name else Markdown.entity_m_32 name
+#[partial]
+def Markdown.entity_m_34 (name : String) : Option String :=
+    if String.lt name "mapstoup" then Markdown.entity_m_16 name else Markdown.entity_m_33 name
+#[partial]
+def Markdown.entity_m_35 (name : String) : Option String :=
+    if String.beq name "mid" then Option.some "∣" else Option.none
+#[partial]
+def Markdown.entity_m_36 (name : String) : Option String :=
+    if String.beq name "midast" then Option.some "*" else Option.none
+#[partial]
+def Markdown.entity_m_37 (name : String) : Option String :=
+    if String.lt name "midast" then Markdown.entity_m_35 name else Markdown.entity_m_36 name
+#[partial]
+def Markdown.entity_m_38 (name : String) : Option String :=
+    if String.beq name "midcir" then Option.some "⫰" else Option.none
+#[partial]
+def Markdown.entity_m_39 (name : String) : Option String :=
+    if String.beq name "middot" then Option.some "·" else Option.none
+#[partial]
+def Markdown.entity_m_40 (name : String) : Option String :=
+    if String.lt name "middot" then Markdown.entity_m_38 name else Markdown.entity_m_39 name
+#[partial]
+def Markdown.entity_m_41 (name : String) : Option String :=
+    if String.lt name "midcir" then Markdown.entity_m_37 name else Markdown.entity_m_40 name
+#[partial]
+def Markdown.entity_m_42 (name : String) : Option String :=
+    if String.beq name "minus" then Option.some "−" else Option.none
+#[partial]
+def Markdown.entity_m_43 (name : String) : Option String :=
+    if String.beq name "minusb" then Option.some "⊟" else Option.none
+#[partial]
+def Markdown.entity_m_44 (name : String) : Option String :=
+    if String.lt name "minusb" then Markdown.entity_m_42 name else Markdown.entity_m_43 name
+#[partial]
+def Markdown.entity_m_45 (name : String) : Option String :=
+    if String.beq name "minusd" then Option.some "∸" else Option.none
+#[partial]
+def Markdown.entity_m_46 (name : String) : Option String :=
+    if String.beq name "minusdu" then Option.some "⨪" else Option.none
+#[partial]
+def Markdown.entity_m_47 (name : String) : Option String :=
+    if String.beq name "mlcp" then Option.some "⫛" else Option.none
+#[partial]
+def Markdown.entity_m_48 (name : String) : Option String :=
+    if String.lt name "mlcp" then Markdown.entity_m_46 name else Markdown.entity_m_47 name
+#[partial]
+def Markdown.entity_m_49 (name : String) : Option String :=
+    if String.lt name "minusdu" then Markdown.entity_m_45 name else Markdown.entity_m_48 name
+#[partial]
+def Markdown.entity_m_50 (name : String) : Option String :=
+    if String.lt name "minusd" then Markdown.entity_m_44 name else Markdown.entity_m_49 name
+#[partial]
+def Markdown.entity_m_51 (name : String) : Option String :=
+    if String.lt name "minus" then Markdown.entity_m_41 name else Markdown.entity_m_50 name
+#[partial]
+def Markdown.entity_m_52 (name : String) : Option String :=
+    if String.beq name "mldr" then Option.some "…" else Option.none
+#[partial]
+def Markdown.entity_m_53 (name : String) : Option String :=
+    if String.beq name "mnplus" then Option.some "∓" else Option.none
+#[partial]
+def Markdown.entity_m_54 (name : String) : Option String :=
+    if String.lt name "mnplus" then Markdown.entity_m_52 name else Markdown.entity_m_53 name
+#[partial]
+def Markdown.entity_m_55 (name : String) : Option String :=
+    if String.beq name "models" then Option.some "⊧" else Option.none
+#[partial]
+def Markdown.entity_m_56 (name : String) : Option String :=
+    if String.beq name "mopf" then Option.some "𝕞" else Option.none
+#[partial]
+def Markdown.entity_m_57 (name : String) : Option String :=
+    if String.beq name "mp" then Option.some "∓" else Option.none
+#[partial]
+def Markdown.entity_m_58 (name : String) : Option String :=
+    if String.lt name "mp" then Markdown.entity_m_56 name else Markdown.entity_m_57 name
+#[partial]
+def Markdown.entity_m_59 (name : String) : Option String :=
+    if String.lt name "mopf" then Markdown.entity_m_55 name else Markdown.entity_m_58 name
+#[partial]
+def Markdown.entity_m_60 (name : String) : Option String :=
+    if String.lt name "models" then Markdown.entity_m_54 name else Markdown.entity_m_59 name
+#[partial]
+def Markdown.entity_m_61 (name : String) : Option String :=
+    if String.beq name "mscr" then Option.some "𝓂" else Option.none
+#[partial]
+def Markdown.entity_m_62 (name : String) : Option String :=
+    if String.beq name "mstpos" then Option.some "∾" else Option.none
+#[partial]
+def Markdown.entity_m_63 (name : String) : Option String :=
+    if String.lt name "mstpos" then Markdown.entity_m_61 name else Markdown.entity_m_62 name
+#[partial]
+def Markdown.entity_m_64 (name : String) : Option String :=
+    if String.beq name "mu" then Option.some "μ" else Option.none
+#[partial]
+def Markdown.entity_m_65 (name : String) : Option String :=
+    if String.beq name "multimap" then Option.some "⊸" else Option.none
+#[partial]
+def Markdown.entity_m_66 (name : String) : Option String :=
+    if String.beq name "mumap" then Option.some "⊸" else Option.none
+#[partial]
+def Markdown.entity_m_67 (name : String) : Option String :=
+    if String.lt name "mumap" then Markdown.entity_m_65 name else Markdown.entity_m_66 name
+#[partial]
+def Markdown.entity_m_68 (name : String) : Option String :=
+    if String.lt name "multimap" then Markdown.entity_m_64 name else Markdown.entity_m_67 name
+#[partial]
+def Markdown.entity_m_69 (name : String) : Option String :=
+    if String.lt name "mu" then Markdown.entity_m_63 name else Markdown.entity_m_68 name
+#[partial]
+def Markdown.entity_m_70 (name : String) : Option String :=
+    if String.lt name "mscr" then Markdown.entity_m_60 name else Markdown.entity_m_69 name
+#[partial]
+def Markdown.entity_m_71 (name : String) : Option String :=
+    if String.lt name "mldr" then Markdown.entity_m_51 name else Markdown.entity_m_70 name
+#[partial]
+def Markdown.entity_m_72 (name : String) : Option String :=
+    if String.lt name "mid" then Markdown.entity_m_34 name else Markdown.entity_m_71 name
+
+def Markdown.entity_m (name : String) : Option String := Markdown.entity_m_72 name
 
 #[partial]
-def Markdown.entity_n (name : String) : Option String :=
-    if String.beq name "nGg" then Option.some "⋙̸"
-    else if String.beq name "nGt" then Option.some "≫⃒"
-    else if String.beq name "nGtv" then Option.some "≫̸"
-    else if String.beq name "nLeftarrow" then Option.some "⇍"
-    else if String.beq name "nLeftrightarrow" then Option.some "⇎"
-    else if String.beq name "nLl" then Option.some "⋘̸"
-    else if String.beq name "nLt" then Option.some "≪⃒"
-    else if String.beq name "nLtv" then Option.some "≪̸"
-    else if String.beq name "nRightarrow" then Option.some "⇏"
-    else if String.beq name "nVDash" then Option.some "⊯"
-    else if String.beq name "nVdash" then Option.some "⊮"
-    else if String.beq name "nabla" then Option.some "∇"
-    else if String.beq name "nacute" then Option.some "ń"
-    else if String.beq name "nang" then Option.some "∠⃒"
-    else if String.beq name "nap" then Option.some "≉"
-    else if String.beq name "napE" then Option.some "⩰̸"
-    else if String.beq name "napid" then Option.some "≋̸"
-    else if String.beq name "napos" then Option.some "ŉ"
-    else if String.beq name "napprox" then Option.some "≉"
-    else if String.beq name "natur" then Option.some "♮"
-    else if String.beq name "natural" then Option.some "♮"
-    else if String.beq name "naturals" then Option.some "ℕ"
-    else if String.beq name "nbsp" then Option.some " "
-    else if String.beq name "nbump" then Option.some "≎̸"
-    else if String.beq name "nbumpe" then Option.some "≏̸"
-    else if String.beq name "ncap" then Option.some "⩃"
-    else if String.beq name "ncaron" then Option.some "ň"
-    else if String.beq name "ncedil" then Option.some "ņ"
-    else if String.beq name "ncong" then Option.some "≇"
-    else if String.beq name "ncongdot" then Option.some "⩭̸"
-    else if String.beq name "ncup" then Option.some "⩂"
-    else if String.beq name "ncy" then Option.some "н"
-    else if String.beq name "ndash" then Option.some "–"
-    else if String.beq name "ne" then Option.some "≠"
-    else if String.beq name "neArr" then Option.some "⇗"
-    else if String.beq name "nearhk" then Option.some "⤤"
-    else if String.beq name "nearr" then Option.some "↗"
-    else if String.beq name "nearrow" then Option.some "↗"
-    else if String.beq name "nedot" then Option.some "≐̸"
-    else if String.beq name "nequiv" then Option.some "≢"
-    else if String.beq name "nesear" then Option.some "⤨"
-    else if String.beq name "nesim" then Option.some "≂̸"
-    else if String.beq name "nexist" then Option.some "∄"
-    else if String.beq name "nexists" then Option.some "∄"
-    else if String.beq name "nfr" then Option.some "𝔫"
-    else if String.beq name "ngE" then Option.some "≧̸"
-    else if String.beq name "nge" then Option.some "≱"
-    else if String.beq name "ngeq" then Option.some "≱"
-    else if String.beq name "ngeqq" then Option.some "≧̸"
-    else if String.beq name "ngeqslant" then Option.some "⩾̸"
-    else if String.beq name "nges" then Option.some "⩾̸"
-    else if String.beq name "ngsim" then Option.some "≵"
-    else if String.beq name "ngt" then Option.some "≯"
-    else if String.beq name "ngtr" then Option.some "≯"
-    else if String.beq name "nhArr" then Option.some "⇎"
-    else if String.beq name "nharr" then Option.some "↮"
-    else if String.beq name "nhpar" then Option.some "⫲"
-    else if String.beq name "ni" then Option.some "∋"
-    else if String.beq name "nis" then Option.some "⋼"
-    else if String.beq name "nisd" then Option.some "⋺"
-    else if String.beq name "niv" then Option.some "∋"
-    else if String.beq name "njcy" then Option.some "њ"
-    else if String.beq name "nlArr" then Option.some "⇍"
-    else if String.beq name "nlE" then Option.some "≦̸"
-    else if String.beq name "nlarr" then Option.some "↚"
-    else if String.beq name "nldr" then Option.some "‥"
-    else if String.beq name "nle" then Option.some "≰"
-    else if String.beq name "nleftarrow" then Option.some "↚"
-    else if String.beq name "nleftrightarrow" then Option.some "↮"
-    else if String.beq name "nleq" then Option.some "≰"
-    else if String.beq name "nleqq" then Option.some "≦̸"
-    else if String.beq name "nleqslant" then Option.some "⩽̸"
-    else if String.beq name "nles" then Option.some "⩽̸"
-    else if String.beq name "nless" then Option.some "≮"
-    else if String.beq name "nlsim" then Option.some "≴"
-    else if String.beq name "nlt" then Option.some "≮"
-    else if String.beq name "nltri" then Option.some "⋪"
-    else if String.beq name "nltrie" then Option.some "⋬"
-    else if String.beq name "nmid" then Option.some "∤"
-    else if String.beq name "nopf" then Option.some "𝕟"
-    else if String.beq name "not" then Option.some "¬"
-    else if String.beq name "notin" then Option.some "∉"
-    else if String.beq name "notinE" then Option.some "⋹̸"
-    else if String.beq name "notindot" then Option.some "⋵̸"
-    else if String.beq name "notinva" then Option.some "∉"
-    else if String.beq name "notinvb" then Option.some "⋷"
-    else if String.beq name "notinvc" then Option.some "⋶"
-    else if String.beq name "notni" then Option.some "∌"
-    else if String.beq name "notniva" then Option.some "∌"
-    else if String.beq name "notnivb" then Option.some "⋾"
-    else if String.beq name "notnivc" then Option.some "⋽"
-    else if String.beq name "npar" then Option.some "∦"
-    else if String.beq name "nparallel" then Option.some "∦"
-    else if String.beq name "nparsl" then Option.some "⫽⃥"
-    else if String.beq name "npart" then Option.some "∂̸"
-    else if String.beq name "npolint" then Option.some "⨔"
-    else if String.beq name "npr" then Option.some "⊀"
-    else if String.beq name "nprcue" then Option.some "⋠"
-    else if String.beq name "npre" then Option.some "⪯̸"
-    else if String.beq name "nprec" then Option.some "⊀"
-    else if String.beq name "npreceq" then Option.some "⪯̸"
-    else if String.beq name "nrArr" then Option.some "⇏"
-    else if String.beq name "nrarr" then Option.some "↛"
-    else if String.beq name "nrarrc" then Option.some "⤳̸"
-    else if String.beq name "nrarrw" then Option.some "↝̸"
-    else if String.beq name "nrightarrow" then Option.some "↛"
-    else if String.beq name "nrtri" then Option.some "⋫"
-    else if String.beq name "nrtrie" then Option.some "⋭"
-    else if String.beq name "nsc" then Option.some "⊁"
-    else if String.beq name "nsccue" then Option.some "⋡"
-    else if String.beq name "nsce" then Option.some "⪰̸"
-    else if String.beq name "nscr" then Option.some "𝓃"
-    else if String.beq name "nshortmid" then Option.some "∤"
-    else if String.beq name "nshortparallel" then Option.some "∦"
-    else if String.beq name "nsim" then Option.some "≁"
-    else if String.beq name "nsime" then Option.some "≄"
-    else if String.beq name "nsimeq" then Option.some "≄"
-    else if String.beq name "nsmid" then Option.some "∤"
-    else if String.beq name "nspar" then Option.some "∦"
-    else if String.beq name "nsqsube" then Option.some "⋢"
-    else if String.beq name "nsqsupe" then Option.some "⋣"
-    else if String.beq name "nsub" then Option.some "⊄"
-    else if String.beq name "nsubE" then Option.some "⫅̸"
-    else if String.beq name "nsube" then Option.some "⊈"
-    else if String.beq name "nsubset" then Option.some "⊂⃒"
-    else if String.beq name "nsubseteq" then Option.some "⊈"
-    else if String.beq name "nsubseteqq" then Option.some "⫅̸"
-    else if String.beq name "nsucc" then Option.some "⊁"
-    else if String.beq name "nsucceq" then Option.some "⪰̸"
-    else if String.beq name "nsup" then Option.some "⊅"
-    else if String.beq name "nsupE" then Option.some "⫆̸"
-    else if String.beq name "nsupe" then Option.some "⊉"
-    else if String.beq name "nsupset" then Option.some "⊃⃒"
-    else if String.beq name "nsupseteq" then Option.some "⊉"
-    else if String.beq name "nsupseteqq" then Option.some "⫆̸"
-    else if String.beq name "ntgl" then Option.some "≹"
-    else if String.beq name "ntilde" then Option.some "ñ"
-    else if String.beq name "ntlg" then Option.some "≸"
-    else if String.beq name "ntriangleleft" then Option.some "⋪"
-    else if String.beq name "ntrianglelefteq" then Option.some "⋬"
-    else if String.beq name "ntriangleright" then Option.some "⋫"
-    else if String.beq name "ntrianglerighteq" then Option.some "⋭"
-    else if String.beq name "nu" then Option.some "ν"
-    else if String.beq name "num" then Option.some "#"
-    else if String.beq name "numero" then Option.some "№"
-    else if String.beq name "numsp" then Option.some " "
-    else if String.beq name "nvDash" then Option.some "⊭"
-    else if String.beq name "nvHarr" then Option.some "⤄"
-    else if String.beq name "nvap" then Option.some "≍⃒"
-    else if String.beq name "nvdash" then Option.some "⊬"
-    else if String.beq name "nvge" then Option.some "≥⃒"
-    else if String.beq name "nvgt" then Option.some ">⃒"
-    else if String.beq name "nvinfin" then Option.some "⧞"
-    else if String.beq name "nvlArr" then Option.some "⤂"
-    else if String.beq name "nvle" then Option.some "≤⃒"
-    else if String.beq name "nvlt" then Option.some "<⃒"
-    else if String.beq name "nvltrie" then Option.some "⊴⃒"
-    else if String.beq name "nvrArr" then Option.some "⤃"
-    else if String.beq name "nvrtrie" then Option.some "⊵⃒"
-    else if String.beq name "nvsim" then Option.some "∼⃒"
-    else if String.beq name "nwArr" then Option.some "⇖"
-    else if String.beq name "nwarhk" then Option.some "⤣"
-    else if String.beq name "nwarr" then Option.some "↖"
-    else if String.beq name "nwarrow" then Option.some "↖"
-    else if String.beq name "nwnear" then Option.some "⤧"
-    else Option.none
+def Markdown.entity_n_0 (name : String) : Option String :=
+    if String.beq name "nGg" then Option.some "⋙̸" else Option.none
+#[partial]
+def Markdown.entity_n_1 (name : String) : Option String :=
+    if String.beq name "nGt" then Option.some "≫⃒" else Option.none
+#[partial]
+def Markdown.entity_n_2 (name : String) : Option String :=
+    if String.lt name "nGt" then Markdown.entity_n_0 name else Markdown.entity_n_1 name
+#[partial]
+def Markdown.entity_n_3 (name : String) : Option String :=
+    if String.beq name "nGtv" then Option.some "≫̸" else Option.none
+#[partial]
+def Markdown.entity_n_4 (name : String) : Option String :=
+    if String.beq name "nLeftarrow" then Option.some "⇍" else Option.none
+#[partial]
+def Markdown.entity_n_5 (name : String) : Option String :=
+    if String.beq name "nLeftrightarrow" then Option.some "⇎" else Option.none
+#[partial]
+def Markdown.entity_n_6 (name : String) : Option String :=
+    if String.lt name "nLeftrightarrow" then Markdown.entity_n_4 name else Markdown.entity_n_5 name
+#[partial]
+def Markdown.entity_n_7 (name : String) : Option String :=
+    if String.lt name "nLeftarrow" then Markdown.entity_n_3 name else Markdown.entity_n_6 name
+#[partial]
+def Markdown.entity_n_8 (name : String) : Option String :=
+    if String.lt name "nGtv" then Markdown.entity_n_2 name else Markdown.entity_n_7 name
+#[partial]
+def Markdown.entity_n_9 (name : String) : Option String :=
+    if String.beq name "nLl" then Option.some "⋘̸" else Option.none
+#[partial]
+def Markdown.entity_n_10 (name : String) : Option String :=
+    if String.beq name "nLt" then Option.some "≪⃒" else Option.none
+#[partial]
+def Markdown.entity_n_11 (name : String) : Option String :=
+    if String.lt name "nLt" then Markdown.entity_n_9 name else Markdown.entity_n_10 name
+#[partial]
+def Markdown.entity_n_12 (name : String) : Option String :=
+    if String.beq name "nLtv" then Option.some "≪̸" else Option.none
+#[partial]
+def Markdown.entity_n_13 (name : String) : Option String :=
+    if String.beq name "nRightarrow" then Option.some "⇏" else Option.none
+#[partial]
+def Markdown.entity_n_14 (name : String) : Option String :=
+    if String.beq name "nVDash" then Option.some "⊯" else Option.none
+#[partial]
+def Markdown.entity_n_15 (name : String) : Option String :=
+    if String.lt name "nVDash" then Markdown.entity_n_13 name else Markdown.entity_n_14 name
+#[partial]
+def Markdown.entity_n_16 (name : String) : Option String :=
+    if String.lt name "nRightarrow" then Markdown.entity_n_12 name else Markdown.entity_n_15 name
+#[partial]
+def Markdown.entity_n_17 (name : String) : Option String :=
+    if String.lt name "nLtv" then Markdown.entity_n_11 name else Markdown.entity_n_16 name
+#[partial]
+def Markdown.entity_n_18 (name : String) : Option String :=
+    if String.lt name "nLl" then Markdown.entity_n_8 name else Markdown.entity_n_17 name
+#[partial]
+def Markdown.entity_n_19 (name : String) : Option String :=
+    if String.beq name "nVdash" then Option.some "⊮" else Option.none
+#[partial]
+def Markdown.entity_n_20 (name : String) : Option String :=
+    if String.beq name "nabla" then Option.some "∇" else Option.none
+#[partial]
+def Markdown.entity_n_21 (name : String) : Option String :=
+    if String.lt name "nabla" then Markdown.entity_n_19 name else Markdown.entity_n_20 name
+#[partial]
+def Markdown.entity_n_22 (name : String) : Option String :=
+    if String.beq name "nacute" then Option.some "ń" else Option.none
+#[partial]
+def Markdown.entity_n_23 (name : String) : Option String :=
+    if String.beq name "nang" then Option.some "∠⃒" else Option.none
+#[partial]
+def Markdown.entity_n_24 (name : String) : Option String :=
+    if String.beq name "nap" then Option.some "≉" else Option.none
+#[partial]
+def Markdown.entity_n_25 (name : String) : Option String :=
+    if String.lt name "nap" then Markdown.entity_n_23 name else Markdown.entity_n_24 name
+#[partial]
+def Markdown.entity_n_26 (name : String) : Option String :=
+    if String.lt name "nang" then Markdown.entity_n_22 name else Markdown.entity_n_25 name
+#[partial]
+def Markdown.entity_n_27 (name : String) : Option String :=
+    if String.lt name "nacute" then Markdown.entity_n_21 name else Markdown.entity_n_26 name
+#[partial]
+def Markdown.entity_n_28 (name : String) : Option String :=
+    if String.beq name "napE" then Option.some "⩰̸" else Option.none
+#[partial]
+def Markdown.entity_n_29 (name : String) : Option String :=
+    if String.beq name "napid" then Option.some "≋̸" else Option.none
+#[partial]
+def Markdown.entity_n_30 (name : String) : Option String :=
+    if String.lt name "napid" then Markdown.entity_n_28 name else Markdown.entity_n_29 name
+#[partial]
+def Markdown.entity_n_31 (name : String) : Option String :=
+    if String.beq name "napos" then Option.some "ŉ" else Option.none
+#[partial]
+def Markdown.entity_n_32 (name : String) : Option String :=
+    if String.beq name "napprox" then Option.some "≉" else Option.none
+#[partial]
+def Markdown.entity_n_33 (name : String) : Option String :=
+    if String.beq name "natur" then Option.some "♮" else Option.none
+#[partial]
+def Markdown.entity_n_34 (name : String) : Option String :=
+    if String.lt name "natur" then Markdown.entity_n_32 name else Markdown.entity_n_33 name
+#[partial]
+def Markdown.entity_n_35 (name : String) : Option String :=
+    if String.lt name "napprox" then Markdown.entity_n_31 name else Markdown.entity_n_34 name
+#[partial]
+def Markdown.entity_n_36 (name : String) : Option String :=
+    if String.lt name "napos" then Markdown.entity_n_30 name else Markdown.entity_n_35 name
+#[partial]
+def Markdown.entity_n_37 (name : String) : Option String :=
+    if String.lt name "napE" then Markdown.entity_n_27 name else Markdown.entity_n_36 name
+#[partial]
+def Markdown.entity_n_38 (name : String) : Option String :=
+    if String.lt name "nVdash" then Markdown.entity_n_18 name else Markdown.entity_n_37 name
+#[partial]
+def Markdown.entity_n_39 (name : String) : Option String :=
+    if String.beq name "natural" then Option.some "♮" else Option.none
+#[partial]
+def Markdown.entity_n_40 (name : String) : Option String :=
+    if String.beq name "naturals" then Option.some "ℕ" else Option.none
+#[partial]
+def Markdown.entity_n_41 (name : String) : Option String :=
+    if String.lt name "naturals" then Markdown.entity_n_39 name else Markdown.entity_n_40 name
+#[partial]
+def Markdown.entity_n_42 (name : String) : Option String :=
+    if String.beq name "nbsp" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_n_43 (name : String) : Option String :=
+    if String.beq name "nbump" then Option.some "≎̸" else Option.none
+#[partial]
+def Markdown.entity_n_44 (name : String) : Option String :=
+    if String.beq name "nbumpe" then Option.some "≏̸" else Option.none
+#[partial]
+def Markdown.entity_n_45 (name : String) : Option String :=
+    if String.lt name "nbumpe" then Markdown.entity_n_43 name else Markdown.entity_n_44 name
+#[partial]
+def Markdown.entity_n_46 (name : String) : Option String :=
+    if String.lt name "nbump" then Markdown.entity_n_42 name else Markdown.entity_n_45 name
+#[partial]
+def Markdown.entity_n_47 (name : String) : Option String :=
+    if String.lt name "nbsp" then Markdown.entity_n_41 name else Markdown.entity_n_46 name
+#[partial]
+def Markdown.entity_n_48 (name : String) : Option String :=
+    if String.beq name "ncap" then Option.some "⩃" else Option.none
+#[partial]
+def Markdown.entity_n_49 (name : String) : Option String :=
+    if String.beq name "ncaron" then Option.some "ň" else Option.none
+#[partial]
+def Markdown.entity_n_50 (name : String) : Option String :=
+    if String.lt name "ncaron" then Markdown.entity_n_48 name else Markdown.entity_n_49 name
+#[partial]
+def Markdown.entity_n_51 (name : String) : Option String :=
+    if String.beq name "ncedil" then Option.some "ņ" else Option.none
+#[partial]
+def Markdown.entity_n_52 (name : String) : Option String :=
+    if String.beq name "ncong" then Option.some "≇" else Option.none
+#[partial]
+def Markdown.entity_n_53 (name : String) : Option String :=
+    if String.beq name "ncongdot" then Option.some "⩭̸" else Option.none
+#[partial]
+def Markdown.entity_n_54 (name : String) : Option String :=
+    if String.lt name "ncongdot" then Markdown.entity_n_52 name else Markdown.entity_n_53 name
+#[partial]
+def Markdown.entity_n_55 (name : String) : Option String :=
+    if String.lt name "ncong" then Markdown.entity_n_51 name else Markdown.entity_n_54 name
+#[partial]
+def Markdown.entity_n_56 (name : String) : Option String :=
+    if String.lt name "ncedil" then Markdown.entity_n_50 name else Markdown.entity_n_55 name
+#[partial]
+def Markdown.entity_n_57 (name : String) : Option String :=
+    if String.lt name "ncap" then Markdown.entity_n_47 name else Markdown.entity_n_56 name
+#[partial]
+def Markdown.entity_n_58 (name : String) : Option String :=
+    if String.beq name "ncup" then Option.some "⩂" else Option.none
+#[partial]
+def Markdown.entity_n_59 (name : String) : Option String :=
+    if String.beq name "ncy" then Option.some "н" else Option.none
+#[partial]
+def Markdown.entity_n_60 (name : String) : Option String :=
+    if String.lt name "ncy" then Markdown.entity_n_58 name else Markdown.entity_n_59 name
+#[partial]
+def Markdown.entity_n_61 (name : String) : Option String :=
+    if String.beq name "ndash" then Option.some "–" else Option.none
+#[partial]
+def Markdown.entity_n_62 (name : String) : Option String :=
+    if String.beq name "ne" then Option.some "≠" else Option.none
+#[partial]
+def Markdown.entity_n_63 (name : String) : Option String :=
+    if String.beq name "neArr" then Option.some "⇗" else Option.none
+#[partial]
+def Markdown.entity_n_64 (name : String) : Option String :=
+    if String.lt name "neArr" then Markdown.entity_n_62 name else Markdown.entity_n_63 name
+#[partial]
+def Markdown.entity_n_65 (name : String) : Option String :=
+    if String.lt name "ne" then Markdown.entity_n_61 name else Markdown.entity_n_64 name
+#[partial]
+def Markdown.entity_n_66 (name : String) : Option String :=
+    if String.lt name "ndash" then Markdown.entity_n_60 name else Markdown.entity_n_65 name
+#[partial]
+def Markdown.entity_n_67 (name : String) : Option String :=
+    if String.beq name "nearhk" then Option.some "⤤" else Option.none
+#[partial]
+def Markdown.entity_n_68 (name : String) : Option String :=
+    if String.beq name "nearr" then Option.some "↗" else Option.none
+#[partial]
+def Markdown.entity_n_69 (name : String) : Option String :=
+    if String.beq name "nearrow" then Option.some "↗" else Option.none
+#[partial]
+def Markdown.entity_n_70 (name : String) : Option String :=
+    if String.lt name "nearrow" then Markdown.entity_n_68 name else Markdown.entity_n_69 name
+#[partial]
+def Markdown.entity_n_71 (name : String) : Option String :=
+    if String.lt name "nearr" then Markdown.entity_n_67 name else Markdown.entity_n_70 name
+#[partial]
+def Markdown.entity_n_72 (name : String) : Option String :=
+    if String.beq name "nedot" then Option.some "≐̸" else Option.none
+#[partial]
+def Markdown.entity_n_73 (name : String) : Option String :=
+    if String.beq name "nequiv" then Option.some "≢" else Option.none
+#[partial]
+def Markdown.entity_n_74 (name : String) : Option String :=
+    if String.beq name "nesear" then Option.some "⤨" else Option.none
+#[partial]
+def Markdown.entity_n_75 (name : String) : Option String :=
+    if String.lt name "nesear" then Markdown.entity_n_73 name else Markdown.entity_n_74 name
+#[partial]
+def Markdown.entity_n_76 (name : String) : Option String :=
+    if String.lt name "nequiv" then Markdown.entity_n_72 name else Markdown.entity_n_75 name
+#[partial]
+def Markdown.entity_n_77 (name : String) : Option String :=
+    if String.lt name "nedot" then Markdown.entity_n_71 name else Markdown.entity_n_76 name
+#[partial]
+def Markdown.entity_n_78 (name : String) : Option String :=
+    if String.lt name "nearhk" then Markdown.entity_n_66 name else Markdown.entity_n_77 name
+#[partial]
+def Markdown.entity_n_79 (name : String) : Option String :=
+    if String.lt name "ncup" then Markdown.entity_n_57 name else Markdown.entity_n_78 name
+#[partial]
+def Markdown.entity_n_80 (name : String) : Option String :=
+    if String.lt name "natural" then Markdown.entity_n_38 name else Markdown.entity_n_79 name
+#[partial]
+def Markdown.entity_n_81 (name : String) : Option String :=
+    if String.beq name "nesim" then Option.some "≂̸" else Option.none
+#[partial]
+def Markdown.entity_n_82 (name : String) : Option String :=
+    if String.beq name "nexist" then Option.some "∄" else Option.none
+#[partial]
+def Markdown.entity_n_83 (name : String) : Option String :=
+    if String.lt name "nexist" then Markdown.entity_n_81 name else Markdown.entity_n_82 name
+#[partial]
+def Markdown.entity_n_84 (name : String) : Option String :=
+    if String.beq name "nexists" then Option.some "∄" else Option.none
+#[partial]
+def Markdown.entity_n_85 (name : String) : Option String :=
+    if String.beq name "nfr" then Option.some "𝔫" else Option.none
+#[partial]
+def Markdown.entity_n_86 (name : String) : Option String :=
+    if String.beq name "ngE" then Option.some "≧̸" else Option.none
+#[partial]
+def Markdown.entity_n_87 (name : String) : Option String :=
+    if String.lt name "ngE" then Markdown.entity_n_85 name else Markdown.entity_n_86 name
+#[partial]
+def Markdown.entity_n_88 (name : String) : Option String :=
+    if String.lt name "nfr" then Markdown.entity_n_84 name else Markdown.entity_n_87 name
+#[partial]
+def Markdown.entity_n_89 (name : String) : Option String :=
+    if String.lt name "nexists" then Markdown.entity_n_83 name else Markdown.entity_n_88 name
+#[partial]
+def Markdown.entity_n_90 (name : String) : Option String :=
+    if String.beq name "nge" then Option.some "≱" else Option.none
+#[partial]
+def Markdown.entity_n_91 (name : String) : Option String :=
+    if String.beq name "ngeq" then Option.some "≱" else Option.none
+#[partial]
+def Markdown.entity_n_92 (name : String) : Option String :=
+    if String.lt name "ngeq" then Markdown.entity_n_90 name else Markdown.entity_n_91 name
+#[partial]
+def Markdown.entity_n_93 (name : String) : Option String :=
+    if String.beq name "ngeqq" then Option.some "≧̸" else Option.none
+#[partial]
+def Markdown.entity_n_94 (name : String) : Option String :=
+    if String.beq name "ngeqslant" then Option.some "⩾̸" else Option.none
+#[partial]
+def Markdown.entity_n_95 (name : String) : Option String :=
+    if String.beq name "nges" then Option.some "⩾̸" else Option.none
+#[partial]
+def Markdown.entity_n_96 (name : String) : Option String :=
+    if String.lt name "nges" then Markdown.entity_n_94 name else Markdown.entity_n_95 name
+#[partial]
+def Markdown.entity_n_97 (name : String) : Option String :=
+    if String.lt name "ngeqslant" then Markdown.entity_n_93 name else Markdown.entity_n_96 name
+#[partial]
+def Markdown.entity_n_98 (name : String) : Option String :=
+    if String.lt name "ngeqq" then Markdown.entity_n_92 name else Markdown.entity_n_97 name
+#[partial]
+def Markdown.entity_n_99 (name : String) : Option String :=
+    if String.lt name "nge" then Markdown.entity_n_89 name else Markdown.entity_n_98 name
+#[partial]
+def Markdown.entity_n_100 (name : String) : Option String :=
+    if String.beq name "ngsim" then Option.some "≵" else Option.none
+#[partial]
+def Markdown.entity_n_101 (name : String) : Option String :=
+    if String.beq name "ngt" then Option.some "≯" else Option.none
+#[partial]
+def Markdown.entity_n_102 (name : String) : Option String :=
+    if String.lt name "ngt" then Markdown.entity_n_100 name else Markdown.entity_n_101 name
+#[partial]
+def Markdown.entity_n_103 (name : String) : Option String :=
+    if String.beq name "ngtr" then Option.some "≯" else Option.none
+#[partial]
+def Markdown.entity_n_104 (name : String) : Option String :=
+    if String.beq name "nhArr" then Option.some "⇎" else Option.none
+#[partial]
+def Markdown.entity_n_105 (name : String) : Option String :=
+    if String.beq name "nharr" then Option.some "↮" else Option.none
+#[partial]
+def Markdown.entity_n_106 (name : String) : Option String :=
+    if String.lt name "nharr" then Markdown.entity_n_104 name else Markdown.entity_n_105 name
+#[partial]
+def Markdown.entity_n_107 (name : String) : Option String :=
+    if String.lt name "nhArr" then Markdown.entity_n_103 name else Markdown.entity_n_106 name
+#[partial]
+def Markdown.entity_n_108 (name : String) : Option String :=
+    if String.lt name "ngtr" then Markdown.entity_n_102 name else Markdown.entity_n_107 name
+#[partial]
+def Markdown.entity_n_109 (name : String) : Option String :=
+    if String.beq name "nhpar" then Option.some "⫲" else Option.none
+#[partial]
+def Markdown.entity_n_110 (name : String) : Option String :=
+    if String.beq name "ni" then Option.some "∋" else Option.none
+#[partial]
+def Markdown.entity_n_111 (name : String) : Option String :=
+    if String.lt name "ni" then Markdown.entity_n_109 name else Markdown.entity_n_110 name
+#[partial]
+def Markdown.entity_n_112 (name : String) : Option String :=
+    if String.beq name "nis" then Option.some "⋼" else Option.none
+#[partial]
+def Markdown.entity_n_113 (name : String) : Option String :=
+    if String.beq name "nisd" then Option.some "⋺" else Option.none
+#[partial]
+def Markdown.entity_n_114 (name : String) : Option String :=
+    if String.beq name "niv" then Option.some "∋" else Option.none
+#[partial]
+def Markdown.entity_n_115 (name : String) : Option String :=
+    if String.lt name "niv" then Markdown.entity_n_113 name else Markdown.entity_n_114 name
+#[partial]
+def Markdown.entity_n_116 (name : String) : Option String :=
+    if String.lt name "nisd" then Markdown.entity_n_112 name else Markdown.entity_n_115 name
+#[partial]
+def Markdown.entity_n_117 (name : String) : Option String :=
+    if String.lt name "nis" then Markdown.entity_n_111 name else Markdown.entity_n_116 name
+#[partial]
+def Markdown.entity_n_118 (name : String) : Option String :=
+    if String.lt name "nhpar" then Markdown.entity_n_108 name else Markdown.entity_n_117 name
+#[partial]
+def Markdown.entity_n_119 (name : String) : Option String :=
+    if String.lt name "ngsim" then Markdown.entity_n_99 name else Markdown.entity_n_118 name
+#[partial]
+def Markdown.entity_n_120 (name : String) : Option String :=
+    if String.beq name "njcy" then Option.some "њ" else Option.none
+#[partial]
+def Markdown.entity_n_121 (name : String) : Option String :=
+    if String.beq name "nlArr" then Option.some "⇍" else Option.none
+#[partial]
+def Markdown.entity_n_122 (name : String) : Option String :=
+    if String.lt name "nlArr" then Markdown.entity_n_120 name else Markdown.entity_n_121 name
+#[partial]
+def Markdown.entity_n_123 (name : String) : Option String :=
+    if String.beq name "nlE" then Option.some "≦̸" else Option.none
+#[partial]
+def Markdown.entity_n_124 (name : String) : Option String :=
+    if String.beq name "nlarr" then Option.some "↚" else Option.none
+#[partial]
+def Markdown.entity_n_125 (name : String) : Option String :=
+    if String.beq name "nldr" then Option.some "‥" else Option.none
+#[partial]
+def Markdown.entity_n_126 (name : String) : Option String :=
+    if String.lt name "nldr" then Markdown.entity_n_124 name else Markdown.entity_n_125 name
+#[partial]
+def Markdown.entity_n_127 (name : String) : Option String :=
+    if String.lt name "nlarr" then Markdown.entity_n_123 name else Markdown.entity_n_126 name
+#[partial]
+def Markdown.entity_n_128 (name : String) : Option String :=
+    if String.lt name "nlE" then Markdown.entity_n_122 name else Markdown.entity_n_127 name
+#[partial]
+def Markdown.entity_n_129 (name : String) : Option String :=
+    if String.beq name "nle" then Option.some "≰" else Option.none
+#[partial]
+def Markdown.entity_n_130 (name : String) : Option String :=
+    if String.beq name "nleftarrow" then Option.some "↚" else Option.none
+#[partial]
+def Markdown.entity_n_131 (name : String) : Option String :=
+    if String.lt name "nleftarrow" then Markdown.entity_n_129 name else Markdown.entity_n_130 name
+#[partial]
+def Markdown.entity_n_132 (name : String) : Option String :=
+    if String.beq name "nleftrightarrow" then Option.some "↮" else Option.none
+#[partial]
+def Markdown.entity_n_133 (name : String) : Option String :=
+    if String.beq name "nleq" then Option.some "≰" else Option.none
+#[partial]
+def Markdown.entity_n_134 (name : String) : Option String :=
+    if String.beq name "nleqq" then Option.some "≦̸" else Option.none
+#[partial]
+def Markdown.entity_n_135 (name : String) : Option String :=
+    if String.lt name "nleqq" then Markdown.entity_n_133 name else Markdown.entity_n_134 name
+#[partial]
+def Markdown.entity_n_136 (name : String) : Option String :=
+    if String.lt name "nleq" then Markdown.entity_n_132 name else Markdown.entity_n_135 name
+#[partial]
+def Markdown.entity_n_137 (name : String) : Option String :=
+    if String.lt name "nleftrightarrow" then Markdown.entity_n_131 name else Markdown.entity_n_136 name
+#[partial]
+def Markdown.entity_n_138 (name : String) : Option String :=
+    if String.lt name "nle" then Markdown.entity_n_128 name else Markdown.entity_n_137 name
+#[partial]
+def Markdown.entity_n_139 (name : String) : Option String :=
+    if String.beq name "nleqslant" then Option.some "⩽̸" else Option.none
+#[partial]
+def Markdown.entity_n_140 (name : String) : Option String :=
+    if String.beq name "nles" then Option.some "⩽̸" else Option.none
+#[partial]
+def Markdown.entity_n_141 (name : String) : Option String :=
+    if String.lt name "nles" then Markdown.entity_n_139 name else Markdown.entity_n_140 name
+#[partial]
+def Markdown.entity_n_142 (name : String) : Option String :=
+    if String.beq name "nless" then Option.some "≮" else Option.none
+#[partial]
+def Markdown.entity_n_143 (name : String) : Option String :=
+    if String.beq name "nlsim" then Option.some "≴" else Option.none
+#[partial]
+def Markdown.entity_n_144 (name : String) : Option String :=
+    if String.beq name "nlt" then Option.some "≮" else Option.none
+#[partial]
+def Markdown.entity_n_145 (name : String) : Option String :=
+    if String.lt name "nlt" then Markdown.entity_n_143 name else Markdown.entity_n_144 name
+#[partial]
+def Markdown.entity_n_146 (name : String) : Option String :=
+    if String.lt name "nlsim" then Markdown.entity_n_142 name else Markdown.entity_n_145 name
+#[partial]
+def Markdown.entity_n_147 (name : String) : Option String :=
+    if String.lt name "nless" then Markdown.entity_n_141 name else Markdown.entity_n_146 name
+#[partial]
+def Markdown.entity_n_148 (name : String) : Option String :=
+    if String.beq name "nltri" then Option.some "⋪" else Option.none
+#[partial]
+def Markdown.entity_n_149 (name : String) : Option String :=
+    if String.beq name "nltrie" then Option.some "⋬" else Option.none
+#[partial]
+def Markdown.entity_n_150 (name : String) : Option String :=
+    if String.beq name "nmid" then Option.some "∤" else Option.none
+#[partial]
+def Markdown.entity_n_151 (name : String) : Option String :=
+    if String.lt name "nmid" then Markdown.entity_n_149 name else Markdown.entity_n_150 name
+#[partial]
+def Markdown.entity_n_152 (name : String) : Option String :=
+    if String.lt name "nltrie" then Markdown.entity_n_148 name else Markdown.entity_n_151 name
+#[partial]
+def Markdown.entity_n_153 (name : String) : Option String :=
+    if String.beq name "nopf" then Option.some "𝕟" else Option.none
+#[partial]
+def Markdown.entity_n_154 (name : String) : Option String :=
+    if String.beq name "not" then Option.some "¬" else Option.none
+#[partial]
+def Markdown.entity_n_155 (name : String) : Option String :=
+    if String.beq name "notin" then Option.some "∉" else Option.none
+#[partial]
+def Markdown.entity_n_156 (name : String) : Option String :=
+    if String.lt name "notin" then Markdown.entity_n_154 name else Markdown.entity_n_155 name
+#[partial]
+def Markdown.entity_n_157 (name : String) : Option String :=
+    if String.lt name "not" then Markdown.entity_n_153 name else Markdown.entity_n_156 name
+#[partial]
+def Markdown.entity_n_158 (name : String) : Option String :=
+    if String.lt name "nopf" then Markdown.entity_n_152 name else Markdown.entity_n_157 name
+#[partial]
+def Markdown.entity_n_159 (name : String) : Option String :=
+    if String.lt name "nltri" then Markdown.entity_n_147 name else Markdown.entity_n_158 name
+#[partial]
+def Markdown.entity_n_160 (name : String) : Option String :=
+    if String.lt name "nleqslant" then Markdown.entity_n_138 name else Markdown.entity_n_159 name
+#[partial]
+def Markdown.entity_n_161 (name : String) : Option String :=
+    if String.lt name "njcy" then Markdown.entity_n_119 name else Markdown.entity_n_160 name
+#[partial]
+def Markdown.entity_n_162 (name : String) : Option String :=
+    if String.lt name "nesim" then Markdown.entity_n_80 name else Markdown.entity_n_161 name
+#[partial]
+def Markdown.entity_n_163 (name : String) : Option String :=
+    if String.beq name "notinE" then Option.some "⋹̸" else Option.none
+#[partial]
+def Markdown.entity_n_164 (name : String) : Option String :=
+    if String.beq name "notindot" then Option.some "⋵̸" else Option.none
+#[partial]
+def Markdown.entity_n_165 (name : String) : Option String :=
+    if String.lt name "notindot" then Markdown.entity_n_163 name else Markdown.entity_n_164 name
+#[partial]
+def Markdown.entity_n_166 (name : String) : Option String :=
+    if String.beq name "notinva" then Option.some "∉" else Option.none
+#[partial]
+def Markdown.entity_n_167 (name : String) : Option String :=
+    if String.beq name "notinvb" then Option.some "⋷" else Option.none
+#[partial]
+def Markdown.entity_n_168 (name : String) : Option String :=
+    if String.beq name "notinvc" then Option.some "⋶" else Option.none
+#[partial]
+def Markdown.entity_n_169 (name : String) : Option String :=
+    if String.lt name "notinvc" then Markdown.entity_n_167 name else Markdown.entity_n_168 name
+#[partial]
+def Markdown.entity_n_170 (name : String) : Option String :=
+    if String.lt name "notinvb" then Markdown.entity_n_166 name else Markdown.entity_n_169 name
+#[partial]
+def Markdown.entity_n_171 (name : String) : Option String :=
+    if String.lt name "notinva" then Markdown.entity_n_165 name else Markdown.entity_n_170 name
+#[partial]
+def Markdown.entity_n_172 (name : String) : Option String :=
+    if String.beq name "notni" then Option.some "∌" else Option.none
+#[partial]
+def Markdown.entity_n_173 (name : String) : Option String :=
+    if String.beq name "notniva" then Option.some "∌" else Option.none
+#[partial]
+def Markdown.entity_n_174 (name : String) : Option String :=
+    if String.lt name "notniva" then Markdown.entity_n_172 name else Markdown.entity_n_173 name
+#[partial]
+def Markdown.entity_n_175 (name : String) : Option String :=
+    if String.beq name "notnivb" then Option.some "⋾" else Option.none
+#[partial]
+def Markdown.entity_n_176 (name : String) : Option String :=
+    if String.beq name "notnivc" then Option.some "⋽" else Option.none
+#[partial]
+def Markdown.entity_n_177 (name : String) : Option String :=
+    if String.beq name "npar" then Option.some "∦" else Option.none
+#[partial]
+def Markdown.entity_n_178 (name : String) : Option String :=
+    if String.lt name "npar" then Markdown.entity_n_176 name else Markdown.entity_n_177 name
+#[partial]
+def Markdown.entity_n_179 (name : String) : Option String :=
+    if String.lt name "notnivc" then Markdown.entity_n_175 name else Markdown.entity_n_178 name
+#[partial]
+def Markdown.entity_n_180 (name : String) : Option String :=
+    if String.lt name "notnivb" then Markdown.entity_n_174 name else Markdown.entity_n_179 name
+#[partial]
+def Markdown.entity_n_181 (name : String) : Option String :=
+    if String.lt name "notni" then Markdown.entity_n_171 name else Markdown.entity_n_180 name
+#[partial]
+def Markdown.entity_n_182 (name : String) : Option String :=
+    if String.beq name "nparallel" then Option.some "∦" else Option.none
+#[partial]
+def Markdown.entity_n_183 (name : String) : Option String :=
+    if String.beq name "nparsl" then Option.some "⫽⃥" else Option.none
+#[partial]
+def Markdown.entity_n_184 (name : String) : Option String :=
+    if String.lt name "nparsl" then Markdown.entity_n_182 name else Markdown.entity_n_183 name
+#[partial]
+def Markdown.entity_n_185 (name : String) : Option String :=
+    if String.beq name "npart" then Option.some "∂̸" else Option.none
+#[partial]
+def Markdown.entity_n_186 (name : String) : Option String :=
+    if String.beq name "npolint" then Option.some "⨔" else Option.none
+#[partial]
+def Markdown.entity_n_187 (name : String) : Option String :=
+    if String.beq name "npr" then Option.some "⊀" else Option.none
+#[partial]
+def Markdown.entity_n_188 (name : String) : Option String :=
+    if String.lt name "npr" then Markdown.entity_n_186 name else Markdown.entity_n_187 name
+#[partial]
+def Markdown.entity_n_189 (name : String) : Option String :=
+    if String.lt name "npolint" then Markdown.entity_n_185 name else Markdown.entity_n_188 name
+#[partial]
+def Markdown.entity_n_190 (name : String) : Option String :=
+    if String.lt name "npart" then Markdown.entity_n_184 name else Markdown.entity_n_189 name
+#[partial]
+def Markdown.entity_n_191 (name : String) : Option String :=
+    if String.beq name "nprcue" then Option.some "⋠" else Option.none
+#[partial]
+def Markdown.entity_n_192 (name : String) : Option String :=
+    if String.beq name "npre" then Option.some "⪯̸" else Option.none
+#[partial]
+def Markdown.entity_n_193 (name : String) : Option String :=
+    if String.lt name "npre" then Markdown.entity_n_191 name else Markdown.entity_n_192 name
+#[partial]
+def Markdown.entity_n_194 (name : String) : Option String :=
+    if String.beq name "nprec" then Option.some "⊀" else Option.none
+#[partial]
+def Markdown.entity_n_195 (name : String) : Option String :=
+    if String.beq name "npreceq" then Option.some "⪯̸" else Option.none
+#[partial]
+def Markdown.entity_n_196 (name : String) : Option String :=
+    if String.beq name "nrArr" then Option.some "⇏" else Option.none
+#[partial]
+def Markdown.entity_n_197 (name : String) : Option String :=
+    if String.lt name "nrArr" then Markdown.entity_n_195 name else Markdown.entity_n_196 name
+#[partial]
+def Markdown.entity_n_198 (name : String) : Option String :=
+    if String.lt name "npreceq" then Markdown.entity_n_194 name else Markdown.entity_n_197 name
+#[partial]
+def Markdown.entity_n_199 (name : String) : Option String :=
+    if String.lt name "nprec" then Markdown.entity_n_193 name else Markdown.entity_n_198 name
+#[partial]
+def Markdown.entity_n_200 (name : String) : Option String :=
+    if String.lt name "nprcue" then Markdown.entity_n_190 name else Markdown.entity_n_199 name
+#[partial]
+def Markdown.entity_n_201 (name : String) : Option String :=
+    if String.lt name "nparallel" then Markdown.entity_n_181 name else Markdown.entity_n_200 name
+#[partial]
+def Markdown.entity_n_202 (name : String) : Option String :=
+    if String.beq name "nrarr" then Option.some "↛" else Option.none
+#[partial]
+def Markdown.entity_n_203 (name : String) : Option String :=
+    if String.beq name "nrarrc" then Option.some "⤳̸" else Option.none
+#[partial]
+def Markdown.entity_n_204 (name : String) : Option String :=
+    if String.lt name "nrarrc" then Markdown.entity_n_202 name else Markdown.entity_n_203 name
+#[partial]
+def Markdown.entity_n_205 (name : String) : Option String :=
+    if String.beq name "nrarrw" then Option.some "↝̸" else Option.none
+#[partial]
+def Markdown.entity_n_206 (name : String) : Option String :=
+    if String.beq name "nrightarrow" then Option.some "↛" else Option.none
+#[partial]
+def Markdown.entity_n_207 (name : String) : Option String :=
+    if String.beq name "nrtri" then Option.some "⋫" else Option.none
+#[partial]
+def Markdown.entity_n_208 (name : String) : Option String :=
+    if String.lt name "nrtri" then Markdown.entity_n_206 name else Markdown.entity_n_207 name
+#[partial]
+def Markdown.entity_n_209 (name : String) : Option String :=
+    if String.lt name "nrightarrow" then Markdown.entity_n_205 name else Markdown.entity_n_208 name
+#[partial]
+def Markdown.entity_n_210 (name : String) : Option String :=
+    if String.lt name "nrarrw" then Markdown.entity_n_204 name else Markdown.entity_n_209 name
+#[partial]
+def Markdown.entity_n_211 (name : String) : Option String :=
+    if String.beq name "nrtrie" then Option.some "⋭" else Option.none
+#[partial]
+def Markdown.entity_n_212 (name : String) : Option String :=
+    if String.beq name "nsc" then Option.some "⊁" else Option.none
+#[partial]
+def Markdown.entity_n_213 (name : String) : Option String :=
+    if String.lt name "nsc" then Markdown.entity_n_211 name else Markdown.entity_n_212 name
+#[partial]
+def Markdown.entity_n_214 (name : String) : Option String :=
+    if String.beq name "nsccue" then Option.some "⋡" else Option.none
+#[partial]
+def Markdown.entity_n_215 (name : String) : Option String :=
+    if String.beq name "nsce" then Option.some "⪰̸" else Option.none
+#[partial]
+def Markdown.entity_n_216 (name : String) : Option String :=
+    if String.beq name "nscr" then Option.some "𝓃" else Option.none
+#[partial]
+def Markdown.entity_n_217 (name : String) : Option String :=
+    if String.lt name "nscr" then Markdown.entity_n_215 name else Markdown.entity_n_216 name
+#[partial]
+def Markdown.entity_n_218 (name : String) : Option String :=
+    if String.lt name "nsce" then Markdown.entity_n_214 name else Markdown.entity_n_217 name
+#[partial]
+def Markdown.entity_n_219 (name : String) : Option String :=
+    if String.lt name "nsccue" then Markdown.entity_n_213 name else Markdown.entity_n_218 name
+#[partial]
+def Markdown.entity_n_220 (name : String) : Option String :=
+    if String.lt name "nrtrie" then Markdown.entity_n_210 name else Markdown.entity_n_219 name
+#[partial]
+def Markdown.entity_n_221 (name : String) : Option String :=
+    if String.beq name "nshortmid" then Option.some "∤" else Option.none
+#[partial]
+def Markdown.entity_n_222 (name : String) : Option String :=
+    if String.beq name "nshortparallel" then Option.some "∦" else Option.none
+#[partial]
+def Markdown.entity_n_223 (name : String) : Option String :=
+    if String.lt name "nshortparallel" then Markdown.entity_n_221 name else Markdown.entity_n_222 name
+#[partial]
+def Markdown.entity_n_224 (name : String) : Option String :=
+    if String.beq name "nsim" then Option.some "≁" else Option.none
+#[partial]
+def Markdown.entity_n_225 (name : String) : Option String :=
+    if String.beq name "nsime" then Option.some "≄" else Option.none
+#[partial]
+def Markdown.entity_n_226 (name : String) : Option String :=
+    if String.beq name "nsimeq" then Option.some "≄" else Option.none
+#[partial]
+def Markdown.entity_n_227 (name : String) : Option String :=
+    if String.lt name "nsimeq" then Markdown.entity_n_225 name else Markdown.entity_n_226 name
+#[partial]
+def Markdown.entity_n_228 (name : String) : Option String :=
+    if String.lt name "nsime" then Markdown.entity_n_224 name else Markdown.entity_n_227 name
+#[partial]
+def Markdown.entity_n_229 (name : String) : Option String :=
+    if String.lt name "nsim" then Markdown.entity_n_223 name else Markdown.entity_n_228 name
+#[partial]
+def Markdown.entity_n_230 (name : String) : Option String :=
+    if String.beq name "nsmid" then Option.some "∤" else Option.none
+#[partial]
+def Markdown.entity_n_231 (name : String) : Option String :=
+    if String.beq name "nspar" then Option.some "∦" else Option.none
+#[partial]
+def Markdown.entity_n_232 (name : String) : Option String :=
+    if String.beq name "nsqsube" then Option.some "⋢" else Option.none
+#[partial]
+def Markdown.entity_n_233 (name : String) : Option String :=
+    if String.lt name "nsqsube" then Markdown.entity_n_231 name else Markdown.entity_n_232 name
+#[partial]
+def Markdown.entity_n_234 (name : String) : Option String :=
+    if String.lt name "nspar" then Markdown.entity_n_230 name else Markdown.entity_n_233 name
+#[partial]
+def Markdown.entity_n_235 (name : String) : Option String :=
+    if String.beq name "nsqsupe" then Option.some "⋣" else Option.none
+#[partial]
+def Markdown.entity_n_236 (name : String) : Option String :=
+    if String.beq name "nsub" then Option.some "⊄" else Option.none
+#[partial]
+def Markdown.entity_n_237 (name : String) : Option String :=
+    if String.beq name "nsubE" then Option.some "⫅̸" else Option.none
+#[partial]
+def Markdown.entity_n_238 (name : String) : Option String :=
+    if String.lt name "nsubE" then Markdown.entity_n_236 name else Markdown.entity_n_237 name
+#[partial]
+def Markdown.entity_n_239 (name : String) : Option String :=
+    if String.lt name "nsub" then Markdown.entity_n_235 name else Markdown.entity_n_238 name
+#[partial]
+def Markdown.entity_n_240 (name : String) : Option String :=
+    if String.lt name "nsqsupe" then Markdown.entity_n_234 name else Markdown.entity_n_239 name
+#[partial]
+def Markdown.entity_n_241 (name : String) : Option String :=
+    if String.lt name "nsmid" then Markdown.entity_n_229 name else Markdown.entity_n_240 name
+#[partial]
+def Markdown.entity_n_242 (name : String) : Option String :=
+    if String.lt name "nshortmid" then Markdown.entity_n_220 name else Markdown.entity_n_241 name
+#[partial]
+def Markdown.entity_n_243 (name : String) : Option String :=
+    if String.lt name "nrarr" then Markdown.entity_n_201 name else Markdown.entity_n_242 name
+#[partial]
+def Markdown.entity_n_244 (name : String) : Option String :=
+    if String.beq name "nsube" then Option.some "⊈" else Option.none
+#[partial]
+def Markdown.entity_n_245 (name : String) : Option String :=
+    if String.beq name "nsubset" then Option.some "⊂⃒" else Option.none
+#[partial]
+def Markdown.entity_n_246 (name : String) : Option String :=
+    if String.lt name "nsubset" then Markdown.entity_n_244 name else Markdown.entity_n_245 name
+#[partial]
+def Markdown.entity_n_247 (name : String) : Option String :=
+    if String.beq name "nsubseteq" then Option.some "⊈" else Option.none
+#[partial]
+def Markdown.entity_n_248 (name : String) : Option String :=
+    if String.beq name "nsubseteqq" then Option.some "⫅̸" else Option.none
+#[partial]
+def Markdown.entity_n_249 (name : String) : Option String :=
+    if String.beq name "nsucc" then Option.some "⊁" else Option.none
+#[partial]
+def Markdown.entity_n_250 (name : String) : Option String :=
+    if String.lt name "nsucc" then Markdown.entity_n_248 name else Markdown.entity_n_249 name
+#[partial]
+def Markdown.entity_n_251 (name : String) : Option String :=
+    if String.lt name "nsubseteqq" then Markdown.entity_n_247 name else Markdown.entity_n_250 name
+#[partial]
+def Markdown.entity_n_252 (name : String) : Option String :=
+    if String.lt name "nsubseteq" then Markdown.entity_n_246 name else Markdown.entity_n_251 name
+#[partial]
+def Markdown.entity_n_253 (name : String) : Option String :=
+    if String.beq name "nsucceq" then Option.some "⪰̸" else Option.none
+#[partial]
+def Markdown.entity_n_254 (name : String) : Option String :=
+    if String.beq name "nsup" then Option.some "⊅" else Option.none
+#[partial]
+def Markdown.entity_n_255 (name : String) : Option String :=
+    if String.lt name "nsup" then Markdown.entity_n_253 name else Markdown.entity_n_254 name
+#[partial]
+def Markdown.entity_n_256 (name : String) : Option String :=
+    if String.beq name "nsupE" then Option.some "⫆̸" else Option.none
+#[partial]
+def Markdown.entity_n_257 (name : String) : Option String :=
+    if String.beq name "nsupe" then Option.some "⊉" else Option.none
+#[partial]
+def Markdown.entity_n_258 (name : String) : Option String :=
+    if String.beq name "nsupset" then Option.some "⊃⃒" else Option.none
+#[partial]
+def Markdown.entity_n_259 (name : String) : Option String :=
+    if String.lt name "nsupset" then Markdown.entity_n_257 name else Markdown.entity_n_258 name
+#[partial]
+def Markdown.entity_n_260 (name : String) : Option String :=
+    if String.lt name "nsupe" then Markdown.entity_n_256 name else Markdown.entity_n_259 name
+#[partial]
+def Markdown.entity_n_261 (name : String) : Option String :=
+    if String.lt name "nsupE" then Markdown.entity_n_255 name else Markdown.entity_n_260 name
+#[partial]
+def Markdown.entity_n_262 (name : String) : Option String :=
+    if String.lt name "nsucceq" then Markdown.entity_n_252 name else Markdown.entity_n_261 name
+#[partial]
+def Markdown.entity_n_263 (name : String) : Option String :=
+    if String.beq name "nsupseteq" then Option.some "⊉" else Option.none
+#[partial]
+def Markdown.entity_n_264 (name : String) : Option String :=
+    if String.beq name "nsupseteqq" then Option.some "⫆̸" else Option.none
+#[partial]
+def Markdown.entity_n_265 (name : String) : Option String :=
+    if String.lt name "nsupseteqq" then Markdown.entity_n_263 name else Markdown.entity_n_264 name
+#[partial]
+def Markdown.entity_n_266 (name : String) : Option String :=
+    if String.beq name "ntgl" then Option.some "≹" else Option.none
+#[partial]
+def Markdown.entity_n_267 (name : String) : Option String :=
+    if String.beq name "ntilde" then Option.some "ñ" else Option.none
+#[partial]
+def Markdown.entity_n_268 (name : String) : Option String :=
+    if String.beq name "ntlg" then Option.some "≸" else Option.none
+#[partial]
+def Markdown.entity_n_269 (name : String) : Option String :=
+    if String.lt name "ntlg" then Markdown.entity_n_267 name else Markdown.entity_n_268 name
+#[partial]
+def Markdown.entity_n_270 (name : String) : Option String :=
+    if String.lt name "ntilde" then Markdown.entity_n_266 name else Markdown.entity_n_269 name
+#[partial]
+def Markdown.entity_n_271 (name : String) : Option String :=
+    if String.lt name "ntgl" then Markdown.entity_n_265 name else Markdown.entity_n_270 name
+#[partial]
+def Markdown.entity_n_272 (name : String) : Option String :=
+    if String.beq name "ntriangleleft" then Option.some "⋪" else Option.none
+#[partial]
+def Markdown.entity_n_273 (name : String) : Option String :=
+    if String.beq name "ntrianglelefteq" then Option.some "⋬" else Option.none
+#[partial]
+def Markdown.entity_n_274 (name : String) : Option String :=
+    if String.beq name "ntriangleright" then Option.some "⋫" else Option.none
+#[partial]
+def Markdown.entity_n_275 (name : String) : Option String :=
+    if String.lt name "ntriangleright" then Markdown.entity_n_273 name else Markdown.entity_n_274 name
+#[partial]
+def Markdown.entity_n_276 (name : String) : Option String :=
+    if String.lt name "ntrianglelefteq" then Markdown.entity_n_272 name else Markdown.entity_n_275 name
+#[partial]
+def Markdown.entity_n_277 (name : String) : Option String :=
+    if String.beq name "ntrianglerighteq" then Option.some "⋭" else Option.none
+#[partial]
+def Markdown.entity_n_278 (name : String) : Option String :=
+    if String.beq name "nu" then Option.some "ν" else Option.none
+#[partial]
+def Markdown.entity_n_279 (name : String) : Option String :=
+    if String.beq name "num" then Option.some "#" else Option.none
+#[partial]
+def Markdown.entity_n_280 (name : String) : Option String :=
+    if String.lt name "num" then Markdown.entity_n_278 name else Markdown.entity_n_279 name
+#[partial]
+def Markdown.entity_n_281 (name : String) : Option String :=
+    if String.lt name "nu" then Markdown.entity_n_277 name else Markdown.entity_n_280 name
+#[partial]
+def Markdown.entity_n_282 (name : String) : Option String :=
+    if String.lt name "ntrianglerighteq" then Markdown.entity_n_276 name else Markdown.entity_n_281 name
+#[partial]
+def Markdown.entity_n_283 (name : String) : Option String :=
+    if String.lt name "ntriangleleft" then Markdown.entity_n_271 name else Markdown.entity_n_282 name
+#[partial]
+def Markdown.entity_n_284 (name : String) : Option String :=
+    if String.lt name "nsupseteq" then Markdown.entity_n_262 name else Markdown.entity_n_283 name
+#[partial]
+def Markdown.entity_n_285 (name : String) : Option String :=
+    if String.beq name "numero" then Option.some "№" else Option.none
+#[partial]
+def Markdown.entity_n_286 (name : String) : Option String :=
+    if String.beq name "numsp" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_n_287 (name : String) : Option String :=
+    if String.lt name "numsp" then Markdown.entity_n_285 name else Markdown.entity_n_286 name
+#[partial]
+def Markdown.entity_n_288 (name : String) : Option String :=
+    if String.beq name "nvDash" then Option.some "⊭" else Option.none
+#[partial]
+def Markdown.entity_n_289 (name : String) : Option String :=
+    if String.beq name "nvHarr" then Option.some "⤄" else Option.none
+#[partial]
+def Markdown.entity_n_290 (name : String) : Option String :=
+    if String.beq name "nvap" then Option.some "≍⃒" else Option.none
+#[partial]
+def Markdown.entity_n_291 (name : String) : Option String :=
+    if String.lt name "nvap" then Markdown.entity_n_289 name else Markdown.entity_n_290 name
+#[partial]
+def Markdown.entity_n_292 (name : String) : Option String :=
+    if String.lt name "nvHarr" then Markdown.entity_n_288 name else Markdown.entity_n_291 name
+#[partial]
+def Markdown.entity_n_293 (name : String) : Option String :=
+    if String.lt name "nvDash" then Markdown.entity_n_287 name else Markdown.entity_n_292 name
+#[partial]
+def Markdown.entity_n_294 (name : String) : Option String :=
+    if String.beq name "nvdash" then Option.some "⊬" else Option.none
+#[partial]
+def Markdown.entity_n_295 (name : String) : Option String :=
+    if String.beq name "nvge" then Option.some "≥⃒" else Option.none
+#[partial]
+def Markdown.entity_n_296 (name : String) : Option String :=
+    if String.lt name "nvge" then Markdown.entity_n_294 name else Markdown.entity_n_295 name
+#[partial]
+def Markdown.entity_n_297 (name : String) : Option String :=
+    if String.beq name "nvgt" then Option.some ">⃒" else Option.none
+#[partial]
+def Markdown.entity_n_298 (name : String) : Option String :=
+    if String.beq name "nvinfin" then Option.some "⧞" else Option.none
+#[partial]
+def Markdown.entity_n_299 (name : String) : Option String :=
+    if String.beq name "nvlArr" then Option.some "⤂" else Option.none
+#[partial]
+def Markdown.entity_n_300 (name : String) : Option String :=
+    if String.lt name "nvlArr" then Markdown.entity_n_298 name else Markdown.entity_n_299 name
+#[partial]
+def Markdown.entity_n_301 (name : String) : Option String :=
+    if String.lt name "nvinfin" then Markdown.entity_n_297 name else Markdown.entity_n_300 name
+#[partial]
+def Markdown.entity_n_302 (name : String) : Option String :=
+    if String.lt name "nvgt" then Markdown.entity_n_296 name else Markdown.entity_n_301 name
+#[partial]
+def Markdown.entity_n_303 (name : String) : Option String :=
+    if String.lt name "nvdash" then Markdown.entity_n_293 name else Markdown.entity_n_302 name
+#[partial]
+def Markdown.entity_n_304 (name : String) : Option String :=
+    if String.beq name "nvle" then Option.some "≤⃒" else Option.none
+#[partial]
+def Markdown.entity_n_305 (name : String) : Option String :=
+    if String.beq name "nvlt" then Option.some "<⃒" else Option.none
+#[partial]
+def Markdown.entity_n_306 (name : String) : Option String :=
+    if String.lt name "nvlt" then Markdown.entity_n_304 name else Markdown.entity_n_305 name
+#[partial]
+def Markdown.entity_n_307 (name : String) : Option String :=
+    if String.beq name "nvltrie" then Option.some "⊴⃒" else Option.none
+#[partial]
+def Markdown.entity_n_308 (name : String) : Option String :=
+    if String.beq name "nvrArr" then Option.some "⤃" else Option.none
+#[partial]
+def Markdown.entity_n_309 (name : String) : Option String :=
+    if String.beq name "nvrtrie" then Option.some "⊵⃒" else Option.none
+#[partial]
+def Markdown.entity_n_310 (name : String) : Option String :=
+    if String.lt name "nvrtrie" then Markdown.entity_n_308 name else Markdown.entity_n_309 name
+#[partial]
+def Markdown.entity_n_311 (name : String) : Option String :=
+    if String.lt name "nvrArr" then Markdown.entity_n_307 name else Markdown.entity_n_310 name
+#[partial]
+def Markdown.entity_n_312 (name : String) : Option String :=
+    if String.lt name "nvltrie" then Markdown.entity_n_306 name else Markdown.entity_n_311 name
+#[partial]
+def Markdown.entity_n_313 (name : String) : Option String :=
+    if String.beq name "nvsim" then Option.some "∼⃒" else Option.none
+#[partial]
+def Markdown.entity_n_314 (name : String) : Option String :=
+    if String.beq name "nwArr" then Option.some "⇖" else Option.none
+#[partial]
+def Markdown.entity_n_315 (name : String) : Option String :=
+    if String.beq name "nwarhk" then Option.some "⤣" else Option.none
+#[partial]
+def Markdown.entity_n_316 (name : String) : Option String :=
+    if String.lt name "nwarhk" then Markdown.entity_n_314 name else Markdown.entity_n_315 name
+#[partial]
+def Markdown.entity_n_317 (name : String) : Option String :=
+    if String.lt name "nwArr" then Markdown.entity_n_313 name else Markdown.entity_n_316 name
+#[partial]
+def Markdown.entity_n_318 (name : String) : Option String :=
+    if String.beq name "nwarr" then Option.some "↖" else Option.none
+#[partial]
+def Markdown.entity_n_319 (name : String) : Option String :=
+    if String.beq name "nwarrow" then Option.some "↖" else Option.none
+#[partial]
+def Markdown.entity_n_320 (name : String) : Option String :=
+    if String.beq name "nwnear" then Option.some "⤧" else Option.none
+#[partial]
+def Markdown.entity_n_321 (name : String) : Option String :=
+    if String.lt name "nwnear" then Markdown.entity_n_319 name else Markdown.entity_n_320 name
+#[partial]
+def Markdown.entity_n_322 (name : String) : Option String :=
+    if String.lt name "nwarrow" then Markdown.entity_n_318 name else Markdown.entity_n_321 name
+#[partial]
+def Markdown.entity_n_323 (name : String) : Option String :=
+    if String.lt name "nwarr" then Markdown.entity_n_317 name else Markdown.entity_n_322 name
+#[partial]
+def Markdown.entity_n_324 (name : String) : Option String :=
+    if String.lt name "nvsim" then Markdown.entity_n_312 name else Markdown.entity_n_323 name
+#[partial]
+def Markdown.entity_n_325 (name : String) : Option String :=
+    if String.lt name "nvle" then Markdown.entity_n_303 name else Markdown.entity_n_324 name
+#[partial]
+def Markdown.entity_n_326 (name : String) : Option String :=
+    if String.lt name "numero" then Markdown.entity_n_284 name else Markdown.entity_n_325 name
+#[partial]
+def Markdown.entity_n_327 (name : String) : Option String :=
+    if String.lt name "nsube" then Markdown.entity_n_243 name else Markdown.entity_n_326 name
+#[partial]
+def Markdown.entity_n_328 (name : String) : Option String :=
+    if String.lt name "notinE" then Markdown.entity_n_162 name else Markdown.entity_n_327 name
+
+def Markdown.entity_n (name : String) : Option String := Markdown.entity_n_328 name
 
 #[partial]
-def Markdown.entity_o (name : String) : Option String :=
-    if String.beq name "oS" then Option.some "Ⓢ"
-    else if String.beq name "oacute" then Option.some "ó"
-    else if String.beq name "oast" then Option.some "⊛"
-    else if String.beq name "ocir" then Option.some "⊚"
-    else if String.beq name "ocirc" then Option.some "ô"
-    else if String.beq name "ocy" then Option.some "о"
-    else if String.beq name "odash" then Option.some "⊝"
-    else if String.beq name "odblac" then Option.some "ő"
-    else if String.beq name "odiv" then Option.some "⨸"
-    else if String.beq name "odot" then Option.some "⊙"
-    else if String.beq name "odsold" then Option.some "⦼"
-    else if String.beq name "oelig" then Option.some "œ"
-    else if String.beq name "ofcir" then Option.some "⦿"
-    else if String.beq name "ofr" then Option.some "𝔬"
-    else if String.beq name "ogon" then Option.some "˛"
-    else if String.beq name "ograve" then Option.some "ò"
-    else if String.beq name "ogt" then Option.some "⧁"
-    else if String.beq name "ohbar" then Option.some "⦵"
-    else if String.beq name "ohm" then Option.some "Ω"
-    else if String.beq name "oint" then Option.some "∮"
-    else if String.beq name "olarr" then Option.some "↺"
-    else if String.beq name "olcir" then Option.some "⦾"
-    else if String.beq name "olcross" then Option.some "⦻"
-    else if String.beq name "oline" then Option.some "‾"
-    else if String.beq name "olt" then Option.some "⧀"
-    else if String.beq name "omacr" then Option.some "ō"
-    else if String.beq name "omega" then Option.some "ω"
-    else if String.beq name "omicron" then Option.some "ο"
-    else if String.beq name "omid" then Option.some "⦶"
-    else if String.beq name "ominus" then Option.some "⊖"
-    else if String.beq name "oopf" then Option.some "𝕠"
-    else if String.beq name "opar" then Option.some "⦷"
-    else if String.beq name "operp" then Option.some "⦹"
-    else if String.beq name "oplus" then Option.some "⊕"
-    else if String.beq name "or" then Option.some "∨"
-    else if String.beq name "orarr" then Option.some "↻"
-    else if String.beq name "ord" then Option.some "⩝"
-    else if String.beq name "order" then Option.some "ℴ"
-    else if String.beq name "orderof" then Option.some "ℴ"
-    else if String.beq name "ordf" then Option.some "ª"
-    else if String.beq name "ordm" then Option.some "º"
-    else if String.beq name "origof" then Option.some "⊶"
-    else if String.beq name "oror" then Option.some "⩖"
-    else if String.beq name "orslope" then Option.some "⩗"
-    else if String.beq name "orv" then Option.some "⩛"
-    else if String.beq name "oscr" then Option.some "ℴ"
-    else if String.beq name "oslash" then Option.some "ø"
-    else if String.beq name "osol" then Option.some "⊘"
-    else if String.beq name "otilde" then Option.some "õ"
-    else if String.beq name "otimes" then Option.some "⊗"
-    else if String.beq name "otimesas" then Option.some "⨶"
-    else if String.beq name "ouml" then Option.some "ö"
-    else if String.beq name "ovbar" then Option.some "⌽"
-    else Option.none
+def Markdown.entity_o_0 (name : String) : Option String :=
+    if String.beq name "oS" then Option.some "Ⓢ" else Option.none
+#[partial]
+def Markdown.entity_o_1 (name : String) : Option String :=
+    if String.beq name "oacute" then Option.some "ó" else Option.none
+#[partial]
+def Markdown.entity_o_2 (name : String) : Option String :=
+    if String.beq name "oast" then Option.some "⊛" else Option.none
+#[partial]
+def Markdown.entity_o_3 (name : String) : Option String :=
+    if String.lt name "oast" then Markdown.entity_o_1 name else Markdown.entity_o_2 name
+#[partial]
+def Markdown.entity_o_4 (name : String) : Option String :=
+    if String.lt name "oacute" then Markdown.entity_o_0 name else Markdown.entity_o_3 name
+#[partial]
+def Markdown.entity_o_5 (name : String) : Option String :=
+    if String.beq name "ocir" then Option.some "⊚" else Option.none
+#[partial]
+def Markdown.entity_o_6 (name : String) : Option String :=
+    if String.beq name "ocirc" then Option.some "ô" else Option.none
+#[partial]
+def Markdown.entity_o_7 (name : String) : Option String :=
+    if String.beq name "ocy" then Option.some "о" else Option.none
+#[partial]
+def Markdown.entity_o_8 (name : String) : Option String :=
+    if String.lt name "ocy" then Markdown.entity_o_6 name else Markdown.entity_o_7 name
+#[partial]
+def Markdown.entity_o_9 (name : String) : Option String :=
+    if String.lt name "ocirc" then Markdown.entity_o_5 name else Markdown.entity_o_8 name
+#[partial]
+def Markdown.entity_o_10 (name : String) : Option String :=
+    if String.lt name "ocir" then Markdown.entity_o_4 name else Markdown.entity_o_9 name
+#[partial]
+def Markdown.entity_o_11 (name : String) : Option String :=
+    if String.beq name "odash" then Option.some "⊝" else Option.none
+#[partial]
+def Markdown.entity_o_12 (name : String) : Option String :=
+    if String.beq name "odblac" then Option.some "ő" else Option.none
+#[partial]
+def Markdown.entity_o_13 (name : String) : Option String :=
+    if String.beq name "odiv" then Option.some "⨸" else Option.none
+#[partial]
+def Markdown.entity_o_14 (name : String) : Option String :=
+    if String.lt name "odiv" then Markdown.entity_o_12 name else Markdown.entity_o_13 name
+#[partial]
+def Markdown.entity_o_15 (name : String) : Option String :=
+    if String.lt name "odblac" then Markdown.entity_o_11 name else Markdown.entity_o_14 name
+#[partial]
+def Markdown.entity_o_16 (name : String) : Option String :=
+    if String.beq name "odot" then Option.some "⊙" else Option.none
+#[partial]
+def Markdown.entity_o_17 (name : String) : Option String :=
+    if String.beq name "odsold" then Option.some "⦼" else Option.none
+#[partial]
+def Markdown.entity_o_18 (name : String) : Option String :=
+    if String.lt name "odsold" then Markdown.entity_o_16 name else Markdown.entity_o_17 name
+#[partial]
+def Markdown.entity_o_19 (name : String) : Option String :=
+    if String.beq name "oelig" then Option.some "œ" else Option.none
+#[partial]
+def Markdown.entity_o_20 (name : String) : Option String :=
+    if String.beq name "ofcir" then Option.some "⦿" else Option.none
+#[partial]
+def Markdown.entity_o_21 (name : String) : Option String :=
+    if String.lt name "ofcir" then Markdown.entity_o_19 name else Markdown.entity_o_20 name
+#[partial]
+def Markdown.entity_o_22 (name : String) : Option String :=
+    if String.lt name "oelig" then Markdown.entity_o_18 name else Markdown.entity_o_21 name
+#[partial]
+def Markdown.entity_o_23 (name : String) : Option String :=
+    if String.lt name "odot" then Markdown.entity_o_15 name else Markdown.entity_o_22 name
+#[partial]
+def Markdown.entity_o_24 (name : String) : Option String :=
+    if String.lt name "odash" then Markdown.entity_o_10 name else Markdown.entity_o_23 name
+#[partial]
+def Markdown.entity_o_25 (name : String) : Option String :=
+    if String.beq name "ofr" then Option.some "𝔬" else Option.none
+#[partial]
+def Markdown.entity_o_26 (name : String) : Option String :=
+    if String.beq name "ogon" then Option.some "˛" else Option.none
+#[partial]
+def Markdown.entity_o_27 (name : String) : Option String :=
+    if String.beq name "ograve" then Option.some "ò" else Option.none
+#[partial]
+def Markdown.entity_o_28 (name : String) : Option String :=
+    if String.lt name "ograve" then Markdown.entity_o_26 name else Markdown.entity_o_27 name
+#[partial]
+def Markdown.entity_o_29 (name : String) : Option String :=
+    if String.lt name "ogon" then Markdown.entity_o_25 name else Markdown.entity_o_28 name
+#[partial]
+def Markdown.entity_o_30 (name : String) : Option String :=
+    if String.beq name "ogt" then Option.some "⧁" else Option.none
+#[partial]
+def Markdown.entity_o_31 (name : String) : Option String :=
+    if String.beq name "ohbar" then Option.some "⦵" else Option.none
+#[partial]
+def Markdown.entity_o_32 (name : String) : Option String :=
+    if String.beq name "ohm" then Option.some "Ω" else Option.none
+#[partial]
+def Markdown.entity_o_33 (name : String) : Option String :=
+    if String.lt name "ohm" then Markdown.entity_o_31 name else Markdown.entity_o_32 name
+#[partial]
+def Markdown.entity_o_34 (name : String) : Option String :=
+    if String.lt name "ohbar" then Markdown.entity_o_30 name else Markdown.entity_o_33 name
+#[partial]
+def Markdown.entity_o_35 (name : String) : Option String :=
+    if String.lt name "ogt" then Markdown.entity_o_29 name else Markdown.entity_o_34 name
+#[partial]
+def Markdown.entity_o_36 (name : String) : Option String :=
+    if String.beq name "oint" then Option.some "∮" else Option.none
+#[partial]
+def Markdown.entity_o_37 (name : String) : Option String :=
+    if String.beq name "olarr" then Option.some "↺" else Option.none
+#[partial]
+def Markdown.entity_o_38 (name : String) : Option String :=
+    if String.beq name "olcir" then Option.some "⦾" else Option.none
+#[partial]
+def Markdown.entity_o_39 (name : String) : Option String :=
+    if String.lt name "olcir" then Markdown.entity_o_37 name else Markdown.entity_o_38 name
+#[partial]
+def Markdown.entity_o_40 (name : String) : Option String :=
+    if String.lt name "olarr" then Markdown.entity_o_36 name else Markdown.entity_o_39 name
+#[partial]
+def Markdown.entity_o_41 (name : String) : Option String :=
+    if String.beq name "olcross" then Option.some "⦻" else Option.none
+#[partial]
+def Markdown.entity_o_42 (name : String) : Option String :=
+    if String.beq name "oline" then Option.some "‾" else Option.none
+#[partial]
+def Markdown.entity_o_43 (name : String) : Option String :=
+    if String.lt name "oline" then Markdown.entity_o_41 name else Markdown.entity_o_42 name
+#[partial]
+def Markdown.entity_o_44 (name : String) : Option String :=
+    if String.beq name "olt" then Option.some "⧀" else Option.none
+#[partial]
+def Markdown.entity_o_45 (name : String) : Option String :=
+    if String.beq name "omacr" then Option.some "ō" else Option.none
+#[partial]
+def Markdown.entity_o_46 (name : String) : Option String :=
+    if String.lt name "omacr" then Markdown.entity_o_44 name else Markdown.entity_o_45 name
+#[partial]
+def Markdown.entity_o_47 (name : String) : Option String :=
+    if String.lt name "olt" then Markdown.entity_o_43 name else Markdown.entity_o_46 name
+#[partial]
+def Markdown.entity_o_48 (name : String) : Option String :=
+    if String.lt name "olcross" then Markdown.entity_o_40 name else Markdown.entity_o_47 name
+#[partial]
+def Markdown.entity_o_49 (name : String) : Option String :=
+    if String.lt name "oint" then Markdown.entity_o_35 name else Markdown.entity_o_48 name
+#[partial]
+def Markdown.entity_o_50 (name : String) : Option String :=
+    if String.lt name "ofr" then Markdown.entity_o_24 name else Markdown.entity_o_49 name
+#[partial]
+def Markdown.entity_o_51 (name : String) : Option String :=
+    if String.beq name "omega" then Option.some "ω" else Option.none
+#[partial]
+def Markdown.entity_o_52 (name : String) : Option String :=
+    if String.beq name "omicron" then Option.some "ο" else Option.none
+#[partial]
+def Markdown.entity_o_53 (name : String) : Option String :=
+    if String.beq name "omid" then Option.some "⦶" else Option.none
+#[partial]
+def Markdown.entity_o_54 (name : String) : Option String :=
+    if String.lt name "omid" then Markdown.entity_o_52 name else Markdown.entity_o_53 name
+#[partial]
+def Markdown.entity_o_55 (name : String) : Option String :=
+    if String.lt name "omicron" then Markdown.entity_o_51 name else Markdown.entity_o_54 name
+#[partial]
+def Markdown.entity_o_56 (name : String) : Option String :=
+    if String.beq name "ominus" then Option.some "⊖" else Option.none
+#[partial]
+def Markdown.entity_o_57 (name : String) : Option String :=
+    if String.beq name "oopf" then Option.some "𝕠" else Option.none
+#[partial]
+def Markdown.entity_o_58 (name : String) : Option String :=
+    if String.beq name "opar" then Option.some "⦷" else Option.none
+#[partial]
+def Markdown.entity_o_59 (name : String) : Option String :=
+    if String.lt name "opar" then Markdown.entity_o_57 name else Markdown.entity_o_58 name
+#[partial]
+def Markdown.entity_o_60 (name : String) : Option String :=
+    if String.lt name "oopf" then Markdown.entity_o_56 name else Markdown.entity_o_59 name
+#[partial]
+def Markdown.entity_o_61 (name : String) : Option String :=
+    if String.lt name "ominus" then Markdown.entity_o_55 name else Markdown.entity_o_60 name
+#[partial]
+def Markdown.entity_o_62 (name : String) : Option String :=
+    if String.beq name "operp" then Option.some "⦹" else Option.none
+#[partial]
+def Markdown.entity_o_63 (name : String) : Option String :=
+    if String.beq name "oplus" then Option.some "⊕" else Option.none
+#[partial]
+def Markdown.entity_o_64 (name : String) : Option String :=
+    if String.beq name "or" then Option.some "∨" else Option.none
+#[partial]
+def Markdown.entity_o_65 (name : String) : Option String :=
+    if String.lt name "or" then Markdown.entity_o_63 name else Markdown.entity_o_64 name
+#[partial]
+def Markdown.entity_o_66 (name : String) : Option String :=
+    if String.lt name "oplus" then Markdown.entity_o_62 name else Markdown.entity_o_65 name
+#[partial]
+def Markdown.entity_o_67 (name : String) : Option String :=
+    if String.beq name "orarr" then Option.some "↻" else Option.none
+#[partial]
+def Markdown.entity_o_68 (name : String) : Option String :=
+    if String.beq name "ord" then Option.some "⩝" else Option.none
+#[partial]
+def Markdown.entity_o_69 (name : String) : Option String :=
+    if String.lt name "ord" then Markdown.entity_o_67 name else Markdown.entity_o_68 name
+#[partial]
+def Markdown.entity_o_70 (name : String) : Option String :=
+    if String.beq name "order" then Option.some "ℴ" else Option.none
+#[partial]
+def Markdown.entity_o_71 (name : String) : Option String :=
+    if String.beq name "orderof" then Option.some "ℴ" else Option.none
+#[partial]
+def Markdown.entity_o_72 (name : String) : Option String :=
+    if String.lt name "orderof" then Markdown.entity_o_70 name else Markdown.entity_o_71 name
+#[partial]
+def Markdown.entity_o_73 (name : String) : Option String :=
+    if String.lt name "order" then Markdown.entity_o_69 name else Markdown.entity_o_72 name
+#[partial]
+def Markdown.entity_o_74 (name : String) : Option String :=
+    if String.lt name "orarr" then Markdown.entity_o_66 name else Markdown.entity_o_73 name
+#[partial]
+def Markdown.entity_o_75 (name : String) : Option String :=
+    if String.lt name "operp" then Markdown.entity_o_61 name else Markdown.entity_o_74 name
+#[partial]
+def Markdown.entity_o_76 (name : String) : Option String :=
+    if String.beq name "ordf" then Option.some "ª" else Option.none
+#[partial]
+def Markdown.entity_o_77 (name : String) : Option String :=
+    if String.beq name "ordm" then Option.some "º" else Option.none
+#[partial]
+def Markdown.entity_o_78 (name : String) : Option String :=
+    if String.beq name "origof" then Option.some "⊶" else Option.none
+#[partial]
+def Markdown.entity_o_79 (name : String) : Option String :=
+    if String.lt name "origof" then Markdown.entity_o_77 name else Markdown.entity_o_78 name
+#[partial]
+def Markdown.entity_o_80 (name : String) : Option String :=
+    if String.lt name "ordm" then Markdown.entity_o_76 name else Markdown.entity_o_79 name
+#[partial]
+def Markdown.entity_o_81 (name : String) : Option String :=
+    if String.beq name "oror" then Option.some "⩖" else Option.none
+#[partial]
+def Markdown.entity_o_82 (name : String) : Option String :=
+    if String.beq name "orslope" then Option.some "⩗" else Option.none
+#[partial]
+def Markdown.entity_o_83 (name : String) : Option String :=
+    if String.lt name "orslope" then Markdown.entity_o_81 name else Markdown.entity_o_82 name
+#[partial]
+def Markdown.entity_o_84 (name : String) : Option String :=
+    if String.beq name "orv" then Option.some "⩛" else Option.none
+#[partial]
+def Markdown.entity_o_85 (name : String) : Option String :=
+    if String.beq name "oscr" then Option.some "ℴ" else Option.none
+#[partial]
+def Markdown.entity_o_86 (name : String) : Option String :=
+    if String.lt name "oscr" then Markdown.entity_o_84 name else Markdown.entity_o_85 name
+#[partial]
+def Markdown.entity_o_87 (name : String) : Option String :=
+    if String.lt name "orv" then Markdown.entity_o_83 name else Markdown.entity_o_86 name
+#[partial]
+def Markdown.entity_o_88 (name : String) : Option String :=
+    if String.lt name "oror" then Markdown.entity_o_80 name else Markdown.entity_o_87 name
+#[partial]
+def Markdown.entity_o_89 (name : String) : Option String :=
+    if String.beq name "oslash" then Option.some "ø" else Option.none
+#[partial]
+def Markdown.entity_o_90 (name : String) : Option String :=
+    if String.beq name "osol" then Option.some "⊘" else Option.none
+#[partial]
+def Markdown.entity_o_91 (name : String) : Option String :=
+    if String.beq name "otilde" then Option.some "õ" else Option.none
+#[partial]
+def Markdown.entity_o_92 (name : String) : Option String :=
+    if String.lt name "otilde" then Markdown.entity_o_90 name else Markdown.entity_o_91 name
+#[partial]
+def Markdown.entity_o_93 (name : String) : Option String :=
+    if String.lt name "osol" then Markdown.entity_o_89 name else Markdown.entity_o_92 name
+#[partial]
+def Markdown.entity_o_94 (name : String) : Option String :=
+    if String.beq name "otimes" then Option.some "⊗" else Option.none
+#[partial]
+def Markdown.entity_o_95 (name : String) : Option String :=
+    if String.beq name "otimesas" then Option.some "⨶" else Option.none
+#[partial]
+def Markdown.entity_o_96 (name : String) : Option String :=
+    if String.lt name "otimesas" then Markdown.entity_o_94 name else Markdown.entity_o_95 name
+#[partial]
+def Markdown.entity_o_97 (name : String) : Option String :=
+    if String.beq name "ouml" then Option.some "ö" else Option.none
+#[partial]
+def Markdown.entity_o_98 (name : String) : Option String :=
+    if String.beq name "ovbar" then Option.some "⌽" else Option.none
+#[partial]
+def Markdown.entity_o_99 (name : String) : Option String :=
+    if String.lt name "ovbar" then Markdown.entity_o_97 name else Markdown.entity_o_98 name
+#[partial]
+def Markdown.entity_o_100 (name : String) : Option String :=
+    if String.lt name "ouml" then Markdown.entity_o_96 name else Markdown.entity_o_99 name
+#[partial]
+def Markdown.entity_o_101 (name : String) : Option String :=
+    if String.lt name "otimes" then Markdown.entity_o_93 name else Markdown.entity_o_100 name
+#[partial]
+def Markdown.entity_o_102 (name : String) : Option String :=
+    if String.lt name "oslash" then Markdown.entity_o_88 name else Markdown.entity_o_101 name
+#[partial]
+def Markdown.entity_o_103 (name : String) : Option String :=
+    if String.lt name "ordf" then Markdown.entity_o_75 name else Markdown.entity_o_102 name
+#[partial]
+def Markdown.entity_o_104 (name : String) : Option String :=
+    if String.lt name "omega" then Markdown.entity_o_50 name else Markdown.entity_o_103 name
+
+def Markdown.entity_o (name : String) : Option String := Markdown.entity_o_104 name
 
 #[partial]
-def Markdown.entity_p (name : String) : Option String :=
-    if String.beq name "par" then Option.some "∥"
-    else if String.beq name "para" then Option.some "¶"
-    else if String.beq name "parallel" then Option.some "∥"
-    else if String.beq name "parsim" then Option.some "⫳"
-    else if String.beq name "parsl" then Option.some "⫽"
-    else if String.beq name "part" then Option.some "∂"
-    else if String.beq name "pcy" then Option.some "п"
-    else if String.beq name "percnt" then Option.some "%"
-    else if String.beq name "period" then Option.some "."
-    else if String.beq name "permil" then Option.some "‰"
-    else if String.beq name "perp" then Option.some "⊥"
-    else if String.beq name "pertenk" then Option.some "‱"
-    else if String.beq name "pfr" then Option.some "𝔭"
-    else if String.beq name "phi" then Option.some "φ"
-    else if String.beq name "phiv" then Option.some "ϕ"
-    else if String.beq name "phmmat" then Option.some "ℳ"
-    else if String.beq name "phone" then Option.some "☎"
-    else if String.beq name "pi" then Option.some "π"
-    else if String.beq name "pitchfork" then Option.some "⋔"
-    else if String.beq name "piv" then Option.some "ϖ"
-    else if String.beq name "planck" then Option.some "ℏ"
-    else if String.beq name "planckh" then Option.some "ℎ"
-    else if String.beq name "plankv" then Option.some "ℏ"
-    else if String.beq name "plus" then Option.some "+"
-    else if String.beq name "plusacir" then Option.some "⨣"
-    else if String.beq name "plusb" then Option.some "⊞"
-    else if String.beq name "pluscir" then Option.some "⨢"
-    else if String.beq name "plusdo" then Option.some "∔"
-    else if String.beq name "plusdu" then Option.some "⨥"
-    else if String.beq name "pluse" then Option.some "⩲"
-    else if String.beq name "plusmn" then Option.some "±"
-    else if String.beq name "plussim" then Option.some "⨦"
-    else if String.beq name "plustwo" then Option.some "⨧"
-    else if String.beq name "pm" then Option.some "±"
-    else if String.beq name "pointint" then Option.some "⨕"
-    else if String.beq name "popf" then Option.some "𝕡"
-    else if String.beq name "pound" then Option.some "£"
-    else if String.beq name "pr" then Option.some "≺"
-    else if String.beq name "prE" then Option.some "⪳"
-    else if String.beq name "prap" then Option.some "⪷"
-    else if String.beq name "prcue" then Option.some "≼"
-    else if String.beq name "pre" then Option.some "⪯"
-    else if String.beq name "prec" then Option.some "≺"
-    else if String.beq name "precapprox" then Option.some "⪷"
-    else if String.beq name "preccurlyeq" then Option.some "≼"
-    else if String.beq name "preceq" then Option.some "⪯"
-    else if String.beq name "precnapprox" then Option.some "⪹"
-    else if String.beq name "precneqq" then Option.some "⪵"
-    else if String.beq name "precnsim" then Option.some "⋨"
-    else if String.beq name "precsim" then Option.some "≾"
-    else if String.beq name "prime" then Option.some "′"
-    else if String.beq name "primes" then Option.some "ℙ"
-    else if String.beq name "prnE" then Option.some "⪵"
-    else if String.beq name "prnap" then Option.some "⪹"
-    else if String.beq name "prnsim" then Option.some "⋨"
-    else if String.beq name "prod" then Option.some "∏"
-    else if String.beq name "profalar" then Option.some "⌮"
-    else if String.beq name "profline" then Option.some "⌒"
-    else if String.beq name "profsurf" then Option.some "⌓"
-    else if String.beq name "prop" then Option.some "∝"
-    else if String.beq name "propto" then Option.some "∝"
-    else if String.beq name "prsim" then Option.some "≾"
-    else if String.beq name "prurel" then Option.some "⊰"
-    else if String.beq name "pscr" then Option.some "𝓅"
-    else if String.beq name "psi" then Option.some "ψ"
-    else if String.beq name "puncsp" then Option.some " "
-    else Option.none
+def Markdown.entity_p_0 (name : String) : Option String :=
+    if String.beq name "par" then Option.some "∥" else Option.none
+#[partial]
+def Markdown.entity_p_1 (name : String) : Option String :=
+    if String.beq name "para" then Option.some "¶" else Option.none
+#[partial]
+def Markdown.entity_p_2 (name : String) : Option String :=
+    if String.lt name "para" then Markdown.entity_p_0 name else Markdown.entity_p_1 name
+#[partial]
+def Markdown.entity_p_3 (name : String) : Option String :=
+    if String.beq name "parallel" then Option.some "∥" else Option.none
+#[partial]
+def Markdown.entity_p_4 (name : String) : Option String :=
+    if String.beq name "parsim" then Option.some "⫳" else Option.none
+#[partial]
+def Markdown.entity_p_5 (name : String) : Option String :=
+    if String.lt name "parsim" then Markdown.entity_p_3 name else Markdown.entity_p_4 name
+#[partial]
+def Markdown.entity_p_6 (name : String) : Option String :=
+    if String.lt name "parallel" then Markdown.entity_p_2 name else Markdown.entity_p_5 name
+#[partial]
+def Markdown.entity_p_7 (name : String) : Option String :=
+    if String.beq name "parsl" then Option.some "⫽" else Option.none
+#[partial]
+def Markdown.entity_p_8 (name : String) : Option String :=
+    if String.beq name "part" then Option.some "∂" else Option.none
+#[partial]
+def Markdown.entity_p_9 (name : String) : Option String :=
+    if String.lt name "part" then Markdown.entity_p_7 name else Markdown.entity_p_8 name
+#[partial]
+def Markdown.entity_p_10 (name : String) : Option String :=
+    if String.beq name "pcy" then Option.some "п" else Option.none
+#[partial]
+def Markdown.entity_p_11 (name : String) : Option String :=
+    if String.beq name "percnt" then Option.some "%" else Option.none
+#[partial]
+def Markdown.entity_p_12 (name : String) : Option String :=
+    if String.lt name "percnt" then Markdown.entity_p_10 name else Markdown.entity_p_11 name
+#[partial]
+def Markdown.entity_p_13 (name : String) : Option String :=
+    if String.lt name "pcy" then Markdown.entity_p_9 name else Markdown.entity_p_12 name
+#[partial]
+def Markdown.entity_p_14 (name : String) : Option String :=
+    if String.lt name "parsl" then Markdown.entity_p_6 name else Markdown.entity_p_13 name
+#[partial]
+def Markdown.entity_p_15 (name : String) : Option String :=
+    if String.beq name "period" then Option.some "." else Option.none
+#[partial]
+def Markdown.entity_p_16 (name : String) : Option String :=
+    if String.beq name "permil" then Option.some "‰" else Option.none
+#[partial]
+def Markdown.entity_p_17 (name : String) : Option String :=
+    if String.lt name "permil" then Markdown.entity_p_15 name else Markdown.entity_p_16 name
+#[partial]
+def Markdown.entity_p_18 (name : String) : Option String :=
+    if String.beq name "perp" then Option.some "⊥" else Option.none
+#[partial]
+def Markdown.entity_p_19 (name : String) : Option String :=
+    if String.beq name "pertenk" then Option.some "‱" else Option.none
+#[partial]
+def Markdown.entity_p_20 (name : String) : Option String :=
+    if String.lt name "pertenk" then Markdown.entity_p_18 name else Markdown.entity_p_19 name
+#[partial]
+def Markdown.entity_p_21 (name : String) : Option String :=
+    if String.lt name "perp" then Markdown.entity_p_17 name else Markdown.entity_p_20 name
+#[partial]
+def Markdown.entity_p_22 (name : String) : Option String :=
+    if String.beq name "pfr" then Option.some "𝔭" else Option.none
+#[partial]
+def Markdown.entity_p_23 (name : String) : Option String :=
+    if String.beq name "phi" then Option.some "φ" else Option.none
+#[partial]
+def Markdown.entity_p_24 (name : String) : Option String :=
+    if String.lt name "phi" then Markdown.entity_p_22 name else Markdown.entity_p_23 name
+#[partial]
+def Markdown.entity_p_25 (name : String) : Option String :=
+    if String.beq name "phiv" then Option.some "ϕ" else Option.none
+#[partial]
+def Markdown.entity_p_26 (name : String) : Option String :=
+    if String.beq name "phmmat" then Option.some "ℳ" else Option.none
+#[partial]
+def Markdown.entity_p_27 (name : String) : Option String :=
+    if String.lt name "phmmat" then Markdown.entity_p_25 name else Markdown.entity_p_26 name
+#[partial]
+def Markdown.entity_p_28 (name : String) : Option String :=
+    if String.lt name "phiv" then Markdown.entity_p_24 name else Markdown.entity_p_27 name
+#[partial]
+def Markdown.entity_p_29 (name : String) : Option String :=
+    if String.lt name "pfr" then Markdown.entity_p_21 name else Markdown.entity_p_28 name
+#[partial]
+def Markdown.entity_p_30 (name : String) : Option String :=
+    if String.lt name "period" then Markdown.entity_p_14 name else Markdown.entity_p_29 name
+#[partial]
+def Markdown.entity_p_31 (name : String) : Option String :=
+    if String.beq name "phone" then Option.some "☎" else Option.none
+#[partial]
+def Markdown.entity_p_32 (name : String) : Option String :=
+    if String.beq name "pi" then Option.some "π" else Option.none
+#[partial]
+def Markdown.entity_p_33 (name : String) : Option String :=
+    if String.lt name "pi" then Markdown.entity_p_31 name else Markdown.entity_p_32 name
+#[partial]
+def Markdown.entity_p_34 (name : String) : Option String :=
+    if String.beq name "pitchfork" then Option.some "⋔" else Option.none
+#[partial]
+def Markdown.entity_p_35 (name : String) : Option String :=
+    if String.beq name "piv" then Option.some "ϖ" else Option.none
+#[partial]
+def Markdown.entity_p_36 (name : String) : Option String :=
+    if String.lt name "piv" then Markdown.entity_p_34 name else Markdown.entity_p_35 name
+#[partial]
+def Markdown.entity_p_37 (name : String) : Option String :=
+    if String.lt name "pitchfork" then Markdown.entity_p_33 name else Markdown.entity_p_36 name
+#[partial]
+def Markdown.entity_p_38 (name : String) : Option String :=
+    if String.beq name "planck" then Option.some "ℏ" else Option.none
+#[partial]
+def Markdown.entity_p_39 (name : String) : Option String :=
+    if String.beq name "planckh" then Option.some "ℎ" else Option.none
+#[partial]
+def Markdown.entity_p_40 (name : String) : Option String :=
+    if String.lt name "planckh" then Markdown.entity_p_38 name else Markdown.entity_p_39 name
+#[partial]
+def Markdown.entity_p_41 (name : String) : Option String :=
+    if String.beq name "plankv" then Option.some "ℏ" else Option.none
+#[partial]
+def Markdown.entity_p_42 (name : String) : Option String :=
+    if String.beq name "plus" then Option.some "+" else Option.none
+#[partial]
+def Markdown.entity_p_43 (name : String) : Option String :=
+    if String.lt name "plus" then Markdown.entity_p_41 name else Markdown.entity_p_42 name
+#[partial]
+def Markdown.entity_p_44 (name : String) : Option String :=
+    if String.lt name "plankv" then Markdown.entity_p_40 name else Markdown.entity_p_43 name
+#[partial]
+def Markdown.entity_p_45 (name : String) : Option String :=
+    if String.lt name "planck" then Markdown.entity_p_37 name else Markdown.entity_p_44 name
+#[partial]
+def Markdown.entity_p_46 (name : String) : Option String :=
+    if String.beq name "plusacir" then Option.some "⨣" else Option.none
+#[partial]
+def Markdown.entity_p_47 (name : String) : Option String :=
+    if String.beq name "plusb" then Option.some "⊞" else Option.none
+#[partial]
+def Markdown.entity_p_48 (name : String) : Option String :=
+    if String.lt name "plusb" then Markdown.entity_p_46 name else Markdown.entity_p_47 name
+#[partial]
+def Markdown.entity_p_49 (name : String) : Option String :=
+    if String.beq name "pluscir" then Option.some "⨢" else Option.none
+#[partial]
+def Markdown.entity_p_50 (name : String) : Option String :=
+    if String.beq name "plusdo" then Option.some "∔" else Option.none
+#[partial]
+def Markdown.entity_p_51 (name : String) : Option String :=
+    if String.lt name "plusdo" then Markdown.entity_p_49 name else Markdown.entity_p_50 name
+#[partial]
+def Markdown.entity_p_52 (name : String) : Option String :=
+    if String.lt name "pluscir" then Markdown.entity_p_48 name else Markdown.entity_p_51 name
+#[partial]
+def Markdown.entity_p_53 (name : String) : Option String :=
+    if String.beq name "plusdu" then Option.some "⨥" else Option.none
+#[partial]
+def Markdown.entity_p_54 (name : String) : Option String :=
+    if String.beq name "pluse" then Option.some "⩲" else Option.none
+#[partial]
+def Markdown.entity_p_55 (name : String) : Option String :=
+    if String.lt name "pluse" then Markdown.entity_p_53 name else Markdown.entity_p_54 name
+#[partial]
+def Markdown.entity_p_56 (name : String) : Option String :=
+    if String.beq name "plusmn" then Option.some "±" else Option.none
+#[partial]
+def Markdown.entity_p_57 (name : String) : Option String :=
+    if String.beq name "plussim" then Option.some "⨦" else Option.none
+#[partial]
+def Markdown.entity_p_58 (name : String) : Option String :=
+    if String.beq name "plustwo" then Option.some "⨧" else Option.none
+#[partial]
+def Markdown.entity_p_59 (name : String) : Option String :=
+    if String.lt name "plustwo" then Markdown.entity_p_57 name else Markdown.entity_p_58 name
+#[partial]
+def Markdown.entity_p_60 (name : String) : Option String :=
+    if String.lt name "plussim" then Markdown.entity_p_56 name else Markdown.entity_p_59 name
+#[partial]
+def Markdown.entity_p_61 (name : String) : Option String :=
+    if String.lt name "plusmn" then Markdown.entity_p_55 name else Markdown.entity_p_60 name
+#[partial]
+def Markdown.entity_p_62 (name : String) : Option String :=
+    if String.lt name "plusdu" then Markdown.entity_p_52 name else Markdown.entity_p_61 name
+#[partial]
+def Markdown.entity_p_63 (name : String) : Option String :=
+    if String.lt name "plusacir" then Markdown.entity_p_45 name else Markdown.entity_p_62 name
+#[partial]
+def Markdown.entity_p_64 (name : String) : Option String :=
+    if String.lt name "phone" then Markdown.entity_p_30 name else Markdown.entity_p_63 name
+#[partial]
+def Markdown.entity_p_65 (name : String) : Option String :=
+    if String.beq name "pm" then Option.some "±" else Option.none
+#[partial]
+def Markdown.entity_p_66 (name : String) : Option String :=
+    if String.beq name "pointint" then Option.some "⨕" else Option.none
+#[partial]
+def Markdown.entity_p_67 (name : String) : Option String :=
+    if String.lt name "pointint" then Markdown.entity_p_65 name else Markdown.entity_p_66 name
+#[partial]
+def Markdown.entity_p_68 (name : String) : Option String :=
+    if String.beq name "popf" then Option.some "𝕡" else Option.none
+#[partial]
+def Markdown.entity_p_69 (name : String) : Option String :=
+    if String.beq name "pound" then Option.some "£" else Option.none
+#[partial]
+def Markdown.entity_p_70 (name : String) : Option String :=
+    if String.lt name "pound" then Markdown.entity_p_68 name else Markdown.entity_p_69 name
+#[partial]
+def Markdown.entity_p_71 (name : String) : Option String :=
+    if String.lt name "popf" then Markdown.entity_p_67 name else Markdown.entity_p_70 name
+#[partial]
+def Markdown.entity_p_72 (name : String) : Option String :=
+    if String.beq name "pr" then Option.some "≺" else Option.none
+#[partial]
+def Markdown.entity_p_73 (name : String) : Option String :=
+    if String.beq name "prE" then Option.some "⪳" else Option.none
+#[partial]
+def Markdown.entity_p_74 (name : String) : Option String :=
+    if String.lt name "prE" then Markdown.entity_p_72 name else Markdown.entity_p_73 name
+#[partial]
+def Markdown.entity_p_75 (name : String) : Option String :=
+    if String.beq name "prap" then Option.some "⪷" else Option.none
+#[partial]
+def Markdown.entity_p_76 (name : String) : Option String :=
+    if String.beq name "prcue" then Option.some "≼" else Option.none
+#[partial]
+def Markdown.entity_p_77 (name : String) : Option String :=
+    if String.lt name "prcue" then Markdown.entity_p_75 name else Markdown.entity_p_76 name
+#[partial]
+def Markdown.entity_p_78 (name : String) : Option String :=
+    if String.lt name "prap" then Markdown.entity_p_74 name else Markdown.entity_p_77 name
+#[partial]
+def Markdown.entity_p_79 (name : String) : Option String :=
+    if String.lt name "pr" then Markdown.entity_p_71 name else Markdown.entity_p_78 name
+#[partial]
+def Markdown.entity_p_80 (name : String) : Option String :=
+    if String.beq name "pre" then Option.some "⪯" else Option.none
+#[partial]
+def Markdown.entity_p_81 (name : String) : Option String :=
+    if String.beq name "prec" then Option.some "≺" else Option.none
+#[partial]
+def Markdown.entity_p_82 (name : String) : Option String :=
+    if String.lt name "prec" then Markdown.entity_p_80 name else Markdown.entity_p_81 name
+#[partial]
+def Markdown.entity_p_83 (name : String) : Option String :=
+    if String.beq name "precapprox" then Option.some "⪷" else Option.none
+#[partial]
+def Markdown.entity_p_84 (name : String) : Option String :=
+    if String.beq name "preccurlyeq" then Option.some "≼" else Option.none
+#[partial]
+def Markdown.entity_p_85 (name : String) : Option String :=
+    if String.lt name "preccurlyeq" then Markdown.entity_p_83 name else Markdown.entity_p_84 name
+#[partial]
+def Markdown.entity_p_86 (name : String) : Option String :=
+    if String.lt name "precapprox" then Markdown.entity_p_82 name else Markdown.entity_p_85 name
+#[partial]
+def Markdown.entity_p_87 (name : String) : Option String :=
+    if String.beq name "preceq" then Option.some "⪯" else Option.none
+#[partial]
+def Markdown.entity_p_88 (name : String) : Option String :=
+    if String.beq name "precnapprox" then Option.some "⪹" else Option.none
+#[partial]
+def Markdown.entity_p_89 (name : String) : Option String :=
+    if String.lt name "precnapprox" then Markdown.entity_p_87 name else Markdown.entity_p_88 name
+#[partial]
+def Markdown.entity_p_90 (name : String) : Option String :=
+    if String.beq name "precneqq" then Option.some "⪵" else Option.none
+#[partial]
+def Markdown.entity_p_91 (name : String) : Option String :=
+    if String.beq name "precnsim" then Option.some "⋨" else Option.none
+#[partial]
+def Markdown.entity_p_92 (name : String) : Option String :=
+    if String.lt name "precnsim" then Markdown.entity_p_90 name else Markdown.entity_p_91 name
+#[partial]
+def Markdown.entity_p_93 (name : String) : Option String :=
+    if String.lt name "precneqq" then Markdown.entity_p_89 name else Markdown.entity_p_92 name
+#[partial]
+def Markdown.entity_p_94 (name : String) : Option String :=
+    if String.lt name "preceq" then Markdown.entity_p_86 name else Markdown.entity_p_93 name
+#[partial]
+def Markdown.entity_p_95 (name : String) : Option String :=
+    if String.lt name "pre" then Markdown.entity_p_79 name else Markdown.entity_p_94 name
+#[partial]
+def Markdown.entity_p_96 (name : String) : Option String :=
+    if String.beq name "precsim" then Option.some "≾" else Option.none
+#[partial]
+def Markdown.entity_p_97 (name : String) : Option String :=
+    if String.beq name "prime" then Option.some "′" else Option.none
+#[partial]
+def Markdown.entity_p_98 (name : String) : Option String :=
+    if String.lt name "prime" then Markdown.entity_p_96 name else Markdown.entity_p_97 name
+#[partial]
+def Markdown.entity_p_99 (name : String) : Option String :=
+    if String.beq name "primes" then Option.some "ℙ" else Option.none
+#[partial]
+def Markdown.entity_p_100 (name : String) : Option String :=
+    if String.beq name "prnE" then Option.some "⪵" else Option.none
+#[partial]
+def Markdown.entity_p_101 (name : String) : Option String :=
+    if String.lt name "prnE" then Markdown.entity_p_99 name else Markdown.entity_p_100 name
+#[partial]
+def Markdown.entity_p_102 (name : String) : Option String :=
+    if String.lt name "primes" then Markdown.entity_p_98 name else Markdown.entity_p_101 name
+#[partial]
+def Markdown.entity_p_103 (name : String) : Option String :=
+    if String.beq name "prnap" then Option.some "⪹" else Option.none
+#[partial]
+def Markdown.entity_p_104 (name : String) : Option String :=
+    if String.beq name "prnsim" then Option.some "⋨" else Option.none
+#[partial]
+def Markdown.entity_p_105 (name : String) : Option String :=
+    if String.lt name "prnsim" then Markdown.entity_p_103 name else Markdown.entity_p_104 name
+#[partial]
+def Markdown.entity_p_106 (name : String) : Option String :=
+    if String.beq name "prod" then Option.some "∏" else Option.none
+#[partial]
+def Markdown.entity_p_107 (name : String) : Option String :=
+    if String.beq name "profalar" then Option.some "⌮" else Option.none
+#[partial]
+def Markdown.entity_p_108 (name : String) : Option String :=
+    if String.lt name "profalar" then Markdown.entity_p_106 name else Markdown.entity_p_107 name
+#[partial]
+def Markdown.entity_p_109 (name : String) : Option String :=
+    if String.lt name "prod" then Markdown.entity_p_105 name else Markdown.entity_p_108 name
+#[partial]
+def Markdown.entity_p_110 (name : String) : Option String :=
+    if String.lt name "prnap" then Markdown.entity_p_102 name else Markdown.entity_p_109 name
+#[partial]
+def Markdown.entity_p_111 (name : String) : Option String :=
+    if String.beq name "profline" then Option.some "⌒" else Option.none
+#[partial]
+def Markdown.entity_p_112 (name : String) : Option String :=
+    if String.beq name "profsurf" then Option.some "⌓" else Option.none
+#[partial]
+def Markdown.entity_p_113 (name : String) : Option String :=
+    if String.lt name "profsurf" then Markdown.entity_p_111 name else Markdown.entity_p_112 name
+#[partial]
+def Markdown.entity_p_114 (name : String) : Option String :=
+    if String.beq name "prop" then Option.some "∝" else Option.none
+#[partial]
+def Markdown.entity_p_115 (name : String) : Option String :=
+    if String.beq name "propto" then Option.some "∝" else Option.none
+#[partial]
+def Markdown.entity_p_116 (name : String) : Option String :=
+    if String.lt name "propto" then Markdown.entity_p_114 name else Markdown.entity_p_115 name
+#[partial]
+def Markdown.entity_p_117 (name : String) : Option String :=
+    if String.lt name "prop" then Markdown.entity_p_113 name else Markdown.entity_p_116 name
+#[partial]
+def Markdown.entity_p_118 (name : String) : Option String :=
+    if String.beq name "prsim" then Option.some "≾" else Option.none
+#[partial]
+def Markdown.entity_p_119 (name : String) : Option String :=
+    if String.beq name "prurel" then Option.some "⊰" else Option.none
+#[partial]
+def Markdown.entity_p_120 (name : String) : Option String :=
+    if String.lt name "prurel" then Markdown.entity_p_118 name else Markdown.entity_p_119 name
+#[partial]
+def Markdown.entity_p_121 (name : String) : Option String :=
+    if String.beq name "pscr" then Option.some "𝓅" else Option.none
+#[partial]
+def Markdown.entity_p_122 (name : String) : Option String :=
+    if String.beq name "psi" then Option.some "ψ" else Option.none
+#[partial]
+def Markdown.entity_p_123 (name : String) : Option String :=
+    if String.beq name "puncsp" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_p_124 (name : String) : Option String :=
+    if String.lt name "puncsp" then Markdown.entity_p_122 name else Markdown.entity_p_123 name
+#[partial]
+def Markdown.entity_p_125 (name : String) : Option String :=
+    if String.lt name "psi" then Markdown.entity_p_121 name else Markdown.entity_p_124 name
+#[partial]
+def Markdown.entity_p_126 (name : String) : Option String :=
+    if String.lt name "pscr" then Markdown.entity_p_120 name else Markdown.entity_p_125 name
+#[partial]
+def Markdown.entity_p_127 (name : String) : Option String :=
+    if String.lt name "prsim" then Markdown.entity_p_117 name else Markdown.entity_p_126 name
+#[partial]
+def Markdown.entity_p_128 (name : String) : Option String :=
+    if String.lt name "profline" then Markdown.entity_p_110 name else Markdown.entity_p_127 name
+#[partial]
+def Markdown.entity_p_129 (name : String) : Option String :=
+    if String.lt name "precsim" then Markdown.entity_p_95 name else Markdown.entity_p_128 name
+#[partial]
+def Markdown.entity_p_130 (name : String) : Option String :=
+    if String.lt name "pm" then Markdown.entity_p_64 name else Markdown.entity_p_129 name
+
+def Markdown.entity_p (name : String) : Option String := Markdown.entity_p_130 name
 
 #[partial]
-def Markdown.entity_q (name : String) : Option String :=
-    if String.beq name "qfr" then Option.some "𝔮"
-    else if String.beq name "qint" then Option.some "⨌"
-    else if String.beq name "qopf" then Option.some "𝕢"
-    else if String.beq name "qprime" then Option.some "⁗"
-    else if String.beq name "qscr" then Option.some "𝓆"
-    else if String.beq name "quaternions" then Option.some "ℍ"
-    else if String.beq name "quatint" then Option.some "⨖"
-    else if String.beq name "quest" then Option.some "?"
-    else if String.beq name "questeq" then Option.some "≟"
-    else if String.beq name "quot" then Option.some "\""
-    else Option.none
+def Markdown.entity_q_0 (name : String) : Option String :=
+    if String.beq name "qfr" then Option.some "𝔮" else Option.none
+#[partial]
+def Markdown.entity_q_1 (name : String) : Option String :=
+    if String.beq name "qint" then Option.some "⨌" else Option.none
+#[partial]
+def Markdown.entity_q_2 (name : String) : Option String :=
+    if String.lt name "qint" then Markdown.entity_q_0 name else Markdown.entity_q_1 name
+#[partial]
+def Markdown.entity_q_3 (name : String) : Option String :=
+    if String.beq name "qopf" then Option.some "𝕢" else Option.none
+#[partial]
+def Markdown.entity_q_4 (name : String) : Option String :=
+    if String.beq name "qprime" then Option.some "⁗" else Option.none
+#[partial]
+def Markdown.entity_q_5 (name : String) : Option String :=
+    if String.beq name "qscr" then Option.some "𝓆" else Option.none
+#[partial]
+def Markdown.entity_q_6 (name : String) : Option String :=
+    if String.lt name "qscr" then Markdown.entity_q_4 name else Markdown.entity_q_5 name
+#[partial]
+def Markdown.entity_q_7 (name : String) : Option String :=
+    if String.lt name "qprime" then Markdown.entity_q_3 name else Markdown.entity_q_6 name
+#[partial]
+def Markdown.entity_q_8 (name : String) : Option String :=
+    if String.lt name "qopf" then Markdown.entity_q_2 name else Markdown.entity_q_7 name
+#[partial]
+def Markdown.entity_q_9 (name : String) : Option String :=
+    if String.beq name "quaternions" then Option.some "ℍ" else Option.none
+#[partial]
+def Markdown.entity_q_10 (name : String) : Option String :=
+    if String.beq name "quatint" then Option.some "⨖" else Option.none
+#[partial]
+def Markdown.entity_q_11 (name : String) : Option String :=
+    if String.lt name "quatint" then Markdown.entity_q_9 name else Markdown.entity_q_10 name
+#[partial]
+def Markdown.entity_q_12 (name : String) : Option String :=
+    if String.beq name "quest" then Option.some "?" else Option.none
+#[partial]
+def Markdown.entity_q_13 (name : String) : Option String :=
+    if String.beq name "questeq" then Option.some "≟" else Option.none
+#[partial]
+def Markdown.entity_q_14 (name : String) : Option String :=
+    if String.beq name "quot" then Option.some "\"" else Option.none
+#[partial]
+def Markdown.entity_q_15 (name : String) : Option String :=
+    if String.lt name "quot" then Markdown.entity_q_13 name else Markdown.entity_q_14 name
+#[partial]
+def Markdown.entity_q_16 (name : String) : Option String :=
+    if String.lt name "questeq" then Markdown.entity_q_12 name else Markdown.entity_q_15 name
+#[partial]
+def Markdown.entity_q_17 (name : String) : Option String :=
+    if String.lt name "quest" then Markdown.entity_q_11 name else Markdown.entity_q_16 name
+#[partial]
+def Markdown.entity_q_18 (name : String) : Option String :=
+    if String.lt name "quaternions" then Markdown.entity_q_8 name else Markdown.entity_q_17 name
+
+def Markdown.entity_q (name : String) : Option String := Markdown.entity_q_18 name
 
 #[partial]
-def Markdown.entity_r (name : String) : Option String :=
-    if String.beq name "rAarr" then Option.some "⇛"
-    else if String.beq name "rArr" then Option.some "⇒"
-    else if String.beq name "rAtail" then Option.some "⤜"
-    else if String.beq name "rBarr" then Option.some "⤏"
-    else if String.beq name "rHar" then Option.some "⥤"
-    else if String.beq name "race" then Option.some "∽̱"
-    else if String.beq name "racute" then Option.some "ŕ"
-    else if String.beq name "radic" then Option.some "√"
-    else if String.beq name "raemptyv" then Option.some "⦳"
-    else if String.beq name "rang" then Option.some "⟩"
-    else if String.beq name "rangd" then Option.some "⦒"
-    else if String.beq name "range" then Option.some "⦥"
-    else if String.beq name "rangle" then Option.some "⟩"
-    else if String.beq name "raquo" then Option.some "»"
-    else if String.beq name "rarr" then Option.some "→"
-    else if String.beq name "rarrap" then Option.some "⥵"
-    else if String.beq name "rarrb" then Option.some "⇥"
-    else if String.beq name "rarrbfs" then Option.some "⤠"
-    else if String.beq name "rarrc" then Option.some "⤳"
-    else if String.beq name "rarrfs" then Option.some "⤞"
-    else if String.beq name "rarrhk" then Option.some "↪"
-    else if String.beq name "rarrlp" then Option.some "↬"
-    else if String.beq name "rarrpl" then Option.some "⥅"
-    else if String.beq name "rarrsim" then Option.some "⥴"
-    else if String.beq name "rarrtl" then Option.some "↣"
-    else if String.beq name "rarrw" then Option.some "↝"
-    else if String.beq name "ratail" then Option.some "⤚"
-    else if String.beq name "ratio" then Option.some "∶"
-    else if String.beq name "rationals" then Option.some "ℚ"
-    else if String.beq name "rbarr" then Option.some "⤍"
-    else if String.beq name "rbbrk" then Option.some "❳"
-    else if String.beq name "rbrace" then Option.some "}"
-    else if String.beq name "rbrack" then Option.some "]"
-    else if String.beq name "rbrke" then Option.some "⦌"
-    else if String.beq name "rbrksld" then Option.some "⦎"
-    else if String.beq name "rbrkslu" then Option.some "⦐"
-    else if String.beq name "rcaron" then Option.some "ř"
-    else if String.beq name "rcedil" then Option.some "ŗ"
-    else if String.beq name "rceil" then Option.some "⌉"
-    else if String.beq name "rcub" then Option.some "}"
-    else if String.beq name "rcy" then Option.some "р"
-    else if String.beq name "rdca" then Option.some "⤷"
-    else if String.beq name "rdldhar" then Option.some "⥩"
-    else if String.beq name "rdquo" then Option.some "”"
-    else if String.beq name "rdquor" then Option.some "”"
-    else if String.beq name "rdsh" then Option.some "↳"
-    else if String.beq name "real" then Option.some "ℜ"
-    else if String.beq name "realine" then Option.some "ℛ"
-    else if String.beq name "realpart" then Option.some "ℜ"
-    else if String.beq name "reals" then Option.some "ℝ"
-    else if String.beq name "rect" then Option.some "▭"
-    else if String.beq name "reg" then Option.some "®"
-    else if String.beq name "rfisht" then Option.some "⥽"
-    else if String.beq name "rfloor" then Option.some "⌋"
-    else if String.beq name "rfr" then Option.some "𝔯"
-    else if String.beq name "rhard" then Option.some "⇁"
-    else if String.beq name "rharu" then Option.some "⇀"
-    else if String.beq name "rharul" then Option.some "⥬"
-    else if String.beq name "rho" then Option.some "ρ"
-    else if String.beq name "rhov" then Option.some "ϱ"
-    else if String.beq name "rightarrow" then Option.some "→"
-    else if String.beq name "rightarrowtail" then Option.some "↣"
-    else if String.beq name "rightharpoondown" then Option.some "⇁"
-    else if String.beq name "rightharpoonup" then Option.some "⇀"
-    else if String.beq name "rightleftarrows" then Option.some "⇄"
-    else if String.beq name "rightleftharpoons" then Option.some "⇌"
-    else if String.beq name "rightrightarrows" then Option.some "⇉"
-    else if String.beq name "rightsquigarrow" then Option.some "↝"
-    else if String.beq name "rightthreetimes" then Option.some "⋌"
-    else if String.beq name "ring" then Option.some "˚"
-    else if String.beq name "risingdotseq" then Option.some "≓"
-    else if String.beq name "rlarr" then Option.some "⇄"
-    else if String.beq name "rlhar" then Option.some "⇌"
-    else if String.beq name "rlm" then Option.some "‏"
-    else if String.beq name "rmoust" then Option.some "⎱"
-    else if String.beq name "rmoustache" then Option.some "⎱"
-    else if String.beq name "rnmid" then Option.some "⫮"
-    else if String.beq name "roang" then Option.some "⟭"
-    else if String.beq name "roarr" then Option.some "⇾"
-    else if String.beq name "robrk" then Option.some "⟧"
-    else if String.beq name "ropar" then Option.some "⦆"
-    else if String.beq name "ropf" then Option.some "𝕣"
-    else if String.beq name "roplus" then Option.some "⨮"
-    else if String.beq name "rotimes" then Option.some "⨵"
-    else if String.beq name "rpar" then Option.some ")"
-    else if String.beq name "rpargt" then Option.some "⦔"
-    else if String.beq name "rppolint" then Option.some "⨒"
-    else if String.beq name "rrarr" then Option.some "⇉"
-    else if String.beq name "rsaquo" then Option.some "›"
-    else if String.beq name "rscr" then Option.some "𝓇"
-    else if String.beq name "rsh" then Option.some "↱"
-    else if String.beq name "rsqb" then Option.some "]"
-    else if String.beq name "rsquo" then Option.some "’"
-    else if String.beq name "rsquor" then Option.some "’"
-    else if String.beq name "rthree" then Option.some "⋌"
-    else if String.beq name "rtimes" then Option.some "⋊"
-    else if String.beq name "rtri" then Option.some "▹"
-    else if String.beq name "rtrie" then Option.some "⊵"
-    else if String.beq name "rtrif" then Option.some "▸"
-    else if String.beq name "rtriltri" then Option.some "⧎"
-    else if String.beq name "ruluhar" then Option.some "⥨"
-    else if String.beq name "rx" then Option.some "℞"
-    else Option.none
+def Markdown.entity_r_0 (name : String) : Option String :=
+    if String.beq name "rAarr" then Option.some "⇛" else Option.none
+#[partial]
+def Markdown.entity_r_1 (name : String) : Option String :=
+    if String.beq name "rArr" then Option.some "⇒" else Option.none
+#[partial]
+def Markdown.entity_r_2 (name : String) : Option String :=
+    if String.beq name "rAtail" then Option.some "⤜" else Option.none
+#[partial]
+def Markdown.entity_r_3 (name : String) : Option String :=
+    if String.lt name "rAtail" then Markdown.entity_r_1 name else Markdown.entity_r_2 name
+#[partial]
+def Markdown.entity_r_4 (name : String) : Option String :=
+    if String.lt name "rArr" then Markdown.entity_r_0 name else Markdown.entity_r_3 name
+#[partial]
+def Markdown.entity_r_5 (name : String) : Option String :=
+    if String.beq name "rBarr" then Option.some "⤏" else Option.none
+#[partial]
+def Markdown.entity_r_6 (name : String) : Option String :=
+    if String.beq name "rHar" then Option.some "⥤" else Option.none
+#[partial]
+def Markdown.entity_r_7 (name : String) : Option String :=
+    if String.beq name "race" then Option.some "∽̱" else Option.none
+#[partial]
+def Markdown.entity_r_8 (name : String) : Option String :=
+    if String.lt name "race" then Markdown.entity_r_6 name else Markdown.entity_r_7 name
+#[partial]
+def Markdown.entity_r_9 (name : String) : Option String :=
+    if String.lt name "rHar" then Markdown.entity_r_5 name else Markdown.entity_r_8 name
+#[partial]
+def Markdown.entity_r_10 (name : String) : Option String :=
+    if String.lt name "rBarr" then Markdown.entity_r_4 name else Markdown.entity_r_9 name
+#[partial]
+def Markdown.entity_r_11 (name : String) : Option String :=
+    if String.beq name "racute" then Option.some "ŕ" else Option.none
+#[partial]
+def Markdown.entity_r_12 (name : String) : Option String :=
+    if String.beq name "radic" then Option.some "√" else Option.none
+#[partial]
+def Markdown.entity_r_13 (name : String) : Option String :=
+    if String.beq name "raemptyv" then Option.some "⦳" else Option.none
+#[partial]
+def Markdown.entity_r_14 (name : String) : Option String :=
+    if String.lt name "raemptyv" then Markdown.entity_r_12 name else Markdown.entity_r_13 name
+#[partial]
+def Markdown.entity_r_15 (name : String) : Option String :=
+    if String.lt name "radic" then Markdown.entity_r_11 name else Markdown.entity_r_14 name
+#[partial]
+def Markdown.entity_r_16 (name : String) : Option String :=
+    if String.beq name "rang" then Option.some "⟩" else Option.none
+#[partial]
+def Markdown.entity_r_17 (name : String) : Option String :=
+    if String.beq name "rangd" then Option.some "⦒" else Option.none
+#[partial]
+def Markdown.entity_r_18 (name : String) : Option String :=
+    if String.beq name "range" then Option.some "⦥" else Option.none
+#[partial]
+def Markdown.entity_r_19 (name : String) : Option String :=
+    if String.lt name "range" then Markdown.entity_r_17 name else Markdown.entity_r_18 name
+#[partial]
+def Markdown.entity_r_20 (name : String) : Option String :=
+    if String.lt name "rangd" then Markdown.entity_r_16 name else Markdown.entity_r_19 name
+#[partial]
+def Markdown.entity_r_21 (name : String) : Option String :=
+    if String.lt name "rang" then Markdown.entity_r_15 name else Markdown.entity_r_20 name
+#[partial]
+def Markdown.entity_r_22 (name : String) : Option String :=
+    if String.lt name "racute" then Markdown.entity_r_10 name else Markdown.entity_r_21 name
+#[partial]
+def Markdown.entity_r_23 (name : String) : Option String :=
+    if String.beq name "rangle" then Option.some "⟩" else Option.none
+#[partial]
+def Markdown.entity_r_24 (name : String) : Option String :=
+    if String.beq name "raquo" then Option.some "»" else Option.none
+#[partial]
+def Markdown.entity_r_25 (name : String) : Option String :=
+    if String.beq name "rarr" then Option.some "→" else Option.none
+#[partial]
+def Markdown.entity_r_26 (name : String) : Option String :=
+    if String.lt name "rarr" then Markdown.entity_r_24 name else Markdown.entity_r_25 name
+#[partial]
+def Markdown.entity_r_27 (name : String) : Option String :=
+    if String.lt name "raquo" then Markdown.entity_r_23 name else Markdown.entity_r_26 name
+#[partial]
+def Markdown.entity_r_28 (name : String) : Option String :=
+    if String.beq name "rarrap" then Option.some "⥵" else Option.none
+#[partial]
+def Markdown.entity_r_29 (name : String) : Option String :=
+    if String.beq name "rarrb" then Option.some "⇥" else Option.none
+#[partial]
+def Markdown.entity_r_30 (name : String) : Option String :=
+    if String.beq name "rarrbfs" then Option.some "⤠" else Option.none
+#[partial]
+def Markdown.entity_r_31 (name : String) : Option String :=
+    if String.lt name "rarrbfs" then Markdown.entity_r_29 name else Markdown.entity_r_30 name
+#[partial]
+def Markdown.entity_r_32 (name : String) : Option String :=
+    if String.lt name "rarrb" then Markdown.entity_r_28 name else Markdown.entity_r_31 name
+#[partial]
+def Markdown.entity_r_33 (name : String) : Option String :=
+    if String.lt name "rarrap" then Markdown.entity_r_27 name else Markdown.entity_r_32 name
+#[partial]
+def Markdown.entity_r_34 (name : String) : Option String :=
+    if String.beq name "rarrc" then Option.some "⤳" else Option.none
+#[partial]
+def Markdown.entity_r_35 (name : String) : Option String :=
+    if String.beq name "rarrfs" then Option.some "⤞" else Option.none
+#[partial]
+def Markdown.entity_r_36 (name : String) : Option String :=
+    if String.beq name "rarrhk" then Option.some "↪" else Option.none
+#[partial]
+def Markdown.entity_r_37 (name : String) : Option String :=
+    if String.lt name "rarrhk" then Markdown.entity_r_35 name else Markdown.entity_r_36 name
+#[partial]
+def Markdown.entity_r_38 (name : String) : Option String :=
+    if String.lt name "rarrfs" then Markdown.entity_r_34 name else Markdown.entity_r_37 name
+#[partial]
+def Markdown.entity_r_39 (name : String) : Option String :=
+    if String.beq name "rarrlp" then Option.some "↬" else Option.none
+#[partial]
+def Markdown.entity_r_40 (name : String) : Option String :=
+    if String.beq name "rarrpl" then Option.some "⥅" else Option.none
+#[partial]
+def Markdown.entity_r_41 (name : String) : Option String :=
+    if String.lt name "rarrpl" then Markdown.entity_r_39 name else Markdown.entity_r_40 name
+#[partial]
+def Markdown.entity_r_42 (name : String) : Option String :=
+    if String.beq name "rarrsim" then Option.some "⥴" else Option.none
+#[partial]
+def Markdown.entity_r_43 (name : String) : Option String :=
+    if String.beq name "rarrtl" then Option.some "↣" else Option.none
+#[partial]
+def Markdown.entity_r_44 (name : String) : Option String :=
+    if String.lt name "rarrtl" then Markdown.entity_r_42 name else Markdown.entity_r_43 name
+#[partial]
+def Markdown.entity_r_45 (name : String) : Option String :=
+    if String.lt name "rarrsim" then Markdown.entity_r_41 name else Markdown.entity_r_44 name
+#[partial]
+def Markdown.entity_r_46 (name : String) : Option String :=
+    if String.lt name "rarrlp" then Markdown.entity_r_38 name else Markdown.entity_r_45 name
+#[partial]
+def Markdown.entity_r_47 (name : String) : Option String :=
+    if String.lt name "rarrc" then Markdown.entity_r_33 name else Markdown.entity_r_46 name
+#[partial]
+def Markdown.entity_r_48 (name : String) : Option String :=
+    if String.lt name "rangle" then Markdown.entity_r_22 name else Markdown.entity_r_47 name
+#[partial]
+def Markdown.entity_r_49 (name : String) : Option String :=
+    if String.beq name "rarrw" then Option.some "↝" else Option.none
+#[partial]
+def Markdown.entity_r_50 (name : String) : Option String :=
+    if String.beq name "ratail" then Option.some "⤚" else Option.none
+#[partial]
+def Markdown.entity_r_51 (name : String) : Option String :=
+    if String.beq name "ratio" then Option.some "∶" else Option.none
+#[partial]
+def Markdown.entity_r_52 (name : String) : Option String :=
+    if String.lt name "ratio" then Markdown.entity_r_50 name else Markdown.entity_r_51 name
+#[partial]
+def Markdown.entity_r_53 (name : String) : Option String :=
+    if String.lt name "ratail" then Markdown.entity_r_49 name else Markdown.entity_r_52 name
+#[partial]
+def Markdown.entity_r_54 (name : String) : Option String :=
+    if String.beq name "rationals" then Option.some "ℚ" else Option.none
+#[partial]
+def Markdown.entity_r_55 (name : String) : Option String :=
+    if String.beq name "rbarr" then Option.some "⤍" else Option.none
+#[partial]
+def Markdown.entity_r_56 (name : String) : Option String :=
+    if String.beq name "rbbrk" then Option.some "❳" else Option.none
+#[partial]
+def Markdown.entity_r_57 (name : String) : Option String :=
+    if String.lt name "rbbrk" then Markdown.entity_r_55 name else Markdown.entity_r_56 name
+#[partial]
+def Markdown.entity_r_58 (name : String) : Option String :=
+    if String.lt name "rbarr" then Markdown.entity_r_54 name else Markdown.entity_r_57 name
+#[partial]
+def Markdown.entity_r_59 (name : String) : Option String :=
+    if String.lt name "rationals" then Markdown.entity_r_53 name else Markdown.entity_r_58 name
+#[partial]
+def Markdown.entity_r_60 (name : String) : Option String :=
+    if String.beq name "rbrace" then Option.some "}" else Option.none
+#[partial]
+def Markdown.entity_r_61 (name : String) : Option String :=
+    if String.beq name "rbrack" then Option.some "]" else Option.none
+#[partial]
+def Markdown.entity_r_62 (name : String) : Option String :=
+    if String.beq name "rbrke" then Option.some "⦌" else Option.none
+#[partial]
+def Markdown.entity_r_63 (name : String) : Option String :=
+    if String.lt name "rbrke" then Markdown.entity_r_61 name else Markdown.entity_r_62 name
+#[partial]
+def Markdown.entity_r_64 (name : String) : Option String :=
+    if String.lt name "rbrack" then Markdown.entity_r_60 name else Markdown.entity_r_63 name
+#[partial]
+def Markdown.entity_r_65 (name : String) : Option String :=
+    if String.beq name "rbrksld" then Option.some "⦎" else Option.none
+#[partial]
+def Markdown.entity_r_66 (name : String) : Option String :=
+    if String.beq name "rbrkslu" then Option.some "⦐" else Option.none
+#[partial]
+def Markdown.entity_r_67 (name : String) : Option String :=
+    if String.lt name "rbrkslu" then Markdown.entity_r_65 name else Markdown.entity_r_66 name
+#[partial]
+def Markdown.entity_r_68 (name : String) : Option String :=
+    if String.beq name "rcaron" then Option.some "ř" else Option.none
+#[partial]
+def Markdown.entity_r_69 (name : String) : Option String :=
+    if String.beq name "rcedil" then Option.some "ŗ" else Option.none
+#[partial]
+def Markdown.entity_r_70 (name : String) : Option String :=
+    if String.lt name "rcedil" then Markdown.entity_r_68 name else Markdown.entity_r_69 name
+#[partial]
+def Markdown.entity_r_71 (name : String) : Option String :=
+    if String.lt name "rcaron" then Markdown.entity_r_67 name else Markdown.entity_r_70 name
+#[partial]
+def Markdown.entity_r_72 (name : String) : Option String :=
+    if String.lt name "rbrksld" then Markdown.entity_r_64 name else Markdown.entity_r_71 name
+#[partial]
+def Markdown.entity_r_73 (name : String) : Option String :=
+    if String.lt name "rbrace" then Markdown.entity_r_59 name else Markdown.entity_r_72 name
+#[partial]
+def Markdown.entity_r_74 (name : String) : Option String :=
+    if String.beq name "rceil" then Option.some "⌉" else Option.none
+#[partial]
+def Markdown.entity_r_75 (name : String) : Option String :=
+    if String.beq name "rcub" then Option.some "}" else Option.none
+#[partial]
+def Markdown.entity_r_76 (name : String) : Option String :=
+    if String.beq name "rcy" then Option.some "р" else Option.none
+#[partial]
+def Markdown.entity_r_77 (name : String) : Option String :=
+    if String.lt name "rcy" then Markdown.entity_r_75 name else Markdown.entity_r_76 name
+#[partial]
+def Markdown.entity_r_78 (name : String) : Option String :=
+    if String.lt name "rcub" then Markdown.entity_r_74 name else Markdown.entity_r_77 name
+#[partial]
+def Markdown.entity_r_79 (name : String) : Option String :=
+    if String.beq name "rdca" then Option.some "⤷" else Option.none
+#[partial]
+def Markdown.entity_r_80 (name : String) : Option String :=
+    if String.beq name "rdldhar" then Option.some "⥩" else Option.none
+#[partial]
+def Markdown.entity_r_81 (name : String) : Option String :=
+    if String.beq name "rdquo" then Option.some "”" else Option.none
+#[partial]
+def Markdown.entity_r_82 (name : String) : Option String :=
+    if String.lt name "rdquo" then Markdown.entity_r_80 name else Markdown.entity_r_81 name
+#[partial]
+def Markdown.entity_r_83 (name : String) : Option String :=
+    if String.lt name "rdldhar" then Markdown.entity_r_79 name else Markdown.entity_r_82 name
+#[partial]
+def Markdown.entity_r_84 (name : String) : Option String :=
+    if String.lt name "rdca" then Markdown.entity_r_78 name else Markdown.entity_r_83 name
+#[partial]
+def Markdown.entity_r_85 (name : String) : Option String :=
+    if String.beq name "rdquor" then Option.some "”" else Option.none
+#[partial]
+def Markdown.entity_r_86 (name : String) : Option String :=
+    if String.beq name "rdsh" then Option.some "↳" else Option.none
+#[partial]
+def Markdown.entity_r_87 (name : String) : Option String :=
+    if String.beq name "real" then Option.some "ℜ" else Option.none
+#[partial]
+def Markdown.entity_r_88 (name : String) : Option String :=
+    if String.lt name "real" then Markdown.entity_r_86 name else Markdown.entity_r_87 name
+#[partial]
+def Markdown.entity_r_89 (name : String) : Option String :=
+    if String.lt name "rdsh" then Markdown.entity_r_85 name else Markdown.entity_r_88 name
+#[partial]
+def Markdown.entity_r_90 (name : String) : Option String :=
+    if String.beq name "realine" then Option.some "ℛ" else Option.none
+#[partial]
+def Markdown.entity_r_91 (name : String) : Option String :=
+    if String.beq name "realpart" then Option.some "ℜ" else Option.none
+#[partial]
+def Markdown.entity_r_92 (name : String) : Option String :=
+    if String.lt name "realpart" then Markdown.entity_r_90 name else Markdown.entity_r_91 name
+#[partial]
+def Markdown.entity_r_93 (name : String) : Option String :=
+    if String.beq name "reals" then Option.some "ℝ" else Option.none
+#[partial]
+def Markdown.entity_r_94 (name : String) : Option String :=
+    if String.beq name "rect" then Option.some "▭" else Option.none
+#[partial]
+def Markdown.entity_r_95 (name : String) : Option String :=
+    if String.lt name "rect" then Markdown.entity_r_93 name else Markdown.entity_r_94 name
+#[partial]
+def Markdown.entity_r_96 (name : String) : Option String :=
+    if String.lt name "reals" then Markdown.entity_r_92 name else Markdown.entity_r_95 name
+#[partial]
+def Markdown.entity_r_97 (name : String) : Option String :=
+    if String.lt name "realine" then Markdown.entity_r_89 name else Markdown.entity_r_96 name
+#[partial]
+def Markdown.entity_r_98 (name : String) : Option String :=
+    if String.lt name "rdquor" then Markdown.entity_r_84 name else Markdown.entity_r_97 name
+#[partial]
+def Markdown.entity_r_99 (name : String) : Option String :=
+    if String.lt name "rceil" then Markdown.entity_r_73 name else Markdown.entity_r_98 name
+#[partial]
+def Markdown.entity_r_100 (name : String) : Option String :=
+    if String.lt name "rarrw" then Markdown.entity_r_48 name else Markdown.entity_r_99 name
+#[partial]
+def Markdown.entity_r_101 (name : String) : Option String :=
+    if String.beq name "reg" then Option.some "®" else Option.none
+#[partial]
+def Markdown.entity_r_102 (name : String) : Option String :=
+    if String.beq name "rfisht" then Option.some "⥽" else Option.none
+#[partial]
+def Markdown.entity_r_103 (name : String) : Option String :=
+    if String.beq name "rfloor" then Option.some "⌋" else Option.none
+#[partial]
+def Markdown.entity_r_104 (name : String) : Option String :=
+    if String.lt name "rfloor" then Markdown.entity_r_102 name else Markdown.entity_r_103 name
+#[partial]
+def Markdown.entity_r_105 (name : String) : Option String :=
+    if String.lt name "rfisht" then Markdown.entity_r_101 name else Markdown.entity_r_104 name
+#[partial]
+def Markdown.entity_r_106 (name : String) : Option String :=
+    if String.beq name "rfr" then Option.some "𝔯" else Option.none
+#[partial]
+def Markdown.entity_r_107 (name : String) : Option String :=
+    if String.beq name "rhard" then Option.some "⇁" else Option.none
+#[partial]
+def Markdown.entity_r_108 (name : String) : Option String :=
+    if String.beq name "rharu" then Option.some "⇀" else Option.none
+#[partial]
+def Markdown.entity_r_109 (name : String) : Option String :=
+    if String.lt name "rharu" then Markdown.entity_r_107 name else Markdown.entity_r_108 name
+#[partial]
+def Markdown.entity_r_110 (name : String) : Option String :=
+    if String.lt name "rhard" then Markdown.entity_r_106 name else Markdown.entity_r_109 name
+#[partial]
+def Markdown.entity_r_111 (name : String) : Option String :=
+    if String.lt name "rfr" then Markdown.entity_r_105 name else Markdown.entity_r_110 name
+#[partial]
+def Markdown.entity_r_112 (name : String) : Option String :=
+    if String.beq name "rharul" then Option.some "⥬" else Option.none
+#[partial]
+def Markdown.entity_r_113 (name : String) : Option String :=
+    if String.beq name "rho" then Option.some "ρ" else Option.none
+#[partial]
+def Markdown.entity_r_114 (name : String) : Option String :=
+    if String.beq name "rhov" then Option.some "ϱ" else Option.none
+#[partial]
+def Markdown.entity_r_115 (name : String) : Option String :=
+    if String.lt name "rhov" then Markdown.entity_r_113 name else Markdown.entity_r_114 name
+#[partial]
+def Markdown.entity_r_116 (name : String) : Option String :=
+    if String.lt name "rho" then Markdown.entity_r_112 name else Markdown.entity_r_115 name
+#[partial]
+def Markdown.entity_r_117 (name : String) : Option String :=
+    if String.beq name "rightarrow" then Option.some "→" else Option.none
+#[partial]
+def Markdown.entity_r_118 (name : String) : Option String :=
+    if String.beq name "rightarrowtail" then Option.some "↣" else Option.none
+#[partial]
+def Markdown.entity_r_119 (name : String) : Option String :=
+    if String.beq name "rightharpoondown" then Option.some "⇁" else Option.none
+#[partial]
+def Markdown.entity_r_120 (name : String) : Option String :=
+    if String.lt name "rightharpoondown" then Markdown.entity_r_118 name else Markdown.entity_r_119 name
+#[partial]
+def Markdown.entity_r_121 (name : String) : Option String :=
+    if String.lt name "rightarrowtail" then Markdown.entity_r_117 name else Markdown.entity_r_120 name
+#[partial]
+def Markdown.entity_r_122 (name : String) : Option String :=
+    if String.lt name "rightarrow" then Markdown.entity_r_116 name else Markdown.entity_r_121 name
+#[partial]
+def Markdown.entity_r_123 (name : String) : Option String :=
+    if String.lt name "rharul" then Markdown.entity_r_111 name else Markdown.entity_r_122 name
+#[partial]
+def Markdown.entity_r_124 (name : String) : Option String :=
+    if String.beq name "rightharpoonup" then Option.some "⇀" else Option.none
+#[partial]
+def Markdown.entity_r_125 (name : String) : Option String :=
+    if String.beq name "rightleftarrows" then Option.some "⇄" else Option.none
+#[partial]
+def Markdown.entity_r_126 (name : String) : Option String :=
+    if String.beq name "rightleftharpoons" then Option.some "⇌" else Option.none
+#[partial]
+def Markdown.entity_r_127 (name : String) : Option String :=
+    if String.lt name "rightleftharpoons" then Markdown.entity_r_125 name else Markdown.entity_r_126 name
+#[partial]
+def Markdown.entity_r_128 (name : String) : Option String :=
+    if String.lt name "rightleftarrows" then Markdown.entity_r_124 name else Markdown.entity_r_127 name
+#[partial]
+def Markdown.entity_r_129 (name : String) : Option String :=
+    if String.beq name "rightrightarrows" then Option.some "⇉" else Option.none
+#[partial]
+def Markdown.entity_r_130 (name : String) : Option String :=
+    if String.beq name "rightsquigarrow" then Option.some "↝" else Option.none
+#[partial]
+def Markdown.entity_r_131 (name : String) : Option String :=
+    if String.beq name "rightthreetimes" then Option.some "⋌" else Option.none
+#[partial]
+def Markdown.entity_r_132 (name : String) : Option String :=
+    if String.lt name "rightthreetimes" then Markdown.entity_r_130 name else Markdown.entity_r_131 name
+#[partial]
+def Markdown.entity_r_133 (name : String) : Option String :=
+    if String.lt name "rightsquigarrow" then Markdown.entity_r_129 name else Markdown.entity_r_132 name
+#[partial]
+def Markdown.entity_r_134 (name : String) : Option String :=
+    if String.lt name "rightrightarrows" then Markdown.entity_r_128 name else Markdown.entity_r_133 name
+#[partial]
+def Markdown.entity_r_135 (name : String) : Option String :=
+    if String.beq name "ring" then Option.some "˚" else Option.none
+#[partial]
+def Markdown.entity_r_136 (name : String) : Option String :=
+    if String.beq name "risingdotseq" then Option.some "≓" else Option.none
+#[partial]
+def Markdown.entity_r_137 (name : String) : Option String :=
+    if String.beq name "rlarr" then Option.some "⇄" else Option.none
+#[partial]
+def Markdown.entity_r_138 (name : String) : Option String :=
+    if String.lt name "rlarr" then Markdown.entity_r_136 name else Markdown.entity_r_137 name
+#[partial]
+def Markdown.entity_r_139 (name : String) : Option String :=
+    if String.lt name "risingdotseq" then Markdown.entity_r_135 name else Markdown.entity_r_138 name
+#[partial]
+def Markdown.entity_r_140 (name : String) : Option String :=
+    if String.beq name "rlhar" then Option.some "⇌" else Option.none
+#[partial]
+def Markdown.entity_r_141 (name : String) : Option String :=
+    if String.beq name "rlm" then Option.some "‏" else Option.none
+#[partial]
+def Markdown.entity_r_142 (name : String) : Option String :=
+    if String.lt name "rlm" then Markdown.entity_r_140 name else Markdown.entity_r_141 name
+#[partial]
+def Markdown.entity_r_143 (name : String) : Option String :=
+    if String.beq name "rmoust" then Option.some "⎱" else Option.none
+#[partial]
+def Markdown.entity_r_144 (name : String) : Option String :=
+    if String.beq name "rmoustache" then Option.some "⎱" else Option.none
+#[partial]
+def Markdown.entity_r_145 (name : String) : Option String :=
+    if String.lt name "rmoustache" then Markdown.entity_r_143 name else Markdown.entity_r_144 name
+#[partial]
+def Markdown.entity_r_146 (name : String) : Option String :=
+    if String.lt name "rmoust" then Markdown.entity_r_142 name else Markdown.entity_r_145 name
+#[partial]
+def Markdown.entity_r_147 (name : String) : Option String :=
+    if String.lt name "rlhar" then Markdown.entity_r_139 name else Markdown.entity_r_146 name
+#[partial]
+def Markdown.entity_r_148 (name : String) : Option String :=
+    if String.lt name "ring" then Markdown.entity_r_134 name else Markdown.entity_r_147 name
+#[partial]
+def Markdown.entity_r_149 (name : String) : Option String :=
+    if String.lt name "rightharpoonup" then Markdown.entity_r_123 name else Markdown.entity_r_148 name
+#[partial]
+def Markdown.entity_r_150 (name : String) : Option String :=
+    if String.beq name "rnmid" then Option.some "⫮" else Option.none
+#[partial]
+def Markdown.entity_r_151 (name : String) : Option String :=
+    if String.beq name "roang" then Option.some "⟭" else Option.none
+#[partial]
+def Markdown.entity_r_152 (name : String) : Option String :=
+    if String.beq name "roarr" then Option.some "⇾" else Option.none
+#[partial]
+def Markdown.entity_r_153 (name : String) : Option String :=
+    if String.lt name "roarr" then Markdown.entity_r_151 name else Markdown.entity_r_152 name
+#[partial]
+def Markdown.entity_r_154 (name : String) : Option String :=
+    if String.lt name "roang" then Markdown.entity_r_150 name else Markdown.entity_r_153 name
+#[partial]
+def Markdown.entity_r_155 (name : String) : Option String :=
+    if String.beq name "robrk" then Option.some "⟧" else Option.none
+#[partial]
+def Markdown.entity_r_156 (name : String) : Option String :=
+    if String.beq name "ropar" then Option.some "⦆" else Option.none
+#[partial]
+def Markdown.entity_r_157 (name : String) : Option String :=
+    if String.beq name "ropf" then Option.some "𝕣" else Option.none
+#[partial]
+def Markdown.entity_r_158 (name : String) : Option String :=
+    if String.lt name "ropf" then Markdown.entity_r_156 name else Markdown.entity_r_157 name
+#[partial]
+def Markdown.entity_r_159 (name : String) : Option String :=
+    if String.lt name "ropar" then Markdown.entity_r_155 name else Markdown.entity_r_158 name
+#[partial]
+def Markdown.entity_r_160 (name : String) : Option String :=
+    if String.lt name "robrk" then Markdown.entity_r_154 name else Markdown.entity_r_159 name
+#[partial]
+def Markdown.entity_r_161 (name : String) : Option String :=
+    if String.beq name "roplus" then Option.some "⨮" else Option.none
+#[partial]
+def Markdown.entity_r_162 (name : String) : Option String :=
+    if String.beq name "rotimes" then Option.some "⨵" else Option.none
+#[partial]
+def Markdown.entity_r_163 (name : String) : Option String :=
+    if String.beq name "rpar" then Option.some ")" else Option.none
+#[partial]
+def Markdown.entity_r_164 (name : String) : Option String :=
+    if String.lt name "rpar" then Markdown.entity_r_162 name else Markdown.entity_r_163 name
+#[partial]
+def Markdown.entity_r_165 (name : String) : Option String :=
+    if String.lt name "rotimes" then Markdown.entity_r_161 name else Markdown.entity_r_164 name
+#[partial]
+def Markdown.entity_r_166 (name : String) : Option String :=
+    if String.beq name "rpargt" then Option.some "⦔" else Option.none
+#[partial]
+def Markdown.entity_r_167 (name : String) : Option String :=
+    if String.beq name "rppolint" then Option.some "⨒" else Option.none
+#[partial]
+def Markdown.entity_r_168 (name : String) : Option String :=
+    if String.lt name "rppolint" then Markdown.entity_r_166 name else Markdown.entity_r_167 name
+#[partial]
+def Markdown.entity_r_169 (name : String) : Option String :=
+    if String.beq name "rrarr" then Option.some "⇉" else Option.none
+#[partial]
+def Markdown.entity_r_170 (name : String) : Option String :=
+    if String.beq name "rsaquo" then Option.some "›" else Option.none
+#[partial]
+def Markdown.entity_r_171 (name : String) : Option String :=
+    if String.lt name "rsaquo" then Markdown.entity_r_169 name else Markdown.entity_r_170 name
+#[partial]
+def Markdown.entity_r_172 (name : String) : Option String :=
+    if String.lt name "rrarr" then Markdown.entity_r_168 name else Markdown.entity_r_171 name
+#[partial]
+def Markdown.entity_r_173 (name : String) : Option String :=
+    if String.lt name "rpargt" then Markdown.entity_r_165 name else Markdown.entity_r_172 name
+#[partial]
+def Markdown.entity_r_174 (name : String) : Option String :=
+    if String.lt name "roplus" then Markdown.entity_r_160 name else Markdown.entity_r_173 name
+#[partial]
+def Markdown.entity_r_175 (name : String) : Option String :=
+    if String.beq name "rscr" then Option.some "𝓇" else Option.none
+#[partial]
+def Markdown.entity_r_176 (name : String) : Option String :=
+    if String.beq name "rsh" then Option.some "↱" else Option.none
+#[partial]
+def Markdown.entity_r_177 (name : String) : Option String :=
+    if String.beq name "rsqb" then Option.some "]" else Option.none
+#[partial]
+def Markdown.entity_r_178 (name : String) : Option String :=
+    if String.lt name "rsqb" then Markdown.entity_r_176 name else Markdown.entity_r_177 name
+#[partial]
+def Markdown.entity_r_179 (name : String) : Option String :=
+    if String.lt name "rsh" then Markdown.entity_r_175 name else Markdown.entity_r_178 name
+#[partial]
+def Markdown.entity_r_180 (name : String) : Option String :=
+    if String.beq name "rsquo" then Option.some "’" else Option.none
+#[partial]
+def Markdown.entity_r_181 (name : String) : Option String :=
+    if String.beq name "rsquor" then Option.some "’" else Option.none
+#[partial]
+def Markdown.entity_r_182 (name : String) : Option String :=
+    if String.beq name "rthree" then Option.some "⋌" else Option.none
+#[partial]
+def Markdown.entity_r_183 (name : String) : Option String :=
+    if String.lt name "rthree" then Markdown.entity_r_181 name else Markdown.entity_r_182 name
+#[partial]
+def Markdown.entity_r_184 (name : String) : Option String :=
+    if String.lt name "rsquor" then Markdown.entity_r_180 name else Markdown.entity_r_183 name
+#[partial]
+def Markdown.entity_r_185 (name : String) : Option String :=
+    if String.lt name "rsquo" then Markdown.entity_r_179 name else Markdown.entity_r_184 name
+#[partial]
+def Markdown.entity_r_186 (name : String) : Option String :=
+    if String.beq name "rtimes" then Option.some "⋊" else Option.none
+#[partial]
+def Markdown.entity_r_187 (name : String) : Option String :=
+    if String.beq name "rtri" then Option.some "▹" else Option.none
+#[partial]
+def Markdown.entity_r_188 (name : String) : Option String :=
+    if String.beq name "rtrie" then Option.some "⊵" else Option.none
+#[partial]
+def Markdown.entity_r_189 (name : String) : Option String :=
+    if String.lt name "rtrie" then Markdown.entity_r_187 name else Markdown.entity_r_188 name
+#[partial]
+def Markdown.entity_r_190 (name : String) : Option String :=
+    if String.lt name "rtri" then Markdown.entity_r_186 name else Markdown.entity_r_189 name
+#[partial]
+def Markdown.entity_r_191 (name : String) : Option String :=
+    if String.beq name "rtrif" then Option.some "▸" else Option.none
+#[partial]
+def Markdown.entity_r_192 (name : String) : Option String :=
+    if String.beq name "rtriltri" then Option.some "⧎" else Option.none
+#[partial]
+def Markdown.entity_r_193 (name : String) : Option String :=
+    if String.lt name "rtriltri" then Markdown.entity_r_191 name else Markdown.entity_r_192 name
+#[partial]
+def Markdown.entity_r_194 (name : String) : Option String :=
+    if String.beq name "ruluhar" then Option.some "⥨" else Option.none
+#[partial]
+def Markdown.entity_r_195 (name : String) : Option String :=
+    if String.beq name "rx" then Option.some "℞" else Option.none
+#[partial]
+def Markdown.entity_r_196 (name : String) : Option String :=
+    if String.lt name "rx" then Markdown.entity_r_194 name else Markdown.entity_r_195 name
+#[partial]
+def Markdown.entity_r_197 (name : String) : Option String :=
+    if String.lt name "ruluhar" then Markdown.entity_r_193 name else Markdown.entity_r_196 name
+#[partial]
+def Markdown.entity_r_198 (name : String) : Option String :=
+    if String.lt name "rtrif" then Markdown.entity_r_190 name else Markdown.entity_r_197 name
+#[partial]
+def Markdown.entity_r_199 (name : String) : Option String :=
+    if String.lt name "rtimes" then Markdown.entity_r_185 name else Markdown.entity_r_198 name
+#[partial]
+def Markdown.entity_r_200 (name : String) : Option String :=
+    if String.lt name "rscr" then Markdown.entity_r_174 name else Markdown.entity_r_199 name
+#[partial]
+def Markdown.entity_r_201 (name : String) : Option String :=
+    if String.lt name "rnmid" then Markdown.entity_r_149 name else Markdown.entity_r_200 name
+#[partial]
+def Markdown.entity_r_202 (name : String) : Option String :=
+    if String.lt name "reg" then Markdown.entity_r_100 name else Markdown.entity_r_201 name
+
+def Markdown.entity_r (name : String) : Option String := Markdown.entity_r_202 name
 
 #[partial]
-def Markdown.entity_s (name : String) : Option String :=
-    if String.beq name "sacute" then Option.some "ś"
-    else if String.beq name "sbquo" then Option.some "‚"
-    else if String.beq name "sc" then Option.some "≻"
-    else if String.beq name "scE" then Option.some "⪴"
-    else if String.beq name "scap" then Option.some "⪸"
-    else if String.beq name "scaron" then Option.some "š"
-    else if String.beq name "sccue" then Option.some "≽"
-    else if String.beq name "sce" then Option.some "⪰"
-    else if String.beq name "scedil" then Option.some "ş"
-    else if String.beq name "scirc" then Option.some "ŝ"
-    else if String.beq name "scnE" then Option.some "⪶"
-    else if String.beq name "scnap" then Option.some "⪺"
-    else if String.beq name "scnsim" then Option.some "⋩"
-    else if String.beq name "scpolint" then Option.some "⨓"
-    else if String.beq name "scsim" then Option.some "≿"
-    else if String.beq name "scy" then Option.some "с"
-    else if String.beq name "sdot" then Option.some "⋅"
-    else if String.beq name "sdotb" then Option.some "⊡"
-    else if String.beq name "sdote" then Option.some "⩦"
-    else if String.beq name "seArr" then Option.some "⇘"
-    else if String.beq name "searhk" then Option.some "⤥"
-    else if String.beq name "searr" then Option.some "↘"
-    else if String.beq name "searrow" then Option.some "↘"
-    else if String.beq name "sect" then Option.some "§"
-    else if String.beq name "semi" then Option.some ";"
-    else if String.beq name "seswar" then Option.some "⤩"
-    else if String.beq name "setminus" then Option.some "∖"
-    else if String.beq name "setmn" then Option.some "∖"
-    else if String.beq name "sext" then Option.some "✶"
-    else if String.beq name "sfr" then Option.some "𝔰"
-    else if String.beq name "sfrown" then Option.some "⌢"
-    else if String.beq name "sharp" then Option.some "♯"
-    else if String.beq name "shchcy" then Option.some "щ"
-    else if String.beq name "shcy" then Option.some "ш"
-    else if String.beq name "shortmid" then Option.some "∣"
-    else if String.beq name "shortparallel" then Option.some "∥"
-    else if String.beq name "shy" then Option.some "­"
-    else if String.beq name "sigma" then Option.some "σ"
-    else if String.beq name "sigmaf" then Option.some "ς"
-    else if String.beq name "sigmav" then Option.some "ς"
-    else if String.beq name "sim" then Option.some "∼"
-    else if String.beq name "simdot" then Option.some "⩪"
-    else if String.beq name "sime" then Option.some "≃"
-    else if String.beq name "simeq" then Option.some "≃"
-    else if String.beq name "simg" then Option.some "⪞"
-    else if String.beq name "simgE" then Option.some "⪠"
-    else if String.beq name "siml" then Option.some "⪝"
-    else if String.beq name "simlE" then Option.some "⪟"
-    else if String.beq name "simne" then Option.some "≆"
-    else if String.beq name "simplus" then Option.some "⨤"
-    else if String.beq name "simrarr" then Option.some "⥲"
-    else if String.beq name "slarr" then Option.some "←"
-    else if String.beq name "smallsetminus" then Option.some "∖"
-    else if String.beq name "smashp" then Option.some "⨳"
-    else if String.beq name "smeparsl" then Option.some "⧤"
-    else if String.beq name "smid" then Option.some "∣"
-    else if String.beq name "smile" then Option.some "⌣"
-    else if String.beq name "smt" then Option.some "⪪"
-    else if String.beq name "smte" then Option.some "⪬"
-    else if String.beq name "smtes" then Option.some "⪬︀"
-    else if String.beq name "softcy" then Option.some "ь"
-    else if String.beq name "sol" then Option.some "/"
-    else if String.beq name "solb" then Option.some "⧄"
-    else if String.beq name "solbar" then Option.some "⌿"
-    else if String.beq name "sopf" then Option.some "𝕤"
-    else if String.beq name "spades" then Option.some "♠"
-    else if String.beq name "spadesuit" then Option.some "♠"
-    else if String.beq name "spar" then Option.some "∥"
-    else if String.beq name "sqcap" then Option.some "⊓"
-    else if String.beq name "sqcaps" then Option.some "⊓︀"
-    else if String.beq name "sqcup" then Option.some "⊔"
-    else if String.beq name "sqcups" then Option.some "⊔︀"
-    else if String.beq name "sqsub" then Option.some "⊏"
-    else if String.beq name "sqsube" then Option.some "⊑"
-    else if String.beq name "sqsubset" then Option.some "⊏"
-    else if String.beq name "sqsubseteq" then Option.some "⊑"
-    else if String.beq name "sqsup" then Option.some "⊐"
-    else if String.beq name "sqsupe" then Option.some "⊒"
-    else if String.beq name "sqsupset" then Option.some "⊐"
-    else if String.beq name "sqsupseteq" then Option.some "⊒"
-    else if String.beq name "squ" then Option.some "□"
-    else if String.beq name "square" then Option.some "□"
-    else if String.beq name "squarf" then Option.some "▪"
-    else if String.beq name "squf" then Option.some "▪"
-    else if String.beq name "srarr" then Option.some "→"
-    else if String.beq name "sscr" then Option.some "𝓈"
-    else if String.beq name "ssetmn" then Option.some "∖"
-    else if String.beq name "ssmile" then Option.some "⌣"
-    else if String.beq name "sstarf" then Option.some "⋆"
-    else if String.beq name "star" then Option.some "☆"
-    else if String.beq name "starf" then Option.some "★"
-    else if String.beq name "straightepsilon" then Option.some "ϵ"
-    else if String.beq name "straightphi" then Option.some "ϕ"
-    else if String.beq name "strns" then Option.some "¯"
-    else if String.beq name "sub" then Option.some "⊂"
-    else if String.beq name "subE" then Option.some "⫅"
-    else if String.beq name "subdot" then Option.some "⪽"
-    else if String.beq name "sube" then Option.some "⊆"
-    else if String.beq name "subedot" then Option.some "⫃"
-    else if String.beq name "submult" then Option.some "⫁"
-    else if String.beq name "subnE" then Option.some "⫋"
-    else if String.beq name "subne" then Option.some "⊊"
-    else if String.beq name "subplus" then Option.some "⪿"
-    else if String.beq name "subrarr" then Option.some "⥹"
-    else if String.beq name "subset" then Option.some "⊂"
-    else if String.beq name "subseteq" then Option.some "⊆"
-    else if String.beq name "subseteqq" then Option.some "⫅"
-    else if String.beq name "subsetneq" then Option.some "⊊"
-    else if String.beq name "subsetneqq" then Option.some "⫋"
-    else if String.beq name "subsim" then Option.some "⫇"
-    else if String.beq name "subsub" then Option.some "⫕"
-    else if String.beq name "subsup" then Option.some "⫓"
-    else if String.beq name "succ" then Option.some "≻"
-    else if String.beq name "succapprox" then Option.some "⪸"
-    else if String.beq name "succcurlyeq" then Option.some "≽"
-    else if String.beq name "succeq" then Option.some "⪰"
-    else if String.beq name "succnapprox" then Option.some "⪺"
-    else if String.beq name "succneqq" then Option.some "⪶"
-    else if String.beq name "succnsim" then Option.some "⋩"
-    else if String.beq name "succsim" then Option.some "≿"
-    else if String.beq name "sum" then Option.some "∑"
-    else if String.beq name "sung" then Option.some "♪"
-    else if String.beq name "sup" then Option.some "⊃"
-    else if String.beq name "sup1" then Option.some "¹"
-    else if String.beq name "sup2" then Option.some "²"
-    else if String.beq name "sup3" then Option.some "³"
-    else if String.beq name "supE" then Option.some "⫆"
-    else if String.beq name "supdot" then Option.some "⪾"
-    else if String.beq name "supdsub" then Option.some "⫘"
-    else if String.beq name "supe" then Option.some "⊇"
-    else if String.beq name "supedot" then Option.some "⫄"
-    else if String.beq name "suphsol" then Option.some "⟉"
-    else if String.beq name "suphsub" then Option.some "⫗"
-    else if String.beq name "suplarr" then Option.some "⥻"
-    else if String.beq name "supmult" then Option.some "⫂"
-    else if String.beq name "supnE" then Option.some "⫌"
-    else if String.beq name "supne" then Option.some "⊋"
-    else if String.beq name "supplus" then Option.some "⫀"
-    else if String.beq name "supset" then Option.some "⊃"
-    else if String.beq name "supseteq" then Option.some "⊇"
-    else if String.beq name "supseteqq" then Option.some "⫆"
-    else if String.beq name "supsetneq" then Option.some "⊋"
-    else if String.beq name "supsetneqq" then Option.some "⫌"
-    else if String.beq name "supsim" then Option.some "⫈"
-    else if String.beq name "supsub" then Option.some "⫔"
-    else if String.beq name "supsup" then Option.some "⫖"
-    else if String.beq name "swArr" then Option.some "⇙"
-    else if String.beq name "swarhk" then Option.some "⤦"
-    else if String.beq name "swarr" then Option.some "↙"
-    else if String.beq name "swarrow" then Option.some "↙"
-    else if String.beq name "swnwar" then Option.some "⤪"
-    else if String.beq name "szlig" then Option.some "ß"
-    else Option.none
+def Markdown.entity_s_0 (name : String) : Option String :=
+    if String.beq name "sacute" then Option.some "ś" else Option.none
+#[partial]
+def Markdown.entity_s_1 (name : String) : Option String :=
+    if String.beq name "sbquo" then Option.some "‚" else Option.none
+#[partial]
+def Markdown.entity_s_2 (name : String) : Option String :=
+    if String.lt name "sbquo" then Markdown.entity_s_0 name else Markdown.entity_s_1 name
+#[partial]
+def Markdown.entity_s_3 (name : String) : Option String :=
+    if String.beq name "sc" then Option.some "≻" else Option.none
+#[partial]
+def Markdown.entity_s_4 (name : String) : Option String :=
+    if String.beq name "scE" then Option.some "⪴" else Option.none
+#[partial]
+def Markdown.entity_s_5 (name : String) : Option String :=
+    if String.lt name "scE" then Markdown.entity_s_3 name else Markdown.entity_s_4 name
+#[partial]
+def Markdown.entity_s_6 (name : String) : Option String :=
+    if String.lt name "sc" then Markdown.entity_s_2 name else Markdown.entity_s_5 name
+#[partial]
+def Markdown.entity_s_7 (name : String) : Option String :=
+    if String.beq name "scap" then Option.some "⪸" else Option.none
+#[partial]
+def Markdown.entity_s_8 (name : String) : Option String :=
+    if String.beq name "scaron" then Option.some "š" else Option.none
+#[partial]
+def Markdown.entity_s_9 (name : String) : Option String :=
+    if String.lt name "scaron" then Markdown.entity_s_7 name else Markdown.entity_s_8 name
+#[partial]
+def Markdown.entity_s_10 (name : String) : Option String :=
+    if String.beq name "sccue" then Option.some "≽" else Option.none
+#[partial]
+def Markdown.entity_s_11 (name : String) : Option String :=
+    if String.beq name "sce" then Option.some "⪰" else Option.none
+#[partial]
+def Markdown.entity_s_12 (name : String) : Option String :=
+    if String.beq name "scedil" then Option.some "ş" else Option.none
+#[partial]
+def Markdown.entity_s_13 (name : String) : Option String :=
+    if String.lt name "scedil" then Markdown.entity_s_11 name else Markdown.entity_s_12 name
+#[partial]
+def Markdown.entity_s_14 (name : String) : Option String :=
+    if String.lt name "sce" then Markdown.entity_s_10 name else Markdown.entity_s_13 name
+#[partial]
+def Markdown.entity_s_15 (name : String) : Option String :=
+    if String.lt name "sccue" then Markdown.entity_s_9 name else Markdown.entity_s_14 name
+#[partial]
+def Markdown.entity_s_16 (name : String) : Option String :=
+    if String.lt name "scap" then Markdown.entity_s_6 name else Markdown.entity_s_15 name
+#[partial]
+def Markdown.entity_s_17 (name : String) : Option String :=
+    if String.beq name "scirc" then Option.some "ŝ" else Option.none
+#[partial]
+def Markdown.entity_s_18 (name : String) : Option String :=
+    if String.beq name "scnE" then Option.some "⪶" else Option.none
+#[partial]
+def Markdown.entity_s_19 (name : String) : Option String :=
+    if String.lt name "scnE" then Markdown.entity_s_17 name else Markdown.entity_s_18 name
+#[partial]
+def Markdown.entity_s_20 (name : String) : Option String :=
+    if String.beq name "scnap" then Option.some "⪺" else Option.none
+#[partial]
+def Markdown.entity_s_21 (name : String) : Option String :=
+    if String.beq name "scnsim" then Option.some "⋩" else Option.none
+#[partial]
+def Markdown.entity_s_22 (name : String) : Option String :=
+    if String.beq name "scpolint" then Option.some "⨓" else Option.none
+#[partial]
+def Markdown.entity_s_23 (name : String) : Option String :=
+    if String.lt name "scpolint" then Markdown.entity_s_21 name else Markdown.entity_s_22 name
+#[partial]
+def Markdown.entity_s_24 (name : String) : Option String :=
+    if String.lt name "scnsim" then Markdown.entity_s_20 name else Markdown.entity_s_23 name
+#[partial]
+def Markdown.entity_s_25 (name : String) : Option String :=
+    if String.lt name "scnap" then Markdown.entity_s_19 name else Markdown.entity_s_24 name
+#[partial]
+def Markdown.entity_s_26 (name : String) : Option String :=
+    if String.beq name "scsim" then Option.some "≿" else Option.none
+#[partial]
+def Markdown.entity_s_27 (name : String) : Option String :=
+    if String.beq name "scy" then Option.some "с" else Option.none
+#[partial]
+def Markdown.entity_s_28 (name : String) : Option String :=
+    if String.lt name "scy" then Markdown.entity_s_26 name else Markdown.entity_s_27 name
+#[partial]
+def Markdown.entity_s_29 (name : String) : Option String :=
+    if String.beq name "sdot" then Option.some "⋅" else Option.none
+#[partial]
+def Markdown.entity_s_30 (name : String) : Option String :=
+    if String.beq name "sdotb" then Option.some "⊡" else Option.none
+#[partial]
+def Markdown.entity_s_31 (name : String) : Option String :=
+    if String.beq name "sdote" then Option.some "⩦" else Option.none
+#[partial]
+def Markdown.entity_s_32 (name : String) : Option String :=
+    if String.lt name "sdote" then Markdown.entity_s_30 name else Markdown.entity_s_31 name
+#[partial]
+def Markdown.entity_s_33 (name : String) : Option String :=
+    if String.lt name "sdotb" then Markdown.entity_s_29 name else Markdown.entity_s_32 name
+#[partial]
+def Markdown.entity_s_34 (name : String) : Option String :=
+    if String.lt name "sdot" then Markdown.entity_s_28 name else Markdown.entity_s_33 name
+#[partial]
+def Markdown.entity_s_35 (name : String) : Option String :=
+    if String.lt name "scsim" then Markdown.entity_s_25 name else Markdown.entity_s_34 name
+#[partial]
+def Markdown.entity_s_36 (name : String) : Option String :=
+    if String.lt name "scirc" then Markdown.entity_s_16 name else Markdown.entity_s_35 name
+#[partial]
+def Markdown.entity_s_37 (name : String) : Option String :=
+    if String.beq name "seArr" then Option.some "⇘" else Option.none
+#[partial]
+def Markdown.entity_s_38 (name : String) : Option String :=
+    if String.beq name "searhk" then Option.some "⤥" else Option.none
+#[partial]
+def Markdown.entity_s_39 (name : String) : Option String :=
+    if String.lt name "searhk" then Markdown.entity_s_37 name else Markdown.entity_s_38 name
+#[partial]
+def Markdown.entity_s_40 (name : String) : Option String :=
+    if String.beq name "searr" then Option.some "↘" else Option.none
+#[partial]
+def Markdown.entity_s_41 (name : String) : Option String :=
+    if String.beq name "searrow" then Option.some "↘" else Option.none
+#[partial]
+def Markdown.entity_s_42 (name : String) : Option String :=
+    if String.lt name "searrow" then Markdown.entity_s_40 name else Markdown.entity_s_41 name
+#[partial]
+def Markdown.entity_s_43 (name : String) : Option String :=
+    if String.lt name "searr" then Markdown.entity_s_39 name else Markdown.entity_s_42 name
+#[partial]
+def Markdown.entity_s_44 (name : String) : Option String :=
+    if String.beq name "sect" then Option.some "§" else Option.none
+#[partial]
+def Markdown.entity_s_45 (name : String) : Option String :=
+    if String.beq name "semi" then Option.some ";" else Option.none
+#[partial]
+def Markdown.entity_s_46 (name : String) : Option String :=
+    if String.lt name "semi" then Markdown.entity_s_44 name else Markdown.entity_s_45 name
+#[partial]
+def Markdown.entity_s_47 (name : String) : Option String :=
+    if String.beq name "seswar" then Option.some "⤩" else Option.none
+#[partial]
+def Markdown.entity_s_48 (name : String) : Option String :=
+    if String.beq name "setminus" then Option.some "∖" else Option.none
+#[partial]
+def Markdown.entity_s_49 (name : String) : Option String :=
+    if String.beq name "setmn" then Option.some "∖" else Option.none
+#[partial]
+def Markdown.entity_s_50 (name : String) : Option String :=
+    if String.lt name "setmn" then Markdown.entity_s_48 name else Markdown.entity_s_49 name
+#[partial]
+def Markdown.entity_s_51 (name : String) : Option String :=
+    if String.lt name "setminus" then Markdown.entity_s_47 name else Markdown.entity_s_50 name
+#[partial]
+def Markdown.entity_s_52 (name : String) : Option String :=
+    if String.lt name "seswar" then Markdown.entity_s_46 name else Markdown.entity_s_51 name
+#[partial]
+def Markdown.entity_s_53 (name : String) : Option String :=
+    if String.lt name "sect" then Markdown.entity_s_43 name else Markdown.entity_s_52 name
+#[partial]
+def Markdown.entity_s_54 (name : String) : Option String :=
+    if String.beq name "sext" then Option.some "✶" else Option.none
+#[partial]
+def Markdown.entity_s_55 (name : String) : Option String :=
+    if String.beq name "sfr" then Option.some "𝔰" else Option.none
+#[partial]
+def Markdown.entity_s_56 (name : String) : Option String :=
+    if String.lt name "sfr" then Markdown.entity_s_54 name else Markdown.entity_s_55 name
+#[partial]
+def Markdown.entity_s_57 (name : String) : Option String :=
+    if String.beq name "sfrown" then Option.some "⌢" else Option.none
+#[partial]
+def Markdown.entity_s_58 (name : String) : Option String :=
+    if String.beq name "sharp" then Option.some "♯" else Option.none
+#[partial]
+def Markdown.entity_s_59 (name : String) : Option String :=
+    if String.beq name "shchcy" then Option.some "щ" else Option.none
+#[partial]
+def Markdown.entity_s_60 (name : String) : Option String :=
+    if String.lt name "shchcy" then Markdown.entity_s_58 name else Markdown.entity_s_59 name
+#[partial]
+def Markdown.entity_s_61 (name : String) : Option String :=
+    if String.lt name "sharp" then Markdown.entity_s_57 name else Markdown.entity_s_60 name
+#[partial]
+def Markdown.entity_s_62 (name : String) : Option String :=
+    if String.lt name "sfrown" then Markdown.entity_s_56 name else Markdown.entity_s_61 name
+#[partial]
+def Markdown.entity_s_63 (name : String) : Option String :=
+    if String.beq name "shcy" then Option.some "ш" else Option.none
+#[partial]
+def Markdown.entity_s_64 (name : String) : Option String :=
+    if String.beq name "shortmid" then Option.some "∣" else Option.none
+#[partial]
+def Markdown.entity_s_65 (name : String) : Option String :=
+    if String.lt name "shortmid" then Markdown.entity_s_63 name else Markdown.entity_s_64 name
+#[partial]
+def Markdown.entity_s_66 (name : String) : Option String :=
+    if String.beq name "shortparallel" then Option.some "∥" else Option.none
+#[partial]
+def Markdown.entity_s_67 (name : String) : Option String :=
+    if String.beq name "shy" then Option.some "­" else Option.none
+#[partial]
+def Markdown.entity_s_68 (name : String) : Option String :=
+    if String.beq name "sigma" then Option.some "σ" else Option.none
+#[partial]
+def Markdown.entity_s_69 (name : String) : Option String :=
+    if String.lt name "sigma" then Markdown.entity_s_67 name else Markdown.entity_s_68 name
+#[partial]
+def Markdown.entity_s_70 (name : String) : Option String :=
+    if String.lt name "shy" then Markdown.entity_s_66 name else Markdown.entity_s_69 name
+#[partial]
+def Markdown.entity_s_71 (name : String) : Option String :=
+    if String.lt name "shortparallel" then Markdown.entity_s_65 name else Markdown.entity_s_70 name
+#[partial]
+def Markdown.entity_s_72 (name : String) : Option String :=
+    if String.lt name "shcy" then Markdown.entity_s_62 name else Markdown.entity_s_71 name
+#[partial]
+def Markdown.entity_s_73 (name : String) : Option String :=
+    if String.lt name "sext" then Markdown.entity_s_53 name else Markdown.entity_s_72 name
+#[partial]
+def Markdown.entity_s_74 (name : String) : Option String :=
+    if String.lt name "seArr" then Markdown.entity_s_36 name else Markdown.entity_s_73 name
+#[partial]
+def Markdown.entity_s_75 (name : String) : Option String :=
+    if String.beq name "sigmaf" then Option.some "ς" else Option.none
+#[partial]
+def Markdown.entity_s_76 (name : String) : Option String :=
+    if String.beq name "sigmav" then Option.some "ς" else Option.none
+#[partial]
+def Markdown.entity_s_77 (name : String) : Option String :=
+    if String.lt name "sigmav" then Markdown.entity_s_75 name else Markdown.entity_s_76 name
+#[partial]
+def Markdown.entity_s_78 (name : String) : Option String :=
+    if String.beq name "sim" then Option.some "∼" else Option.none
+#[partial]
+def Markdown.entity_s_79 (name : String) : Option String :=
+    if String.beq name "simdot" then Option.some "⩪" else Option.none
+#[partial]
+def Markdown.entity_s_80 (name : String) : Option String :=
+    if String.lt name "simdot" then Markdown.entity_s_78 name else Markdown.entity_s_79 name
+#[partial]
+def Markdown.entity_s_81 (name : String) : Option String :=
+    if String.lt name "sim" then Markdown.entity_s_77 name else Markdown.entity_s_80 name
+#[partial]
+def Markdown.entity_s_82 (name : String) : Option String :=
+    if String.beq name "sime" then Option.some "≃" else Option.none
+#[partial]
+def Markdown.entity_s_83 (name : String) : Option String :=
+    if String.beq name "simeq" then Option.some "≃" else Option.none
+#[partial]
+def Markdown.entity_s_84 (name : String) : Option String :=
+    if String.lt name "simeq" then Markdown.entity_s_82 name else Markdown.entity_s_83 name
+#[partial]
+def Markdown.entity_s_85 (name : String) : Option String :=
+    if String.beq name "simg" then Option.some "⪞" else Option.none
+#[partial]
+def Markdown.entity_s_86 (name : String) : Option String :=
+    if String.beq name "simgE" then Option.some "⪠" else Option.none
+#[partial]
+def Markdown.entity_s_87 (name : String) : Option String :=
+    if String.beq name "siml" then Option.some "⪝" else Option.none
+#[partial]
+def Markdown.entity_s_88 (name : String) : Option String :=
+    if String.lt name "siml" then Markdown.entity_s_86 name else Markdown.entity_s_87 name
+#[partial]
+def Markdown.entity_s_89 (name : String) : Option String :=
+    if String.lt name "simgE" then Markdown.entity_s_85 name else Markdown.entity_s_88 name
+#[partial]
+def Markdown.entity_s_90 (name : String) : Option String :=
+    if String.lt name "simg" then Markdown.entity_s_84 name else Markdown.entity_s_89 name
+#[partial]
+def Markdown.entity_s_91 (name : String) : Option String :=
+    if String.lt name "sime" then Markdown.entity_s_81 name else Markdown.entity_s_90 name
+#[partial]
+def Markdown.entity_s_92 (name : String) : Option String :=
+    if String.beq name "simlE" then Option.some "⪟" else Option.none
+#[partial]
+def Markdown.entity_s_93 (name : String) : Option String :=
+    if String.beq name "simne" then Option.some "≆" else Option.none
+#[partial]
+def Markdown.entity_s_94 (name : String) : Option String :=
+    if String.lt name "simne" then Markdown.entity_s_92 name else Markdown.entity_s_93 name
+#[partial]
+def Markdown.entity_s_95 (name : String) : Option String :=
+    if String.beq name "simplus" then Option.some "⨤" else Option.none
+#[partial]
+def Markdown.entity_s_96 (name : String) : Option String :=
+    if String.beq name "simrarr" then Option.some "⥲" else Option.none
+#[partial]
+def Markdown.entity_s_97 (name : String) : Option String :=
+    if String.beq name "slarr" then Option.some "←" else Option.none
+#[partial]
+def Markdown.entity_s_98 (name : String) : Option String :=
+    if String.lt name "slarr" then Markdown.entity_s_96 name else Markdown.entity_s_97 name
+#[partial]
+def Markdown.entity_s_99 (name : String) : Option String :=
+    if String.lt name "simrarr" then Markdown.entity_s_95 name else Markdown.entity_s_98 name
+#[partial]
+def Markdown.entity_s_100 (name : String) : Option String :=
+    if String.lt name "simplus" then Markdown.entity_s_94 name else Markdown.entity_s_99 name
+#[partial]
+def Markdown.entity_s_101 (name : String) : Option String :=
+    if String.beq name "smallsetminus" then Option.some "∖" else Option.none
+#[partial]
+def Markdown.entity_s_102 (name : String) : Option String :=
+    if String.beq name "smashp" then Option.some "⨳" else Option.none
+#[partial]
+def Markdown.entity_s_103 (name : String) : Option String :=
+    if String.lt name "smashp" then Markdown.entity_s_101 name else Markdown.entity_s_102 name
+#[partial]
+def Markdown.entity_s_104 (name : String) : Option String :=
+    if String.beq name "smeparsl" then Option.some "⧤" else Option.none
+#[partial]
+def Markdown.entity_s_105 (name : String) : Option String :=
+    if String.beq name "smid" then Option.some "∣" else Option.none
+#[partial]
+def Markdown.entity_s_106 (name : String) : Option String :=
+    if String.beq name "smile" then Option.some "⌣" else Option.none
+#[partial]
+def Markdown.entity_s_107 (name : String) : Option String :=
+    if String.lt name "smile" then Markdown.entity_s_105 name else Markdown.entity_s_106 name
+#[partial]
+def Markdown.entity_s_108 (name : String) : Option String :=
+    if String.lt name "smid" then Markdown.entity_s_104 name else Markdown.entity_s_107 name
+#[partial]
+def Markdown.entity_s_109 (name : String) : Option String :=
+    if String.lt name "smeparsl" then Markdown.entity_s_103 name else Markdown.entity_s_108 name
+#[partial]
+def Markdown.entity_s_110 (name : String) : Option String :=
+    if String.lt name "smallsetminus" then Markdown.entity_s_100 name else Markdown.entity_s_109 name
+#[partial]
+def Markdown.entity_s_111 (name : String) : Option String :=
+    if String.lt name "simlE" then Markdown.entity_s_91 name else Markdown.entity_s_110 name
+#[partial]
+def Markdown.entity_s_112 (name : String) : Option String :=
+    if String.beq name "smt" then Option.some "⪪" else Option.none
+#[partial]
+def Markdown.entity_s_113 (name : String) : Option String :=
+    if String.beq name "smte" then Option.some "⪬" else Option.none
+#[partial]
+def Markdown.entity_s_114 (name : String) : Option String :=
+    if String.lt name "smte" then Markdown.entity_s_112 name else Markdown.entity_s_113 name
+#[partial]
+def Markdown.entity_s_115 (name : String) : Option String :=
+    if String.beq name "smtes" then Option.some "⪬︀" else Option.none
+#[partial]
+def Markdown.entity_s_116 (name : String) : Option String :=
+    if String.beq name "softcy" then Option.some "ь" else Option.none
+#[partial]
+def Markdown.entity_s_117 (name : String) : Option String :=
+    if String.lt name "softcy" then Markdown.entity_s_115 name else Markdown.entity_s_116 name
+#[partial]
+def Markdown.entity_s_118 (name : String) : Option String :=
+    if String.lt name "smtes" then Markdown.entity_s_114 name else Markdown.entity_s_117 name
+#[partial]
+def Markdown.entity_s_119 (name : String) : Option String :=
+    if String.beq name "sol" then Option.some "/" else Option.none
+#[partial]
+def Markdown.entity_s_120 (name : String) : Option String :=
+    if String.beq name "solb" then Option.some "⧄" else Option.none
+#[partial]
+def Markdown.entity_s_121 (name : String) : Option String :=
+    if String.lt name "solb" then Markdown.entity_s_119 name else Markdown.entity_s_120 name
+#[partial]
+def Markdown.entity_s_122 (name : String) : Option String :=
+    if String.beq name "solbar" then Option.some "⌿" else Option.none
+#[partial]
+def Markdown.entity_s_123 (name : String) : Option String :=
+    if String.beq name "sopf" then Option.some "𝕤" else Option.none
+#[partial]
+def Markdown.entity_s_124 (name : String) : Option String :=
+    if String.beq name "spades" then Option.some "♠" else Option.none
+#[partial]
+def Markdown.entity_s_125 (name : String) : Option String :=
+    if String.lt name "spades" then Markdown.entity_s_123 name else Markdown.entity_s_124 name
+#[partial]
+def Markdown.entity_s_126 (name : String) : Option String :=
+    if String.lt name "sopf" then Markdown.entity_s_122 name else Markdown.entity_s_125 name
+#[partial]
+def Markdown.entity_s_127 (name : String) : Option String :=
+    if String.lt name "solbar" then Markdown.entity_s_121 name else Markdown.entity_s_126 name
+#[partial]
+def Markdown.entity_s_128 (name : String) : Option String :=
+    if String.lt name "sol" then Markdown.entity_s_118 name else Markdown.entity_s_127 name
+#[partial]
+def Markdown.entity_s_129 (name : String) : Option String :=
+    if String.beq name "spadesuit" then Option.some "♠" else Option.none
+#[partial]
+def Markdown.entity_s_130 (name : String) : Option String :=
+    if String.beq name "spar" then Option.some "∥" else Option.none
+#[partial]
+def Markdown.entity_s_131 (name : String) : Option String :=
+    if String.lt name "spar" then Markdown.entity_s_129 name else Markdown.entity_s_130 name
+#[partial]
+def Markdown.entity_s_132 (name : String) : Option String :=
+    if String.beq name "sqcap" then Option.some "⊓" else Option.none
+#[partial]
+def Markdown.entity_s_133 (name : String) : Option String :=
+    if String.beq name "sqcaps" then Option.some "⊓︀" else Option.none
+#[partial]
+def Markdown.entity_s_134 (name : String) : Option String :=
+    if String.beq name "sqcup" then Option.some "⊔" else Option.none
+#[partial]
+def Markdown.entity_s_135 (name : String) : Option String :=
+    if String.lt name "sqcup" then Markdown.entity_s_133 name else Markdown.entity_s_134 name
+#[partial]
+def Markdown.entity_s_136 (name : String) : Option String :=
+    if String.lt name "sqcaps" then Markdown.entity_s_132 name else Markdown.entity_s_135 name
+#[partial]
+def Markdown.entity_s_137 (name : String) : Option String :=
+    if String.lt name "sqcap" then Markdown.entity_s_131 name else Markdown.entity_s_136 name
+#[partial]
+def Markdown.entity_s_138 (name : String) : Option String :=
+    if String.beq name "sqcups" then Option.some "⊔︀" else Option.none
+#[partial]
+def Markdown.entity_s_139 (name : String) : Option String :=
+    if String.beq name "sqsub" then Option.some "⊏" else Option.none
+#[partial]
+def Markdown.entity_s_140 (name : String) : Option String :=
+    if String.lt name "sqsub" then Markdown.entity_s_138 name else Markdown.entity_s_139 name
+#[partial]
+def Markdown.entity_s_141 (name : String) : Option String :=
+    if String.beq name "sqsube" then Option.some "⊑" else Option.none
+#[partial]
+def Markdown.entity_s_142 (name : String) : Option String :=
+    if String.beq name "sqsubset" then Option.some "⊏" else Option.none
+#[partial]
+def Markdown.entity_s_143 (name : String) : Option String :=
+    if String.beq name "sqsubseteq" then Option.some "⊑" else Option.none
+#[partial]
+def Markdown.entity_s_144 (name : String) : Option String :=
+    if String.lt name "sqsubseteq" then Markdown.entity_s_142 name else Markdown.entity_s_143 name
+#[partial]
+def Markdown.entity_s_145 (name : String) : Option String :=
+    if String.lt name "sqsubset" then Markdown.entity_s_141 name else Markdown.entity_s_144 name
+#[partial]
+def Markdown.entity_s_146 (name : String) : Option String :=
+    if String.lt name "sqsube" then Markdown.entity_s_140 name else Markdown.entity_s_145 name
+#[partial]
+def Markdown.entity_s_147 (name : String) : Option String :=
+    if String.lt name "sqcups" then Markdown.entity_s_137 name else Markdown.entity_s_146 name
+#[partial]
+def Markdown.entity_s_148 (name : String) : Option String :=
+    if String.lt name "spadesuit" then Markdown.entity_s_128 name else Markdown.entity_s_147 name
+#[partial]
+def Markdown.entity_s_149 (name : String) : Option String :=
+    if String.lt name "smt" then Markdown.entity_s_111 name else Markdown.entity_s_148 name
+#[partial]
+def Markdown.entity_s_150 (name : String) : Option String :=
+    if String.lt name "sigmaf" then Markdown.entity_s_74 name else Markdown.entity_s_149 name
+#[partial]
+def Markdown.entity_s_151 (name : String) : Option String :=
+    if String.beq name "sqsup" then Option.some "⊐" else Option.none
+#[partial]
+def Markdown.entity_s_152 (name : String) : Option String :=
+    if String.beq name "sqsupe" then Option.some "⊒" else Option.none
+#[partial]
+def Markdown.entity_s_153 (name : String) : Option String :=
+    if String.lt name "sqsupe" then Markdown.entity_s_151 name else Markdown.entity_s_152 name
+#[partial]
+def Markdown.entity_s_154 (name : String) : Option String :=
+    if String.beq name "sqsupset" then Option.some "⊐" else Option.none
+#[partial]
+def Markdown.entity_s_155 (name : String) : Option String :=
+    if String.beq name "sqsupseteq" then Option.some "⊒" else Option.none
+#[partial]
+def Markdown.entity_s_156 (name : String) : Option String :=
+    if String.lt name "sqsupseteq" then Markdown.entity_s_154 name else Markdown.entity_s_155 name
+#[partial]
+def Markdown.entity_s_157 (name : String) : Option String :=
+    if String.lt name "sqsupset" then Markdown.entity_s_153 name else Markdown.entity_s_156 name
+#[partial]
+def Markdown.entity_s_158 (name : String) : Option String :=
+    if String.beq name "squ" then Option.some "□" else Option.none
+#[partial]
+def Markdown.entity_s_159 (name : String) : Option String :=
+    if String.beq name "square" then Option.some "□" else Option.none
+#[partial]
+def Markdown.entity_s_160 (name : String) : Option String :=
+    if String.lt name "square" then Markdown.entity_s_158 name else Markdown.entity_s_159 name
+#[partial]
+def Markdown.entity_s_161 (name : String) : Option String :=
+    if String.beq name "squarf" then Option.some "▪" else Option.none
+#[partial]
+def Markdown.entity_s_162 (name : String) : Option String :=
+    if String.beq name "squf" then Option.some "▪" else Option.none
+#[partial]
+def Markdown.entity_s_163 (name : String) : Option String :=
+    if String.beq name "srarr" then Option.some "→" else Option.none
+#[partial]
+def Markdown.entity_s_164 (name : String) : Option String :=
+    if String.lt name "srarr" then Markdown.entity_s_162 name else Markdown.entity_s_163 name
+#[partial]
+def Markdown.entity_s_165 (name : String) : Option String :=
+    if String.lt name "squf" then Markdown.entity_s_161 name else Markdown.entity_s_164 name
+#[partial]
+def Markdown.entity_s_166 (name : String) : Option String :=
+    if String.lt name "squarf" then Markdown.entity_s_160 name else Markdown.entity_s_165 name
+#[partial]
+def Markdown.entity_s_167 (name : String) : Option String :=
+    if String.lt name "squ" then Markdown.entity_s_157 name else Markdown.entity_s_166 name
+#[partial]
+def Markdown.entity_s_168 (name : String) : Option String :=
+    if String.beq name "sscr" then Option.some "𝓈" else Option.none
+#[partial]
+def Markdown.entity_s_169 (name : String) : Option String :=
+    if String.beq name "ssetmn" then Option.some "∖" else Option.none
+#[partial]
+def Markdown.entity_s_170 (name : String) : Option String :=
+    if String.lt name "ssetmn" then Markdown.entity_s_168 name else Markdown.entity_s_169 name
+#[partial]
+def Markdown.entity_s_171 (name : String) : Option String :=
+    if String.beq name "ssmile" then Option.some "⌣" else Option.none
+#[partial]
+def Markdown.entity_s_172 (name : String) : Option String :=
+    if String.beq name "sstarf" then Option.some "⋆" else Option.none
+#[partial]
+def Markdown.entity_s_173 (name : String) : Option String :=
+    if String.beq name "star" then Option.some "☆" else Option.none
+#[partial]
+def Markdown.entity_s_174 (name : String) : Option String :=
+    if String.lt name "star" then Markdown.entity_s_172 name else Markdown.entity_s_173 name
+#[partial]
+def Markdown.entity_s_175 (name : String) : Option String :=
+    if String.lt name "sstarf" then Markdown.entity_s_171 name else Markdown.entity_s_174 name
+#[partial]
+def Markdown.entity_s_176 (name : String) : Option String :=
+    if String.lt name "ssmile" then Markdown.entity_s_170 name else Markdown.entity_s_175 name
+#[partial]
+def Markdown.entity_s_177 (name : String) : Option String :=
+    if String.beq name "starf" then Option.some "★" else Option.none
+#[partial]
+def Markdown.entity_s_178 (name : String) : Option String :=
+    if String.beq name "straightepsilon" then Option.some "ϵ" else Option.none
+#[partial]
+def Markdown.entity_s_179 (name : String) : Option String :=
+    if String.lt name "straightepsilon" then Markdown.entity_s_177 name else Markdown.entity_s_178 name
+#[partial]
+def Markdown.entity_s_180 (name : String) : Option String :=
+    if String.beq name "straightphi" then Option.some "ϕ" else Option.none
+#[partial]
+def Markdown.entity_s_181 (name : String) : Option String :=
+    if String.beq name "strns" then Option.some "¯" else Option.none
+#[partial]
+def Markdown.entity_s_182 (name : String) : Option String :=
+    if String.beq name "sub" then Option.some "⊂" else Option.none
+#[partial]
+def Markdown.entity_s_183 (name : String) : Option String :=
+    if String.lt name "sub" then Markdown.entity_s_181 name else Markdown.entity_s_182 name
+#[partial]
+def Markdown.entity_s_184 (name : String) : Option String :=
+    if String.lt name "strns" then Markdown.entity_s_180 name else Markdown.entity_s_183 name
+#[partial]
+def Markdown.entity_s_185 (name : String) : Option String :=
+    if String.lt name "straightphi" then Markdown.entity_s_179 name else Markdown.entity_s_184 name
+#[partial]
+def Markdown.entity_s_186 (name : String) : Option String :=
+    if String.lt name "starf" then Markdown.entity_s_176 name else Markdown.entity_s_185 name
+#[partial]
+def Markdown.entity_s_187 (name : String) : Option String :=
+    if String.lt name "sscr" then Markdown.entity_s_167 name else Markdown.entity_s_186 name
+#[partial]
+def Markdown.entity_s_188 (name : String) : Option String :=
+    if String.beq name "subE" then Option.some "⫅" else Option.none
+#[partial]
+def Markdown.entity_s_189 (name : String) : Option String :=
+    if String.beq name "subdot" then Option.some "⪽" else Option.none
+#[partial]
+def Markdown.entity_s_190 (name : String) : Option String :=
+    if String.lt name "subdot" then Markdown.entity_s_188 name else Markdown.entity_s_189 name
+#[partial]
+def Markdown.entity_s_191 (name : String) : Option String :=
+    if String.beq name "sube" then Option.some "⊆" else Option.none
+#[partial]
+def Markdown.entity_s_192 (name : String) : Option String :=
+    if String.beq name "subedot" then Option.some "⫃" else Option.none
+#[partial]
+def Markdown.entity_s_193 (name : String) : Option String :=
+    if String.lt name "subedot" then Markdown.entity_s_191 name else Markdown.entity_s_192 name
+#[partial]
+def Markdown.entity_s_194 (name : String) : Option String :=
+    if String.lt name "sube" then Markdown.entity_s_190 name else Markdown.entity_s_193 name
+#[partial]
+def Markdown.entity_s_195 (name : String) : Option String :=
+    if String.beq name "submult" then Option.some "⫁" else Option.none
+#[partial]
+def Markdown.entity_s_196 (name : String) : Option String :=
+    if String.beq name "subnE" then Option.some "⫋" else Option.none
+#[partial]
+def Markdown.entity_s_197 (name : String) : Option String :=
+    if String.lt name "subnE" then Markdown.entity_s_195 name else Markdown.entity_s_196 name
+#[partial]
+def Markdown.entity_s_198 (name : String) : Option String :=
+    if String.beq name "subne" then Option.some "⊊" else Option.none
+#[partial]
+def Markdown.entity_s_199 (name : String) : Option String :=
+    if String.beq name "subplus" then Option.some "⪿" else Option.none
+#[partial]
+def Markdown.entity_s_200 (name : String) : Option String :=
+    if String.beq name "subrarr" then Option.some "⥹" else Option.none
+#[partial]
+def Markdown.entity_s_201 (name : String) : Option String :=
+    if String.lt name "subrarr" then Markdown.entity_s_199 name else Markdown.entity_s_200 name
+#[partial]
+def Markdown.entity_s_202 (name : String) : Option String :=
+    if String.lt name "subplus" then Markdown.entity_s_198 name else Markdown.entity_s_201 name
+#[partial]
+def Markdown.entity_s_203 (name : String) : Option String :=
+    if String.lt name "subne" then Markdown.entity_s_197 name else Markdown.entity_s_202 name
+#[partial]
+def Markdown.entity_s_204 (name : String) : Option String :=
+    if String.lt name "submult" then Markdown.entity_s_194 name else Markdown.entity_s_203 name
+#[partial]
+def Markdown.entity_s_205 (name : String) : Option String :=
+    if String.beq name "subset" then Option.some "⊂" else Option.none
+#[partial]
+def Markdown.entity_s_206 (name : String) : Option String :=
+    if String.beq name "subseteq" then Option.some "⊆" else Option.none
+#[partial]
+def Markdown.entity_s_207 (name : String) : Option String :=
+    if String.lt name "subseteq" then Markdown.entity_s_205 name else Markdown.entity_s_206 name
+#[partial]
+def Markdown.entity_s_208 (name : String) : Option String :=
+    if String.beq name "subseteqq" then Option.some "⫅" else Option.none
+#[partial]
+def Markdown.entity_s_209 (name : String) : Option String :=
+    if String.beq name "subsetneq" then Option.some "⊊" else Option.none
+#[partial]
+def Markdown.entity_s_210 (name : String) : Option String :=
+    if String.beq name "subsetneqq" then Option.some "⫋" else Option.none
+#[partial]
+def Markdown.entity_s_211 (name : String) : Option String :=
+    if String.lt name "subsetneqq" then Markdown.entity_s_209 name else Markdown.entity_s_210 name
+#[partial]
+def Markdown.entity_s_212 (name : String) : Option String :=
+    if String.lt name "subsetneq" then Markdown.entity_s_208 name else Markdown.entity_s_211 name
+#[partial]
+def Markdown.entity_s_213 (name : String) : Option String :=
+    if String.lt name "subseteqq" then Markdown.entity_s_207 name else Markdown.entity_s_212 name
+#[partial]
+def Markdown.entity_s_214 (name : String) : Option String :=
+    if String.beq name "subsim" then Option.some "⫇" else Option.none
+#[partial]
+def Markdown.entity_s_215 (name : String) : Option String :=
+    if String.beq name "subsub" then Option.some "⫕" else Option.none
+#[partial]
+def Markdown.entity_s_216 (name : String) : Option String :=
+    if String.lt name "subsub" then Markdown.entity_s_214 name else Markdown.entity_s_215 name
+#[partial]
+def Markdown.entity_s_217 (name : String) : Option String :=
+    if String.beq name "subsup" then Option.some "⫓" else Option.none
+#[partial]
+def Markdown.entity_s_218 (name : String) : Option String :=
+    if String.beq name "succ" then Option.some "≻" else Option.none
+#[partial]
+def Markdown.entity_s_219 (name : String) : Option String :=
+    if String.beq name "succapprox" then Option.some "⪸" else Option.none
+#[partial]
+def Markdown.entity_s_220 (name : String) : Option String :=
+    if String.lt name "succapprox" then Markdown.entity_s_218 name else Markdown.entity_s_219 name
+#[partial]
+def Markdown.entity_s_221 (name : String) : Option String :=
+    if String.lt name "succ" then Markdown.entity_s_217 name else Markdown.entity_s_220 name
+#[partial]
+def Markdown.entity_s_222 (name : String) : Option String :=
+    if String.lt name "subsup" then Markdown.entity_s_216 name else Markdown.entity_s_221 name
+#[partial]
+def Markdown.entity_s_223 (name : String) : Option String :=
+    if String.lt name "subsim" then Markdown.entity_s_213 name else Markdown.entity_s_222 name
+#[partial]
+def Markdown.entity_s_224 (name : String) : Option String :=
+    if String.lt name "subset" then Markdown.entity_s_204 name else Markdown.entity_s_223 name
+#[partial]
+def Markdown.entity_s_225 (name : String) : Option String :=
+    if String.lt name "subE" then Markdown.entity_s_187 name else Markdown.entity_s_224 name
+#[partial]
+def Markdown.entity_s_226 (name : String) : Option String :=
+    if String.beq name "succcurlyeq" then Option.some "≽" else Option.none
+#[partial]
+def Markdown.entity_s_227 (name : String) : Option String :=
+    if String.beq name "succeq" then Option.some "⪰" else Option.none
+#[partial]
+def Markdown.entity_s_228 (name : String) : Option String :=
+    if String.lt name "succeq" then Markdown.entity_s_226 name else Markdown.entity_s_227 name
+#[partial]
+def Markdown.entity_s_229 (name : String) : Option String :=
+    if String.beq name "succnapprox" then Option.some "⪺" else Option.none
+#[partial]
+def Markdown.entity_s_230 (name : String) : Option String :=
+    if String.beq name "succneqq" then Option.some "⪶" else Option.none
+#[partial]
+def Markdown.entity_s_231 (name : String) : Option String :=
+    if String.lt name "succneqq" then Markdown.entity_s_229 name else Markdown.entity_s_230 name
+#[partial]
+def Markdown.entity_s_232 (name : String) : Option String :=
+    if String.lt name "succnapprox" then Markdown.entity_s_228 name else Markdown.entity_s_231 name
+#[partial]
+def Markdown.entity_s_233 (name : String) : Option String :=
+    if String.beq name "succnsim" then Option.some "⋩" else Option.none
+#[partial]
+def Markdown.entity_s_234 (name : String) : Option String :=
+    if String.beq name "succsim" then Option.some "≿" else Option.none
+#[partial]
+def Markdown.entity_s_235 (name : String) : Option String :=
+    if String.lt name "succsim" then Markdown.entity_s_233 name else Markdown.entity_s_234 name
+#[partial]
+def Markdown.entity_s_236 (name : String) : Option String :=
+    if String.beq name "sum" then Option.some "∑" else Option.none
+#[partial]
+def Markdown.entity_s_237 (name : String) : Option String :=
+    if String.beq name "sung" then Option.some "♪" else Option.none
+#[partial]
+def Markdown.entity_s_238 (name : String) : Option String :=
+    if String.beq name "sup" then Option.some "⊃" else Option.none
+#[partial]
+def Markdown.entity_s_239 (name : String) : Option String :=
+    if String.lt name "sup" then Markdown.entity_s_237 name else Markdown.entity_s_238 name
+#[partial]
+def Markdown.entity_s_240 (name : String) : Option String :=
+    if String.lt name "sung" then Markdown.entity_s_236 name else Markdown.entity_s_239 name
+#[partial]
+def Markdown.entity_s_241 (name : String) : Option String :=
+    if String.lt name "sum" then Markdown.entity_s_235 name else Markdown.entity_s_240 name
+#[partial]
+def Markdown.entity_s_242 (name : String) : Option String :=
+    if String.lt name "succnsim" then Markdown.entity_s_232 name else Markdown.entity_s_241 name
+#[partial]
+def Markdown.entity_s_243 (name : String) : Option String :=
+    if String.beq name "sup1" then Option.some "¹" else Option.none
+#[partial]
+def Markdown.entity_s_244 (name : String) : Option String :=
+    if String.beq name "sup2" then Option.some "²" else Option.none
+#[partial]
+def Markdown.entity_s_245 (name : String) : Option String :=
+    if String.lt name "sup2" then Markdown.entity_s_243 name else Markdown.entity_s_244 name
+#[partial]
+def Markdown.entity_s_246 (name : String) : Option String :=
+    if String.beq name "sup3" then Option.some "³" else Option.none
+#[partial]
+def Markdown.entity_s_247 (name : String) : Option String :=
+    if String.beq name "supE" then Option.some "⫆" else Option.none
+#[partial]
+def Markdown.entity_s_248 (name : String) : Option String :=
+    if String.beq name "supdot" then Option.some "⪾" else Option.none
+#[partial]
+def Markdown.entity_s_249 (name : String) : Option String :=
+    if String.lt name "supdot" then Markdown.entity_s_247 name else Markdown.entity_s_248 name
+#[partial]
+def Markdown.entity_s_250 (name : String) : Option String :=
+    if String.lt name "supE" then Markdown.entity_s_246 name else Markdown.entity_s_249 name
+#[partial]
+def Markdown.entity_s_251 (name : String) : Option String :=
+    if String.lt name "sup3" then Markdown.entity_s_245 name else Markdown.entity_s_250 name
+#[partial]
+def Markdown.entity_s_252 (name : String) : Option String :=
+    if String.beq name "supdsub" then Option.some "⫘" else Option.none
+#[partial]
+def Markdown.entity_s_253 (name : String) : Option String :=
+    if String.beq name "supe" then Option.some "⊇" else Option.none
+#[partial]
+def Markdown.entity_s_254 (name : String) : Option String :=
+    if String.lt name "supe" then Markdown.entity_s_252 name else Markdown.entity_s_253 name
+#[partial]
+def Markdown.entity_s_255 (name : String) : Option String :=
+    if String.beq name "supedot" then Option.some "⫄" else Option.none
+#[partial]
+def Markdown.entity_s_256 (name : String) : Option String :=
+    if String.beq name "suphsol" then Option.some "⟉" else Option.none
+#[partial]
+def Markdown.entity_s_257 (name : String) : Option String :=
+    if String.beq name "suphsub" then Option.some "⫗" else Option.none
+#[partial]
+def Markdown.entity_s_258 (name : String) : Option String :=
+    if String.lt name "suphsub" then Markdown.entity_s_256 name else Markdown.entity_s_257 name
+#[partial]
+def Markdown.entity_s_259 (name : String) : Option String :=
+    if String.lt name "suphsol" then Markdown.entity_s_255 name else Markdown.entity_s_258 name
+#[partial]
+def Markdown.entity_s_260 (name : String) : Option String :=
+    if String.lt name "supedot" then Markdown.entity_s_254 name else Markdown.entity_s_259 name
+#[partial]
+def Markdown.entity_s_261 (name : String) : Option String :=
+    if String.lt name "supdsub" then Markdown.entity_s_251 name else Markdown.entity_s_260 name
+#[partial]
+def Markdown.entity_s_262 (name : String) : Option String :=
+    if String.lt name "sup1" then Markdown.entity_s_242 name else Markdown.entity_s_261 name
+#[partial]
+def Markdown.entity_s_263 (name : String) : Option String :=
+    if String.beq name "suplarr" then Option.some "⥻" else Option.none
+#[partial]
+def Markdown.entity_s_264 (name : String) : Option String :=
+    if String.beq name "supmult" then Option.some "⫂" else Option.none
+#[partial]
+def Markdown.entity_s_265 (name : String) : Option String :=
+    if String.lt name "supmult" then Markdown.entity_s_263 name else Markdown.entity_s_264 name
+#[partial]
+def Markdown.entity_s_266 (name : String) : Option String :=
+    if String.beq name "supnE" then Option.some "⫌" else Option.none
+#[partial]
+def Markdown.entity_s_267 (name : String) : Option String :=
+    if String.beq name "supne" then Option.some "⊋" else Option.none
+#[partial]
+def Markdown.entity_s_268 (name : String) : Option String :=
+    if String.lt name "supne" then Markdown.entity_s_266 name else Markdown.entity_s_267 name
+#[partial]
+def Markdown.entity_s_269 (name : String) : Option String :=
+    if String.lt name "supnE" then Markdown.entity_s_265 name else Markdown.entity_s_268 name
+#[partial]
+def Markdown.entity_s_270 (name : String) : Option String :=
+    if String.beq name "supplus" then Option.some "⫀" else Option.none
+#[partial]
+def Markdown.entity_s_271 (name : String) : Option String :=
+    if String.beq name "supset" then Option.some "⊃" else Option.none
+#[partial]
+def Markdown.entity_s_272 (name : String) : Option String :=
+    if String.lt name "supset" then Markdown.entity_s_270 name else Markdown.entity_s_271 name
+#[partial]
+def Markdown.entity_s_273 (name : String) : Option String :=
+    if String.beq name "supseteq" then Option.some "⊇" else Option.none
+#[partial]
+def Markdown.entity_s_274 (name : String) : Option String :=
+    if String.beq name "supseteqq" then Option.some "⫆" else Option.none
+#[partial]
+def Markdown.entity_s_275 (name : String) : Option String :=
+    if String.beq name "supsetneq" then Option.some "⊋" else Option.none
+#[partial]
+def Markdown.entity_s_276 (name : String) : Option String :=
+    if String.lt name "supsetneq" then Markdown.entity_s_274 name else Markdown.entity_s_275 name
+#[partial]
+def Markdown.entity_s_277 (name : String) : Option String :=
+    if String.lt name "supseteqq" then Markdown.entity_s_273 name else Markdown.entity_s_276 name
+#[partial]
+def Markdown.entity_s_278 (name : String) : Option String :=
+    if String.lt name "supseteq" then Markdown.entity_s_272 name else Markdown.entity_s_277 name
+#[partial]
+def Markdown.entity_s_279 (name : String) : Option String :=
+    if String.lt name "supplus" then Markdown.entity_s_269 name else Markdown.entity_s_278 name
+#[partial]
+def Markdown.entity_s_280 (name : String) : Option String :=
+    if String.beq name "supsetneqq" then Option.some "⫌" else Option.none
+#[partial]
+def Markdown.entity_s_281 (name : String) : Option String :=
+    if String.beq name "supsim" then Option.some "⫈" else Option.none
+#[partial]
+def Markdown.entity_s_282 (name : String) : Option String :=
+    if String.lt name "supsim" then Markdown.entity_s_280 name else Markdown.entity_s_281 name
+#[partial]
+def Markdown.entity_s_283 (name : String) : Option String :=
+    if String.beq name "supsub" then Option.some "⫔" else Option.none
+#[partial]
+def Markdown.entity_s_284 (name : String) : Option String :=
+    if String.beq name "supsup" then Option.some "⫖" else Option.none
+#[partial]
+def Markdown.entity_s_285 (name : String) : Option String :=
+    if String.beq name "swArr" then Option.some "⇙" else Option.none
+#[partial]
+def Markdown.entity_s_286 (name : String) : Option String :=
+    if String.lt name "swArr" then Markdown.entity_s_284 name else Markdown.entity_s_285 name
+#[partial]
+def Markdown.entity_s_287 (name : String) : Option String :=
+    if String.lt name "supsup" then Markdown.entity_s_283 name else Markdown.entity_s_286 name
+#[partial]
+def Markdown.entity_s_288 (name : String) : Option String :=
+    if String.lt name "supsub" then Markdown.entity_s_282 name else Markdown.entity_s_287 name
+#[partial]
+def Markdown.entity_s_289 (name : String) : Option String :=
+    if String.beq name "swarhk" then Option.some "⤦" else Option.none
+#[partial]
+def Markdown.entity_s_290 (name : String) : Option String :=
+    if String.beq name "swarr" then Option.some "↙" else Option.none
+#[partial]
+def Markdown.entity_s_291 (name : String) : Option String :=
+    if String.lt name "swarr" then Markdown.entity_s_289 name else Markdown.entity_s_290 name
+#[partial]
+def Markdown.entity_s_292 (name : String) : Option String :=
+    if String.beq name "swarrow" then Option.some "↙" else Option.none
+#[partial]
+def Markdown.entity_s_293 (name : String) : Option String :=
+    if String.beq name "swnwar" then Option.some "⤪" else Option.none
+#[partial]
+def Markdown.entity_s_294 (name : String) : Option String :=
+    if String.beq name "szlig" then Option.some "ß" else Option.none
+#[partial]
+def Markdown.entity_s_295 (name : String) : Option String :=
+    if String.lt name "szlig" then Markdown.entity_s_293 name else Markdown.entity_s_294 name
+#[partial]
+def Markdown.entity_s_296 (name : String) : Option String :=
+    if String.lt name "swnwar" then Markdown.entity_s_292 name else Markdown.entity_s_295 name
+#[partial]
+def Markdown.entity_s_297 (name : String) : Option String :=
+    if String.lt name "swarrow" then Markdown.entity_s_291 name else Markdown.entity_s_296 name
+#[partial]
+def Markdown.entity_s_298 (name : String) : Option String :=
+    if String.lt name "swarhk" then Markdown.entity_s_288 name else Markdown.entity_s_297 name
+#[partial]
+def Markdown.entity_s_299 (name : String) : Option String :=
+    if String.lt name "supsetneqq" then Markdown.entity_s_279 name else Markdown.entity_s_298 name
+#[partial]
+def Markdown.entity_s_300 (name : String) : Option String :=
+    if String.lt name "suplarr" then Markdown.entity_s_262 name else Markdown.entity_s_299 name
+#[partial]
+def Markdown.entity_s_301 (name : String) : Option String :=
+    if String.lt name "succcurlyeq" then Markdown.entity_s_225 name else Markdown.entity_s_300 name
+#[partial]
+def Markdown.entity_s_302 (name : String) : Option String :=
+    if String.lt name "sqsup" then Markdown.entity_s_150 name else Markdown.entity_s_301 name
+
+def Markdown.entity_s (name : String) : Option String := Markdown.entity_s_302 name
 
 #[partial]
-def Markdown.entity_t (name : String) : Option String :=
-    if String.beq name "target" then Option.some "⌖"
-    else if String.beq name "tau" then Option.some "τ"
-    else if String.beq name "tbrk" then Option.some "⎴"
-    else if String.beq name "tcaron" then Option.some "ť"
-    else if String.beq name "tcedil" then Option.some "ţ"
-    else if String.beq name "tcy" then Option.some "т"
-    else if String.beq name "tdot" then Option.some "⃛"
-    else if String.beq name "telrec" then Option.some "⌕"
-    else if String.beq name "tfr" then Option.some "𝔱"
-    else if String.beq name "there4" then Option.some "∴"
-    else if String.beq name "therefore" then Option.some "∴"
-    else if String.beq name "theta" then Option.some "θ"
-    else if String.beq name "thetasym" then Option.some "ϑ"
-    else if String.beq name "thetav" then Option.some "ϑ"
-    else if String.beq name "thickapprox" then Option.some "≈"
-    else if String.beq name "thicksim" then Option.some "∼"
-    else if String.beq name "thinsp" then Option.some " "
-    else if String.beq name "thkap" then Option.some "≈"
-    else if String.beq name "thksim" then Option.some "∼"
-    else if String.beq name "thorn" then Option.some "þ"
-    else if String.beq name "tilde" then Option.some "˜"
-    else if String.beq name "times" then Option.some "×"
-    else if String.beq name "timesb" then Option.some "⊠"
-    else if String.beq name "timesbar" then Option.some "⨱"
-    else if String.beq name "timesd" then Option.some "⨰"
-    else if String.beq name "tint" then Option.some "∭"
-    else if String.beq name "toea" then Option.some "⤨"
-    else if String.beq name "top" then Option.some "⊤"
-    else if String.beq name "topbot" then Option.some "⌶"
-    else if String.beq name "topcir" then Option.some "⫱"
-    else if String.beq name "topf" then Option.some "𝕥"
-    else if String.beq name "topfork" then Option.some "⫚"
-    else if String.beq name "tosa" then Option.some "⤩"
-    else if String.beq name "tprime" then Option.some "‴"
-    else if String.beq name "trade" then Option.some "™"
-    else if String.beq name "triangle" then Option.some "▵"
-    else if String.beq name "triangledown" then Option.some "▿"
-    else if String.beq name "triangleleft" then Option.some "◃"
-    else if String.beq name "trianglelefteq" then Option.some "⊴"
-    else if String.beq name "triangleq" then Option.some "≜"
-    else if String.beq name "triangleright" then Option.some "▹"
-    else if String.beq name "trianglerighteq" then Option.some "⊵"
-    else if String.beq name "tridot" then Option.some "◬"
-    else if String.beq name "trie" then Option.some "≜"
-    else if String.beq name "triminus" then Option.some "⨺"
-    else if String.beq name "triplus" then Option.some "⨹"
-    else if String.beq name "trisb" then Option.some "⧍"
-    else if String.beq name "tritime" then Option.some "⨻"
-    else if String.beq name "trpezium" then Option.some "⏢"
-    else if String.beq name "tscr" then Option.some "𝓉"
-    else if String.beq name "tscy" then Option.some "ц"
-    else if String.beq name "tshcy" then Option.some "ћ"
-    else if String.beq name "tstrok" then Option.some "ŧ"
-    else if String.beq name "twixt" then Option.some "≬"
-    else if String.beq name "twoheadleftarrow" then Option.some "↞"
-    else if String.beq name "twoheadrightarrow" then Option.some "↠"
-    else Option.none
+def Markdown.entity_t_0 (name : String) : Option String :=
+    if String.beq name "target" then Option.some "⌖" else Option.none
+#[partial]
+def Markdown.entity_t_1 (name : String) : Option String :=
+    if String.beq name "tau" then Option.some "τ" else Option.none
+#[partial]
+def Markdown.entity_t_2 (name : String) : Option String :=
+    if String.beq name "tbrk" then Option.some "⎴" else Option.none
+#[partial]
+def Markdown.entity_t_3 (name : String) : Option String :=
+    if String.lt name "tbrk" then Markdown.entity_t_1 name else Markdown.entity_t_2 name
+#[partial]
+def Markdown.entity_t_4 (name : String) : Option String :=
+    if String.lt name "tau" then Markdown.entity_t_0 name else Markdown.entity_t_3 name
+#[partial]
+def Markdown.entity_t_5 (name : String) : Option String :=
+    if String.beq name "tcaron" then Option.some "ť" else Option.none
+#[partial]
+def Markdown.entity_t_6 (name : String) : Option String :=
+    if String.beq name "tcedil" then Option.some "ţ" else Option.none
+#[partial]
+def Markdown.entity_t_7 (name : String) : Option String :=
+    if String.lt name "tcedil" then Markdown.entity_t_5 name else Markdown.entity_t_6 name
+#[partial]
+def Markdown.entity_t_8 (name : String) : Option String :=
+    if String.beq name "tcy" then Option.some "т" else Option.none
+#[partial]
+def Markdown.entity_t_9 (name : String) : Option String :=
+    if String.beq name "tdot" then Option.some "⃛" else Option.none
+#[partial]
+def Markdown.entity_t_10 (name : String) : Option String :=
+    if String.lt name "tdot" then Markdown.entity_t_8 name else Markdown.entity_t_9 name
+#[partial]
+def Markdown.entity_t_11 (name : String) : Option String :=
+    if String.lt name "tcy" then Markdown.entity_t_7 name else Markdown.entity_t_10 name
+#[partial]
+def Markdown.entity_t_12 (name : String) : Option String :=
+    if String.lt name "tcaron" then Markdown.entity_t_4 name else Markdown.entity_t_11 name
+#[partial]
+def Markdown.entity_t_13 (name : String) : Option String :=
+    if String.beq name "telrec" then Option.some "⌕" else Option.none
+#[partial]
+def Markdown.entity_t_14 (name : String) : Option String :=
+    if String.beq name "tfr" then Option.some "𝔱" else Option.none
+#[partial]
+def Markdown.entity_t_15 (name : String) : Option String :=
+    if String.beq name "there4" then Option.some "∴" else Option.none
+#[partial]
+def Markdown.entity_t_16 (name : String) : Option String :=
+    if String.lt name "there4" then Markdown.entity_t_14 name else Markdown.entity_t_15 name
+#[partial]
+def Markdown.entity_t_17 (name : String) : Option String :=
+    if String.lt name "tfr" then Markdown.entity_t_13 name else Markdown.entity_t_16 name
+#[partial]
+def Markdown.entity_t_18 (name : String) : Option String :=
+    if String.beq name "therefore" then Option.some "∴" else Option.none
+#[partial]
+def Markdown.entity_t_19 (name : String) : Option String :=
+    if String.beq name "theta" then Option.some "θ" else Option.none
+#[partial]
+def Markdown.entity_t_20 (name : String) : Option String :=
+    if String.lt name "theta" then Markdown.entity_t_18 name else Markdown.entity_t_19 name
+#[partial]
+def Markdown.entity_t_21 (name : String) : Option String :=
+    if String.beq name "thetasym" then Option.some "ϑ" else Option.none
+#[partial]
+def Markdown.entity_t_22 (name : String) : Option String :=
+    if String.beq name "thetav" then Option.some "ϑ" else Option.none
+#[partial]
+def Markdown.entity_t_23 (name : String) : Option String :=
+    if String.lt name "thetav" then Markdown.entity_t_21 name else Markdown.entity_t_22 name
+#[partial]
+def Markdown.entity_t_24 (name : String) : Option String :=
+    if String.lt name "thetasym" then Markdown.entity_t_20 name else Markdown.entity_t_23 name
+#[partial]
+def Markdown.entity_t_25 (name : String) : Option String :=
+    if String.lt name "therefore" then Markdown.entity_t_17 name else Markdown.entity_t_24 name
+#[partial]
+def Markdown.entity_t_26 (name : String) : Option String :=
+    if String.lt name "telrec" then Markdown.entity_t_12 name else Markdown.entity_t_25 name
+#[partial]
+def Markdown.entity_t_27 (name : String) : Option String :=
+    if String.beq name "thickapprox" then Option.some "≈" else Option.none
+#[partial]
+def Markdown.entity_t_28 (name : String) : Option String :=
+    if String.beq name "thicksim" then Option.some "∼" else Option.none
+#[partial]
+def Markdown.entity_t_29 (name : String) : Option String :=
+    if String.beq name "thinsp" then Option.some " " else Option.none
+#[partial]
+def Markdown.entity_t_30 (name : String) : Option String :=
+    if String.lt name "thinsp" then Markdown.entity_t_28 name else Markdown.entity_t_29 name
+#[partial]
+def Markdown.entity_t_31 (name : String) : Option String :=
+    if String.lt name "thicksim" then Markdown.entity_t_27 name else Markdown.entity_t_30 name
+#[partial]
+def Markdown.entity_t_32 (name : String) : Option String :=
+    if String.beq name "thkap" then Option.some "≈" else Option.none
+#[partial]
+def Markdown.entity_t_33 (name : String) : Option String :=
+    if String.beq name "thksim" then Option.some "∼" else Option.none
+#[partial]
+def Markdown.entity_t_34 (name : String) : Option String :=
+    if String.lt name "thksim" then Markdown.entity_t_32 name else Markdown.entity_t_33 name
+#[partial]
+def Markdown.entity_t_35 (name : String) : Option String :=
+    if String.beq name "thorn" then Option.some "þ" else Option.none
+#[partial]
+def Markdown.entity_t_36 (name : String) : Option String :=
+    if String.beq name "tilde" then Option.some "˜" else Option.none
+#[partial]
+def Markdown.entity_t_37 (name : String) : Option String :=
+    if String.lt name "tilde" then Markdown.entity_t_35 name else Markdown.entity_t_36 name
+#[partial]
+def Markdown.entity_t_38 (name : String) : Option String :=
+    if String.lt name "thorn" then Markdown.entity_t_34 name else Markdown.entity_t_37 name
+#[partial]
+def Markdown.entity_t_39 (name : String) : Option String :=
+    if String.lt name "thkap" then Markdown.entity_t_31 name else Markdown.entity_t_38 name
+#[partial]
+def Markdown.entity_t_40 (name : String) : Option String :=
+    if String.beq name "times" then Option.some "×" else Option.none
+#[partial]
+def Markdown.entity_t_41 (name : String) : Option String :=
+    if String.beq name "timesb" then Option.some "⊠" else Option.none
+#[partial]
+def Markdown.entity_t_42 (name : String) : Option String :=
+    if String.beq name "timesbar" then Option.some "⨱" else Option.none
+#[partial]
+def Markdown.entity_t_43 (name : String) : Option String :=
+    if String.lt name "timesbar" then Markdown.entity_t_41 name else Markdown.entity_t_42 name
+#[partial]
+def Markdown.entity_t_44 (name : String) : Option String :=
+    if String.lt name "timesb" then Markdown.entity_t_40 name else Markdown.entity_t_43 name
+#[partial]
+def Markdown.entity_t_45 (name : String) : Option String :=
+    if String.beq name "timesd" then Option.some "⨰" else Option.none
+#[partial]
+def Markdown.entity_t_46 (name : String) : Option String :=
+    if String.beq name "tint" then Option.some "∭" else Option.none
+#[partial]
+def Markdown.entity_t_47 (name : String) : Option String :=
+    if String.lt name "tint" then Markdown.entity_t_45 name else Markdown.entity_t_46 name
+#[partial]
+def Markdown.entity_t_48 (name : String) : Option String :=
+    if String.beq name "toea" then Option.some "⤨" else Option.none
+#[partial]
+def Markdown.entity_t_49 (name : String) : Option String :=
+    if String.beq name "top" then Option.some "⊤" else Option.none
+#[partial]
+def Markdown.entity_t_50 (name : String) : Option String :=
+    if String.lt name "top" then Markdown.entity_t_48 name else Markdown.entity_t_49 name
+#[partial]
+def Markdown.entity_t_51 (name : String) : Option String :=
+    if String.lt name "toea" then Markdown.entity_t_47 name else Markdown.entity_t_50 name
+#[partial]
+def Markdown.entity_t_52 (name : String) : Option String :=
+    if String.lt name "timesd" then Markdown.entity_t_44 name else Markdown.entity_t_51 name
+#[partial]
+def Markdown.entity_t_53 (name : String) : Option String :=
+    if String.lt name "times" then Markdown.entity_t_39 name else Markdown.entity_t_52 name
+#[partial]
+def Markdown.entity_t_54 (name : String) : Option String :=
+    if String.lt name "thickapprox" then Markdown.entity_t_26 name else Markdown.entity_t_53 name
+#[partial]
+def Markdown.entity_t_55 (name : String) : Option String :=
+    if String.beq name "topbot" then Option.some "⌶" else Option.none
+#[partial]
+def Markdown.entity_t_56 (name : String) : Option String :=
+    if String.beq name "topcir" then Option.some "⫱" else Option.none
+#[partial]
+def Markdown.entity_t_57 (name : String) : Option String :=
+    if String.beq name "topf" then Option.some "𝕥" else Option.none
+#[partial]
+def Markdown.entity_t_58 (name : String) : Option String :=
+    if String.lt name "topf" then Markdown.entity_t_56 name else Markdown.entity_t_57 name
+#[partial]
+def Markdown.entity_t_59 (name : String) : Option String :=
+    if String.lt name "topcir" then Markdown.entity_t_55 name else Markdown.entity_t_58 name
+#[partial]
+def Markdown.entity_t_60 (name : String) : Option String :=
+    if String.beq name "topfork" then Option.some "⫚" else Option.none
+#[partial]
+def Markdown.entity_t_61 (name : String) : Option String :=
+    if String.beq name "tosa" then Option.some "⤩" else Option.none
+#[partial]
+def Markdown.entity_t_62 (name : String) : Option String :=
+    if String.lt name "tosa" then Markdown.entity_t_60 name else Markdown.entity_t_61 name
+#[partial]
+def Markdown.entity_t_63 (name : String) : Option String :=
+    if String.beq name "tprime" then Option.some "‴" else Option.none
+#[partial]
+def Markdown.entity_t_64 (name : String) : Option String :=
+    if String.beq name "trade" then Option.some "™" else Option.none
+#[partial]
+def Markdown.entity_t_65 (name : String) : Option String :=
+    if String.lt name "trade" then Markdown.entity_t_63 name else Markdown.entity_t_64 name
+#[partial]
+def Markdown.entity_t_66 (name : String) : Option String :=
+    if String.lt name "tprime" then Markdown.entity_t_62 name else Markdown.entity_t_65 name
+#[partial]
+def Markdown.entity_t_67 (name : String) : Option String :=
+    if String.lt name "topfork" then Markdown.entity_t_59 name else Markdown.entity_t_66 name
+#[partial]
+def Markdown.entity_t_68 (name : String) : Option String :=
+    if String.beq name "triangle" then Option.some "▵" else Option.none
+#[partial]
+def Markdown.entity_t_69 (name : String) : Option String :=
+    if String.beq name "triangledown" then Option.some "▿" else Option.none
+#[partial]
+def Markdown.entity_t_70 (name : String) : Option String :=
+    if String.beq name "triangleleft" then Option.some "◃" else Option.none
+#[partial]
+def Markdown.entity_t_71 (name : String) : Option String :=
+    if String.lt name "triangleleft" then Markdown.entity_t_69 name else Markdown.entity_t_70 name
+#[partial]
+def Markdown.entity_t_72 (name : String) : Option String :=
+    if String.lt name "triangledown" then Markdown.entity_t_68 name else Markdown.entity_t_71 name
+#[partial]
+def Markdown.entity_t_73 (name : String) : Option String :=
+    if String.beq name "trianglelefteq" then Option.some "⊴" else Option.none
+#[partial]
+def Markdown.entity_t_74 (name : String) : Option String :=
+    if String.beq name "triangleq" then Option.some "≜" else Option.none
+#[partial]
+def Markdown.entity_t_75 (name : String) : Option String :=
+    if String.lt name "triangleq" then Markdown.entity_t_73 name else Markdown.entity_t_74 name
+#[partial]
+def Markdown.entity_t_76 (name : String) : Option String :=
+    if String.beq name "triangleright" then Option.some "▹" else Option.none
+#[partial]
+def Markdown.entity_t_77 (name : String) : Option String :=
+    if String.beq name "trianglerighteq" then Option.some "⊵" else Option.none
+#[partial]
+def Markdown.entity_t_78 (name : String) : Option String :=
+    if String.lt name "trianglerighteq" then Markdown.entity_t_76 name else Markdown.entity_t_77 name
+#[partial]
+def Markdown.entity_t_79 (name : String) : Option String :=
+    if String.lt name "triangleright" then Markdown.entity_t_75 name else Markdown.entity_t_78 name
+#[partial]
+def Markdown.entity_t_80 (name : String) : Option String :=
+    if String.lt name "trianglelefteq" then Markdown.entity_t_72 name else Markdown.entity_t_79 name
+#[partial]
+def Markdown.entity_t_81 (name : String) : Option String :=
+    if String.lt name "triangle" then Markdown.entity_t_67 name else Markdown.entity_t_80 name
+#[partial]
+def Markdown.entity_t_82 (name : String) : Option String :=
+    if String.beq name "tridot" then Option.some "◬" else Option.none
+#[partial]
+def Markdown.entity_t_83 (name : String) : Option String :=
+    if String.beq name "trie" then Option.some "≜" else Option.none
+#[partial]
+def Markdown.entity_t_84 (name : String) : Option String :=
+    if String.beq name "triminus" then Option.some "⨺" else Option.none
+#[partial]
+def Markdown.entity_t_85 (name : String) : Option String :=
+    if String.lt name "triminus" then Markdown.entity_t_83 name else Markdown.entity_t_84 name
+#[partial]
+def Markdown.entity_t_86 (name : String) : Option String :=
+    if String.lt name "trie" then Markdown.entity_t_82 name else Markdown.entity_t_85 name
+#[partial]
+def Markdown.entity_t_87 (name : String) : Option String :=
+    if String.beq name "triplus" then Option.some "⨹" else Option.none
+#[partial]
+def Markdown.entity_t_88 (name : String) : Option String :=
+    if String.beq name "trisb" then Option.some "⧍" else Option.none
+#[partial]
+def Markdown.entity_t_89 (name : String) : Option String :=
+    if String.lt name "trisb" then Markdown.entity_t_87 name else Markdown.entity_t_88 name
+#[partial]
+def Markdown.entity_t_90 (name : String) : Option String :=
+    if String.beq name "tritime" then Option.some "⨻" else Option.none
+#[partial]
+def Markdown.entity_t_91 (name : String) : Option String :=
+    if String.beq name "trpezium" then Option.some "⏢" else Option.none
+#[partial]
+def Markdown.entity_t_92 (name : String) : Option String :=
+    if String.lt name "trpezium" then Markdown.entity_t_90 name else Markdown.entity_t_91 name
+#[partial]
+def Markdown.entity_t_93 (name : String) : Option String :=
+    if String.lt name "tritime" then Markdown.entity_t_89 name else Markdown.entity_t_92 name
+#[partial]
+def Markdown.entity_t_94 (name : String) : Option String :=
+    if String.lt name "triplus" then Markdown.entity_t_86 name else Markdown.entity_t_93 name
+#[partial]
+def Markdown.entity_t_95 (name : String) : Option String :=
+    if String.beq name "tscr" then Option.some "𝓉" else Option.none
+#[partial]
+def Markdown.entity_t_96 (name : String) : Option String :=
+    if String.beq name "tscy" then Option.some "ц" else Option.none
+#[partial]
+def Markdown.entity_t_97 (name : String) : Option String :=
+    if String.beq name "tshcy" then Option.some "ћ" else Option.none
+#[partial]
+def Markdown.entity_t_98 (name : String) : Option String :=
+    if String.lt name "tshcy" then Markdown.entity_t_96 name else Markdown.entity_t_97 name
+#[partial]
+def Markdown.entity_t_99 (name : String) : Option String :=
+    if String.lt name "tscy" then Markdown.entity_t_95 name else Markdown.entity_t_98 name
+#[partial]
+def Markdown.entity_t_100 (name : String) : Option String :=
+    if String.beq name "tstrok" then Option.some "ŧ" else Option.none
+#[partial]
+def Markdown.entity_t_101 (name : String) : Option String :=
+    if String.beq name "twixt" then Option.some "≬" else Option.none
+#[partial]
+def Markdown.entity_t_102 (name : String) : Option String :=
+    if String.lt name "twixt" then Markdown.entity_t_100 name else Markdown.entity_t_101 name
+#[partial]
+def Markdown.entity_t_103 (name : String) : Option String :=
+    if String.beq name "twoheadleftarrow" then Option.some "↞" else Option.none
+#[partial]
+def Markdown.entity_t_104 (name : String) : Option String :=
+    if String.beq name "twoheadrightarrow" then Option.some "↠" else Option.none
+#[partial]
+def Markdown.entity_t_105 (name : String) : Option String :=
+    if String.lt name "twoheadrightarrow" then Markdown.entity_t_103 name else Markdown.entity_t_104 name
+#[partial]
+def Markdown.entity_t_106 (name : String) : Option String :=
+    if String.lt name "twoheadleftarrow" then Markdown.entity_t_102 name else Markdown.entity_t_105 name
+#[partial]
+def Markdown.entity_t_107 (name : String) : Option String :=
+    if String.lt name "tstrok" then Markdown.entity_t_99 name else Markdown.entity_t_106 name
+#[partial]
+def Markdown.entity_t_108 (name : String) : Option String :=
+    if String.lt name "tscr" then Markdown.entity_t_94 name else Markdown.entity_t_107 name
+#[partial]
+def Markdown.entity_t_109 (name : String) : Option String :=
+    if String.lt name "tridot" then Markdown.entity_t_81 name else Markdown.entity_t_108 name
+#[partial]
+def Markdown.entity_t_110 (name : String) : Option String :=
+    if String.lt name "topbot" then Markdown.entity_t_54 name else Markdown.entity_t_109 name
+
+def Markdown.entity_t (name : String) : Option String := Markdown.entity_t_110 name
 
 #[partial]
-def Markdown.entity_u (name : String) : Option String :=
-    if String.beq name "uArr" then Option.some "⇑"
-    else if String.beq name "uHar" then Option.some "⥣"
-    else if String.beq name "uacute" then Option.some "ú"
-    else if String.beq name "uarr" then Option.some "↑"
-    else if String.beq name "ubrcy" then Option.some "ў"
-    else if String.beq name "ubreve" then Option.some "ŭ"
-    else if String.beq name "ucirc" then Option.some "û"
-    else if String.beq name "ucy" then Option.some "у"
-    else if String.beq name "udarr" then Option.some "⇅"
-    else if String.beq name "udblac" then Option.some "ű"
-    else if String.beq name "udhar" then Option.some "⥮"
-    else if String.beq name "ufisht" then Option.some "⥾"
-    else if String.beq name "ufr" then Option.some "𝔲"
-    else if String.beq name "ugrave" then Option.some "ù"
-    else if String.beq name "uharl" then Option.some "↿"
-    else if String.beq name "uharr" then Option.some "↾"
-    else if String.beq name "uhblk" then Option.some "▀"
-    else if String.beq name "ulcorn" then Option.some "⌜"
-    else if String.beq name "ulcorner" then Option.some "⌜"
-    else if String.beq name "ulcrop" then Option.some "⌏"
-    else if String.beq name "ultri" then Option.some "◸"
-    else if String.beq name "umacr" then Option.some "ū"
-    else if String.beq name "uml" then Option.some "¨"
-    else if String.beq name "uogon" then Option.some "ų"
-    else if String.beq name "uopf" then Option.some "𝕦"
-    else if String.beq name "uparrow" then Option.some "↑"
-    else if String.beq name "updownarrow" then Option.some "↕"
-    else if String.beq name "upharpoonleft" then Option.some "↿"
-    else if String.beq name "upharpoonright" then Option.some "↾"
-    else if String.beq name "uplus" then Option.some "⊎"
-    else if String.beq name "upsi" then Option.some "υ"
-    else if String.beq name "upsih" then Option.some "ϒ"
-    else if String.beq name "upsilon" then Option.some "υ"
-    else if String.beq name "upuparrows" then Option.some "⇈"
-    else if String.beq name "urcorn" then Option.some "⌝"
-    else if String.beq name "urcorner" then Option.some "⌝"
-    else if String.beq name "urcrop" then Option.some "⌎"
-    else if String.beq name "uring" then Option.some "ů"
-    else if String.beq name "urtri" then Option.some "◹"
-    else if String.beq name "uscr" then Option.some "𝓊"
-    else if String.beq name "utdot" then Option.some "⋰"
-    else if String.beq name "utilde" then Option.some "ũ"
-    else if String.beq name "utri" then Option.some "▵"
-    else if String.beq name "utrif" then Option.some "▴"
-    else if String.beq name "uuarr" then Option.some "⇈"
-    else if String.beq name "uuml" then Option.some "ü"
-    else if String.beq name "uwangle" then Option.some "⦧"
-    else Option.none
+def Markdown.entity_u_0 (name : String) : Option String :=
+    if String.beq name "uArr" then Option.some "⇑" else Option.none
+#[partial]
+def Markdown.entity_u_1 (name : String) : Option String :=
+    if String.beq name "uHar" then Option.some "⥣" else Option.none
+#[partial]
+def Markdown.entity_u_2 (name : String) : Option String :=
+    if String.lt name "uHar" then Markdown.entity_u_0 name else Markdown.entity_u_1 name
+#[partial]
+def Markdown.entity_u_3 (name : String) : Option String :=
+    if String.beq name "uacute" then Option.some "ú" else Option.none
+#[partial]
+def Markdown.entity_u_4 (name : String) : Option String :=
+    if String.beq name "uarr" then Option.some "↑" else Option.none
+#[partial]
+def Markdown.entity_u_5 (name : String) : Option String :=
+    if String.beq name "ubrcy" then Option.some "ў" else Option.none
+#[partial]
+def Markdown.entity_u_6 (name : String) : Option String :=
+    if String.lt name "ubrcy" then Markdown.entity_u_4 name else Markdown.entity_u_5 name
+#[partial]
+def Markdown.entity_u_7 (name : String) : Option String :=
+    if String.lt name "uarr" then Markdown.entity_u_3 name else Markdown.entity_u_6 name
+#[partial]
+def Markdown.entity_u_8 (name : String) : Option String :=
+    if String.lt name "uacute" then Markdown.entity_u_2 name else Markdown.entity_u_7 name
+#[partial]
+def Markdown.entity_u_9 (name : String) : Option String :=
+    if String.beq name "ubreve" then Option.some "ŭ" else Option.none
+#[partial]
+def Markdown.entity_u_10 (name : String) : Option String :=
+    if String.beq name "ucirc" then Option.some "û" else Option.none
+#[partial]
+def Markdown.entity_u_11 (name : String) : Option String :=
+    if String.beq name "ucy" then Option.some "у" else Option.none
+#[partial]
+def Markdown.entity_u_12 (name : String) : Option String :=
+    if String.lt name "ucy" then Markdown.entity_u_10 name else Markdown.entity_u_11 name
+#[partial]
+def Markdown.entity_u_13 (name : String) : Option String :=
+    if String.lt name "ucirc" then Markdown.entity_u_9 name else Markdown.entity_u_12 name
+#[partial]
+def Markdown.entity_u_14 (name : String) : Option String :=
+    if String.beq name "udarr" then Option.some "⇅" else Option.none
+#[partial]
+def Markdown.entity_u_15 (name : String) : Option String :=
+    if String.beq name "udblac" then Option.some "ű" else Option.none
+#[partial]
+def Markdown.entity_u_16 (name : String) : Option String :=
+    if String.beq name "udhar" then Option.some "⥮" else Option.none
+#[partial]
+def Markdown.entity_u_17 (name : String) : Option String :=
+    if String.lt name "udhar" then Markdown.entity_u_15 name else Markdown.entity_u_16 name
+#[partial]
+def Markdown.entity_u_18 (name : String) : Option String :=
+    if String.lt name "udblac" then Markdown.entity_u_14 name else Markdown.entity_u_17 name
+#[partial]
+def Markdown.entity_u_19 (name : String) : Option String :=
+    if String.lt name "udarr" then Markdown.entity_u_13 name else Markdown.entity_u_18 name
+#[partial]
+def Markdown.entity_u_20 (name : String) : Option String :=
+    if String.lt name "ubreve" then Markdown.entity_u_8 name else Markdown.entity_u_19 name
+#[partial]
+def Markdown.entity_u_21 (name : String) : Option String :=
+    if String.beq name "ufisht" then Option.some "⥾" else Option.none
+#[partial]
+def Markdown.entity_u_22 (name : String) : Option String :=
+    if String.beq name "ufr" then Option.some "𝔲" else Option.none
+#[partial]
+def Markdown.entity_u_23 (name : String) : Option String :=
+    if String.beq name "ugrave" then Option.some "ù" else Option.none
+#[partial]
+def Markdown.entity_u_24 (name : String) : Option String :=
+    if String.lt name "ugrave" then Markdown.entity_u_22 name else Markdown.entity_u_23 name
+#[partial]
+def Markdown.entity_u_25 (name : String) : Option String :=
+    if String.lt name "ufr" then Markdown.entity_u_21 name else Markdown.entity_u_24 name
+#[partial]
+def Markdown.entity_u_26 (name : String) : Option String :=
+    if String.beq name "uharl" then Option.some "↿" else Option.none
+#[partial]
+def Markdown.entity_u_27 (name : String) : Option String :=
+    if String.beq name "uharr" then Option.some "↾" else Option.none
+#[partial]
+def Markdown.entity_u_28 (name : String) : Option String :=
+    if String.beq name "uhblk" then Option.some "▀" else Option.none
+#[partial]
+def Markdown.entity_u_29 (name : String) : Option String :=
+    if String.lt name "uhblk" then Markdown.entity_u_27 name else Markdown.entity_u_28 name
+#[partial]
+def Markdown.entity_u_30 (name : String) : Option String :=
+    if String.lt name "uharr" then Markdown.entity_u_26 name else Markdown.entity_u_29 name
+#[partial]
+def Markdown.entity_u_31 (name : String) : Option String :=
+    if String.lt name "uharl" then Markdown.entity_u_25 name else Markdown.entity_u_30 name
+#[partial]
+def Markdown.entity_u_32 (name : String) : Option String :=
+    if String.beq name "ulcorn" then Option.some "⌜" else Option.none
+#[partial]
+def Markdown.entity_u_33 (name : String) : Option String :=
+    if String.beq name "ulcorner" then Option.some "⌜" else Option.none
+#[partial]
+def Markdown.entity_u_34 (name : String) : Option String :=
+    if String.beq name "ulcrop" then Option.some "⌏" else Option.none
+#[partial]
+def Markdown.entity_u_35 (name : String) : Option String :=
+    if String.lt name "ulcrop" then Markdown.entity_u_33 name else Markdown.entity_u_34 name
+#[partial]
+def Markdown.entity_u_36 (name : String) : Option String :=
+    if String.lt name "ulcorner" then Markdown.entity_u_32 name else Markdown.entity_u_35 name
+#[partial]
+def Markdown.entity_u_37 (name : String) : Option String :=
+    if String.beq name "ultri" then Option.some "◸" else Option.none
+#[partial]
+def Markdown.entity_u_38 (name : String) : Option String :=
+    if String.beq name "umacr" then Option.some "ū" else Option.none
+#[partial]
+def Markdown.entity_u_39 (name : String) : Option String :=
+    if String.beq name "uml" then Option.some "¨" else Option.none
+#[partial]
+def Markdown.entity_u_40 (name : String) : Option String :=
+    if String.lt name "uml" then Markdown.entity_u_38 name else Markdown.entity_u_39 name
+#[partial]
+def Markdown.entity_u_41 (name : String) : Option String :=
+    if String.lt name "umacr" then Markdown.entity_u_37 name else Markdown.entity_u_40 name
+#[partial]
+def Markdown.entity_u_42 (name : String) : Option String :=
+    if String.lt name "ultri" then Markdown.entity_u_36 name else Markdown.entity_u_41 name
+#[partial]
+def Markdown.entity_u_43 (name : String) : Option String :=
+    if String.lt name "ulcorn" then Markdown.entity_u_31 name else Markdown.entity_u_42 name
+#[partial]
+def Markdown.entity_u_44 (name : String) : Option String :=
+    if String.lt name "ufisht" then Markdown.entity_u_20 name else Markdown.entity_u_43 name
+#[partial]
+def Markdown.entity_u_45 (name : String) : Option String :=
+    if String.beq name "uogon" then Option.some "ų" else Option.none
+#[partial]
+def Markdown.entity_u_46 (name : String) : Option String :=
+    if String.beq name "uopf" then Option.some "𝕦" else Option.none
+#[partial]
+def Markdown.entity_u_47 (name : String) : Option String :=
+    if String.beq name "uparrow" then Option.some "↑" else Option.none
+#[partial]
+def Markdown.entity_u_48 (name : String) : Option String :=
+    if String.lt name "uparrow" then Markdown.entity_u_46 name else Markdown.entity_u_47 name
+#[partial]
+def Markdown.entity_u_49 (name : String) : Option String :=
+    if String.lt name "uopf" then Markdown.entity_u_45 name else Markdown.entity_u_48 name
+#[partial]
+def Markdown.entity_u_50 (name : String) : Option String :=
+    if String.beq name "updownarrow" then Option.some "↕" else Option.none
+#[partial]
+def Markdown.entity_u_51 (name : String) : Option String :=
+    if String.beq name "upharpoonleft" then Option.some "↿" else Option.none
+#[partial]
+def Markdown.entity_u_52 (name : String) : Option String :=
+    if String.beq name "upharpoonright" then Option.some "↾" else Option.none
+#[partial]
+def Markdown.entity_u_53 (name : String) : Option String :=
+    if String.lt name "upharpoonright" then Markdown.entity_u_51 name else Markdown.entity_u_52 name
+#[partial]
+def Markdown.entity_u_54 (name : String) : Option String :=
+    if String.lt name "upharpoonleft" then Markdown.entity_u_50 name else Markdown.entity_u_53 name
+#[partial]
+def Markdown.entity_u_55 (name : String) : Option String :=
+    if String.lt name "updownarrow" then Markdown.entity_u_49 name else Markdown.entity_u_54 name
+#[partial]
+def Markdown.entity_u_56 (name : String) : Option String :=
+    if String.beq name "uplus" then Option.some "⊎" else Option.none
+#[partial]
+def Markdown.entity_u_57 (name : String) : Option String :=
+    if String.beq name "upsi" then Option.some "υ" else Option.none
+#[partial]
+def Markdown.entity_u_58 (name : String) : Option String :=
+    if String.beq name "upsih" then Option.some "ϒ" else Option.none
+#[partial]
+def Markdown.entity_u_59 (name : String) : Option String :=
+    if String.lt name "upsih" then Markdown.entity_u_57 name else Markdown.entity_u_58 name
+#[partial]
+def Markdown.entity_u_60 (name : String) : Option String :=
+    if String.lt name "upsi" then Markdown.entity_u_56 name else Markdown.entity_u_59 name
+#[partial]
+def Markdown.entity_u_61 (name : String) : Option String :=
+    if String.beq name "upsilon" then Option.some "υ" else Option.none
+#[partial]
+def Markdown.entity_u_62 (name : String) : Option String :=
+    if String.beq name "upuparrows" then Option.some "⇈" else Option.none
+#[partial]
+def Markdown.entity_u_63 (name : String) : Option String :=
+    if String.beq name "urcorn" then Option.some "⌝" else Option.none
+#[partial]
+def Markdown.entity_u_64 (name : String) : Option String :=
+    if String.lt name "urcorn" then Markdown.entity_u_62 name else Markdown.entity_u_63 name
+#[partial]
+def Markdown.entity_u_65 (name : String) : Option String :=
+    if String.lt name "upuparrows" then Markdown.entity_u_61 name else Markdown.entity_u_64 name
+#[partial]
+def Markdown.entity_u_66 (name : String) : Option String :=
+    if String.lt name "upsilon" then Markdown.entity_u_60 name else Markdown.entity_u_65 name
+#[partial]
+def Markdown.entity_u_67 (name : String) : Option String :=
+    if String.lt name "uplus" then Markdown.entity_u_55 name else Markdown.entity_u_66 name
+#[partial]
+def Markdown.entity_u_68 (name : String) : Option String :=
+    if String.beq name "urcorner" then Option.some "⌝" else Option.none
+#[partial]
+def Markdown.entity_u_69 (name : String) : Option String :=
+    if String.beq name "urcrop" then Option.some "⌎" else Option.none
+#[partial]
+def Markdown.entity_u_70 (name : String) : Option String :=
+    if String.beq name "uring" then Option.some "ů" else Option.none
+#[partial]
+def Markdown.entity_u_71 (name : String) : Option String :=
+    if String.lt name "uring" then Markdown.entity_u_69 name else Markdown.entity_u_70 name
+#[partial]
+def Markdown.entity_u_72 (name : String) : Option String :=
+    if String.lt name "urcrop" then Markdown.entity_u_68 name else Markdown.entity_u_71 name
+#[partial]
+def Markdown.entity_u_73 (name : String) : Option String :=
+    if String.beq name "urtri" then Option.some "◹" else Option.none
+#[partial]
+def Markdown.entity_u_74 (name : String) : Option String :=
+    if String.beq name "uscr" then Option.some "𝓊" else Option.none
+#[partial]
+def Markdown.entity_u_75 (name : String) : Option String :=
+    if String.beq name "utdot" then Option.some "⋰" else Option.none
+#[partial]
+def Markdown.entity_u_76 (name : String) : Option String :=
+    if String.lt name "utdot" then Markdown.entity_u_74 name else Markdown.entity_u_75 name
+#[partial]
+def Markdown.entity_u_77 (name : String) : Option String :=
+    if String.lt name "uscr" then Markdown.entity_u_73 name else Markdown.entity_u_76 name
+#[partial]
+def Markdown.entity_u_78 (name : String) : Option String :=
+    if String.lt name "urtri" then Markdown.entity_u_72 name else Markdown.entity_u_77 name
+#[partial]
+def Markdown.entity_u_79 (name : String) : Option String :=
+    if String.beq name "utilde" then Option.some "ũ" else Option.none
+#[partial]
+def Markdown.entity_u_80 (name : String) : Option String :=
+    if String.beq name "utri" then Option.some "▵" else Option.none
+#[partial]
+def Markdown.entity_u_81 (name : String) : Option String :=
+    if String.beq name "utrif" then Option.some "▴" else Option.none
+#[partial]
+def Markdown.entity_u_82 (name : String) : Option String :=
+    if String.lt name "utrif" then Markdown.entity_u_80 name else Markdown.entity_u_81 name
+#[partial]
+def Markdown.entity_u_83 (name : String) : Option String :=
+    if String.lt name "utri" then Markdown.entity_u_79 name else Markdown.entity_u_82 name
+#[partial]
+def Markdown.entity_u_84 (name : String) : Option String :=
+    if String.beq name "uuarr" then Option.some "⇈" else Option.none
+#[partial]
+def Markdown.entity_u_85 (name : String) : Option String :=
+    if String.beq name "uuml" then Option.some "ü" else Option.none
+#[partial]
+def Markdown.entity_u_86 (name : String) : Option String :=
+    if String.beq name "uwangle" then Option.some "⦧" else Option.none
+#[partial]
+def Markdown.entity_u_87 (name : String) : Option String :=
+    if String.lt name "uwangle" then Markdown.entity_u_85 name else Markdown.entity_u_86 name
+#[partial]
+def Markdown.entity_u_88 (name : String) : Option String :=
+    if String.lt name "uuml" then Markdown.entity_u_84 name else Markdown.entity_u_87 name
+#[partial]
+def Markdown.entity_u_89 (name : String) : Option String :=
+    if String.lt name "uuarr" then Markdown.entity_u_83 name else Markdown.entity_u_88 name
+#[partial]
+def Markdown.entity_u_90 (name : String) : Option String :=
+    if String.lt name "utilde" then Markdown.entity_u_78 name else Markdown.entity_u_89 name
+#[partial]
+def Markdown.entity_u_91 (name : String) : Option String :=
+    if String.lt name "urcorner" then Markdown.entity_u_67 name else Markdown.entity_u_90 name
+#[partial]
+def Markdown.entity_u_92 (name : String) : Option String :=
+    if String.lt name "uogon" then Markdown.entity_u_44 name else Markdown.entity_u_91 name
+
+def Markdown.entity_u (name : String) : Option String := Markdown.entity_u_92 name
 
 #[partial]
-def Markdown.entity_v (name : String) : Option String :=
-    if String.beq name "vArr" then Option.some "⇕"
-    else if String.beq name "vBar" then Option.some "⫨"
-    else if String.beq name "vBarv" then Option.some "⫩"
-    else if String.beq name "vDash" then Option.some "⊨"
-    else if String.beq name "vangrt" then Option.some "⦜"
-    else if String.beq name "varepsilon" then Option.some "ϵ"
-    else if String.beq name "varkappa" then Option.some "ϰ"
-    else if String.beq name "varnothing" then Option.some "∅"
-    else if String.beq name "varphi" then Option.some "ϕ"
-    else if String.beq name "varpi" then Option.some "ϖ"
-    else if String.beq name "varpropto" then Option.some "∝"
-    else if String.beq name "varr" then Option.some "↕"
-    else if String.beq name "varrho" then Option.some "ϱ"
-    else if String.beq name "varsigma" then Option.some "ς"
-    else if String.beq name "varsubsetneq" then Option.some "⊊︀"
-    else if String.beq name "varsubsetneqq" then Option.some "⫋︀"
-    else if String.beq name "varsupsetneq" then Option.some "⊋︀"
-    else if String.beq name "varsupsetneqq" then Option.some "⫌︀"
-    else if String.beq name "vartheta" then Option.some "ϑ"
-    else if String.beq name "vartriangleleft" then Option.some "⊲"
-    else if String.beq name "vartriangleright" then Option.some "⊳"
-    else if String.beq name "vcy" then Option.some "в"
-    else if String.beq name "vdash" then Option.some "⊢"
-    else if String.beq name "vee" then Option.some "∨"
-    else if String.beq name "veebar" then Option.some "⊻"
-    else if String.beq name "veeeq" then Option.some "≚"
-    else if String.beq name "vellip" then Option.some "⋮"
-    else if String.beq name "verbar" then Option.some "|"
-    else if String.beq name "vert" then Option.some "|"
-    else if String.beq name "vfr" then Option.some "𝔳"
-    else if String.beq name "vltri" then Option.some "⊲"
-    else if String.beq name "vnsub" then Option.some "⊂⃒"
-    else if String.beq name "vnsup" then Option.some "⊃⃒"
-    else if String.beq name "vopf" then Option.some "𝕧"
-    else if String.beq name "vprop" then Option.some "∝"
-    else if String.beq name "vrtri" then Option.some "⊳"
-    else if String.beq name "vscr" then Option.some "𝓋"
-    else if String.beq name "vsubnE" then Option.some "⫋︀"
-    else if String.beq name "vsubne" then Option.some "⊊︀"
-    else if String.beq name "vsupnE" then Option.some "⫌︀"
-    else if String.beq name "vsupne" then Option.some "⊋︀"
-    else if String.beq name "vzigzag" then Option.some "⦚"
-    else Option.none
+def Markdown.entity_v_0 (name : String) : Option String :=
+    if String.beq name "vArr" then Option.some "⇕" else Option.none
+#[partial]
+def Markdown.entity_v_1 (name : String) : Option String :=
+    if String.beq name "vBar" then Option.some "⫨" else Option.none
+#[partial]
+def Markdown.entity_v_2 (name : String) : Option String :=
+    if String.lt name "vBar" then Markdown.entity_v_0 name else Markdown.entity_v_1 name
+#[partial]
+def Markdown.entity_v_3 (name : String) : Option String :=
+    if String.beq name "vBarv" then Option.some "⫩" else Option.none
+#[partial]
+def Markdown.entity_v_4 (name : String) : Option String :=
+    if String.beq name "vDash" then Option.some "⊨" else Option.none
+#[partial]
+def Markdown.entity_v_5 (name : String) : Option String :=
+    if String.beq name "vangrt" then Option.some "⦜" else Option.none
+#[partial]
+def Markdown.entity_v_6 (name : String) : Option String :=
+    if String.lt name "vangrt" then Markdown.entity_v_4 name else Markdown.entity_v_5 name
+#[partial]
+def Markdown.entity_v_7 (name : String) : Option String :=
+    if String.lt name "vDash" then Markdown.entity_v_3 name else Markdown.entity_v_6 name
+#[partial]
+def Markdown.entity_v_8 (name : String) : Option String :=
+    if String.lt name "vBarv" then Markdown.entity_v_2 name else Markdown.entity_v_7 name
+#[partial]
+def Markdown.entity_v_9 (name : String) : Option String :=
+    if String.beq name "varepsilon" then Option.some "ϵ" else Option.none
+#[partial]
+def Markdown.entity_v_10 (name : String) : Option String :=
+    if String.beq name "varkappa" then Option.some "ϰ" else Option.none
+#[partial]
+def Markdown.entity_v_11 (name : String) : Option String :=
+    if String.lt name "varkappa" then Markdown.entity_v_9 name else Markdown.entity_v_10 name
+#[partial]
+def Markdown.entity_v_12 (name : String) : Option String :=
+    if String.beq name "varnothing" then Option.some "∅" else Option.none
+#[partial]
+def Markdown.entity_v_13 (name : String) : Option String :=
+    if String.beq name "varphi" then Option.some "ϕ" else Option.none
+#[partial]
+def Markdown.entity_v_14 (name : String) : Option String :=
+    if String.beq name "varpi" then Option.some "ϖ" else Option.none
+#[partial]
+def Markdown.entity_v_15 (name : String) : Option String :=
+    if String.lt name "varpi" then Markdown.entity_v_13 name else Markdown.entity_v_14 name
+#[partial]
+def Markdown.entity_v_16 (name : String) : Option String :=
+    if String.lt name "varphi" then Markdown.entity_v_12 name else Markdown.entity_v_15 name
+#[partial]
+def Markdown.entity_v_17 (name : String) : Option String :=
+    if String.lt name "varnothing" then Markdown.entity_v_11 name else Markdown.entity_v_16 name
+#[partial]
+def Markdown.entity_v_18 (name : String) : Option String :=
+    if String.lt name "varepsilon" then Markdown.entity_v_8 name else Markdown.entity_v_17 name
+#[partial]
+def Markdown.entity_v_19 (name : String) : Option String :=
+    if String.beq name "varpropto" then Option.some "∝" else Option.none
+#[partial]
+def Markdown.entity_v_20 (name : String) : Option String :=
+    if String.beq name "varr" then Option.some "↕" else Option.none
+#[partial]
+def Markdown.entity_v_21 (name : String) : Option String :=
+    if String.lt name "varr" then Markdown.entity_v_19 name else Markdown.entity_v_20 name
+#[partial]
+def Markdown.entity_v_22 (name : String) : Option String :=
+    if String.beq name "varrho" then Option.some "ϱ" else Option.none
+#[partial]
+def Markdown.entity_v_23 (name : String) : Option String :=
+    if String.beq name "varsigma" then Option.some "ς" else Option.none
+#[partial]
+def Markdown.entity_v_24 (name : String) : Option String :=
+    if String.beq name "varsubsetneq" then Option.some "⊊︀" else Option.none
+#[partial]
+def Markdown.entity_v_25 (name : String) : Option String :=
+    if String.lt name "varsubsetneq" then Markdown.entity_v_23 name else Markdown.entity_v_24 name
+#[partial]
+def Markdown.entity_v_26 (name : String) : Option String :=
+    if String.lt name "varsigma" then Markdown.entity_v_22 name else Markdown.entity_v_25 name
+#[partial]
+def Markdown.entity_v_27 (name : String) : Option String :=
+    if String.lt name "varrho" then Markdown.entity_v_21 name else Markdown.entity_v_26 name
+#[partial]
+def Markdown.entity_v_28 (name : String) : Option String :=
+    if String.beq name "varsubsetneqq" then Option.some "⫋︀" else Option.none
+#[partial]
+def Markdown.entity_v_29 (name : String) : Option String :=
+    if String.beq name "varsupsetneq" then Option.some "⊋︀" else Option.none
+#[partial]
+def Markdown.entity_v_30 (name : String) : Option String :=
+    if String.beq name "varsupsetneqq" then Option.some "⫌︀" else Option.none
+#[partial]
+def Markdown.entity_v_31 (name : String) : Option String :=
+    if String.lt name "varsupsetneqq" then Markdown.entity_v_29 name else Markdown.entity_v_30 name
+#[partial]
+def Markdown.entity_v_32 (name : String) : Option String :=
+    if String.lt name "varsupsetneq" then Markdown.entity_v_28 name else Markdown.entity_v_31 name
+#[partial]
+def Markdown.entity_v_33 (name : String) : Option String :=
+    if String.beq name "vartheta" then Option.some "ϑ" else Option.none
+#[partial]
+def Markdown.entity_v_34 (name : String) : Option String :=
+    if String.beq name "vartriangleleft" then Option.some "⊲" else Option.none
+#[partial]
+def Markdown.entity_v_35 (name : String) : Option String :=
+    if String.beq name "vartriangleright" then Option.some "⊳" else Option.none
+#[partial]
+def Markdown.entity_v_36 (name : String) : Option String :=
+    if String.lt name "vartriangleright" then Markdown.entity_v_34 name else Markdown.entity_v_35 name
+#[partial]
+def Markdown.entity_v_37 (name : String) : Option String :=
+    if String.lt name "vartriangleleft" then Markdown.entity_v_33 name else Markdown.entity_v_36 name
+#[partial]
+def Markdown.entity_v_38 (name : String) : Option String :=
+    if String.lt name "vartheta" then Markdown.entity_v_32 name else Markdown.entity_v_37 name
+#[partial]
+def Markdown.entity_v_39 (name : String) : Option String :=
+    if String.lt name "varsubsetneqq" then Markdown.entity_v_27 name else Markdown.entity_v_38 name
+#[partial]
+def Markdown.entity_v_40 (name : String) : Option String :=
+    if String.lt name "varpropto" then Markdown.entity_v_18 name else Markdown.entity_v_39 name
+#[partial]
+def Markdown.entity_v_41 (name : String) : Option String :=
+    if String.beq name "vcy" then Option.some "в" else Option.none
+#[partial]
+def Markdown.entity_v_42 (name : String) : Option String :=
+    if String.beq name "vdash" then Option.some "⊢" else Option.none
+#[partial]
+def Markdown.entity_v_43 (name : String) : Option String :=
+    if String.lt name "vdash" then Markdown.entity_v_41 name else Markdown.entity_v_42 name
+#[partial]
+def Markdown.entity_v_44 (name : String) : Option String :=
+    if String.beq name "vee" then Option.some "∨" else Option.none
+#[partial]
+def Markdown.entity_v_45 (name : String) : Option String :=
+    if String.beq name "veebar" then Option.some "⊻" else Option.none
+#[partial]
+def Markdown.entity_v_46 (name : String) : Option String :=
+    if String.beq name "veeeq" then Option.some "≚" else Option.none
+#[partial]
+def Markdown.entity_v_47 (name : String) : Option String :=
+    if String.lt name "veeeq" then Markdown.entity_v_45 name else Markdown.entity_v_46 name
+#[partial]
+def Markdown.entity_v_48 (name : String) : Option String :=
+    if String.lt name "veebar" then Markdown.entity_v_44 name else Markdown.entity_v_47 name
+#[partial]
+def Markdown.entity_v_49 (name : String) : Option String :=
+    if String.lt name "vee" then Markdown.entity_v_43 name else Markdown.entity_v_48 name
+#[partial]
+def Markdown.entity_v_50 (name : String) : Option String :=
+    if String.beq name "vellip" then Option.some "⋮" else Option.none
+#[partial]
+def Markdown.entity_v_51 (name : String) : Option String :=
+    if String.beq name "verbar" then Option.some "|" else Option.none
+#[partial]
+def Markdown.entity_v_52 (name : String) : Option String :=
+    if String.lt name "verbar" then Markdown.entity_v_50 name else Markdown.entity_v_51 name
+#[partial]
+def Markdown.entity_v_53 (name : String) : Option String :=
+    if String.beq name "vert" then Option.some "|" else Option.none
+#[partial]
+def Markdown.entity_v_54 (name : String) : Option String :=
+    if String.beq name "vfr" then Option.some "𝔳" else Option.none
+#[partial]
+def Markdown.entity_v_55 (name : String) : Option String :=
+    if String.beq name "vltri" then Option.some "⊲" else Option.none
+#[partial]
+def Markdown.entity_v_56 (name : String) : Option String :=
+    if String.lt name "vltri" then Markdown.entity_v_54 name else Markdown.entity_v_55 name
+#[partial]
+def Markdown.entity_v_57 (name : String) : Option String :=
+    if String.lt name "vfr" then Markdown.entity_v_53 name else Markdown.entity_v_56 name
+#[partial]
+def Markdown.entity_v_58 (name : String) : Option String :=
+    if String.lt name "vert" then Markdown.entity_v_52 name else Markdown.entity_v_57 name
+#[partial]
+def Markdown.entity_v_59 (name : String) : Option String :=
+    if String.lt name "vellip" then Markdown.entity_v_49 name else Markdown.entity_v_58 name
+#[partial]
+def Markdown.entity_v_60 (name : String) : Option String :=
+    if String.beq name "vnsub" then Option.some "⊂⃒" else Option.none
+#[partial]
+def Markdown.entity_v_61 (name : String) : Option String :=
+    if String.beq name "vnsup" then Option.some "⊃⃒" else Option.none
+#[partial]
+def Markdown.entity_v_62 (name : String) : Option String :=
+    if String.lt name "vnsup" then Markdown.entity_v_60 name else Markdown.entity_v_61 name
+#[partial]
+def Markdown.entity_v_63 (name : String) : Option String :=
+    if String.beq name "vopf" then Option.some "𝕧" else Option.none
+#[partial]
+def Markdown.entity_v_64 (name : String) : Option String :=
+    if String.beq name "vprop" then Option.some "∝" else Option.none
+#[partial]
+def Markdown.entity_v_65 (name : String) : Option String :=
+    if String.beq name "vrtri" then Option.some "⊳" else Option.none
+#[partial]
+def Markdown.entity_v_66 (name : String) : Option String :=
+    if String.lt name "vrtri" then Markdown.entity_v_64 name else Markdown.entity_v_65 name
+#[partial]
+def Markdown.entity_v_67 (name : String) : Option String :=
+    if String.lt name "vprop" then Markdown.entity_v_63 name else Markdown.entity_v_66 name
+#[partial]
+def Markdown.entity_v_68 (name : String) : Option String :=
+    if String.lt name "vopf" then Markdown.entity_v_62 name else Markdown.entity_v_67 name
+#[partial]
+def Markdown.entity_v_69 (name : String) : Option String :=
+    if String.beq name "vscr" then Option.some "𝓋" else Option.none
+#[partial]
+def Markdown.entity_v_70 (name : String) : Option String :=
+    if String.beq name "vsubnE" then Option.some "⫋︀" else Option.none
+#[partial]
+def Markdown.entity_v_71 (name : String) : Option String :=
+    if String.beq name "vsubne" then Option.some "⊊︀" else Option.none
+#[partial]
+def Markdown.entity_v_72 (name : String) : Option String :=
+    if String.lt name "vsubne" then Markdown.entity_v_70 name else Markdown.entity_v_71 name
+#[partial]
+def Markdown.entity_v_73 (name : String) : Option String :=
+    if String.lt name "vsubnE" then Markdown.entity_v_69 name else Markdown.entity_v_72 name
+#[partial]
+def Markdown.entity_v_74 (name : String) : Option String :=
+    if String.beq name "vsupnE" then Option.some "⫌︀" else Option.none
+#[partial]
+def Markdown.entity_v_75 (name : String) : Option String :=
+    if String.beq name "vsupne" then Option.some "⊋︀" else Option.none
+#[partial]
+def Markdown.entity_v_76 (name : String) : Option String :=
+    if String.beq name "vzigzag" then Option.some "⦚" else Option.none
+#[partial]
+def Markdown.entity_v_77 (name : String) : Option String :=
+    if String.lt name "vzigzag" then Markdown.entity_v_75 name else Markdown.entity_v_76 name
+#[partial]
+def Markdown.entity_v_78 (name : String) : Option String :=
+    if String.lt name "vsupne" then Markdown.entity_v_74 name else Markdown.entity_v_77 name
+#[partial]
+def Markdown.entity_v_79 (name : String) : Option String :=
+    if String.lt name "vsupnE" then Markdown.entity_v_73 name else Markdown.entity_v_78 name
+#[partial]
+def Markdown.entity_v_80 (name : String) : Option String :=
+    if String.lt name "vscr" then Markdown.entity_v_68 name else Markdown.entity_v_79 name
+#[partial]
+def Markdown.entity_v_81 (name : String) : Option String :=
+    if String.lt name "vnsub" then Markdown.entity_v_59 name else Markdown.entity_v_80 name
+#[partial]
+def Markdown.entity_v_82 (name : String) : Option String :=
+    if String.lt name "vcy" then Markdown.entity_v_40 name else Markdown.entity_v_81 name
+
+def Markdown.entity_v (name : String) : Option String := Markdown.entity_v_82 name
 
 #[partial]
-def Markdown.entity_w (name : String) : Option String :=
-    if String.beq name "wcirc" then Option.some "ŵ"
-    else if String.beq name "wedbar" then Option.some "⩟"
-    else if String.beq name "wedge" then Option.some "∧"
-    else if String.beq name "wedgeq" then Option.some "≙"
-    else if String.beq name "weierp" then Option.some "℘"
-    else if String.beq name "wfr" then Option.some "𝔴"
-    else if String.beq name "wopf" then Option.some "𝕨"
-    else if String.beq name "wp" then Option.some "℘"
-    else if String.beq name "wr" then Option.some "≀"
-    else if String.beq name "wreath" then Option.some "≀"
-    else if String.beq name "wscr" then Option.some "𝓌"
-    else Option.none
+def Markdown.entity_w_0 (name : String) : Option String :=
+    if String.beq name "wcirc" then Option.some "ŵ" else Option.none
+#[partial]
+def Markdown.entity_w_1 (name : String) : Option String :=
+    if String.beq name "wedbar" then Option.some "⩟" else Option.none
+#[partial]
+def Markdown.entity_w_2 (name : String) : Option String :=
+    if String.lt name "wedbar" then Markdown.entity_w_0 name else Markdown.entity_w_1 name
+#[partial]
+def Markdown.entity_w_3 (name : String) : Option String :=
+    if String.beq name "wedge" then Option.some "∧" else Option.none
+#[partial]
+def Markdown.entity_w_4 (name : String) : Option String :=
+    if String.beq name "wedgeq" then Option.some "≙" else Option.none
+#[partial]
+def Markdown.entity_w_5 (name : String) : Option String :=
+    if String.beq name "weierp" then Option.some "℘" else Option.none
+#[partial]
+def Markdown.entity_w_6 (name : String) : Option String :=
+    if String.lt name "weierp" then Markdown.entity_w_4 name else Markdown.entity_w_5 name
+#[partial]
+def Markdown.entity_w_7 (name : String) : Option String :=
+    if String.lt name "wedgeq" then Markdown.entity_w_3 name else Markdown.entity_w_6 name
+#[partial]
+def Markdown.entity_w_8 (name : String) : Option String :=
+    if String.lt name "wedge" then Markdown.entity_w_2 name else Markdown.entity_w_7 name
+#[partial]
+def Markdown.entity_w_9 (name : String) : Option String :=
+    if String.beq name "wfr" then Option.some "𝔴" else Option.none
+#[partial]
+def Markdown.entity_w_10 (name : String) : Option String :=
+    if String.beq name "wopf" then Option.some "𝕨" else Option.none
+#[partial]
+def Markdown.entity_w_11 (name : String) : Option String :=
+    if String.beq name "wp" then Option.some "℘" else Option.none
+#[partial]
+def Markdown.entity_w_12 (name : String) : Option String :=
+    if String.lt name "wp" then Markdown.entity_w_10 name else Markdown.entity_w_11 name
+#[partial]
+def Markdown.entity_w_13 (name : String) : Option String :=
+    if String.lt name "wopf" then Markdown.entity_w_9 name else Markdown.entity_w_12 name
+#[partial]
+def Markdown.entity_w_14 (name : String) : Option String :=
+    if String.beq name "wr" then Option.some "≀" else Option.none
+#[partial]
+def Markdown.entity_w_15 (name : String) : Option String :=
+    if String.beq name "wreath" then Option.some "≀" else Option.none
+#[partial]
+def Markdown.entity_w_16 (name : String) : Option String :=
+    if String.beq name "wscr" then Option.some "𝓌" else Option.none
+#[partial]
+def Markdown.entity_w_17 (name : String) : Option String :=
+    if String.lt name "wscr" then Markdown.entity_w_15 name else Markdown.entity_w_16 name
+#[partial]
+def Markdown.entity_w_18 (name : String) : Option String :=
+    if String.lt name "wreath" then Markdown.entity_w_14 name else Markdown.entity_w_17 name
+#[partial]
+def Markdown.entity_w_19 (name : String) : Option String :=
+    if String.lt name "wr" then Markdown.entity_w_13 name else Markdown.entity_w_18 name
+#[partial]
+def Markdown.entity_w_20 (name : String) : Option String :=
+    if String.lt name "wfr" then Markdown.entity_w_8 name else Markdown.entity_w_19 name
+
+def Markdown.entity_w (name : String) : Option String := Markdown.entity_w_20 name
 
 #[partial]
-def Markdown.entity_x (name : String) : Option String :=
-    if String.beq name "xcap" then Option.some "⋂"
-    else if String.beq name "xcirc" then Option.some "◯"
-    else if String.beq name "xcup" then Option.some "⋃"
-    else if String.beq name "xdtri" then Option.some "▽"
-    else if String.beq name "xfr" then Option.some "𝔵"
-    else if String.beq name "xhArr" then Option.some "⟺"
-    else if String.beq name "xharr" then Option.some "⟷"
-    else if String.beq name "xi" then Option.some "ξ"
-    else if String.beq name "xlArr" then Option.some "⟸"
-    else if String.beq name "xlarr" then Option.some "⟵"
-    else if String.beq name "xmap" then Option.some "⟼"
-    else if String.beq name "xnis" then Option.some "⋻"
-    else if String.beq name "xodot" then Option.some "⨀"
-    else if String.beq name "xopf" then Option.some "𝕩"
-    else if String.beq name "xoplus" then Option.some "⨁"
-    else if String.beq name "xotime" then Option.some "⨂"
-    else if String.beq name "xrArr" then Option.some "⟹"
-    else if String.beq name "xrarr" then Option.some "⟶"
-    else if String.beq name "xscr" then Option.some "𝓍"
-    else if String.beq name "xsqcup" then Option.some "⨆"
-    else if String.beq name "xuplus" then Option.some "⨄"
-    else if String.beq name "xutri" then Option.some "△"
-    else if String.beq name "xvee" then Option.some "⋁"
-    else if String.beq name "xwedge" then Option.some "⋀"
-    else Option.none
+def Markdown.entity_x_0 (name : String) : Option String :=
+    if String.beq name "xcap" then Option.some "⋂" else Option.none
+#[partial]
+def Markdown.entity_x_1 (name : String) : Option String :=
+    if String.beq name "xcirc" then Option.some "◯" else Option.none
+#[partial]
+def Markdown.entity_x_2 (name : String) : Option String :=
+    if String.beq name "xcup" then Option.some "⋃" else Option.none
+#[partial]
+def Markdown.entity_x_3 (name : String) : Option String :=
+    if String.lt name "xcup" then Markdown.entity_x_1 name else Markdown.entity_x_2 name
+#[partial]
+def Markdown.entity_x_4 (name : String) : Option String :=
+    if String.lt name "xcirc" then Markdown.entity_x_0 name else Markdown.entity_x_3 name
+#[partial]
+def Markdown.entity_x_5 (name : String) : Option String :=
+    if String.beq name "xdtri" then Option.some "▽" else Option.none
+#[partial]
+def Markdown.entity_x_6 (name : String) : Option String :=
+    if String.beq name "xfr" then Option.some "𝔵" else Option.none
+#[partial]
+def Markdown.entity_x_7 (name : String) : Option String :=
+    if String.beq name "xhArr" then Option.some "⟺" else Option.none
+#[partial]
+def Markdown.entity_x_8 (name : String) : Option String :=
+    if String.lt name "xhArr" then Markdown.entity_x_6 name else Markdown.entity_x_7 name
+#[partial]
+def Markdown.entity_x_9 (name : String) : Option String :=
+    if String.lt name "xfr" then Markdown.entity_x_5 name else Markdown.entity_x_8 name
+#[partial]
+def Markdown.entity_x_10 (name : String) : Option String :=
+    if String.lt name "xdtri" then Markdown.entity_x_4 name else Markdown.entity_x_9 name
+#[partial]
+def Markdown.entity_x_11 (name : String) : Option String :=
+    if String.beq name "xharr" then Option.some "⟷" else Option.none
+#[partial]
+def Markdown.entity_x_12 (name : String) : Option String :=
+    if String.beq name "xi" then Option.some "ξ" else Option.none
+#[partial]
+def Markdown.entity_x_13 (name : String) : Option String :=
+    if String.beq name "xlArr" then Option.some "⟸" else Option.none
+#[partial]
+def Markdown.entity_x_14 (name : String) : Option String :=
+    if String.lt name "xlArr" then Markdown.entity_x_12 name else Markdown.entity_x_13 name
+#[partial]
+def Markdown.entity_x_15 (name : String) : Option String :=
+    if String.lt name "xi" then Markdown.entity_x_11 name else Markdown.entity_x_14 name
+#[partial]
+def Markdown.entity_x_16 (name : String) : Option String :=
+    if String.beq name "xlarr" then Option.some "⟵" else Option.none
+#[partial]
+def Markdown.entity_x_17 (name : String) : Option String :=
+    if String.beq name "xmap" then Option.some "⟼" else Option.none
+#[partial]
+def Markdown.entity_x_18 (name : String) : Option String :=
+    if String.beq name "xnis" then Option.some "⋻" else Option.none
+#[partial]
+def Markdown.entity_x_19 (name : String) : Option String :=
+    if String.lt name "xnis" then Markdown.entity_x_17 name else Markdown.entity_x_18 name
+#[partial]
+def Markdown.entity_x_20 (name : String) : Option String :=
+    if String.lt name "xmap" then Markdown.entity_x_16 name else Markdown.entity_x_19 name
+#[partial]
+def Markdown.entity_x_21 (name : String) : Option String :=
+    if String.lt name "xlarr" then Markdown.entity_x_15 name else Markdown.entity_x_20 name
+#[partial]
+def Markdown.entity_x_22 (name : String) : Option String :=
+    if String.lt name "xharr" then Markdown.entity_x_10 name else Markdown.entity_x_21 name
+#[partial]
+def Markdown.entity_x_23 (name : String) : Option String :=
+    if String.beq name "xodot" then Option.some "⨀" else Option.none
+#[partial]
+def Markdown.entity_x_24 (name : String) : Option String :=
+    if String.beq name "xopf" then Option.some "𝕩" else Option.none
+#[partial]
+def Markdown.entity_x_25 (name : String) : Option String :=
+    if String.beq name "xoplus" then Option.some "⨁" else Option.none
+#[partial]
+def Markdown.entity_x_26 (name : String) : Option String :=
+    if String.lt name "xoplus" then Markdown.entity_x_24 name else Markdown.entity_x_25 name
+#[partial]
+def Markdown.entity_x_27 (name : String) : Option String :=
+    if String.lt name "xopf" then Markdown.entity_x_23 name else Markdown.entity_x_26 name
+#[partial]
+def Markdown.entity_x_28 (name : String) : Option String :=
+    if String.beq name "xotime" then Option.some "⨂" else Option.none
+#[partial]
+def Markdown.entity_x_29 (name : String) : Option String :=
+    if String.beq name "xrArr" then Option.some "⟹" else Option.none
+#[partial]
+def Markdown.entity_x_30 (name : String) : Option String :=
+    if String.beq name "xrarr" then Option.some "⟶" else Option.none
+#[partial]
+def Markdown.entity_x_31 (name : String) : Option String :=
+    if String.lt name "xrarr" then Markdown.entity_x_29 name else Markdown.entity_x_30 name
+#[partial]
+def Markdown.entity_x_32 (name : String) : Option String :=
+    if String.lt name "xrArr" then Markdown.entity_x_28 name else Markdown.entity_x_31 name
+#[partial]
+def Markdown.entity_x_33 (name : String) : Option String :=
+    if String.lt name "xotime" then Markdown.entity_x_27 name else Markdown.entity_x_32 name
+#[partial]
+def Markdown.entity_x_34 (name : String) : Option String :=
+    if String.beq name "xscr" then Option.some "𝓍" else Option.none
+#[partial]
+def Markdown.entity_x_35 (name : String) : Option String :=
+    if String.beq name "xsqcup" then Option.some "⨆" else Option.none
+#[partial]
+def Markdown.entity_x_36 (name : String) : Option String :=
+    if String.beq name "xuplus" then Option.some "⨄" else Option.none
+#[partial]
+def Markdown.entity_x_37 (name : String) : Option String :=
+    if String.lt name "xuplus" then Markdown.entity_x_35 name else Markdown.entity_x_36 name
+#[partial]
+def Markdown.entity_x_38 (name : String) : Option String :=
+    if String.lt name "xsqcup" then Markdown.entity_x_34 name else Markdown.entity_x_37 name
+#[partial]
+def Markdown.entity_x_39 (name : String) : Option String :=
+    if String.beq name "xutri" then Option.some "△" else Option.none
+#[partial]
+def Markdown.entity_x_40 (name : String) : Option String :=
+    if String.beq name "xvee" then Option.some "⋁" else Option.none
+#[partial]
+def Markdown.entity_x_41 (name : String) : Option String :=
+    if String.beq name "xwedge" then Option.some "⋀" else Option.none
+#[partial]
+def Markdown.entity_x_42 (name : String) : Option String :=
+    if String.lt name "xwedge" then Markdown.entity_x_40 name else Markdown.entity_x_41 name
+#[partial]
+def Markdown.entity_x_43 (name : String) : Option String :=
+    if String.lt name "xvee" then Markdown.entity_x_39 name else Markdown.entity_x_42 name
+#[partial]
+def Markdown.entity_x_44 (name : String) : Option String :=
+    if String.lt name "xutri" then Markdown.entity_x_38 name else Markdown.entity_x_43 name
+#[partial]
+def Markdown.entity_x_45 (name : String) : Option String :=
+    if String.lt name "xscr" then Markdown.entity_x_33 name else Markdown.entity_x_44 name
+#[partial]
+def Markdown.entity_x_46 (name : String) : Option String :=
+    if String.lt name "xodot" then Markdown.entity_x_22 name else Markdown.entity_x_45 name
+
+def Markdown.entity_x (name : String) : Option String := Markdown.entity_x_46 name
 
 #[partial]
-def Markdown.entity_y (name : String) : Option String :=
-    if String.beq name "yacute" then Option.some "ý"
-    else if String.beq name "yacy" then Option.some "я"
-    else if String.beq name "ycirc" then Option.some "ŷ"
-    else if String.beq name "ycy" then Option.some "ы"
-    else if String.beq name "yen" then Option.some "¥"
-    else if String.beq name "yfr" then Option.some "𝔶"
-    else if String.beq name "yicy" then Option.some "ї"
-    else if String.beq name "yopf" then Option.some "𝕪"
-    else if String.beq name "yscr" then Option.some "𝓎"
-    else if String.beq name "yucy" then Option.some "ю"
-    else if String.beq name "yuml" then Option.some "ÿ"
-    else Option.none
+def Markdown.entity_y_0 (name : String) : Option String :=
+    if String.beq name "yacute" then Option.some "ý" else Option.none
+#[partial]
+def Markdown.entity_y_1 (name : String) : Option String :=
+    if String.beq name "yacy" then Option.some "я" else Option.none
+#[partial]
+def Markdown.entity_y_2 (name : String) : Option String :=
+    if String.lt name "yacy" then Markdown.entity_y_0 name else Markdown.entity_y_1 name
+#[partial]
+def Markdown.entity_y_3 (name : String) : Option String :=
+    if String.beq name "ycirc" then Option.some "ŷ" else Option.none
+#[partial]
+def Markdown.entity_y_4 (name : String) : Option String :=
+    if String.beq name "ycy" then Option.some "ы" else Option.none
+#[partial]
+def Markdown.entity_y_5 (name : String) : Option String :=
+    if String.beq name "yen" then Option.some "¥" else Option.none
+#[partial]
+def Markdown.entity_y_6 (name : String) : Option String :=
+    if String.lt name "yen" then Markdown.entity_y_4 name else Markdown.entity_y_5 name
+#[partial]
+def Markdown.entity_y_7 (name : String) : Option String :=
+    if String.lt name "ycy" then Markdown.entity_y_3 name else Markdown.entity_y_6 name
+#[partial]
+def Markdown.entity_y_8 (name : String) : Option String :=
+    if String.lt name "ycirc" then Markdown.entity_y_2 name else Markdown.entity_y_7 name
+#[partial]
+def Markdown.entity_y_9 (name : String) : Option String :=
+    if String.beq name "yfr" then Option.some "𝔶" else Option.none
+#[partial]
+def Markdown.entity_y_10 (name : String) : Option String :=
+    if String.beq name "yicy" then Option.some "ї" else Option.none
+#[partial]
+def Markdown.entity_y_11 (name : String) : Option String :=
+    if String.beq name "yopf" then Option.some "𝕪" else Option.none
+#[partial]
+def Markdown.entity_y_12 (name : String) : Option String :=
+    if String.lt name "yopf" then Markdown.entity_y_10 name else Markdown.entity_y_11 name
+#[partial]
+def Markdown.entity_y_13 (name : String) : Option String :=
+    if String.lt name "yicy" then Markdown.entity_y_9 name else Markdown.entity_y_12 name
+#[partial]
+def Markdown.entity_y_14 (name : String) : Option String :=
+    if String.beq name "yscr" then Option.some "𝓎" else Option.none
+#[partial]
+def Markdown.entity_y_15 (name : String) : Option String :=
+    if String.beq name "yucy" then Option.some "ю" else Option.none
+#[partial]
+def Markdown.entity_y_16 (name : String) : Option String :=
+    if String.beq name "yuml" then Option.some "ÿ" else Option.none
+#[partial]
+def Markdown.entity_y_17 (name : String) : Option String :=
+    if String.lt name "yuml" then Markdown.entity_y_15 name else Markdown.entity_y_16 name
+#[partial]
+def Markdown.entity_y_18 (name : String) : Option String :=
+    if String.lt name "yucy" then Markdown.entity_y_14 name else Markdown.entity_y_17 name
+#[partial]
+def Markdown.entity_y_19 (name : String) : Option String :=
+    if String.lt name "yscr" then Markdown.entity_y_13 name else Markdown.entity_y_18 name
+#[partial]
+def Markdown.entity_y_20 (name : String) : Option String :=
+    if String.lt name "yfr" then Markdown.entity_y_8 name else Markdown.entity_y_19 name
+
+def Markdown.entity_y (name : String) : Option String := Markdown.entity_y_20 name
 
 #[partial]
-def Markdown.entity_z (name : String) : Option String :=
-    if String.beq name "zacute" then Option.some "ź"
-    else if String.beq name "zcaron" then Option.some "ž"
-    else if String.beq name "zcy" then Option.some "з"
-    else if String.beq name "zdot" then Option.some "ż"
-    else if String.beq name "zeetrf" then Option.some "ℨ"
-    else if String.beq name "zeta" then Option.some "ζ"
-    else if String.beq name "zfr" then Option.some "𝔷"
-    else if String.beq name "zhcy" then Option.some "ж"
-    else if String.beq name "zigrarr" then Option.some "⇝"
-    else if String.beq name "zopf" then Option.some "𝕫"
-    else if String.beq name "zscr" then Option.some "𝓏"
-    else if String.beq name "zwj" then Option.some "‍"
-    else if String.beq name "zwnj" then Option.some "‌"
-    else Option.none
+def Markdown.entity_z_0 (name : String) : Option String :=
+    if String.beq name "zacute" then Option.some "ź" else Option.none
+#[partial]
+def Markdown.entity_z_1 (name : String) : Option String :=
+    if String.beq name "zcaron" then Option.some "ž" else Option.none
+#[partial]
+def Markdown.entity_z_2 (name : String) : Option String :=
+    if String.beq name "zcy" then Option.some "з" else Option.none
+#[partial]
+def Markdown.entity_z_3 (name : String) : Option String :=
+    if String.lt name "zcy" then Markdown.entity_z_1 name else Markdown.entity_z_2 name
+#[partial]
+def Markdown.entity_z_4 (name : String) : Option String :=
+    if String.lt name "zcaron" then Markdown.entity_z_0 name else Markdown.entity_z_3 name
+#[partial]
+def Markdown.entity_z_5 (name : String) : Option String :=
+    if String.beq name "zdot" then Option.some "ż" else Option.none
+#[partial]
+def Markdown.entity_z_6 (name : String) : Option String :=
+    if String.beq name "zeetrf" then Option.some "ℨ" else Option.none
+#[partial]
+def Markdown.entity_z_7 (name : String) : Option String :=
+    if String.beq name "zeta" then Option.some "ζ" else Option.none
+#[partial]
+def Markdown.entity_z_8 (name : String) : Option String :=
+    if String.lt name "zeta" then Markdown.entity_z_6 name else Markdown.entity_z_7 name
+#[partial]
+def Markdown.entity_z_9 (name : String) : Option String :=
+    if String.lt name "zeetrf" then Markdown.entity_z_5 name else Markdown.entity_z_8 name
+#[partial]
+def Markdown.entity_z_10 (name : String) : Option String :=
+    if String.lt name "zdot" then Markdown.entity_z_4 name else Markdown.entity_z_9 name
+#[partial]
+def Markdown.entity_z_11 (name : String) : Option String :=
+    if String.beq name "zfr" then Option.some "𝔷" else Option.none
+#[partial]
+def Markdown.entity_z_12 (name : String) : Option String :=
+    if String.beq name "zhcy" then Option.some "ж" else Option.none
+#[partial]
+def Markdown.entity_z_13 (name : String) : Option String :=
+    if String.beq name "zigrarr" then Option.some "⇝" else Option.none
+#[partial]
+def Markdown.entity_z_14 (name : String) : Option String :=
+    if String.lt name "zigrarr" then Markdown.entity_z_12 name else Markdown.entity_z_13 name
+#[partial]
+def Markdown.entity_z_15 (name : String) : Option String :=
+    if String.lt name "zhcy" then Markdown.entity_z_11 name else Markdown.entity_z_14 name
+#[partial]
+def Markdown.entity_z_16 (name : String) : Option String :=
+    if String.beq name "zopf" then Option.some "𝕫" else Option.none
+#[partial]
+def Markdown.entity_z_17 (name : String) : Option String :=
+    if String.beq name "zscr" then Option.some "𝓏" else Option.none
+#[partial]
+def Markdown.entity_z_18 (name : String) : Option String :=
+    if String.lt name "zscr" then Markdown.entity_z_16 name else Markdown.entity_z_17 name
+#[partial]
+def Markdown.entity_z_19 (name : String) : Option String :=
+    if String.beq name "zwj" then Option.some "‍" else Option.none
+#[partial]
+def Markdown.entity_z_20 (name : String) : Option String :=
+    if String.beq name "zwnj" then Option.some "‌" else Option.none
+#[partial]
+def Markdown.entity_z_21 (name : String) : Option String :=
+    if String.lt name "zwnj" then Markdown.entity_z_19 name else Markdown.entity_z_20 name
+#[partial]
+def Markdown.entity_z_22 (name : String) : Option String :=
+    if String.lt name "zwj" then Markdown.entity_z_18 name else Markdown.entity_z_21 name
+#[partial]
+def Markdown.entity_z_23 (name : String) : Option String :=
+    if String.lt name "zopf" then Markdown.entity_z_15 name else Markdown.entity_z_22 name
+#[partial]
+def Markdown.entity_z_24 (name : String) : Option String :=
+    if String.lt name "zfr" then Markdown.entity_z_10 name else Markdown.entity_z_23 name
+
+def Markdown.entity_z (name : String) : Option String := Markdown.entity_z_24 name
