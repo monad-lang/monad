@@ -57,7 +57,8 @@ struct Markdown.BlockState {
 
 /// What closing an open block produces.
 type Markdown.Finalized {
-    fin_block (block : Markdown.RawBlock),
+    // `ends_blank`: the block ended with a blank line (only a list can).
+    fin_block (block : Markdown.RawBlock) (ends_blank : Bool),
     fin_item (item : Markdown.RawItem) (ends_blank : Bool) (between_blank : Bool),
     fin_none,
     fin_document
@@ -566,29 +567,30 @@ def Markdown.drop_blank_head (lines : List String) : List String :=
 def Markdown.finalize_open (b : Markdown.OpenBlock) : Markdown.Finalized :=
     match b {
         open_doc _ => Markdown.Finalized.fin_document,
-        open_blockquote blocks => Markdown.Finalized.fin_block (raw_block_quote (List.reverse blocks)),
-        open_list kind loose items _ =>
-            Markdown.Finalized.fin_block (raw_list kind (Bool.not loose) (List.reverse items)),
+        open_blockquote blocks => Markdown.Finalized.fin_block (raw_block_quote (List.reverse blocks)) false,
+        open_list kind loose items last_blank =>
+            Markdown.Finalized.fin_block (raw_list kind (Bool.not loose) (List.reverse items)) last_blank,
         open_item _ checked blocks ends between _ =>
             Markdown.Finalized.fin_item (Markdown.mk_raw_item checked (List.reverse blocks)) ends between,
         open_paragraph lines =>
             match lines {
                 List.empty => Markdown.Finalized.fin_none,
-                List.cons _ _ => Markdown.Finalized.fin_block (raw_paragraph (List.reverse lines))
+                List.cons _ _ => Markdown.Finalized.fin_block (raw_paragraph (List.reverse lines)) false
             },
         open_fence info _ _ _ lines =>
-            Markdown.Finalized.fin_block (raw_code_block info (Markdown.join_terminated (List.reverse lines))),
+            Markdown.Finalized.fin_block (raw_code_block info (Markdown.join_terminated (List.reverse lines))) false,
         open_indented_code lines =>
             match Markdown.drop_blank_head lines {
                 List.empty => Markdown.Finalized.fin_none,
                 List.cons _ _ =>
                     Markdown.Finalized.fin_block
                         (raw_code_block Option.none
-                            (Markdown.join_terminated (List.reverse (Markdown.drop_blank_head lines))))
+                            (Markdown.join_terminated (List.reverse (Markdown.drop_blank_head lines)))) false
             },
-        open_html _ lines => Markdown.Finalized.fin_block (raw_html_block (Markdown.join_plain (List.reverse lines))),
+        open_html _ lines =>
+            Markdown.Finalized.fin_block (raw_html_block (Markdown.join_plain (List.reverse lines))) false,
         open_table aligns head rows =>
-            Markdown.Finalized.fin_block (raw_table aligns (List.reverse head) (List.reverse rows))
+            Markdown.Finalized.fin_block (raw_table aligns (List.reverse head) (List.reverse rows)) false
     }
 
 def Markdown.mk_raw_item (checked : Option Bool) (blocks : List Markdown.RawBlock) : Markdown.RawItem :=
@@ -596,7 +598,7 @@ def Markdown.mk_raw_item (checked : Option Bool) (blocks : List Markdown.RawBloc
 
 /// Put a finished block into the current stack head, which is its parent.
 #[partial]
-def Markdown.push_into (b : Markdown.RawBlock) (state : Markdown.BlockState) : Markdown.BlockState :=
+def Markdown.push_into (b : Markdown.RawBlock) (block_ends_blank : Bool) (state : Markdown.BlockState) : Markdown.BlockState :=
     match state.stack {
         List.empty => state,
         List.cons parent tail =>
@@ -609,7 +611,9 @@ def Markdown.push_into (b : Markdown.RawBlock) (state : Markdown.BlockState) : M
                     // A block that starts after a blank line makes the list
                     // loose; a trailing blank alone does not.
                     let between2 : Bool :=
-                        Bool.or between (Bool.and ends (Bool.not (List.is_empty blocks))) in
+                        Bool.or between
+                            (Bool.and (Bool.or ends block_ends_blank)
+                                (Bool.not (List.is_empty blocks))) in
                     Markdown.with_stack
                         (List.cons
                             (Markdown.OpenBlock.open_item indent checked (List.cons b blocks) false between2 start)
@@ -647,7 +651,7 @@ def Markdown.close_tip (state : Markdown.BlockState) : Markdown.BlockState :=
         List.empty => state,
         List.cons top rest =>
             match Markdown.finalize_open top {
-                Markdown.Finalized.fin_block b => Markdown.push_into b (Markdown.with_stack rest state),
+                Markdown.Finalized.fin_block b ends => Markdown.push_into b ends (Markdown.with_stack rest state),
                 Markdown.Finalized.fin_item i ends between =>
                     Markdown.push_item_into i ends between (Markdown.with_stack rest state),
                 Markdown.Finalized.fin_none => Markdown.with_stack rest state,
@@ -806,7 +810,7 @@ def Markdown.open_new
             match Markdown.try_atx first base {
                 Option.some h =>
                     Markdown.Started.started_consumed
-                        (Markdown.push_into (raw_heading h.level false [h.text]) prepared),
+                        (Markdown.push_into (raw_heading h.level false [h.text]) false prepared),
                 Option.none =>
                     match Markdown.try_fence first base {
                         Option.some f =>
@@ -846,7 +850,7 @@ def Markdown.open_new_after_setext
     if Markdown.is_thematic first base
     then
         Markdown.Started.started_consumed
-            (Markdown.push_into raw_thematic_break
+            (Markdown.push_into raw_thematic_break false
                 (Markdown.close_list_tip (Markdown.close_paragraph_tip state)))
     else
         match Markdown.try_list_item first (Markdown.tip_is_paragraph state) base {
@@ -928,7 +932,7 @@ pub def Markdown.to_heading (level : I64) (lines : List String) (state : Markdow
     match state.stack {
         List.empty => state,
         List.cons _ rest =>
-            Markdown.push_into (raw_heading level true (List.reverse lines)) (Markdown.with_stack rest state)
+            Markdown.push_into (raw_heading level true (List.reverse lines)) false (Markdown.with_stack rest state)
     }
 
 /// Fold a blank line into the innermost open list item.
