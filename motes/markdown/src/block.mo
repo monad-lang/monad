@@ -938,7 +938,13 @@ def Markdown.mark_blank_stack (stack : List Markdown.OpenBlock) : List Markdown.
         List.cons top rest =>
             match top {
                 open_item indent checked blocks _ between =>
-                    List.cons (Markdown.OpenBlock.open_item indent checked blocks true between) rest,
+                    // A freshly opened, still empty item is not "blank" -- a
+                    // blank line right after the marker must not make the list
+                    // loose.
+                    List.cons
+                        (Markdown.OpenBlock.open_item indent checked blocks
+                            (Bool.not (List.is_empty blocks)) between)
+                        rest,
                 open_doc _ => stack,
                 open_list _ _ _ _ => stack,
                 _ => List.cons top (Markdown.mark_blank_stack rest)
