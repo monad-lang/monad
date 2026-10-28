@@ -14,7 +14,12 @@
 // Sort 0 / Prop) is for proofs and invariants — do NOT use Eq for
 // runtime comparison.
 
-type Ordering {
+/// Three-way comparison result.
+///
+/// `pub` (with `Ord` below) so a mote outside `std` can declare `Ord`
+/// instances for its own types — `motes/time`'s `Instant`/`DateTime` are the
+/// first such consumers.
+pub type Ordering {
     lt,
     eq,
     gt
@@ -23,7 +28,7 @@ type Ordering {
 open Ordering {eq, gt, lt}
 
 /// Total ordering with three-way comparison.
-class [BEq A] Ord A {
+pub class [BEq A] Ord A {
     def compare : A -> A -> Ordering
 }
 
