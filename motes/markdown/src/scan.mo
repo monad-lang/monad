@@ -218,6 +218,12 @@ pub def Markdown.Cursor.step (c : Markdown.Cursor) : Markdown.Cursor :=
 pub def Markdown.Cursor.step_many (n : I64) (c : Markdown.Cursor) : Markdown.Cursor :=
     if I64.lt n 1i64 then c else Markdown.Cursor.step_many (I64.sub n 1i64) (Markdown.Cursor.step c)
 
+/// The cursor's text with any residual tab columns spelled as spaces.
+pub def Markdown.Cursor.materialize (c : Markdown.Cursor) : String :=
+    if I64.lt 0i64 c.tabs
+    then String.concat (String.repeat " " c.tabs) c.text
+    else c.text
+
 /// Consume spaces and tabs. A tab's remaining columns read back as spaces
 /// (see `peek`), so both spellings are tested here.
 #[partial]

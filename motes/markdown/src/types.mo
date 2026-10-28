@@ -90,6 +90,30 @@ pub type Markdown.Inline {
     inline_html (literal : String)
 }
 
+// ─── Parser-internal tree ───
+//
+// The block pass produces `RawBlock`s, whose paragraphs, headings and table
+// cells still hold SOURCE text. Inline parsing runs after the whole block
+// pass, so a link reference definition anywhere in the document resolves a
+// link anywhere else. `Markdown.resolve_block` (parse.mo) turns this into the
+// public `Block`.
+
+pub type Markdown.RawBlock {
+    raw_paragraph (lines : List String),
+    raw_heading (level : I64) (lines : List String),
+    raw_thematic_break,
+    raw_code_block (info : Option String) (literal : String),
+    raw_block_quote (blocks : List Markdown.RawBlock),
+    raw_list (kind : Markdown.ListKind) (tight : Bool) (items : List Markdown.RawItem),
+    raw_table (aligns : List Markdown.Align) (head : List String) (rows : List (List String)),
+    raw_html_block (literal : String)
+}
+
+pub struct Markdown.RawItem {
+    checked : Option Bool,
+    blocks : List Markdown.RawBlock
+}
+
 // ─── Equality ───
 
 /// `Bool` has a `BEq` instance but no `Bool.beq` def, and generic dispatch is

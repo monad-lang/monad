@@ -15,6 +15,15 @@ pub use lib::types {
     Markdown.list_item_beq, Markdown.table_row_beq,
 }
 
+pub use lib::parse {
+    Markdown.parse, Markdown.parse_with, Markdown.split_frontmatter,
+}
+
+pub use lib::html {
+    Markdown.to_html, Markdown.to_html_with,
+    Markdown.to_html_nodes, Markdown.to_html_nodes_with,
+}
+
 pub use lib::options {
     Markdown.Options, Markdown.HtmlOptions,
     Markdown.default_options, Markdown.commonmark_options, Markdown.site_options,
