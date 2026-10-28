@@ -608,8 +608,14 @@ def Markdown.push_into (b : Markdown.RawBlock) (state : Markdown.BlockState) : M
                 open_blockquote blocks =>
                     Markdown.with_stack (List.cons (Markdown.OpenBlock.open_blockquote (List.cons b blocks)) tail) state,
                 open_item indent checked blocks ends between =>
+                    // A block that starts after a blank line makes the list
+                    // loose; a trailing blank alone does not.
+                    let between2 : Bool :=
+                        Bool.or between (Bool.and ends (Bool.not (List.is_empty blocks))) in
                     Markdown.with_stack
-                        (List.cons (Markdown.OpenBlock.open_item indent checked (List.cons b blocks) ends between) tail)
+                        (List.cons
+                            (Markdown.OpenBlock.open_item indent checked (List.cons b blocks) false between2)
+                            tail)
                         state,
                 _ => state
             }
@@ -790,7 +796,8 @@ def Markdown.open_new
     else
         let base : I64 := c.column in
         let first : Markdown.Cursor := Markdown.Cursor.skip_spaces c in
-        let prepared : Markdown.BlockState := Markdown.close_paragraph_tip state in
+        let prepared : Markdown.BlockState :=
+            Markdown.close_list_tip (Markdown.close_paragraph_tip state) in
         if Markdown.is_blockquote first base
         then
             Markdown.mark_opened
@@ -934,10 +941,7 @@ def Markdown.mark_blank_stack (stack : List Markdown.OpenBlock) : List Markdown.
         List.cons top rest =>
             match top {
                 open_item indent checked blocks _ between =>
-                    List.cons
-                        (Markdown.OpenBlock.open_item indent checked blocks true
-                            (Bool.or between (Bool.not (List.is_empty blocks))))
-                        rest,
+                    List.cons (Markdown.OpenBlock.open_item indent checked blocks true between) rest,
                 open_doc _ => stack,
                 open_list _ _ _ _ => stack,
                 _ => List.cons top (Markdown.mark_blank_stack rest)
@@ -997,10 +1001,12 @@ def Markdown.add_content (state : Markdown.BlockState) (c : Markdown.Cursor) : M
                         Markdown.append_paragraph_line
                             (Markdown.Cursor.materialize (Markdown.Cursor.skip_spaces c)) state,
                     _ =>
+                        // A list cannot hold a paragraph directly: close it
+                        // and let the paragraph land in its parent.
                         let first : Markdown.Cursor := Markdown.Cursor.skip_spaces c in
                         Markdown.open_leaf
                             (Markdown.OpenBlock.open_paragraph [Markdown.Cursor.materialize first])
-                            state
+                            (Markdown.close_list_tip state)
                 }
         }
 
