@@ -1,0 +1,19 @@
+# The crypto mote: verification-only primitives, Phase 0-1 of
+# `plans/library-ideas/crypto-primitives.md`.
+#
+# `[link]` is a build property of the PACKAGE (motes/tls/mote.toml's
+# convention): a program that depends on `motes/crypto` links `-lcrypto`,
+# and nothing else does. `pkg-config` supplies the `-L` so no store path
+# appears here.
+#
+# No `[dependencies]`: `init`/`std` are ambient. This mote is a LEAF on
+# purpose -- `b64.mo` duplicates `motes/http`'s standard-base64 decoder
+# rather than depending on `http`.
+[mote]
+name = "crypto"
+version = "0.1.0"
+edition = "2026"
+
+[link]
+libs = ["crypto"]
+pkg-config = ["openssl"]

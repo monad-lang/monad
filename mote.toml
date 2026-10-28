@@ -36,6 +36,7 @@ members = [
   "bench",
   "proofs",
   "motes/clap",
+  "motes/crypto",
   "motes/demo",
   "motes/example",
   "motes/ffi_example",
