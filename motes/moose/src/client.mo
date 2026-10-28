@@ -580,8 +580,10 @@ def Client.drop_headers (names : List String) (h : Headers) : Headers :=
     List.cons n rest => Client.drop_headers rest (Headers.remove n h)
   }
 
-/// One-shot request without redirect following.
-def Client.request (req : Request) : IO (Result String Response) :=
+/// One-shot request without redirect following. Zero redirects is the
+/// useful default for an API client that must not be bounced across
+/// origins with a body or credential attached (`motes/oauth`'s endpoints).
+pub def Client.request (req : Request) : IO (Result String Response) :=
   Client.request_with 0i64 req
 
 /// Convenience: GET a `Uri` with the given headers, follow up to 10
@@ -589,7 +591,7 @@ def Client.request (req : Request) : IO (Result String Response) :=
 /// structured `Uri`, not a raw `String` -- parsing (`Uri.parse`, which
 /// can fail on malformed input) is the caller's own concern, same as
 /// `Request`'s own `uri` field.
-def Client.get (u : Uri) (hdrs : Headers) : IO (Result String Response) :=
+pub def Client.get (u : Uri) (hdrs : Headers) : IO (Result String Response) :=
   Client.get_timeout u hdrs Client.default_timeout_ms
 
 pub def Client.get_timeout (u : Uri) (hdrs : Headers) (timeout_ms : I64) : IO (Result String Response) :=
