@@ -10,3 +10,4 @@ pub use lib::types {CryptoSigAlg, CryptoPublicKey}
 pub use lib::b64 {B64.encode_std, B64.decode_std, B64Url.encode, B64Url.decode}
 pub use lib::hex {Hex.encode, Hex.decode}
 pub use lib::ct {Ct.eq}
+pub use lib::random {Random.bytes, Random.token}

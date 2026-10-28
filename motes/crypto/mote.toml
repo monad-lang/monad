@@ -17,3 +17,11 @@ edition = "2026"
 [link]
 libs = ["crypto"]
 pkg-config = ["openssl"]
+
+# Affine-by-default migration exception, the same one every mote carries.
+# The one violation shape is `random.mo`'s buffer: a `ByteBuf` must reach
+# `ByteBuf.ptr` (to be filled) and `ByteBuf.to_list`/`free` (to be read
+# and released), and `ByteBuf` is deliberately not `Copy`. `motes/tls`
+# has the same shape in `Tls.read_attempt`.
+[affine]
+mode = "warn"
