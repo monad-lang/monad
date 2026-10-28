@@ -538,6 +538,143 @@ def whnf_hcomp (c : Cubical) : Option Term :=
             else Option.none,
     }
 
+// ─── Glue (Stage 6b-ii) ──────────────────────────────────────────────
+//
+// `Glue A φ T w` is definitionally `T it_is_one` on φ, and the two
+// reductions that read it (`whnf_glue`, `whnf_glue_intro`) fire on the
+// LITERAL `i1` for the same reason `whnf_hcomp_satisfied` does: the
+// witness is a proof of `is_one i1`, and reduction has no conversion
+// check. The elimination's iota has no such guard at all -- it needs no
+// boundary condition, which is why it is the half of CCHM's rule that is
+// kept (`CubicalPrim.glue_elim`).
+
+/// `Glue A i1 T w ≡ T it_is_one`. Stuck for every other φ.
+def whnf_glue (c : Cubical) : Option Term :=
+    match c {
+        { prim := p, args := as } =>
+            if cubical_prim_eq p CubicalPrim.glue then
+                match as {
+                    List.cons _a_typ rest =>
+                        match rest {
+                            List.cons a_face rest2 =>
+                                match rest2 {
+                                    List.cons a_partial rest3 =>
+                                        match rest3 {
+                                            List.cons _a_equiv rest4 =>
+                                                if List.is_empty rest4
+                                                then whnf_glue_at_face a_face a_partial
+                                                else Option.none,
+                                            List.empty => Option.none,
+                                        },
+                                    List.empty => Option.none,
+                                },
+                            List.empty => Option.none,
+                        },
+                    List.empty => Option.none,
+                }
+            else Option.none,
+    }
+
+/// The `i1` check shared by the formation's and the introduction's
+/// rules, split out so the guard is written once.
+def whnf_glue_at_face (a_face : Term) (a_at_one : Term) : Option Term :=
+    if whnf_term_is_bare_prim a_face CubicalPrim.i1
+    then Option.some (Term.app a_at_one cub_it_is_one)
+    else Option.none
+
+/// `glue A i1 T w t a ≡ t it_is_one`. Stuck for every other φ -- which is
+/// why the introduction carries φ at all (`CubicalPrim.glue_intro`).
+def whnf_glue_intro (c : Cubical) : Option Term :=
+    match c {
+        { prim := p, args := as } =>
+            if cubical_prim_eq p CubicalPrim.glue_intro then
+                match as {
+                    List.cons _a_typ rest =>
+                        match rest {
+                            List.cons a_face rest2 =>
+                                match rest2 {
+                                    List.cons _a_partial rest3 =>
+                                        match rest3 {
+                                            List.cons _a_equiv rest4 =>
+                                                match rest4 {
+                                                    List.cons a_sys rest5 =>
+                                                        match rest5 {
+                                                            List.cons _a_base rest6 =>
+                                                                if List.is_empty rest6
+                                                                then whnf_glue_at_face a_face a_sys
+                                                                else Option.none,
+                                                            List.empty => Option.none,
+                                                        },
+                                                    List.empty => Option.none,
+                                                },
+                                            List.empty => Option.none,
+                                        },
+                                    List.empty => Option.none,
+                                },
+                            List.empty => Option.none,
+                        },
+                    List.empty => Option.none,
+                }
+            else Option.none,
+    }
+
+/// `unglue (glue A φ T w t a) ≡ a`, for EVERY φ. A neutral `unglue`
+/// stays stuck: CCHM's other half, `unglue g ≡ Sigma.fst (w it_is_one) g`,
+/// holds only under the introduction's `w t = a` condition, which nothing
+/// enforces (`univalence.md`, 6b-ii).
+def whnf_glue_elim (c : Cubical) : Option Term :=
+    match c {
+        { prim := p, args := as } =>
+            if cubical_prim_eq p CubicalPrim.glue_elim then
+                match as {
+                    List.cons a_glued rest =>
+                        if List.is_empty rest then whnf_glue_elim_fire a_glued else Option.none,
+                    List.empty => Option.none,
+                }
+            else Option.none,
+    }
+
+/// The iota step itself: peel the introduction's six arguments and answer
+/// the last. The count is re-checked rather than trusted, exactly as the
+/// other rules here do.
+def whnf_glue_elim_fire (a_glued : Term) : Option Term :=
+    match a_glued {
+        Term.cubical inner =>
+            match inner {
+                { prim := q, args := inner_as } =>
+                    if cubical_prim_eq q CubicalPrim.glue_intro then
+                        match inner_as {
+                            List.cons _a_typ rest =>
+                                match rest {
+                                    List.cons _a_face rest2 =>
+                                        match rest2 {
+                                            List.cons _a_partial rest3 =>
+                                                match rest3 {
+                                                    List.cons _a_equiv rest4 =>
+                                                        match rest4 {
+                                                            List.cons _a_sys rest5 =>
+                                                                match rest5 {
+                                                                    List.cons a_base rest6 =>
+                                                                        if List.is_empty rest6
+                                                                        then Option.some a_base
+                                                                        else Option.none,
+                                                                    List.empty => Option.none,
+                                                                },
+                                                            List.empty => Option.none,
+                                                        },
+                                                    List.empty => Option.none,
+                                                },
+                                            List.empty => Option.none,
+                                        },
+                                    List.empty => Option.none,
+                                },
+                            List.empty => Option.none,
+                        }
+                    else Option.none,
+            },
+        _ => Option.none,
+    }
+
 /// The generator step `face_eq0` and `face_eq1` share, on the single,
 /// already-reduced argument. At the endpoint where the constraint HOLDS
 /// the cofibration is `i1` (`face_eq0 i0`: the face `i = 0` is all of
@@ -614,44 +751,65 @@ def whnf_face_contradicts (l : Term) (r : Term) : Option Term :=
             },
     }
 
-/// Normalize a cubical head: reduce each argument to WHNF, then take
-/// one De Morgan step if any applies, then one face-lattice step, then
-/// one transport step if the family is constant. No further pass over
-/// any of THOSE steps' results is needed -- each is assembled from pieces
-/// that are already in WHNF (whnf_transp answers the already-reduced
-/// element, which came out of `whnf_cubical_args`), and a stuck head keeps
-/// its reduced arguments, so a caller comparing two stuck terms compares
-/// them as reduced as they can be.
+/// The rules whose answer is already in WHNF: each is assembled from the
+/// arguments `whnf_cubical_args` just reduced (or, for `whnf_face`, from
+/// generators it folds to an endpoint), so re-entering the reducer would
+/// buy nothing.
+def whnf_cubical_settled (c : Cubical) : Option Term :=
+    match whnf_demorgan c {
+        Option.some t => Option.some t,
+        Option.none =>
+            match whnf_face c {
+                Option.some t => Option.some t,
+                Option.none => whnf_transp c,
+            },
+    }
+
+/// The rules that answer a BETA REDEX -- a system applied to `i1` and the
+/// witness -- so their answer goes back through the reducer. Without that
+/// the head would be a `Term.lam` and `whnf`'s contract ("keep reducing at
+/// the head until the head is rigid") would be broken for every caller.
+def whnf_cubical_redex (c : Cubical) : Option Term :=
+    match whnf_hcomp c {
+        Option.some t => Option.some t,
+        Option.none =>
+            match whnf_glue c {
+                Option.some t => Option.some t,
+                Option.none => whnf_glue_intro c,
+            },
+    }
+
+/// Normalize a cubical head: an `unglue` iota step on the unreduced
+/// argument, then reduce every argument to WHNF, then one step from each
+/// half. A stuck head keeps its reduced arguments, so a caller comparing
+/// two stuck terms compares them as reduced as they can be.
 ///
-/// `hcomp`'s satisfied-face answer is the ONE that is not already reduced:
-/// it is the system applied to `i1` and then to the witness, i.e. a beta
-/// redex, so it goes back through the reducer. Without that the head would
-/// be a `Term.lam` and `whnf`'s contract ("keep reducing at the head until
-/// the head is rigid") would be broken for every caller.
 /// `#[partial]`, exactly as `whnf_go` is and for the same reason: the
-/// `hcomp` step hands its answer back to the reducer, so the recursion is
+/// redex half hands its answer back to the reducer, so the recursion is
 /// fuel-bounded rather than structural.
 #[partial]
 def whnf_cubical (fuel : I64) (scope : Scope) (locals : LocalScope) (c : Cubical) : Term :=
     match c {
         { prim := p, args := as } =>
-            let as_r : List Term := whnf_cubical_args fuel scope locals as in
-            // Annotated local, never a bare struct literal in argument
-            // position (the miscompile trap; AGENTS.md).
-            let c_r : Cubical := { prim := p, args := as_r } in
-            match whnf_demorgan c_r {
-                Option.some t => t,
+            // `unglue`'s iota reads the INTRODUCTION's head, and the
+            // argument reduction below destroys the redex wherever φ is the
+            // literal `i1` (the introduction itself reduces to `t
+            // it_is_one` there, leaving no `glue` node to fire on). So it
+            // gets first refusal on the UNREDUCED argument. Every other
+            // rule wants reduced arguments and is tried after.
+            match whnf_glue_elim c {
+                Option.some t => whnf_go (fuel - 1) scope locals t,
                 Option.none =>
-                    match whnf_face c_r {
+                    let as_r : List Term := whnf_cubical_args fuel scope locals as in
+                    // Annotated local, never a bare struct literal in
+                    // argument position (the miscompile trap; AGENTS.md).
+                    let c_r : Cubical := { prim := p, args := as_r } in
+                    match whnf_cubical_settled c_r {
                         Option.some t => t,
                         Option.none =>
-                            match whnf_hcomp c_r {
+                            match whnf_cubical_redex c_r {
                                 Option.some t => whnf_go (fuel - 1) scope locals t,
-                                Option.none =>
-                                    match whnf_transp c_r {
-                                        Option.some t => t,
-                                        Option.none => Term.cubical c_r,
-                                    },
+                                Option.none => Term.cubical c_r,
                             },
                     },
             },

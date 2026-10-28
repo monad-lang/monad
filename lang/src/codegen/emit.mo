@@ -17,7 +17,7 @@ use lang::types {
   group, i64, id_eq,
   ident, param_many, sentinel, show_identifier, show_module_path, term_peel,
   Cubical, face_eq0, face_eq1, hcomp, i0, i1, ijoin, imeet, ineg, interval,
-  is_one, it_is_one, pathp, transp,
+  is_one, it_is_one, pathp, transp, glue, glue_elim, glue_intro,
 }
 use llvm::ir {
   DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal,
@@ -2544,6 +2544,11 @@ def compile_cubical_ir (c : CodegenCtx) (cub_ : Cubical) : CompileResult :=
         // The `is_one i1` witness is type-level like the rest: the checker
         // consumes it and nothing at runtime does.
         CubicalPrim.it_is_one => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+        // Stage 6b-ii's three form a type, introduce into it and project
+        // back out: type-level throughout, so all three erase to void.
+        CubicalPrim.glue => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+        CubicalPrim.glue_intro => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+        CubicalPrim.glue_elim => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     }
 
 #[partial]

@@ -745,6 +745,36 @@ pub type CubicalPrim {
     /// (`lang/typecheck/infer.mo`) states it and both typing paths a
     /// zero-arity primitive can take already read that table.
     it_is_one,
+    /// The `Glue` type former (Stage 6b-ii,
+    /// plans/type-system/univalence.md): `Glue A φ T w` for a type `A`, a
+    /// cofibration `φ`, a partial type `T : is_one φ -> Type`, and a
+    /// partial equivalence `w : (u : is_one φ) -> Equiv (T u) A`. The
+    /// partial pair is `hcomp`'s own "function out of `is_one φ`"
+    /// encoding, so no new syntax.
+    ///
+    /// `w`'s type is why the rule is bespoke: it names `Equiv`, which
+    /// lives in `proofs` -- above this checker -- so the rule builds the
+    /// `Sigma`/`Pi`/`PathP` unfolding itself. `univalence.md`'s 6b-ii
+    /// measurement records why the alternative (moving `Equiv` down into
+    /// the prelude so the rule could name it) is blocked, and that the pin
+    /// meant to tie this unfolding to the library's `Equiv` is not
+    /// expressible yet -- library drift is a recorded OPEN risk, not a
+    /// controlled one.
+    glue,
+    /// The `Glue` introduction. Six arguments, not the two of Agda's
+    /// `glue t a`: the reduction `glue ... t a ≡ t it_is_one` fires at the
+    /// literal `i1`, and `whnf` has no expected type to read φ from, so φ
+    /// (and the rest of the formation's arguments) has to be carried.
+    /// A two-argument form could only reduce unconditionally, which is
+    /// subject reduction-unsound for `φ ≠ i1`.
+    glue_intro,
+    /// `unglue g : A` for `g : Glue A φ T w`, computed by iota on the
+    /// introduction: `unglue (glue A φ T w t a) ≡ a` for EVERY `φ`. That
+    /// unconditional iota is the half of CCHM's rule that needs no
+    /// boundary condition; the `Sigma.fst (w witness) g` half needs
+    /// `w t = a`, which nothing enforces (the same unenforced shape as
+    /// `hcomp`'s `u i0 = u0`), so a neutral `unglue` stays stuck.
+    glue_elim,
 }
 
 /// One cubical primitive applied to `args`, whose length is its arity.
@@ -2662,11 +2692,30 @@ pub def cub_is_one (i : Term) : Term := cub CubicalPrim.is_one [i]
 pub def cub_it_is_one : Term := cub CubicalPrim.it_is_one List.empty
 
 /// `hcomp A φ u u0` -- Kan composition. `whnf_hcomp`
-/// (`lang/src/typecheck/whnf.mo`) answers `u0` when the cofibration is
-/// REFUTED and stays stuck when it is satisfied; see `CubicalPrim.hcomp`
-/// for why the satisfied case has no rule here.
+/// (`lang/src/typecheck/whnf.mo`) answers `u0` when `face_decide` REFUTES
+/// the cofibration and `u i1 it_is_one` when it is the LITERAL `i1`; any
+/// other cofibration stays stuck. See `CubicalPrim.hcomp` for why the two
+/// decided cases answer differently.
 pub def cub_hcomp (a_typ : Term) (a_face : Term) (a_sys : Term) (a_base : Term) : Term :=
     cub CubicalPrim.hcomp [a_typ, a_face, a_sys, a_base]
+
+/// `Glue A φ T w` -- the `Glue` type former (Stage 6b-ii,
+/// plans/type-system/univalence.md). `whnf_glue` answers `T it_is_one` at
+/// the LITERAL `i1` and stays stuck everywhere else.
+pub def cub_glue (a_typ : Term) (a_face : Term) (a_partial : Term) (a_equiv : Term) : Term :=
+    cub CubicalPrim.glue [a_typ, a_face, a_partial, a_equiv]
+
+/// `glue A φ T w t a` -- the `Glue` introduction, carrying the formation's
+/// arguments so the reduction can see φ. `whnf_glue_intro` answers
+/// `t it_is_one` at the literal `i1`.
+pub def cub_glue_intro (a_typ : Term) (a_face : Term) (a_partial : Term)
+    (a_equiv : Term) (a_sys : Term) (a_base : Term) : Term :=
+    cub CubicalPrim.glue_intro [a_typ, a_face, a_partial, a_equiv, a_sys, a_base]
+
+/// `unglue g` -- projection out of a `Glue` type. `whnf_glue_elim` fires
+/// iota on a `glue` introduction for every φ.
+pub def cub_glue_elim (a_glued : Term) : Term :=
+    cub CubicalPrim.glue_elim [a_glued]
 
 /// How many arguments a primitive takes. `args` is positional and this is
 /// the only statement of its expected length; `type_check_cubical` is what
@@ -2687,6 +2736,9 @@ pub def cubical_arity (prim : CubicalPrim) : I64 := match prim {
     CubicalPrim.is_one => 1,
     CubicalPrim.hcomp => 4,
     CubicalPrim.it_is_one => 0,
+    CubicalPrim.glue => 4,
+    CubicalPrim.glue_intro => 6,
+    CubicalPrim.glue_elim => 1,
 }
 
 /// Is this primitive one of the two interval ENDPOINTS? The reducer and the
@@ -2706,6 +2758,9 @@ pub def cubical_is_endpoint (prim : CubicalPrim) : Bool := match prim {
     CubicalPrim.is_one => false,
     CubicalPrim.hcomp => false,
     CubicalPrim.it_is_one => false,
+    CubicalPrim.glue => false,
+    CubicalPrim.glue_intro => false,
+    CubicalPrim.glue_elim => false,
 }
 
 /// A dense tag per primitive. Total over `CubicalPrim`, so a primitive added
@@ -2732,6 +2787,9 @@ pub def cubical_prim_tag (prim : CubicalPrim) : I64 := match prim {
     CubicalPrim.is_one => 10,
     CubicalPrim.hcomp => 11,
     CubicalPrim.it_is_one => 12,
+    CubicalPrim.glue => 13,
+    CubicalPrim.glue_intro => 14,
+    CubicalPrim.glue_elim => 15,
 }
 
 pub def cubical_prim_eq (a : CubicalPrim) (b : CubicalPrim) : Bool :=
@@ -2753,6 +2811,9 @@ pub def cubical_prim_name (prim : CubicalPrim) : String := match prim {
     CubicalPrim.is_one => "is_one",
     CubicalPrim.hcomp => "hcomp",
     CubicalPrim.it_is_one => "it_is_one",
+    CubicalPrim.glue => "Glue",
+    CubicalPrim.glue_intro => "glue",
+    CubicalPrim.glue_elim => "unglue",
 }
 
 /// Every primitive, in `cubical_prim_tag` order. Exists as one list so the
@@ -2764,7 +2825,9 @@ pub def cubical_prims_all : List CubicalPrim :=
         (List.cons CubicalPrim.pathp (List.cons CubicalPrim.transp (List.cons CubicalPrim.face_eq0
         (List.cons CubicalPrim.face_eq1 (List.cons CubicalPrim.is_one
         (List.cons CubicalPrim.hcomp (List.cons CubicalPrim.it_is_one
-        List.empty))))))))))))
+        (List.cons CubicalPrim.glue (List.cons CubicalPrim.glue_intro
+        (List.cons CubicalPrim.glue_elim
+        List.empty)))))))))))))))
 
 /// The string a `#[cubical "..."]` MARKER names a primitive by -- the
 /// marker key, which is NOT the surface name `cubical_prim_name` returns:
@@ -2788,6 +2851,9 @@ pub def cubical_marker_key (prim : CubicalPrim) : String := match prim {
     CubicalPrim.is_one => "is_one",
     CubicalPrim.hcomp => "hcomp",
     CubicalPrim.it_is_one => "it_is_one",
+    CubicalPrim.glue => "glue",
+    CubicalPrim.glue_intro => "glue_intro",
+    CubicalPrim.glue_elim => "glue_elim",
 }
 
 /// Decode a `#[cubical "..."]` marker's string back to the primitive it

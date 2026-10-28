@@ -7,7 +7,8 @@ use lang::types {
   ScopeError, Similar, SortLevel, StructLitField, Term, TypeConstraint,
   TypeError, binder_anon, binder_is_explicit, binder_is_level, binder_name,
   binder_named,
-  concrete, cub_hcomp, cub_i0, cub_i1, cub_interval, cub_is_one,
+  concrete, cub_glue, cub_glue_elim, cub_glue_intro, cub_hcomp, cub_i0, cub_i1,
+  cub_interval, cub_is_one,
   cub_pathp, cubical_arity,
   cubical_prim_eq, cubical_prim_name, field_access_chain,
   id_eq, id_member, level_lt, level_of_type, list_rev_loop, list_reverse, many,
@@ -6918,6 +6919,15 @@ def type_check_cubical (c : Cubical) (expected_type : Term) (scope : Scope)
             // is its whole rule.
             CubicalPrim.it_is_one =>
                 check_cubical_args_then c expected_type scope local_types locals,
+            // Stage 6b-ii: `Glue` is the second bespoke formation (after
+            // `hcomp`), and its two projections are the first rules that
+            // read a type back out of a cubical node.
+            CubicalPrim.glue =>
+                type_check_glue c.args expected_type scope local_types locals,
+            CubicalPrim.glue_intro =>
+                type_check_glue_intro c.args expected_type scope local_types locals,
+            CubicalPrim.glue_elim =>
+                type_check_glue_elim c.args expected_type scope local_types locals,
         }
 
 /// The generic tail of `type_check_cubical` shared by every Stage 1
@@ -7123,6 +7133,342 @@ def type_check_hcomp_go (a_typ : Term) (a_face : Term) (a_sys : Term) (a_base : 
             },
     }
 
+// ─── Stage 6b-ii: Glue ──────────────────────────────────────────────────
+//
+// `Glue A φ T w` is CCHM's type former, and it is what makes univalence a
+// theorem rather than an axiom. All three rules are bespoke for one shared
+// reason: `w`'s type names `Equiv`, which lives in `proofs` -- ABOVE this
+// checker -- so nothing here can refer to it by name. The helpers below
+// build its `Sigma`/`Pi`/`PathP` unfolding instead. `univalence.md`'s
+// 6b-ii measurement records why the alternative (moving `Equiv` down into
+// the prelude so the rule could name it) is blocked by the Rust host's
+// whole-corpus gate. The pin the plan prescribed for that trade-off -- one
+// tying this unfolding to `Equiv`'s own -- is NOT expressible today
+// (measured; both reasons are in the plan's 6b-ii section), so the shipped
+// pin `test_glue_w_type_has_the_shape_of_equiv` covers only the kernel
+// side and library drift is OPEN.
+
+/// `Sigma`, as a term. It stays a NAME in the expansion -- an inductive
+/// cannot be spelled any other way -- which is sound precisely because it
+/// is already ambient from the prelude in every scope, `lang`'s included.
+def equiv_sigma_ref : Term :=
+    Term.var sentinel (DebugName.named (Identifier.id "Sigma"))
+
+/// `A -> B` for two types at the caller's depth. Only `B` is shifted: a
+/// `pi`'s `ret` sits one binder deeper and its `arg` does not.
+def equiv_arrow (a : Term) (b : Term) : Term :=
+    Term.pi binder_anon a (term_shift 1 b)
+
+/// `Path A x y`, spelled as the primitive line `PathP (fn _ => A) x y` --
+/// exactly the body `proofs/src/equiv.mo` gives `Path`.
+def equiv_path (a_ty : Term) (a_left : Term) (a_right : Term) : Term :=
+    cub_pathp (Term.lam binder_anon cub_interval (term_shift 1 a_ty)) a_left a_right
+
+/// `Sigma A (fn _ => body)`, with `body` at depth one deeper.
+def equiv_sigma (a_ty : Term) (a_body : Term) : Term :=
+    Term.app (Term.app equiv_sigma_ref a_ty) (Term.lam binder_anon a_ty a_body)
+
+/// `isContr A := Sigma A (fn center => (x : A) -> Path A x center)`.
+def equiv_is_contr (a_ty : Term) : Term :=
+    equiv_sigma a_ty
+        (Term.pi binder_anon (term_shift 1 a_ty)
+            (equiv_path (term_shift 2 a_ty) (Term.var 0 DebugName.unnamed)
+                (Term.var 1 DebugName.unnamed)))
+
+/// `fiber A B f b := Sigma A (fn a => Path B (f a) b)`, for the four terms
+/// at the caller's depth.
+def equiv_fiber (a_ty : Term) (b_ty : Term) (a_fun : Term) (a_point : Term) : Term :=
+    equiv_sigma a_ty
+        (equiv_path (term_shift 1 b_ty)
+            (Term.app (term_shift 1 a_fun) (Term.var 0 DebugName.unnamed))
+            (term_shift 1 a_point))
+
+/// `Equiv X Y := Sigma (X -> Y) (fn f => (b : Y) -> isContr (fiber X Y f b))`
+/// -- the library def's unfolding, one helper per level of it.
+///
+/// `pub` for the shape pin (`test_glue_w_type_has_the_shape_of_equiv`,
+/// `proofs/src/checker/cubical_props.mo`), which reads the assembled type
+/// rather than any intermediate -- the same reason `as_cubical_type`
+/// (`whnf.mo`) is `pub`.
+pub def equiv_type (a_x : Term) (a_y : Term) : Term :=
+    equiv_sigma (equiv_arrow a_x a_y)
+        (Term.pi binder_anon (term_shift 1 a_y)
+            (equiv_is_contr
+                (equiv_fiber (term_shift 2 a_x) (term_shift 2 a_y)
+                    (Term.var 1 DebugName.unnamed)
+                    (Term.var 0 DebugName.unnamed))))
+
+/// `w : (u : is_one φ) -> Equiv (T u) A` -- `Glue`'s fourth argument's type.
+def glue_equiv_type (a_typ : Term) (a_face : Term) (a_partial : Term) : Term :=
+    Term.pi binder_anon (cub_is_one a_face)
+        (equiv_type (Term.app (term_shift 1 a_partial) (Term.var 0 DebugName.unnamed))
+            (term_shift 1 a_typ))
+
+/// `T : is_one φ -> T u`'s type, i.e. the system type `glue`'s `t` is
+/// checked against (and the type of an `hcomp` system).
+def glue_system_type (a_face : Term) (a_partial : Term) : Term :=
+    Term.pi binder_anon (cub_is_one a_face)
+        (Term.app (term_shift 1 a_partial) (Term.var 0 DebugName.unnamed))
+
+/// The checked first four arguments of a `Glue` node, plus the sort level
+/// its partial type lands in. Shared by the formation and the introduction
+/// so the two cannot check different things.
+struct GlueParams {
+    typ_ : Term,
+    face_ : Term,
+    partial_ : Term,
+    equiv_ : Term,
+    level_ : SortLevel,
+}
+
+/// Check `A`, `φ`, `T` and `w` against `Glue`'s four parameter types.
+def check_glue_params (a_typ : Term) (a_face : Term) (a_partial : Term) (a_equiv : Term)
+    (scope : Scope) (local_types : List Term) (locals : LocalScope)
+    : Result TypeError GlueParams :=
+    // `A` is INFERRED with a sort guard, exactly as `hcomp`'s is: checking
+    // it against `Type` would echo that expectation back and lose the level.
+    match type_check a_typ Term.hole scope local_types locals {
+        err e => err e,
+        ok typ_tt =>
+            match sort_level_of typ_tt.typ {
+                Option.none => err (TypeError.custom "Glue's first argument must be a type"),
+                Option.some _l =>
+                    match type_check a_face cub_interval scope local_types locals {
+                        err e => err e,
+                        ok face_tt =>
+                            // `T` is INFERRED and peeled to a `pi`, like
+                            // `PathP`'s line: its codomain's level IS the
+                            // level `Glue` lands in, and a checked `pi
+                            // (is_one φ) (Sort _)` expectation would lose it.
+                            match type_check a_partial Term.hole scope local_types locals {
+                                err e => err e,
+                                ok partial_tt =>
+                                    match term_peel partial_tt.typ {
+                                        Term.pi _ dom cod =>
+                                            match unify dom (cub_is_one face_tt.term)
+                                                scope locals {
+                                                err _ => err (TypeError.custom
+                                                    "Glue's third argument must be a partial type over `is_one φ`"),
+                                                ok _ =>
+                                                    match sort_level_of cod {
+                                                        Option.none => err (TypeError.custom
+                                                            "Glue's third argument must be a line into a sort"),
+                                                        Option.some l =>
+                                                            match type_check a_equiv
+                                                                (glue_equiv_type typ_tt.term
+                                                                    face_tt.term partial_tt.term)
+                                                                scope local_types locals {
+                                                                err e => err e,
+                                                                ok equiv_tt =>
+                                                                    ok (GlueParams.mk
+                                                                        typ_tt.term face_tt.term
+                                                                        partial_tt.term
+                                                                        equiv_tt.term l),
+                                                            },
+                                                    },
+                                            },
+                                        _ => err (TypeError.custom
+                                            "Glue's third argument must be a partial type over `is_one φ`"),
+                                    },
+                            },
+                    },
+            },
+    }
+
+/// `Glue A φ T w : Sort l` -- the formation rule (Stage 6b-ii). The result
+/// is the sort `T`'s codomain lands in, the same level discipline
+/// `type_check_pathp` uses for a line.
+def type_check_glue (args : List Term) (expected_type : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    // Nested constructor patterns do not parse; the four args are peeled
+    // one level at a time.
+    match args {
+        List.cons a_typ rest =>
+            match rest {
+                List.cons a_face rest2 =>
+                    match rest2 {
+                        List.cons a_partial rest3 =>
+                            match rest3 {
+                                List.cons a_equiv rest4 =>
+                                    match rest4 {
+                                        List.empty =>
+                                            match check_glue_params a_typ a_face a_partial
+                                                a_equiv scope local_types locals {
+                                                err e => err e,
+                                                ok p =>
+                                                    match p {
+                                                        GlueParams.mk a b c d l =>
+                                                            match unify (Term.sort l)
+                                                                expected_type scope locals {
+                                                                err e => err e,
+                                                                ok unified => ok (mk_typed
+                                                                    (cub_glue a b c d) unified),
+                                                            },
+                                                    },
+                                            },
+                                        _ => err (TypeError.custom "Glue takes 4 argument(s)"),
+                                    },
+                                _ => err (TypeError.custom "Glue takes 4 argument(s)"),
+                            },
+                        _ => err (TypeError.custom "Glue takes 4 argument(s)"),
+                    },
+                _ => err (TypeError.custom "Glue takes 4 argument(s)"),
+            },
+        // The arity table rejects every other argument count before this
+        // runs; the arm exists only because the list has to be peeled.
+        _ => err (TypeError.custom "Glue takes 4 argument(s)"),
+    }
+
+/// `glue A φ T w t a : Glue A φ T w` -- the introduction (Stage 6b-ii).
+///
+/// Unlike CCHM's `glue t a`, the formation's four arguments are carried
+/// explicitly, because the reduction `glue ... t a ≡ t it_is_one` fires at
+/// the literal `i1` and `whnf` has no expected type to read φ from. The
+/// consequence is that the result type needs nothing from the expectation
+/// to be COMPUTED -- it is rebuilt from the checked arguments -- and the
+/// expectation is only unified against at the end.
+///
+/// `t : (u : is_one φ) -> T u` and `a : A`. The compatibility condition
+/// `w (t u) = a` on φ is NOT checked, the same unenforced shape as
+/// `hcomp`'s `u i0 = u0` (finding 6 records it as deliberate).
+def type_check_glue_intro (args : List Term) (expected_type : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match args {
+        List.cons a_typ rest =>
+            match rest {
+                List.cons a_face rest2 =>
+                    match rest2 {
+                        List.cons a_partial rest3 =>
+                            match rest3 {
+                                List.cons a_equiv rest4 =>
+                                    match rest4 {
+                                        List.cons a_sys rest5 =>
+                                            match rest5 {
+                                                List.cons a_base rest6 =>
+                                                    match rest6 {
+                                                        List.empty =>
+                                                            match check_glue_params a_typ a_face
+                                                                a_partial a_equiv scope
+                                                                local_types locals {
+                                                                err e => err e,
+                                                                ok p =>
+                                                                    match p {
+                                                                        GlueParams.mk ga gf gt gw _l =>
+                                                                            match type_check a_sys
+                                                                                (glue_system_type gf gt)
+                                                                                scope local_types locals {
+                                                                                err e => err e,
+                                                                                ok sys_tt =>
+                                                                                    match type_check a_base ga
+                                                                                        scope local_types locals {
+                                                                                        err e => err e,
+                                                                                        ok base_tt =>
+                                                                                            match unify base_tt.typ ga scope locals {
+                                                                                                err e => err e,
+                                                                                                ok _ =>
+                                                                                                    // Expectation FIRST here, unlike
+                                                                                                    // `check_cubical_args_then`'s
+                                                                                                    // `unify inferred expected`: `unify`
+                                                                                                    // has no `Term.cubical` arm, so an
+                                                                                                    // INFERRING caller's bare `Term.hole`
+                                                                                                    // would be a mismatch on the second
+                                                                                                    // side. On the first it is the
+                                                                                                    // wildcard it means, and a real
+                                                                                                    // expectation still reports a
+                                                                                                    // genuine mismatch.
+                                                                                                    match unify expected_type (cub_glue ga gf gt gw) scope locals {
+                                                                                                        err e => err e,
+                                                                                                        ok unified => ok (mk_typed
+                                                                                                            (cub_glue_intro ga gf gt gw sys_tt.term base_tt.term)
+                                                                                                            unified),
+                                                                                                    },
+                                                                                            },
+                                                                                    },
+                                                                            },
+                                                                    },
+                                                            },
+                                                        _ => err (TypeError.custom "glue takes 6 argument(s)"),
+                                                    },
+                                                _ => err (TypeError.custom "glue takes 6 argument(s)"),
+                                            },
+                                        _ => err (TypeError.custom "glue takes 6 argument(s)"),
+                                    },
+                                _ => err (TypeError.custom "glue takes 6 argument(s)"),
+                            },
+                        _ => err (TypeError.custom "glue takes 6 argument(s)"),
+                    },
+                _ => err (TypeError.custom "glue takes 6 argument(s)"),
+            },
+        _ => err (TypeError.custom "glue takes 6 argument(s)"),
+    }
+
+/// The `A` of a `Glue A φ T w` type, or none when `t` is not one.
+///
+/// The UNREDUCED spelling is read first and `whnf` is only the fallback,
+/// which is load-bearing rather than an optimisation: `whnf` reduces
+/// `Glue A i1 T w` to `T it_is_one` (`whnf_glue`), so reducing first would
+/// make every `unglue` at the literal endpoint fail to find its `Glue` and
+/// report "must be a Glue type" for a term that is one.
+def glue_base_of (t : Term) (scope : Scope) (locals : LocalScope) : Option Term :=
+    match glue_base_of_head t {
+        Option.some a => Option.some a,
+        Option.none => glue_base_of_head (whnf scope locals t),
+    }
+
+/// The head read on its own, so `glue_base_of` states the order once.
+def glue_base_of_head (t : Term) : Option Term :=
+    match term_peel t {
+        Term.cubical c =>
+            match c {
+                { prim := q, args := as } =>
+                    if cubical_prim_eq q CubicalPrim.glue then
+                        match as {
+                            List.cons a_typ _rest => Option.some a_typ,
+                            // `cubical_arity` already fixed the count at
+                            // four; the arm exists only because the list is
+                            // peeled.
+                            List.empty => Option.none,
+                        }
+                    else Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// `unglue g : A` for `g : Glue A φ T w` -- the elimination (Stage 6b-ii).
+///
+/// The result is read OFF the argument's inferred type, via
+/// `glue_base_of`. A `g` whose type is not a `Glue` is rejected rather
+/// than left with a stuck type.
+def type_check_glue_elim (args : List Term) (expected_type : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match args {
+        List.cons a_glued rest =>
+            match rest {
+                List.empty =>
+                    match type_check a_glued Term.hole scope local_types locals {
+                        err e => err e,
+                        ok glued_tt =>
+                            match glue_base_of glued_tt.typ scope locals {
+                                Option.some a_typ =>
+                                    // Expectation first, for the reason
+                                    // `type_check_glue_intro` states: an
+                                    // inferring caller's expectation is a
+                                    // bare `Term.hole`, and `A` is a cubical
+                                    // term only `Similar` can match.
+                                    match unify expected_type a_typ scope locals {
+                                        err e => err e,
+                                        ok unified => ok (mk_typed
+                                            (cub_glue_elim glued_tt.term) unified),
+                                    },
+                                Option.none => err (TypeError.custom
+                                    "unglue's argument must be a Glue type"),
+                            },
+                    },
+                _ => err (TypeError.custom "unglue takes 1 argument(s)"),
+            },
+        _ => err (TypeError.custom "unglue takes 1 argument(s)"),
+    }
+
 /// The formation rule for `PathP A a b : Sort l` where
 /// `A : I -> Sort l` (Stage 2, plans/type-system/univalence.md).
 ///
@@ -7269,6 +7615,12 @@ def cubical_result_type (prim : CubicalPrim) : Term := match prim {
     CubicalPrim.is_one => sort_n 1,
     CubicalPrim.hcomp => Term.hole,
     CubicalPrim.it_is_one => cub_is_one cub_i1,
+    // Stage 6b-ii's three are all bespoke: `Glue`'s result is the sort
+    // its partial type lands in, and the other two read their types off
+    // the Glue they are applied to.
+    CubicalPrim.glue => Term.hole,
+    CubicalPrim.glue_intro => Term.hole,
+    CubicalPrim.glue_elim => Term.hole,
 }
 
 /// Every Stage 1 argument is a dimension, i.e. an `I`. When `PathP` lands

@@ -320,6 +320,9 @@ def test_cubical_arity_table : Bool :=
         && I64.beq (cubical_arity CubicalPrim.imeet) 2
         && I64.beq (cubical_arity CubicalPrim.ijoin) 2
         && I64.beq (cubical_arity CubicalPrim.it_is_one) 0
+        && I64.beq (cubical_arity CubicalPrim.glue) 4
+        && I64.beq (cubical_arity CubicalPrim.glue_intro) 6
+        && I64.beq (cubical_arity CubicalPrim.glue_elim) 1
 
 /// The smart constructors must agree with the table they are checked
 /// against, or every well-formed term is rejected for arity.

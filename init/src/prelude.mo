@@ -565,8 +565,8 @@ pub class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type 
 }
 
 // The cubical interval and its operations (univalence.md Stages 1-5, plus
-// Stage 6b's `is_one i1` witness), as BODY-LESS marker defs inside a
-// `with Cubical` block. The
+// Stage 6b's `is_one i1` witness and Stage 6b-ii's `Glue`), as BODY-LESS
+// marker defs inside a `with Cubical` block. The
 // `#[cubical "..."]` MARKER, never the bare spelling, is what binds:
 // `build_scope_def` (lang/src/scope.mo) enters the def's prefixed name
 // into `ScopeData.cubical_prims`, and the checker rewrites a resolved
@@ -577,7 +577,7 @@ pub class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type 
 // univalence.
 //
 // Each is `pub` (univalence.md Stage 6 reconnaissance, 2026-10-26):
-// every existing reference to one of these thirteen names is either
+// every existing reference to one of these sixteen names is either
 // inside `init` itself or a hand-built synthetic `Scope` in a `lang`
 // test/pin file, which bypasses privacy enforcement entirely -- so the
 // missing `pub` was latent, not load-bearing, until a real cross-mote
@@ -607,4 +607,17 @@ with Cubical {
 	// `test_it_is_one_types_as_a_proof_of_is_one_i1`
 	// (`proofs/src/checker/cubical_props.mo`) asserts that row's answer.
 	#[cubical "it_is_one"] pub def it_is_one : Cubical.is_one Cubical.i1
+	// Stage 6b-ii's three. Their signatures are stated LOOSELY, and that
+	// is deliberate: only the checker's own rules (`type_check_glue`,
+	// `type_check_glue_intro`, `type_check_glue_elim`,
+	// lang/src/typecheck/infer.mo) can state them exactly, because `w`'s
+	// type mentions `Equiv`, which lives in `proofs` -- above this file.
+	// What these three lines buy is name RESOLUTION and a type for the
+	// under-applied case; a saturated application is typed by the rule.
+	#[cubical "glue"] pub def Glue (A : Type) (phi : Cubical.I)
+		(T : Cubical.is_one phi -> Type) (w : (u : Cubical.is_one phi) -> Type) : Type
+	#[cubical "glue_intro"] pub def glue (A : Type) (phi : Cubical.I)
+		(T : Cubical.is_one phi -> Type) (w : (u : Cubical.is_one phi) -> Type)
+		(t : (u : Cubical.is_one phi) -> T u) (a : A) : Cubical.Glue A phi T w
+	#[cubical "glue_elim"] pub def unglue (g : Type) : Type
 }
