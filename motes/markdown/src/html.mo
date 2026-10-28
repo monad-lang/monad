@@ -191,7 +191,9 @@ def Markdown.item_node (opts : Markdown.HtmlOptions) (tight : Bool) (item : Mark
 /// cmark's `cr()`: a block child starts on its own line, so a loose item opens
 /// with a newline and a tight item puts one before any non-paragraph child.
 def Markdown.item_children (opts : Markdown.HtmlOptions) (tight : Bool) (blocks : List Markdown.Block) : List Html.Node :=
-    if tight
+    if List.is_empty blocks
+    then List.empty
+    else if tight
     then Markdown.tight_children opts blocks
     else List.cons (Markdown.txt "\n") (Markdown.blocks_nodes opts blocks)
 

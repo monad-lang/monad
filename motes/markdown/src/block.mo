@@ -41,7 +41,7 @@ type Markdown.OpenBlock {
     open_doc (blocks : List Markdown.RawBlock),
     open_blockquote (blocks : List Markdown.RawBlock),
     open_list (kind : Markdown.ListKind) (loose : Bool) (items : List Markdown.RawItem) (last_blank : Bool),
-    open_item (content_indent : I64) (checked : Option Bool) (blocks : List Markdown.RawBlock) (ends_blank : Bool) (between_blank : Bool),
+    open_item (content_indent : I64) (checked : Option Bool) (blocks : List Markdown.RawBlock) (ends_blank : Bool) (between_blank : Bool) (start_line : I64),
     open_paragraph (lines : List String),
     open_fence (info : Option String) (fence_char : U8) (fence_len : I64) (indent : I64) (lines : List String),
     open_indented_code (lines : List String),
@@ -51,7 +51,8 @@ type Markdown.OpenBlock {
 
 struct Markdown.BlockState {
     stack : List Markdown.OpenBlock,
-    opts : Markdown.Options
+    opts : Markdown.Options,
+    line : I64
 }
 
 /// What closing an open block produces.
@@ -81,11 +82,11 @@ struct Markdown.MatchResult {
     cursor : Markdown.Cursor
 }
 
-def Markdown.mk_state (stack : List Markdown.OpenBlock) (opts : Markdown.Options) : Markdown.BlockState :=
-    let s : Markdown.BlockState := { stack := stack, opts := opts } in s
+def Markdown.mk_state (stack : List Markdown.OpenBlock) (opts : Markdown.Options) (line : I64) : Markdown.BlockState :=
+    let s : Markdown.BlockState := { stack := stack, opts := opts, line := line } in s
 
 def Markdown.with_stack (stack : List Markdown.OpenBlock) (state : Markdown.BlockState) : Markdown.BlockState :=
-    let s : Markdown.BlockState := { stack := stack, opts := state.opts } in s
+    let s : Markdown.BlockState := { stack := stack, opts := state.opts, line := state.line } in s
 
 def Markdown.mk_match
     (matched : List Markdown.OpenBlock) (unmatched : List Markdown.OpenBlock) (cursor : Markdown.Cursor)
@@ -505,7 +506,7 @@ def Markdown.accepts_line (b : Markdown.OpenBlock) (has_child : Bool) (c : Markd
             then Option.some (Markdown.consume_blockquote started)
             else Option.none,
         open_list _ _ _ _ => Option.some c,
-        open_item content_indent _ blocks _ _ => Markdown.accepts_item content_indent blocks has_child c,
+        open_item content_indent _ blocks _ _ _ => Markdown.accepts_item content_indent blocks has_child c,
         open_paragraph _ =>
             if Markdown.Cursor.blank c then Option.none else Option.some c,
         // An indented code block continues on a blank line or four columns of
@@ -568,7 +569,7 @@ def Markdown.finalize_open (b : Markdown.OpenBlock) : Markdown.Finalized :=
         open_blockquote blocks => Markdown.Finalized.fin_block (raw_block_quote (List.reverse blocks)),
         open_list kind loose items _ =>
             Markdown.Finalized.fin_block (raw_list kind (Bool.not loose) (List.reverse items)),
-        open_item _ checked blocks ends between =>
+        open_item _ checked blocks ends between _ =>
             Markdown.Finalized.fin_item (Markdown.mk_raw_item checked (List.reverse blocks)) ends between,
         open_paragraph lines =>
             match lines {
@@ -604,14 +605,14 @@ def Markdown.push_into (b : Markdown.RawBlock) (state : Markdown.BlockState) : M
                     Markdown.with_stack (List.cons (Markdown.OpenBlock.open_doc (List.cons b blocks)) tail) state,
                 open_blockquote blocks =>
                     Markdown.with_stack (List.cons (Markdown.OpenBlock.open_blockquote (List.cons b blocks)) tail) state,
-                open_item indent checked blocks ends between =>
+                open_item indent checked blocks ends between start =>
                     // A block that starts after a blank line makes the list
                     // loose; a trailing blank alone does not.
                     let between2 : Bool :=
                         Bool.or between (Bool.and ends (Bool.not (List.is_empty blocks))) in
                     Markdown.with_stack
                         (List.cons
-                            (Markdown.OpenBlock.open_item indent checked (List.cons b blocks) false between2)
+                            (Markdown.OpenBlock.open_item indent checked (List.cons b blocks) false between2 start)
                             tail)
                         state,
                 _ => state
@@ -681,7 +682,7 @@ pub def Markdown.finish (state : Markdown.BlockState) : List Markdown.RawBlock :
 // ─── Opening ───
 
 def Markdown.open_leaf (b : Markdown.OpenBlock) (state : Markdown.BlockState) : Markdown.BlockState :=
-    let s : Markdown.BlockState := { stack := List.cons b state.stack, opts := state.opts } in s
+    let s : Markdown.BlockState := { stack := List.cons b state.stack, opts := state.opts, line := state.line } in s
 
 def Markdown.replace_tip (b : Markdown.OpenBlock) (state : Markdown.BlockState) : Markdown.BlockState :=
     match state.stack {
@@ -736,7 +737,7 @@ def Markdown.open_list_for (start : Markdown.ListStart) (state : Markdown.BlockS
 
 def Markdown.open_item_for (start : Markdown.ListStart) (state : Markdown.BlockState) : Markdown.BlockState :=
     Markdown.open_leaf
-        (Markdown.OpenBlock.open_item start.content_indent Option.none List.empty false false)
+        (Markdown.OpenBlock.open_item start.content_indent Option.none List.empty false false state.line)
         state
 
 /// A new sibling block ends an open paragraph: cmark re-parents the new
@@ -932,28 +933,28 @@ pub def Markdown.to_heading (level : I64) (lines : List String) (state : Markdow
 
 /// Fold a blank line into the innermost open list item.
 #[partial]
-def Markdown.mark_blank_stack (stack : List Markdown.OpenBlock) : List Markdown.OpenBlock :=
+def Markdown.mark_blank_stack (line : I64) (stack : List Markdown.OpenBlock) : List Markdown.OpenBlock :=
     match stack {
         List.empty => stack,
         List.cons top rest =>
             match top {
-                open_item indent checked blocks _ between =>
-                    // A freshly opened, still empty item is not "blank" -- a
-                    // blank line right after the marker must not make the list
-                    // loose.
+                open_item indent checked blocks _ between start =>
+                    // A blank line ON the item's opening line is not "blank";
+                    // a later blank line is.
                     List.cons
                         (Markdown.OpenBlock.open_item indent checked blocks
-                            (Bool.not (List.is_empty blocks)) between)
+                            (Bool.not (I64.beq start line))
+                            between start)
                         rest,
                 open_doc _ => stack,
                 open_list _ _ _ _ => stack,
-                _ => List.cons top (Markdown.mark_blank_stack rest)
+                _ => List.cons top (Markdown.mark_blank_stack line rest)
             }
     }
 
 #[partial]
 def Markdown.mark_blank (state : Markdown.BlockState) : Markdown.BlockState :=
-    Markdown.with_stack (Markdown.mark_blank_stack state.stack) state
+    Markdown.with_stack (Markdown.mark_blank_stack state.line state.stack) state
 
 /// A blank line: closes the open paragraph, keeps containers open, and marks
 /// the innermost item.
@@ -981,6 +982,14 @@ def Markdown.blank_line (state : Markdown.BlockState) (c : Markdown.Cursor) : Ma
                     then Markdown.replace_tip (Markdown.OpenBlock.open_html html_type (List.cons "" lines)) state
                     else Markdown.mark_blank (Markdown.close_tip state),
                 open_doc _ => state,
+                open_blockquote _ => state,
+                // The list's last child (an item already closed) ends with a
+                // blank line; the next item opening turns the list loose.
+                open_list kind loose items _ =>
+                    if List.is_empty items
+                    then state
+                    else Markdown.replace_tip (Markdown.OpenBlock.open_list kind loose items true) state,
+                open_item _ _ _ _ _ _ => Markdown.mark_blank state,
                 _ => Markdown.mark_blank state
             }
     }
@@ -1041,11 +1050,14 @@ def Markdown.incorporate_line (state : Markdown.BlockState) (line : String) : Ma
 def Markdown.incorporate_lines (state : Markdown.BlockState) (lines : List String) : Markdown.BlockState :=
     match lines {
         List.empty => state,
-        List.cons line rest => Markdown.incorporate_lines (Markdown.incorporate_line state line) rest
+        List.cons line rest =>
+            let next : Markdown.BlockState := Markdown.incorporate_line state line in
+            Markdown.incorporate_lines
+                (Markdown.with_stack next.stack { next with line := I64.add next.line 1i64 }) rest
     }
 
 /// Parse `lines` into a raw block list.
 pub def Markdown.block_parse (opts : Markdown.Options) (lines : List String) : List Markdown.RawBlock :=
     let start : Markdown.BlockState :=
-        Markdown.mk_state [Markdown.OpenBlock.open_doc List.empty] opts in
+        Markdown.mk_state [Markdown.OpenBlock.open_doc List.empty] opts 1i64 in
     Markdown.finish (Markdown.incorporate_lines start lines)
