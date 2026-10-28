@@ -246,3 +246,25 @@ pub def Markdown.Cursor.first_nonspace_column (c : Markdown.Cursor) : I64 :=
 /// Whether the line has nothing but spaces and tabs from the cursor on.
 pub def Markdown.Cursor.blank (c : Markdown.Cursor) : Bool :=
     Markdown.Cursor.at_end (Markdown.Cursor.skip_spaces c)
+
+/// The first `n` elements of `xs`.
+#[partial]
+pub def Markdown.list_take (n : I64) (xs : List A) : List A :=
+    if I64.lt n 1i64
+    then List.empty
+    else
+        match xs {
+            List.empty => List.empty,
+            List.cons x rest => List.cons x (Markdown.list_take (I64.sub n 1i64) rest)
+        }
+
+/// `xs` without its first `n` elements.
+#[partial]
+pub def Markdown.list_drop (n : I64) (xs : List A) : List A :=
+    if I64.lt n 1i64
+    then xs
+    else
+        match xs {
+            List.empty => List.empty,
+            List.cons _ rest => Markdown.list_drop (I64.sub n 1i64) rest
+        }

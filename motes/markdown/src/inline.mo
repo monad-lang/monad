@@ -6,10 +6,16 @@
 /// their entry points plug into `inline_loop`'s dispatch.
 use init::string {}
 use parsec::core {is_empty}
-use lib::scan {Markdown.Cursor, Markdown.char_width, Markdown.utf8_of_codepoint}
+use lib::scan {
+    Markdown.Cursor, Markdown.char_width, Markdown.codepoint_at, Markdown.list_drop,
+    Markdown.list_take, Markdown.utf8_of_codepoint,
+}
 use lib::link_syntax {
     Markdown.LinkTail, Markdown.normalize_label, Markdown.parse_link_tail,
     Markdown.parse_ref_label,
+}
+use lib::inline_html {
+    Markdown.scan_email_autolink, Markdown.scan_html_tag, Markdown.scan_uri_autolink,
 }
 use lib::refs {Markdown.lookup_ref}
 use lib::types {Markdown.Inline, Markdown.LinkRef}
@@ -19,21 +25,45 @@ open Markdown.Inline {
     inline_link, inline_image,
 }
 
+/// An open delimiter run: its character, how many remain, its original
+/// length (the rule of three), whether it may open, and the node count
+/// BEFORE its own text node was pushed -- which is what makes the content of
+/// a later match computable from `len`.
+struct Markdown.DelimRec {
+    ch : U8,
+    count : I64,
+    orig : I64,
+    can_open : Bool,
+    outer_len : I64
+}
+
+def Markdown.mk_delim_rec (ch : U8) (count : I64) (orig : I64) (can_open : Bool) (outer_len : I64)
+    : Markdown.DelimRec :=
+    let d : Markdown.DelimRec :=
+        { ch := ch, count := count, orig := orig, can_open := can_open, outer_len := outer_len } in d
+
 struct Markdown.InlineBuild {
     pieces : List String,
     nodes : List Markdown.Inline,
-    refs : List Markdown.LinkRef
+    refs : List Markdown.LinkRef,
+    len : I64,
+    delims : List Markdown.DelimRec,
+    prev : Option U32
 }
 
-def Markdown.mk_build (pieces : List String) (nodes : List Markdown.Inline) (refs : List Markdown.LinkRef)
-    : Markdown.InlineBuild :=
-    let b : Markdown.InlineBuild := { pieces := pieces, nodes := nodes, refs := refs } in b
+def Markdown.mk_build
+    (pieces : List String) (nodes : List Markdown.Inline) (refs : List Markdown.LinkRef)
+    (len : I64) (delims : List Markdown.DelimRec) (prev : Option U32) : Markdown.InlineBuild :=
+    let b : Markdown.InlineBuild :=
+        { pieces := pieces, nodes := nodes, refs := refs, len := len, delims := delims, prev := prev } in b
 
 def Markdown.inline_start (refs : List Markdown.LinkRef) : Markdown.InlineBuild :=
-    Markdown.mk_build List.empty List.empty refs
+    Markdown.mk_build List.empty List.empty refs 0i64 List.empty Option.none
 
 def Markdown.push_piece (s : String) (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
-    let next : Markdown.InlineBuild := { pieces := List.cons s b.pieces, nodes := b.nodes, refs := b.refs } in next
+    let next : Markdown.InlineBuild :=
+        { pieces := List.cons s b.pieces, nodes := b.nodes, refs := b.refs, len := b.len,
+          delims := b.delims, prev := b.prev } in next
 
 /// Turn the pending character pieces into one text node.
 def Markdown.flush (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
@@ -42,12 +72,14 @@ def Markdown.flush (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
         List.cons _ _ =>
             let t : String := String.concat_list (List.reverse b.pieces) in
             Markdown.mk_build List.empty (List.cons (inline_text t) b.nodes) b.refs
+                (I64.add b.len 1i64) b.delims b.prev
     }
 
 def Markdown.push_node (n : Markdown.Inline) (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
     let flushed : Markdown.InlineBuild := Markdown.flush b in
     let next : Markdown.InlineBuild :=
-        { pieces := flushed.pieces, nodes := List.cons n flushed.nodes, refs := flushed.refs } in next
+        { pieces := flushed.pieces, nodes := List.cons n flushed.nodes, refs := flushed.refs,
+          len := I64.add flushed.len 1i64, delims := flushed.delims, prev := flushed.prev } in next
 
 // ─── Escapes ───
 
@@ -358,9 +390,17 @@ def Markdown.inline_loop (b : Markdown.InlineBuild) (s : String) : Markdown.Inli
                 then Markdown.scan_bracket b s false
                 else if U8.beq byte 33u8
                 then Markdown.scan_bang b s
+                else if U8.beq byte 60u8
+                then Markdown.scan_lt b s
+                else if Bool.or (U8.beq byte 42u8) (U8.beq byte 95u8)
+                then Markdown.scan_delim b s byte
                 else
                     let w : I64 := Markdown.char_width s in
-                    Markdown.inline_loop (Markdown.push_piece (String.slice s 0 w) b) (String.drop w s),
+                    let piece : String := String.slice s 0 w in
+                    let b2 : Markdown.InlineBuild :=
+                        { pieces := b.pieces, nodes := b.nodes, refs := b.refs, len := b.len,
+                          delims := b.delims, prev := Markdown.codepoint_at piece } in
+                    Markdown.inline_loop (Markdown.push_piece piece b2) (String.drop w s),
             Option.none => b
         }
 
@@ -393,7 +433,8 @@ def Markdown.scan_entity (b : Markdown.InlineBuild) (s : String) : Markdown.Inli
 def Markdown.scan_newline (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBuild :=
     match Markdown.drop_space_pieces b.pieces 0i64 {
         Pair.pair spaces rest =>
-            let cleared : Markdown.InlineBuild := Markdown.mk_build rest b.nodes b.refs in
+            let cleared : Markdown.InlineBuild :=
+                Markdown.mk_build rest b.nodes b.refs b.len b.delims b.prev in
             let brk : Markdown.Inline :=
                 if I64.lt 1i64 spaces then inline_hard_break else inline_soft_break in
             Markdown.inline_loop (Markdown.push_node brk cleared) (String.drop 1i64 s)
@@ -638,5 +679,228 @@ def Markdown.scan_bracket (b : Markdown.InlineBuild) (s : String) (image : Bool)
                         Option.none =>
                             Markdown.inline_loop (Markdown.push_piece (String.slice s 0 opener) b) inner
                     }
+            }
+    }
+
+/// `<` : URI autolink, email autolink, raw HTML, then a literal `<`.
+#[partial]
+def Markdown.scan_lt (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBuild :=
+    match Markdown.scan_uri_autolink s {
+        Option.some found =>
+            match found {
+                Pair.pair content rest =>
+                    Markdown.inline_loop (Markdown.push_node (Markdown.Inline.inline_autolink content content) b) rest
+            },
+        Option.none =>
+            match Markdown.scan_email_autolink s {
+                Option.some found =>
+                    match found {
+                        Pair.pair content rest =>
+                            Markdown.inline_loop
+                                (Markdown.push_node
+                                    (Markdown.Inline.inline_autolink (String.concat "mailto:" content) content)
+                                    b)
+                                rest
+                    },
+                Option.none =>
+                    match Markdown.scan_html_tag s {
+                        Option.some found =>
+                            match found {
+                                Pair.pair literal rest =>
+                                    Markdown.inline_loop
+                                        (Markdown.push_node (Markdown.Inline.inline_html literal) b) rest
+                            },
+                        Option.none =>
+                            Markdown.inline_loop (Markdown.push_piece "<" b) (String.drop 1i64 s)
+                    }
+            }
+    }
+
+// ─── Emphasis ───
+//
+// Delimiter runs are pushed as text nodes with a `DelimRec` recording the
+// node count before them. A later closer looks back for the nearest opener,
+// wraps the nodes between (excluding the opener's own text node) and drops
+// the records inside the range -- exactly cmark's "remove delimiters between
+// opener and closer". Leftover opener delimiters stay as text before the
+// wrapped node; leftover closer delimiters are rematched.
+
+def Markdown.is_space_cp (cp : Option U32) : Bool :=
+    match cp {
+        Option.none => true,
+        Option.some c =>
+            Bool.or (U32.beq c 32u32)
+                (Bool.or (U32.beq c 9u32)
+                    (Bool.or (U32.beq c 10u32) (U32.beq c 13u32)))
+    }
+
+/// ASCII punctuation plus the ranges CommonMark treats as punctuation; the
+/// generated Unicode table replaces this in the label-folding pass.
+def Markdown.is_punct_cp (cp : Option U32) : Bool :=
+    match cp {
+        Option.none => false,
+        Option.some c =>
+            Bool.or
+                (Bool.and (U32.lt 32u32 c) (U32.lt c 48u32))
+                (Bool.or
+                    (Bool.and (U32.lt 57u32 c) (U32.lt c 65u32))
+                    (Bool.or
+                        (Bool.and (U32.lt 90u32 c) (U32.lt c 97u32))
+                        (Bool.and (U32.lt 122u32 c) (U32.lt c 127u32))))
+    }
+
+/// (left-flanking, right-flanking).
+pub def Markdown.flanking (prev : Option U32) (next : Option U32) : Pair Bool Bool :=
+    let prev_space : Bool := Markdown.is_space_cp prev in
+    let prev_punct : Bool := Markdown.is_punct_cp prev in
+    let next_space : Bool := Markdown.is_space_cp next in
+    let next_punct : Bool := Markdown.is_punct_cp next in
+    let left : Bool :=
+        Bool.and (Bool.not next_space)
+            (Bool.or (Bool.not next_punct) (Bool.or prev_space prev_punct)) in
+    let right : Bool :=
+        Bool.and (Bool.not prev_space)
+            (Bool.or (Bool.not prev_punct) (Bool.or next_space next_punct)) in
+    Pair.pair left right
+
+/// A `*` run opens when left-flanking, closes when right-flanking. An `_` run
+/// additionally refuses intraword use.
+def Markdown.can_open_run (ch : U8) (prev : Option U32) (next : Option U32) (left : Bool) (right : Bool) : Bool :=
+    if U8.beq ch 95u8
+    then Bool.and left (Bool.or (Bool.not right) (Markdown.is_punct_cp prev))
+    else left
+
+def Markdown.can_close_run (ch : U8) (prev : Option U32) (next : Option U32) (left : Bool) (right : Bool) : Bool :=
+    if U8.beq ch 95u8
+    then Bool.and right (Bool.or (Bool.not left) (Markdown.is_punct_cp next))
+    else right
+
+#[partial]
+def Markdown.count_same (ch : U8) (s : String) (n : I64) : Pair I64 String :=
+    match String.get s 0 {
+        Option.some b =>
+            if U8.beq b ch
+            then Markdown.count_same ch (String.drop 1i64 s) (I64.add n 1i64)
+            else Pair.pair n s,
+        Option.none => Pair.pair n s
+    }
+
+def Markdown.one_char (ch : U8) : String := String.from_list [ch]
+
+#[partial]
+def Markdown.repeat_char (ch : U8) (n : I64) (piece : String) (acc : List String) : String :=
+    if I64.lt n 1i64
+    then String.concat_list (List.reverse acc)
+    else Markdown.repeat_char ch (I64.sub n 1i64) piece (List.cons piece acc)
+
+def Markdown.mod3 (n : I64) : I64 :=
+    I64.sub n (I64.mul 3i64 (I64.div n 3i64))
+
+/// cmark's rule of three.
+def Markdown.rule_of_three (opener : Markdown.DelimRec) (closer_count : I64) (closer_orig : I64)
+    (closer_can_open : Bool) : Bool :=
+    if Bool.or closer_can_open opener.can_open
+    then
+        Bool.and (Bool.not (I64.beq (Markdown.mod3 closer_orig) 0i64))
+            (I64.beq (Markdown.mod3 (I64.add opener.count closer_orig)) 0i64)
+    else false
+
+/// Index of the nearest opener for this closer, or none.
+#[partial]
+def Markdown.find_opener
+    (delims : List Markdown.DelimRec) (ch : U8) (closer_count : I64) (closer_orig : I64)
+    (closer_can_open : Bool) (i : I64) : Option I64 :=
+    match delims {
+        List.empty => Option.none,
+        List.cons d rest =>
+            if Bool.and (U8.beq d.ch ch) d.can_open
+            then
+                if Markdown.rule_of_three d closer_count closer_orig closer_can_open
+                then Markdown.find_opener rest ch closer_count closer_orig closer_can_open (I64.add i 1i64)
+                else Option.some i
+            else Markdown.find_opener rest ch closer_count closer_orig closer_can_open (I64.add i 1i64)
+    }
+
+def Markdown.emphasis_node (width : I64) (children : List Markdown.Inline) : Markdown.Inline :=
+    if I64.beq width 2i64
+    then Markdown.Inline.inline_strong children
+    else Markdown.Inline.inline_emphasis children
+
+/// Finish a delimiter run: push any leftover as text, and record it as an
+/// opener when it may open.
+#[partial]
+def Markdown.finish_delim
+    (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool) (rest : String)
+    : Markdown.InlineBuild :=
+    if I64.lt remaining 1i64
+    then Markdown.inline_loop b rest
+    else
+        let text : String := Markdown.repeat_char ch remaining (Markdown.one_char ch) List.empty in
+        let outer_len : I64 := b.len in
+        let b1 : Markdown.InlineBuild := Markdown.push_node (inline_text text) b in
+        let delims : List Markdown.DelimRec :=
+            if can_open
+            then List.cons (Markdown.mk_delim_rec ch remaining orig can_open outer_len) b.delims
+            else b.delims in
+        let b2 : Markdown.InlineBuild :=
+            { pieces := b1.pieces, nodes := b1.nodes, refs := b1.refs, len := b1.len,
+              delims := delims, prev := b1.prev } in
+        Markdown.inline_loop b2 rest
+
+/// Match as many closers as possible against this run, then push the rest.
+#[partial]
+def Markdown.match_closers
+    (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool) (rest : String)
+    : Markdown.InlineBuild :=
+    match Markdown.find_opener b.delims ch remaining orig can_open 0i64 {
+        Option.none => Markdown.finish_delim b ch remaining orig can_open rest,
+        Option.some index =>
+            match List.get index b.delims {
+                Option.none => Markdown.finish_delim b ch remaining orig can_open rest,
+                Option.some opener =>
+                    let width : I64 :=
+                        if Bool.and (Bool.not (I64.lt remaining 2i64)) (Bool.not (I64.lt opener.count 2i64))
+                        then 2i64 else 1i64 in
+                    let content_count : I64 := I64.sub (I64.sub b.len opener.outer_len) 1i64 in
+                    let content_rev : List Markdown.Inline := Markdown.list_take content_count b.nodes in
+                    let outer : List Markdown.Inline := Markdown.list_drop (I64.add content_count 1i64) b.nodes in
+                    let wrapped : Markdown.Inline :=
+                        Markdown.emphasis_node width (List.reverse content_rev) in
+                    let left : I64 := I64.sub opener.count width in
+                    let nodes1 : List Markdown.Inline :=
+                        if I64.lt left 1i64
+                        then List.cons wrapped outer
+                        else List.cons wrapped
+                                (List.cons (inline_text (Markdown.repeat_char ch left (Markdown.one_char ch) List.empty)) outer) in
+                    let len1 : I64 :=
+                        if I64.lt left 1i64
+                        then I64.add opener.outer_len 1i64
+                        else I64.add opener.outer_len 2i64 in
+                    let delims1 : List Markdown.DelimRec := Markdown.list_drop (I64.add index 1i64) b.delims in
+                    let b1 : Markdown.InlineBuild :=
+                        { pieces := List.empty, nodes := nodes1, refs := b.refs, len := len1,
+                          delims := delims1, prev := b.prev } in
+                    let remaining1 : I64 := I64.sub remaining width in
+                    Markdown.match_closers b1 ch remaining1 orig can_open rest
+            }
+    }
+
+#[partial]
+def Markdown.scan_delim (b : Markdown.InlineBuild) (s : String) (ch : U8) : Markdown.InlineBuild :=
+    match Markdown.count_same ch s 0i64 {
+        Pair.pair n rest =>
+            let next : Option U32 := Markdown.codepoint_at rest in
+            let flank : Pair Bool Bool := Markdown.flanking b.prev next in
+            match flank {
+                Pair.pair left right =>
+                    let can_open : Bool := Markdown.can_open_run ch b.prev next left right in
+                    let can_close : Bool := Markdown.can_close_run ch b.prev next left right in
+                    let settled : Markdown.InlineBuild := Markdown.flush b in
+                    let b1 : Markdown.InlineBuild :=
+                        { pieces := settled.pieces, nodes := settled.nodes, refs := settled.refs,
+                          len := settled.len, delims := settled.delims, prev := Option.some (U8.to_u32 ch) } in
+                    if can_close
+                    then Markdown.match_closers b1 ch n n can_open rest
+                    else Markdown.finish_delim b1 ch n n can_open rest
             }
     }
