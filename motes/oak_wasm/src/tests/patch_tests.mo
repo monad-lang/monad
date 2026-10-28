@@ -325,6 +325,14 @@ def test_adopt_type_mapping : Bool :=
         && Patch.adopt_type (node_doctype "html") == 8i64
         && Patch.adopt_type (node_fragment List.empty) == 0i64
 
+/// Raw HTML has no single DOM node kind of its own (`Dom` has no innerHTML),
+/// so a hydration pass must mount it fresh rather than adopt a neighbour.
+#[test]
+def test_adopt_type_never_adopts_raw_html : Bool :=
+    Patch.adopt_type (Html.Node.node_raw_html "<b>x</b>") == 0i64
+        && Bool.not (Patch.kind_ok (Html.Node.node_raw_html "<b>x</b>") 3i64 "")
+        && Bool.not (Patch.kind_ok (Html.Node.node_raw_html "<b>x</b>") 1i64 "div")
+
 #[test]
 def test_kind_ok_accepts_a_matching_element : Bool :=
     Patch.kind_ok (element "div" List.empty List.empty) 1i64 "div"

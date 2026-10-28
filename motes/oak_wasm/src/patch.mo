@@ -540,6 +540,10 @@ pub def Patch.mount_node (node : Html.Node) : IO Node :=
         Html.Node.node_void tag attrs => Patch.mount_void tag attrs,
         Html.Node.node_text content => Dom.text_node content,
         Html.Node.node_raw_text tag attrs content => Patch.mount_raw tag attrs content,
+        // `Dom` has no innerHTML primitive, so raw markup that reaches the
+        // live DOM is shown as its literal text. SSR (`Html.to_string`) keeps
+        // it verbatim; see `adopt_type`, which never adopts it.
+        Html.Node.node_raw_html literal => Dom.text_node literal,
         Html.Node.node_comment content => Dom.comment content,
         // A doctype has no place inside an element; a comment keeps the
         // path model intact and renders nothing.
@@ -631,6 +635,8 @@ pub def Patch.adopt_type (node : Html.Node) : I64 := match node {
     Html.Node.node_raw_text _tag _attrs _content => 1i64,
     Html.Node.node_text _content => 3i64,
     Html.Node.node_comment _content => 8i64,
+    // A raw-HTML node has no single DOM node of its own kind; never adopt.
+    Html.Node.node_raw_html _literal => 0i64,
     Html.Node.node_doctype _declaration => 8i64,
     Html.Node.node_fragment _children => 0i64,
 }
@@ -707,6 +713,9 @@ def Patch.hydrate_adopt (parent : Node) (node : Html.Node) (existing : Node) (in
         let _ <- Dom.set_text existing content;
         IO.pure existing
     },
+    // `adopt_type` is 0 for raw HTML, so this arm is unreachable; it is
+    // here only to keep the match exhaustive.
+    Html.Node.node_raw_html _literal => Patch.hydrate_fresh parent node index,
     Html.Node.node_doctype declaration => do {
         let _ <- Dom.set_text existing (String.concat "DOCTYPE " declaration);
         IO.pure existing

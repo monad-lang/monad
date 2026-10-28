@@ -86,14 +86,76 @@ def test_raw_text_with_attrs : Bool :=
         "<script type=\"module\" src=\"/app.js\"></script>"
 
 #[test]
+def test_raw_html_is_verbatim : Bool :=
+    renders
+        (Html.Node.node_raw_html "<div class=\"note\">\n<p>hi</p>\n</div>")
+        "<div class=\"note\">\n<p>hi</p>\n</div>"
+
+#[test]
+def test_raw_html_in_a_fragment : Bool :=
+    renders
+        (Html.Node.node_fragment
+            [ Html.Node.node_text "a",
+              Html.Node.node_raw_html "<b>",
+              Html.Node.node_text "c" ])
+        "a<b>c"
+
+#[test]
+def test_raw_html_is_not_annotated : Bool :=
+    let node :=
+        Html.Node.node_element "div" List.empty
+            (List.cons (Html.Node.node_raw_html "<i>x</i>") List.empty) in
+    let opts : Html.RenderOpts := { charset := false, annotate := true, xhtml_void := false } in
+    String.beq (Html.to_string_with opts node)
+        "<div data-oak=\"0\"><i>x</i></div>"
+
+#[test]
 def test_to_string_with_annotates_elements : Bool :=
     let node :=
         Html.Node.node_element "div" List.empty
             (List.cons (Html.Node.node_element "span" List.empty
                 (List.cons (Html.Node.node_text "hi") List.empty)) List.empty) in
-    let opts : Html.RenderOpts := { charset := false, annotate := true } in
+    let opts : Html.RenderOpts := { charset := false, annotate := true, xhtml_void := false } in
     String.beq (Html.to_string_with opts node)
         "<div data-oak=\"0\"><span data-oak=\"0.0\">hi</span></div>"
+
+// ─── XHTML void spelling ───
+
+#[test]
+def test_xhtml_void_br : Bool :=
+    let opts : Html.RenderOpts := { charset := false, annotate := false, xhtml_void := true } in
+    String.beq (Html.to_string_with opts (Html.Node.node_void "br" List.empty)) "<br />"
+
+#[test]
+def test_xhtml_void_hr_and_attrs : Bool :=
+    let opts : Html.RenderOpts := { charset := false, annotate := false, xhtml_void := true } in
+    Bool.and
+        (String.beq (Html.to_string_with opts (Html.Node.node_void "hr" List.empty)) "<hr />")
+        (String.beq
+            (Html.to_string_with opts
+                (Html.Node.node_void "img"
+                    [ Html.Attr.attr "src" "/x.png", Html.Attr.attr "alt" "x" ]))
+            "<img src=\"/x.png\" alt=\"x\" />")
+
+#[test]
+def test_xhtml_void_default_is_html5 : Bool :=
+    renders (Html.Node.node_void "hr" List.empty) "<hr>"
+
+// ─── Linear serializer ───
+//
+// The old serializer was `concat child (siblings)`, which re-copied every
+// remaining sibling per child: 100k flat siblings is ~5e9 character copies.
+
+#[terminating]
+def repeat_text (n : I64) (i : I64) (acc : List Html.Node) : List Html.Node :=
+    if I64.beq i n
+    then List.reverse acc
+    else repeat_text n (I64.add i 1) (List.cons (Html.Node.node_text "x") acc)
+
+#[test]
+def test_flat_siblings_serialize_linearly : Bool :=
+    let children := repeat_text 100000 0 List.empty in
+    I64.beq (String.length (Html.to_string (Html.Node.node_fragment children))) 100000i64
 
 #[test]
 def test_to_string_with_default_matches : Bool :=

@@ -34,30 +34,39 @@ pub type Html.Node {
     node_void (tag : String) (attrs : List Html.Attr),
     node_text (content : String),
     node_raw_text (tag : String) (attrs : List Html.Attr) (content : String),
+    node_raw_html (literal : String),
     node_comment (content : String),
     node_doctype (declaration : String),
     node_fragment (children : List Html.Node)
 }
 
 with Html {
-    pub def to_string (n : Html.Node) : String := html_node_to_string n
+    pub def to_string (n : Html.Node) : String :=
+        let opts : Html.RenderOpts := { charset := false, annotate := false, xhtml_void := false } in
+        html_node_to_string opts "0" n
 
     /// Serialize with render options. `annotate` writes `data-oak="<path>"`
-    /// on every element (a stable tree path for client hydration); `charset`
-    /// is consulted by `oak`'s document builder, not here.
+    /// on every element (a stable tree path for client hydration);
+    /// `xhtml_void` spells void elements `<br />` instead of `<br>`;
+    /// `charset` is consulted by `oak`'s document builder, not here.
     pub def to_string_with (opts : Html.RenderOpts) (n : Html.Node) : String :=
-        if opts.annotate then html_node_to_string_at opts "0" n else html_node_to_string n
+        html_node_to_string opts "0" n
 
     pub def beq (a b : Html.Node) : Bool := html_node_beq a b
 }
 
+/// Every field is named at every literal: an omitted field is filled
+/// positionally, which shifts the fields that follow it (measured on the
+/// Rust host, 2026-10-19), and a constructor-valued default cannot be
+/// lowered by the Rust host at all.
 pub struct Html.RenderOpts {
-    charset : Bool,
-    annotate : Bool
+    charset : Bool := false,
+    annotate : Bool := false,
+    xhtml_void : Bool := false
 }
 
 pub def Html.default_opts : Html.RenderOpts :=
-    { charset := false, annotate := false }
+    { charset := false, annotate := false, xhtml_void := false }
 
 // ─── Escaping ───
 
@@ -93,6 +102,11 @@ def html_escape_attr (input : String) : String :=
     String.concat_list (html_escape_pieces html_escape_attr_char input List.empty)
 
 // ─── Serializer ───
+//
+// Pieces, not concatenation. The output is a reversed `List String` joined
+// once by `String.concat_list`: the old shape, `concat child (rest)`,
+// re-copied every remaining sibling per child, which is quadratic on the
+// flat hundred-thousand-node lists the oak hydration path builds.
 
 def html_attr_to_string (a : Html.Attr) : String :=
     match a {
@@ -101,65 +115,75 @@ def html_attr_to_string (a : Html.Attr) : String :=
         bool_attr name => String.concat " " name
     }
 
-def html_attrs_to_string (attrs : List Html.Attr) : String :=
+#[terminating]
+def html_attr_pieces (attrs : List Html.Attr) (acc : List String) : List String :=
     match attrs {
-        empty => "",
-        cons a rest => String.concat (html_attr_to_string a) (html_attrs_to_string rest)
+        empty => acc,
+        cons a rest => html_attr_pieces rest (List.cons (html_attr_to_string a) acc)
     }
 
-def html_children_to_string (children : List Html.Node) : String :=
-    match children {
-        empty => "",
-        cons child rest => String.concat (html_node_to_string child) (html_children_to_string rest)
-    }
+def html_attrs_to_string (attrs : List Html.Attr) : String :=
+    String.concat_list (List.reverse (html_attr_pieces attrs List.empty))
 
 def html_open_tag (tag : String) (attrs : List Html.Attr) : String :=
     String.concat "<" (String.concat tag (String.concat (html_attrs_to_string attrs) ">"))
 
+/// `xhtml_void` is for CommonMark conformance, where cmark spells void
+/// elements `<br />`; the default keeps the HTML5 spelling.
+def html_void_tag (opts : Html.RenderOpts) (tag : String) (attrs : List Html.Attr) : String :=
+    if opts.xhtml_void
+    then String.concat "<" (String.concat tag (String.concat (html_attrs_to_string attrs) " />"))
+    else html_open_tag tag attrs
+
 def html_close_tag (tag : String) : String :=
     String.concat "</" (String.concat tag ">")
 
-def html_node_to_string (n : Html.Node) : String :=
-    match n {
-        node_element tag attrs children =>
-            String.concat (html_open_tag tag attrs)
-                (String.concat (html_children_to_string children) (html_close_tag tag)),
-        node_void tag attrs => html_open_tag tag attrs,
-        node_text content => html_escape_text content,
-        node_raw_text tag attrs content =>
-            String.concat (html_open_tag tag attrs) (String.concat content (html_close_tag tag)),
-        node_comment content => String.concat "<!--" (String.concat content "-->"),
-        node_doctype declaration => String.concat "<!DOCTYPE " (String.concat declaration ">"),
-        node_fragment children => html_children_to_string children
-    }
+// ─── Hydration paths and annotation ───
 
-// ─── Annotated serializer (hydration paths) ───
+def html_child_path (opts : Html.RenderOpts) (path : String) (idx : I64) : String :=
+    if opts.annotate
+    then String.concat path (String.concat "." (I64.to_string idx))
+    else path
 
 def html_annotated_attrs (opts : Html.RenderOpts) (path : String) (attrs : List Html.Attr) : List Html.Attr :=
     if opts.annotate
     then List.append attrs (List.cons (Html.Attr.attr "data-oak" path) List.empty)
     else attrs
 
-#[terminating]
-def html_children_to_string_at (opts : Html.RenderOpts) (path : String) (idx : I64) (children : List Html.Node) : String :=
-    match children {
-        empty => "",
-        cons child rest =>
-            String.concat
-                (html_node_to_string_at opts (String.concat path (String.concat "." (I64.to_string idx))) child)
-                (html_children_to_string_at opts path (I64.add idx 1) rest)
-    }
-
-#[terminating]
-def html_node_to_string_at (opts : Html.RenderOpts) (path : String) (n : Html.Node) : String :=
+/// `n`'s pieces, reversed, prepended to `acc`; the caller reverses once.
+/// `path` is the hydration path of `n` (unused unless `opts.annotate`).
+#[partial]
+def html_node_pieces (opts : Html.RenderOpts) (path : String) (n : Html.Node) (acc : List String) : List String :=
     match n {
         node_element tag attrs children =>
-            String.concat (html_open_tag tag (html_annotated_attrs opts path attrs))
-                (String.concat (html_children_to_string_at opts path 0 children) (html_close_tag tag)),
-        node_void tag attrs => html_open_tag tag (html_annotated_attrs opts path attrs),
-        node_fragment children => html_children_to_string_at opts path 0 children,
-        _ => html_node_to_string n
+            List.cons (html_close_tag tag)
+                (html_children_pieces opts path 0 children
+                    (List.cons (html_open_tag tag (html_annotated_attrs opts path attrs)) acc)),
+        node_void tag attrs =>
+            List.cons (html_void_tag opts tag (html_annotated_attrs opts path attrs)) acc,
+        node_text content => List.cons (html_escape_text content) acc,
+        node_raw_text tag attrs content =>
+            List.cons (html_close_tag tag)
+                (List.cons content (List.cons (html_open_tag tag attrs) acc)),
+        node_raw_html literal => List.cons literal acc,
+        node_comment content =>
+            List.cons (String.concat "<!--" (String.concat content "-->")) acc,
+        node_doctype declaration =>
+            List.cons (String.concat "<!DOCTYPE " (String.concat declaration ">")) acc,
+        node_fragment children => html_children_pieces opts path 0 children acc
     }
+
+#[partial]
+def html_children_pieces (opts : Html.RenderOpts) (path : String) (idx : I64) (children : List Html.Node) (acc : List String) : List String :=
+    match children {
+        empty => acc,
+        cons child rest =>
+            html_children_pieces opts path (I64.add idx 1) rest
+                (html_node_pieces opts (html_child_path opts path idx) child acc)
+    }
+
+def html_node_to_string (opts : Html.RenderOpts) (path : String) (n : Html.Node) : String :=
+    String.concat_list (List.reverse (html_node_pieces opts path n List.empty))
 
 // ─── Equality ───
 //
@@ -214,6 +238,10 @@ def html_node_beq (a b : Html.Node) : Bool :=
         },
         node_raw_text t1 a1 c1 => match b {
             node_raw_text t2 a2 c2 => String.beq t1 t2 && html_attrs_beq a1 a2 && String.beq c1 c2,
+            _ => false
+        },
+        node_raw_html l1 => match b {
+            node_raw_html l2 => String.beq l1 l2,
             _ => false
         },
         node_comment c1 => match b {
