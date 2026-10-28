@@ -36,13 +36,15 @@ struct Markdown.DelimRec {
     count : I64,
     orig : I64,
     can_open : Bool,
+    can_close : Bool,
     outer_len : I64
 }
 
-def Markdown.mk_delim_rec (ch : U8) (count : I64) (orig : I64) (can_open : Bool) (outer_len : I64)
-    : Markdown.DelimRec :=
+def Markdown.mk_delim_rec (ch : U8) (count : I64) (orig : I64) (can_open : Bool) (can_close : Bool)
+    (outer_len : I64) : Markdown.DelimRec :=
     let d : Markdown.DelimRec :=
-        { ch := ch, count := count, orig := orig, can_open := can_open, outer_len := outer_len } in d
+        { ch := ch, count := count, orig := orig, can_open := can_open, can_close := can_close,
+          outer_len := outer_len } in d
 
 struct Markdown.InlineBuild {
     pieces : List String,
@@ -810,7 +812,7 @@ def Markdown.mod3 (n : I64) : I64 :=
 /// cmark's rule of three.
 def Markdown.rule_of_three (opener : Markdown.DelimRec) (closer_count : I64) (closer_orig : I64)
     (closer_can_open : Bool) : Bool :=
-    if Bool.or closer_can_open opener.can_open
+    if Bool.or closer_can_open opener.can_close
     then
         Bool.and (Bool.not (I64.beq (Markdown.mod3 closer_orig) 0i64))
             (I64.beq (Markdown.mod3 (I64.add opener.count closer_orig)) 0i64)
@@ -851,7 +853,7 @@ def Markdown.finish_delim
         let b1 : Markdown.InlineBuild := Markdown.push_node (inline_text text) b in
         let delims : List Markdown.DelimRec :=
             if can_open
-            then List.cons (Markdown.mk_delim_rec ch remaining orig can_open outer_len) b.delims
+            then List.cons (Markdown.mk_delim_rec ch remaining orig can_open false outer_len) b.delims
             else b.delims in
         let b2 : Markdown.InlineBuild :=
             { pieces := b1.pieces, nodes := b1.nodes, refs := b1.refs, len := b1.len,
@@ -901,7 +903,7 @@ def Markdown.match_one
                         then rest_delims
                         else List.cons
                                 (Markdown.mk_delim_rec ch left opener.orig opener.can_open
-                                    opener.outer_len)
+                                    opener.can_close opener.outer_len)
                                 rest_delims in
                     let b1 : Markdown.InlineBuild :=
                         { pieces := List.empty, nodes := nodes1, refs := b.refs, len := len1,

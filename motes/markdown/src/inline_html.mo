@@ -23,7 +23,7 @@ def Markdown.is_scheme_char (b : U8) : Bool :=
 /// `<scheme:...>`: a scheme, a colon, then no spaces or angle brackets.
 #[partial]
 def Markdown.uri_autolink_go (content : String) (s : String) (n : I64) : Option (Pair String String) :=
-    if I64.lt 0i64 n
+    if I64.lt 1000000i64 n
     then Option.none
     else
         match String.get s 0 {
@@ -31,10 +31,10 @@ def Markdown.uri_autolink_go (content : String) (s : String) (n : I64) : Option 
             Option.some b =>
                 if U8.beq b 62u8
                 then
-                    if I64.lt 1i64 n
+                    if I64.lt n 1i64
                     then Option.none
                     else
-                        let inner : String := String.slice content 0 (I64.sub (String.length content) 1i64) in
+                        let inner : String := String.slice content 0 n in
                         if Markdown.has_scheme inner
                         then Option.some (Pair.pair inner (String.drop 1i64 s))
                         else Option.none
@@ -244,7 +244,7 @@ def Markdown.scan_open_tag (orig : String) (after : String) : Option (Pair Strin
 
 #[partial]
 def Markdown.declaration_end (s : String) (n : I64) : Option String :=
-    if I64.lt 0i64 n
+    if I64.lt 1000000i64 n
     then Option.none
     else
         match String.get s 0 {
