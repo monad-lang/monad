@@ -109,6 +109,13 @@ pub type Markdown.RawBlock {
     raw_html_block (literal : String)
 }
 
+/// A resolved link reference definition. `label` is already normalized.
+pub struct Markdown.LinkRef {
+    label : String,
+    dest : String,
+    title : Option String
+}
+
 pub struct Markdown.RawItem {
     checked : Option Bool,
     blocks : List Markdown.RawBlock

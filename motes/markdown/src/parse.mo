@@ -10,11 +10,12 @@ use lib::scan {Markdown.split_lines}
 use lib::block {
     Markdown.block_parse, Markdown.join_plain, Markdown.trim_end,
 }
-use lib::inline {Markdown.inline_parse}
+use lib::inline {Markdown.inline_parse_with}
+use lib::refs {Markdown.collect_refs}
 use lib::types {
     Markdown.Block, Markdown.Document, Markdown.FrontFormat, Markdown.FrontSplit,
-    Markdown.Frontmatter, Markdown.Inline, Markdown.ListItem, Markdown.RawBlock,
-    Markdown.RawItem,
+    Markdown.Frontmatter, Markdown.Inline, Markdown.LinkRef, Markdown.ListItem,
+    Markdown.RawBlock, Markdown.RawItem,
     Markdown.TableRow,
 }
 
@@ -78,57 +79,57 @@ pub def Markdown.split_frontmatter (src : String) : Markdown.FrontSplit :=
 
 // ─── Resolve: raw blocks to the public AST ───
 
-pub def Markdown.inline_of_lines (lines : List String) : List Markdown.Inline :=
-    Markdown.inline_parse (Markdown.trim_end (Markdown.join_plain lines))
+pub def Markdown.inline_of_lines (refs : List Markdown.LinkRef) (lines : List String) : List Markdown.Inline :=
+    Markdown.inline_parse_with refs (Markdown.trim_end (Markdown.join_plain lines))
 
 #[partial]
-pub def Markdown.resolve_block (b : Markdown.RawBlock) : Markdown.Block :=
+pub def Markdown.resolve_block (refs : List Markdown.LinkRef) (b : Markdown.RawBlock) : Markdown.Block :=
     match b {
-        raw_paragraph lines => block_paragraph (Markdown.inline_of_lines lines),
-        raw_heading level lines => block_heading level (Markdown.inline_of_lines lines),
+        raw_paragraph lines => block_paragraph (Markdown.inline_of_lines refs lines),
+        raw_heading level lines => block_heading level (Markdown.inline_of_lines refs lines),
         raw_thematic_break => block_thematic_break,
         raw_code_block info literal => block_code_block info literal,
-        raw_block_quote blocks => block_quote (Markdown.resolve_blocks blocks),
-        raw_list kind tight items => block_list kind tight (Markdown.resolve_items items),
-        raw_table aligns head rows => block_table aligns (Markdown.resolve_row head) (Markdown.resolve_rows rows),
+        raw_block_quote blocks => block_quote (Markdown.resolve_blocks refs blocks),
+        raw_list kind tight items => block_list kind tight (Markdown.resolve_items refs items),
+        raw_table aligns head rows => block_table aligns (Markdown.resolve_row refs head) (Markdown.resolve_rows refs rows),
         raw_html_block literal => block_html_block literal
     }
 
 #[partial]
-pub def Markdown.resolve_blocks (blocks : List Markdown.RawBlock) : List Markdown.Block :=
+pub def Markdown.resolve_blocks (refs : List Markdown.LinkRef) (blocks : List Markdown.RawBlock) : List Markdown.Block :=
     match blocks {
         List.empty => List.empty,
-        List.cons b rest => List.cons (Markdown.resolve_block b) (Markdown.resolve_blocks rest)
+        List.cons b rest => List.cons (Markdown.resolve_block refs b) (Markdown.resolve_blocks refs rest)
     }
 
-def Markdown.resolve_item (item : Markdown.RawItem) : Markdown.ListItem :=
+def Markdown.resolve_item (refs : List Markdown.LinkRef) (item : Markdown.RawItem) : Markdown.ListItem :=
     let resolved : Markdown.ListItem :=
-        { checked := item.checked, blocks := Markdown.resolve_blocks item.blocks } in
+        { checked := item.checked, blocks := Markdown.resolve_blocks refs item.blocks } in
     resolved
 
 #[partial]
-def Markdown.resolve_items (items : List Markdown.RawItem) : List Markdown.ListItem :=
+def Markdown.resolve_items (refs : List Markdown.LinkRef) (items : List Markdown.RawItem) : List Markdown.ListItem :=
     match items {
         List.empty => List.empty,
-        List.cons i rest => List.cons (Markdown.resolve_item i) (Markdown.resolve_items rest)
+        List.cons i rest => List.cons (Markdown.resolve_item refs i) (Markdown.resolve_items refs rest)
     }
 
-def Markdown.resolve_row (cells : List String) : Markdown.TableRow :=
-    let row : Markdown.TableRow := { cells := Markdown.resolve_cells cells } in row
+def Markdown.resolve_row (refs : List Markdown.LinkRef) (cells : List String) : Markdown.TableRow :=
+    let row : Markdown.TableRow := { cells := Markdown.resolve_cells refs cells } in row
 
 #[partial]
-def Markdown.resolve_cells (cells : List String) : List (List Markdown.Inline) :=
+def Markdown.resolve_cells (refs : List Markdown.LinkRef) (cells : List String) : List (List Markdown.Inline) :=
     match cells {
         List.empty => List.empty,
         List.cons c rest =>
-            List.cons (Markdown.inline_parse (Markdown.trim_end c)) (Markdown.resolve_cells rest)
+            List.cons (Markdown.inline_parse_with refs (Markdown.trim_end c)) (Markdown.resolve_cells refs rest)
     }
 
 #[partial]
-def Markdown.resolve_rows (rows : List (List String)) : List Markdown.TableRow :=
+def Markdown.resolve_rows (refs : List Markdown.LinkRef) (rows : List (List String)) : List Markdown.TableRow :=
     match rows {
         List.empty => List.empty,
-        List.cons r rest => List.cons (Markdown.resolve_row r) (Markdown.resolve_rows rest)
+        List.cons r rest => List.cons (Markdown.resolve_row refs r) (Markdown.resolve_rows refs rest)
     }
 
 // ─── Entry points ───
@@ -138,8 +139,12 @@ pub def Markdown.parse_with (opts : Markdown.Options) (src : String) : Markdown.
     let front : Option Markdown.Frontmatter :=
         if opts.frontmatter then split.front else Option.none in
     let body : String := if opts.frontmatter then split.body else src in
+    let raw : List Markdown.RawBlock := Markdown.block_parse opts (Markdown.split_lines body) in
+    let collected : Pair (List Markdown.LinkRef) (List Markdown.RawBlock) := Markdown.collect_refs raw in
     let blocks : List Markdown.Block :=
-        Markdown.resolve_blocks (Markdown.block_parse opts (Markdown.split_lines body)) in
+        match collected {
+            Pair.pair refs rewritten => Markdown.resolve_blocks refs rewritten
+        } in
     let doc : Markdown.Document := { front := front, blocks := blocks } in doc
 
 /// Parse with the GFM-on defaults.

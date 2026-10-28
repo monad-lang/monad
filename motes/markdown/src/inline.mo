@@ -6,24 +6,34 @@
 /// their entry points plug into `inline_loop`'s dispatch.
 use init::string {}
 use parsec::core {is_empty}
-use lib::scan {Markdown.char_width, Markdown.utf8_of_codepoint}
-use lib::types {Markdown.Inline}
+use lib::scan {Markdown.Cursor, Markdown.char_width, Markdown.utf8_of_codepoint}
+use lib::link_syntax {
+    Markdown.LinkTail, Markdown.normalize_label, Markdown.parse_link_tail,
+    Markdown.parse_ref_label,
+}
+use lib::refs {Markdown.lookup_ref}
+use lib::types {Markdown.Inline, Markdown.LinkRef}
 
-open Markdown.Inline {inline_text, inline_soft_break, inline_hard_break}
+open Markdown.Inline {
+    inline_text, inline_soft_break, inline_hard_break, inline_code,
+    inline_link, inline_image,
+}
 
 struct Markdown.InlineBuild {
     pieces : List String,
-    nodes : List Markdown.Inline
+    nodes : List Markdown.Inline,
+    refs : List Markdown.LinkRef
 }
 
-def Markdown.mk_build (pieces : List String) (nodes : List Markdown.Inline) : Markdown.InlineBuild :=
-    let b : Markdown.InlineBuild := { pieces := pieces, nodes := nodes } in b
+def Markdown.mk_build (pieces : List String) (nodes : List Markdown.Inline) (refs : List Markdown.LinkRef)
+    : Markdown.InlineBuild :=
+    let b : Markdown.InlineBuild := { pieces := pieces, nodes := nodes, refs := refs } in b
 
-def Markdown.inline_start : Markdown.InlineBuild :=
-    Markdown.mk_build List.empty List.empty
+def Markdown.inline_start (refs : List Markdown.LinkRef) : Markdown.InlineBuild :=
+    Markdown.mk_build List.empty List.empty refs
 
 def Markdown.push_piece (s : String) (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
-    let next : Markdown.InlineBuild := { pieces := List.cons s b.pieces, nodes := b.nodes } in next
+    let next : Markdown.InlineBuild := { pieces := List.cons s b.pieces, nodes := b.nodes, refs := b.refs } in next
 
 /// Turn the pending character pieces into one text node.
 def Markdown.flush (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
@@ -31,12 +41,13 @@ def Markdown.flush (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
         List.empty => b,
         List.cons _ _ =>
             let t : String := String.concat_list (List.reverse b.pieces) in
-            Markdown.mk_build List.empty (List.cons (inline_text t) b.nodes)
+            Markdown.mk_build List.empty (List.cons (inline_text t) b.nodes) b.refs
     }
 
 def Markdown.push_node (n : Markdown.Inline) (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
     let flushed : Markdown.InlineBuild := Markdown.flush b in
-    let next : Markdown.InlineBuild := { pieces := flushed.pieces, nodes := List.cons n flushed.nodes } in next
+    let next : Markdown.InlineBuild :=
+        { pieces := flushed.pieces, nodes := List.cons n flushed.nodes, refs := flushed.refs } in next
 
 // ─── Escapes ───
 
@@ -206,6 +217,114 @@ def Markdown.numeric_tail (v : I64) (rest : String) : Option (Pair String String
         Option.none => Option.none
     }
 
+// ─── Code spans ───
+
+/// Count a backtick run at the head of `s`; returns the count and the rest.
+#[partial]
+def Markdown.count_backticks (s : String) (n : I64) : Pair I64 String :=
+    match String.get s 0 {
+        Option.some b =>
+            if U8.beq b 96u8
+            then Markdown.count_backticks (String.drop 1i64 s) (I64.add n 1i64)
+            else Pair.pair n s,
+        Option.none => Pair.pair n s
+    }
+
+/// Search `text` for a run of exactly `n` backticks. Returns the content
+/// before it and the remainder after it.
+#[partial]
+def Markdown.find_code_close (text : String) (rest : String) (pos : I64) (n : I64)
+    : Option (Pair String String) :=
+    if is_empty rest
+    then Option.none
+    else
+        match String.get rest 0 {
+            Option.some b =>
+                if U8.beq b 96u8
+                then
+                    match Markdown.count_backticks rest 0i64 {
+                        Pair.pair k after =>
+                            if I64.beq k n
+                            then Option.some (Pair.pair (String.slice text 0 pos) (String.drop (I64.add pos k) text))
+                            else Markdown.find_code_close text after (I64.add pos k) n
+                    }
+                else
+                    let w : I64 := Markdown.char_width rest in
+                    Markdown.find_code_close text (String.drop w rest) (I64.add pos w) n,
+            Option.none => Option.none
+        }
+
+/// Line endings become spaces; one leading and one trailing space are
+/// stripped when both are present and the content is not all spaces.
+def Markdown.normalize_code (content : String) : String :=
+    let spaced : String := Markdown.newlines_to_spaces content List.empty in
+    let len : I64 := String.length spaced in
+    let first_space : Bool :=
+        match String.get spaced 0 {
+            Option.some b => U8.beq b 32u8,
+            Option.none => false
+        } in
+    let last_space : Bool :=
+        if I64.lt 0i64 len
+        then
+            match String.get spaced (I64.sub len 1i64) {
+                Option.some b => U8.beq b 32u8,
+                Option.none => false
+            }
+        else false in
+    if Bool.and first_space last_space
+    then
+        let inner : String := String.slice spaced 1i64 (I64.sub len 2i64) in
+        if Markdown.all_spaces inner
+        then spaced
+        else inner
+    else spaced
+
+#[partial]
+def Markdown.newlines_to_spaces (s : String) (acc : List String) : String :=
+    if is_empty s
+    then String.concat_list (List.reverse acc)
+    else
+        match String.get s 0 {
+            Option.some b =>
+                if U8.beq b 10u8
+                then Markdown.newlines_to_spaces (String.drop 1i64 s) (List.cons " " acc)
+                else
+                    let w : I64 := Markdown.char_width s in
+                    Markdown.newlines_to_spaces (String.drop w s) (List.cons (String.slice s 0 w) acc),
+            Option.none => String.concat_list (List.reverse acc)
+        }
+
+#[partial]
+def Markdown.all_spaces (s : String) : Bool :=
+    if is_empty s
+    then true
+    else
+        match String.get s 0 {
+            Option.some b =>
+                if U8.beq b 32u8 then Markdown.all_spaces (String.drop 1i64 s) else false,
+            Option.none => true
+        }
+
+#[partial]
+def Markdown.scan_code (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBuild :=
+    match Markdown.count_backticks s 0i64 {
+        Pair.pair n rest =>
+            match Markdown.find_code_close rest rest 0i64 n {
+                Option.some found =>
+                    match found {
+                        Pair.pair content after =>
+                            Markdown.inline_loop
+                                (Markdown.push_node (inline_code (Markdown.normalize_code content)) b)
+                                after
+                    },
+                Option.none =>
+                    Markdown.inline_loop
+                        (Markdown.push_piece (String.slice s 0 n) b)
+                        (String.drop n s)
+            }
+    }
+
 // ─── Breaks ───
 
 #[partial]
@@ -233,6 +352,12 @@ def Markdown.inline_loop (b : Markdown.InlineBuild) (s : String) : Markdown.Inli
                 then Markdown.scan_entity b s
                 else if U8.beq byte 10u8
                 then Markdown.scan_newline b s
+                else if U8.beq byte 96u8
+                then Markdown.scan_code b s
+                else if U8.beq byte 91u8
+                then Markdown.scan_bracket b s false
+                else if U8.beq byte 33u8
+                then Markdown.scan_bang b s
                 else
                     let w : I64 := Markdown.char_width s in
                     Markdown.inline_loop (Markdown.push_piece (String.slice s 0 w) b) (String.drop w s),
@@ -268,7 +393,7 @@ def Markdown.scan_entity (b : Markdown.InlineBuild) (s : String) : Markdown.Inli
 def Markdown.scan_newline (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBuild :=
     match Markdown.drop_space_pieces b.pieces 0i64 {
         Pair.pair spaces rest =>
-            let cleared : Markdown.InlineBuild := Markdown.mk_build rest b.nodes in
+            let cleared : Markdown.InlineBuild := Markdown.mk_build rest b.nodes b.refs in
             let brk : Markdown.Inline :=
                 if I64.lt 1i64 spaces then inline_hard_break else inline_soft_break in
             Markdown.inline_loop (Markdown.push_node brk cleared) (String.drop 1i64 s)
@@ -276,9 +401,15 @@ def Markdown.scan_newline (b : Markdown.InlineBuild) (s : String) : Markdown.Inl
 
 /// Parse inline source into a node list. Adjacent text is merged and empty
 /// text nodes are dropped.
-pub def Markdown.inline_parse (src : String) : List Markdown.Inline :=
-    let done : Markdown.InlineBuild := Markdown.flush (Markdown.inline_loop Markdown.inline_start src) in
+#[partial]
+pub def Markdown.inline_parse_with (refs : List Markdown.LinkRef) (src : String) : List Markdown.Inline :=
+    let done : Markdown.InlineBuild :=
+        Markdown.flush (Markdown.inline_loop (Markdown.inline_start refs) src) in
     List.reverse done.nodes
+
+#[partial]
+pub def Markdown.inline_parse (src : String) : List Markdown.Inline :=
+    Markdown.inline_parse_with List.empty src
 
 /// Unescape a one-line string the way a link destination or a code fence's
 /// info string is unescaped: backslash escapes and character references, and
@@ -295,5 +426,217 @@ def Markdown.flatten_text (nodes : List Markdown.Inline) (acc : List String) : S
             }
     }
 
+#[partial]
 pub def Markdown.unescape (s : String) : String :=
     Markdown.flatten_text (Markdown.inline_parse s) List.empty
+
+// ─── Links and images ───
+
+/// `![` opens an image; a lone `!` is text.
+#[partial]
+def Markdown.scan_bang (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBuild :=
+    let next : String := String.drop 1i64 s in
+    match String.get next 0 {
+        Option.some b2 =>
+            if U8.beq b2 91u8
+            then Markdown.scan_bracket b s true
+            else Markdown.inline_loop (Markdown.push_piece "!" b) next,
+        Option.none => Markdown.push_piece "!" b
+    }
+
+
+/// Find the `]` matching an already-consumed `[`. Skips escapes and code
+/// spans; nested brackets increase the depth. Returns the label text and the
+/// text after the `]`.
+#[partial]
+def Markdown.find_bracket_close (text : String) (rest : String) (pos : I64) (depth : I64)
+    : Option (Pair String String) :=
+    if is_empty rest
+    then Option.none
+    else
+        match String.get rest 0 {
+            Option.none => Option.none,
+            Option.some b =>
+                if U8.beq b 92u8
+                then
+                    let next : String := String.drop 1i64 rest in
+                    let w : I64 := Markdown.char_width next in
+                    Markdown.find_bracket_close text (String.drop w next) (I64.add pos (I64.add 1i64 w)) depth
+                else if U8.beq b 96u8
+                then
+                    match Markdown.count_backticks rest 0i64 {
+                        Pair.pair n after_run =>
+                            match Markdown.find_code_close after_run after_run 0i64 n {
+                                Option.some found =>
+                                    match found {
+                                        Pair.pair _ after_code =>
+                                            let consumed : I64 := I64.sub (I64.sub (String.length rest) (String.length after_code)) 0i64 in
+                                            Markdown.find_bracket_close text after_code (I64.add pos consumed) depth
+                                    },
+                                Option.none =>
+                                    Markdown.find_bracket_close text (String.drop n rest) (I64.add pos n) depth
+                            }
+                    }
+                else if U8.beq b 91u8
+                then Markdown.find_bracket_close text (String.drop 1i64 rest) (I64.add pos 1i64) (I64.add depth 1i64)
+                else if U8.beq b 93u8
+                then
+                    if I64.beq depth 1i64
+                    then Option.some (Pair.pair (String.slice text 0 pos) (String.drop 1i64 rest))
+                    else Markdown.find_bracket_close text (String.drop 1i64 rest) (I64.add pos 1i64) (I64.sub depth 1i64)
+                else
+                    let w : I64 := Markdown.char_width rest in
+                    Markdown.find_bracket_close text (String.drop w rest) (I64.add pos w) depth
+        }
+
+#[partial]
+def Markdown.has_link (nodes : List Markdown.Inline) : Bool :=
+    match nodes {
+        List.empty => false,
+        List.cons n rest =>
+            Bool.or
+                (match n {
+                    inline_link _ _ _ => true,
+                    Markdown.Inline.inline_emphasis children => Markdown.has_link children,
+                    Markdown.Inline.inline_strong children => Markdown.has_link children,
+                    Markdown.Inline.inline_strikethrough children => Markdown.has_link children,
+                    _ => false
+                })
+                (Markdown.has_link rest)
+    }
+
+/// Flatten nodes to plain text: what an image's `alt` is.
+#[partial]
+pub def Markdown.flatten_alt (nodes : List Markdown.Inline) (acc : List String) : String :=
+    match nodes {
+        List.empty => String.concat_list (List.reverse acc),
+        List.cons n rest =>
+            match n {
+                inline_text t => Markdown.flatten_alt rest (List.cons t acc),
+                inline_code t => Markdown.flatten_alt rest (List.cons t acc),
+                inline_soft_break => Markdown.flatten_alt rest (List.cons "\n" acc),
+                inline_hard_break => Markdown.flatten_alt rest (List.cons "\n" acc),
+                inline_emphasis children => Markdown.flatten_alt rest
+                    (List.cons (Markdown.flatten_alt children List.empty) acc),
+                inline_strong children => Markdown.flatten_alt rest
+                    (List.cons (Markdown.flatten_alt children List.empty) acc),
+                inline_strikethrough children => Markdown.flatten_alt rest
+                    (List.cons (Markdown.flatten_alt children List.empty) acc),
+                inline_link _ _ children => Markdown.flatten_alt rest
+                    (List.cons (Markdown.flatten_alt children List.empty) acc),
+                inline_image _ _ alt => Markdown.flatten_alt rest (List.cons alt acc),
+                inline_autolink _ label => Markdown.flatten_alt rest (List.cons label acc),
+                inline_html literal => Markdown.flatten_alt rest (List.cons literal acc)
+            }
+    }
+
+/// A resolution: destination, title and the text after the construct.
+struct Markdown.Resolved {
+    dest : String,
+    title : Option String,
+    rest : String
+}
+
+def Markdown.mk_resolved (dest : String) (title : Option String) (rest : String) : Markdown.Resolved :=
+    let r : Markdown.Resolved := { dest := dest, title := title, rest := rest } in r
+
+/// An inline tail, a full/collapsed reference, or a shortcut reference.
+#[partial]
+pub def Markdown.resolve_link (label : String) (after : String) (refs : List Markdown.LinkRef)
+    : Option Markdown.Resolved :=
+    let normal : String := Markdown.normalize_label (Markdown.unescape label) in
+    match Markdown.Cursor.peek (Markdown.Cursor.start after) {
+        Option.some b =>
+            if U8.beq b 40u8
+            then
+                match Markdown.parse_link_tail (Markdown.Cursor.start after) {
+                    Option.some tail => Markdown.resolved_tail tail,
+                    Option.none => Option.none
+                }
+            else if U8.beq b 91u8
+            then
+                if String.starts_with "[]" after
+                then Markdown.resolve_by_label normal (String.drop 2i64 after) refs
+                else
+                    match Markdown.Cursor.peek (Markdown.Cursor.step (Markdown.Cursor.start after)) {
+                        Option.some inner =>
+                            if U8.beq inner 93u8
+                            then Markdown.resolve_by_label normal (String.drop 2i64 after) refs
+                            else
+                                match Markdown.parse_ref_label (Markdown.Cursor.start after) {
+                                    Option.some labelled =>
+                                        match labelled {
+                                            Pair.pair ref_label after_ref =>
+                                                Markdown.resolve_by_label
+                                                    (Markdown.normalize_label (Markdown.unescape ref_label))
+                                                    after_ref.text refs
+                                        },
+                                    Option.none => Option.none
+                                },
+                        Option.none => Option.none
+                    }
+            else Markdown.resolve_by_label normal after refs,
+        Option.none => Markdown.resolve_by_label normal after refs
+    }
+
+#[partial]
+def Markdown.resolve_by_label (label : String) (rest : String) (refs : List Markdown.LinkRef)
+    : Option Markdown.Resolved :=
+    if String.beq label ""
+    then Option.none
+    else
+        match Markdown.lookup_ref label refs {
+            Option.some r => Option.some (Markdown.mk_resolved (Markdown.unescape r.dest) (Markdown.unescape_title r.title) rest),
+            Option.none => Option.none
+        }
+
+#[partial]
+def Markdown.unescape_title (title : Option String) : Option String :=
+    match title {
+        Option.some t => Option.some (Markdown.unescape t),
+        Option.none => Option.none
+    }
+
+#[partial]
+def Markdown.resolved_tail (tail : Markdown.LinkTail) : Option Markdown.Resolved :=
+    Option.some
+        (Markdown.mk_resolved (Markdown.unescape tail.dest) (Markdown.unescape_title tail.title) tail.rest.text)
+
+/// Emit a link or an image, or fall back to a literal opener. A link whose
+/// label already contains a link is not formed (links cannot nest).
+#[partial]
+#[partial]
+def Markdown.emit_link (b : Markdown.InlineBuild) (image : Bool) (label : String) (resolved : Markdown.Resolved)
+    : Markdown.InlineBuild :=
+    let children : List Markdown.Inline := Markdown.inline_parse_with b.refs label in
+    if Bool.and (Bool.not image) (Markdown.has_link children)
+    then
+        // Links cannot nest: the outer opener is literal and the label is
+        // rescanned, which is what lets the inner one form.
+        Markdown.inline_loop (Markdown.push_piece (if image then "![" else "[") b)
+            (String.drop (if image then 2i64 else 1i64) label)
+    else
+        let node : Markdown.Inline :=
+            if image
+            then inline_image resolved.dest resolved.title (Markdown.flatten_alt children List.empty)
+            else inline_link resolved.dest resolved.title children in
+        Markdown.inline_loop (Markdown.push_node node b) resolved.rest
+
+#[partial]
+#[partial]
+def Markdown.scan_bracket (b : Markdown.InlineBuild) (s : String) (image : Bool) : Markdown.InlineBuild :=
+    let opener : I64 := if image then 2i64 else 1i64 in
+    let inner : String := String.drop opener s in
+    match Markdown.find_bracket_close inner inner 0i64 1i64 {
+        Option.none =>
+            Markdown.inline_loop (Markdown.push_piece (String.slice s 0 opener) b) inner,
+        Option.some found =>
+            match found {
+                Pair.pair label after =>
+                    match Markdown.resolve_link label after b.refs {
+                        Option.some resolved => Markdown.emit_link b image label resolved,
+                        Option.none =>
+                            Markdown.inline_loop (Markdown.push_piece (String.slice s 0 opener) b) inner
+                    }
+            }
+    }
