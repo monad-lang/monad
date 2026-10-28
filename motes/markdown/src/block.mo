@@ -27,6 +27,7 @@ use lib::scan {
 }
 use lib::block_html {Markdown.html_block_ends, Markdown.html_block_start}
 use lib::inline {Markdown.unescape}
+use lib::refs {Markdown.refs_of_text, Markdown.trim_space}
 use lib::types {Markdown.Align, Markdown.ListKind, Markdown.RawBlock, Markdown.RawItem}
 
 open Markdown.RawBlock {
@@ -832,9 +833,20 @@ def Markdown.open_new
                                     if Markdown.tip_is_paragraph state then
                                         match Markdown.try_setext first base {
                                             Option.some level =>
-                                                Markdown.Started.started_consumed
-                                                    (Markdown.to_heading level
-                                                        (Markdown.tip_paragraph_lines state) state),
+                                                // A setext underline over a paragraph that is
+                                                // nothing but reference definitions is not a
+                                                // heading: the definitions go, and the line
+                                                // stays paragraph text.
+                                                match Markdown.refs_of_text
+                                                        (Markdown.join_plain
+                                                            (List.reverse (Markdown.tip_paragraph_lines state))) {
+                                                    Pair.pair _ remaining =>
+                                                        if String.beq (Markdown.trim_space remaining) ""
+                                                        then Markdown.Started.started_none state c false
+                                                        else Markdown.Started.started_consumed
+                                                            (Markdown.to_heading level
+                                                                (Markdown.tip_paragraph_lines state) state)
+                                                },
                                             Option.none =>
                                                 Markdown.open_new_after_setext state first base c all_matched maybe_lazy
                                         }
