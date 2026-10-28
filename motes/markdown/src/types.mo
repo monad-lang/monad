@@ -90,6 +90,53 @@ pub type Markdown.Inline {
     inline_html (literal : String)
 }
 
+open Markdown.Block {
+    block_paragraph, block_heading, block_thematic_break, block_code_block,
+    block_quote, block_list, block_table, block_html_block,
+}
+
+open Markdown.Inline {inline_text}
+
+// ─── Block constructors ───
+//
+// The self-hosted checker types a block constructor used from another module
+// as the bare type name, so every construction goes through one of these
+// helpers, which live beside the declaration.
+
+pub def Markdown.mk_paragraph (inlines : List Markdown.Inline) : Markdown.Block :=
+    block_paragraph inlines
+
+pub def Markdown.mk_heading (level : I64) (inlines : List Markdown.Inline) : Markdown.Block :=
+    block_heading level inlines
+
+pub def Markdown.mk_thematic_break : Markdown.Block := block_thematic_break
+
+pub def Markdown.mk_code_block (info : Option String) (literal : String) : Markdown.Block :=
+    block_code_block info literal
+
+pub def Markdown.mk_block_quote (blocks : List Markdown.Block) : Markdown.Block :=
+    block_quote blocks
+
+pub def Markdown.mk_block_list
+    (kind : Markdown.ListKind) (tight : Bool) (items : List Markdown.ListItem) : Markdown.Block :=
+    block_list kind tight items
+
+pub def Markdown.mk_block_table
+    (aligns : List Markdown.Align) (head : Markdown.TableRow) (rows : List Markdown.TableRow)
+    : Markdown.Block :=
+    block_table aligns head rows
+
+pub def Markdown.mk_html_block (literal : String) : Markdown.Block :=
+    block_html_block literal
+
+pub def Markdown.mk_block_item (checked : Option Bool) (blocks : List Markdown.Block) : Markdown.ListItem :=
+    let i : Markdown.ListItem := { checked := checked, blocks := blocks } in i
+
+pub def Markdown.mk_table_row (cells : List (List Markdown.Inline)) : Markdown.TableRow :=
+    let r : Markdown.TableRow := { cells := cells } in r
+
+pub def Markdown.mk_inline_text (text : String) : Markdown.Inline := inline_text text
+
 // ─── Parser-internal tree ───
 //
 // The block pass produces `RawBlock`s, whose paragraphs, headings and table

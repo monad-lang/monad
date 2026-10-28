@@ -18,6 +18,14 @@ use json::json {
 use lib::scan {Markdown.char_width}
 use lib::tests::render {Markdown.render}
 
+/// The fixture is stored in parts under the compiled backend's 64 KiB read
+/// limit (plans/implementations/compiled-read-file-second-chunk.md); the
+/// parts are the vendored bytes, split at line boundaries.
+pub def Markdown.spec_parts : List String :=
+    [ "motes/markdown/testdata/commonmark-0.31.2.part1.json",
+      "motes/markdown/testdata/commonmark-0.31.2.part2.json",
+      "motes/markdown/testdata/commonmark-0.31.2.part3.json" ]
+
 pub def Markdown.spec_path : String :=
     "motes/markdown/testdata/commonmark-0.31.2.spec.json"
 
@@ -129,18 +137,39 @@ pub def Markdown.examples_of_json (j : Json) : Result String (List Markdown.Spec
 /// Read and decode the fixture. Every failure names the path and the reason.
 /// Tests run from the repository root, which is what makes the path work.
 pub def Markdown.load_spec (path : String) : IO (Result String (List Markdown.SpecExample)) := do {
-    let r <- IO.read_file (Path.path path);
+    let r <- Markdown.read_parts Markdown.spec_parts List.empty;
     Markdown.loaded_spec path r
 }
 
-def Markdown.loaded_spec
-    (path : String) (r : Result StreamError String) : IO (Result String (List Markdown.SpecExample)) :=
+/// Read every part and join them: one file per part keeps each read under
+/// the compiled backend's 64 KiB limit.
+#[partial]
+def Markdown.read_parts (paths : List String) (acc : List String)
+    : IO (Result String String) :=
+    match paths {
+        List.empty => IO.pure (Result.ok (String.concat_list (List.reverse acc))),
+        List.cons p rest => do {
+            let r <- IO.read_file (Path.path p);
+            Markdown.part_read p rest acc r
+        }
+    }
+
+#[partial]
+def Markdown.part_read
+    (path : String) (rest : List String) (acc : List String) (r : Result StreamError String)
+    : IO (Result String String) :=
     match r {
         Result.err e =>
             IO.pure (Result.err
-                (String.concat "cannot read spec fixture " (String.concat path (String.concat ": " e.message)))),
-        Result.ok text =>
-            Markdown.parsed_spec text
+                (String.concat "cannot read spec fixture part " (String.concat path (String.concat ": " e.message)))),
+        Result.ok text => Markdown.read_parts rest (List.cons text acc)
+    }
+
+def Markdown.loaded_spec
+    (path : String) (r : Result String String) : IO (Result String (List Markdown.SpecExample)) :=
+    match r {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok text => Markdown.parsed_spec text
     }
 
 def Markdown.parsed_spec (text : String) : IO (Result String (List Markdown.SpecExample)) :=

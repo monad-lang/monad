@@ -1074,8 +1074,8 @@ def Markdown.mark_blank_stack (line : I64) (stack : List Markdown.OpenBlock) : L
                             (Bool.not (I64.beq start line))
                             between start)
                         rest,
-                open_doc _ => stack,
-                open_list _ _ _ _ => stack,
+                open_doc _ => List.cons top rest,
+                open_list _ _ _ _ => List.cons top rest,
                 _ => List.cons top (Markdown.mark_blank_stack line rest)
             }
     }

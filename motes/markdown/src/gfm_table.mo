@@ -27,28 +27,35 @@ def Markdown.trim_cells (cells : List String) (acc : List String) : List String 
         List.cons c rest => Markdown.trim_cells rest (List.cons (Markdown.trim_both c) acc)
     }
 
-#[partial]
+/// Trim spaces from both ends. One self-call per loop: the self-tail-call
+/// rewrite emits one merge entry per call site, so a function with two
+/// recursive calls in different branches produces an invalid PHI.
 def Markdown.trim_both (s : String) : String :=
+    Markdown.trim_trailing (Markdown.trim_leading s)
+
+#[partial]
+def Markdown.trim_leading (s : String) : String :=
+    match String.get s 0 {
+        Option.some b =>
+            if U8.beq b 32u8
+            then Markdown.trim_leading (String.drop 1i64 s)
+            else s,
+        Option.none => s
+    }
+
+#[partial]
+def Markdown.trim_trailing (s : String) : String :=
     let len : I64 := String.length s in
     if I64.lt len 1i64
     then s
     else
-        let start_trimmed : String :=
-            match String.get s 0 {
-                Option.some b => if U8.beq b 32u8 then Markdown.trim_both (String.slice s 1i64 (I64.sub len 1i64)) else s,
-                Option.none => s
-            } in
-        let tlen : I64 := String.length start_trimmed in
-        if I64.lt tlen 1i64
-        then start_trimmed
-        else
-            match String.get start_trimmed (I64.sub tlen 1i64) {
-                Option.some b =>
-                    if U8.beq b 32u8
-                    then Markdown.trim_both (String.slice start_trimmed 0 (I64.sub tlen 1i64))
-                    else start_trimmed,
-                Option.none => start_trimmed
-            }
+        match String.get s (I64.sub len 1i64) {
+            Option.some b =>
+                if U8.beq b 32u8
+                then Markdown.trim_trailing (String.slice s 0 (I64.sub len 1i64))
+                else s,
+            Option.none => s
+        }
 
 /// A line that begins or ends with an unescaped pipe has an empty outer cell.
 #[partial]

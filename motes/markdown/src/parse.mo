@@ -15,14 +15,13 @@ use lib::refs {Markdown.collect_refs}
 use lib::types {
     Markdown.Block, Markdown.Document, Markdown.FrontFormat, Markdown.FrontSplit,
     Markdown.Frontmatter, Markdown.Inline, Markdown.LinkRef, Markdown.ListItem,
-    Markdown.RawBlock, Markdown.RawItem,
-    Markdown.TableRow,
+    Markdown.RawBlock, Markdown.RawItem, Markdown.TableRow,
+    Markdown.mk_block_item, Markdown.mk_block_list, Markdown.mk_block_quote,
+    Markdown.mk_block_table, Markdown.mk_code_block, Markdown.mk_heading,
+    Markdown.mk_html_block, Markdown.mk_inline_text, Markdown.mk_paragraph,
+    Markdown.mk_table_row, Markdown.mk_thematic_break,
 }
 
-open Markdown.Block {
-    block_paragraph, block_heading, block_thematic_break, block_code_block,
-    block_quote, block_list, block_table, block_html_block,
-}
 open Markdown.RawBlock {
     raw_paragraph, raw_heading, raw_thematic_break, raw_code_block,
     raw_block_quote, raw_list, raw_table, raw_html_block,
@@ -86,15 +85,17 @@ pub def Markdown.inline_of_lines
 #[partial]
 pub def Markdown.resolve_block (opts : Markdown.Options) (refs : List Markdown.LinkRef) (b : Markdown.RawBlock) : Markdown.Block :=
     match b {
-        raw_paragraph lines => block_paragraph (Markdown.inline_of_lines opts refs lines),
-        raw_heading level _ lines => block_heading level (Markdown.inline_of_lines opts refs lines),
-        raw_thematic_break => block_thematic_break,
-        raw_code_block info literal => block_code_block info literal,
-        raw_block_quote blocks => block_quote (Markdown.resolve_blocks opts refs blocks),
-        raw_list kind tight items => block_list kind tight (Markdown.resolve_items opts refs items),
+        raw_paragraph lines => Markdown.mk_paragraph (Markdown.inline_of_lines opts refs lines),
+        raw_heading level _ lines => Markdown.mk_heading level (Markdown.inline_of_lines opts refs lines),
+        raw_thematic_break => Markdown.mk_thematic_break,
+        raw_code_block info literal => Markdown.mk_code_block info literal,
+        raw_block_quote blocks => Markdown.mk_block_quote (Markdown.resolve_blocks opts refs blocks),
+        raw_list kind tight items =>
+            Markdown.mk_block_list kind tight (Markdown.resolve_items opts refs items),
         raw_table aligns head rows =>
-            block_table aligns (Markdown.resolve_row opts refs head) (Markdown.resolve_rows opts refs rows),
-        raw_html_block literal => block_html_block literal
+            Markdown.mk_block_table aligns (Markdown.resolve_row opts refs head)
+                (Markdown.resolve_rows opts refs rows),
+        raw_html_block literal => Markdown.mk_html_block literal
     }
 
 #[partial]
@@ -116,7 +117,7 @@ def Markdown.resolve_item
     else Markdown.mk_item item.checked blocks
 
 def Markdown.mk_item (checked : Option Bool) (blocks : List Markdown.Block) : Markdown.ListItem :=
-    let i : Markdown.ListItem := { checked := checked, blocks := blocks } in i
+    Markdown.mk_block_item checked blocks
 
 /// A leading `[ ] ` or `[x] `/`[X] ` in an item's first paragraph is a task
 /// marker: it sets `checked` and is removed from the text.
@@ -125,7 +126,7 @@ def Markdown.task_item (blocks : List Markdown.Block) : Markdown.ListItem :=
     match blocks {
         List.cons b rest =>
             match b {
-                block_paragraph inlines => Markdown.task_paragraph inlines rest,
+                Markdown.Block.block_paragraph inlines => Markdown.task_paragraph inlines rest,
                 _ => Markdown.mk_item Option.none blocks
             },
         List.empty => Markdown.mk_item Option.none blocks
@@ -137,14 +138,14 @@ def Markdown.task_paragraph (inlines : List Markdown.Inline) (rest : List Markdo
     match inlines {
         List.cons first more =>
             match first {
-                inline_text t =>
+                Markdown.Inline.inline_text t =>
                     match Markdown.task_marker t {
                         Option.some checked => Markdown.mk_item (Option.some checked) (Markdown.task_rest checked t more rest),
-                        Option.none => Markdown.mk_item Option.none (List.cons (block_paragraph inlines) rest)
+                        Option.none => Markdown.mk_item Option.none (List.cons (Markdown.mk_paragraph inlines) rest)
                     },
-                _ => Markdown.mk_item Option.none (List.cons (block_paragraph inlines) rest)
+                _ => Markdown.mk_item Option.none (List.cons (Markdown.mk_paragraph inlines) rest)
             },
-        List.empty => Markdown.mk_item Option.none (List.cons (block_paragraph inlines) rest)
+        List.empty => Markdown.mk_item Option.none (List.cons (Markdown.mk_paragraph inlines) rest)
     }
 
 /// The marker is `[ ]`, `[x]` or `[X]` followed by a space.
@@ -160,8 +161,8 @@ def Markdown.task_rest (checked : Bool) (t : String) (more : List Markdown.Inlin
     let inlines : List Markdown.Inline :=
         if String.beq text ""
         then more
-        else List.cons (Markdown.Inline.inline_text text) more in
-    let para : Markdown.Block := block_paragraph inlines in
+        else List.cons (Markdown.mk_inline_text text) more in
+    let para : Markdown.Block := Markdown.mk_paragraph inlines in
     let blocks : List Markdown.Block :=
         if List.is_empty inlines then rest else List.cons para rest in
     blocks
@@ -176,8 +177,9 @@ def Markdown.resolve_items
             List.cons (Markdown.resolve_item opts refs i) (Markdown.resolve_items opts refs rest)
     }
 
-def Markdown.resolve_row (opts : Markdown.Options) (refs : List Markdown.LinkRef) (cells : List String) : Markdown.TableRow :=
-    let row : Markdown.TableRow := { cells := Markdown.resolve_cells opts refs cells } in row
+def Markdown.resolve_row (opts : Markdown.Options) (refs : List Markdown.LinkRef) (cells : List String)
+    : Markdown.TableRow :=
+    Markdown.mk_table_row (Markdown.resolve_cells opts refs cells)
 
 #[partial]
 def Markdown.resolve_cells
