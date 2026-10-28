@@ -836,7 +836,7 @@ def Markdown.open_new_after_setext
             (Markdown.push_into raw_thematic_break
                 (Markdown.close_list_tip (Markdown.close_paragraph_tip state)))
     else
-        match Markdown.try_list_item first false base {
+        match Markdown.try_list_item first (Markdown.tip_is_paragraph state) base {
             Option.some ls =>
                 Markdown.mark_opened
                     (Markdown.open_new

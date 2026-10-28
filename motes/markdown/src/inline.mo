@@ -130,7 +130,7 @@ def Markdown.take_alnum (s : String) (acc : List String) (n : I64) : Pair String
 /// no codepoint is that large, and the caller maps out-of-range to U+FFFD.
 #[partial]
 def Markdown.take_digits (s : String) (acc : I64) (n : I64) : Pair I64 String :=
-    if I64.lt 9i64 n
+    if I64.lt 7i64 n
     then Pair.pair acc s
     else
         match String.get s 0 {
@@ -347,7 +347,8 @@ def Markdown.scan_code (b : Markdown.InlineBuild) (s : String) : Markdown.Inline
                     match found {
                         Pair.pair content after =>
                             Markdown.inline_loop
-                                (Markdown.push_node (inline_code (Markdown.normalize_code content)) b)
+                                (Markdown.prev_of s after
+                                    (Markdown.push_node (inline_code (Markdown.normalize_code content)) b))
                                 after
                     },
                 Option.none =>
@@ -424,7 +425,9 @@ def Markdown.scan_entity (b : Markdown.InlineBuild) (s : String) : Markdown.Inli
     match Markdown.try_entity s {
         Option.some found =>
             match found {
-                Pair.pair text rest => Markdown.inline_loop (Markdown.push_piece text b) rest
+                Pair.pair text rest =>
+                    Markdown.inline_loop
+                        (Markdown.prev_of s rest (Markdown.push_piece text b)) rest
             },
         Option.none => Markdown.inline_loop (Markdown.push_piece "&" b) (String.drop 1i64 s)
     }
@@ -648,7 +651,7 @@ def Markdown.resolved_tail (tail : Markdown.LinkTail) : Option Markdown.Resolved
 #[partial]
 #[partial]
 def Markdown.emit_link (b : Markdown.InlineBuild) (image : Bool) (label : String) (resolved : Markdown.Resolved)
-    : Markdown.InlineBuild :=
+    (whole : String) : Markdown.InlineBuild :=
     let children : List Markdown.Inline := Markdown.inline_parse_with b.refs label in
     if Bool.and (Bool.not image) (Markdown.has_link children)
     then
@@ -661,7 +664,8 @@ def Markdown.emit_link (b : Markdown.InlineBuild) (image : Bool) (label : String
             if image
             then inline_image resolved.dest resolved.title (Markdown.flatten_alt children List.empty)
             else inline_link resolved.dest resolved.title children in
-        Markdown.inline_loop (Markdown.push_node node b) resolved.rest
+        Markdown.inline_loop
+            (Markdown.prev_of whole resolved.rest (Markdown.push_node node b)) resolved.rest
 
 #[partial]
 #[partial]
@@ -675,7 +679,7 @@ def Markdown.scan_bracket (b : Markdown.InlineBuild) (s : String) (image : Bool)
             match found {
                 Pair.pair label after =>
                     match Markdown.resolve_link label after b.refs {
-                        Option.some resolved => Markdown.emit_link b image label resolved,
+                        Option.some resolved => Markdown.emit_link b image label resolved s,
                         Option.none =>
                             Markdown.inline_loop (Markdown.push_piece (String.slice s 0 opener) b) inner
                     }
@@ -689,7 +693,10 @@ def Markdown.scan_lt (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBu
         Option.some found =>
             match found {
                 Pair.pair content rest =>
-                    Markdown.inline_loop (Markdown.push_node (Markdown.Inline.inline_autolink content content) b) rest
+                    Markdown.inline_loop
+                        (Markdown.prev_of s rest
+                            (Markdown.push_node (Markdown.Inline.inline_autolink content content) b))
+                        rest
             },
         Option.none =>
             match Markdown.scan_email_autolink s {
@@ -697,9 +704,10 @@ def Markdown.scan_lt (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBu
                     match found {
                         Pair.pair content rest =>
                             Markdown.inline_loop
-                                (Markdown.push_node
-                                    (Markdown.Inline.inline_autolink (String.concat "mailto:" content) content)
-                                    b)
+                                (Markdown.prev_of s rest
+                                    (Markdown.push_node
+                                        (Markdown.Inline.inline_autolink (String.concat "mailto:" content) content)
+                                        b))
                                 rest
                     },
                 Option.none =>
@@ -708,13 +716,35 @@ def Markdown.scan_lt (b : Markdown.InlineBuild) (s : String) : Markdown.InlineBu
                             match found {
                                 Pair.pair literal rest =>
                                     Markdown.inline_loop
-                                        (Markdown.push_node (Markdown.Inline.inline_html literal) b) rest
+                                        (Markdown.prev_of s rest
+                                            (Markdown.push_node (Markdown.Inline.inline_html literal) b))
+                                        rest
                             },
                         Option.none =>
                             Markdown.inline_loop (Markdown.push_piece "<" b) (String.drop 1i64 s)
                     }
             }
     }
+
+/// The last codepoint of `s`, for the delimiter flanking state.
+#[partial]
+def Markdown.last_cp (s : String) (acc : Option U32) : Option U32 :=
+    if is_empty s
+    then acc
+    else
+        match Markdown.codepoint_at s {
+            Option.some cp => Markdown.last_cp (String.drop (Markdown.char_width s) s) (Option.some cp),
+            Option.none => acc
+        }
+
+/// Set `prev` to the last source character of the construct that consumed
+/// `whole` down to `rest`. Flanking depends on it, so every construct that
+/// does not feed the loop one character at a time must set it.
+pub def Markdown.prev_of (whole : String) (rest : String) (b : Markdown.InlineBuild) : Markdown.InlineBuild :=
+    let consumed : I64 := I64.sub (String.length whole) (String.length rest) in
+    let prefix : String := String.slice whole 0 consumed in
+    let p : Option U32 := Markdown.last_cp prefix Option.none in
+    { b with prev := p }
 
 // ─── Emphasis ───
 //
@@ -852,6 +882,14 @@ def Markdown.finish_delim
 def Markdown.match_closers
     (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool) (rest : String)
     : Markdown.InlineBuild :=
+    if I64.lt remaining 1i64
+    then Markdown.inline_loop b rest
+    else Markdown.match_one b ch remaining orig can_open rest
+
+#[partial]
+def Markdown.match_one
+    (b : Markdown.InlineBuild) (ch : U8) (remaining : I64) (orig : I64) (can_open : Bool) (rest : String)
+    : Markdown.InlineBuild :=
     match Markdown.find_opener b.delims ch remaining orig can_open 0i64 {
         Option.none => Markdown.finish_delim b ch remaining orig can_open rest,
         Option.some index =>
@@ -876,7 +914,14 @@ def Markdown.match_closers
                         if I64.lt left 1i64
                         then I64.add opener.outer_len 1i64
                         else I64.add opener.outer_len 2i64 in
-                    let delims1 : List Markdown.DelimRec := Markdown.list_drop (I64.add index 1i64) b.delims in
+                    let rest_delims : List Markdown.DelimRec := Markdown.list_drop (I64.add index 1i64) b.delims in
+                    let delims1 : List Markdown.DelimRec :=
+                        if I64.lt left 1i64
+                        then rest_delims
+                        else List.cons
+                                (Markdown.mk_delim_rec ch left opener.orig opener.can_open
+                                    opener.outer_len)
+                                rest_delims in
                     let b1 : Markdown.InlineBuild :=
                         { pieces := List.empty, nodes := nodes1, refs := b.refs, len := len1,
                           delims := delims1, prev := b.prev } in
