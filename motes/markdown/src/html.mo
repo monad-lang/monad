@@ -194,7 +194,24 @@ def Markdown.items_nodes_rev (opts : Markdown.HtmlOptions) (tight : Bool) (items
 
 #[partial]
 def Markdown.item_node (opts : Markdown.HtmlOptions) (tight : Bool) (item : Markdown.ListItem) : Html.Node :=
-    Markdown.el "li" List.empty (Markdown.item_children opts tight item.blocks)
+    let children : List Html.Node := Markdown.item_children opts tight item.blocks in
+    Markdown.el "li" List.empty (Markdown.task_prefix item.checked children)
+
+/// A task-list item starts with its checkbox and a space.
+def Markdown.task_prefix (checked : Option Bool) (children : List Html.Node) : List Html.Node :=
+    match checked {
+        Option.none => children,
+        Option.some state =>
+            List.cons (Markdown.checkbox state)
+                (List.cons (Markdown.txt " ") children)
+    }
+
+def Markdown.checkbox (state : Bool) : Html.Node :=
+    let attrs : List Html.Attr :=
+        if state
+        then [ Markdown.at "type" "checkbox", Markdown.at "checked" "", Markdown.at "disabled" "" ]
+        else [ Markdown.at "type" "checkbox", Markdown.at "disabled" "" ] in
+    Html.Node.node_void "input" attrs
 
 #[partial]
 /// cmark's `cr()`: a block child starts on its own line, so a loose item opens
