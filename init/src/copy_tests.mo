@@ -32,3 +32,14 @@ def test_copy_string_shares_the_pointer : Bool :=
     match Copy.copy "hello" {
         Pair.pair a b => String.beq a "hello" && String.beq b "hello",
     }
+
+/// `Nat` is a heap chain, so this is the instance whose soundness rests on
+/// the region rule: the two halves are the same chain pointer, and it is
+/// never freed individually (`plans/bootstrapping/ownership-regions-memory.md`
+/// O3/O4). A structural test is all the language can observe.
+#[test]
+def test_copy_nat_shares_the_chain : Bool :=
+    let two : Nat := Nat.succ (Nat.succ Nat.zero) in
+    match Copy.copy two {
+        Pair.pair a b => Nat.eq (Nat.add a b) (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero)))),
+    }

@@ -76,16 +76,22 @@ pub def type_error_message (e : TypeError) : String :=
 			String.concat "`" (String.concat (show_identifier name)
 				(String.concat "` : " (String.concat (show_term typ)
 				(String.concat " is used " (String.concat (I64.to_string uses)
-				" times but is affine; borrow it, or give its type a Copy instance"))))),
+				" times but is affine; share it with `Shared`, give its type a Copy instance, or copy it with `Clone.clone`"))))),
 		TypeError.value_used_after_move name typ owning =>
 			String.concat "`" (String.concat (show_identifier name)
 				(String.concat "` : " (String.concat (show_term typ)
 				(String.concat " is moved " (String.concat (I64.to_string owning)
-				" times; no borrow can fix this -- it needs Copy, Clone, or a rewrite"))))),
+				" times; a shared view cannot fix this -- it needs Copy, Clone, or a rewrite"))))),
 		TypeError.linear_unused name typ =>
 			String.concat "linear `" (String.concat (show_identifier name)
 				(String.concat "` : " (String.concat (show_term typ)
 				" is never used; linear means exactly once"))),
+		// The view rule. Named for the fix: the payload has an owner
+		// already, so either read the view or copy it deliberately.
+		TypeError.borrowed_value_escapes name typ =>
+			String.concat "`" (String.concat (show_identifier name)
+				(String.concat "` : " (String.concat (show_term typ)
+				" is a borrowed view from `Shared.get`; it cannot be stored, returned, or passed to an owning parameter -- read it, or copy it with `Clone.clone`"))),
 	}
 
 /// Render a full diagnostic for a type error — same visual family as
@@ -231,14 +237,20 @@ def test_type_error_message_copy_required : Bool :=
 	// The message must name the remedy, not just the count -- the
 	// whole point of splitting this from `value_used_after_move`.
 	let e : TypeError := TypeError.copy_required (Identifier.id "s") (Term.sort (SortLevel.concrete 1)) 3 in
-	String.contains (type_error_message e) "borrow it, or give its type a Copy instance"
+	String.contains (type_error_message e) "share it with `Shared`, give its type a Copy instance, or copy it with `Clone.clone`"
 
 #[test]
 def test_type_error_message_value_used_after_move : Bool :=
 	let e : TypeError := TypeError.value_used_after_move (Identifier.id "t") (Term.sort (SortLevel.concrete 1)) 2 in
-	String.contains (type_error_message e) "no borrow can fix this"
+	String.contains (type_error_message e) "a shared view cannot fix this"
 
 #[test]
 def test_type_error_message_linear_unused : Bool :=
 	let e : TypeError := TypeError.linear_unused (Identifier.id "h") (Term.sort (SortLevel.concrete 1)) in
 	String.contains (type_error_message e) "never used"
+
+#[test]
+def test_type_error_message_borrowed_value_escapes : Bool :=
+	let e : TypeError := TypeError.borrowed_value_escapes (Identifier.id "v") (Term.sort (SortLevel.concrete 1)) in
+	String.contains (type_error_message e) "is a borrowed view from `Shared.get`"
+		&& String.contains (type_error_message e) "Clone.clone"

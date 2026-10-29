@@ -3622,7 +3622,7 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
   {
     let init_dir = stdlib_dir();
     let std_dir = std_dir();
-    let entries: [(ModulePath, std::path::PathBuf); 15] = [
+    let entries: [(ModulePath, std::path::PathBuf); 17] = [
       (mpt("'prelude"), init_dir.join("prelude.mo")),
       (
         ModulePath::new(vec![id("init"), id("id")]),
@@ -3654,6 +3654,17 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, Load
       (
         ModulePath::new(vec![id("init"), id("copy")]),
         init_dir.join("copy.mo"),
+      ),
+      // `shared` is imported by name (`use init::shared {Shared}`), and
+      // `clone` is re-exported by the hub alongside `copy`; both must be
+      // loadable for the same reason `init.copy` is.
+      (
+        ModulePath::new(vec![id("init"), id("shared")]),
+        init_dir.join("shared.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("init"), id("clone")]),
+        init_dir.join("clone.mo"),
       ),
       (mpt("init"), init_dir.join("lib.mo")),
       (
@@ -3720,6 +3731,8 @@ pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
     "string.mo",
     "list.mo",
     "copy.mo",
+    "shared.mo",
+    "clone.mo",
     "lib.mo",
   ];
   let std_files = [

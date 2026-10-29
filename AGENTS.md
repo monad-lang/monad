@@ -288,6 +288,7 @@ Attributes come before visibility: `#[test] pub def ...`, never
 | `#[test]` | Run via `monad test` |
 | `#[partial]` | Parser-table function (loops as ordinary code) |
 | `#[terminating]` | Suppresses the termination check where it is too weak |
+| `#[shared]` | Marks the shared read handle type (`init/src/shared.mo`); the affine checker keys recognition on it, not on the type's name |
 
 Operators (precedence low→high): `|>`/`<|` (5), `>>=` (10), `<*>` (15),
 `<|>` (20), `||` (25), `&&` (30), `==`/`!=`/`<=`/`>=` (40), `++` (50),

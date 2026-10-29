@@ -15,9 +15,13 @@ pub use lib::list {*}
 // fail-closed every binder in every module outside init's closure
 // that didn't import copy.mo by hand (measured: 0 candidates).
 pub use lib::copy {*}
-// `Borrow` is deliberately NOT re-exported: a file that uses
-// `Borrow.of` must name it, and one that never does holds no borrow
-// for the gate to recognise either way.
+// `Clone` is ambient for the same reason as `Copy`: the affine
+// diagnostic offers `Clone.clone` as a remedy in every file, so the
+// class and its instances have to be in scope without an import.
+pub use lib::clone {*}
+// `Shared` is deliberately NOT re-exported: a file that uses
+// `Shared.of` must name it, and one that never does holds no shared
+// read for the gate to recognise either way.
 
 infix (+) := I64.add
 

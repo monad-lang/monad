@@ -20,7 +20,7 @@
 /// mote's #[test]s should not pay for a run-by-hand probe.
 use lang::module {ElaboratedModules, elaborate_loaded_modules}
 use lang::types {Decl, Def, Term}
-use lang::typecheck::usage {ctor_name_set, borrow_of_name_set}
+use lang::typecheck::usage {ctor_name_set, shared_name_set}
 use lang::typecheck::dropck {DropInfo, collect_drop_info}
 use std::io {IO.println}
 open IO {get_env, println}
@@ -93,7 +93,7 @@ def probe_dropck_on_the_compiler_itself : IO Bool := do {
             Result.err e => do { println ("probe failed: " ++ e); return false },
             Result.ok em => do {
                 let ctors : HashMap String Bool := ctor_name_set em.scope;
-                let borrows : HashMap String Bool := borrow_of_name_set em.scope;
+                let borrows : HashMap String Bool := shared_name_set em.scope;
                 let stats : Stats := walk_decls ctors borrows em.elaborated_decls stats_empty;
                 let t1 : I64 <- Bench.now;
                 println ("dropck probe over lang/src/lib.mo's closure:");

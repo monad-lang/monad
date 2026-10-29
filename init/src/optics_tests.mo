@@ -33,6 +33,19 @@ def set_y (new_y : I64) (pt : Point) : Point :=
 def y_lens : Lens Point I64 :=
     lens get_y set_y
 
+/// `over`/`over_prism` rebuild the whole structure, so they require
+/// `[Copy S]`. `Point` is two `I64`s — a field-wise duplicate is a value
+/// copy, which is exactly the "genuinely immutable small struct" remedy.
+instance Copy Point {
+    def copy (pt : Point) : Pair Point Point :=
+        match pt {
+            mk x y =>
+                let a : Point := { x := x, y := y } in
+                let b : Point := { x := x, y := y } in
+                Pair.pair a b,
+        }
+}
+
 /// Helper: add 1 to I64.
 def inc (x : I64) : I64 := x + 1
 
@@ -109,6 +122,14 @@ type Shape {
 }
 
 open Shape {circle, rectangle}
+
+instance Copy Shape {
+    def copy (sh : Shape) : Pair Shape Shape :=
+        match sh {
+            circle r => Pair.pair (circle r) (circle r),
+            rectangle w h => Pair.pair (rectangle w h) (rectangle w h),
+        }
+}
 
 /// Helper: preview for circle prism.
 def preview_circle (s : Shape) : Option F64 :=

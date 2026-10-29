@@ -1745,6 +1745,13 @@ pub type TypeError {
     /// weakening does not excuse: linear means exactly once, so
     /// dropping it is as wrong as using it twice.
     linear_unused (name: Identifier) (typ: Term),
+    /// A borrowed view of a `Shared` payload used where an OWNER is
+    /// required: stored into a constructor/struct, returned from the def,
+    /// or passed to an owning parameter. A view aliases the payload its
+    /// `Shared` handle points at; handing it out as an owner would give
+    /// two owners to one value. Read it, pass the `Shared` handle on, or
+    /// make an explicit copy with `Clone.clone`.
+    borrowed_value_escapes (name: Identifier) (typ: Term),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`

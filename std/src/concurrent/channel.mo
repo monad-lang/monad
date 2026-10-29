@@ -12,7 +12,7 @@
 // re-checks the cancel flag on every wake-up) and unwinds at the next
 // bind, the same cooperative rule as every other native.
 
-use init::borrow {Borrow, Borrow.get}
+use init::shared {Shared, Shared.get}
 use lib::concurrent::combine {sleepIO}
 
 /// Channel handles are opaque runtime objects; do not construct or pattern
@@ -66,8 +66,8 @@ def try_first {A : Type} (chs : List (Channel A)) : IO (Option A) :=
   }
 
 #[partial]
-def select_loop {A : Type} (chs : Borrow (List (Channel A))) : IO A :=
-  Monad.bind (try_first (Borrow.get chs)) (fn v =>
+def select_loop {A : Type} (chs : Shared (List (Channel A))) : IO A :=
+  Monad.bind (try_first (Shared.get chs)) (fn v =>
     match v {
       Option.some a => IO.pure a,
       Option.none => Monad.bind (sleepIO 1) (fn _ => select_loop chs)
@@ -79,4 +79,4 @@ def select_loop {A : Type} (chs : Borrow (List (Channel A))) : IO A :=
 /// there is no value of `A` to hand back.
 #[partial]
 pub def select {A : Type} (chs : List (Channel A)) : IO A :=
-  select_loop (Borrow.of chs)
+  select_loop (Shared.of chs)

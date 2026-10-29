@@ -115,7 +115,7 @@ pattern-match, compare or print one, and never use it after `Stream.close`.
 
 > The two stream snippets below are **not type-checked**. They use one
 > `FdStream` for write, read and close; affine-by-default rejects that until
-> `Stream.*` takes a borrow (`Borrow FdStream`) instead of an owned handle.
+> `Stream.*` takes a borrow (`Shared FdStream`) instead of an owned handle.
 > They are kept as an API illustration, not as compilable examples.
 
 ```monad,ignore

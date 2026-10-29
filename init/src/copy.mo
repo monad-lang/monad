@@ -14,9 +14,9 @@
 /// (`init/mote.toml`). `Copy` is a type-system concept with no OS
 /// surface, and `Pair`, which `copy` returns, is already here
 /// (`init/src/prelude.mo`). It started out in `std` and had to move:
-/// `Borrow A` belongs in `init` for the same reason, `std` depends on
+/// `Shared A` belongs in `init` for the same reason, `std` depends on
 /// `init` and never the reverse, so a `Copy` in `std` would strand
-/// `instance Copy (Borrow A)` away from its own type and put it out of
+/// `instance Copy (Shared A)` away from its own type and put it out of
 /// reach of every `init`-only consumer.
 ///
 /// ## Why a class and not a compiler table
@@ -75,19 +75,29 @@
 /// (`std/src/bytebuf.mo`); aliasing it would let one owner observe
 /// another's writes, so it stays affine despite being collector-managed.
 ///
-/// **`Nat` is absent on purpose, and the design's own table disagrees.**
-/// Design B's *Copy policy for core types* lists `Nat` alongside the
-/// scalars as a builtin `Copy`. That is only defensible once `Nat` has
-/// a machine-word representation (the efficient `Nat`/`String`/
-/// `ByteArray` proposal). Today it is a unary inductive —
-/// `type Nat { zero, succ (n : Nat) }` in `init/src/prelude.mo` — so a
-/// value of it is a heap chain, and granting `Copy` would hand two
-/// owners to the same allocation. That is precisely the double free the
-/// gate exists to prevent, so the table is aspirational here and the
-/// instance stays out until the representation changes. The affine
-/// report surfaces the consequence honestly: `Nat` binders show up
-/// under `value_used_after_move`, which is the correct answer for a
-/// linked structure moved twice.
+/// **`Nat` IS `Copy` — a pointer duplicate of an immutable chain, and a
+/// region-bound one.** `Nat` is unary (`type Nat { zero, succ (n : Nat) }`,
+/// `init/src/prelude.mo`), so a value is a heap chain and `copy` hands out
+/// the same pointer twice. That is sound only because the allocation is
+/// never freed individually: the decided memory model
+/// (`plans/bootstrapping/ownership-regions-memory.md` O3) classifies
+/// `Copy`-typed allocations as **Region**, freed whole with their arena,
+/// and O4's `drop_<T>` skips `Copy` fields and binders. The earlier
+/// version of this comment forbade the instance on the strength of a
+/// double free — that argument applies to *direct free*, which is exactly
+/// what O3's classification rules out. Those three invariants (same
+/// `is_copy` verdict decides allocation class and field skips; drop-point
+/// emission guarded by `is_copy`; never free a region cell individually)
+/// are the contract this instance depends on. Until O3/O4 land nothing is
+/// freed at all, so it is safe today as well.
+///
+/// Granting it also removes the corpus's only *unfixable* `Nat.mul`
+/// violation: multiplying by `b` reuses `b` once per recursion step, which
+/// no borrow can license (the argument is an owning position at every
+/// callee). `Nat` is a pure immutable value; sharing it is the honest
+/// model. Do NOT extend this reasoning to `List`, `Term`, `ModulePath`,
+/// `HashMap` or `Scope`: those are mutable or deliberately structural, and
+/// `Copy` there would turn ownership into a silent deep copy.
 pub class Copy A {
     def copy : A -> Pair A A
 }
@@ -140,3 +150,45 @@ pub instance Copy Unit {
 pub instance Copy String {
     def copy (x : String) : Pair String String := Pair.pair x x
 }
+
+/// `Nat` is an immutable value; the duplicate is the same chain pointer.
+/// Sound because `Copy`-typed allocations are Region-classified and never
+/// freed individually — see this file's header for the invariants that
+/// instance depends on.
+pub instance Copy Nat {
+    def copy (x : Nat) : Pair Nat Nat := Pair.pair x x
+}
+/// The product comonad: `E` is a read-only environment, so `extract` is the
+/// second component and `duplicate` copies it into both halves.
+///
+/// `duplicate`/`extend` store `e` twice, which is a real duplication of the
+/// environment — licensed by `[Copy E]`, the polymorphic half of the Copy
+/// gate (`copy_vars_of_def`). Requiring `Copy` here is honest: a comonad
+/// over a linear environment cannot hand out two copies of it.
+pub instance {E : Type} [Copy E] Comonad (Pair E) {
+    def extract (p : Pair E A) : A :=
+        match p { Pair.pair _ a => a }
+
+    // `e` is duplicated deliberately, through `Copy.copy`: the affine
+    // rule sees ONE use of the binder, and the duplication it licenses is
+    // the instance's `[Copy E]`. (The rule's syntactic type attribution
+    // reads the constructor's declared field type, `A`, not this
+    // instance's `E`, so a bare second mention would be reported as a
+    // double move of an affine binder.)
+    def duplicate (p : Pair E A) : Pair E (Pair E A) :=
+        match p {
+            Pair.pair e a =>
+                match Copy.copy e {
+                    Pair.pair e1 e2 => Pair.pair e1 (Pair.pair e2 a),
+                },
+        }
+
+    def extend (f : Pair E A -> B) (p : Pair E A) : Pair E B :=
+        match p {
+            Pair.pair e a =>
+                match Copy.copy e {
+                    Pair.pair e1 e2 => Pair.pair e1 (f (Pair.pair e2 a)),
+                },
+        }
+}
+

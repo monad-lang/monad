@@ -24,6 +24,22 @@
 /// that path returns, and must release it there. That is the entire
 /// rule: **release iff owning count on this path is 0.**
 ///
+/// **Not yet implemented — requirements for whoever wires this module
+/// into codegen** (invariants I1/I2 of the memory-safety review recorded in
+/// `plans/bootstrapping/ownership-regions-memory.md`). The rule below is
+/// still the data-owning one; these two cases need extra work before the
+/// first release is emitted:
+///
+/// - A **borrowed view** (`BinderUse.view`, a `Shared.get` result or an
+///   alias of one) must never get a drop point. Releasing it would free a
+///   payload its `Shared` handle still points at.
+/// - A **function-typed binder** transfers ownership when it is passed,
+///   stored or returned, even though `owning_at` counts a call argument as
+///   a read. Its release decision must use `usage.mo`'s `function_moves`
+///   notion, not the data-owning count, or a closure moved into a callee is
+///   freed twice. The collector's view environment (`ViewEnv`) and its
+///   beta-redex arm also need mirroring here.
+///
 /// ## Why this needs a NEW walk, not `owning_uses` as-is
 ///
 /// `usage.mo`'s own `owning_uses`/`uses_of` deliberately combine
@@ -85,7 +101,7 @@ use std::list {List.length}
 /// branch, more for nested `if`/`match`.
 ///
 /// `borrows` is threaded for the same reason `usage.mo` threads it: a
-/// real `Borrow.of x` misread as a constructor store would count `x` as
+/// real `Shared.of x` misread as a constructor store would count `x` as
 /// consumed here, and a consumed binder gets no release — a leak, not
 /// just a miscount.
 #[partial]
@@ -191,8 +207,9 @@ def any_leaf_true (bs : List Bool) : Bool :=
 
 /// Every binder `t` introduces (`lam`/match-arm), with its own
 /// `drop_leaves`. Mirrors `usage.mo`'s `collect_binder_uses` traversal
-/// exactly — same cases, same order of descent — computing a per-leaf
-/// release list instead of a single use count.
+/// (same cases, same order of descent) — but NOTE that `usage.mo` has since
+/// gained a beta-redex arm and a view environment, which this walk has not;
+/// keep the two in step when this module is wired.
 ///
 /// Accumulator-passing, like every corpus-scale walker in this
 /// codebase (`lang/codegen/decls.mo`'s `extract_defs`,

@@ -66,7 +66,7 @@ use lib::typecheck::infer {body_type_error, empty_local_types, empty_locals, typ
 // `--affine` (Phase 5 of the enforcement plan): the M2 usage rule as
 // real diagnostics. Built once per module by the affine walk below,
 // exactly how `affine.mo`'s own doc on `check_def` prescribes.
-use lib::typecheck::usage {borrow_of_name_set, ctor_name_set}
+use lib::typecheck::usage {shared_name_set, ctor_name_set}
 use lib::typecheck::affine {check_def}
 // The self-hosted twin of the Rust host's `use`-completeness gate
 // (`check_use_completeness`, rust/core/src/term/module.rs): every name the
@@ -2183,7 +2183,7 @@ pub def CheckDiagnostics.warnings (d : CheckDiagnostics) : List String := d.warn
 pub def check_module_with_scope_classified (mode : AffineMode) (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO CheckDiagnostics := do {
     let ordinary <- check_module_with_scope scope decl_list locals path verbose;
     let ctors : HashMap String Bool := ctor_name_set scope;
-    let borrows : HashMap String Bool := borrow_of_name_set scope;
+    let borrows : HashMap String Bool := shared_name_set scope;
     match mode {
         AffineMode.affine_error => do {
             let affine_diags : List String := check_module_decls_affine_only false ctors borrows scope decl_list path;
@@ -3172,7 +3172,7 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
                 AffineMode.affine_error =>
                     attach_range no_range
                         (check_module_decls_affine_only false (ctor_name_set em.scope)
-                            (borrow_of_name_set em.scope) em.scope em.target_decls (Option.some file_path)),
+                            (shared_name_set em.scope) em.scope em.target_decls (Option.some file_path)),
                 AffineMode.affine_warn => List.empty,
             };
             let all_diags : List Diagnostic := list_append diags affine;
@@ -6509,8 +6509,30 @@ def test_affine_check_rejects_a_twice_used_binder : IO Bool := do {
         && I64.beq (List.length affine) 1)
 }
 
+/// The `#[shared]` marker, end to end. A type declared with it is what the
+/// checker recognizes, so `Marked.of x` twice is two reads, not two owning
+/// uses. The SAME source without the marker treats each `Marked.of x` as an
+/// ordinary constructor store, so the second one is `value_used_after_move`
+/// — which is what makes the marker, rather than the type's name, the
+/// load-bearing thing (the rename trap this replaced).
+#[test]
+def test_affine_check_recognises_a_marked_shared_type : IO Bool := do {
+    let body : String :=
+        "type Marked A { of (value : A) }\n"
+        ++ "def Marked.get (b : Marked A) : A := match b { of v => v }\n"
+        ++ "type T { mk }\ntype P { mkp (l : T) (r : T) }\n"
+        ++ "def f (b : Marked T) : T := Marked.get b\n"
+        ++ "def twice (x : T) : P := P.mkp (f (Marked.of x)) (f (Marked.of x))";
+    let marked : String := "#[shared]\n" ++ body;
+    let marked_diags : List String <- check_affine_diags_of_source marked "probe";
+    let plain_diags : List String <- check_affine_diags_of_source body "probe";
+    return (I64.beq (List.length marked_diags) 0
+        && diags_contain "is moved 2 times" plain_diags
+        && I64.beq (List.length plain_diags) 1)
+}
+
 /// The rule's other verdict, end to end: two CONSTRUCTOR stores of one
-/// binder are two owning uses, so no borrow can help and the reported
+/// binder are two owning uses, so no shared view can help and the reported
 /// error is `value_used_after_move` with its own wording.
 #[test]
 def test_affine_check_rejects_a_double_store : IO Bool := do {
@@ -6518,7 +6540,7 @@ def test_affine_check_rejects_a_double_store : IO Bool := do {
     let ordinary : List String <- check_diags_of_source src "probe";
     let affine : List String <- check_affine_diags_of_source src "probe";
     return (I64.beq (List.length ordinary) 0
-        && diags_contain "is moved 2 times; no borrow can fix this" affine
+        && diags_contain "is moved 2 times; a shared view cannot fix this" affine
         && I64.beq (List.length affine) 1)
 }
 

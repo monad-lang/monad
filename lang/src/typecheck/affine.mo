@@ -55,14 +55,18 @@
 ///   `Copy`, `Clone`, or a rewrite. The irreducible bucket (187).
 /// - **`linear_unused`** — a `!x` never used. The one case affine's
 ///   weakening does not excuse, since linear means *exactly* once.
+/// - **`borrowed_value_escapes`** — a `Shared.get` view stored, returned,
+///   or (once call signatures are consulted) passed to an owning
+///   parameter. The view aliases a payload its handle points at; handing
+///   it out as an owner would give one value two owners.
 ///
 /// An erased `%x` used in runtime position reports through
 /// `TypeError.custom`: it is real but has no corpus instances at all
 /// (the whole corpus carries zero multiplicity annotations), so it does
-/// not earn a fourth variant yet.
-use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeConstraint, TypeError, binder_named, id_member, show_identifier}
+/// not earn its own variant yet.
+use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeConstraint, TypeError, binder_explicit, binder_named, id_member, show_identifier}
 use lib::scope {scope_data_empty}
-use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses}
+use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, typ_is_function}
 use lib::typecheck::copy_class {is_copy}
 use std::map {HashMap}
 use llvm::strmap {str_map_empty, str_map_insert}
@@ -123,7 +127,7 @@ pub def permits_sharing (m : Multiplicity) : Bool :=
 /// passes `Multiplicity.many` today.
 ///
 /// The over-use gates compare the BORROW-AWARE budget `count -
-/// borrowed`, not the raw count: `f (Borrow.of x); g (Borrow.of x)`
+/// borrowed`, not the raw count: `f (Shared.of x); g (Shared.of x)`
 /// mentions `x` twice but consumes it zero times, and gating on the raw
 /// count there was the false positive B1 existed to remove. `borrowed`
 /// is computed per-branch consistently (`usage.mo`'s `BinderUse`
@@ -149,10 +153,45 @@ pub def check_binder_with (scope : Scope) (copy_vars : List Identifier) (strict 
     let typ : Term := BinderUse.typ u in
     let uses : I64 := BinderUse.count u in
     let borrowed : I64 := BinderUse.borrowed u in
-    let budget : I64 := uses - borrowed in
-    let owning : I64 := BinderUse.owning u in
+    // A FUNCTION-typed binder is measured by moves, not raw mentions:
+    // calling a closure reads it and may happen any number of times, while
+    // passing/storing/returning it transfers it, and exactly one transfer
+    // is allowed (`usage.mo`'s `function_moves`). That is what makes
+    // `List.map f tail` legal without `Copy (A -> B)` — the closure is
+    // never duplicated, so its captures are never double-owned.
+    // Only a LAMBDA binder has a computed move count. A match binder's
+    // type is attributed after collection, so `moves` is still 0 there;
+    // measuring it by moves would silently license every double transfer
+    // of a pattern-bound closure, so it falls back to the data budget
+    // (fail closed) until the collector can see the field's type.
+    let is_fn : Bool :=
+        match BinderUse.kind u {
+            BinderKind.bk_lam => typ_is_function typ,
+            BinderKind.bk_match => false,
+        } in
+    let budget : I64 := if is_fn then BinderUse.moves u else uses - borrowed in
+    let owning : I64 := if is_fn then BinderUse.moves u else BinderUse.owning u in
     let name : Identifier := BinderUse.name u in
-    if Bool.not strict
+    // A borrowed view (`Shared.get`, or a binder aliased/matched from one)
+    // never spends the affine budget — it is not an owner. What it must not
+    // do is escape: an owning use hands the payload out as if it were the
+    // view's own. A `Copy` payload is exempt (copying it out IS sound), and
+    // an unattributable type fails CLOSED here, unlike the ordinary
+    // fail-open below: a view whose payload type this walk cannot name must
+    // not be allowed to escape unchecked (hazard R6 of the plan).
+    if BinderUse.view u then
+        // The payload is exempt when it may be SHARED, which is exactly
+        // what `effective_mult_with_vars` decides for a bare binder: a
+        // `Copy` instance, or a type variable licensed by the def's own
+        // `[Copy A]` constraint. (An instantiated field type the syntactic
+        // walk reads as its declared parameter stays fail-closed -- the
+        // plan's known attribution gap.)
+        let payload_shared : Bool :=
+            permits_sharing (effective_mult_with_vars scope copy_vars Multiplicity.many typ) in
+        if I64.gt owning 0 && Bool.not payload_shared
+        then Option.some (TypeError.borrowed_value_escapes name typ)
+        else Option.none
+    else if Bool.not strict
        && is_unannotated declared
        && Bool.not (typ_is_attributable typ)
     then Option.none
@@ -226,7 +265,7 @@ def over_use_error (name : Identifier) (typ : Term) (budget : I64) (owning : I64
 /// Takes the constructor-name set and the borrow-name set rather than
 /// deriving them, because building either is a scan of every inductive
 /// in scope and a caller checking many defs must build them once.
-/// `ctor_name_set`/`borrow_of_name_set` (`lang/typecheck/usage.mo`) are
+/// `ctor_name_set`/`shared_name_set` (`lang/typecheck/usage.mo`) are
 /// the builders.
 #[partial]
 pub def check_def (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (d : Def) : List TypeError :=
@@ -278,7 +317,7 @@ def constraint_class_is_copy (c : TypeConstraint) : Bool :=
 /// the list is still a heap chain, and its own Copy instance would have
 /// to deep-copy. Peeling stops at the first non-`ctx` constructor, so
 /// the applied case correctly answers no.
-def type_var_is_copy (copy_vars : List Identifier) (typ : Term) : Bool :=
+pub def type_var_is_copy (copy_vars : List Identifier) (typ : Term) : Bool :=
     match type_var_name typ {
         Option.some id => id_member id copy_vars,
         Option.none => false,
@@ -329,13 +368,21 @@ def a_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Term"))
 /// A binder with the given use and owning counts.
 def binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
-      count := uses, owning := owning, ctor := Identifier.id "", pos := 0 - 1 }
+      count := uses, owning := owning, ctor := Identifier.id "", pos := 0 - 1,
+      view := false }
+
+/// A function-typed binder with `moves` transfers of the closure.
+def fn_binder (uses : I64) (moves : I64) : BinderUse :=
+    let typ : Term := Term.pi (binder_explicit (DebugName.named (Identifier.id "a"))) Term.hole Term.hole in
+    { name := Identifier.id "f", kind := BinderKind.bk_lam, typ := typ,
+      count := uses, owning := moves, moves := moves,
+      ctor := Identifier.id "", pos := 0 - 1, view := false }
 
 /// A binder whose uses split between real and borrowed.
 def borrowable (uses : I64) (borrowed : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type,
       count := uses, borrowed := borrowed, owning := owning,
-      ctor := Identifier.id "", pos := 0 - 1 }
+      ctor := Identifier.id "", pos := 0 - 1, view := false }
 
 #[test]
 def test_unannotated_is_affine_not_many : Bool :=
@@ -399,6 +446,103 @@ def test_two_owning_uses_is_a_move_twice : Bool :=
     }
 
 #[test]
+def test_a_match_bound_function_falls_back_to_the_data_budget : Bool :=
+    // A match binder's type is attributed AFTER collection, so its move
+    // count is unknown (0). Measuring it by moves would license any number
+    // of transfers of the closure; the data budget must report instead.
+    let base : BinderUse := fn_binder 2 0 in
+    let u : BinderUse := { base with kind := BinderKind.bk_match } in
+    match check_binder probe_scope Multiplicity.many u {
+        Option.some _ => true,
+        Option.none => false,
+    }
+
+#[test]
+def test_a_view_of_a_copy_constrained_payload_may_be_stored : Bool :=
+    // The view exemption is the same judgement the ordinary path uses:
+    // `Copy A` through an instance OR through the def's `[Copy A]`.
+    let base : BinderUse := binder 1 1 in
+    let u : BinderUse := { base with view := true, typ := a_type_var } in
+    let exempt : Bool :=
+        match check_binder_with probe_scope [Identifier.id "A"] false Multiplicity.many u {
+            Option.none => true,
+            Option.some _ => false,
+        } in
+    let reported : Bool :=
+        match check_binder_with probe_scope List.empty false Multiplicity.many u {
+            Option.some _ => true,
+            Option.none => false,
+        } in
+    exempt && reported
+
+#[test]
+def test_a_function_binder_called_and_passed_once_is_fine : Bool :=
+    // `List.map`'s shape: two mentions, one move. Measured by `moves`,
+    // not by the raw count -- which is what lets function values avoid a
+    // blanket `Copy (A -> B)`.
+    match check_binder probe_scope Multiplicity.many (fn_binder 2 1) {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_a_function_binder_passed_on_twice_is_a_double_move : Bool :=
+    match check_binder probe_scope Multiplicity.many (fn_binder 2 2) {
+        Option.some e =>
+            match e {
+                TypeError.value_used_after_move _n _t owning => I64.beq owning 2,
+                _ => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_a_view_may_not_be_stored : Bool :=
+    // A `Shared.get` result used where an owner is required: an owning
+    // use (`owning > 0`) of a non-`Copy` payload is an escape. A view
+    // never spends the affine budget, so this is the only diagnostic it
+    // can earn.
+    let base : BinderUse := binder 1 1 in
+    let u : BinderUse := { base with view := true } in
+    match check_binder probe_scope Multiplicity.many u {
+        Option.some e =>
+            match e {
+                TypeError.borrowed_value_escapes _n _t => true,
+                _ => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_a_view_used_only_for_reads_is_fine : Bool :=
+    // Read twice, owned zero times: a view is a borrow, so neither the
+    // budget nor the escape rule has anything to say.
+    let base : BinderUse := binder 2 0 in
+    let u : BinderUse := { base with view := true } in
+    match check_binder probe_scope Multiplicity.many u {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_a_view_with_an_unnamable_payload_fails_closed : Bool :=
+    // Hazard R6: the ordinary rule fails OPEN on a hole-typed binder
+    // (enforcement) and CLOSED only for the report. A view must fail
+    // closed in BOTH, because a hole there means the payload's Copy-ness
+    // is unknown and an unchecked escape is a use-after-free once frees
+    // land.
+    let base : BinderUse := binder 1 1 in
+    let u : BinderUse := { base with view := true, typ := Term.hole } in
+    match check_binder probe_scope Multiplicity.many u {
+        Option.some e =>
+            match e {
+                TypeError.borrowed_value_escapes _n _t => true,
+                _ => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
 def test_linear_unused_is_an_error : Bool :=
     // The one case affine's weakening does not excuse.
     match check_binder probe_scope Multiplicity.linear (binder 0 0) {
@@ -444,20 +588,20 @@ def test_sharing_is_permitted_only_by_many : Bool :=
 
 // ─── Tests: the borrow-aware budget ─────────────────────────────────
 
-/// `Borrow.of <arg>` as an elaborated application: head var `of`, the
-/// spelling `usage.mo`'s `head_is_borrow_of` checks first.
+/// `Shared.of <arg>` as an elaborated application: head var `of`, the
+/// spelling `usage.mo`'s `head_is_shared_of` checks first.
 def borrow_of (arg : Term) : Term :=
     Term.app (Term.var (0 - 1) (DebugName.named (Identifier.id "of"))) arg
 
-/// The borrow set a scope where `Borrow` really is the sole inductive
-/// declaring `of` resolves to. Hand-built here; `borrow_of_name_set`
+/// The borrow set a scope where `Shared` really is the sole inductive
+/// declaring `of` resolves to. Hand-built here; `shared_name_set`
 /// end-to-end is `usage.mo`'s own test territory.
-def probe_borrows : HashMap String Bool :=
-    str_map_insert "of" true (str_map_insert "Borrow.of" true str_map_empty)
+def probe_shared : HashMap String Bool :=
+    str_map_insert "of" true (str_map_insert "Shared.of" true str_map_empty)
 
 #[test]
 def test_a_borrowed_use_does_not_spend_the_budget : Bool :=
-    // One real use, one borrow: `f (Borrow.of x); P x`. Budget 1, so
+    // One real use, one borrow: `f (Shared.of x); P x`. Budget 1, so
     // no diagnostic where the raw count of 2 used to fire one.
     match check_binder probe_scope Multiplicity.many (borrowable 2 1 0) {
         Option.none => true,
@@ -466,7 +610,7 @@ def test_a_borrowed_use_does_not_spend_the_budget : Bool :=
 
 #[test]
 def test_two_borrows_are_not_an_over_use : Bool :=
-    // `f (Borrow.of x); g (Borrow.of x)` — the exact case from the plan
+    // `f (Shared.of x); g (Shared.of x)` — the exact case from the plan
     // doc's B1 gap, exercised end-to-end through collection rather
     // than a hand-built `BinderUse`: two uses, both direct borrow
     // arguments, budget zero, clean pass.
@@ -475,7 +619,7 @@ def test_two_borrows_are_not_an_over_use : Bool :=
     let x : Term := Term.var 0 (DebugName.named (Identifier.id "x")) in
     let body : Term := Term.app (Term.app f (borrow_of x)) (Term.app g (borrow_of x)) in
     let lam : Term := Term.lam (binder_named (Identifier.id "x")) Term.hole body in
-    match collect_binder_uses str_map_empty probe_borrows lam {
+    match collect_binder_uses str_map_empty probe_shared lam {
         List.cons u _rest =>
             I64.beq (BinderUse.count u) 2
                 && I64.beq (BinderUse.borrowed u) 2
@@ -488,7 +632,7 @@ def test_two_borrows_are_not_an_over_use : Bool :=
 
 #[test]
 def test_a_borrow_does_not_hide_a_real_over_use : Bool :=
-    // `f (Borrow.of x); P x x` — one borrow, two real stores. The
+    // `f (Shared.of x); P x x` — one borrow, two real stores. The
     // borrow buys nothing here; budget 2 is still an over-use, and one
     // the diagnostic must not under-report.
     match check_binder probe_scope Multiplicity.many (borrowable 3 1 2) {
@@ -516,7 +660,7 @@ def test_a_linear_binder_only_ever_borrowed_is_unused : Bool :=
 
 #[test]
 def test_a_borrow_still_cannot_name_an_erased_binder : Bool :=
-    // `Borrow.of x` still mentions `x` at run time, so the erased
+    // `Shared.of x` still mentions `x` at run time, so the erased
     // multiplicity counts RAW uses. There is no budget to spend.
     match check_binder probe_scope Multiplicity.zero (borrowable 1 1 0) {
         Option.some e =>
@@ -539,11 +683,11 @@ def list_of_a : Term :=
 
 def hole_binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := Term.hole,
-      count := uses, owning := owning }
+      count := uses, owning := owning, view := false }
 
 def var_binder (uses : I64) (owning : I64) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := a_type_var,
-      count := uses, owning := owning }
+      count := uses, owning := owning, view := false }
 
 #[test]
 def test_copy_constrained_var_may_be_shared : Bool :=

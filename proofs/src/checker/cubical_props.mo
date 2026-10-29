@@ -29,6 +29,7 @@ use lang::scope {build_scope_from_decls}
 use lang::typecheck::cubical {peels_to_bare_interval}
 use lang::typecheck::infer {empty_local_types, empty_locals, equiv_type, type_check}
 use lang::typecheck::whnf {whnf}
+use init::shared {Shared}
 use lang::types {
   CubicalPrim, DebugName, ModulePath, Scope, ScopeData, SortLevel, Similar, Term,
   binder_anon, binder_named,
@@ -37,7 +38,6 @@ use lang::types {
   cub_ijoin, cub_ineg, cub_interval, cub_is_one, cub_it_is_one, cub_pathp,
   cub_transp, cubical_prim_eq, id, sentinel, sort_n,
 }
-use init::borrow {Borrow}
 
 def checker_synthetic_path : ModulePath :=
     ModulePath.mk (List.cons (Identifier.id "proofs_checker") List.empty)
@@ -1207,10 +1207,16 @@ def test_hcomp_result_type_is_unified_with_the_expected_type : Bool :=
 /// already checked-shaped, because `whnf` is what is under test.
 ///
 /// `phi` is read twice (the composite's own face and the system built
-/// over it), so it is borrowed: `Borrow Term` is Copy, `Term` is not.
+/// over it), so it is shared: `Shared Term` is Copy, `Term` is not.
+///
+/// The two `Shared.get` results are passed straight to the two callees
+/// rather than bound, which is the dynamic-extent form of the shared view
+/// rule. That a callee could store one is hazard R8 in
+/// `plans/type-system/quantitative-types.md`; these helpers are tests over
+/// immutable terms, and O5's lifetime discipline is what will close it.
 def hcomp_in (phi : Term) : Term :=
-    let b : Borrow Term := Borrow.of phi in
-    cub_hcomp cub_interval (Borrow.get b) (system_over (Borrow.get b)) cub_i0
+    let b : Shared Term := Shared.of phi in
+    cub_hcomp cub_interval (Shared.get b) (system_over (Shared.get b)) cub_i0
 
 #[test]
 def test_whnf_reduces_hcomp_over_a_refuted_face_to_the_base : Bool :=

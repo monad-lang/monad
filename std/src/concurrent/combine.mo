@@ -2,7 +2,7 @@
 // Duration.
 // Builds on forkIO/await_fiber/cancel_fiber from std.concurrent.fiber.
 
-use init::borrow {Borrow, Borrow.get}
+use init::shared {Shared, Shared.get}
 use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO, pollFiber}
 
 // `Combine.Duration`, not `Duration`: `motes/time` declares a `pub Duration`
@@ -81,20 +81,20 @@ def poll_first (fibers : List (Fiber A)) : IO (Option (Result FiberError A)) :=
   }
 
 // The race loop reads the contestant list every round and cancels it at
-// the end, so it threads a `Borrow`: `race` hands the list over once.
-def race_won (fibers : Borrow (List (Fiber A))) (winner : Result FiberError A) : IO (Result FiberError A) :=
-  Monad.bind (cancel_all (Borrow.get fibers)) (fn _ => IO.pure winner)
+// the end, so it threads a `Shared`: `race` hands the list over once.
+def race_won (fibers : Shared (List (Fiber A))) (winner : Result FiberError A) : IO (Result FiberError A) :=
+  Monad.bind (cancel_all (Shared.get fibers)) (fn _ => IO.pure winner)
 
 #[partial]
-def race_step (fibers : Borrow (List (Fiber A))) (done : Option (Result FiberError A)) : IO (Result FiberError A) :=
+def race_step (fibers : Shared (List (Fiber A))) (done : Option (Result FiberError A)) : IO (Result FiberError A) :=
   match done {
     Option.some a => race_won fibers a,
     Option.none => Monad.bind (sleepIO 1) (fn _ => race_loop fibers)
   }
 
 #[partial]
-def race_loop (fibers : Borrow (List (Fiber A))) : IO (Result FiberError A) :=
-  Monad.bind (poll_first (Borrow.get fibers)) (race_step fibers)
+def race_loop (fibers : Shared (List (Fiber A))) : IO (Result FiberError A) :=
+  Monad.bind (poll_first (Shared.get fibers)) (race_step fibers)
 
 /// The answer of whichever fiber stops first, error or not; every other
 /// one is cancelled. Waits by polling the contestants every millisecond, so a
@@ -106,7 +106,7 @@ def race_loop (fibers : Borrow (List (Fiber A))) : IO (Result FiberError A) :=
 /// back. Callers pass at least one fiber.
 #[partial]
 pub def race (fibers : List (Fiber A)) : IO (Result FiberError A) :=
-  race_loop (Borrow.of fibers)
+  race_loop (Shared.of fibers)
 
 /// The outcome of a bounded wait: the fiber finished (with its own result),
 /// or the duration expired first.

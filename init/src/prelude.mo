@@ -292,19 +292,6 @@ pub type Pair A B {
 	pair (first : A) (second : B)
 }
 
-/// The product comonad: `E` is a read-only environment, so `extract` is the
-/// second component and `duplicate` copies it into both halves.
-pub instance {E : Type} Comonad (Pair E) {
-    def extract (p : Pair E A) : A :=
-        match p { Pair.pair _ a => a }
-
-    def duplicate (p : Pair E A) : Pair E (Pair E A) :=
-        match p { Pair.pair e a => Pair.pair e (Pair.pair e a) }
-
-    def extend (f : Pair E A -> B) (p : Pair E A) : Pair E B :=
-        match p { Pair.pair e a => Pair.pair e (f (Pair.pair e a)) }
-}
-
 /// Dependent pair: the second component's TYPE may depend on the first
 /// component's VALUE -- e.g. `Sigma Nat (fn n => Vec n A)` pairs a
 /// length with a vector of exactly that length.

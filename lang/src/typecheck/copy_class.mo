@@ -109,7 +109,7 @@ pub def copy_verdict (scope : Scope) (typ : Term) : CopyVerdict :=
 /// those constraints against the real type arguments the carrier
 /// erased here — that resolution is not implemented, so such an
 /// instance keeps falling through to affine. An UNCONSTRAINED one
-/// (`instance {A : Type} Copy (Borrow A)`) needs no such check — it
+/// (`instance {A : Type} Copy (Shared A)`) needs no such check — it
 /// holds for every `A` — and `instance_unconditionally_copy` below is
 /// what admits exactly that shape without pretending to resolve the
 /// constrained one.
@@ -187,8 +187,8 @@ def keep_admissible_go (instances : List Instance) (acc : List Instance) : List 
 /// `Show.show` through a wildcard-headed instance needs the REAL type
 /// argument to pick field-wise behaviour, so an unresolved wildcard
 /// there is a genuine gap. `Copy` can be different: a builtin instance
-/// like `instance {A : Type} Copy (Borrow A)` is true for every `A`
-/// without ever inspecting it — the body duplicates the `Borrow`
+/// like `instance {A : Type} Copy (Shared A)` is true for every `A`
+/// without ever inspecting it — the body duplicates the `Shared`
 /// marker, not the value underneath — so there is no missing
 /// information to fail closed over, and excluding it (what
 /// `instance_is_fully_concrete` alone would do) denies `Copy` to
@@ -204,7 +204,7 @@ def keep_admissible_go (instances : List Instance) (acc : List Instance) : List 
 ///   That second clause is what stops an accidental blanket
 ///   `instance {A : Type} Copy A` (head IS the wildcard) from granting
 ///   ω to every type in the language; only a wildcard NESTED inside a
-///   concrete head (`Borrow`'s own `A`) is admitted.
+///   concrete head (`Shared`'s own `A`) is admitted.
 def instance_admissible (ins : Instance) : Bool :=
     instance_is_fully_concrete ins || instance_unconditionally_copy ins
 

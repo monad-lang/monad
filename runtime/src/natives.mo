@@ -33,12 +33,12 @@
 ///   `runtime_declarations`) is the NUL-terminated strlen.
 use llvm::ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair, mk}
 use std::list {}
-// `Borrow` for the SSA-name and mask threading below: under the
+// `Shared` for the SSA-name and mask threading below: under the
 // affine-by-default rule (Design B) a `String` or an IR value may be moved once, and every
 // reused name below is read, never re-owned -- the B1 conversion idiom
 // `last_colon_colon` landed (`lang/src/scope.mo`): the caller wraps
-// once in `Borrow.of`, the callee reads through `Borrow.get`.
-use init::borrow {Borrow}
+// once in `Shared.of`, the callee reads through `Shared.get`.
+use init::shared {Shared}
 
 open LLVMType {i1_, i32_, i8_, i64_, ptr}
 open LLVMValue {
@@ -130,11 +130,11 @@ def i64_params_rest (i : I64) (n : I64) : List ParamPair :=
 /// exception, labelled once and never referenced, so it stays an
 /// owned `String`.
 #[partial]
-def load_byte_instrs (base : LLVMValue) (idx : LLVMValue) (addr_n : Borrow String) (q_n : Borrow String) (b8_n : Borrow String) (b_n : String) : List LLVMInstruction :=
-  [assign (Borrow.get addr_n) (add base idx),
-   assign (Borrow.get q_n) (inttoptr (var_ (Borrow.get addr_n)) i64_ (ptr i8_)),
-   assign (Borrow.get b8_n) (load i8_ (ptr i8_) (var_ (Borrow.get q_n))),
-   assign b_n (zext (var_ (Borrow.get b8_n)) i8_ i64_)]
+def load_byte_instrs (base : LLVMValue) (idx : LLVMValue) (addr_n : Shared String) (q_n : Shared String) (b8_n : Shared String) (b_n : String) : List LLVMInstruction :=
+  [assign (Shared.get addr_n) (add base idx),
+   assign (Shared.get q_n) (inttoptr (var_ (Shared.get addr_n)) i64_ (ptr i8_)),
+   assign (Shared.get b8_n) (load i8_ (ptr i8_) (var_ (Shared.get q_n))),
+   assign b_n (zext (var_ (Shared.get b8_n)) i8_ i64_)]
 
 /// `@monad_set_field(obj, idx, val)` as an assign -- assigned to a
 /// throwaway temp because every instruction in this IR assigns, and
@@ -168,8 +168,8 @@ def emit_string_starts_with : LLVMFunction :=
        branch (var_ "cont") "body" "done"] in
   let body :=
     LLVMBasicBlock.mk "body"
-      (List.append (load_byte_instrs (parm_ 1) (var_ "i") (Borrow.of "addr_s") (Borrow.of "qs") (Borrow.of "s_b8") "sb")
-        (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Borrow.of "addr_p") (Borrow.of "qp") (Borrow.of "p_b8") "pb")
+      (List.append (load_byte_instrs (parm_ 1) (var_ "i") (Shared.of "addr_s") (Shared.of "qs") (Shared.of "s_b8") "sb")
+        (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Shared.of "addr_p") (Shared.of "qp") (Shared.of "p_b8") "pb")
           [assign "neq" (icmp_ne (var_ "pb") (var_ "sb")),
            branch (var_ "neq") "fail" "next"])) in
   let next :=
@@ -207,7 +207,7 @@ def emit_string_to_list : LLVMFunction :=
        branch (var_ "cont") "body" "done"] in
   let body :=
     LLVMBasicBlock.mk "body"
-      (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Borrow.of "addr_b") (Borrow.of "qb") (Borrow.of "byte8") "byte")
+      (List.append (load_byte_instrs (parm_ 0) (var_ "i") (Shared.of "addr_b") (Shared.of "qb") (Shared.of "byte8") "byte")
         [assign "con" (alloc_constructor rt_tag_list_cons [var_ "byte", var_ "acc"]),
          set_field_call (var_ "con") 0 (var_ "byte") "sf0",
          set_field_call (var_ "con") 1 (var_ "acc") "sf1",
@@ -248,7 +248,7 @@ def emit_string_get : LLVMFunction :=
        branch (var_ "is_null") "none_block" "first_byte_check"] in
   let first_byte_check :=
     LLVMBasicBlock.mk "first_byte_check"
-      (List.append (load_byte_instrs (parm_ 0) (int_ 0) (Borrow.of "addr_f") (Borrow.of "qf") (Borrow.of "fbyte8") "fbyte")
+      (List.append (load_byte_instrs (parm_ 0) (int_ 0) (Shared.of "addr_f") (Shared.of "qf") (Shared.of "fbyte8") "fbyte")
         [assign "is_nul" (icmp_eq (var_ "fbyte") (int_ 0)),
          branch (var_ "is_nul") "none_block" "some_block"]) in
   let len_check :=
@@ -262,7 +262,7 @@ def emit_string_get : LLVMFunction :=
        ret (var_ "none_con")] in
   let some_block :=
     LLVMBasicBlock.mk "some_block"
-      (List.append (load_byte_instrs (parm_ 0) (parm_ 1) (Borrow.of "addr_g") (Borrow.of "qg") (Borrow.of "gbyte8") "gbyte")
+      (List.append (load_byte_instrs (parm_ 0) (parm_ 1) (Shared.of "addr_g") (Shared.of "qg") (Shared.of "gbyte8") "gbyte")
         [assign "some_con" (alloc_constructor rt_tag_some [var_ "gbyte"]),
          set_field_call (var_ "some_con") 0 (var_ "gbyte") "gsf",
          ret (var_ "some_con")]) in
@@ -473,13 +473,13 @@ def u8_mask : LLVMValue := int_ 255
 /// `op` is built from `var_ "a"`/`var_ "b"` by the caller. The mask is
 /// a borrow because it is read three times and never re-owned -- an
 /// IR value, like a String, may be moved once under the affine rule.
-def emit_masked_binop (name : String) (mask : Borrow LLVMValue) (op : LLVMValue) : LLVMFunction :=
+def emit_masked_binop (name : String) (mask : Shared LLVMValue) (op : LLVMValue) : LLVMFunction :=
   let entry :=
     LLVMBasicBlock.mk "entry"
-      [assign "a" (and_ (parm_ 0) (Borrow.get mask)),
-       assign "b" (and_ (parm_ 1) (Borrow.get mask)),
+      [assign "a" (and_ (parm_ 0) (Shared.get mask)),
+       assign "b" (and_ (parm_ 1) (Shared.get mask)),
        assign "r" op,
-       assign "m" (and_ (var_ "r") (Borrow.get mask)),
+       assign "m" (and_ (var_ "r") (Shared.get mask)),
        ret (var_ "m")] in
   { name := name,
     params := (i64_params 2),
@@ -501,13 +501,13 @@ def emit_mask_convert (name : String) (mask : LLVMValue) : LLVMFunction :=
     dbg_loc := Option.none }
 
 def emit_u8_add : LLVMFunction :=
-  emit_masked_binop "monad_u8_add" (Borrow.of u8_mask) (add (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u8_add" (Shared.of u8_mask) (add (var_ "a") (var_ "b"))
 
 def emit_u32_add : LLVMFunction :=
-  emit_masked_binop "monad_u32_add" (Borrow.of u32_mask) (add (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_add" (Shared.of u32_mask) (add (var_ "a") (var_ "b"))
 
 def emit_u32_sub : LLVMFunction :=
-  emit_masked_binop "monad_u32_sub" (Borrow.of u32_mask) (sub (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_sub" (Shared.of u32_mask) (sub (var_ "a") (var_ "b"))
 
 /// `monad_u32_mul(a, b)`: masked product, matching `int_binop_width`'s
 /// `mask_to_suffix(a.wrapping_mul(b), U32)`.
@@ -519,24 +519,24 @@ def emit_u32_sub : LLVMFunction :=
 /// a build failure rather than letting the def compile to a
 /// silent `return Unit` stub.
 def emit_u32_mul : LLVMFunction :=
-  emit_masked_binop "monad_u32_mul" (Borrow.of u32_mask) (mul (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_mul" (Shared.of u32_mask) (mul (var_ "a") (var_ "b"))
 
 def emit_u32_and : LLVMFunction :=
-  emit_masked_binop "monad_u32_and" (Borrow.of u32_mask) (and_ (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_and" (Shared.of u32_mask) (and_ (var_ "a") (var_ "b"))
 
 def emit_u32_or : LLVMFunction :=
-  emit_masked_binop "monad_u32_or" (Borrow.of u32_mask) (or_ (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_or" (Shared.of u32_mask) (or_ (var_ "a") (var_ "b"))
 
 def emit_u32_xor : LLVMFunction :=
-  emit_masked_binop "monad_u32_xor" (Borrow.of u32_mask) (xor_ (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_xor" (Shared.of u32_mask) (xor_ (var_ "a") (var_ "b"))
 
 /// Shifts mask the RESULT, which is what makes an overshift wrap the way
 /// the reference does rather than leaving high bits set.
 def emit_u32_shl : LLVMFunction :=
-  emit_masked_binop "monad_u32_shl" (Borrow.of u32_mask) (shl_ (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_shl" (Shared.of u32_mask) (shl_ (var_ "a") (var_ "b"))
 
 def emit_u32_shr : LLVMFunction :=
-  emit_masked_binop "monad_u32_shr" (Borrow.of u32_mask) (lshr_ (var_ "a") (var_ "b"))
+  emit_masked_binop "monad_u32_shr" (Shared.of u32_mask) (lshr_ (var_ "a") (var_ "b"))
 
 /// `monad_u32_div(a, b)`: masked operands, 0 when the masked divisor is 0,
 /// else the masked quotient. Newly reachable because the interpreter
@@ -647,7 +647,7 @@ def emit_string_get_char : LLVMFunction :=
        jump "read"] in
   let read :=
     LLVMBasicBlock.mk "read"
-      (List.append (load_byte_instrs (parm_ 0) (var_ "bi") (Borrow.of "addr_c") (Borrow.of "qc") (Borrow.of "cbyte8") "cbyte")
+      (List.append (load_byte_instrs (parm_ 0) (var_ "bi") (Shared.of "addr_c") (Shared.of "qc") (Shared.of "cbyte8") "cbyte")
         [assign "at_end" (icmp_eq (var_ "cbyte") (int_ 0)),
          branch (var_ "at_end") "none_block" "classify"]) in
   // A continuation byte is `0b10xxxxxx`: (b & 0xC0) == 0x80.

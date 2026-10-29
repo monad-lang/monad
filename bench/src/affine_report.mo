@@ -62,11 +62,11 @@ use lang::types {
 }
 use lang::scope {scope_data_empty}
 use lang::typecheck::usage {
-  BinderKind, BinderUse, attribute_binder_types, borrow_of_name_set, collect_binder_uses,
-  ctor_name_set,
+  BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, ctor_name_set,
+  shared_name_set, typ_is_function,
 }
 use lang::typecheck::copy_class {CopyVerdict, copy_verdict}
-use lang::typecheck::affine {check_def_strict}
+use lang::typecheck::affine {check_def_strict, copy_vars_of_def, type_var_is_copy}
 use lang::typecheck::diagnostic {type_error_message}
 use std::map {HashMap}
 use std::list {List.length}
@@ -218,7 +218,7 @@ pub struct Totals {
     /// one move plus any number of reads, which a borrow discipline
     /// serves without duplicating anything.
     borrowable : I64,
-    /// Total uses that are the direct argument of a real `Borrow.of`
+    /// Total uses that are the direct argument of a real `Shared.of`
     /// call (`BinderUse.borrowed`, summed over every binder, not just
     /// the 2+ set). Today it is near-zero by construction — B1
     /// converted one call site — so what it measures is that the
@@ -318,11 +318,24 @@ def residue_key (u : BinderUse) : String :=
 /// way down, like every list walker in `lang/codegen/` — this runs over
 /// whole modules, and the natural non-tail shape holds a native frame
 /// per binder.
-def tally_binder (scope : Scope) (u : BinderUse) (acc : Totals) : Totals :=
+def tally_binder (scope : Scope) (copy_vars : List Identifier) (u : BinderUse) (acc : Totals) : Totals :=
     let n : I64 := BinderUse.count u in
     let tname : String := type_head_name (BinderUse.typ u) in
-    let copyable : Bool := binder_is_copy scope (BinderUse.typ u) in
-    // Borrow-argument uses summed over ALL binders, not just the 2+
+    // The rule grants ω through a `[Copy A]` constraint as well as through
+    // instance resolution (`affine.mo`'s `effective_mult_with_vars`), so the
+    // tally must use the same two routes or the cross-check below is off by
+    // exactly the constraint-granted binders.
+    let copyable : Bool :=
+        binder_is_copy scope (BinderUse.typ u) || type_var_is_copy copy_vars (BinderUse.typ u) in
+    // The RULE's notion of over-use, which is not the raw count for two
+    // kinds of binder: a FUNCTION-typed one is measured by moves (calls
+    // are reads), and a borrowed VIEW never spends the budget at all. The
+    // cross-check below compares the rule's diagnostics against this
+    // predicate, so it has to use the same notion.
+    let is_fn : Bool := typ_is_function (BinderUse.typ u) in
+    let over : Bool :=
+        if is_fn then I64.gt (BinderUse.moves u) 1 else I64.gt n 1 in
+    // Shared-argument uses summed over ALL binders, not just the 2+
     // set — see the field's doc comment for why the report needs this.
     let acc : Totals := { acc with borrowed_uses := Totals.borrowed_uses acc + BinderUse.borrowed u } in
     if I64.beq n 0 then
@@ -330,8 +343,11 @@ def tally_binder (scope : Scope) (u : BinderUse) (acc : Totals) : Totals :=
     else if I64.beq n 1 then
         { acc with binders := Totals.binders acc + 1, one := Totals.one acc + 1 }
     else
+        // Non-Copy binders the affine rule must diagnose: over-used by its
+        // own measure, and not a view (which the view rule owns).
+        let diagnosable : Bool := over && Bool.not (BinderUse.view u) in
         let non_copy : I64 :=
-            if copyable then Totals.many_non_copy acc
+            if copyable || Bool.not diagnosable then Totals.many_non_copy acc
             else Totals.many_non_copy acc + 1 in
         let residue : List TypeTally :=
             if String.beq tname "?" then
@@ -339,7 +355,8 @@ def tally_binder (scope : Scope) (u : BinderUse) (acc : Totals) : Totals :=
             else Totals.unresolved acc in
         // At most one owning use means one move plus reads, which
         // borrows serve. Two or more is real duplication.
-        let dup : Bool := I64.gt (BinderUse.owning u) 1 in
+        let dup : Bool :=
+            if is_fn then I64.gt (BinderUse.moves u) 1 else I64.gt (BinderUse.owning u) 1 in
         { acc with
             binders := Totals.binders acc + 1,
             many := Totals.many acc + 1,
@@ -358,10 +375,10 @@ def tally_binder (scope : Scope) (u : BinderUse) (acc : Totals) : Totals :=
                 else Totals.copy_ambiguous acc }
 
 #[partial]
-def tally_binders (scope : Scope) (us : List BinderUse) (acc : Totals) : Totals :=
+def tally_binders (scope : Scope) (copy_vars : List Identifier) (us : List BinderUse) (acc : Totals) : Totals :=
     match us {
         List.empty => acc,
-        List.cons u rest => tally_binders scope rest (tally_binder scope u acc),
+        List.cons u rest => tally_binders scope copy_vars rest (tally_binder scope copy_vars u acc),
     }
 
 // ─── Walking a module's defs ───────────────────────────────────────
@@ -381,7 +398,8 @@ def tally_decls (ctors : HashMap String Bool) (borrows : HashMap String Bool) (s
             match d {
                 Decl.def_d def_ =>
                     let raw : List BinderUse := collect_binder_uses ctors borrows (def_term def_) in
-                    let counted : Totals := tally_binders s (attribute_binder_types s raw) acc in
+                    let counted : Totals :=
+                        tally_binders s (copy_vars_of_def def_) (attribute_binder_types s raw) acc in
                     // The Milestone 2 rule, run over the same def. The
                     // STRICT variant: the report's numbers must stay a
                     // fail-closed upper bound, unlike enforcement.
@@ -499,22 +517,22 @@ def print_totals (label : String) (t : Totals) : IO Bool := do {
     println ("  used 0 times (free)    " ++ I64.to_string (Totals.zero t) ++ "  (" ++ pct (Totals.zero t) n ++ "%)");
     println ("  used 1 time  (move)    " ++ I64.to_string (Totals.one t) ++ "  (" ++ pct (Totals.one t) n ++ "%)");
     println ("  used 2+ times          " ++ I64.to_string (Totals.many t) ++ "  (" ++ pct (Totals.many t) n ++ "%)");
-    println ("  ... of those, non-Copy " ++ I64.to_string (Totals.many_non_copy t) ++ "  (" ++ pct (Totals.many_non_copy t) n ++ "%)");
+    println ("  ... of those, non-Copy (the rule's cost) " ++ I64.to_string (Totals.many_non_copy t) ++ "  (" ++ pct (Totals.many_non_copy t) n ++ "%)");
     println ("  ... Copy granted           " ++ I64.to_string (Totals.copy_granted t) ++ "   (real instances, init/src/copy.mo)");
     println ("  ... Copy ambiguous          " ++ I64.to_string (Totals.copy_ambiguous t) ++ "   (2+ concrete instances matched; denied)");
     println "  ^ PESSIMISTIC bound: what Copy alone would have to cover.";
     println "";
     println "  splitting the 2+ set by how the extra uses are spent:";
     println ("    borrowable (<=1 owning use) " ++ I64.to_string (Totals.borrowable t) ++ "  (" ++ pct (Totals.borrowable t) (Totals.many t) ++ "% of the 2+ set)");
-    println ("    borrow-argument uses (all binders) " ++ I64.to_string (Totals.borrowed_uses t) ++ "  (live iff Borrow.of identity resolution works)");
+    println ("    borrow-argument uses (all binders) " ++ I64.to_string (Totals.borrowed_uses t) ++ "  (live iff Shared.of identity resolution works)");
     println ("    needs duplication (2+ owning) " ++ I64.to_string (Totals.needs_dup t) ++ "  (" ++ pct (Totals.needs_dup t) (Totals.many t) ++ "%)");
     println ("    ... of those, non-Copy       " ++ I64.to_string (Totals.needs_dup_non_copy t) ++ "  (" ++ pct (Totals.needs_dup_non_copy t) n ++ "% of all binders)");
     println "  ^ OPTIMISTIC bound: assumes a callee never retains an argument.";
     println "    The real cost sits between the two.";
     println "";
     println "  what the Milestone 2 rule actually reports:";
-    println ("    copy_required         " ++ I64.to_string (Totals.diag_copy_required t) ++ "  (borrow it, or add a Copy instance)");
-    println ("    value_used_after_move " ++ I64.to_string (Totals.diag_used_after_move t) ++ "  (moved twice; no borrow helps)");
+    println ("    copy_required         " ++ I64.to_string (Totals.diag_copy_required t) ++ "  (share it, add a Copy instance, or Clone.clone)");
+    println ("    value_used_after_move " ++ I64.to_string (Totals.diag_used_after_move t) ++ "  (moved twice; a shared view cannot help)");
     println ("    linear_unused         " ++ I64.to_string (Totals.diag_linear_unused t));
     println ("    other                 " ++ I64.to_string (Totals.diag_other t));
     // If the rule and the tally disagree, one of them is wrong. Saying
@@ -563,7 +581,7 @@ def report_on (path : String) : IO Bool := do {
                 // full scan of the inductives map at every one of the
                 // corpus's 44,609 application nodes.
                 let ctors : HashMap String Bool := ctor_name_set em.scope;
-                let borrows : HashMap String Bool := borrow_of_name_set em.scope;
+                let borrows : HashMap String Bool := shared_name_set em.scope;
                 let totals : Totals := tally_decls ctors borrows em.scope em.elaborated_decls totals_empty;
                 print_totals path totals
             }
@@ -695,7 +713,7 @@ def sweep_target (f : String) (st : Sweep) : IO Sweep := do {
             // Per-file, not per-run: each elaboration's scope is
             // that file's own view of the corpus.
             let ctors : HashMap String Bool := ctor_name_set em.scope;
-            let borrows : HashMap String Bool := borrow_of_name_set em.scope;
+            let borrows : HashMap String Bool := shared_name_set em.scope;
             let dir : Totals := tally_decls ctors borrows em.scope em.target_decls (Sweep.dir st);
             let grand : Totals := tally_decls ctors borrows em.scope em.target_decls (Sweep.grand st);
             let out : Sweep :=
@@ -833,7 +851,7 @@ def test_tally_splits_the_three_buckets : Bool :=
         List.cons (tally_of 0 term_type)
             (List.cons (tally_of 1 term_type)
                 (List.cons (tally_of 3 term_type) List.empty)) in
-    let t : Totals := tally_binders probe_scope us totals_empty in
+    let t : Totals := tally_binders probe_scope List.empty us totals_empty in
     I64.beq (Totals.zero t) 1 && I64.beq (Totals.one t) 1 && I64.beq (Totals.many t) 1
 
 #[test]
@@ -843,7 +861,7 @@ def test_tally_counts_every_overuse_as_non_copy_without_instances : Bool :=
     // measured through the tally rather than asserted at the gate.
     let us : List BinderUse :=
         List.cons (tally_of 2 i64_type) (List.cons (tally_of 2 term_type) List.empty) in
-    let t : Totals := tally_binders probe_scope us totals_empty in
+    let t : Totals := tally_binders probe_scope List.empty us totals_empty in
     I64.beq (Totals.many t) 2 && I64.beq (Totals.many_non_copy t) 2
 
 #[test]

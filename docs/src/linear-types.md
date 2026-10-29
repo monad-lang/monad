@@ -15,12 +15,14 @@ Theory (QTT).
 > `build`, `run`, `test`, `eval` and the language server. There is no flag
 > and no off switch. A mote that has not finished migrating can opt into
 > warnings with `[affine] mode = "warn"` in its `mote.toml`; the default is
-> `error`. `runtime` and `proofs` are at zero and enforced.
+> `error`. `init`, `runtime`, `proofs` and `web_event` are at zero and enforced.
 >
-> Two gaps remain: the explicit `!`/`?`/`%` annotations below parse but are
+> Three gaps remain: the explicit `!`/`?`/`%` annotations below parse but are
 > dropped before checking in some positions, so only the affine row is
-> enforced; and memory reclamation is not implemented (codegen emits no
-> `monad_release` yet, so the collector remains).
+> enforced; a `Shared.get` view is rejected when it is stored or returned but
+> not yet when it is passed to an *owning* call parameter (that needs the
+> callee's signature); and memory reclamation is not implemented (codegen
+> emits no `monad_release` yet, so the collector remains).
 
 ## Overview
 
@@ -125,8 +127,29 @@ The affine rule is live; the annotations are not yet.
 `init/src/copy.mo`) decides which types may still be shared. Resolution is
 *fail-closed*: where it cannot tell, it denies sharing rather than granting it,
 because the opposite default would quietly disable the whole check. Instances
-are unconstrained — `Copy (Borrow A)` and `Copy String` resolve, `Copy (Pair A B)`
+are unconstrained — `Copy (Shared A)` and `Copy String` resolve, `Copy (Pair A B)`
 does not.
+
+`Shared` (`init/src/shared.mo`) is a plain type constructor, not reference
+syntax: there is no `&T` spelling and none is planned. **The type is the
+mode.** It is marked `#[shared]`, and that marker — not the type's name — is
+what the checker keys on when it recognizes a `Shared.of` read, so renaming
+the type cannot silently disable the check.
+
+A **function-typed binder** is measured by *moves*, not raw mentions:
+calling a closure (`f x`) reads it and may happen any number of times,
+while passing it on, storing it or returning it transfers it — and exactly
+one transfer is allowed. That is what lets `List.map f tail` type-check
+without a `Copy (A -> B)` instance: the closure is never duplicated, so the
+environment it captured is never double-owned.
+
+`Copy` duplicates implicitly; **`Clone`** (`init/src/clone.mo`) copies
+explicitly. `Clone.clone (Shared.of x)` takes the source as a shared read and
+returns a fresh owned value, so it neither consumes `x` nor hands out an
+alias, and the checker never inserts it. Instances exist for the scalars,
+`String`, `Pair`, `Option`, `Result` and `List`; mutable state and handles
+(`ByteBuf`, `Ref`, `Ptr`, streams) have none by design — a copy of those is a
+new resource and must be written out.
 
 **Usage counting** (`lang/src/typecheck/usage.mo`) counts each binder's uses,
 distinguishing one that takes ownership from one that only reads, and combining
@@ -150,7 +173,7 @@ instance; a binder owned twice really is moved twice and wants a rewrite; a
 `!x` never used is the one case affine's weakening does not excuse.
 
 Two caveats matter. **Nothing frees memory yet.** Codegen still emits no
-`monad_release`, `Borrow` is boxed rather than erased, and `String` is
+`monad_release`, `Shared` is boxed rather than erased, and `String` is
 collector-owned, so the GC described in
 [Compiling and Running](./compiling.md#memory) is not going anywhere yet.
 Second, the rule only sees the binders it can *type*: a binder whose type is

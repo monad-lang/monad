@@ -205,29 +205,6 @@ pub def List.reverse (self : List A) : List A :=
 pub def List.singleton (a : A) : List A :=
 	List.cons a List.empty
 
-// ── List U8 helpers (pattern-only, concrete) ──
-
-def list_starts_with (full : List U8) (prefix : List U8) : Bool :=
-	match prefix {
-		empty => true,
-		cons p_byte p_tail => match full {
-			empty => false,
-			cons f_byte f_tail =>
-				if U8.beq p_byte f_byte
-				then list_starts_with f_tail p_tail
-				else false
-		}
-	}
-
-def list_contains (haystack : List U8) (needle : List U8) : Bool :=
-	match haystack {
-		empty => List.is_empty needle,
-		cons _ tail =>
-			if list_starts_with haystack needle
-			then true
-			else list_contains tail needle
-	}
-
 // ── Prefix / Suffix ──
 
 pub def String.ends_with (s : String) (suffix : String) : Bool :=
@@ -248,25 +225,57 @@ def String.reverse (s : String) : String :=
 
 // ── Search ──
 
+/// UTF-8 width of a leading byte. Used to step a scan by WHOLE
+/// characters: `String.drop`/`String.slice` return `""` on a mid-character
+/// offset, so a byte-at-a-time walk silently stops at the first non-ASCII
+/// byte (`String.contains "héllo" "llo"` was false).
+def utf8_lead_width (b : U8) : I64 :=
+	if U8.lt b 128u8 then 1
+	else if U8.lt b 224u8 then 2
+	else if U8.lt b 240u8 then 3
+	else 4
+
+/// Scan `s` for `sub`, one CHARACTER at a time. `String.starts_with`
+/// compares the prefix byte-wise (it `strlen`s the prefix, never the
+/// haystack), `String.get` at index 0 is the runtime's O(1) fast path, and
+/// `String.drop` is an O(1) interior pointer — so this is O(n·m) with no
+/// list round-trip and no per-step `strlen`.
+///
+/// `#[terminating]`: the recursion descends through the NATIVE
+/// `String.drop`, which the termination checker cannot see through.
+#[terminating]
+def contains_from (s : String) (sub : String) : Bool :=
+	if String.starts_with sub s then true
+	else match String.get s 0 {
+		Option.some b => contains_from (String.drop (utf8_lead_width b) s) sub,
+		Option.none => false,
+	}
+
 pub def String.contains (s : String) (sub : String) : Bool :=
-	list_contains (String.to_list s) (String.to_list sub)
+	contains_from s sub
 
 // ── Trim ──
 
 def is_whitespace_byte (b : U8) : Bool :=
 	U8.beq b 32u8 || U8.beq b 9u8 || U8.beq b 10u8 || U8.beq b 13u8
 
-def trim_leading (bytes : List U8) : List U8 :=
-	match bytes {
-		empty => bytes,
-		cons b rest =>
-			if is_whitespace_byte b
-			then trim_leading rest
-			else bytes
+/// Trim leading whitespace on the string itself. A `String` is `Copy`, so
+/// this needs no list round-trip (and no second owner of the bytes).
+///
+/// `#[terminating]` for the same reason as `String.contains`: the
+/// descent is through the native `String.drop`.
+#[terminating]
+def trim_leading (s : String) : String :=
+	match String.get s 0 {
+		Option.some b =>
+			if is_whitespace_byte b then trim_leading (String.drop 1 s) else s,
+		Option.none => s,
 	}
 
 pub def String.trim (s : String) : String :=
-	String.from_list (List.reverse (trim_leading (List.reverse (trim_leading (String.to_list s)))))
+	let lead_trimmed : String := trim_leading s in
+	let reversed : String := String.reverse lead_trimmed in
+	String.reverse (trim_leading reversed)
 
 /// Index of the last occurrence of `needle` in `haystack`, or -1.
 ///
