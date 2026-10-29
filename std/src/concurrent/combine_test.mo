@@ -8,7 +8,7 @@
 
 use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO}
 use lib::concurrent::combine {
-  Duration, FiberScope, Timeout, all, race, scope_fork, scoped, sleepIO, timeout,
+  Combine.Duration, FiberScope, Timeout, all, race, scope_fork, scoped, sleepIO, timeout,
 }
 use lib::io {}
 use lib::list {List.length}
@@ -236,7 +236,7 @@ def test_sleepIO_fibers_run_concurrently : IO Bool {
 #[test]
 def test_timeout_finished_before_expiry : IO Bool := do {
   let f <- forkIO (fn (_ : Unit) => do { sleepIO 10; return 7i64 });
-  let d : Duration := { millis := 300 };
+  let d : Combine.Duration := { millis := 300 };
   let r <- timeout d f;
   return (match r {
     Result.ok t => match t {
@@ -252,7 +252,7 @@ def test_timeout_finished_before_expiry : IO Bool := do {
 #[test]
 def test_timeout_expires : IO Bool := do {
   let f <- forkIO (fn (_ : Unit) => do { sleepIO 300; return 7i64 });
-  let d : Duration := { millis := 20 };
+  let d : Combine.Duration := { millis := 20 };
   let r <- timeout d f;
   return (match r {
     Result.ok t => match t {

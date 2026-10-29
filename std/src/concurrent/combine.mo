@@ -5,7 +5,11 @@
 use init::borrow {Borrow, Borrow.get}
 use lib::concurrent::fiber {Fiber, FiberError, await_fiber, cancel_fiber, forkIO, pollFiber}
 
-struct Duration {
+// `Combine.Duration`, not `Duration`: `motes/time` declares a `pub Duration`
+// (seconds and nanos) and whole-program qualification makes the bare name
+// ambiguous, so the literal `{ millis := 300 }` resolved to the wrong one.
+// Same reason `FiberScope` below carries a namespace note.
+struct Combine.Duration {
     millis : I64,
 }
 
@@ -120,7 +124,7 @@ pub type Timeout A {
 /// cancels the waiter, which may itself stay blocked in `await_fiber f`
 /// until `f` finishes; nothing waits for either, and `timeout` returns as
 /// soon as the timer wins.
-pub def timeout {A : Type} (duration : Duration) (f : Fiber A) : IO (Result FiberError (Timeout A)) := do {
+pub def timeout {A : Type} (duration : Combine.Duration) (f : Fiber A) : IO (Result FiberError (Timeout A)) := do {
     let waiter <- forkIO (fn (_ : Unit) => do {
         let r <- await_fiber f;
         return (Timeout.finished r)
