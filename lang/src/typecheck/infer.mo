@@ -8480,18 +8480,16 @@ def test_type_check_struct_lit_wrong_field_type_rejected : Bool :=
     }
 
 #[test]
-def test_type_check_struct_lit_missing_field_ok : Bool :=
-    // Only `x` provided, `y` entirely absent -- must still succeed,
-    // mirroring the reference compiler's own leniency here
-    // (`check_struct_fields`, core_check.rs: only fields PRESENT in the
-    // literal are checked, absence isn't itself an error at this
-    // layer).
+def test_type_check_struct_lit_missing_field_rejected : Bool :=
+    // Only `x` provided, `y` absent and not defaulted -- an ERROR since
+    // 2026-10-28 (both compilers): the hole the omission left is what
+    // `lower_sparse_args` truncates an allocation at.
     let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     let type_name : Option Term := Option.some point_type_ref in
     match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
-        ok _ => true,
-        err _ => false,
+        ok _ => false,
+        err _ => true,
     }
 
 // --- Regression: the shape codegen's own struct-literal desugar produces ---
@@ -8654,18 +8652,17 @@ def test_type_check_struct_lit_unknown_struct_rejected : Bool :=
     }
 
 #[test]
-def test_type_check_struct_lit_extra_unknown_field_ignored : Bool :=
-    // A literal field with no matching declared param is silently
-    // ignored, same leniency as the reference's own `check_struct_fields`
-    // (which only ever walks the struct's OWN declared fields).
+def test_type_check_struct_lit_extra_unknown_field_rejected : Bool :=
+    // A literal field with no matching declared param was silently dropped
+    // before 2026-10-28; it is an ERROR now, on both compilers.
     let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.sort (SortLevel.concrete 1)) in
     let extra : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 (List.cons f2 (List.cons extra List.empty)) in
     let type_name : Option Term := Option.some point_type_ref in
     match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
-        ok _ => true,
-        err _ => false,
+        ok _ => false,
+        err _ => true,
     }
 
 // --- Tests for type_check_named_call (Phase 5 of
