@@ -16,10 +16,9 @@ use moose::client {
 use std::stream {Stream, FdStream}
 use http::types {
   Transport, Transport.read_bytes, Transport.write_bytes,
-  Body.is_empty, GET, HEAD, Headers, Headers.empty, Headers.get, Headers.set,
-  POST, Request, Response, Status.found, Status.moved_permanently, Status.ok,
+  Body, Body.is_empty, Headers, Headers.empty, Headers.get, Headers.set, HttpVersion,
+  Method, Request, Response, Status.found, Status.moved_permanently, Status.ok,
   Status.permanent_redirect, Status.see_other, Status.temporary_redirect, Uri,
-  empty, http1_1, text,
 }
 use http::wire {Wire.format_response, Wire.parse_request}
 use http::body {Body.from_text, Body.to_bytes_pure}
@@ -66,6 +65,14 @@ def get_req (port : U16) : Request :=
 def post_req (port : U16) (body : String) : Request :=
   { method := Method.POST, uri := uri_of (url_for port), headers := Headers.empty, version := HttpVersion.http1_1, body := Body.from_text body }
 
+/// Make a PUT request with a text body for a loopback URL.
+def put_req (port : U16) (body : String) : Request :=
+  { method := Method.PUT, uri := uri_of (url_for port), headers := Headers.empty, version := HttpVersion.http1_1, body := Body.from_text body }
+
+/// Make a PATCH request with a text body for a loopback URL.
+def patch_req (port : U16) (body : String) : Request :=
+  { method := Method.PATCH, uri := uri_of (url_for port), headers := Headers.empty, version := HttpVersion.http1_1, body := Body.from_text body }
+
 /// Serialise a test response. Serialising a `Body.text` cannot fail, so an
 /// error here is a bug in the test, and the marker it goes out as fails the
 /// response parse on the client side instead of hanging.
@@ -104,6 +111,32 @@ def server_echo_send (sock : FdStream) (read_res : Result String (List U8)) : IO
           let echo := String.from_list (Body.to_bytes_pure req.body);
           server_write_close sock (Response.ok_text echo)
         }
+      }
+  }
+
+/// Server reads the request, checks its METHOD, echoes the body back, closes.
+/// A wrong method echoes `wrong-method`, which fails the caller's assertion.
+def server_read_echo_method (sock : FdStream) (want : Method) : IO Unit := do {
+  let read_res <- tcp_read_bytes sock 8192;
+  server_echo_method_send sock want read_res
+}
+
+def server_echo_method_send (sock : FdStream) (want : Method) (read_res : Result String (List U8)) : IO Unit :=
+  match read_res {
+    Result.err _ => Stream.close sock,
+    Result.ok req_bytes =>
+      match Wire.parse_request req_bytes {
+        Result.err _ => Stream.close sock,
+        Result.ok req =>
+          match req {
+            { method, body, .. } =>
+              let echo : String :=
+                if method == want
+                then String.from_list (Body.to_bytes_pure body)
+                else "wrong-method"
+              in
+              server_write_close sock (Response.ok_text echo)
+          }
       }
   }
 
@@ -198,6 +231,66 @@ def test_post_echo : IO Bool := do {
               let resp : Result String Response <- Client.read_response conn.socket Method.GET;
               Client.close conn;
               return (resp_ok resp Status.ok "echo-me")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// PUT echo roundtrip: the server checks the method and echoes the body.
+#[test]
+def test_put_echo : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res : Result String Connection <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { Stream.close listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          Stream.close listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              Client.write_request conn (put_req port "put-body");
+              server_read_echo_method sock Method.PUT;
+              let resp : Result String Response <- Client.read_response conn.socket Method.PUT;
+              Client.close conn;
+              return (resp_ok resp Status.ok "put-body")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// PATCH echo roundtrip: same shape, method-checked server-side.
+#[test]
+def test_patch_echo : IO Bool := do {
+  let listen_res <- IO.tcp_listen 0u16;
+  match listen_res {
+    Result.err _ => return false,
+    Result.ok listener => do {
+      let port <- IO.tcp_local_port listener;
+      let conn_res : Result String Connection <- Client.connect (url_for port);
+      match conn_res {
+        Result.err _ => do { Stream.close listener; return false },
+        Result.ok conn => do {
+          let accept_res <- IO.tcp_accept listener;
+          Stream.close listener;
+          match accept_res {
+            Result.err _ => do { Client.close conn; return false },
+            Result.ok sock => do {
+              Client.write_request conn (patch_req port "patch-body");
+              server_read_echo_method sock Method.PATCH;
+              let resp : Result String Response <- Client.read_response conn.socket Method.PATCH;
+              Client.close conn;
+              return (resp_ok resp Status.ok "patch-body")
             }
           }
         }
@@ -557,6 +650,12 @@ def rp_post (u : Uri) : Request :=
     version := HttpVersion.http1_1,
     body := Body.text "payload" }
 
+def rp_put (u : Uri) : Request :=
+  { method := Method.PUT, uri := u, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text "payload" }
+
+def rp_patch (u : Uri) : Request :=
+  { method := Method.PATCH, uri := u, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text "payload" }
+
 def rp_get (u : Uri) : Request :=
   Request.get u
 
@@ -595,6 +694,25 @@ def test_redirect_302_post_becomes_get : Bool :=
 #[test]
 def test_redirect_303_post_becomes_get : Bool :=
   rp_gets (rp_post (rp_origin 80u16)) Status.see_other (rp_origin 80u16)
+
+/// PUT is idempotent, so 301/302 keep the method and body as 307/308 do
+/// (only a POST is downgraded); 303 still asks with GET.
+#[test]
+def test_redirect_put_preserves_except_303 : Bool :=
+  rp_keeps (rp_put (rp_origin 80u16)) Status.moved_permanently (rp_origin 8080u16)
+  && rp_keeps (rp_put (rp_origin 80u16)) Status.found (rp_origin 8080u16)
+  && rp_keeps (rp_put (rp_origin 80u16)) Status.temporary_redirect (rp_origin 8080u16)
+  && rp_keeps (rp_put (rp_origin 80u16)) Status.permanent_redirect (rp_origin 8080u16)
+  && rp_gets (rp_put (rp_origin 80u16)) Status.see_other (rp_origin 8080u16)
+
+/// PATCH follows the POST rule under every status.
+#[test]
+def test_redirect_patch_preserves_except_303 : Bool :=
+  rp_keeps (rp_patch (rp_origin 80u16)) Status.moved_permanently (rp_origin 8080u16)
+  && rp_keeps (rp_patch (rp_origin 80u16)) Status.found (rp_origin 8080u16)
+  && rp_keeps (rp_patch (rp_origin 80u16)) Status.temporary_redirect (rp_origin 8080u16)
+  && rp_keeps (rp_patch (rp_origin 80u16)) Status.permanent_redirect (rp_origin 8080u16)
+  && rp_gets (rp_patch (rp_origin 80u16)) Status.see_other (rp_origin 8080u16)
 
 /// A GET carries nothing to preserve or drop, so a 301 leaves it alone.
 #[test]

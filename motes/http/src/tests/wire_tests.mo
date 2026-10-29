@@ -1,9 +1,9 @@
 /// Phase 3 tests — HTTP/1.1 wire format parse/serialize roundtrips.
 
 use http::types {
-  Body, Framing, Headers, Method, Request, Response, Response.no_content,
+  Body, Framing, Headers, HttpVersion, Method, Request, Response, Response.no_content,
   Response.text, Response.with_header, Response.with_status, Status.created, Status.no_content,
-  Status.not_found, Status.not_modified, Status.ok, Uri, http1_0, http1_1,
+  Status.not_found, Status.not_modified, Status.ok, Uri,
 }
 use http::body {Body.length, Body.to_bytes_pure}
 use http::strings {Strings.drop_bytes}
@@ -192,6 +192,14 @@ def test_format_request_absolute_uri : Bool :=
   let req : Request := { method := Method.GET, uri := u, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.empty } in
   String.beq (w_req_text req) "GET http://example.com/path HTTP/1.1\r\ncontent-length: 0\r\n\r\n"
 
+/// A PUT request carries its body like a POST; the method is the only
+/// difference in the request line.
+#[test]
+def test_format_put_with_body : Bool :=
+  let u : Uri := Uri.uri "" Option.none "" Option.none "/item" Option.none Option.none in
+  let req : Request := { method := Method.PUT, uri := u, headers := Headers.empty, version := HttpVersion.http1_1, body := Body.text "abc" } in
+  String.beq (w_req_text req) "PUT /item HTTP/1.1\r\ncontent-length: 3\r\n\r\nabc"
+
 #[test]
 def test_parse_method_all : Bool :=
   match Wire.parse_method "GET" {
@@ -201,7 +209,11 @@ def test_parse_method_all : Bool :=
           && match Wire.parse_method "DELETE" {
             Result.ok m3 => m3 == Method.DELETE
               && match Wire.parse_method "PATCH" {
-                Result.ok m4 => m4 == Method.PATCH,
+                Result.ok m4 => m4 == Method.PATCH
+                  && match Wire.parse_method "PUT" {
+                    Result.ok m5 => m5 == Method.PUT,
+                    Result.err _ => false
+                  },
                 Result.err _ => false
               },
             Result.err _ => false

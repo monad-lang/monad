@@ -4,9 +4,11 @@
 /// response. Two API styles:
 ///
 ///   One-shot:  `Client.get url headers`, `Client.post url headers body`,
+///              `Client.put url headers body`, `Client.patch url headers body`,
 ///              `Client.request req` — opens a fresh connection per call,
-///              closes after. `get` follows redirects; `post` doesn't
-///              (the caller decides, via `Client.request_with`).
+///              closes after. `get` and `put` follow redirects (both
+///              idempotent); `post` and `patch` don't (the caller decides,
+///              via `Client.request_with`).
 ///
 ///   Streaming: `Client.post_stream url headers body init on_bytes` — the
 ///              same one-shot POST with the decoded body handed to `on_bytes`
@@ -434,14 +436,14 @@ def Client.close (conn : Connection) : IO Unit :=
 /// Send one request, read the response, close the connection.
 /// Follows up to `max_redirects` redirects (0 = no redirect following).
 #[terminating]
-def Client.request_with (max_redirects : I64) (req : Request) : IO (Result String Response) :=
+pub def Client.request_with (max_redirects : I64) (req : Request) : IO (Result String Response) :=
   Client.request_with_timeout max_redirects Client.default_timeout_ms req
 
 /// `request_with` with one deadline per hop (a redirect starts a fresh
 /// one; the alternative -- one cap across every hop -- makes a slow
 /// redirect chain indistinguishable from a stalled peer).
 #[terminating]
-def Client.request_with_timeout (max_redirects : I64) (timeout_ms : I64) (req : Request) : IO (Result String Response) := do {
+pub def Client.request_with_timeout (max_redirects : I64) (timeout_ms : I64) (req : Request) : IO (Result String Response) := do {
   let now <- IO.current_time;
   let deadline : I64 := now + timeout_ms;
   let conn_res <- Client.connect_with_timeout (Uri.format req.uri) timeout_ms;
@@ -612,6 +614,34 @@ pub def Client.post (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String
 pub def Client.post_timeout (u : Uri) (hdrs : Headers) (body : Body) (timeout_ms : I64) : IO (Result String Response) :=
   let req : Request :=
     { method := Method.POST, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
+  in
+  Client.request_with_timeout 0i64 timeout_ms req
+
+/// Convenience: PUT a body to a `Uri` with the given headers, one-shot,
+/// following up to 10 redirects -- PUT is idempotent (RFC 9110 §9.2.2),
+/// so a redirect can be retried without the work being done twice. The
+/// redirect repeats the method and body for 301/302/307/308; 303 answers
+/// with a bodyless GET, which is that status's own instruction.
+pub def Client.put (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Response) :=
+  Client.put_timeout u hdrs body Client.default_timeout_ms
+
+pub def Client.put_timeout (u : Uri) (hdrs : Headers) (body : Body) (timeout_ms : I64) : IO (Result String Response) :=
+  let req : Request :=
+    { method := Method.PUT, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
+  in
+  Client.request_with_timeout 10i64 timeout_ms req
+
+/// Convenience: PATCH a body to a `Uri` with the given headers, one-shot
+/// -- NOT following redirects. PATCH is not idempotent (RFC 5789 §2), so
+/// `post`'s reasoning applies unchanged: silently replaying it on any
+/// redirect could apply the same change twice; following one is the
+/// caller's decision (`Client.request_with`, directly).
+pub def Client.patch (u : Uri) (hdrs : Headers) (body : Body) : IO (Result String Response) :=
+  Client.patch_timeout u hdrs body Client.default_timeout_ms
+
+pub def Client.patch_timeout (u : Uri) (hdrs : Headers) (body : Body) (timeout_ms : I64) : IO (Result String Response) :=
+  let req : Request :=
+    { method := Method.PATCH, uri := u, headers := hdrs, version := HttpVersion.http1_1, body := body }
   in
   Client.request_with_timeout 0i64 timeout_ms req
 
