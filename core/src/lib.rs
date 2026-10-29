@@ -1758,15 +1758,32 @@ pub fn check_files(
       Err(e) => vec![synthetic_diagnostic(format!("{e}"), Some(file.clone()))],
       Ok(text) => match dependencies.view_for_text(&text, file, &path) {
         Err(diagnostics) => diagnostics,
-        Ok(view) => {
-          let (diagnostics, updated) = check_one_source(file, &text, &path, view);
-          // The corpus loop's own modules, for the unused-def pass below;
-          // the dependencies it reached are folded in right after the loop.
-          if let Some(module) = updated.get_module(&path) {
+        Ok((view, decls)) => match dependencies.cached_for_file(file) {
+          // This file was already checked as some other file's dependency
+          // (under its `use`-qualified path). The check is identical -- the
+          // same isolated view, the same type pass -- so reuse it and run
+          // only what the dependency pass skipped: the use-completeness
+          // gate and this file's own warnings.
+          Some(Ok(module)) => {
+            let module = module.with_path(path.clone());
             master_loaded.add_module(module.clone());
+            completeness_diagnostics(&path, file, &decls, &view)
+              .unwrap_or_else(|| module_warnings(&module, Some(file)))
           }
-          diagnostics
-        }
+          Some(Err(diagnostics)) => diagnostics,
+          None => {
+            let (diagnostics, updated) = check_one_source(file, &text, &path, view);
+            // The corpus loop's own modules, for the unused-def pass below;
+            // the dependencies it reached are folded in right after the
+            // loop. Remember this check under the file too, so a later
+            // file importing this one does not type-check it again.
+            if let Some(module) = updated.get_module(&path) {
+              master_loaded.add_module(module.clone());
+              dependencies.remember(file, &path, module.clone());
+            }
+            diagnostics
+          }
+        },
       },
     };
     results.push(FileCheckResult {
@@ -1825,6 +1842,12 @@ struct CheckDependencies<'a> {
   defaults: &'a LoadedModules,
   search_paths: &'a SearchPaths,
   checked: Map<ModulePath, DependencyCheck>,
+  /// File -> the key its checked module is stored under (`checked`), so a
+  /// file already checked under one module path is not checked again under
+  /// another: the corpus loop asks by the swept path, a `use` names the
+  /// mote-qualified one, and both reach the same checked body. Keys are
+  /// canonicalized (see `file_key`).
+  by_file: Map<PathBuf, ModulePath>,
   /// Modules whose check is on the current recursion stack, so `a` using
   /// `b` using `a` is a cycle error (`load_module_files_inner`'s own rule)
   /// rather than unbounded recursion.
@@ -1837,19 +1860,21 @@ impl<'a> CheckDependencies<'a> {
       defaults,
       search_paths,
       checked: Map::new(),
+      by_file: Map::new(),
       in_progress: crate::empty_set(),
     }
   }
 
   /// The isolated view a file with the given source text must be checked
-  /// against. A parse failure here is reported the same way the loader's
-  /// own generic failure would be (one synthetic diagnostic at the file).
+  /// against, plus its parsed decls (the completeness gate needs them). A
+  /// parse failure here is reported the same way the loader's own generic
+  /// failure would be (one synthetic diagnostic at the file).
   fn view_for_text(
     &mut self,
     text: &str,
     file: &Path,
     module_path: &ModulePath,
-  ) -> Result<LoadedModules, Vec<crate::diag::Diagnostic>> {
+  ) -> Result<(LoadedModules, Vec<SourceContext<Decl>>), Vec<crate::diag::Diagnostic>> {
     let context = ModuleContext::new(module_path.clone(), Some(file.to_path_buf()));
     let decls = load_decls_from_text_with_path(text, &context).map_err(|e| {
       vec![synthetic_diagnostic(
@@ -1857,7 +1882,31 @@ impl<'a> CheckDependencies<'a> {
         Some(file.to_path_buf()),
       )]
     })?;
-    self.view_for_uses(&Self::uses_of(&decls))
+    let view = self.view_for_uses(&Self::uses_of(&decls))?;
+    Ok((view, decls))
+  }
+
+  /// This file's already-checked module, whichever module path it was first
+  /// checked under.
+  fn cached_for_file(&self, file: &Path) -> Option<Result<Module, Vec<crate::diag::Diagnostic>>> {
+    let key = self.by_file.get(&file_key(file))?;
+    match self.checked.get(key)? {
+      DependencyCheck::Checked(module) => Some(Ok(module.clone())),
+      DependencyCheck::Failed(diagnostics) => Some(Err(diagnostics.clone())),
+    }
+  }
+
+  /// Record a top-level check so a later importer reuses it instead of
+  /// type-checking this file again under its `use`-qualified path.
+  fn remember(&mut self, file: &Path, module_path: &ModulePath, module: Module) {
+    self
+      .by_file
+      .entry(file_key(file))
+      .or_insert_with(|| module_path.clone());
+    self
+      .checked
+      .entry(module_path.clone())
+      .or_insert(DependencyCheck::Checked(module));
   }
 
   /// The `use` decls a view starts from, filtered exactly as
@@ -1936,6 +1985,12 @@ impl<'a> CheckDependencies<'a> {
         None,
       )]);
     };
+    // Already checked under some other module path (a corpus file the sweep
+    // reached first): re-label it instead of reading and type-checking the
+    // same source a second time.
+    if let Some(cached) = self.cached_for_file(&file) {
+      return cached.map(|module| module.with_path(module_path.clone()));
+    }
     let text = fs::read_to_string(&file)
       .map_err(|e| vec![synthetic_diagnostic(format!("{e}"), Some(file.clone()))])?;
     let context = ModuleContext::new(module_path.clone(), Some(file.clone()));
@@ -1949,7 +2004,13 @@ impl<'a> CheckDependencies<'a> {
     let (diagnostics, updated) =
       check_one_source_with_completeness(&file, &text, module_path, view, false);
     match updated.get_module(module_path) {
-      Some(module) => Ok(module.clone()),
+      Some(module) => {
+        self
+          .by_file
+          .entry(file_key(&file))
+          .or_insert_with(|| module_path.clone());
+        Ok(module.clone())
+      }
       None => Err(diagnostics),
     }
   }
@@ -1962,6 +2023,34 @@ impl<'a> CheckDependencies<'a> {
       if let DependencyCheck::Checked(module) = cached {
         master_loaded.add_module(module);
       }
+    }
+  }
+}
+
+/// Canonical form of a file path, so the same file reached by a swept path
+/// (`motes/weaver/src/store.mo`) and by a `use` resolution (the same file
+/// under a search-path prefix) keys the same `by_file` entry.
+fn file_key(file: &Path) -> PathBuf {
+  fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf())
+}
+
+/// The use-completeness diagnostics for a file whose type check was reused
+/// from the dependency cache (`check_files`' `Some(Ok(module))` branch), or
+/// `None` if the file passes the gate. Same error shapes the full loader
+/// path yields, so a reused check reports exactly what a fresh one would.
+fn completeness_diagnostics(
+  module_path: &ModulePath,
+  file: &PathBuf,
+  decls: &[SourceContext<Decl>],
+  view: &LoadedModules,
+) -> Option<Vec<crate::diag::Diagnostic>> {
+  match crate::term::module::check_use_completeness(module_path.clone(), decls, view, Some(file)) {
+    Ok(()) => None,
+    Err(crate::term::module::LoadingError::Type(type_error)) => Some(
+      crate::eval::r#type::type_error_as_diagnostics(&type_error, Some(file)),
+    ),
+    Err(crate::term::module::LoadingError::Generic(message)) => {
+      Some(vec![synthetic_diagnostic(message, Some(file.clone()))])
     }
   }
 }

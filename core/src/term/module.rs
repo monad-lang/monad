@@ -2016,8 +2016,9 @@ fn load_decl_uses_modules(
 /// `compile`, the LSP), not only for `check`. Enforced unconditionally:
 /// the `MONAD_USE_COMPLETENESS` opt-in it grew up under is gone, so no
 /// caller can weaken the rule by forgetting to set (or inheriting a
-/// missing) environment variable.
-fn check_use_completeness(
+/// missing) environment variable. Public so `check_files` can run it for a
+/// corpus file whose type check it reused from the dependency cache.
+pub fn check_use_completeness(
   consumer: ModulePath,
   decls: &[SourceContext<Decl>],
   loaded: &LoadedModules,
@@ -4674,6 +4675,16 @@ impl Module {
 
   pub fn get_infix(&self, op: &Operator) -> Option<&Infix> {
     self.infix.get(op).map(|ctx| ctx.value())
+  }
+  /// The same checked module re-labelled under a different module path. One
+  /// file can be named two ways -- a corpus check discovers it by the path
+  /// it was swept under, a `use` names it mote-qualified -- and its checked
+  /// body is identical either way, so a caller that has already checked the
+  /// file can reuse that work instead of type-checking it again. Cheap: the
+  /// body's maps are `Arc`-shared, only `path` changes.
+  pub fn with_path(mut self, path: ModulePath) -> Self {
+    self.path = path;
+    self
   }
   pub fn get_uses(&self) -> &Vec<SourceContext<Use>> {
     &self.uses
