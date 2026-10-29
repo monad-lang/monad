@@ -1676,7 +1676,37 @@ def test_level_solved_from_an_earlier_argument_reaches_a_later_parameter : Bool 
 #[test]
 def test_level_polymorphic_partial_application_instantiates : Bool :=
     checked_typ_is_pi_over_sorts
-        (app (var sentinel (named (id "dup"))) (sort_n 0)) dup_scope 1
+        (Term.app (var sentinel (named (id "dup"))) (sort_n 0)) dup_scope 1
+
+// --- A partial application's type is the RESIDUAL Pi ---
+//
+// The signature-driven def-call path used to report `unify_structural`'s
+// answer as the call's type, and `unify_go`'s Pi arm answers the unified
+// CODOMAIN -- so `q p0` typed as `P`, one arrow short of the `P -> P` it is.
+// That made every partially applied def passed as an ARGUMENT compare as
+// its full result (`List.map (prefixed "a_") xs` in `std/src/derive.mo` was
+// the corpus shape). Pinned at term level: the rule is a leaf of the
+// application path, and a source-level pin would go through the def
+// boundary's own comparison instead.
+
+def partial_pi_src : String := "type P { p0 }\ndef q (a : P) (b : P) : P := a\n"
+
+def p_typ : Term := var sentinel (named (id "P"))
+
+#[test]
+def test_a_partial_application_keeps_the_residual_pi : Bool :=
+    match try_parse_decls partial_pi_src {
+        Option.none => false,
+        Option.some decls =>
+            let sc : Scope := scope_with_decls decls in
+            let call : Term :=
+                Term.app (var sentinel (named (id "q"))) (var sentinel (named (id "p0"))) in
+            let want : Term := pi binder_anon p_typ p_typ in
+            match type_check call want sc empty_local_types empty_locals {
+                err _ => false,
+                ok tt => Similar.similar tt.typ want,
+            },
+    }
 
 // --- R3b: elaboration into `Elim` (core-term-simplification.md) ---
 //

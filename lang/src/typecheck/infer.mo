@@ -192,6 +192,28 @@ def any_term_has_hole (ts : List Term) : Bool :=
         List.cons x rest => if term_has_hole x then true else any_term_has_hole rest,
     }
 
+/// Does `t` mention a BOUND variable -- a de Bruijn index, not the free-var
+/// sentinel? A DEPENDENT parameter type does: `fiber (A : Type) (B : Type)
+/// (f : A -> B) (b : B)` records `b`'s domain still referencing the `A`/
+/// `B` binders, so it cannot be compared with a closed argument type until
+/// the earlier arguments are substituted into it -- which this checker does
+/// not do. `call_arg_type_error` declines on such a parameter rather than
+/// reporting the raw index as a mismatch.
+#[terminating]
+def term_has_bound_var (t : Term) : Bool :=
+    match t {
+        Term.var idx _ => Bool.not (I64.beq idx sentinel),
+        _ => any_term_has_bound_var (term_children t),
+    }
+
+#[terminating]
+def any_term_has_bound_var (ts : List Term) : Bool :=
+    match ts {
+        List.empty => false,
+        List.cons x rest =>
+            if term_has_bound_var x then true else any_term_has_bound_var rest,
+    }
+
 /// Does `t` mention a type variable that is still UNINSTANTIATED -- a name
 /// `locals` skolemized, or a name nothing in `scope` binds?
 #[terminating]
@@ -998,6 +1020,38 @@ def open_method_vars (cls : Class) (method_name : Identifier) (tt : TypedTerm) :
             TypedTerm.mk tt.term (fill_unsolved_vars (class_method_var_names cls sig) tt.typ),
     }
 
+/// The declared field count of `ind`'s constructor named `name`.
+def constructor_arity_of (ind : Inductive) (name : Identifier) : Option I64 :=
+    match ind {
+        Inductive.mk _ _ _ ctors _ _ => constructor_arity_in ctors name,
+    }
+
+#[partial]
+def constructor_arity_in (ctors : List InductConstructor) (name : Identifier) : Option I64 :=
+    match ctors {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match c {
+                InductConstructor.mk cname params _ =>
+                    if constructor_name_matches cname name
+                    then Option.some (List.length params)
+                    else constructor_arity_in rest name,
+            },
+    }
+
+/// `InductConstructor.name` is a full `NamePath`; a case carries the bare
+/// identifier, matched against the path's LAST segment (the same
+/// normalisation `constructor_bare_name` performs).
+def constructor_name_matches (cname : NamePath) (name : Identifier) : Bool :=
+    match cname {
+        NamePath.mk segs =>
+            match list_last segs {
+                Option.some last => id_eq last name,
+                Option.none => false,
+            },
+    }
+
+
 /// Whether `t` still has a hole: a partial expectation (`IO _`) fixes the
 /// carrier but not the method's own variables.
 #[partial]
@@ -1202,8 +1256,23 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
                     match type_check three then_typ scope local_types locals {
                         ok els_tt =>
                             let els_term : Term := els_tt.term in
+                            let els_typ : Term := els_tt.typ in
+                            // The else arm is CHECKED against the then type,
+                            // but the checker's arms mostly ignore an
+                            // expectation (`type_check_lit`, `type_check_con`,
+                            // the free/bound var arms), so the checked type was
+                            // discarded and `if b then IO.pure 0 else
+                            // IO.pure (Result.ok Unit.unit)` checked cleanly --
+                            // one arm yielding an `I64` box and the other a
+                            // constructor, with nothing saying so. The match
+                            // arm result is the one boundary that already
+                            // enforced this; `if` now does too.
+                            match body_type_error three els_typ then_typ scope locals {
+                                Option.some e => err e,
+                                Option.none =>
                             let lit_val : Literal := Literal.if_ cond_term then_term els_term in
                             ok (mk_typed (Term.lit lit_val) then_typ),
+                            },
                         err e => err e,
                     },
                 err e => err e,
@@ -4331,8 +4400,17 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                         drop_no_progress_bindings
                                                                             (solve_typevars scope (rebuild_pi_chain (drop_params (List.length real_args) params) ret) expected_type List.empty) in
                                                                     match def_call_check_args real_args params (List.append pre ret_seed) List.empty scope local_types locals {
-                                                                        err _ => Option.none,
-                                                                        ok pair =>
+                                                                        // A decline means "type this call another
+                                                                        // way", the pre-existing contract. A solved
+                                                                        // mismatch is not that: the ordinary path
+                                                                        // would check the same argument against
+                                                                        // `Term.hole` and accept it, so the error
+                                                                        // escapes the probe the way
+                                                                        // `validate_dict_hints`' own hard error
+                                                                        // does (`Option.some (err e)` above).
+                                                                        CallArgOutcome.call_args_decline => Option.none,
+                                                                        CallArgOutcome.call_args_type_error e => Option.some (err e),
+                                                                        CallArgOutcome.call_args_ok pair =>
                                                                             match pair {
                                                                                 DccPair.mk elab_args subst levels =>
                                                                                     // A PARTIAL application's type is the
@@ -4390,11 +4468,26 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     let ret_subst : List (Pair Identifier Term) :=
                                                                                         solve_typevars scope subst_ret expected_type List.empty in
                                                                                     let refined_ret : Term := subst_typevars_term subst_ret ret_subst in
+                                                                                    // `refined_ret`, NOT the unification's answer.
+                                                                                    // It used to be
+                                                                                    // `match unify_structural refined_ret
+                                                                                    // expected_type { ok u => u, err _ =>
+                                                                                    // refined_ret }`, and `unify_go`'s Pi arm
+                                                                                    // answers the unified CODOMAIN -- so a
+                                                                                    // PARTIAL application under a Pi expectation
+                                                                                    // came back one arrow short. `def p : I64 ->
+                                                                                    // I64 := q 1` (two-parameter `q`) typed its
+                                                                                    // body `I64`, which the def boundary then
+                                                                                    // rejected; and every partially applied def
+                                                                                    // passed as an argument
+                                                                                    // (`List.map (prefixed "a_") xs`) typed as
+                                                                                    // its full result, which the call-argument
+                                                                                    // check reported on 60+ corpus sites. A hole
+                                                                                    // return type is the one case the expectation
+                                                                                    // still improves on (`unify hole e` answers
+                                                                                    // `e`), so that keeps the unification.
                                                                                     let result_typ : Term :=
-                                                                                        match unify_structural refined_ret expected_type scope locals {
-                                                                                            ok u => u,
-                                                                                            err _ => refined_ret,
-                                                                                        } in
+                                                                                        call_result_typ refined_ret expected_type scope locals in
                                                                                     // Re-attach the peeled `#` markers ahead of
                                                                                     // the elaborated arguments (the dict pass reads
                                                                                     // the hint off them) and insert the callee's
@@ -4689,6 +4782,26 @@ def drop_params (n : I64) (params : List Term) : List Term :=
             List.cons _ rest => drop_params (n - 1) rest,
         }
 
+/// The type a signature-driven call reports: the residual Pi chain, NOT
+/// what `unify_structural` answers.
+///
+/// `unify_go`'s Pi arm returns the unified CODOMAIN (its own doc: "Pi
+/// matches Pi structurally"), so using its answer as the call's type made
+/// every PARTIAL application under a Pi expectation come back one arrow
+/// short: `def p : I64 -> I64 := q 1` (two-parameter `q`) typed its body
+/// `I64`, and `List.map (prefixed "a_") xs` typed the argument `String`
+/// instead of `String -> String`. A HOLE return type is the one case the
+/// expectation genuinely improves on (`unify hole e` answers `e`), so the
+/// unification is kept there and only there.
+def call_result_typ (refined_ret : Term) (expected_type : Term)
+    (scope : Scope) (locals : LocalScope) : Term :=
+    if is_hole (term_peel refined_ret) then
+        match unify_structural refined_ret expected_type scope locals {
+            ok u => u,
+            err _ => refined_ret,
+        }
+    else refined_ret
+
 /// Rebuild a `Term.pi` chain over `ret` from the still-unapplied
 /// parameter types, right-associated: `[A, B]` over `R` gives
 /// `Pi A (Pi B R)`. Empty list (a saturated call) gives `ret` itself,
@@ -4709,6 +4822,28 @@ pub struct DccPair {
     /// `Term`; `try_type_check_def_call` applies it to the return type
     /// with `subst_levels_term`.
     levels : List (Pair Identifier SortLevel),
+}
+
+/// What the signature-driven argument loop concluded, in three cases
+/// rather than two.
+///
+/// The probe is fail-open by design (`try_type_check_def_call`'s own doc
+/// comment): "this checker could not type this call this way" must fall
+/// back to the ordinary path, so most failures are a DECLINE --
+/// `call_args_decline`, which every pre-existing `err` maps to.
+///
+/// `call_args_type_error` is a real mismatch: the argument's type was
+/// inferred, the parameter's type was fully solved, and the two do not
+/// match. Falling back cannot rescue that -- the ordinary path checks
+/// the argument against `Term.hole`, i.e. accepts anything -- so the
+/// error has to escape. `try_type_check_def_call` returns it the way it
+/// already returns `validate_dict_hints`' own hard error.
+///
+/// `call_args_ok` carries the loop's result unchanged.
+pub type CallArgOutcome {
+    call_args_ok (pair : DccPair),
+    call_args_decline,
+    call_args_type_error (err : TypeError),
 }
 
 /// `try_type_check_def_call`'s argument loop: infer each argument's own
@@ -4798,12 +4933,12 @@ def drop_no_progress_bindings (bs : List (Pair Identifier Term)) : List (Pair Id
     }
 
 #[partial]
-def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
+def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : CallArgOutcome :=
     match args {
-        List.empty => ok (DccPair.mk List.empty subst levels),
+        List.empty => CallArgOutcome.call_args_ok (DccPair.mk List.empty subst levels),
         List.cons arg rest =>
             match params {
-                List.empty => err (TypeError.custom "over-application"),
+                List.empty => CallArgOutcome.call_args_decline,
                 List.cons param_ty rest_params =>
                     // Levels solved by the arguments BEFORE this one
                     // (W1.4) reach this parameter's type, so a later
@@ -4848,11 +4983,14 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                             // argument to a def whose matching param is a
                             // registered inductive (`file_path : String`)
                             // committed here as an empty constructor.
+                            // Every failure on this path stays a DECLINE
+                            // (`call_args_decline`), exactly as the `err`
+                            // it replaces did.
                             if not (struct_literal_arg_matches_expected arg a_expected scope)
-                            then err (TypeError.custom "named call: struct literal argument does not describe the expected type")
+                            then CallArgOutcome.call_args_decline
                             else
                             match type_check arg a_expected scope local_types locals {
-                                err e => err e,
+                                err _ => CallArgOutcome.call_args_decline,
                                 ok a_tt =>
                                     def_call_continue arg a_tt param_ty rest rest_params subst levels scope local_types locals,
                             },
@@ -5060,11 +5198,100 @@ def open_free_type_vars (t : Term) (scope : Scope) : Term :=
         _ => t,
     }
 
+/// `body_type_error`'s call-argument form: is this argument's inferred type
+/// the parameter's type?
+///
+/// One definition for every application site, so the guards stay the same
+/// as the def boundary's and a call-specific one can be added here alone.
+/// `param` must already have THIS argument's own solutions applied
+/// (`subst_typevars_term`/`subst_levels_term`): a raw declared parameter
+/// still naming its signature variables is exactly the "no instantiation at
+/// use sites" class `body_type_error`'s typevar guard skips, so comparing
+/// the unsolved form would buy nothing.
+///
+/// `arg` is the SOURCE argument, not the elaborated one: `body_type_error`'s
+/// hole test is what keeps an argument that still carries an inference hole
+/// (an unannotated lambda, a do-bind continuation) out of the comparison.
+def call_arg_type_error (arg : Term) (arg_typ : Term) (param : Term)
+    (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    // REPORTING PASS ONLY. `scope.incomplete_match_ok` is the bit
+    // `lang/module.mo`'s `scope_for_elab_body` sets on the ELABORATION path
+    // (and what an explicit `#[allow_incomplete_match]` exemption sets on the
+    // check path); `false` is the checked, reporting default. The comparison
+    // must not run where its error is swallowed: `elaborate_def_with_scope`
+    // keeps a rejected decl UN-elaborated for codegen, so a rejection here
+    // removes a derive-generated method and the build fails stages later
+    // with an unrelated name. MEASURED on `motes/weaver`: the whole-graph
+    // elaboration resolves the bare `prefixed` in `std/src/derive.mo`'s
+    // `beq_piece` to `motes/weaver`'s `prefixed : String -> TLine -> TLine`
+    // (the open `whole-program-name-collisions.md` class), and the argument
+    // check turned that latent collision into a failed build. `monad check`
+    // still reports it -- a diagnostic belongs on the reporting path, the
+    // same check-path-only split `elaborate_def_with_scope` already
+    // documents for the def-body comparison.
+    //
+    // A DEPENDENT parameter (`fiber`'s `b : B`, still referencing the
+    // earlier binders) cannot be compared with a closed argument type --
+    // substituting the earlier arguments into it is work this checker does
+    // not do, and comparing the raw index reports `expected A, found I64`
+    // for a call the Rust host accepts.
+    if scope.incomplete_match_ok
+    then Option.none
+    else if term_has_bound_var param
+    then Option.none
+    else if constructor_value_expected_as_function arg param scope
+    then Option.none
+    else body_type_error arg arg_typ param scope locals
+
+/// Is `arg` a CONSTRUCTOR reference with at least one field being passed
+/// where a FUNCTION is expected?
+///
+/// `type_check_con`/`type_check_free_var_con` type a constructor reference
+/// as its owning inductive (`Map.fold` is a `Map K V`, not a function), so
+/// a constructor passed as a FUNCTION VALUE compares as a bare type and is
+/// reported as a mismatch: `map_parse UseFilter.use_items use_brace_items`
+/// in `lang/src/parser.mo` is the live shape, rejected by the call-argument
+/// check while the Rust host accepts it. Giving a constructor reference its
+/// real Pi type is the "constructor-as-value typing" prerequisite recorded
+/// in `implementations/checker-accepts-what-the-rust-host-rejects.md`, and
+/// is out of scope here.
+///
+/// NULLARY constructors are deliberately NOT covered: a nullary constructor
+/// genuinely IS its type, so `needs Msg.started` (`needs : (I64 -> Msg) ->
+/// Msg`) is a real error and stays rejected -- that is the repro this whole
+/// check exists for.
+def constructor_value_expected_as_function (arg : Term) (param : Term) (scope : Scope) : Bool :=
+    if Bool.not (is_pi_typ (term_peel param))
+    then false
+    else match constructor_ref_arity arg scope {
+        Option.some fields => I64.gt fields 0,
+        Option.none => false,
+    }
+
+/// The declared field count of the constructor `t` names, when `t` is a
+/// bare or type-qualified constructor REFERENCE (never applied).
+def constructor_ref_arity (t : Term) (scope : Scope) : Option I64 :=
+    match term_peel t {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel then
+                match dbg {
+                    DebugName.named id =>
+                        let bare : Identifier := Identifier.id (last_dotted_segment (show_identifier id)) in
+                        match scope_find_inductive_by_constructor (NamePath.mk (List.cons bare List.empty)) scope {
+                            Option.some ind => constructor_arity_of ind bare,
+                            Option.none => Option.none,
+                        },
+                    DebugName.unnamed => Option.none,
+                }
+            else Option.none,
+        _ => Option.none,
+    }
+
 /// `def_call_check_args`'s per-argument tail: solve this parameter's
 /// type variables from the argument's (already inferred) type, then
 /// recurse for the remaining arguments.
 #[partial]
-def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
+def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : CallArgOutcome :=
     let a_typ : Term := a_tt.typ in
     let next_subst : List (Pair Identifier Term) := solve_typevars scope param_ty a_typ subst in
     // W1.4: the same argument pair also determines LEVEL variables, whose
@@ -5072,13 +5299,26 @@ def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : 
     // `solve_levels` is non-committal, so an argument that says nothing
     // about the level leaves it free for a later one to solve.
     let next_levels : List (Pair Identifier SortLevel) := solve_levels param_ty a_typ levels in
+    // THE argument check: `try_type_check_def_call` used to check every
+    // argument against `Term.hole` (see `check_arg_for_call`) and never
+    // compare the result with the parameter, so `f "s"` for `f (x : I64)`
+    // and `needs Msg.started` for `needs (f : I64 -> Msg)` checked
+    // cleanly and reached codegen. The parameter is substituted FIRST:
+    // `List A` solved from this argument becomes `List I64`, so a genuine
+    // mismatch is reported against the type the caller actually wrote.
+    let solved_param : Term := subst_levels_term (subst_typevars_term param_ty next_subst) next_levels in
+    match call_arg_type_error arg a_typ solved_param scope locals {
+        Option.some e => CallArgOutcome.call_args_type_error e,
+        Option.none =>
     match def_call_check_args rest rest_params next_subst next_levels scope local_types locals {
-        err e => err e,
-        ok pair =>
+        CallArgOutcome.call_args_decline => CallArgOutcome.call_args_decline,
+        CallArgOutcome.call_args_type_error e => CallArgOutcome.call_args_type_error e,
+        CallArgOutcome.call_args_ok pair =>
             match pair {
                 DccPair.mk rest_elab rest_subst rest_levels =>
-                    ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst rest_levels),
+                    CallArgOutcome.call_args_ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst rest_levels),
             },
+    }
     }
 
 /// A signature decomposed for `try_type_check_def_call`: its explicit
@@ -5701,9 +5941,57 @@ def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term)
                 ok f_tt =>
                     let f_term : Term := f_tt.term in
                     let f_typ : Term := f_tt.typ in
+                    match callee_domain_error f a_term a_typ f_typ scope locals {
+                        Option.some e => err e,
+                        Option.none =>
                     extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
+                    },
                 err e => err e,
             }
+
+/// The ordinary path's argument check: the callee's own Pi domain against
+/// the argument's inferred type.
+///
+/// Only this path sees a LOCAL function value. A def call resolves through
+/// `try_type_check_def_call` (which checks each argument itself) and never
+/// reaches here, and a class method's carrier is derived FROM the argument
+/// (`carrier_from_expected_type`), so its domain is the argument's own type
+/// by construction and compares equal. What is left is exactly the shape
+/// the def probe declines on: `def danger (pick : String -> I64) : I64 :=
+/// pick 1i64`, accepted at HEAD and rejected by the Rust host.
+///
+/// `pi_domain_of` declines a hole domain and a folded `forall` -- the
+/// callee knows no more than we do there; `call_arg_type_error` owns the
+/// rest of the guards.
+///
+/// A CLASS-METHOD callee is skipped outright. Its carrier is derived FROM
+/// the argument's own inferred type (`carrier_from_expected_type`), so the
+/// Pi this path inspects is synthesized out of the very type it would be
+/// compared with -- and for a do-block over a monad transformer the
+/// derivation can apply the carrier once more than the source did, which is
+/// exactly the disagreement the comparison then reports: MEASURED on
+/// `motes/oak/src/tests/html_t_tests.mo`'s `prog_do_open`, where the
+/// argument typed `HtmlT (HtmlT RenderM Open Open) Open Open Unit` and the
+/// derived domain `HtmlT RenderM Open Open Unit`. The Rust host accepts it.
+def callee_domain_error (f : Term) (a_term : Term) (a_typ : Term) (f_typ : Term)
+    (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    if callee_is_class_method f scope
+    then Option.none
+    else match pi_domain_of f_typ {
+        Option.none => Option.none,
+        Option.some dom => call_arg_type_error a_term a_typ dom scope locals,
+    }
+
+/// Does `f`'s call spine name a CLASS METHOD (a method declared by a class,
+/// whose carrier the checker resolves per call)?
+def callee_is_class_method (f : Term) (scope : Scope) : Bool :=
+    match flatten_call_spine f {
+        CallSpine.mk head _args =>
+            match class_method_declared_sig head scope {
+                Option.some _ => true,
+                Option.none => false,
+            },
+    }
 
 /// When `f` is an inline lambda with a KNOWN (non-hole) declared param
 /// type -- the shape every `let x : T := value in body` (and do-block
@@ -6112,9 +6400,14 @@ def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (l
                                     // level-polymorphic CLASS method is
                                     // out of W1.4's scope (see
                                     // `solve_levels`'s own doc comment).
+                                    // Both failure kinds collapse to `none`:
+                                    // this path produces a HINT for an
+                                    // argument's binder, never a diagnostic.
+                                    // The call's own check reports.
                                     match def_call_check_args args params List.empty List.empty scope local_types locals {
-                                        err _ => Option.none,
-                                        ok dcc =>
+                                        CallArgOutcome.call_args_decline => Option.none,
+                                        CallArgOutcome.call_args_type_error _ => Option.none,
+                                        CallArgOutcome.call_args_ok dcc =>
                                             // `dcc.subst` solves type variables from arguments
                                             // ALREADY applied; a HOF argument whose carrier
                                             // comes from a LATER sibling (`Comonad.extend (fn a
@@ -7156,13 +7449,14 @@ def con_arity_msg (full_name : NamePath) (got : I64) (want : I64) : String :=
 /// synthetic single-constructor `Inductive` `build_scope_struct`
 /// registers for every struct (name `mk`, mirroring the reference's own
 /// desugaring of a struct literal into a constructor application,
-/// `core/src/core_check.rs`'s `desugar_struct_literals`). Mirrors the
-/// reference's own leniency (`check_struct_fields`, core_check.rs):
-/// fields present in the literal are checked against their declared
-/// type; fields ABSENT from the literal (whether or not the struct
-/// declares a default for them) are not separately validated here --
-/// same as `check_con_args_against_params`'s existing `Option.none`
-/// handling for any other constructor call with sparse args.
+/// `core/src/core_check.rs`'s `desugar_struct_literals`). The literal's
+/// FIELD SET is validated first, by the same rule a named call uses
+/// (`field_set_validate`): a written name no declared field matches is an
+/// error, and a declared field the literal omits is an error unless it
+/// carries a `:=` default. Both compilers enforce it (`check_struct_fields`
+/// on the Rust side); before 2026-10-28 both accepted a typo'd name and an
+/// omitted required field silently, and the hole the omission left is what
+/// `lower_sparse_args` truncates an allocation at.
 def type_check_struct_lit (fields : List StructLitField) (type_name : Option Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match struct_lit_head_name type_name expected_type {
         Option.none =>
@@ -7179,6 +7473,16 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
                                 List.cons ctor _ =>
                                     match ctor {
                                         InductConstructor.mk con_name params _ =>
+                                            // The field SET first: an unknown
+                                            // name used to be dropped and an
+                                            // uncovered field lowered to a
+                                            // hole `lower_sparse_args` truncates
+                                            // the allocation at -- a silent
+                                            // wrong program, and a SIGSEGV in
+                                            // the compiled binary.
+                                            match field_set_validate "struct literal" params fields {
+                                                err e => err e,
+                                                ok _ =>
                                             let args : List (Option Term) := struct_lit_build_args params fields in
                                             let bindings : List (Pair Identifier Term) := con_own_param_bindings ind expected_type in
                                             match check_con_args_against_params args params bindings scope local_types locals {
@@ -7191,6 +7495,7 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
                                                         Option.none => expected_type,
                                                     } in
                                                     ok (mk_typed (Term.con c) result_typ),
+                                            }
                                             }
                                     }
                             }
@@ -7465,22 +7770,24 @@ def named_call_param_exists (params : List Param) (name : Identifier) : Bool :=
             }
     }
 
-/// Every literal field name must be among `params`' own declared names --
-/// STRICTER than `struct_lit_build_args`'s existing leniency (which
-/// silently drops an unmatched literal field, since it only ever walks
-/// the STRUCT's own declared fields, never the literal's) -- a genuine
-/// named call should reject a typo'd field name outright rather than
-/// silently ignore it.
+/// Every written field name must be among `params`' own declared names --
+/// STRICTER than `struct_lit_build_args`'s own walk, which silently drops
+/// an unmatched literal field because it only ever visits the STRUCT's
+/// declared names, never the literal's.
+///
+/// `kind` is the construction spelling the message names ("named call",
+/// "struct literal", "struct update"): the rule is one rule, but a reader
+/// needs to see which of the three they wrote.
 #[terminating]
-def named_call_check_unknown_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
+def field_set_check_unknown (kind : String) (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
     match fields {
         List.empty => ok true,
         List.cons f rest =>
             match f {
                 StructLitField.mk fname _ =>
                     if named_call_param_exists params fname
-                    then named_call_check_unknown_fields params rest
-                    else err (TypeError.custom (String.concat "named call: unknown field `" (String.concat (show_identifier fname) "`")))
+                    then field_set_check_unknown kind params rest
+                    else err (TypeError.custom (String.concat kind (String.concat ": unknown field `" (String.concat (show_identifier fname) "`"))))
             }
     }
 
@@ -7503,26 +7810,31 @@ def named_call_check_unknown_fields (params : List Param) (fields : List StructL
 /// (`type_check_named_call_def_target`, below), so an omitted field with
 /// a `:=` default is accepted on the def path on exactly these terms.
 #[terminating]
-def named_call_check_missing_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
+def field_set_check_missing (kind : String) (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
     match params {
         List.empty => ok true,
         List.cons p rest =>
             match p {
                 Param.mk pname _ _ pdefault _ =>
                     match struct_lit_find_field fields pname {
-                        Option.some _ => named_call_check_missing_fields rest fields,
+                        Option.some _ => field_set_check_missing kind rest fields,
                         Option.none => match pdefault {
-                            Option.some _ => named_call_check_missing_fields rest fields,
-                            Option.none => err (TypeError.custom (String.concat "named call: missing required field `" (String.concat (show_identifier pname) "`"))),
+                            Option.some _ => field_set_check_missing kind rest fields,
+                            Option.none => err (TypeError.custom (String.concat kind (String.concat ": missing required field `" (String.concat (show_identifier pname) "`")))),
                         },
                     }
             }
     }
 
-def named_call_validate_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
-    match named_call_check_unknown_fields params fields {
+/// Both halves: every written name declared, every declared field covered
+/// or defaulted. This is the rule a NAMED call (`P { x := 1 }`) and a bare
+/// struct LITERAL (`{ x := 1 }`) share -- `type_check_struct_lit` calls it
+/// too, so the two spellings cannot drift apart on what an omitted field
+/// means.
+def field_set_validate (kind : String) (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
+    match field_set_check_unknown kind params fields {
         err e => err e,
-        ok _ => named_call_check_missing_fields params fields,
+        ok _ => field_set_check_missing kind params fields,
     }
 
 /// Resolves `f` (the callee) as a constructor name and, if found, builds
@@ -7550,7 +7862,7 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
                                 Option.some ctor =>
                                     match ctor {
                                         InductConstructor.mk con_name params _ =>
-                                            match named_call_validate_fields params fields {
+                                            match field_set_validate "named call" params fields {
                                                 err e => err e,
                                                 ok _ =>
                                                     let args : List (Option Term) := struct_lit_build_args params fields in
@@ -7607,13 +7919,13 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
 /// does the right thing at each layer.
 ///
 /// Field validation is the CONSTRUCTOR path's own helpers now, over the
-/// same `List Param`: `named_call_check_unknown_fields` for the field
+/// same `List Param`: `field_set_check_unknown` for the field
 /// NAMES, and `named_call_def_pair_args` for the `:=` DEFAULTS. The two
 /// def-side mirrors of them (`named_call_def_check_unknown_fields` and
 /// `def_param_pair_exists`) are deleted rather than widened, so the two
 /// paths cannot drift apart on what an omitted field means again.
 def type_check_named_call_def_target (f : Term) (params : List Param) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Option TypedTerm) :=
-    match named_call_check_unknown_fields params fields {
+    match field_set_check_unknown "named call" params fields {
         err e => err e,
         ok _ =>
             match named_call_def_pair_args params fields {
@@ -7641,7 +7953,7 @@ def type_check_named_call_def_target (f : Term) (params : List Param) (fields : 
 ///
 /// That makes this function subsume the separate missing-fields pass the
 /// def path used to run -- same condition, same message, same order -- so
-/// `named_call_check_missing_fields` stays the constructor path's own and
+/// `field_set_check_missing` stays the constructor path's own and
 /// the only observable difference is that an omitted field with a default
 /// is no longer rejected. `params` is `List Param` rather than the
 /// name+type pair list this used to take because `ScopeData.def_params`
@@ -7762,6 +8074,17 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                         List.cons ctor _ =>
                                             match ctor {
                                                 InductConstructor.mk con_name params _ =>
+                                                    // An override naming no declared field used
+                                                    // to be dropped on the floor: the args walk
+                                                    // visits declared params only, so only the
+                                                    // written values it recognised were ever
+                                                    // checked and `{ p with nosuch := 3 }`
+                                                    // checked clean. Only the UNKNOWN half
+                                                    // applies -- omitting a field is what an
+                                                    // update is for.
+                                                    match field_set_check_unknown "struct update" params fields {
+                                                        err e => err e,
+                                                        ok _ =>
                                                     let n : I64 := List.length params in
                                                     let binders : List Identifier := struct_update_binders params in
                                                     // Only the OVERRIDES are type-checked, each against
@@ -7782,6 +8105,7 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                                             let no_fp : Option FieldPattern := Option.none in
                                                             let case_ : MatchCase := MatchCase.mk mk_name binders body no_fp (Option.some (inductive_type_path ind)) in
                                                             ok (mk_typed (Term.lit (Literal.match_ base_term (List.cons case_ List.empty))) base_typ),
+                                                    }
                                                     },
                                             }
                                     }
@@ -8430,7 +8754,7 @@ def test_type_check_named_call_missing_field_is_an_error : Bool :=
     // omitting `y` must always be an error here, UNLIKE `type_check_
     // struct_lit`'s own leniency (`test_type_check_struct_lit_missing_
     // field_ok`, above) -- a positive, deliberate strictness difference
-    // (see `named_call_validate_fields`'s own doc comment), not a gap.
+    // (see `field_set_validate`'s own doc comment), not a gap.
     let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.sort (SortLevel.concrete 1)) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_named_call point_mk_var fields Term.hole point_scope empty_local_types empty_locals {
@@ -8906,7 +9230,7 @@ def rect_w_only_fields : List StructLitField := List.cons rect_w_field List.empt
 #[test]
 def test_named_call_ctor_omitted_defaulted_field_is_accepted : Bool :=
     // `Rect { w := 1 }` -- `h` is omitted but declares a default.
-    match named_call_check_missing_fields rect_params rect_w_only_fields {
+    match field_set_check_missing "named call" rect_params rect_w_only_fields {
         ok _ => true,
         err _ => false,
     }
@@ -8914,7 +9238,7 @@ def test_named_call_ctor_omitted_defaulted_field_is_accepted : Bool :=
 #[test]
 def test_named_call_ctor_omitted_undefaulted_field_is_rejected : Bool :=
     // `Rect {}` -- `w` has no default, so it must still be required.
-    match named_call_check_missing_fields rect_params List.empty {
+    match field_set_check_missing "named call" rect_params List.empty {
         ok _ => false,
         err e => match e {
             TypeError.custom msg => String.contains msg "missing required field `w`",
