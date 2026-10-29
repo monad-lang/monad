@@ -10,7 +10,7 @@
 /// FFI boundary never sees foreign memory or a caller-supplied length.
 
 use std::bytebuf {ByteBuf, ByteBuf.alloc, ByteBuf.free, ByteBuf.ptr, ByteBuf.to_list}
-use lib::b64 {B64Url.encode}
+use std::base64 {B64Url.encode}
 use lib::ffi {RAND_bytes}
 
 /// Upper bound on a single draw. Tokens are 32 bytes; the cap only stops a

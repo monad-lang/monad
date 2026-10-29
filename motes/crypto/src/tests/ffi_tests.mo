@@ -8,7 +8,7 @@
 
 use std::io {IO.get_env}
 use std::list {List.any, List.length}
-use crypto::b64 {B64Url.decode}
+use std::base64 {B64Url.decode}
 use crypto::ct {Ct.eq}
 use crypto::random {Random.bytes, Random.token}
 

@@ -7,7 +7,7 @@
 
 use std::io {IO.get_env}
 use std::list {List.length}
-use crypto::b64 {B64Url.decode}
+use std::base64 {B64Url.decode}
 use oauth::pkce {Pkce.valid_verifier, Pkce.verifier}
 use oauth::errors {OauthError}
 use oauth::state {OauthStateStore.begin, OauthStateStore.new, PendingAuth}

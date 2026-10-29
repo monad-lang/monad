@@ -14,7 +14,7 @@ use http::types {Body, Headers, Headers.empty, Headers.set, Response, Status.ok,
 use http::body {Body.from_text, Body.to_bytes_pure}
 use http::uri {Uri.format}
 use json::json {Json, Json.get_object, Json.make_object, Json.parse}
-use crypto::b64 {B64.encode_std}
+use std::base64 {B64.encode_std}
 use lib::config {ClientAuth, OauthConfig}
 use lib::discovery {OauthEndpoints}
 use lib::errors {OauthError, OauthError.to_string}

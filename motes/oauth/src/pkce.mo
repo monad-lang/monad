@@ -9,7 +9,7 @@
 
 use std::list {List.all}
 use std::sha256 {Sha256.hash_bytes}
-use crypto::b64 {B64Url.encode}
+use std::base64 {B64Url.encode}
 use crypto::random {Random.token}
 use moose::form {Form.is_unreserved}
 
