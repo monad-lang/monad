@@ -3508,6 +3508,24 @@ pub fn load_module_from_text_typed_at(
   file: Option<PathBuf>,
   loaded: &mut LoadedModules,
 ) -> Result<(), LoadingError> {
+  load_module_from_text_typed_at_opts(text, path, file, loaded, true)
+}
+
+/// `load_module_from_text_typed_at` with the use-completeness gate made
+/// optional. Only the module the user actually asked about is checked for
+/// completeness (`load_module_files_impl`'s `top_level`): a dependency's
+/// own violation belongs to the dependency's own file, which a corpus
+/// check reaches on its own pass, so an importer must not fail on it.
+/// `check_files`' dependency cache checks each dependency once, without
+/// completeness, and the corpus loop then checks that same file as a
+/// top-level one -- which is where its completeness is enforced.
+pub fn load_module_from_text_typed_at_opts(
+  text: &str,
+  path: &ModulePath,
+  file: Option<PathBuf>,
+  loaded: &mut LoadedModules,
+  top_level: bool,
+) -> Result<(), LoadingError> {
   let file_path = file.unwrap_or_else(|| path.to_file_path());
   let module_context = ModuleContext::new(path.clone(), Some(file_path.clone()));
   let init_decls = load_decls_from_text_with_path(text, &module_context)
@@ -3541,7 +3559,9 @@ pub fn load_module_from_text_typed_at(
   );
   built.set_macro_call_names(macro_call_names);
   loaded.add_module(built);
-  check_use_completeness(path.clone(), &written_decls, loaded, Some(&file_path))?;
+  if top_level {
+    check_use_completeness(path.clone(), &written_decls, loaded, Some(&file_path))?;
+  }
   Ok(())
 }
 

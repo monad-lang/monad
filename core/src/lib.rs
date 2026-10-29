@@ -16,6 +16,7 @@ use crate::term::Decl;
 // to it bare), but still needed unqualified by `mod test`'s `use super::*`
 // regression test below -- cfg-gating this import would break that test's
 // compilation under a `repl`-less `cargo test`.
+use crate::parser::ModuleContext;
 #[cfg_attr(not(feature = "repl"), allow(unused_imports))]
 use crate::term::Term;
 #[cfg(feature = "repl")]
@@ -26,11 +27,13 @@ use crate::term::module::ParsedModule;
 #[cfg(feature = "repl")]
 use crate::term::module::module;
 use crate::term::module::{
-  LoadedModules, default_module_source_files, default_modules, load_module_files,
-  load_module_from_text, load_module_from_text_at, module_warnings,
+  LoadedModules, Module, default_module_source_files, default_modules,
+  load_decls_from_text_with_path, load_module_files, load_module_from_text,
+  load_module_from_text_at, module_warnings, resolve_module_file,
 };
 use crate::term::{
-  GlobalRef, InductiveVariant, ModulePath, NamePath, Named, SearchPaths, SourceContext, SourceRange,
+  GlobalRef, InductiveVariant, ModulePath, NamePath, Named, SearchPaths, SourceContext,
+  SourceRange, Use,
 };
 
 pub mod core_check;
@@ -1677,9 +1680,13 @@ pub struct FileCheckResult {
 ///
 /// A file that fails to load contributes its `TypeError` (or, for a
 /// generic loader failure — e.g. a missing `use`d module — a single
-/// synthetic `Diagnostic` with no location) as that file's diagnostics;
-/// `master_loaded` only advances past files that loaded successfully, so
-/// one broken file can't prevent the rest from being checked.
+/// synthetic `Diagnostic`) as that file's diagnostics. Every file is
+/// checked against the default modules plus its OWN `use` closure
+/// (`CheckDependencies`), so no file's check can see a sibling's
+/// declarations; a dependency's failure is reported once, against the
+/// dependency's own file, and an importer of a broken module gets that same
+/// error rather than a re-rendered copy. One broken file can't prevent the
+/// rest from being checked.
 pub fn check_files(
   inputs: Vec<PathBuf>,
   extra_mote_paths: Vec<PathBuf>,
@@ -1731,6 +1738,14 @@ pub fn check_files(
     })
     .collect();
 
+  // The cache that keeps per-file isolation affordable: each module is
+  // checked once, against its own isolated view, and reused by every file
+  // whose `use` closure reaches it. Without it the isolated check is
+  // quadratic -- `lang` alone measured 3m37s for 88 files against 22s for
+  // the accumulated check this replaced -- because every file re-parsed and
+  // re-type-checked its whole dependency closure.
+  let mut dependencies = CheckDependencies::new(&check_base, &search_paths);
+
   let mut results = Vec::with_capacity(files.len());
   // Threaded alongside `results` so the whole-program pass below (which
   // only ever sees `ModulePath`s, via `Module::path`) can find each
@@ -1740,22 +1755,26 @@ pub fn check_files(
     let path: ModulePath = file.clone().into();
     path_by_module.insert(path.clone(), file.clone());
     let diagnostics = match fs::read_to_string(file) {
-      Err(e) => vec![crate::diag::Diagnostic {
-        message: format!("{e}"),
-        path: Some(file.clone()),
-        ..Default::default()
-      }],
-      Ok(text) => {
-        let (diagnostics, updated) = check_one_source(file, &text, &path, check_base.clone());
-        master_loaded.extend(updated);
-        diagnostics
-      }
+      Err(e) => vec![synthetic_diagnostic(format!("{e}"), Some(file.clone()))],
+      Ok(text) => match dependencies.view_for_text(&text, file, &path) {
+        Err(diagnostics) => diagnostics,
+        Ok(view) => {
+          let (diagnostics, updated) = check_one_source(file, &text, &path, view);
+          // The corpus loop's own modules, for the unused-def pass below;
+          // the dependencies it reached are folded in right after the loop.
+          if let Some(module) = updated.get_module(&path) {
+            master_loaded.add_module(module.clone());
+          }
+          diagnostics
+        }
+      },
     };
     results.push(FileCheckResult {
       path: file.clone(),
       diagnostics,
     });
   }
+  dependencies.extend_into(&mut master_loaded);
 
   // Whole-program pass, run once the corpus loop above has finished (so
   // `master_loaded` holds every checked file, not just one at a time) — a
@@ -1781,6 +1800,180 @@ pub fn check_files(
   Ok(results)
 }
 
+/// One dependency module's memoized outcome: the checked module, or the
+/// diagnostics its own isolated check produced (so a broken dependency is
+/// reported once, not once per importer).
+enum DependencyCheck {
+  Checked(Module),
+  Failed(Vec<crate::diag::Diagnostic>),
+}
+
+/// The cache behind `check_files`' per-file isolation.
+///
+/// Every checked file is checked against the DEFAULT modules plus its own
+/// `use` closure -- never against whatever earlier files in the sweep
+/// happened to load (see `check_files`'s own comment on why). Building that
+/// closure per file is what made the check quadratic once the isolation
+/// landed: each of `lang`'s 88 files re-parsed and re-type-checked its
+/// whole dependency closure, 3m37s against 22s for the accumulated check
+/// it replaced. This cache checks each module once, in ITS OWN isolated
+/// view, and reuses it for every consumer whose closure reaches it -- the
+/// module still only sees what it imports, and the corpus is still checked
+/// one file at a time.
+struct CheckDependencies<'a> {
+  /// The per-file base: prelude/init/std only.
+  defaults: &'a LoadedModules,
+  search_paths: &'a SearchPaths,
+  checked: Map<ModulePath, DependencyCheck>,
+  /// Modules whose check is on the current recursion stack, so `a` using
+  /// `b` using `a` is a cycle error (`load_module_files_inner`'s own rule)
+  /// rather than unbounded recursion.
+  in_progress: Set<ModulePath>,
+}
+
+impl<'a> CheckDependencies<'a> {
+  fn new(defaults: &'a LoadedModules, search_paths: &'a SearchPaths) -> Self {
+    CheckDependencies {
+      defaults,
+      search_paths,
+      checked: Map::new(),
+      in_progress: crate::empty_set(),
+    }
+  }
+
+  /// The isolated view a file with the given source text must be checked
+  /// against. A parse failure here is reported the same way the loader's
+  /// own generic failure would be (one synthetic diagnostic at the file).
+  fn view_for_text(
+    &mut self,
+    text: &str,
+    file: &Path,
+    module_path: &ModulePath,
+  ) -> Result<LoadedModules, Vec<crate::diag::Diagnostic>> {
+    let context = ModuleContext::new(module_path.clone(), Some(file.to_path_buf()));
+    let decls = load_decls_from_text_with_path(text, &context).map_err(|e| {
+      vec![synthetic_diagnostic(
+        format!("parse error for {module_path}: {e}"),
+        Some(file.to_path_buf()),
+      )]
+    })?;
+    self.view_for_uses(&Self::uses_of(&decls))
+  }
+
+  /// The `use` decls a view starts from, filtered exactly as
+  /// `load_decl_uses_modules` filters them (a check never runs in test
+  /// mode, so `#[cfg(test)]` uses are out of the closure).
+  fn uses_of(decls: &[SourceContext<Decl>]) -> Vec<&Use> {
+    decls
+      .iter()
+      .filter_map(|ctx| match ctx.value() {
+        Decl::Use(u) if !u.has_cfg_test_attr() => Some(u),
+        _ => None,
+      })
+      .collect()
+  }
+
+  /// Defaults plus every module `uses` reaches, transitively -- the same
+  /// set the loader would have accumulated for this module before the
+  /// type check, each member now checked once and cached.
+  fn view_for_uses(
+    &mut self,
+    uses: &[&Use],
+  ) -> Result<LoadedModules, Vec<crate::diag::Diagnostic>> {
+    let mut view = self.defaults.clone();
+    view.set_search_paths(self.search_paths.clone());
+    let mut stack: Vec<ModulePath> = uses.iter().map(|u| u.module_path.clone()).collect();
+    let mut seen: Set<ModulePath> = crate::empty_set();
+    while let Some(module_path) = stack.pop() {
+      if !seen.insert(module_path.clone()) {
+        continue;
+      }
+      let module = self.ensure(&module_path)?;
+      for use_ctx in module.get_uses() {
+        let use_ = use_ctx.value();
+        if !use_.has_cfg_test_attr() {
+          stack.push(use_.module_path.clone());
+        }
+      }
+      view.add_module(module);
+    }
+    Ok(view)
+  }
+
+  fn ensure(&mut self, module_path: &ModulePath) -> Result<Module, Vec<crate::diag::Diagnostic>> {
+    if let Some(cached) = self.checked.get(module_path) {
+      return match cached {
+        DependencyCheck::Checked(module) => Ok(module.clone()),
+        DependencyCheck::Failed(diagnostics) => Err(diagnostics.clone()),
+      };
+    }
+    if !self.in_progress.insert(module_path.clone()) {
+      return Err(vec![synthetic_diagnostic(
+        format!("module cycle detected: {module_path}"),
+        None,
+      )]);
+    }
+    let result = self.check(module_path);
+    self.in_progress.remove(module_path);
+    self.checked.insert(
+      module_path.clone(),
+      match &result {
+        Ok(module) => DependencyCheck::Checked(module.clone()),
+        Err(diagnostics) => DependencyCheck::Failed(diagnostics.clone()),
+      },
+    );
+    result
+  }
+
+  /// Check one module in its own isolated view, as a dependency: no
+  /// use-completeness gate (`load_module_files_impl` enforces that only
+  /// for the module a caller actually asked about; the dependency's own
+  /// file gets it on its own pass through the corpus).
+  fn check(&mut self, module_path: &ModulePath) -> Result<Module, Vec<crate::diag::Diagnostic>> {
+    let Some(file) = resolve_module_file(module_path, self.search_paths) else {
+      return Err(vec![synthetic_diagnostic(
+        format!("module not found: {module_path}"),
+        None,
+      )]);
+    };
+    let text = fs::read_to_string(&file)
+      .map_err(|e| vec![synthetic_diagnostic(format!("{e}"), Some(file.clone()))])?;
+    let context = ModuleContext::new(module_path.clone(), Some(file.clone()));
+    let decls = load_decls_from_text_with_path(&text, &context).map_err(|e| {
+      vec![synthetic_diagnostic(
+        format!("parse error for {module_path}: {e}"),
+        Some(file.clone()),
+      )]
+    })?;
+    let view = self.view_for_uses(&Self::uses_of(&decls))?;
+    let (diagnostics, updated) =
+      check_one_source_with_completeness(&file, &text, module_path, view, false);
+    match updated.get_module(module_path) {
+      Some(module) => Ok(module.clone()),
+      None => Err(diagnostics),
+    }
+  }
+
+  /// Fold every successfully checked dependency into `master_loaded`, so
+  /// the whole-program unused-def pass sees the same corpus the accumulated
+  /// loader used to hand it.
+  fn extend_into(self, master_loaded: &mut LoadedModules) {
+    for (_, cached) in self.checked {
+      if let DependencyCheck::Checked(module) = cached {
+        master_loaded.add_module(module);
+      }
+    }
+  }
+}
+
+fn synthetic_diagnostic(message: String, path: Option<PathBuf>) -> crate::diag::Diagnostic {
+  crate::diag::Diagnostic {
+    message,
+    path,
+    ..Default::default()
+  }
+}
+
 /// Type-check one file's given `source` text against `loaded`, returning
 /// its diagnostics and (whether or not it loaded successfully — a failed
 /// load still returns `loaded` unchanged, not consumed) the resulting
@@ -1792,13 +1985,29 @@ fn check_one_source(
   path: &PathBuf,
   source: &str,
   module_path: &ModulePath,
-  mut loaded: LoadedModules,
+  loaded: LoadedModules,
 ) -> (Vec<crate::diag::Diagnostic>, LoadedModules) {
-  match crate::term::module::load_module_from_text_typed_at(
+  check_one_source_with_completeness(path, source, module_path, loaded, true)
+}
+
+/// `check_one_source` with the use-completeness gate made optional — see
+/// `load_module_from_text_typed_at_opts`. `check_files`' dependency cache
+/// checks a dependency without it, because a dependency's own violation
+/// belongs to the dependency's own file, which the corpus loop checks on
+/// its own pass; an importer must not fail on it.
+fn check_one_source_with_completeness(
+  path: &PathBuf,
+  source: &str,
+  module_path: &ModulePath,
+  mut loaded: LoadedModules,
+  top_level: bool,
+) -> (Vec<crate::diag::Diagnostic>, LoadedModules) {
+  match crate::term::module::load_module_from_text_typed_at_opts(
     source,
     module_path,
     Some(path.clone()),
     &mut loaded,
+    top_level,
   ) {
     Ok(()) => {
       let warnings = loaded
@@ -1812,11 +2021,7 @@ fn check_one_source(
       loaded,
     ),
     Err(crate::term::module::LoadingError::Generic(message)) => (
-      vec![crate::diag::Diagnostic {
-        message,
-        path: Some(path.clone()),
-        ..Default::default()
-      }],
+      vec![synthetic_diagnostic(message, Some(path.clone()))],
       loaded,
     ),
   }
