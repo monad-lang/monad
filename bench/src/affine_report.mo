@@ -333,8 +333,13 @@ def tally_binder (scope : Scope) (copy_vars : List Identifier) (u : BinderUse) (
     // cross-check below compares the rule's diagnostics against this
     // predicate, so it has to use the same notion.
     let is_fn : Bool := typ_is_function (BinderUse.typ u) in
+    // The rule's BUDGET, not the raw count: a `Shared.of` argument is a read
+    // that does not spend it (`borrow_aware_uses`), so `f (Shared.of x); g x`
+    // is legal with two mentions.
     let over : Bool :=
-        if is_fn then I64.gt (BinderUse.moves u) 1 else I64.gt n 1 in
+        if is_fn
+        then I64.gt (BinderUse.moves u) 1
+        else I64.gt (n - BinderUse.borrowed u) 1 in
     // Shared-argument uses summed over ALL binders, not just the 2+
     // set — see the field's doc comment for why the report needs this.
     let acc : Totals := { acc with borrowed_uses := Totals.borrowed_uses acc + BinderUse.borrowed u } in
@@ -814,7 +819,7 @@ def report_affine_usage_corpus : IO Bool := do {
 
 def tally_of (count : I64) (typ : Term) : BinderUse :=
     { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := typ, count := count,
-      owning := count, ctor := Identifier.id "", pos := 0 - 1 }
+      owning := count, ctor := Identifier.id "", pos := 0 - 1, view := false }
 
 def i64_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "I64"))
 
