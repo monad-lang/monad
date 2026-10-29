@@ -58,6 +58,12 @@ def test_base64_slash_and_plus : Bool :=
 def test_base64_empty : Bool :=
   decoded_is (Strings.base64_decode "") ""
 
+/// The std decoder accepts an untruncated final group without padding; the
+/// local decoder this replaced required a multiple of four characters.
+#[test]
+def test_base64_unpadded_tail : Bool :=
+  decoded_is (Strings.base64_decode "YQ") "a"
+
 // ── rejection ──────────────────────────────────────────────────────────
 
 /// A length that is not a whole number of 4-character groups.

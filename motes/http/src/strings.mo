@@ -6,6 +6,8 @@
 /// `Strings` is an empty namespace type (never constructed) so the helpers
 /// resolve cross-module the same way `Headers.*` does.
 
+use std::base64 {B64.decode_std, B64Error.to_string}
+
 type Strings {}
 
 // ── split_on ────────────────────────────────────────────────────────────
@@ -195,136 +197,20 @@ def Strings.decode_hex_pair (h1 : U8) (h2 : U8) : Result String U8 :=
 // ── base64 ──────────────────────────────────────────────────────────────
 // RFC 4648 §4 decoding, for `Middleware.auth_basic`: the HTTP Basic
 // credential is base64 (RFC 7617), so a predicate that claims to see the
-// decoded "user:pass" has to actually decode it. Strict rather than
-// permissive — the input must be a whole number of 4-character groups,
-// `=` may appear only as the last one or two characters, and the bits a
-// padded group leaves over must be zero (the canonical encoding). A
-// malformed credential is a rejection, not a best-effort guess.
+// decoded "user:pass" has to actually decode it.
+//
+// The decoder is `std::base64`'s: strict about characters, padding
+// placement and canonical trailing bits. Its one difference from the
+// local decoder this replaced is that an unpadded final group (`YQ` as
+// well as `YQ==`) is accepted. A malformed credential is a rejection,
+// not a best-effort guess.
 
-/// Value of a base64 alphabet character (the standard alphabet of RFC
-/// 4648 §4), or `Option.none` for anything outside it — including `=`,
-/// which the group decoder treats as padding rather than as a value.
-def Strings.base64_value (c : U8) : Option U8 :=
-  if U8.beq c 43u8 then Option.some 62u8                    // '+'
-  else if U8.beq c 47u8 then Option.some 63u8               // '/'
-  else if Strings.is_digit c then Option.some (U8.add (U8.sub c 48u8) 52u8)
-  else if Strings.is_upper_alpha c then Option.some (U8.sub c 65u8)
-  else if Strings.is_lower_alpha c then Option.some (U8.add (U8.sub c 97u8) 26u8)
-  else Option.none
-
-/// `x mod m`, as `x - (x/m)*m`: this language's `U8` has no remainder
-/// operation (nor any shift or bitwise one), so the bit arithmetic of
-/// base64 is written as multiplication and division throughout.
-def Strings.u8_mod (x : U8) (m : U8) : U8 :=
-  U8.sub x (U8.mul (U8.div x m) m)
-
-/// First byte of a 4-character group: `v1`'s 6 bits, then the top 2 of
-/// `v2`.
-def Strings.base64_byte1 (v1 : U8) (v2 : U8) : U8 :=
-  U8.add (U8.mul v1 4u8) (U8.div v2 16u8)
-
-/// Second byte: `v2`'s low 4 bits, then the top 4 of `v3`.
-def Strings.base64_byte2 (v2 : U8) (v3 : U8) : U8 :=
-  U8.add (U8.mul (Strings.u8_mod v2 16u8) 16u8) (U8.div v3 4u8)
-
-/// Third byte: `v3`'s low 2 bits, then all 6 of `v4`.
-def Strings.base64_byte3 (v3 : U8) (v4 : U8) : U8 :=
-  U8.add (U8.mul (Strings.u8_mod v3 4u8) 64u8) v4
-
-/// Decode a whole base64 string to the bytes it encodes.
+/// Decode a whole standard-alphabet base64 string to the bytes it encodes.
+/// `std`'s reasons are rendered here: this module's seam reports text.
 pub def Strings.base64_decode (s : String) : Result String (List U8) :=
-  Strings.base64_decode_go (String.to_list s) List.empty
-
-/// Walk the input 4 characters at a time, collecting decoded bytes in
-/// `out` (REVERSED — the caller flips it once at the end). A run that is
-/// not a whole number of groups is a `Result.err`, not a short read.
-#[terminating]
-def Strings.base64_decode_go (xs : List U8) (out : List U8) : Result String (List U8) :=
-  match xs {
-    List.empty => Result.ok (List.reverse out),
-    List.cons c1 r1 => match r1 {
-      List.empty => Strings.base64_length_err,
-      List.cons c2 r2 => match r2 {
-        List.empty => Strings.base64_length_err,
-        List.cons c3 r3 => match r3 {
-          List.empty => Strings.base64_length_err,
-          List.cons c4 r4 => Strings.base64_group c1 c2 c3 c4 r4 out
-        }
-      }
-    }
-  }
-
-def Strings.base64_length_err : Result String (List U8) :=
-  Result.err "base64: length is not a multiple of 4"
-
-def Strings.base64_char_err : Result String (List U8) :=
-  Result.err "base64: invalid character"
-
-def Strings.base64_pad_err : Result String (List U8) :=
-  Result.err "base64: data after the padding"
-
-def Strings.base64_canonical_err : Result String (List U8) :=
-  Result.err "base64: non-canonical padding bits"
-
-/// Decode one 4-character group. A trailing `=` makes it the LAST group:
-/// `xx==` is one byte and `xxx=` is two, and anything after it is an
-/// error (RFC 4648 §4 allows padding only at the end).
-///
-/// `#[terminating]`: this and `base64_decode_go` call each other, so
-/// neither is structurally recursive on its own — the descent is real
-/// (`rest` is strictly shorter every time), but it alternates between
-/// the two.
-#[terminating]
-def Strings.base64_group (c1 : U8) (c2 : U8) (c3 : U8) (c4 : U8) (rest : List U8) (out : List U8) : Result String (List U8) :=
-  if U8.beq c4 61u8 then
-    match rest {
-      List.cons _ _ => Strings.base64_pad_err,
-      List.empty => Strings.base64_group_padded c1 c2 c3 out
-    }
-  else
-    match Strings.base64_value c1 {
-      Option.none => Strings.base64_char_err,
-      Option.some v1 => match Strings.base64_value c2 {
-        Option.none => Strings.base64_char_err,
-        Option.some v2 => match Strings.base64_value c3 {
-          Option.none => Strings.base64_char_err,
-          Option.some v3 => match Strings.base64_value c4 {
-            Option.none => Strings.base64_char_err,
-            Option.some v4 =>
-              Strings.base64_decode_go rest
-                (List.cons (Strings.base64_byte3 v3 v4)
-                  (List.cons (Strings.base64_byte2 v2 v3)
-                    (List.cons (Strings.base64_byte1 v1 v2) out)))
-          }
-        }
-      }
-    }
-
-/// A group ending in one or two `=` characters (its 4th is already known
-/// to be one). The unused low bits of the last real character must be
-/// zero — `AA==` is canonical, `AB==` is not — and `AAA=`/`AAB=` differ
-/// the same way.
-def Strings.base64_group_padded (c1 : U8) (c2 : U8) (c3 : U8) (out : List U8) : Result String (List U8) :=
-  match Strings.base64_value c1 {
-    Option.none => Strings.base64_char_err,
-    Option.some v1 => match Strings.base64_value c2 {
-      Option.none => Strings.base64_char_err,
-      Option.some v2 =>
-        if U8.beq c3 61u8 then
-          if U8.beq (Strings.u8_mod v2 16u8) 0u8
-          then Result.ok (List.reverse (List.cons (Strings.base64_byte1 v1 v2) out))
-          else Strings.base64_canonical_err
-        else
-          match Strings.base64_value c3 {
-            Option.none => Strings.base64_char_err,
-            Option.some v3 =>
-              if U8.beq (Strings.u8_mod v3 4u8) 0u8
-              then Result.ok (List.reverse
-                (List.cons (Strings.base64_byte2 v2 v3)
-                  (List.cons (Strings.base64_byte1 v1 v2) out)))
-              else Strings.base64_canonical_err
-          }
-    }
+  match B64.decode_std s {
+    Result.ok bs => Result.ok bs,
+    Result.err e => Result.err (B64Error.to_string e)
   }
 
 /// Map an ASCII digit byte ('0'..'9') to a U16, or none for non-digits.
