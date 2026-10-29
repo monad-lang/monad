@@ -9,8 +9,9 @@
 use std::io {IO.get_env}
 use std::list {List.any, List.length}
 use std::base64 {B64Url.decode}
+use std::random {Random, Random.token, RandomError}
 use crypto::ct {Ct.eq}
-use crypto::random {Random.bytes, Random.token}
+use crypto::random {CryptoRandom.new}
 
 def ffi_enabled : IO Bool := do {
   let v <- IO.get_env "MONAD_CRYPTO_FFI_TESTS";
@@ -23,7 +24,7 @@ def ffi_enabled : IO Bool := do {
 def has_nonzero (bs : List U8) : Bool :=
   List.any (fn (b : U8) => Bool.not (U8.beq b 0u8)) bs
 
-def differ (a : Result String (List U8)) (b : Result String (List U8)) : Bool :=
+def differ (a : Result RandomError (List U8)) (b : Result RandomError (List U8)) : Bool :=
   match a {
     Result.err _ => false,
     Result.ok x => match b {
@@ -32,7 +33,7 @@ def differ (a : Result String (List U8)) (b : Result String (List U8)) : Bool :=
     }
   }
 
-def token_is_32_bytes (r : Result String String) : Bool :=
+def token_is_32_bytes (r : Result RandomError String) : Bool :=
   match r {
     Result.err _ => false,
     Result.ok traw =>
@@ -47,7 +48,7 @@ def token_is_32_bytes (r : Result String String) : Bool :=
 
 #[test]
 def test_random_zero_bytes : IO Bool := do {
-  let r <- Random.bytes 0i64;
+  let r <- Random.bytes CryptoRandom.new 0i64;
   return (match r {
     Result.ok bs => bs == List.empty,
     Result.err _ => false,
@@ -56,7 +57,7 @@ def test_random_zero_bytes : IO Bool := do {
 
 #[test]
 def test_random_negative_bytes : IO Bool := do {
-  let r <- Random.bytes (I64.sub 0i64 5i64);
+  let r <- Random.bytes CryptoRandom.new (I64.sub 0i64 5i64);
   return (match r {
     Result.ok bs => bs == List.empty,
     Result.err _ => false,
@@ -68,7 +69,7 @@ def test_random_32_bytes : IO Bool := do {
   let on <- ffi_enabled;
   if on
   then do {
-    let r <- Random.bytes 32i64;
+    let r <- Random.bytes CryptoRandom.new 32i64;
     return (match r {
       Result.ok bs => I64.beq (List.length bs) 32i64,
       Result.err _ => false,
@@ -82,7 +83,7 @@ def test_random_not_all_zero : IO Bool := do {
   let on <- ffi_enabled;
   if on
   then do {
-    let r <- Random.bytes 32i64;
+    let r <- Random.bytes CryptoRandom.new 32i64;
     return (match r {
       Result.ok bs => has_nonzero bs,
       Result.err _ => false,
@@ -96,8 +97,8 @@ def test_random_two_draws_differ : IO Bool := do {
   let on <- ffi_enabled;
   if on
   then do {
-    let r1 <- Random.bytes 32i64;
-    let r2 <- Random.bytes 32i64;
+    let r1 <- Random.bytes CryptoRandom.new 32i64;
+    let r2 <- Random.bytes CryptoRandom.new 32i64;
     return (differ r1 r2)
   }
   else return true
@@ -108,7 +109,7 @@ def test_random_token_is_base64url : IO Bool := do {
   let on <- ffi_enabled;
   if on
   then do {
-    let r <- Random.token 32i64;
+    let r <- Random.token CryptoRandom.new 32i64;
     return (token_is_32_bytes r)
   }
   else return true

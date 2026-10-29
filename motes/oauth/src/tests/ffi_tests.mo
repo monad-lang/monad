@@ -8,6 +8,7 @@
 use std::io {IO.get_env}
 use std::list {List.length}
 use std::base64 {B64Url.decode}
+use std::random {RandomError}
 use oauth::pkce {Pkce.valid_verifier, Pkce.verifier}
 use oauth::errors {OauthError}
 use oauth::state {OauthStateStore.begin, OauthStateStore.new, PendingAuth}
@@ -20,7 +21,7 @@ def ffi_enabled : IO Bool := do {
   })
 }
 
-def verifier_ok (r : Result String String) : Bool :=
+def verifier_ok (r : Result RandomError String) : Bool :=
   match r {
     Result.err _ => false,
     Result.ok vraw =>

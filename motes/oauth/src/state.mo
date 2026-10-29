@@ -17,7 +17,8 @@
 use std::list {List.filter, List.length}
 use std::ref {Ref, Ref.new, Ref.update}
 use crypto::ct {Ct.eq}
-use crypto::random {Random.token}
+use std::random {Random.token, RandomError}
+use crypto::random {CryptoRandom.new}
 use lib::errors {OauthError}
 use lib::pkce {Pkce.verifier}
 
@@ -201,8 +202,8 @@ def OauthStateStore.take_at
 
 def OauthStateStore.begin_results
   (st : OauthStateStore) (now_ms : I64) (redirect_uri : String) (return_to : Option String)
-  (state_r : Result String String) (nonce_r : Result String String)
-  (verifier_r : Result String String)
+  (state_r : Result RandomError String) (nonce_r : Result RandomError String)
+  (verifier_r : Result RandomError String)
   : IO (Result OauthError PendingAuth) := do {
   match state_r {
     Result.err _ => return (Result.err OauthError.rng_failed),
@@ -225,8 +226,8 @@ pub def OauthStateStore.begin
   (st : OauthStateStore) (redirect_uri : String) (return_to : Option String)
   : IO (Result OauthError PendingAuth) := do {
   let now <- IO.current_time;
-  let state_r <- Random.token 32i64;
-  let nonce_r <- Random.token 32i64;
+  let state_r <- Random.token CryptoRandom.new 32i64;
+  let nonce_r <- Random.token CryptoRandom.new 32i64;
   let verifier_r <- Pkce.verifier;
   OauthStateStore.begin_results st now redirect_uri return_to state_r nonce_r verifier_r
 }

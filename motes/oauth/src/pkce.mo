@@ -10,7 +10,8 @@
 use std::list {List.all}
 use std::sha256 {Sha256.hash_bytes}
 use std::base64 {B64Url.encode}
-use crypto::random {Random.token}
+use std::random {Random.token, RandomError}
+use crypto::random {CryptoRandom.new}
 use moose::form {Form.is_unreserved}
 
 pub def Pkce.method : String := "S256"
@@ -19,8 +20,8 @@ pub def Pkce.challenge (verifier : String) : String :=
   B64Url.encode (Sha256.hash_bytes (String.to_list verifier))
 
 /// A fresh verifier, or the RNG failure.
-pub def Pkce.verifier : IO (Result String String) :=
-  Random.token 32i64
+pub def Pkce.verifier : IO (Result RandomError String) :=
+  Random.token CryptoRandom.new 32i64
 
 /// RFC 7636 §4.1: 43 to 128 characters, all unreserved.
 pub def Pkce.valid_verifier (verifier : String) : Bool :=
