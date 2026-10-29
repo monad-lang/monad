@@ -169,6 +169,10 @@ monad run <path> [--verbose/-v] [--debug/-g] [--release]
 monad eval <path> [--verbose/-v]
         Evaluate with the built-in interpreter. Pure programs only.
 
+monad repl
+        Interactive read-eval-print loop over the same interpreter.
+        Expressions print `value : type`; declarations persist in a session.
+
 monad pretty <path>
         Parse and pretty-print a .mo source file.
 
@@ -255,11 +259,47 @@ there is no need to run it from the workspace root.
 > longer capped at 255. Every file in the corpus runs self-hosted; CI's sweep
 > carries no exclusion list.
 
-> **`monad eval` is not a general interpreter.** Eight natives are wired into it
-> — `i64_add`, `i64_sub`, `i64_mul`, `i64_eq`, `i64_lt`, `string_concat`,
-> `string_eq`, `string_to_lowercase` — and everything else, `println` included,
-> stops with `unknown native`. It evaluates the file's `main` and prints
-> `Eval result <value>`. Use `monad run` for a real program.
+> **`monad eval` and `monad repl` are not general interpreters.** Their shared
+> native table covers the pure integer and string primitives (arithmetic,
+> comparison, conversion, and the `String` operations); IO, files, processes,
+> environment access and concurrency are not wired, so a program that reaches
+> them stops with `unknown native`. `eval` evaluates the file's `main` and
+> prints `Eval result <value>`; use `monad run` for a real program.
+
+### The REPL
+
+`monad repl` is an interactive loop over the same evaluator (`eval::run`,
+shared with `monad eval` and the web REPL at `/try`). It has no line editing
+or history, and it does not trap interrupts: a runaway expression has to be
+stopped with Ctrl-C at the shell. Prompts go to stderr; results and
+diagnostics go to stdout (the CLI's convention), so a scripted session can
+pipe stdin and diff stdout.
+
+```text
+$ monad repl
+Monad (self-hosted) -- type :help for commands
+>> 2 + 3
+5 : I64
+>> def twice (n : I64) : I64 := n + n
+ok
+>> twice 21
+42 : I64
+>> use init::foldable {}
+ok
+>> :type twice
+twice : (I64 -> I64)
+>> :quit
+```
+
+Expressions are evaluated against the declarations entered so far and are
+never kept; `def`/`type`/`struct`/`class`/`instance`/`use`/`open` inputs join
+the session only after they check cleanly, and a rejected definition leaves
+every earlier one intact. `use` is an ordinary declaration, resolved through
+the standard filesystem loader (so `use init::list`, a `std` module, or a
+mote in the workspace all work as they do under `monad check`). `:help`
+lists the commands, `:reset` forgets every definition, and `:type <expr>`
+prints an expression's type without evaluating it. A `def` whose body starts
+on the next line continues on the `.. ` prompt.
 
 ### Where the binary lands
 
@@ -503,8 +543,10 @@ IR directly for thirteen simple operations.
 - Compiling a large program is slow — a full self-compile takes minutes.
 - Deep recursion in compiled code can exhaust the stack; raise it with
   `ulimit -s` when compiling large inputs.
-- `monad eval` reaches only eight natives (above), so it is not a substitute for
-  `monad run`.
+- `monad eval` and `monad repl` reach only the pure native table (above), so
+  neither is a substitute for `monad run`; `monad repl` also re-checks the
+  whole session on each input, which is fine for a scratchpad but not
+  instantaneous for a large one.
 - `monad test` compiles one driver binary per test file and runs it; a file
   whose tests reach a native the backend does not wire (the concurrency ones
   especially) is skipped with that reason rather than run.

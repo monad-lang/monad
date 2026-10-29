@@ -575,6 +575,7 @@ monad build file.mo -o "$PWD/out"  # compile to a native binary
 monad install motes/weaver           # release build -> $MONAD_HOME/bin/weaver
 monad run file.mo                    # compile and execute
 monad eval file.mo                   # interpret (pure programs only)
+monad repl                           # interactive loop; expressions print value : type
 monad check file.mo                  # type-check, no execution
 monad check init std lang            # directories are expanded recursively
 monad test file.mo                   # compile and run this file's #[test] defs
@@ -585,8 +586,8 @@ monad version                        # the git commit this binary was built from
 ```
 
 `compile` and `run` take `--verbose`/`-v`, `--debug`/`-g` and `--release`;
-`eval`, `check` and `test` take `--verbose`/`-v`. Debug info is on unless you
-pass `--release`. Flags may go before or after the paths, `--output=NAME` is not
+`eval`, `check` and `test` take `--verbose`/`-v`; `repl` takes no flags.
+Debug info is on unless you pass `--release`. Flags may go before or after the paths, `--output=NAME` is not
 recognised (use a space), and a **relative** output name lands in
 `/tmp/monad_out_<pid>`. See [Compiling and Running](./compiling.md), and
 [The Bootstrap Host](./bootstrap-host.md) for the Rust implementation's

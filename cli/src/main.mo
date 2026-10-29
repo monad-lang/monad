@@ -55,8 +55,14 @@ use clap::args {*}
 // (`std/src/log.mo` -- its own header documents the gating rules).
 use std::log {fail_line, ok_line, stage}
 // The shared evaluator (`monad eval`'s filesystem entry). The recipe itself
-// lives in `eval::run`, which the /try engine uses too.
+// lives in `eval::run`, used by the /try engine and `monad repl` too.
 use eval::file {Eval.run_file}
+// The REPL's session core: classification, persistent declarations and
+// `use`, and the value/type step. The terminal loop below is the only I/O.
+use eval::session {
+    EvalInput, EvalResponse, EvalSession, Eval.new_session, Eval.classify, Eval.step,
+}
+use std::io {IO.read_line, IO.write_stderr, IO.flush_stdout}
 // The language server. It is a dependency of the BINARY and not of the
 // library: `lsp_serve` is a whole program that talks on stdin/stdout, so
 // nothing outside `main`'s `lsp` arm may reach it -- an editor's protocol
@@ -862,9 +868,9 @@ def run_file (path : String) (verbose : Bool) (debug : Bool) (program_args : Lis
 }
 
 /// Evaluate a source file using the self-hosted interpreter. The pipeline
-/// lives in `eval::file`/`eval::run`, shared with the /try engine -- one
-/// loader/checker/lowering/evaluator, one error vocabulary. Pure programs
-/// only (`basic_native_table`).
+/// lives in `eval::file`/`eval::run`, shared with the /try engine and
+/// `monad repl` -- one loader/checker/lowering/evaluator, one error
+/// vocabulary. Pure programs only (`basic_native_table`).
 def eval_file (file_path : String) (verbose : Bool) : IO I64 := do {
     let r <- Eval.run_file file_path verbose;
     match r {
@@ -878,6 +884,114 @@ def eval_file (file_path : String) (verbose : Bool) : IO I64 := do {
         },
     }
 }
+
+/// `monad repl`: the terminal loop over `Eval.step`. The session itself is
+/// `eval::session`'s (no I/O); this function only reads lines, gathers a
+/// continuation while the classifier says the entry is unfinished, and
+/// prints the response. Prompts go to stderr so stdout stays
+/// machine-parseable; stdout is flushed after every response because
+/// `IO.println` is buffered.
+def repl_main : IO I64 := do {
+    let session <- Eval.new_session "repl.mo";
+    println "Monad (self-hosted) -- type :help for commands";
+    repl_loop session "";
+}
+
+#[terminating]
+def repl_loop (s : EvalSession) (pending : String) : IO I64 := do {
+    IO.write_stderr (if String.is_empty pending then ">> " else ".. ");
+    let line <- IO.read_line;
+    match line {
+        Result.err _ => do {
+            fail_line "repl: could not read stdin";
+            return 1
+        },
+        Result.ok maybe => repl_line s pending maybe,
+    }
+}
+
+#[terminating]
+def repl_line (s : EvalSession) (pending : String) (maybe : Option String) : IO I64 :=
+    match maybe {
+        Option.none => repl_eof pending,
+        Option.some text => repl_text s pending text,
+    }
+
+#[terminating]
+def repl_text (s : EvalSession) (pending : String) (text : String) : IO I64 := do {
+    let combined : String := append_pending pending text;
+    let classified := Eval.classify s combined;
+    match classified {
+        Pair.pair s2 input => repl_input s2 combined input,
+    }
+}
+
+#[terminating]
+def repl_input (s : EvalSession) (combined : String) (input : EvalInput) : IO I64 :=
+    match input {
+        EvalInput.eval_input_continue => repl_loop s combined,
+        _ => repl_step s input,
+    }
+
+#[terminating]
+def repl_step (s : EvalSession) (input : EvalInput) : IO I64 := do {
+    let stepped <- Eval.step s input;
+    match stepped {
+        Pair.pair s2 response => repl_printed s2 response,
+    }
+}
+
+#[terminating]
+def repl_printed (s : EvalSession) (response : EvalResponse) : IO I64 := do {
+    let quit <- print_response response;
+    IO.flush_stdout;
+    if quit then return 0 else repl_loop s ""
+}
+
+def repl_eof (pending : String) : IO I64 :=
+    if String.is_empty pending
+    then IO.pure 0
+    else do {
+        fail_line "repl: input ended inside an unfinished definition";
+        return 1
+    }
+
+def append_pending (pending : String) (line : String) : String :=
+    if String.is_empty pending then line else String.concat pending (String.concat "\n" line)
+
+/// Print one response; `true` means the session should end.
+def print_response (r : EvalResponse) : IO Bool :=
+    match r {
+        EvalResponse.eval_response_blank => IO.pure false,
+        EvalResponse.eval_response_ok warnings => do {
+            print_warnings warnings;
+            println "ok";
+            return false
+        },
+        EvalResponse.eval_response_value text typ warnings => do {
+            print_warnings warnings;
+            println (String.concat text (String.concat " : " typ));
+            return false
+        },
+        EvalResponse.eval_response_meta text => do {
+            println text;
+            return false
+        },
+        EvalResponse.eval_response_error message => do {
+            fail_line message;
+            return false
+        },
+        EvalResponse.eval_response_quit => IO.pure true,
+    }
+
+def print_warnings (warnings : List String) : IO Unit :=
+    match warnings {
+        List.empty => IO.pure unit,
+        List.cons w rest => do {
+            println (String.concat "warning: " w);
+            print_warnings rest
+        },
+    }
 
 /// The original `compile_file` body, unchanged -- codegen's own loading
 /// + compile pipeline, run only once the gate above has confirmed the
@@ -2195,6 +2309,11 @@ type Command {
     install (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (no_cache: Bool) (target: String),
     run (file: Path) (verbose: Bool) (debug: Bool) (args: List String),
     eval (file: Path) (verbose: Bool),
+    /// `monad repl`: an interactive read-eval-print loop on stdin/stdout.
+    /// Expressions print `value : type`; declarations (`def`, `type`,
+    /// `struct`, `class`, `instance`, `use`, `open`, ...) persist in a
+    /// session module. Pure programs only (the interpreter native table).
+    repl,
     pretty (file: String),
     check (files: List String) (opts: CheckOptions),
     test (files: List String) (verbose: Bool) (workspace: Bool) (locked: Bool) (no_cache: Bool) (target_dir: String) (jobs: I64),
@@ -2454,6 +2573,8 @@ def Command.from_args (args : List String) : Command :=
                                 },
                         },
                 }
+            else if cmd == "repl" then
+                Command.repl
             else if cmd == "pretty" then
                 match Cli.take_positional rest {
                     Cli.PosResult.pos_result path_opt _ =>
@@ -2647,6 +2768,9 @@ def main (args : List String) : IO I64 {
         eval file_path verbose => do {
             eval_file (Path.to_string file_path) verbose
         },
+        repl => do {
+            repl_main
+        },
         pretty file_path => do {
             // Prints the TARGET FILE's own declarations, pretty-printed
             // back to source text via `lang.pretty.show_decls`. Only
@@ -2754,6 +2878,10 @@ def print_help : IO I64 {
     println "         Everything after <path> is the compiled program's own argv -- a leading `--`";
     println "         separates them and is dropped once (a `--` before <path> is peeled too)";
     println "       monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)";
+    println "       monad repl  Interactive read-eval-print loop (pure programs only)";
+    println "         Expressions print `value : type`; declarations (def/type/struct/class/instance/use/open) persist";
+    println "         `:help`, `:quit`, `:reset`, `:type <expr>`; a `def` body may continue on the next line";
+    println "         Prompts go to stderr; results and diagnostics to stdout; EOF or :quit leaves";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
     println "       monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache]  Parse and typecheck .mo source files (no execution)";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";

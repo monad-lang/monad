@@ -53,7 +53,7 @@ machine-readable output, or a per-test timeout, use the host.
 |---------|--------------|
 | `monad-rs lsp` | LSP server over stdio: diagnostics, hover, definition, document and workspace symbols, an organize-imports code action, and code lenses that run tests. No completion, rename, or semantic tokens. |
 | `monad-rs mcp` | MCP server exposing `check`, `symbols`, `hover`, `definition`, `organize_imports`, `test` |
-| `monad-rs repl` | Interactive REPL |
+| `monad-rs repl` | Interactive REPL (the self-hosted `monad repl` is the same idea over `eval::run`; neither has line editing) |
 | `monad-rs organize-imports [--write]` | Rewrites bare `use`/`open` to explicit name lists; the only codemod that exists |
 | `monad-rs symbols` / `hover FILE L C` / `definition FILE L C` | One-shot code intelligence, `--json` available |
 

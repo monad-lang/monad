@@ -223,6 +223,13 @@ def test_from_args_compile_is_no_longer_a_verb : Bool :=
     }
 
 #[test]
+def test_from_args_repl : Bool :=
+    match Command.from_args ["repl"] {
+        Command.repl => true,
+        _ => false,
+    }
+
+#[test]
 def test_from_args_pretty : Bool :=
     match Command.from_args ["pretty", "b.mo"] {
         Command.pretty path => path == "b.mo",

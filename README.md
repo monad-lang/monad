@@ -109,6 +109,10 @@ monad run <path> [--verbose/-v] [--debug/-g] [--release]
 monad eval <path> [--verbose/-v]
         Evaluate with the built-in interpreter. Pure programs only.
 
+monad repl
+        Interactive loop over the same interpreter; expressions print
+        value : type and declarations/use persist in a session.
+
 monad check [<path>...] [--workspace/-w] [--verbose/-v]
         Parse and type-check; no execution.
 

@@ -359,6 +359,17 @@ jobs:
                  motes/oak_wasm motes/oak \
                  std/src/ref_tests.mo
 
+      # `monad repl` end to end through the self-hosted binary: a scripted
+      # session covering expressions, a definition then a call, `use`,
+      # `:type`, a rejected definition, multi-line input and EOF. Prompts go
+      # to stderr, so the script asserts stdout only.
+      - name: Self-hosted REPL session
+        run: |
+          nix develop --no-pure-eval --accept-flake-config \
+            --profile "$HOME/.monad-ci-devshell" \
+            -c env MONAD_BIN="$PWD/target-monad/ci-self-compile/monad" \
+                 scripts/check-repl.sh
+
       # The raw-mode loop's only automated coverage: the 13 Python pty drivers
       # in scripts/weaver-tui-repro/, against the release weaver built from
       # THIS commit's self-compiled compiler. The wrapper classifies from the
