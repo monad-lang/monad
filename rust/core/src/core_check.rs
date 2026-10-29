@@ -1342,8 +1342,10 @@ fn infer_lit(
 /// The whole rule, not just the type half: a written name that is not a
 /// declared field is `NamedCallUnknownField`, and a declared field the
 /// literal omits is `NamedCallMissingField` unless the struct declares a
-/// `:=` default for it (`StructInfo.defaults`, which `lower_sparse_args`
-/// fills in). Both used to be accepted silently — the walk only ever
+/// `:=` default for it. Defaults fill the omission before this point
+/// (`desugar_struct_literals` substitutes `StructInfo.defaults`;
+/// self-hosted, `struct_lit_build_args` falls back to `Param.default`). Both
+/// halves used to be accepted silently — the walk only ever
 /// visited the struct's OWN declared names, so an unmatched written name
 /// was never the subject of a question and an uncovered field was a
 /// legitimate `Option::none` slot. Measured 2026-10-05: both compilers

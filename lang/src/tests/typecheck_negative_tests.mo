@@ -182,9 +182,8 @@ def test_correct_arguments_and_guarded_shapes_are_accepted : IO Bool :=
 ///
 /// A CONCRETE mismatch on purpose. An arm whose type still carries an
 /// unsolved type variable (`IO.pure (Result.ok Unit.unit)` infers
-/// `IO (Result _ _)`) is skipped by `body_type_error`'s typevar guard, so
-/// that spelling stays accepted -- see the `if` section of
-/// `implementations/checker-accepts-what-the-rust-host-rejects.md`.
+/// `IO (Result _ _)`) is skipped by `body_type_error`'s typevar guard --
+/// pinned as accepted below, since `docs/src/bootstrap-host.md` states it.
 def if_source : String :=
     "def if_branches : IO I64 := if true then IO.pure 0 else IO.pure \"s\"\n"
 
@@ -195,6 +194,12 @@ def test_if_arms_of_different_types_are_rejected : IO Bool :=
 #[test]
 def test_if_arms_of_the_same_type_are_accepted : IO Bool :=
     accepted "def if_ok : IO I64 := if true then IO.pure 0 else IO.pure 1\n"
+
+/// The typevar guard's permissive half. Deleting the guard must show up
+/// here, not as a silent divergence from the Rust host.
+#[test]
+def test_if_arms_whose_type_still_carries_a_type_variable_are_accepted : IO Bool :=
+    accepted "def if_hole_arm : IO I64 := if true then IO.pure 0 else IO.pure (Result.ok Unit.unit)\n"
 
 // --- Struct literals and updates -------------------------------------------
 

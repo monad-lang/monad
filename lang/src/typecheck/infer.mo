@@ -1040,9 +1040,9 @@ def constructor_arity_in (ctors : List InductConstructor) (name : Identifier) : 
             },
     }
 
-/// `InductConstructor.name` is a full `NamePath`; a case carries the bare
-/// identifier, matched against the path's LAST segment (the same
-/// normalisation `constructor_bare_name` performs).
+/// `InductConstructor.name` is a full `NamePath`; a constructor REFERENCE
+/// carries the bare identifier, matched against the path's LAST segment (the
+/// same normalisation `constructor_bare_name` performs).
 def constructor_name_matches (cname : NamePath) (name : Identifier) : Bool :=
     match cname {
         NamePath.mk segs =>
@@ -1051,7 +1051,6 @@ def constructor_name_matches (cname : NamePath) (name : Identifier) : Bool :=
                 Option.none => false,
             },
     }
-
 
 /// Whether `t` still has a hole: a partial expectation (`IO _`) fixes the
 /// carrier but not the method's own variables.
@@ -1260,19 +1259,15 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
                             let els_typ : Term := els_tt.typ in
                             // The else arm is CHECKED against the then type,
                             // but the checker's arms mostly ignore an
-                            // expectation (`type_check_lit`, `type_check_con`,
-                            // the free/bound var arms), so the checked type was
-                            // discarded and `if b then IO.pure 0 else
-                            // IO.pure (Result.ok Unit.unit)` checked cleanly --
-                            // one arm yielding an `I64` box and the other a
-                            // constructor, with nothing saying so. The match
-                            // arm result is the one boundary that already
-                            // enforced this; `if` now does too.
+                            // expectation, so the checked type was discarded
+                            // and `if c then IO.pure 0 else IO.pure "s"`
+                            // checked cleanly. The match-arm result is the one
+                            // boundary that already enforced this.
                             match body_type_error three els_typ then_typ scope locals {
                                 Option.some e => err e,
                                 Option.none =>
-                            let lit_val : Literal := Literal.if_ cond_term then_term els_term in
-                            ok (mk_typed (Term.lit lit_val) then_typ),
+                                    let lit_val : Literal := Literal.if_ cond_term then_term els_term in
+                                    ok (mk_typed (Term.lit lit_val) then_typ),
                             },
                         err e => err e,
                     },
@@ -4409,9 +4404,9 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                         // escapes the probe the way
                                                                         // `validate_dict_hints`' own hard error
                                                                         // does (`Option.some (err e)` above).
-                                                                        CallArgOutcome.call_args_decline => Option.none,
-                                                                        CallArgOutcome.call_args_type_error e => Option.some (err e),
-                                                                        CallArgOutcome.call_args_ok pair =>
+                                                                        CallArgOutcome.decline => Option.none,
+                                                                        CallArgOutcome.type_error e => Option.some (err e),
+                                                                        CallArgOutcome.ok pair =>
                                                                             match pair {
                                                                                 DccPair.mk elab_args subst levels =>
                                                                                     // A PARTIAL application's type is the
@@ -4469,24 +4464,8 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     let ret_subst : List (Pair Identifier Term) :=
                                                                                         solve_typevars scope subst_ret expected_type List.empty in
                                                                                     let refined_ret : Term := subst_typevars_term subst_ret ret_subst in
-                                                                                    // `refined_ret`, NOT the unification's answer.
-                                                                                    // It used to be
-                                                                                    // `match unify_structural refined_ret
-                                                                                    // expected_type { ok u => u, err _ =>
-                                                                                    // refined_ret }`, and `unify_go`'s Pi arm
-                                                                                    // answers the unified CODOMAIN -- so a
-                                                                                    // PARTIAL application under a Pi expectation
-                                                                                    // came back one arrow short. `def p : I64 ->
-                                                                                    // I64 := q 1` (two-parameter `q`) typed its
-                                                                                    // body `I64`, which the def boundary then
-                                                                                    // rejected; and every partially applied def
-                                                                                    // passed as an argument
-                                                                                    // (`List.map (prefixed "a_") xs`) typed as
-                                                                                    // its full result, which the call-argument
-                                                                                    // check reported on 60+ corpus sites. A hole
-                                                                                    // return type is the one case the expectation
-                                                                                    // still improves on (`unify hole e` answers
-                                                                                    // `e`), so that keeps the unification.
+                                                                                    // `refined_ret`, NOT the unification's
+                                                                                    // answer -- see `call_result_typ`.
                                                                                     let result_typ : Term :=
                                                                                         call_result_typ refined_ret expected_type scope locals in
                                                                                     // Re-attach the peeled `#` markers ahead of
@@ -4825,34 +4804,28 @@ pub struct DccPair {
     levels : List (Pair Identifier SortLevel),
 }
 
-/// What the signature-driven argument loop concluded, in three cases
-/// rather than two.
+/// What the signature-driven argument loop concluded.
 ///
 /// The probe is fail-open by design (`try_type_check_def_call`'s own doc
 /// comment): "this checker could not type this call this way" must fall
-/// back to the ordinary path, so most failures are a DECLINE --
-/// `call_args_decline`, which every pre-existing `err` maps to.
-///
-/// `call_args_type_error` is a real mismatch: the argument's type was
-/// inferred, the parameter's type was fully solved, and the two do not
-/// match. Falling back cannot rescue that -- the ordinary path checks
-/// the argument against `Term.hole`, i.e. accepts anything -- so the
-/// error has to escape. `try_type_check_def_call` returns it the way it
-/// already returns `validate_dict_hints`' own hard error.
-///
-/// `call_args_ok` carries the loop's result unchanged.
+/// back to the ordinary path, so every pre-existing `err` is a `decline`.
+/// `type_error` is the one real mismatch -- falling back cannot rescue it,
+/// because the ordinary path checks that argument against `Term.hole` --
+/// so it escapes the probe like `validate_dict_hints`' own hard error.
 pub type CallArgOutcome {
-    call_args_ok (pair : DccPair),
-    call_args_decline,
-    call_args_type_error (err : TypeError),
+    ok (pair : DccPair),
+    decline,
+    type_error (err : TypeError),
 }
 
 /// `try_type_check_def_call`'s argument loop: infer each argument's own
-/// type, solve this parameter's remaining type variables against it,
-/// and recurse (with the solutions so far substituted into the later
-/// parameter types). Any argument check failure is an `err` (the caller
-/// falls back to `type_check_app`'s previous behavior, preserving its
-/// leniency).
+/// type, compare it with that parameter's SOLVED type, solve the
+/// parameter's remaining type variables against the argument, and recurse
+/// (with the solutions so far substituted into the later parameter types).
+///
+/// Only a solved mismatch is `type_error`; everything else -- an argument
+/// that cannot be inferred in isolation, over-application -- is `decline`,
+/// which the caller answers by falling back to the ordinary path.
 ///
 /// The argument is inferred INTRINSICALLY first (checked against
 /// `Term.hole`): checking it against the parameter type directly would
@@ -4936,10 +4909,10 @@ def drop_no_progress_bindings (bs : List (Pair Identifier Term)) : List (Pair Id
 #[partial]
 def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : CallArgOutcome :=
     match args {
-        List.empty => CallArgOutcome.call_args_ok (DccPair.mk List.empty subst levels),
+        List.empty => CallArgOutcome.ok (DccPair.mk List.empty subst levels),
         List.cons arg rest =>
             match params {
-                List.empty => CallArgOutcome.call_args_decline,
+                List.empty => CallArgOutcome.decline,
                 List.cons param_ty rest_params =>
                     // Levels solved by the arguments BEFORE this one
                     // (W1.4) reach this parameter's type, so a later
@@ -4984,14 +4957,13 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                             // argument to a def whose matching param is a
                             // registered inductive (`file_path : String`)
                             // committed here as an empty constructor.
-                            // Every failure on this path stays a DECLINE
-                            // (`call_args_decline`), exactly as the `err`
-                            // it replaces did.
+                            // Every failure on this path stays a DECLINE,
+                            // exactly as the `err` it replaces did.
                             if not (struct_literal_arg_matches_expected arg a_expected scope)
-                            then CallArgOutcome.call_args_decline
+                            then CallArgOutcome.decline
                             else
                             match type_check arg a_expected scope local_types locals {
-                                err _ => CallArgOutcome.call_args_decline,
+                                err _ => CallArgOutcome.decline,
                                 ok a_tt =>
                                     def_call_continue arg a_tt param_ty rest rest_params subst levels scope local_types locals,
                             },
@@ -5204,45 +5176,45 @@ def open_free_type_vars (t : Term) (scope : Scope) : Term :=
 ///
 /// One definition for every application site, so the guards stay the same
 /// as the def boundary's and a call-specific one can be added here alone.
-/// `param` must already have THIS argument's own solutions applied
-/// (`subst_typevars_term`/`subst_levels_term`): a raw declared parameter
-/// still naming its signature variables is exactly the "no instantiation at
-/// use sites" class `body_type_error`'s typevar guard skips, so comparing
-/// the unsolved form would buy nothing.
+/// The parameter is SOLVED first: a raw declared parameter still naming its
+/// signature variables is exactly the "no instantiation at use sites" class
+/// `body_type_error`'s typevar guard skips, so comparing the unsolved form
+/// would buy nothing.
 ///
 /// `arg` is the SOURCE argument, not the elaborated one: `body_type_error`'s
 /// hole test is what keeps an argument that still carries an inference hole
 /// (an unannotated lambda, a do-bind continuation) out of the comparison.
 def call_arg_type_error (arg : Term) (arg_typ : Term) (param : Term)
+    (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel))
     (scope : Scope) (locals : LocalScope) : Option TypeError :=
     // REPORTING PASS ONLY. `scope.incomplete_match_ok` is the bit
-    // `lang/module.mo`'s `scope_for_elab_body` sets on the ELABORATION path
-    // (and what an explicit `#[allow_incomplete_match]` exemption sets on the
-    // check path); `false` is the checked, reporting default. The comparison
-    // must not run where its error is swallowed: `elaborate_def_with_scope`
-    // keeps a rejected decl UN-elaborated for codegen, so a rejection here
-    // removes a derive-generated method and the build fails stages later
-    // with an unrelated name. MEASURED on `motes/weaver`: the whole-graph
-    // elaboration resolves the bare `prefixed` in `std/src/derive.mo`'s
-    // `beq_piece` to `motes/weaver`'s `prefixed : String -> TLine -> TLine`
-    // (the open `whole-program-name-collisions.md` class), and the argument
-    // check turned that latent collision into a failed build. `monad check`
-    // still reports it -- a diagnostic belongs on the reporting path, the
-    // same check-path-only split `elaborate_def_with_scope` already
-    // documents for the def-body comparison.
+    // `lang/module.mo`'s `scope_for_elab_body` sets on the ELABORATION path;
+    // `false` is the checked, reporting default. The comparison must not run
+    // where its error is swallowed: `elaborate_def_with_scope` keeps a
+    // rejected decl UN-elaborated for codegen, so a rejection here removes a
+    // derive-generated method and the build fails stages later with an
+    // unrelated name. MEASURED on `motes/weaver`: the whole-graph elaboration
+    // resolves the bare `prefixed` in `std/src/derive.mo`'s `beq_piece` to
+    // `motes/weaver`'s own `prefixed` (the open
+    // `whole-program-name-collisions.md` class), and the argument check
+    // turned that latent collision into a failed build.
     //
     // A DEPENDENT parameter (`fiber`'s `b : B`, still referencing the
     // earlier binders) cannot be compared with a closed argument type --
     // substituting the earlier arguments into it is work this checker does
     // not do, and comparing the raw index reports `expected A, found I64`
     // for a call the Rust host accepts.
+    //
+    // The gate comes before the substitution on purpose: the elaboration
+    // path pays one boolean, not a `subst_typevars_term`/`subst_levels_term`
+    // pair per argument.
     if scope.incomplete_match_ok
     then Option.none
     else if term_has_bound_var param
     then Option.none
     else if constructor_value_expected_as_function arg param scope
     then Option.none
-    else body_type_error arg arg_typ param scope locals
+    else body_type_error arg arg_typ (subst_levels_term (subst_typevars_term param subst) levels) scope locals
 
 /// Is `arg` a CONSTRUCTOR reference with at least one field being passed
 /// where a FUNCTION is expected?
@@ -5304,20 +5276,17 @@ def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : 
     // argument against `Term.hole` (see `check_arg_for_call`) and never
     // compare the result with the parameter, so `f "s"` for `f (x : I64)`
     // and `needs Msg.started` for `needs (f : I64 -> Msg)` checked
-    // cleanly and reached codegen. The parameter is substituted FIRST:
-    // `List A` solved from this argument becomes `List I64`, so a genuine
-    // mismatch is reported against the type the caller actually wrote.
-    let solved_param : Term := subst_levels_term (subst_typevars_term param_ty next_subst) next_levels in
-    match call_arg_type_error arg a_typ solved_param scope locals {
-        Option.some e => CallArgOutcome.call_args_type_error e,
+    // cleanly and reached codegen.
+    match call_arg_type_error arg a_typ param_ty next_subst next_levels scope locals {
+        Option.some e => CallArgOutcome.type_error e,
         Option.none =>
     match def_call_check_args rest rest_params next_subst next_levels scope local_types locals {
-        CallArgOutcome.call_args_decline => CallArgOutcome.call_args_decline,
-        CallArgOutcome.call_args_type_error e => CallArgOutcome.call_args_type_error e,
-        CallArgOutcome.call_args_ok pair =>
+        CallArgOutcome.decline => CallArgOutcome.decline,
+        CallArgOutcome.type_error e => CallArgOutcome.type_error e,
+        CallArgOutcome.ok pair =>
             match pair {
                 DccPair.mk rest_elab rest_subst rest_levels =>
-                    CallArgOutcome.call_args_ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst rest_levels),
+                    CallArgOutcome.ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst rest_levels),
             },
     }
     }
@@ -5953,34 +5922,29 @@ def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term)
 /// The ordinary path's argument check: the callee's own Pi domain against
 /// the argument's inferred type.
 ///
-/// Only this path sees a LOCAL function value. A def call resolves through
-/// `try_type_check_def_call` (which checks each argument itself) and never
-/// reaches here, and a class method's carrier is derived FROM the argument
-/// (`carrier_from_expected_type`), so its domain is the argument's own type
-/// by construction and compares equal. What is left is exactly the shape
-/// the def probe declines on: `def danger (pick : String -> I64) : I64 :=
-/// pick 1i64`, accepted at HEAD and rejected by the Rust host.
-///
-/// `pi_domain_of` declines a hole domain and a folded `forall` -- the
-/// callee knows no more than we do there; `call_arg_type_error` owns the
-/// rest of the guards.
+/// Only this path sees a LOCAL function value (`def danger (pick : String ->
+/// I64) : I64 := pick 1i64`, accepted at HEAD and rejected by the Rust
+/// host). A def call resolves through `try_type_check_def_call` and never
+/// reaches here. `pi_domain_of` declines a hole domain and a folded
+/// `forall`; `call_arg_type_error` owns the rest of the guards.
 ///
 /// A CLASS-METHOD callee is skipped outright. Its carrier is derived FROM
 /// the argument's own inferred type (`carrier_from_expected_type`), so the
 /// Pi this path inspects is synthesized out of the very type it would be
 /// compared with -- and for a do-block over a monad transformer the
-/// derivation can apply the carrier once more than the source did, which is
-/// exactly the disagreement the comparison then reports: MEASURED on
-/// `motes/oak/src/tests/html_t_tests.mo`'s `prog_do_open`, where the
+/// derivation can apply the carrier once more than the source did: MEASURED
+/// on `motes/oak/src/tests/html_t_tests.mo`'s `prog_do_open`, where the
 /// argument typed `HtmlT (HtmlT RenderM Open Open) Open Open Unit` and the
 /// derived domain `HtmlT RenderM Open Open Unit`. The Rust host accepts it.
 def callee_domain_error (f : Term) (a_term : Term) (a_typ : Term) (f_typ : Term)
     (scope : Scope) (locals : LocalScope) : Option TypeError :=
-    if callee_is_class_method f scope
+    if scope.incomplete_match_ok
+    then Option.none
+    else if callee_is_class_method f scope
     then Option.none
     else match pi_domain_of f_typ {
         Option.none => Option.none,
-        Option.some dom => call_arg_type_error a_term a_typ dom scope locals,
+        Option.some dom => call_arg_type_error a_term a_typ dom List.empty List.empty scope locals,
     }
 
 /// Does `f`'s call spine name a CLASS METHOD (a method declared by a class,
@@ -6406,9 +6370,9 @@ def class_method_next_param (f : Term) (expected_type : Term) (scope : Scope) (l
                                     // argument's binder, never a diagnostic.
                                     // The call's own check reports.
                                     match def_call_check_args args params List.empty List.empty scope local_types locals {
-                                        CallArgOutcome.call_args_decline => Option.none,
-                                        CallArgOutcome.call_args_type_error _ => Option.none,
-                                        CallArgOutcome.call_args_ok dcc =>
+                                        CallArgOutcome.decline => Option.none,
+                                        CallArgOutcome.type_error _ => Option.none,
+                                        CallArgOutcome.ok dcc =>
                                             // `dcc.subst` solves type variables from arguments
                                             // ALREADY applied; a HOF argument whose carrier
                                             // comes from a LATER sibling (`Comonad.extend (fn a

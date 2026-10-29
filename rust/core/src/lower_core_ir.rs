@@ -629,11 +629,10 @@ fn lower_prefix_args(
 
 /// `{ x := 1, y := 2 }` compiles to an ordinary `Con` of the annotated
 /// struct's sole constructor, with `fields` (keyed by name, unordered)
-/// re-ordered into the struct's declared field order. Missing fields
-/// (defaults, which this checker doesn't track — see
-/// `core_check::check_struct_fields`'s doc comment) are not synthesized
-/// here either; a struct value with a missing field simply isn't
-/// constructible via this path, matching the checker's own limitation.
+/// re-ordered into the struct's declared field order. A field the literal
+/// omits is already resolved by `desugar_struct_literals` — to its `:=`
+/// default, or to a `NamedCallMissingField` error when it has none (see
+/// `core_check::check_struct_fields`) — so nothing is synthesized here.
 fn lower_struct_lit(
   ctx: &mut LowerCtx,
   fields: &Map<Identifier, CoreTerm>,
