@@ -1703,7 +1703,21 @@ pub fn check_files(
 
   let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
   let search_paths = build_default_search_paths(&inputs[0], &extra_mote_paths);
-  master_loaded.set_search_paths(search_paths);
+  master_loaded.set_search_paths(search_paths.clone());
+
+  // The checker's per-file base: the DEFAULT modules (prelude/init/std)
+  // only, cloned for each file -- a `LoadedModules` clone is O(1) per its
+  // own doc comment -- and extended by that file's own `use` closure inside
+  // `check_one_source`. The accumulating `master_loaded` must NOT be the
+  // base: handing every file every earlier file's modules made a bare type
+  // name declared in two unrelated motes resolve by hash iteration order.
+  // The live case is `Duration`, declared by both
+  // `std::concurrent::combine` and `motes/time`: with both in one registry,
+  // whichever iteration order won decided whether `combine_test`'s
+  // `{ millis := ... }` checked at all. `master_loaded` is still extended
+  // below for the whole-program unused-def pass, which genuinely needs the
+  // accumulated corpus.
+  let check_base = master_loaded.clone();
 
   // Skip files already satisfied by the embedded default modules — same
   // filter `run_tests` applies, for the same reason: a bare re-check of
@@ -1732,8 +1746,8 @@ pub fn check_files(
         ..Default::default()
       }],
       Ok(text) => {
-        let (diagnostics, updated) = check_one_source(file, &text, &path, master_loaded.clone());
-        master_loaded = updated;
+        let (diagnostics, updated) = check_one_source(file, &text, &path, check_base.clone());
+        master_loaded.extend(updated);
         diagnostics
       }
     };
