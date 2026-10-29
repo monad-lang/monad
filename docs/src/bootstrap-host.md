@@ -252,23 +252,43 @@ If you are writing Monad, target the self-hosted compiler: everything in the
 main chapters works there. Use the host for its tooling — editor diagnostics, a
 REPL, and running test suites.
 
-If you are working on the compiler itself, you need both. The host is the
-stricter one, and not only about holes. Measured at the end of the test-gap
-branch, the self-hosted checker accepts a *concrete* type mismatch in nine of
-the ten positions probed — def body, application body, `return`, `if`/`else`
-branches, lambda argument, named-def-call argument, constructor argument,
-struct-literal field, class-method return — and enforces only the match-arm
-result. **That measurement predates the discarded-expected-type fix above and
-has not been redone.** Most of those nine positions may not have been nine
-independent missing comparisons at all, but one expected type dropped upstream
-of all of them — the probe defs in that experiment were polymorphic. Re-measure
-before quoting the number. `unify` itself is sound; the comparison is
-simply never invoked at those boundaries, so **a clean self-hosted `check` is
-not evidence of type soundness.** (`def f : I64 := "s"` is the shortest way to
-see it: accepted self-hosted, one error under the host.) The
-self-hosted grammar is separately the more permissive one at the edges, in the
-four places listed above. Both directions are larger than the hole case this
-paragraph used to name, and the type-checking one is much the largest.
+If you are working on the compiler itself, you need both, and the two agree on
+far more than they used to. Re-measured 2026-10-28, the self-hosted checker now
+*rejects* a concrete type mismatch at every boundary the old table listed:
+a def body (`def f : I64 := "s"`), a parameterised body (`def f (x : I64) :
+I64 := "s"`), a call argument — first-order, literal, higher-order, and a
+call through a local function value — an `if`/`else` arm, and a struct literal
+or update whose field set is wrong (unknown name, or a required field
+omitted). Most of the old "nine of ten positions" were one expected type
+dropped upstream, as suspected; what remains unmatched to the host is a list of
+*guarded* comparisons, not missing ones:
+
+- a comparison is skipped when either side still carries an inference hole or
+  an unsolved type variable, so `def f : I64 := "s"` is caught but
+  `if b then IO.pure 0 else IO.pure (Result.ok Unit.unit)` (whose else-arm
+  types as `IO (Result _ _)`) is not;
+- a constructor reference passed as a function value is typed as its owning
+  type, so `map_parse UseFilter.use_items ...` is accepted;
+- a DEPENDENT parameter type (`fiber`'s `b : B`) is not compared, since
+  substituting the earlier arguments into it is work the checker does not do;
+- `unify` itself is sound, but its Pi arm answers the unified *codomain*,
+  which is why a def call's reported type is now taken from the residual Pi
+  rather than from the unification;
+- a constructor PATTERN's binder count is not compared with the constructor's
+  declared field count, because the host does not compare it either (measured:
+  both a one-binder pattern on a two-field struct and a three-binder one check
+  clean there). The gap that produced a segfaulting driver is really that
+  pattern BINDERS are untyped, which is a separate feature;
+- the call-argument comparison runs on the CHECK path only, not during
+  best-effort elaboration — the same split `elaborate_def_with_scope`
+  documents for def bodies. Elaboration swallows a rejection, so a comparison
+  there would turn a latent whole-program bare-name collision into a failed
+  build; `monad check` still reports it.
+
+A clean self-hosted `check` is much stronger evidence of type soundness than
+it was, but the bullets above are the shapes to re-probe before trusting it
+for a new construct. The self-hosted grammar is separately the more
+permissive one at the edges, in the four places listed above.
 
 This appendix is the current record. The two plans it used to point at are
 historical: `bootstrapping/self-hosted-parity-gaps.md` was a 2026-09-07
