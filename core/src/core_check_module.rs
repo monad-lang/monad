@@ -3841,6 +3841,65 @@ mod test {
   }
 
   #[test]
+  fn test_struct_literal_unknown_field_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    // The LITERAL spelling, not the named-call one: the walk used to visit
+    // only the struct's own declared names, so a written name matching none
+    // of them was silently dropped (`implementations/2026-10-05-unknown-
+    // struct-field-name-silently-dropped.md`).
+    let source =
+      "struct Point { x : I64, y : I64 }\ndef p : Point := { x := 1, y := 2, nosuch := 3 }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("NamedCallUnknownField"),
+      "an unknown field in a struct LITERAL must be rejected, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_struct_literal_missing_required_field_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    let source = "struct Point { x : I64, y : I64 }\ndef p : Point := { x := 1 }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("NamedCallMissingField"),
+      "a struct literal missing a non-defaulted field must be rejected, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_struct_literal_omitted_defaulted_field_is_accepted() {
+    let env = ModuleCheckEnv::new();
+    let source = "struct Box2 { w : I64, h : I64 := 7 }\ndef b : Box2 := { w := 1 }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "an omitted field with a `:=` default must be filled, not rejected: {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_struct_update_unknown_field_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    let source = "struct Point { x : I64, y : I64 }\n\
+                  def base : Point := { x := 1, y := 2 }\n\
+                  def bad (p : Point) : Point := { p with nosuch := 3 }\n";
+    let report = check_module_source(&env, source);
+    let last = report.defs.last().expect("three defs are checked");
+    let debug = format!("{:?}", last.result);
+    assert!(
+      debug.contains("NamedCallUnknownField"),
+      "an unknown field in a struct UPDATE must be rejected, got {debug}"
+    );
+  }
+
+  #[test]
   fn test_named_call_nested_unannotated_struct_literal_field_value() {
     // Regression pin for `check_named_call_fields` checking each present
     // field's value against its OWN declared type (rather than handing

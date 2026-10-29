@@ -1236,6 +1236,23 @@ fn infer_lit(
     // `StructLit` without an annotation has).
     CoreLit::StructUpdate { base, fields } => {
       let base_ty = infer(mctx, ctx, structs, base)?;
+      // An override that names no declared field used to be dropped on the
+      // floor (only `fields.values()` was walked): `{ p with nosuch := 3 }`
+      // checked clean in both compilers. Reject it whenever the base's type
+      // resolves to a registered struct; an unresolvable base keeps the
+      // long-standing best-effort behaviour.
+      if let CoreTerm::Free(atom) = force(mctx, base_ty.clone()).into_stripped_ctx()
+        && let Some(info) = structs.structs.get(&atom)
+      {
+        for name in fields.keys() {
+          if !info.fields.iter().any(|(declared, _)| declared == name) {
+            return Err(InferError::NamedCallUnknownField {
+              target: atom,
+              field: name.clone(),
+            });
+          }
+        }
+      }
       for v in fields.values() {
         infer(mctx, ctx, structs, v)?;
       }
@@ -1320,14 +1337,24 @@ fn infer_lit(
   }
 }
 
-/// Check a struct literal's present fields against `struct_atom`'s
-/// registered field types. Missing fields (e.g. ones with a default
-/// value, which this simplified checker doesn't track) and extra fields
-/// are not validated — see `StructFields`' doc comment; this catches the
-/// common case (present fields typed correctly) without the
-/// module/`Scope` access needed for full field-set validation. Errors
-/// with `CannotInfer` if `struct_atom` isn't a registered struct at all
-/// (an unannotated/unknown expected type reached this point, or the
+/// Check a struct literal's FIELD SET and its present fields' types.
+///
+/// The whole rule, not just the type half: a written name that is not a
+/// declared field is `NamedCallUnknownField`, and a declared field the
+/// literal omits is `NamedCallMissingField` unless the struct declares a
+/// `:=` default for it (`StructInfo.defaults`, which `lower_sparse_args`
+/// fills in). Both used to be accepted silently — the walk only ever
+/// visited the struct's OWN declared names, so an unmatched written name
+/// was never the subject of a question and an uncovered field was a
+/// legitimate `Option::none` slot. Measured 2026-10-05: both compilers
+/// reported 0 errors for `{ x := 1, y := 2, nosuch := 3 }` and for
+/// `{ x := 1 }`, and the compiled self-hosted driver died with exit -1 on
+/// the hole left by the missing field. The self-hosted checker applies
+/// the identical rule (`field_set_*`, `lang/src/typecheck/infer.mo`), so
+/// the two compilers agree rather than diverging in a new direction.
+///
+/// Errors with `CannotInfer` if `struct_atom` isn't a registered struct
+/// at all (an unannotated/unknown expected type reached this point, or the
 /// annotation named something that isn't a struct).
 fn check_struct_fields(
   mctx: &mut MetaContext,
@@ -1337,14 +1364,26 @@ fn check_struct_fields(
   fields: &Map<Identifier, CoreTerm>,
   lit: &CoreLit,
 ) -> Result<(), InferError> {
-  let field_defs = &structs
+  let info = structs
     .structs
     .get(&struct_atom)
-    .ok_or_else(|| InferError::CannotInfer(CoreTerm::Lit(lit.clone())))?
-    .fields;
-  for (name, field_ty) in field_defs {
+    .ok_or_else(|| InferError::CannotInfer(CoreTerm::Lit(lit.clone())))?;
+  for name in fields.keys() {
+    if !info.fields.iter().any(|(declared, _)| declared == name) {
+      return Err(InferError::NamedCallUnknownField {
+        target: struct_atom,
+        field: name.clone(),
+      });
+    }
+  }
+  for (name, field_ty) in &info.fields {
     if let Some(value) = fields.get(name) {
       check(mctx, ctx, structs, value, field_ty)?;
+    } else if !info.defaults.contains_key(name) {
+      return Err(InferError::NamedCallMissingField {
+        target: struct_atom,
+        field: name.clone(),
+      });
     }
   }
   Ok(())
