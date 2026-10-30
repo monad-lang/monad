@@ -1,7 +1,6 @@
 /// Transformer server: deadlines, `Expect: 100-continue`, chunked request
 /// bodies, strict Host parsing, and continuous acceptance.
 
-use init::borrow {Borrow, Borrow.get}
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {FiberError}
 use std::list {List.length}
@@ -9,11 +8,11 @@ use std::stream {Stream, FdStream}
 use std::test {}
 use http::body {Body.to_bytes_pure}
 use http::types {
-  Body, Request, Response, Response.ok_text, Transport, Transport.read_bytes,
+  Body, Response, Response.ok_text, Transport, Transport.read_bytes,
   Transport.write_bytes,
 }
 use moon::handler_t {
-  HandlerT, HandlerT.pure_io, HandlerT.request_io, HttpError,
+  HandlerT, HandlerT.body_bytes_io, HandlerT.pure_io, HttpError,
 }
 use moon::server {
   ServerConfig, ServerConfig.on, ServerConfig.with_timeouts,
@@ -24,10 +23,8 @@ def hello_handler : HandlerT IO Response :=
   HandlerT.pure_io (Response.ok_text "hello")
 
 def echo_len_handler : HandlerT IO Response := do {
-  let rb : Borrow Request <- HandlerT.request_io;
-  let req : Request := Borrow.get rb;
-  let body : Body := req.body;
-  HandlerT.pure_io (Response.ok_text (I64.to_string (List.length (Body.to_bytes_pure body))))
+  let bytes : List U8 <- HandlerT.body_bytes_io;
+  HandlerT.pure_io (Response.ok_text (I64.to_string (List.length bytes)))
 }
 
 def write_text (sock : FdStream) (s : String) : IO Bool := do {

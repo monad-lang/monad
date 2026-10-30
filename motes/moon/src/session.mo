@@ -14,7 +14,7 @@ use std::process {process_id}
 use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new, Ref.set, Ref.update}
 use std::sha256 {Sha256.hash}
 use http::cookie {
-  CookieAttrs, CookieAttrs.default, Cookie.clear, Cookie.lookup,
+  CookieAttrs, CookieAttrs.default, Cookie.clear, Cookie.lookup, Cookie.parse,
   Cookie.parse_headers, Cookie.set_cookie, SameSite,
 }
 use http::types {Headers, Headers.add, Request, Response}
@@ -32,7 +32,10 @@ pub struct SessionStore {
   ttl_seconds : I64,
   secure : Bool,
   same_site : SameSite,
-  max_sessions : I64
+  max_sessions : I64,
+  /// Optional CSPRNG-backed id generator. `None` keeps the historical
+  /// time/pid/counter hash; `moon::session_crypto` supplies one.
+  next_id : Option (Unit -> IO (Result String String))
 }
 
 /// Explicit session policy. `default` is the historical behaviour; use
@@ -42,13 +45,15 @@ pub struct SessionConfig {
   ttl_seconds : I64,
   secure : Bool,
   same_site : SameSite,
-  max_sessions : I64
+  max_sessions : I64,
+  next_id : Option (Unit -> IO (Result String String))
 }
 
 pub def SessionConfig.default (cookie_name : String) (ttl_seconds : I64) : SessionConfig :=
   let c : SessionConfig :=
     { cookie_name := cookie_name, ttl_seconds := ttl_seconds, secure := false,
-      same_site := SameSite.lax, max_sessions := 1000i64 } in
+      same_site := SameSite.lax, max_sessions := 1000i64,
+      next_id := Option.none } in
   c
 
 /// A store with an explicit policy. `SameSite=None` requires `Secure`, per
@@ -71,7 +76,8 @@ def SessionStore.make (cfg : SessionConfig) : IO (Result String SessionStore) :=
   let st : SessionStore :=
     { sessions := sessions, counter := counter, cookie_name := cfg.cookie_name,
       ttl_seconds := cfg.ttl_seconds, secure := cfg.secure,
-      same_site := cfg.same_site, max_sessions := cfg.max_sessions };
+      same_site := cfg.same_site, max_sessions := cfg.max_sessions,
+      next_id := cfg.next_id };
   IO.pure (Result.ok st)
 }
 
@@ -81,13 +87,12 @@ pub def SessionStore.new (cookie_name : String) (ttl_seconds : I64) : IO Session
   let st : SessionStore :=
     { sessions := sessions, counter := counter, cookie_name := cookie_name,
       ttl_seconds := ttl_seconds, secure := false, same_site := SameSite.lax,
-      max_sessions := 1000i64 };
+      max_sessions := 1000i64, next_id := Option.none };
   return st
 }
 
-/// A fresh id. Documented as not a CSPRNG: it is unpredictable enough for a
-/// local session table, not for a security-critical token.
-pub def SessionStore.new_id (st : SessionStore) : IO String := do {
+/// The historical id: time/pid/counter hashed. Not a CSPRNG.
+def SessionStore.legacy_id (st : SessionStore) : IO String := do {
   let n <- Ref.add_i64 st.counter 1;
   let t <- IO.current_time_nano;
   return (Sha256.hash
@@ -97,13 +102,62 @@ pub def SessionStore.new_id (st : SessionStore) : IO String := do {
           (String.concat ":" (I64.to_string n))))))
 }
 
-pub def SessionStore.begin (st : SessionStore) : IO Session := do {
-  let id <- SessionStore.new_id st;
+/// A fresh id from the configured generator, or the legacy hash when none
+/// is configured. An error from a configured generator is reported; `new_id`
+/// (the historical signature) falls back to the legacy id.
+pub def SessionStore.new_id_checked (st : SessionStore) : IO (Result String String) := do {
+  match st.next_id {
+    Option.some generate => generate unit,
+    Option.none => do {
+      let id <- SessionStore.legacy_id st;
+      IO.pure (Result.ok id)
+    }
+  }
+}
+
+pub def SessionStore.new_id (st : SessionStore) : IO String := do {
+  let r <- SessionStore.new_id_checked st;
+  match r {
+    Result.ok id => IO.pure id,
+    Result.err _ => SessionStore.legacy_id st
+  }
+}
+
+def SessionStore.make_session (st : SessionStore) (id : String) : IO Session := do {
   let now <- IO.current_time_nano;
   let s : Session :=
     { id := id, data := List.empty,
       expires_at := I64.add now (I64.mul st.ttl_seconds 1000000000i64) };
-  return s
+  IO.pure s
+}
+
+def SessionStore.begin_with (st : SessionStore) (id : String) :
+    IO (Result String Session) := do {
+  let s <- SessionStore.make_session st id;
+  IO.pure (Result.ok s)
+}
+
+def SessionStore.begin_legacy (st : SessionStore) : IO Session := do {
+  let id <- SessionStore.legacy_id st;
+  SessionStore.make_session st id
+}
+
+/// Checked begin: a configured generator's failure is returned, not
+/// silently downgraded.
+pub def SessionStore.begin_checked (st : SessionStore) : IO (Result String Session) := do {
+  let idr <- SessionStore.new_id_checked st;
+  match idr {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok id => SessionStore.begin_with st id
+  }
+}
+
+pub def SessionStore.begin (st : SessionStore) : IO Session := do {
+  let r <- SessionStore.begin_checked st;
+  match r {
+    Result.ok s => IO.pure s,
+    Result.err _ => SessionStore.begin_legacy st
+  }
 }
 
 // ── session data ────────────────────────────────────────────────────────
@@ -142,6 +196,17 @@ def Session.remove_key (key : String) (data : List (Pair String String)) : List 
 
 pub def SessionStore.load (st : SessionStore) (req : Request) : IO (Option Session) := do {
   let cookies := Cookie.parse_headers req.headers;
+  SessionStore.load_cookies st cookies
+}
+
+/// `load` from a single `Cookie` header value, for the transformer
+/// middleware (whose context exposes the header, not an owned Request).
+pub def SessionStore.load_header (st : SessionStore) (cookie : Option String) :
+    IO (Option Session) :=
+  SessionStore.load_cookies st (Cookie.parse cookie)
+
+pub def SessionStore.load_cookies (st : SessionStore)
+    (cookies : List (Pair String String)) : IO (Option Session) := do {
   match Cookie.lookup st.cookie_name cookies {
     Option.none => return Option.none,
     Option.some id => do {

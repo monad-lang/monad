@@ -8,18 +8,17 @@
 /// The auth helpers here compare with `Strings.ct_eq`; the old predicate
 /// variants remain for callers that need a custom check.
 
-use init::borrow {Borrow, Borrow.get}
 use std::list {List.any}
 use http::types {
-  Body, Headers, Headers.add, Headers.empty, Headers.get, Headers.set, HttpVersion,
-  Method, Request, Response, Status.forbidden, Status.no_content,
+  Body, Headers, Headers.add, Headers.empty, Headers.set, HttpVersion,
+  Method, Response, Status.forbidden, Status.no_content,
   Status.unauthorized,
 }
 use http::strings {
   Strings.base64_decode, Strings.ct_eq, Strings.list_drop_prefix,
   Strings.list_starts_with,
 }
-use lib::context {Ctx, Ctx.request}
+use lib::context {Ctx, Ctx.header, Ctx.method, Ctx.path}
 use lib::handler_t {
   HandlerT, HandlerT.catch_io, HandlerT.io_bind, HandlerT.pure_io, HandlerT.run,
   HttpError,
@@ -28,16 +27,14 @@ use lib::middleware {Middleware.cors_response, Middleware.ensure_content_type}
 
 /// Log the request path, then run the handler.
 pub def MiddlewareT.logging (next : HandlerT IO Response) : HandlerT IO Response :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
-    let rb : Borrow Request := Ctx.request (Borrow.get ctx) in
-    let req : Request := Borrow.get rb in
-    HandlerT.io_bind (IO.println req.uri.path) (fn (_ : Unit) =>
+  HandlerT.mk (fn (ctx : Ctx) =>
+    HandlerT.io_bind (IO.println (Ctx.path ctx)) (fn (_ : Unit) =>
       HandlerT.run next ctx))
 
 /// Apply a pure transformation to every successful response.
 pub def MiddlewareT.map_response (f : Response -> Response)
     (next : HandlerT IO Response) : HandlerT IO Response :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
+  HandlerT.mk (fn (ctx : Ctx) =>
     HandlerT.io_bind (HandlerT.run next ctx) (fn (r : Result HttpError Response) =>
       match r {
         Result.ok res => IO.pure (Result.ok (f res)),
@@ -79,18 +76,15 @@ def MiddlewareT.origin_allowed (cfg : CorsConfig) (origin : String) : Bool :=
   then true
   else List.any (fn (o : String) => String.beq o origin) cfg.origins
 
-def MiddlewareT.has_header (name : String) (headers : Headers) : Bool :=
-  match Headers.get name headers {
+def MiddlewareT.has_header (name : String) (ctx : Ctx) : Bool :=
+  match Ctx.header name ctx {
     Option.some _ => true,
     Option.none => false
   }
 
-def MiddlewareT.is_preflight (req : Request) : Bool :=
-  match req {
-    { method, headers, .. } =>
-      Bool.and (BEq.beq method Method.OPTIONS)
-        (MiddlewareT.has_header "Access-Control-Request-Method" headers)
-  }
+def MiddlewareT.is_preflight (ctx : Ctx) : Bool :=
+  Bool.and (BEq.beq (Ctx.method ctx) Method.OPTIONS)
+    (MiddlewareT.has_header "Access-Control-Request-Method" ctx)
 
 def MiddlewareT.preflight_response (cfg : CorsConfig) (origin : String) : Response :=
   let h1 := Headers.set "Access-Control-Allow-Origin" origin Headers.empty in
@@ -119,11 +113,11 @@ def MiddlewareT.add_cors_headers (cfg : CorsConfig) (origin : String)
   }
 
 def MiddlewareT.cors_origin_at (cfg : CorsConfig) (origin : String)
-    (next : HandlerT IO Response) (req : Request) (ctx : Borrow Ctx) :
+    (next : HandlerT IO Response) (ctx : Ctx) :
     IO (Result HttpError Response) := do {
   if Bool.not (MiddlewareT.origin_allowed cfg origin)
   then HandlerT.run next ctx
-  else if MiddlewareT.is_preflight req
+  else if MiddlewareT.is_preflight ctx
   then IO.pure (Result.ok (MiddlewareT.preflight_response cfg origin))
   else do {
     let r <- HandlerT.run next ctx;
@@ -135,11 +129,10 @@ def MiddlewareT.cors_origin_at (cfg : CorsConfig) (origin : String)
 }
 
 def MiddlewareT.cors_at (cfg : CorsConfig) (next : HandlerT IO Response)
-    (ctx : Borrow Ctx) : IO (Result HttpError Response) := do {
-  let req : Request := Borrow.get (Ctx.request (Borrow.get ctx));
-  match Headers.get "Origin" req.headers {
+    (ctx : Ctx) : IO (Result HttpError Response) := do {
+  match Ctx.header "Origin" ctx {
     Option.none => HandlerT.run next ctx,
-    Option.some origin => MiddlewareT.cors_origin_at cfg origin next req ctx
+    Option.some origin => MiddlewareT.cors_origin_at cfg origin next ctx
   }
 }
 
@@ -169,9 +162,8 @@ def MiddlewareT.forbidden_response : Response :=
     version := HttpVersion.http1_1, body := Body.text "Forbidden" }
 
 def MiddlewareT.auth_basic_at (expected : String) (next : HandlerT IO Response)
-    (ctx : Borrow Ctx) : IO (Result HttpError Response) :=
-  let req : Request := Borrow.get (Ctx.request (Borrow.get ctx)) in
-  match Headers.get "Authorization" req.headers {
+    (ctx : Ctx) : IO (Result HttpError Response) :=
+  match Ctx.header "Authorization" ctx {
     Option.none => IO.pure (Result.ok MiddlewareT.unauthorized_response),
     Option.some cred =>
       let cred_s : String := cred in
@@ -197,9 +189,8 @@ pub def MiddlewareT.auth_basic_ct (expected : String)
   HandlerT.mk (MiddlewareT.auth_basic_at expected next)
 
 def MiddlewareT.auth_bearer_at (expected : String) (next : HandlerT IO Response)
-    (ctx : Borrow Ctx) : IO (Result HttpError Response) :=
-  let req : Request := Borrow.get (Ctx.request (Borrow.get ctx)) in
-  match Headers.get "Authorization" req.headers {
+    (ctx : Ctx) : IO (Result HttpError Response) :=
+  match Ctx.header "Authorization" ctx {
     Option.none => IO.pure (Result.ok MiddlewareT.unauthorized_response),
     Option.some cred =>
       let cred_s : String := cred in

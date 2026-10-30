@@ -6,13 +6,11 @@
 
 use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new}
 use std::test {}
-use init::borrow {Borrow, Borrow.get}
-use http::types {Request, Request.get, Response, Response.ok_text, Uri}
-use http::wire {Wire.request_target}
+use http::types {Request, Request.get, Response, Uri}
 use moon::handler_t {
   HandlerT, HandlerT.catch_io, HandlerT.lift_io, HandlerT.map_error_io,
-  HandlerT.of_old, HandlerT.pure_io, HandlerT.request_io, HandlerT.run_io,
-  HandlerT.throw_io, HandlerT.to_old, HandlerT.with_request,
+  HandlerT.param_io, HandlerT.path_io, HandlerT.pure_io, HandlerT.run_io,
+  HandlerT.throw_io, HandlerT.to_old, HandlerT.with_route,
   HttpError, HttpError.make,
 }
 
@@ -114,21 +112,16 @@ def test_map_error_changes_status : IO Bool := do {
 // ── context ─────────────────────────────────────────────────────────────
 
 def request_path : HandlerT IO String := do {
-  let r : Borrow Request <- HandlerT.request_io;
-  let req : Request := Borrow.get r;
-  return (Wire.request_target req.uri)
+  let p : String <- HandlerT.path_io;
+  return p
 }
 
 #[test]
-def test_request_read_twice : IO Bool := do {
+def test_path_read_twice : IO Bool := do {
   let h : HandlerT IO Bool := do {
-    let a : Borrow Request <- HandlerT.request_io;
-    let b : Borrow Request <- HandlerT.request_io;
-    let ra : Request := Borrow.get a;
-    let rb : Request := Borrow.get b;
-    let pa := Wire.request_target ra.uri;
-    let pb := Wire.request_target rb.uri;
-    return (Bool.and (String.beq pa "/a") (String.beq pb "/a"))
+    let a : String <- HandlerT.path_io;
+    let b : String <- HandlerT.path_io;
+    return (Bool.and (String.beq a "/a") (String.beq b "/a"))
   };
   let r <- HandlerT.run_io h (get_req "/a");
   match r {
@@ -138,10 +131,10 @@ def test_request_read_twice : IO Bool := do {
 }
 
 def path_with (path : String) : HandlerT IO String :=
-  HandlerT.with_request (Borrow.of (get_req path)) request_path
+  HandlerT.with_route path List.empty request_path
 
 #[test]
-def test_with_request_replaces_request : IO Bool := do {
+def test_with_route_replaces_path : IO Bool := do {
   let r <- HandlerT.run_io (path_with "/b") (get_req "/a");
   match r {
     Result.ok p => IO.pure (String.beq p "/b"),
@@ -149,16 +142,24 @@ def test_with_request_replaces_request : IO Bool := do {
   }
 }
 
-// ── old-API adapters ────────────────────────────────────────────────────
-
-def old_handler (_req : Request) : IO Response :=
-  IO.pure (Response.ok_text "old")
-
 #[test]
-def test_of_old_to_old : IO Bool := do {
-  let res : Response <- HandlerT.to_old (HandlerT.of_old old_handler) (get_req "/");
-  IO.pure (U16.beq res.status 200u16)
+def test_param_lookup : IO Bool := do {
+  let h : HandlerT IO Bool := do {
+    let id : Option String <- HandlerT.param_io "id";
+    match id {
+      Option.some v => return (String.beq v "42"),
+      Option.none => return false
+    }
+  };
+  let r <- HandlerT.run_io (HandlerT.with_route "/users/42" [Pair.pair "id" "42"] h)
+    (get_req "/users/42");
+  match r {
+    Result.ok v => IO.pure v,
+    Result.err _ => IO.pure false
+  }
 }
+
+// ── old-API adapter ─────────────────────────────────────────────────────
 
 def error_handler : HandlerT IO Response :=
   HandlerT.throw_io (HttpError.make 500u16 "boom")

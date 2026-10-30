@@ -1,7 +1,7 @@
 /// Session middleware over `HandlerT`: the handle is installed into the
 /// context, committed after the handler, and loadable on the next request.
 
-use init::borrow {Borrow, Borrow.get}
+use init::shared {Shared, Shared.get}
 use std::test {}
 use http::cookie {SameSite}
 use http::strings {Strings.split_on}
@@ -35,23 +35,22 @@ def with_header (name : String) (value : String) (req : Request) : Request :=
       req2
   }
 
-def set_session_value (handle : Borrow SessionHandle) : HandlerT IO Response := do {
-  let h : SessionHandle := Borrow.get handle;
+def set_session_value (handle : Shared SessionHandle) : HandlerT IO Response := do {
+  let h : SessionHandle := Shared.get handle;
   let _u : Unit <- HandlerT.lift_io (SessionHandle.put h "k" "v");
   HandlerT.pure_io (Response.ok_text "ok")
 }
 
 def set_value : HandlerT IO Response := do {
-  let slot : Borrow SessionSlot <- HandlerT.session_io;
-  let slot_value : SessionSlot := Borrow.get slot;
-  match SessionSlot.handle slot_value {
+  let slot : Shared SessionSlot <- HandlerT.session_io;
+  match SessionSlot.handle slot {
     Option.some handle => set_session_value handle,
     Option.none => HandlerT.throw_io (HttpError.make 500u16 "no session")
   }
 }
 
-def read_session_value (handle : Borrow SessionHandle) : HandlerT IO Response := do {
-  let h : SessionHandle := Borrow.get handle;
+def read_session_value (handle : Shared SessionHandle) : HandlerT IO Response := do {
+  let h : SessionHandle := Shared.get handle;
   let s : Session <- HandlerT.lift_io (SessionHandle.get h);
   match Session.get s "k" {
     Option.some v => HandlerT.pure_io (Response.ok_text v),
@@ -60,9 +59,8 @@ def read_session_value (handle : Borrow SessionHandle) : HandlerT IO Response :=
 }
 
 def read_value : HandlerT IO Response := do {
-  let slot : Borrow SessionSlot <- HandlerT.session_io;
-  let slot_value : SessionSlot := Borrow.get slot;
-  match SessionSlot.handle slot_value {
+  let slot : Shared SessionSlot <- HandlerT.session_io;
+  match SessionSlot.handle slot {
     Option.some handle => read_session_value handle,
     Option.none => HandlerT.throw_io (HttpError.make 500u16 "no session")
   }
@@ -157,3 +155,5 @@ def test_same_site_none_with_secure_ok : IO Bool := do {
     Result.err _ => IO.pure false
   }
 }
+
+

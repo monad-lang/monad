@@ -1,7 +1,6 @@
 /// `RouterT` — the transformer router, sharing matcher semantics with the
 /// original `Router`.
 
-use init::borrow {Borrow, Borrow.get}
 use std::test {}
 use http::types {
   Body, Headers.empty, HttpVersion, Method, Request, Request.get, Response,
@@ -10,11 +9,11 @@ use http::types {
 }
 use http::body {Body.to_bytes_pure}
 use moon::handler_t {
-  HandlerT, HandlerT.pure_io, HandlerT.request_io, HandlerT.run_io,
+  HandlerT, HandlerT.param_io, HandlerT.pure_io, HandlerT.run_io,
   HandlerT.throw_io, HttpError, HttpError.make,
 }
 use moon::router {
-  RouteT, Router.param, RouterT.get, RouterT.post, RouterT.route, RouterT.scope,
+  RouteT, RouterT.get, RouterT.post, RouterT.route, RouterT.scope,
 }
 
 def get_req (path : String) : Request :=
@@ -35,9 +34,8 @@ def other_handler : HandlerT IO Response :=
   HandlerT.pure_io (Response.ok_text "other")
 
 def param_handler : HandlerT IO Response := do {
-  let rb : Borrow Request <- HandlerT.request_io;
-  let req : Request := Borrow.get rb;
-  match Router.param "id" req {
+  let id : Option String <- HandlerT.param_io "id";
+  match id {
     Option.some v => HandlerT.pure_io (Response.ok_text v),
     Option.none => HandlerT.throw_io (HttpError.make 500u16 "missing param")
   }

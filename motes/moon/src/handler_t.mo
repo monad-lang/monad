@@ -2,12 +2,14 @@
 /// `Request -> IO Response` surface (both stay supported; nothing here
 /// deprecates the old one).
 ///
-/// Shape: `HandlerT M A = Borrow Ctx -> M (Result HttpError A)`. That is a
-/// `ReaderT Ctx (ResultT HttpError M)` with the environment borrowed once
-/// and the error channel typed. The concrete newtype plus a hand-written
-/// `Monad` instance is deliberate: resolving the generic
-/// `Monad (ReaderT Ctx (ResultT E M))` miscompiles self-hosted (the same
-/// reason `motes/sql/src/db.mo` hand-writes `DbM.bind`).
+/// Shape: `HandlerT M A = Ctx -> M (Result HttpError A)`. `Ctx` is a Copy
+/// record of Copy handles (`context.mo`), so this is `ReaderT Ctx` over
+/// `ResultT HttpError M` without the view/escape problem a `Ctx`
+/// environment would create: `bind` may use the context freely. The
+/// concrete newtype plus a hand-written `Monad` instance is deliberate:
+/// resolving the generic `Monad (ReaderT Ctx (ResultT E M))` miscompiles
+/// self-hosted (the same reason `motes/sql/src/db.mo` hand-writes
+/// `DbM.bind`).
 ///
 /// IO-specialised `_io` operations exist because a `[Monad M]`-constrained
 /// helper called from inside a lambda crashes the compiled backend
@@ -16,17 +18,18 @@
 /// lambdas use the `_io` forms, `Monad.pure`/`Monad.bind` at IO, and
 /// unconstrained helpers (`run`, `local`, `ask_io`, `request_io`).
 
-use init::borrow {Borrow, Borrow.get}
+use init::shared {Shared}
 use http::types {
-  Body, Headers, Headers.set, HttpVersion, Request, Response,
+  Body, Headers, Headers.set, HttpVersion, Method, Request, Response,
   Status.bad_request, Status.forbidden, Status.internal_server_error,
   Status.not_found, Status.payload_too_large, Status.request_header_fields_too_large,
   Status.unauthorized,
 }
 use lib::context {
-  Ctx, Ctx.make, Ctx.request, Ctx.session, Ctx.with_request, Ctx.with_session,
-  SessionSlot,
+  Ctx, Ctx.body_bytes, Ctx.header, Ctx.make, Ctx.method, Ctx.param, Ctx.path,
+  Ctx.session, Ctx.session_handle, Ctx.with_route, Ctx.with_session, SessionSlot,
 }
+use lib::session {SessionHandle}
 
 // ── the error channel ───────────────────────────────────────────────────
 
@@ -83,11 +86,11 @@ pub def HttpError.headers_too_large : HttpError :=
 // ── the transformer ─────────────────────────────────────────────────────
 
 pub type HandlerT (M : Type -> Type) (A : Type) {
-  mk (run : Borrow Ctx -> M (Result HttpError A))
+  mk (run : Ctx -> M (Result HttpError A))
 }
 
 pub def HandlerT.run {M : Type -> Type} {A : Type}
-    (h : HandlerT M A) (ctx : Borrow Ctx) : M (Result HttpError A) :=
+    (h : HandlerT M A) (ctx : Ctx) : M (Result HttpError A) :=
   match h {
     HandlerT.mk r => r ctx
   }
@@ -95,7 +98,7 @@ pub def HandlerT.run {M : Type -> Type} {A : Type}
 // ── Monad (hand-written, concrete head) ─────────────────────────────────
 
 def HandlerT.bind_step [Monad M] {A : Type} {B : Type}
-    (f : A -> HandlerT M B) (ctx : Borrow Ctx) (r : Result HttpError A) :
+    (f : A -> HandlerT M B) (ctx : Ctx) (r : Result HttpError A) :
     M (Result HttpError B) :=
   match r {
     Result.ok a => HandlerT.run (f a) ctx,
@@ -103,13 +106,13 @@ def HandlerT.bind_step [Monad M] {A : Type} {B : Type}
   }
 
 def HandlerT.bind_at [Monad M] {A : Type} {B : Type}
-    (ma : HandlerT M A) (f : A -> HandlerT M B) (ctx : Borrow Ctx) :
+    (ma : HandlerT M A) (f : A -> HandlerT M B) (ctx : Ctx) :
     M (Result HttpError B) :=
   Monad.bind (HandlerT.run ma ctx) (HandlerT.bind_step f ctx)
 
 pub instance [Monad M] Monad (HandlerT M) {
   def pure (a : A) : HandlerT M A :=
-    HandlerT.mk (fn (_ : Borrow Ctx) => Monad.pure (Result.ok a))
+    HandlerT.mk (fn (_ : Ctx) => Monad.pure (Result.ok a))
   def bind (ma : HandlerT M A) (f : A -> HandlerT M B) : HandlerT M B :=
     HandlerT.mk (HandlerT.bind_at ma f)
 }
@@ -117,28 +120,41 @@ pub instance [Monad M] Monad (HandlerT M) {
 // ── generic operations ─────────────────────────────────────────────────
 
 pub def HandlerT.pure [Monad M] {A : Type} (a : A) : HandlerT M A :=
-  HandlerT.mk (fn (_ : Borrow Ctx) => Monad.pure (Result.ok a))
+  HandlerT.mk (fn (_ : Ctx) => Monad.pure (Result.ok a))
 
 pub def HandlerT.lift [Monad M] {A : Type} (m : M A) : HandlerT M A :=
-  HandlerT.mk (fn (_ : Borrow Ctx) =>
+  HandlerT.mk (fn (_ : Ctx) =>
     Monad.bind m (fn a => Monad.pure (Result.ok a)))
 
-pub def HandlerT.ask [Monad M] : HandlerT M (Borrow Ctx) :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) => Monad.pure (Result.ok ctx))
+pub def HandlerT.ask [Monad M] : HandlerT M Ctx :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok ctx))
 
-pub def HandlerT.request [Monad M] : HandlerT M (Borrow Request) :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
-    Monad.pure (Result.ok (Ctx.request (Borrow.get ctx))))
+pub def HandlerT.method [Monad M] : HandlerT M Method :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok (Ctx.method ctx)))
 
-pub def HandlerT.session [Monad M] : HandlerT M (Borrow SessionSlot) :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
-    Monad.pure (Result.ok (Ctx.session (Borrow.get ctx))))
+pub def HandlerT.path [Monad M] : HandlerT M String :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok (Ctx.path ctx)))
+
+pub def HandlerT.header [Monad M] (name : String) : HandlerT M (Option String) :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok (Ctx.header name ctx)))
+
+pub def HandlerT.param [Monad M] (name : String) : HandlerT M (Option String) :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok (Ctx.param name ctx)))
+
+pub def HandlerT.body_bytes [Monad M] : HandlerT M (List U8) :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok (Ctx.body_bytes ctx)))
+
+pub def HandlerT.session [Monad M] : HandlerT M (Shared SessionSlot) :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok (Ctx.session ctx)))
+
+pub def HandlerT.session_handle [Monad M] : HandlerT M (Option (Shared SessionHandle)) :=
+  HandlerT.mk (fn (ctx : Ctx) => Monad.pure (Result.ok (Ctx.session_handle ctx)))
 
 pub def HandlerT.throw [Monad M] {A : Type} (e : HttpError) : HandlerT M A :=
-  HandlerT.mk (fn (_ : Borrow Ctx) => Monad.pure (Result.err e))
+  HandlerT.mk (fn (_ : Ctx) => Monad.pure (Result.err e))
 
 def HandlerT.catch_step [Monad M] {A : Type}
-    (on_error : HttpError -> HandlerT M A) (ctx : Borrow Ctx)
+    (on_error : HttpError -> HandlerT M A) (ctx : Ctx)
     (r : Result HttpError A) : M (Result HttpError A) :=
   match r {
     Result.ok a => Monad.pure (Result.ok a),
@@ -146,7 +162,7 @@ def HandlerT.catch_step [Monad M] {A : Type}
   }
 
 def HandlerT.catch_at [Monad M] {A : Type}
-    (h : HandlerT M A) (on_error : HttpError -> HandlerT M A) (ctx : Borrow Ctx) :
+    (h : HandlerT M A) (on_error : HttpError -> HandlerT M A) (ctx : Ctx) :
     M (Result HttpError A) :=
   Monad.bind (HandlerT.run h ctx) (HandlerT.catch_step on_error ctx)
 
@@ -156,7 +172,7 @@ pub def HandlerT.catch [Monad M] {A : Type}
 
 pub def HandlerT.map_error [Monad M] {A : Type}
     (f : HttpError -> HttpError) (h : HandlerT M A) : HandlerT M A :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
+  HandlerT.mk (fn (ctx : Ctx) =>
     Monad.bind (HandlerT.run h ctx) (fn (r : Result HttpError A) =>
       match r {
         Result.ok a => Monad.pure (Result.ok a),
@@ -170,19 +186,19 @@ pub def HandlerT.local {M : Type -> Type} {A : Type}
   HandlerT.mk (HandlerT.local_at f h)
 
 def HandlerT.local_at {M : Type -> Type} {A : Type}
-    (f : Ctx -> Ctx) (h : HandlerT M A) (ctx : Borrow Ctx) :
+    (f : Ctx -> Ctx) (h : HandlerT M A) (ctx : Ctx) :
     M (Result HttpError A) :=
-  let inner : Borrow Ctx := Borrow.of (f (Borrow.get ctx)) in
-  HandlerT.run h inner
+  HandlerT.run h (f ctx)
 
-/// Replace the request half of the context (the router attaches params).
-pub def HandlerT.with_request {M : Type -> Type} {A : Type}
-    (req : Borrow Request) (h : HandlerT M A) : HandlerT M A :=
-  HandlerT.local (fn (c : Ctx) => Ctx.with_request c req) h
+/// Replace the effective path and params (the router's route context).
+pub def HandlerT.with_route {M : Type -> Type} {A : Type}
+    (path : String) (params : List (Pair String String)) (h : HandlerT M A) :
+    HandlerT M A :=
+  HandlerT.local (fn (c : Ctx) => Ctx.with_route c path params) h
 
 /// Replace the session half of the context.
 pub def HandlerT.with_session {M : Type -> Type} {A : Type}
-    (slot : Borrow SessionSlot) (h : HandlerT M A) : HandlerT M A :=
+    (slot : Shared SessionSlot) (h : HandlerT M A) : HandlerT M A :=
   HandlerT.local (fn (c : Ctx) => Ctx.with_session c slot) h
 
 // ── IO-specialised operations (safe inside lambdas) ────────────────────
@@ -195,28 +211,41 @@ pub def HandlerT.io_bind {A : Type} {B : Type} (m : IO A) (f : A -> IO B) : IO B
   Monad.bind m f
 
 pub def HandlerT.pure_io {A : Type} (a : A) : HandlerT IO A :=
-  HandlerT.mk (fn (_ : Borrow Ctx) => IO.pure (Result.ok a))
+  HandlerT.mk (fn (_ : Ctx) => IO.pure (Result.ok a))
 
 pub def HandlerT.throw_io {A : Type} (e : HttpError) : HandlerT IO A :=
-  HandlerT.mk (fn (_ : Borrow Ctx) => IO.pure (Result.err e))
+  HandlerT.mk (fn (_ : Ctx) => IO.pure (Result.err e))
 
 pub def HandlerT.lift_io {A : Type} (m : IO A) : HandlerT IO A :=
-  HandlerT.mk (fn (_ : Borrow Ctx) =>
+  HandlerT.mk (fn (_ : Ctx) =>
     HandlerT.io_bind m (fn a => IO.pure (Result.ok a)))
 
-pub def HandlerT.ask_io : HandlerT IO (Borrow Ctx) :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) => IO.pure (Result.ok ctx))
+pub def HandlerT.ask_io : HandlerT IO Ctx :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok ctx))
 
-pub def HandlerT.request_io : HandlerT IO (Borrow Request) :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
-    IO.pure (Result.ok (Ctx.request (Borrow.get ctx))))
+pub def HandlerT.method_io : HandlerT IO Method :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok (Ctx.method ctx)))
 
-pub def HandlerT.session_io : HandlerT IO (Borrow SessionSlot) :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
-    IO.pure (Result.ok (Ctx.session (Borrow.get ctx))))
+pub def HandlerT.path_io : HandlerT IO String :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok (Ctx.path ctx)))
+
+pub def HandlerT.header_io (name : String) : HandlerT IO (Option String) :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok (Ctx.header name ctx)))
+
+pub def HandlerT.param_io (name : String) : HandlerT IO (Option String) :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok (Ctx.param name ctx)))
+
+pub def HandlerT.body_bytes_io : HandlerT IO (List U8) :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok (Ctx.body_bytes ctx)))
+
+pub def HandlerT.session_io : HandlerT IO (Shared SessionSlot) :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok (Ctx.session ctx)))
+
+pub def HandlerT.session_handle_io : HandlerT IO (Option (Shared SessionHandle)) :=
+  HandlerT.mk (fn (ctx : Ctx) => IO.pure (Result.ok (Ctx.session_handle ctx)))
 
 def HandlerT.catch_step_io {A : Type}
-    (on_error : HttpError -> HandlerT IO A) (ctx : Borrow Ctx)
+    (on_error : HttpError -> HandlerT IO A) (ctx : Ctx)
     (r : Result HttpError A) : IO (Result HttpError A) :=
   match r {
     Result.ok a => IO.pure (Result.ok a),
@@ -224,7 +253,7 @@ def HandlerT.catch_step_io {A : Type}
   }
 
 def HandlerT.catch_at_io {A : Type}
-    (h : HandlerT IO A) (on_error : HttpError -> HandlerT IO A) (ctx : Borrow Ctx) :
+    (h : HandlerT IO A) (on_error : HttpError -> HandlerT IO A) (ctx : Ctx) :
     IO (Result HttpError A) :=
   HandlerT.io_bind (HandlerT.run h ctx) (HandlerT.catch_step_io on_error ctx)
 
@@ -234,7 +263,7 @@ pub def HandlerT.catch_io {A : Type}
 
 pub def HandlerT.map_error_io {A : Type}
     (f : HttpError -> HttpError) (h : HandlerT IO A) : HandlerT IO A :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
+  HandlerT.mk (fn (ctx : Ctx) =>
     HandlerT.io_bind (HandlerT.run h ctx) (fn (r : Result HttpError A) =>
       match r {
         Result.ok a => IO.pure (Result.ok a),
@@ -247,8 +276,7 @@ pub def HandlerT.map_error_io {A : Type}
 pub def HandlerT.run_io {A : Type} (h : HandlerT IO A) (req : Request) :
     IO (Result HttpError A) :=
   let slot : SessionSlot := SessionSlot.absent in
-  let c : Ctx := Ctx.make (Borrow.of req) (Borrow.of slot) in
-  HandlerT.run h (Borrow.of c)
+  HandlerT.run h (Ctx.make req (Shared.of slot))
 
 /// Adapt a transformer handler to the old total handler shape.
 pub def HandlerT.to_old (h : HandlerT IO Response) (req : Request) : IO Response := do {
@@ -258,9 +286,3 @@ pub def HandlerT.to_old (h : HandlerT IO Response) (req : Request) : IO Response
     Result.err e => IO.pure (HttpError.to_response e)
   }
 }
-
-/// Adapt an old total handler into the transformer shape.
-pub def HandlerT.of_old (h : Request -> IO Response) : HandlerT IO Response :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
-    HandlerT.io_bind (h (Borrow.get (Ctx.request (Borrow.get ctx))))
-      (fn res => IO.pure (Result.ok res)))

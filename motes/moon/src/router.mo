@@ -16,13 +16,12 @@
 ///   - `OPTIONS` on a known path answers 204 with `Allow`;
 ///   - no route for the path at all answers 404.
 
-use init::borrow {Borrow, Borrow.get}
 use http::types {
   Body, Headers.empty, Headers.set, Method, Request, Response,
   Status.method_not_allowed, Status.no_content, Status.not_found,
   Uri, http1_1,
 }
-use lib::context {Ctx, Ctx.request, Ctx.with_request}
+use lib::context {Ctx, Ctx.method, Ctx.path, Ctx.with_route}
 use lib::handler_t {HandlerT, HandlerT.run, HttpError}
 use http::uri {Uri.percent_decode_or}
 use http::strings {
@@ -345,8 +344,8 @@ def Router.param_lookup (name : String) (params : List (Pair String String)) : O
 //
 // The same matching rules as `Route`/`Router.route`, with a `HandlerT IO
 // Response` handler and a `HandlerT` entry point. Both APIs stay supported;
-// this one is what new code should use. The matcher helpers above are shared
-// (same module), so the two routers cannot drift on path/param semantics.
+// this one is what new code should use. `Ctx` carries the effective path and
+// the captured params (`context.mo`), so the router never copies a Request.
 
 pub struct RouteT {
   method : Method,
@@ -380,47 +379,48 @@ pub def RouterT.options (pattern : String) (handler : HandlerT IO Response) : Ro
 
 // ── matching ────────────────────────────────────────────────────────────
 
-pub def RouterT.find (routes : List RouteT) (req : Request) :
+pub def RouterT.find (routes : List RouteT) (method : Method) (path : String) :
     Option (Pair RouteT (List (Pair String String))) :=
-  match RouterT.find_exact routes req {
+  match RouterT.find_exact routes method path {
     Option.some hit => Option.some hit,
     Option.none =>
-      if BEq.beq req.method Method.HEAD
-      then RouterT.find_head routes req
+      if BEq.beq method Method.HEAD
+      then RouterT.find_head routes method path
       else Option.none
   }
 
 #[terminating]
-def RouterT.find_exact (rest : List RouteT) (req : Request) :
+def RouterT.find_exact (rest : List RouteT) (method : Method) (path : String) :
     Option (Pair RouteT (List (Pair String String))) :=
   match rest {
     List.empty => Option.none,
     List.cons r rs =>
-      if RouterT.matches r req
-      then RouterT.hit r req
-      else RouterT.find_exact rs req
+      if RouterT.matches r method path
+      then RouterT.hit r path
+      else RouterT.find_exact rs method path
   }
 
 #[terminating]
-def RouterT.find_head (rest : List RouteT) (req : Request) :
+def RouterT.find_head (rest : List RouteT) (method : Method) (path : String) :
     Option (Pair RouteT (List (Pair String String))) :=
   match rest {
     List.empty => Option.none,
     List.cons r rs =>
-      if RouterT.matches_get_for_head r req
-      then RouterT.hit r req
-      else RouterT.find_head rs req
+      if RouterT.matches_get_for_head r method path
+      then RouterT.hit r path
+      else RouterT.find_head rs method path
   }
 
-def RouterT.matches (r : RouteT) (req : Request) : Bool :=
-  Bool.and (BEq.beq r.method req.method) (Router.match_path_ok r.pattern req.uri.path)
+def RouterT.matches (r : RouteT) (method : Method) (path : String) : Bool :=
+  Bool.and (BEq.beq r.method method) (Router.match_path_ok r.pattern path)
 
-def RouterT.matches_get_for_head (r : RouteT) (req : Request) : Bool :=
-  Bool.and (BEq.beq r.method Method.GET) (Router.match_path_ok r.pattern req.uri.path)
+def RouterT.matches_get_for_head (r : RouteT) (method : Method) (path : String) : Bool :=
+  Bool.and (Bool.and (BEq.beq method Method.HEAD) (BEq.beq r.method Method.GET))
+    (Router.match_path_ok r.pattern path)
 
-def RouterT.hit (r : RouteT) (req : Request) :
+def RouterT.hit (r : RouteT) (path : String) :
     Option (Pair RouteT (List (Pair String String))) :=
-  match Router.match_path r.pattern req.uri.path {
+  match Router.match_path r.pattern path {
     Option.none => Option.none,
     Option.some params => Option.some (Pair.pair r params)
   }
@@ -454,65 +454,50 @@ def RouterT.options_response (allowed : List Method) : Response :=
   let allow := Router.method_names allowed in
   { status := Status.no_content, headers := Headers.set "Allow" allow Headers.empty, version := HttpVersion.http1_1, body := Body.empty }
 
-def RouterT.miss_response (routes : List RouteT) (req : Request) : Response :=
-  let allowed := RouterT.allowed routes req.uri.path in
+def RouterT.miss_response (routes : List RouteT) (method : Method) (path : String) : Response :=
+  let allowed := RouterT.allowed routes path in
   if List.is_empty allowed
   then RouterT.not_found_response
-  else if BEq.beq req.method Method.OPTIONS
+  else if BEq.beq method Method.OPTIONS
   then RouterT.options_response allowed
   else RouterT.method_not_allowed_response allowed
 
 // ── dispatch ────────────────────────────────────────────────────────────
 
-/// Build a request with the route's captured params attached.
-def Router.req_with_params (req : Request) (params : List (Pair String String)) : Request :=
-  { req with params := params }
-
-def RouterT.dispatch_with_req (r : RouteT) (params : List (Pair String String))
-    (base_req : Request) (ctx : Borrow Ctx) : IO (Result HttpError Response) :=
-  let req2 : Request := Router.req_with_params base_req params in
-  let rb : Borrow Request := Borrow.of req2 in
-  let c2 : Ctx := Ctx.with_request (Borrow.get ctx) rb in
-  HandlerT.run r.handler (Borrow.of c2)
-
 /// The router as a `HandlerT`.
 pub def RouterT.route (routes : List RouteT) : HandlerT IO Response :=
   HandlerT.mk (RouterT.route_at routes)
 
-def RouterT.route_at (routes : List RouteT) (ctx : Borrow Ctx) :
+def RouterT.route_at (routes : List RouteT) (ctx : Ctx) :
     IO (Result HttpError Response) :=
-  let req : Request := Borrow.get (Ctx.request (Borrow.get ctx)) in
-  let rb : Borrow Request := Borrow.of req in
-  match RouterT.find routes (Borrow.get rb) {
-    Option.none => IO.pure (Result.ok (RouterT.miss_response routes (Borrow.get rb))),
+  match RouterT.find routes (Ctx.method ctx) (Ctx.path ctx) {
+    Option.none =>
+      IO.pure (Result.ok (RouterT.miss_response routes (Ctx.method ctx) (Ctx.path ctx))),
     Option.some hit =>
       match hit {
-        Pair.pair r params => RouterT.dispatch_with_req r params (Borrow.get rb) ctx
+        Pair.pair r params =>
+          HandlerT.run r.handler (Ctx.with_route ctx (Ctx.path ctx) params)
       }
   }
 
 /// Mount `routes` under `prefix`, falling through to `next` when the prefix
-/// does not match or no route inside matches. This is the composable form
-/// the old terminal `Router.mount` cannot express.
+/// does not match or no route inside matches.
 pub def RouterT.scope (prefix : String) (routes : List RouteT)
     (next : HandlerT IO Response) : HandlerT IO Response :=
   HandlerT.mk (RouterT.scope_at prefix routes next)
 
 def RouterT.scope_at (prefix : String) (routes : List RouteT)
-    (next : HandlerT IO Response) (ctx : Borrow Ctx) :
+    (next : HandlerT IO Response) (ctx : Ctx) :
     IO (Result HttpError Response) :=
-  let req : Request := Borrow.get (Ctx.request (Borrow.get ctx)) in
-  let rb : Borrow Request := Borrow.of req in
-  let path_req : Request := Borrow.get rb in
-  match Router.strip_prefix prefix path_req.uri.path {
+  match Router.strip_prefix prefix (Ctx.path ctx) {
     Option.none => HandlerT.run next ctx,
     Option.some sub_path =>
-      let sub_req : Request := Router.req_with_path (Borrow.get rb) sub_path in
-      match RouterT.find routes sub_req {
+      match RouterT.find routes (Ctx.method ctx) sub_path {
         Option.none => HandlerT.run next ctx,
         Option.some hit =>
           match hit {
-            Pair.pair r params => RouterT.dispatch_with_req r params sub_req ctx
+            Pair.pair r params =>
+              HandlerT.run r.handler (Ctx.with_route ctx sub_path params)
           }
       }
   }

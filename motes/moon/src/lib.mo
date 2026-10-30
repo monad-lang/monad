@@ -31,8 +31,9 @@ pub use lib::router {
 }
 
 pub use lib::context {
-    Ctx, Ctx.make, Ctx.request, Ctx.session, Ctx.with_request, Ctx.with_session,
-    SessionSlot, SessionSlot.handle,
+    Ctx, Ctx.make, Ctx.method, Ctx.path, Ctx.header, Ctx.param, Ctx.body_bytes,
+    Ctx.body_text, Ctx.session, Ctx.session_handle, Ctx.with_route,
+    Ctx.with_session, SessionSlot, SessionSlot.handle,
 }
 
 pub use lib::handler_t {
@@ -41,12 +42,15 @@ pub use lib::handler_t {
     HttpError.unauthorized, HttpError.internal, HttpError.payload_too_large,
     HttpError.headers_too_large,
     HandlerT, HandlerT.run, HandlerT.pure, HandlerT.lift, HandlerT.ask,
-    HandlerT.request, HandlerT.session, HandlerT.throw, HandlerT.catch,
-    HandlerT.map_error, HandlerT.local, HandlerT.with_request,
-    HandlerT.with_session, HandlerT.pure_io, HandlerT.throw_io, HandlerT.lift_io,
-    HandlerT.ask_io, HandlerT.request_io, HandlerT.session_io, HandlerT.catch_io,
-    HandlerT.map_error_io, HandlerT.io_bind, HandlerT.run_io, HandlerT.to_old,
-    HandlerT.of_old,
+    HandlerT.method, HandlerT.path, HandlerT.header, HandlerT.param,
+    HandlerT.body_bytes, HandlerT.session, HandlerT.session_handle,
+    HandlerT.throw, HandlerT.catch, HandlerT.map_error, HandlerT.local,
+    HandlerT.with_route, HandlerT.with_session, HandlerT.pure_io,
+    HandlerT.throw_io, HandlerT.lift_io, HandlerT.ask_io, HandlerT.method_io,
+    HandlerT.path_io, HandlerT.header_io, HandlerT.param_io,
+    HandlerT.body_bytes_io, HandlerT.session_io, HandlerT.session_handle_io,
+    HandlerT.catch_io, HandlerT.map_error_io, HandlerT.io_bind,
+    HandlerT.run_io, HandlerT.to_old,
 }
 
 pub use lib::middleware_t {
@@ -76,7 +80,8 @@ pub use lib::session {
     Session, Session.get, Session.put, SessionHandle, SessionHandle.make,
     SessionHandle.get, SessionHandle.put, SessionConfig, SessionConfig.default,
     SessionStore, SessionStore.new, SessionStore.new_with, SessionStore.begin,
-    SessionStore.load, SessionStore.commit, SessionStore.rotate,
+    SessionStore.begin_checked, SessionStore.new_id_checked, SessionStore.load,
+    SessionStore.load_header, SessionStore.commit, SessionStore.rotate,
     SessionStore.destroy, SessionStore.with_session, SessionStore.middleware,
 }
 

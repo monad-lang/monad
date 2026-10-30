@@ -11,7 +11,8 @@
 /// poll is enough for a development loop. Hashing whole files is the cost;
 /// an mtime native would make the poll cheap and is the next step.
 
-use init::borrow {Borrow, Borrow.get}
+use init::clone {Clone}
+use init::shared {Shared, Shared.get}
 use std::concurrent::combine {sleepIO}
 use std::concurrent::fiber {Fiber, forkIO}
 use std::hex {Hex.encode}
@@ -22,10 +23,8 @@ use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new, Ref.set}
 use std::sha256 {Sha256.hash, Sha256.hash_bytes}
 use http::sse {Sse.response, SseEvent}
 use http::types {Body, Headers, Headers.get, Headers.set, HttpVersion, Request, Response, Status.ok}
-use lib::context {Ctx, Ctx.request}
-use lib::handler_t {
-  HandlerT, HandlerT.io_bind, HandlerT.run, HttpError, HttpError.make,
-}
+use lib::context {Ctx}
+use lib::handler_t {HandlerT, HandlerT.io_bind, HandlerT.run, HttpError}
 
 // ── SSE ─────────────────────────────────────────────────────────────────
 
@@ -62,17 +61,11 @@ def Live.reload_source (version : Ref I64) (seen : Ref I64) : Unit -> IO (Option
 
 /// The transformer-handler form of `Live.reload`.
 pub def Live.reload_t (version : Ref I64) : HandlerT IO Response :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
-    HandlerT.io_bind (Live.reload version (Borrow.get (Ctx.request (Borrow.get ctx))))
-      (fn (r : Result String Response) =>
-        match r {
-          Result.ok res => IO.pure (Result.ok res),
-          Result.err e => IO.pure (Result.err (Live.io_error e))
-        }))
-
-/// Lift the old handler's string error into `HttpError`.
-def Live.io_error (e : String) : HttpError :=
-  HttpError.make 500u16 e
+  HandlerT.mk (fn (_ : Ctx) => do {
+    let v <- Ref.get version;
+    let seen : Ref I64 <- Ref.new (I64.sub v 1i64);
+    IO.pure (Result.ok (Sse.response (Live.reload_source version seen)))
+  })
 
 // ── file watchers ───────────────────────────────────────────────────────
 
@@ -252,37 +245,37 @@ pub def Live.inject (res : Response) (endpoint : String) : Response :=
 
 def Live.inject_parts (status : U16) (headers : Headers) (version : HttpVersion)
     (body : Body) (endpoint : String) : Response :=
-  let hb : Borrow Headers := Borrow.of headers in
+  let hb : Shared Headers := Shared.of headers in
   if Bool.not (U16.beq status Status.ok)
-  then { status := status, headers := Borrow.get hb, version := version, body := body }
+  then { status := status, headers := Clone.clone hb, version := version, body := body }
   else
     match body {
       Body.text s =>
-        match Headers.get "Content-Type" (Borrow.get hb) {
+        match Headers.get "Content-Type" (Shared.get hb) {
           Option.some ct =>
             if String.contains (String.to_lowercase ct) "text/html"
             then
               let injected := String.concat s (Live.script endpoint) in
-              let hs := Headers.set "Cache-Control" "no-store" (Borrow.get hb) in
+              let hs := Headers.set "Cache-Control" "no-store" (Shared.get hb) in
               let res2 : Response :=
                 { status := status, headers := hs, version := version,
                   body := Body.text injected } in
               res2
             else
-              { status := status, headers := Borrow.get hb, version := version,
+              { status := status, headers := Clone.clone hb, version := version,
                 body := Body.text s },
           Option.none =>
-            { status := status, headers := Borrow.get hb, version := version,
+            { status := status, headers := Clone.clone hb, version := version,
               body := Body.text s }
         },
       Body.empty =>
-        { status := status, headers := Borrow.get hb, version := version, body := Body.empty },
+        { status := status, headers := Clone.clone hb, version := version, body := Body.empty },
       Body.bytes data =>
-        { status := status, headers := Borrow.get hb, version := version, body := Body.bytes data },
+        { status := status, headers := Clone.clone hb, version := version, body := Body.bytes data },
       Body.stream next =>
-        { status := status, headers := Borrow.get hb, version := version, body := Body.stream next },
+        { status := status, headers := Clone.clone hb, version := version, body := Body.stream next },
       Body.form fields =>
-        { status := status, headers := Borrow.get hb, version := version, body := Body.form fields }
+        { status := status, headers := Clone.clone hb, version := version, body := Body.form fields }
     }
 
 /// Old-API dev middleware.
@@ -296,7 +289,7 @@ pub def Live.dev_middleware (endpoint : String)
 /// Transformer dev middleware.
 pub def Live.dev_middleware_t (endpoint : String)
     (next : HandlerT IO Response) : HandlerT IO Response :=
-  HandlerT.mk (fn (ctx : Borrow Ctx) =>
+  HandlerT.mk (fn (ctx : Ctx) =>
     HandlerT.io_bind (HandlerT.run next ctx) (fn (r : Result HttpError Response) =>
       match r {
         Result.ok res => IO.pure (Result.ok (Live.inject res endpoint)),
