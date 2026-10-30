@@ -206,6 +206,30 @@ def test_run_debug_flags : Bool :=
     }
 
 #[test]
+def test_script_alias_and_args : Bool :=
+    match Command.from_args ["s", "dev", "--", "x"] {
+        Command.script name args _verbose _debug _release _no_cache _workspace _list
+            _target_dir _mote =>
+            match name {
+                Option.some n => String.beq n "dev" && one_string args "x",
+                Option.none => false,
+            },
+        _ => false,
+    }
+
+#[test]
+def test_script_list_mode : Bool :=
+    match Command.from_args ["script", "--list"] {
+        Command.script name _args _verbose _debug _release _no_cache _workspace list
+            _target_dir _mote =>
+            match name {
+                Option.none => list == true,
+                Option.some _ => false,
+            },
+        _ => false,
+    }
+
+#[test]
 def test_eval_file_and_verbose : Bool :=
     match Command.from_args ["eval", "a.mo", "-v"] {
         Command.eval file verbose => String.beq file "a.mo" && verbose == true,

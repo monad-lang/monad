@@ -44,6 +44,18 @@ pub type Command {
         (#[arg {short := "v", help := "print each module as it loads"}] verbose : Bool)
         (#[arg {short := "g", help := "emit DWARF debug info"}] debug : Bool)
         (#[arg {short := "", help := "build without debug info"}] release : Bool),
+    /// Build and run a named `[[script]]` from the nearest manifest.
+    script
+        (#[pos {help := "script name (use --list to see them)"}] name : Option String)
+        (#[pos {help := "the program's own arguments (put flag-like ones after `--`)"}] args : List String)
+        (#[arg {short := "v", help := "print each module as it loads"}] verbose : Bool)
+        (#[arg {short := "g", help := "emit DWARF debug info"}] debug : Bool)
+        (#[arg {short := "", help := "build without debug info"}] release : Bool)
+        (#[arg {short := "", help := "compile for real, reading and writing no store entry"}] no_cache : Bool)
+        (#[arg {short := "w", help := "search every mote in the enclosing workspace"}] workspace : Bool)
+        (#[arg {short := "", help := "list scripts instead of running one"}] list : Bool)
+        (#[opt {short := "", value_name := "DIR", help := "where the store and output directories live"}] target_dir : Option String)
+        (#[opt {short := "", value_name := "NAME", help := "use this mote's closure (default: the script's manifest)"}] mote : Option String),
     /// Evaluate a source file with the built-in interpreter (pure programs).
     eval
         (#[pos {help := "a .mo source file"}] file : String)

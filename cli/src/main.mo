@@ -21,7 +21,9 @@ use lang::codegen::decls {collect_all_decls_from_modules, export_names}
 use lang::module {CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
 use lang::mote {
   Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
-  Mote.discover, Mote.workspace_members, MoteManifest, BinTarget,
+  Mote.discover, Mote.workspace_members, Mote.manifest_at,
+  Mote.scripts_at_path, MoteManifest, BinTarget, ScriptTarget,
+  ScriptTarget.script_name, ScriptTarget.script_path, ScriptTarget.script_mote,
 }
 use build::closure {Build.input_hash}
 use build::store {
@@ -263,11 +265,19 @@ def build_target_dir (target_dir_flag : String) (src : String) : IO String := do
 }
 
 def build_cached (src : String) (dest_name : Path) (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (target : TargetSpec) : IO I64 := do {
+    let root <- Build.mote_root_of src;
+    build_cached_at src root dest_name target_dir_flag verbose debug no_cache target
+}
+
+/// `build_cached` with an explicit closure root. A script declared at a
+/// virtual workspace root lives outside the member it names in `mote = ...`;
+/// deriving the root from the source path would key the cache on the wrong
+/// closure (a false hit when the member changes).
+def build_cached_at (src : String) (root : String) (dest_name : Path) (target_dir_flag : String) (verbose : Bool) (debug : Bool) (no_cache : Bool) (target : TargetSpec) : IO I64 := do {
     // Resolved either way: it is where the binary lands, not a cache
     // decision.
     let target_dir <- build_target_dir target_dir_flag src;
     let dest_dir : String := build_dest_dir target_dir debug;
-    let root <- Build.mote_root_of src;
     // The target is in the key, so a native aarch64 or darwin build cannot be
     // served an x86_64 artifact. `target.triple` is a `clang -dumpmachine`
     // probe, not the constant it replaced, so the key moves with PATH.
@@ -866,6 +876,273 @@ def run_file (path : String) (verbose : Bool) (debug : Bool) (program_args : Lis
                 return exit_code
             }
         }
+    }
+}
+
+// ── [[script]] ──────────────────────────────────────────────────────────
+
+#[terminating]
+def script_find (name : String) (scripts : List ScriptTarget) : Option ScriptTarget :=
+    match scripts {
+        List.empty => Option.none,
+        List.cons t rest =>
+            if String.beq (ScriptTarget.script_name t) name
+            then Option.some t
+            else script_find name rest,
+    }
+
+#[terminating]
+def script_count (name : String) (scripts : List ScriptTarget) : I64 :=
+    match scripts {
+        List.empty => 0i64,
+        List.cons t rest =>
+            if String.beq (ScriptTarget.script_name t) name
+            then I64.add 1i64 (script_count name rest)
+            else script_count name rest,
+    }
+
+#[terminating]
+def script_dep_dir (name : String) (deps : List (Pair String String)) : Option String :=
+    match deps {
+        List.empty => Option.none,
+        List.cons p rest =>
+            match p {
+                Pair.pair k v =>
+                    if String.beq k name then Option.some v else script_dep_dir name rest,
+            },
+    }
+
+#[partial]
+def script_member_root (dir : String) (depth : I64) : IO (Option String) := do {
+    if I64.lt depth 1i64 then IO.pure Option.none
+    else do {
+        let members <- Mote.workspace_members dir;
+        if Bool.not (List.is_empty members)
+        then IO.pure (Option.some dir)
+        else if String.beq dir "/"
+        then IO.pure Option.none
+        else script_member_root
+            (Path.to_string (Path.join (Path.path dir) (Path.path "..")))
+            (I64.sub depth 1i64)
+    }
+}
+
+#[partial]
+def script_member_named (root : String) (members : List String) (name : String) : IO (Option String) :=
+    match members {
+        List.empty => IO.pure Option.none,
+        List.cons m rest => do {
+            let dir := Path.to_string (Path.join (Path.path root) (Path.path m));
+            let man <- Mote.manifest_at dir;
+            match man {
+                Option.some x =>
+                    if String.beq x.name name
+                    then IO.pure (Option.some dir)
+                    else script_member_named root rest name,
+                Option.none => script_member_named root rest name,
+            }
+        },
+    }
+
+def script_owner_dir (base_dir : String) (mote_name : String) : IO (Option String) := do {
+    let own <- Mote.manifest_at base_dir;
+    match own {
+        Option.some m =>
+            if String.beq m.name mote_name
+            then IO.pure (Option.some m.dir)
+            else match script_dep_dir mote_name m.dep_dirs {
+                Option.some d => IO.pure (Option.some d),
+                Option.none => do {
+                    let root <- script_member_root base_dir 32i64;
+                    match root {
+                        Option.none => IO.pure Option.none,
+                        Option.some r => do {
+                            let members <- Mote.workspace_members r;
+                            script_member_named r members mote_name
+                        }
+                    }
+                },
+            },
+        Option.none => do {
+            let root <- script_member_root base_dir 32i64;
+            match root {
+                Option.none => IO.pure Option.none,
+                Option.some r => do {
+                    let members <- Mote.workspace_members r;
+                    script_member_named r members mote_name
+                }
+            }
+        },
+    }
+}
+
+#[partial]
+def script_find_in_members (root : String) (members : List String) (name : String) :
+        IO (Option (Pair String ScriptTarget)) :=
+    match members {
+        List.empty => IO.pure Option.none,
+        List.cons m rest => do {
+            let dir := Path.to_string (Path.join (Path.path root) (Path.path m));
+            let found <- Mote.scripts_at_path (String.concat dir "/mote.toml");
+            match found {
+                Option.some pr =>
+                    match pr {
+                        Pair.pair mdir scripts =>
+                            match script_find name scripts {
+                                Option.some t => IO.pure (Option.some (Pair.pair mdir t)),
+                                Option.none => script_find_in_members root rest name,
+                            },
+                    },
+                Option.none => script_find_in_members root rest name,
+            }
+        },
+    }
+
+def script_display_dir (dir : String) : String :=
+    if String.is_empty dir then "." else dir
+
+#[terminating]
+def script_print_lines (dir : String) (scripts : List ScriptTarget) : IO Unit :=
+    match scripts {
+        List.empty => IO.pure unit,
+        List.cons t rest => do {
+            println (String.concat (script_display_dir dir)
+                (String.concat "/" (String.concat (ScriptTarget.script_name t)
+                    (String.concat " -> " (ScriptTarget.script_path t)))));
+            script_print_lines dir rest
+        },
+    }
+
+def script_print (dir : String) (scripts : List ScriptTarget) : IO I64 :=
+    match scripts {
+        List.empty => do {
+            println (String.concat "no [[script]] entries in " (script_display_dir dir));
+            return 1
+        },
+        List.cons _ _ => do {
+            script_print_lines dir scripts;
+            return 0
+        },
+    }
+
+def script_build_and_run (manifest_dir : String) (t : ScriptTarget)
+    (verbose : Bool) (debug : Bool) (no_cache : Bool) (target_dir_flag : String)
+    (mote_name : String) (program_args : List String) : IO I64 := do {
+    let owner_opt <-
+        if String.is_empty mote_name
+        then IO.pure (Option.some manifest_dir)
+        else script_owner_dir manifest_dir mote_name;
+    match owner_opt {
+        Option.none => do {
+            println (String.concat "error: no mote `" (String.concat mote_name
+                (String.concat "` for script `" (String.concat (ScriptTarget.script_name t) "`"))));
+            return 1
+        },
+        Option.some owner => do {
+            let spec <- TargetSpec.native;
+            let src := ScriptTarget.script_path t;
+            let out_name : Path := Path.path (ScriptTarget.script_name t);
+            let rc <- build_cached_at src owner out_name target_dir_flag verbose debug
+                no_cache spec;
+            if Bool.not (I64.beq rc 0i64)
+            then do {
+                println "script: compilation failed";
+                return 1
+            }
+            else do {
+                let target_dir <- build_target_dir target_dir_flag src;
+                let dest_dir : String := build_dest_dir target_dir debug;
+                let bin_path : String :=
+                    Path.to_string (Path.join (Path.path dest_dir) out_name);
+                exec_cmd bin_path program_args
+            }
+        },
+    }
+}
+
+#[partial]
+def script_run_in_workspace (base_dir : String) (name : String) (verbose : Bool)
+    (debug : Bool) (no_cache : Bool) (target_dir_flag : String) (mote_name : String)
+    (program_args : List String) : IO I64 := do {
+    let root <- script_member_root base_dir 32i64;
+    match root {
+        Option.none => do {
+            println (String.concat "error: no script `" (String.concat name "`"));
+            return 1
+        },
+        Option.some r => do {
+            let members <- Mote.workspace_members r;
+            let hit <- script_find_in_members r members name;
+            match hit {
+                Option.some pr =>
+                    match pr {
+                        Pair.pair mdir t =>
+                            script_build_and_run mdir t verbose debug no_cache
+                                target_dir_flag mote_name program_args,
+                    },
+                Option.none => do {
+                    println (String.concat "error: no script `" (String.concat name "`"));
+                    return 1
+                },
+            }
+        },
+    }
+}
+
+def script_run_named (dir : String) (scripts : List ScriptTarget) (name : String)
+    (verbose : Bool) (debug : Bool) (no_cache : Bool) (target_dir_flag : String)
+    (workspace : Bool) (mote_name : String) (program_args : List String) : IO I64 := do {
+    if String.is_empty name
+    then do {
+        println "error: script: no script name given (use --list)";
+        return 1
+    }
+    else do {
+        let n := script_count name scripts;
+        if I64.beq n 0i64
+        then
+            if workspace
+            then script_run_in_workspace dir name verbose debug no_cache target_dir_flag
+                mote_name program_args
+            else do {
+                println (String.concat "error: no script `" (String.concat name
+                    (String.concat "` in " dir)));
+                return 1
+            }
+        else if I64.beq n 1i64
+        then match script_find name scripts {
+            Option.some t =>
+                script_build_and_run dir t verbose debug no_cache target_dir_flag
+                    mote_name program_args,
+            Option.none => do {
+                println (String.concat "error: no script `" (String.concat name "`"));
+                return 1
+            },
+        }
+        else do {
+            println (String.concat "error: duplicate script name `" (String.concat name "`"));
+            return 1
+        }
+    }
+}
+
+def run_script (name : String) (verbose : Bool) (debug : Bool) (no_cache : Bool)
+    (target_dir_flag : String) (list_mode : Bool) (workspace : Bool)
+    (mote_name : String) (program_args : List String) : IO I64 := do {
+    let found <- Mote.scripts_at_path ".";
+    match found {
+        Option.none => do {
+            println "error: no mote.toml above this directory";
+            return 1
+        },
+        Option.some pr =>
+            match pr {
+                Pair.pair dir scripts =>
+                    if list_mode
+                    then script_print dir scripts
+                    else script_run_named dir scripts name verbose debug no_cache
+                        target_dir_flag workspace mote_name program_args,
+            },
     }
 }
 
@@ -2346,6 +2623,12 @@ def Command.dispatch (cmd : Command) : IO I64 :=
         },
         Command.run file args verbose debug release => do {
             run_file file verbose (if debug then true else Bool.not release) args
+        },
+        Command.script name args verbose debug release no_cache workspace list target_dir mote => do {
+            run_script (Option.get_or_default "" name) verbose
+                (if debug then true else Bool.not release) no_cache
+                (Option.get_or_default "" target_dir) list workspace
+                (Option.get_or_default "" mote) args
         },
         Command.eval file verbose => do {
             eval_file file verbose
