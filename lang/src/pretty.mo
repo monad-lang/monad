@@ -83,13 +83,15 @@ def show_param (p : Param) : String := match p {
 pub def show_term (t : Term) : String := match t {
     var idx dbg => show_debug_name dbg,
     lam dbg typ body =>
+        // The parens around the annotated parameter are what makes the
+        // printed lambda re-parse; both grammars reject the bare form.
         let name_str := show_debug_name (binder_name dbg) in
         let type_str := show_term typ in
         let body_str := show_term body in
-        let fn_name := String.concat "(fn " name_str in
+        let fn_name := String.concat "(fn (" name_str in
         let fn_type := String.concat " : " type_str in
         let lhs := String.concat fn_name fn_type in
-        let rhs := String.concat " => " body_str in
+        let rhs := String.concat ") => " body_str in
         let inner := String.concat lhs rhs in
         String.concat inner ")",
     pi b arg ret =>
@@ -116,12 +118,10 @@ pub def show_term (t : Term) : String := match t {
             let rt := String.concat "} -> " body_str in
             String.concat mid rt,
     app fun arg =>
-        let fun_str := show_term fun in
-        let arg_str := show_term arg in
-        let lhs := String.concat "(" fun_str in
-        let sp := String.concat " " arg_str in
-        let inner := String.concat lhs sp in
-        String.concat inner ")",
+        // Flattened: `((f a) b)` prints as `(f a b)`, which reads back
+        // identically because `app` associates left in both grammars.
+        let spine := show_app_spine (Term.app fun arg) in
+        String.concat "(" (String.concat spine ")"),
     lit value => show_literal value,
     // Not type-checked terms: `resolve_quote` (lang/typecheck/macro_expand.mo)
     // leaves the `quote_` wrapper itself in place while resolving its
@@ -171,12 +171,90 @@ def show_cubical_args (ts : List Term) : String := match ts {
         String.concat one (show_cubical_args rest),
 }
 
+/// The whole argument spine of an application, innermost function first:
+/// `f a b` for `app (app f a) b`. A nested argument is printed by
+/// `show_term`, which parenthesises an application of its own, so only the
+/// head call of a spine is flattened.
+#[partial]
+def show_app_spine (t : Term) : String := match t {
+    Term.app fun arg =>
+        let head := show_app_spine fun in
+        String.concat head (String.concat " " (show_term arg)),
+    _ => show_term t,
+}
+
+
+/// Escape a string's content for a `"..."` literal, so that what
+/// `show_literal` prints reads back as the same value. Escapes `\` and `"`
+/// (required by the lexer), names the five common control bytes, and
+/// spells the rest `\u{..}`. Bytes from 0x20 up are copied in RUNS rather
+/// than one at a time: a lone byte of a multi-byte UTF-8 sequence is not a
+/// valid `String`, so an astral character must stay whole.
+#[partial]
+pub def escape_string (s : String) : String :=
+    String.concat_list (escape_bytes (String.to_list s) List.empty List.empty)
+
+/// `run` is the pending unescaped byte run, newest byte first; `acc` is
+/// the emitted pieces, newest first. One self-call, so the tail-call
+/// rewrite keeps this a loop.
+#[partial]
+def escape_bytes (bs : List U8) (run : List U8) (acc : List String) : List String :=
+    match bs {
+        List.empty => List.reverse (push_escaped_run run acc),
+        List.cons b rest =>
+            let escaped : Bool := is_escapable_byte b in
+            let next_run : List U8 :=
+                if escaped then List.empty else List.cons b run in
+            let next_acc : List String :=
+                if escaped
+                then List.cons (escape_byte b) (push_escaped_run run acc)
+                else acc in
+            escape_bytes rest next_run next_acc,
+    }
+
+/// Close the pending run into `acc`, unless it is empty.
+#[partial]
+def push_escaped_run (run : List U8) (acc : List String) : List String :=
+    match run {
+        List.empty => acc,
+        List.cons _ _ => List.cons (String.from_list (List.reverse run)) acc,
+    }
+
+def is_escapable_byte (b : U8) : Bool :=
+    U8.lt b 0x20u8 || U8.beq b 0x22u8 || U8.beq b 0x5Cu8
+
+#[partial]
+def escape_byte (b : U8) : String :=
+    if U8.beq b 0x5Cu8 then "\\\\"
+    else if U8.beq b 0x22u8 then "\\\""
+    else if U8.beq b 0x0Au8 then "\\n"
+    else if U8.beq b 0x0Du8 then "\\r"
+    else if U8.beq b 0x09u8 then "\\t"
+    else if U8.beq b 0x08u8 then "\\b"
+    else if U8.beq b 0x0Cu8 then "\\f"
+    else unicode_control_escape b
+
+/// The `\u{..}` spelling of a control byte below 0x20: one or two
+/// lowercase hex digits, which is what `unicode_escape` reads.
+def unicode_control_escape (b : U8) : String :=
+    let n : U32 := U8.to_u32 b in
+    if U32.lt n 16u32
+    then String.concat "\\u{" (String.concat (hex_digit n) "}")
+    else
+        let hi : String := hex_digit (U32.shr n 4u32) in
+        let lo : String := hex_digit (U32.and n 15u32) in
+        String.concat "\\u{" (String.concat hi (String.concat lo "}"))
+
+/// One lowercase hex digit as its character, not its decimal value.
+def hex_digit (n : U32) : String :=
+    if U32.lt n 10u32
+    then String.from_list [U32.to_u8 (U32.add n 48u32)]
+    else String.from_list [U32.to_u8 (U32.add n 87u32)]
 
 #[partial]
 def show_literal (lit : Literal) : String := match lit {
     str value =>
-        let lhs := String.concat "\"" value in
-        String.concat lhs "\"",
+        String.concat "\"" (String.concat (escape_string value) "\""),
     char value =>
         let lhs := String.concat "'" (char_to_string value) in
         String.concat lhs "'",
@@ -665,7 +743,7 @@ def test_show_lam_unnamed : Bool :=
     let dbg := DebugName.unnamed in
     let body := Term.var 0 DebugName.unnamed in
     let t := Term.lam (binder_explicit dbg) Term.hole body in
-    show_term t == "(fn _ : _ => _)"
+    show_term t == "(fn (_ : _) => _)"
 
 #[test]
 def test_show_lam_named : Bool :=
@@ -673,7 +751,7 @@ def test_show_lam_named : Bool :=
     let dbg := DebugName.named id in
     let body := Term.var 0 dbg in
     let t := Term.lam (binder_explicit dbg) (Term.sort (SortLevel.concrete 1)) body in
-    show_term t == "(fn x : Type => x)"
+    show_term t == "(fn (x : Type) => x)"
 
 #[test]
 def test_show_forall_named : Bool :=
@@ -919,7 +997,7 @@ def test_show_decl_def : Bool :=
     let lam := Term.lam (binder_named path) (Term.sort (SortLevel.concrete 1)) var_t in
     let d := Def.mk name (Term.sort (SortLevel.concrete 1)) lam List.empty List.empty Visibility.package_private List.empty in
     let decl := Decl.def_d d in
-    show_decl decl == "def id : Type := (fn x : Type => x)"
+    show_decl decl == "def id : Type := (fn (x : Type) => x)"
 
 #[test]
 def test_show_decl_class : Bool :=

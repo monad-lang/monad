@@ -7,8 +7,8 @@ use lang::types {
   show_module_path, sort_n, u32, unnamed, use_bare, zero,
 }
 use lib::pretty {
-  show_decl, show_instance, show_match_case, show_multiplicity, show_num_suffix,
-  show_term, show_universe,
+  escape_string, show_decl, show_instance, show_match_case, show_multiplicity,
+  show_num_suffix, show_term, show_universe,
 }
 
 open Term {app, con, hole, lam, lit, ntv, pi, var}
@@ -167,7 +167,7 @@ def test_show_term_lam_simple : Bool :=
     let body : Term := Term.var 0 (DebugName.named test_id_x) in
     let lam : Term := Term.lam (binder_named test_id_x) (sort_n 1) body in
     let result : String := show_term lam in
-    String.beq result "(fn x : Type => x)"
+    String.beq result "(fn (x : Type) => x)"
 
 #[test]
 def test_show_term_app_simple : Bool :=
@@ -307,7 +307,7 @@ def test_show_decl_def : Bool :=
     let def_ : Def := Def.mk name typ body empty_constraints empty_attrs Visibility.package_private List.empty in
     let decl : Decl := Decl.def_d def_ in
     let result : String := show_decl decl in
-    String.beq result "def id : (Type -> (A -> A)) := (fn x : A => x)"
+    String.beq result "def id : (Type -> (A -> A)) := (fn (x : A) => x)"
 
 #[test]
 def test_show_decl_inductive : Bool :=
@@ -395,3 +395,32 @@ def test_show_match_case_with_args : Bool :=
     let mc : MatchCase := MatchCase.mk (Identifier.id "some") args body Option.none Option.none in
     let result : String := show_match_case mc in
     String.beq result "some x y => x"
+
+// --- escape_string tests ---
+
+#[test]
+def test_escape_string_quote_and_backslash : Bool :=
+    String.beq (escape_string "a\"b\\c") "a\\\"b\\\\c"
+
+#[test]
+def test_escape_string_named_controls : Bool :=
+    String.beq (escape_string "x\ty\nz\r") "x\\ty\\nz\\r"
+
+#[test]
+def test_escape_string_control_byte_one_digit : Bool :=
+    String.beq (escape_string (String.from_list [1u8])) "\\u{1}"
+
+#[test]
+def test_escape_string_control_byte_two_digits : Bool :=
+    String.beq (escape_string (String.from_list [27u8])) "\\u{1b}"
+
+/// Non-ASCII text -- an astral character above all -- must come back
+/// byte-identical, which a per-byte escape would break.
+#[test]
+def test_escape_string_astral_unchanged : Bool :=
+    String.beq (escape_string "\u{1F600}") "\u{1F600}"
+
+#[test]
+def test_show_term_str_escaped : Bool :=
+    let t : Term := Term.lit (Literal.str "say \"hi\"") in
+    String.beq (show_term t) "\"say \\\"hi\\\"\""
