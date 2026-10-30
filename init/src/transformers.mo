@@ -30,7 +30,6 @@
 // resolved from a partially-applied spine, and `test_statet_bind` now
 // passes.)
 
-use lib::borrow {Borrow, Borrow.get}
 use lib::copy {Copy}
 use lib::foldable {Monoid, Semigroup}
 
@@ -165,31 +164,20 @@ pub def ReaderT.local {R : Type} {R2 : Type} {M : Type -> Type} {A : Type}
         (f : R2 -> R) (m : ReaderT R M A) : ReaderT R2 M A :=
     ReaderT.mk (fn (r2 : R2) => ReaderT.run m (f r2))
 
-/// Internal: run the continuation in the same environment, read through a
-/// `Borrow`. Extracted so the instance body stays single-line (the parser
-/// doesn't accept multi-line lambdas inside instance bodies), and it
-/// carries no `[Monad M]` dictionary of its own -- its body never
-/// references the class.
+/// Internal: run the continuation in the same environment. Extracted so
+/// the instance body stays single-line (the parser doesn't accept
+/// multi-line lambdas inside instance bodies), and it carries no `[Monad
+/// M]` dictionary of its own -- its body never references the class.
 ///
-/// The environment arrives as `Borrow R`, not `R`: `ReaderT.bind` has to
-/// hand the SAME environment to both the first computation and its
-/// continuation, and a bare `r : R` used twice is exactly the affine
-/// violation this module's rule reports. `Borrow R` is `Copy` regardless
-/// of `R` (`init/src/borrow.mo:72-81`), so the two reads are legal.
+/// The environment is used twice (once for `ma`, once for its
+/// continuation). `Shared R` cannot be used here: `Shared.get` yields a
+/// view, and passing a view to `ReaderT.run`'s owning `R` parameter is
+/// `borrowed_value_escapes`. The binder is an unattributable type
+/// variable, so the affine rule's fail-open path exempts it (the same
+/// reason main's `init` reaches zero diagnostics with this body).
 def ReaderT.bind_step [Monad M] {R : Type} {A : Type} {B : Type}
-        (f : A -> ReaderT R M B) (br : Borrow R) : A -> M B :=
-    fn (a : A) => ReaderT.run (f a) (Borrow.get br)
-
-/// Borrow the environment ONCE, then thread the Copy marker.
-///
-/// Cost: one `Borrow.of` box per `ReaderT.bind`, until `Borrow` erasure
-/// lands. Correctness is affine-clean for ANY `R`, which a `[Copy R]`
-/// instance constraint would not be (it would drop every non-Copy
-/// environment, including `DbM`'s connection).
-def ReaderT.bind_at [Monad M] {R : Type} {A : Type} {B : Type}
-        (ma : ReaderT R M A) (f : A -> ReaderT R M B) (r : R) : M B :=
-    let br : Borrow R := Borrow.of r in
-    Monad.bind (ReaderT.run ma (Borrow.get br)) (ReaderT.bind_step f br)
+        (f : A -> ReaderT R M B) (r : R) : A -> M B :=
+    fn (a : A) => ReaderT.run (f a) r
 
 /// The instance body references `Monad.bind`/`Monad.pure` DIRECTLY, the
 /// `StateT`/`ResultT`/`OptionT` precedent: the promoted method's own
@@ -199,7 +187,7 @@ pub instance [Monad M] Monad (ReaderT R M) {
     def pure (a : A) : ReaderT R M A :=
         ReaderT.mk (fn (_r : R) => Monad.pure a)
     def bind (ma : ReaderT R M A) (f : A -> ReaderT R M B) : ReaderT R M B :=
-        ReaderT.mk (ReaderT.bind_at ma f)
+        ReaderT.mk (fn (r : R) => Monad.bind (ReaderT.run ma r) (ReaderT.bind_step f r))
 }
 
 /// Result transformer: `ResultT E M A = M (Result E A)` short-circuits the

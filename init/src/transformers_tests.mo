@@ -183,11 +183,12 @@ def test_statet_modify : Bool :=
         Pair.pair s _ => s == 6
     }
 
-// ── ReaderT: affine-clean bind for a NON-Copy environment ───────────────
+// ── ReaderT with a NON-Copy environment ─────────────────────────────────
 //
-// `List I64` has no `Copy` instance. The old `bind` used its environment
-// twice and would be an affine error under `error` mode; the Borrow-based
-// bind reads the same environment twice through a Copy marker.
+// `List I64` has no `Copy` instance. `ReaderT.bind` names its environment
+// twice; the binder's type is an unattributable type variable, so the
+// affine rule's fail-open path exempts it. This test pins that a non-Copy
+// environment still runs.
 
 def readert_list_bind_result : ReaderT (List I64) Id I64 :=
     let m : ReaderT (List I64) Id I64 := ReaderT.ask in
