@@ -1,6 +1,8 @@
 use std::test {}
 use lib::id {Id, Id.run}
-use lib::transformers {StateT, ReaderT, ResultT, OptionT}
+use lib::transformers {
+    StateT, ReaderT, ResultT, OptionT, WriterT, IdentityT,
+}
 
 // StateT spike: the smallest shape that exercises everything the rest of
 // this module depends on -- a higher-kinded type parameter (`M : Type -> Type`)
@@ -151,3 +153,145 @@ def test_optiont_bind_short_circuits : Bool :=
         Option.some _ => false,
         Option.none => true
     }
+
+// ── StateT: get / put / modify (MonadState operations, no class) ────────
+
+def statet_get_result : StateT I64 Id I64 :=
+    StateT.get
+
+#[test]
+def test_statet_get : Bool :=
+    match Id.run (StateT.run statet_get_result 5i64) {
+        Pair.pair s a => Bool.and (s == 5) (a == 5)
+    }
+
+def statet_put_result : StateT I64 Id Unit :=
+    StateT.put 9i64
+
+#[test]
+def test_statet_put : Bool :=
+    match Id.run (StateT.run statet_put_result 5i64) {
+        Pair.pair s _ => s == 9
+    }
+
+def statet_modify_result : StateT I64 Id Unit :=
+    StateT.modify (fn (x : I64) => x + 1i64)
+
+#[test]
+def test_statet_modify : Bool :=
+    match Id.run (StateT.run statet_modify_result 5i64) {
+        Pair.pair s _ => s == 6
+    }
+
+// ── ReaderT: affine-clean bind for a NON-Copy environment ───────────────
+//
+// `List I64` has no `Copy` instance. The old `bind` used its environment
+// twice and would be an affine error under `error` mode; the Borrow-based
+// bind reads the same environment twice through a Copy marker.
+
+def readert_list_bind_result : ReaderT (List I64) Id I64 :=
+    let m : ReaderT (List I64) Id I64 := ReaderT.ask in
+    Monad.bind m (fn (xs : List I64) =>
+        match xs {
+            List.cons h _ => Monad.pure h,
+            List.empty => Monad.pure 0i64
+        })
+
+#[test]
+def test_readert_bind_non_copy_env : Bool :=
+    let env : List I64 := List.cons 1i64 (List.cons 2i64 List.empty) in
+    (Id.run (ReaderT.run readert_list_bind_result env)) == 1
+
+// ── ResultT: ExceptT operations ─────────────────────────────────────────
+
+def resultt_throw_result : ResultT String Id I64 :=
+    ResultT.throw "bad"
+
+#[test]
+def test_resultt_throw : Bool :=
+    match Id.run (ResultT.run resultt_throw_result) {
+        Result.ok _ => false,
+        Result.err e => String.beq e "bad"
+    }
+
+def resultt_catch_result : ResultT String Id I64 :=
+    ResultT.catch resultt_throw_result (fn (_e : String) => Monad.pure 9i64)
+
+#[test]
+def test_resultt_catch : Bool :=
+    match Id.run (ResultT.run resultt_catch_result) {
+        Result.ok a => a == 9,
+        Result.err _ => false
+    }
+
+def resultt_map_error_result : ResultT I64 Id I64 :=
+    ResultT.map_error (fn (_e : String) => 42i64) resultt_throw_result
+
+#[test]
+def test_resultt_map_error : Bool :=
+    match Id.run (ResultT.run resultt_map_error_result) {
+        Result.ok _ => false,
+        Result.err e => e == 42
+    }
+
+// ── WriterT ─────────────────────────────────────────────────────────────
+
+def writert_bind_log_result : WriterT String Id I64 :=
+    let m : WriterT String Id I64 := Monad.pure 10i64 in
+    Monad.bind m (fn a =>
+        Monad.bind (WriterT.tell "x") (fn (_ : Unit) => Monad.pure (a + 1i64)))
+
+#[test]
+def test_writert_bind_log : Bool :=
+    match Id.run (WriterT.run writert_bind_log_result) {
+        Pair.pair w a => Bool.and (String.beq w "x") (a == 11)
+    }
+
+#[test]
+def test_writert_lift_empty_log : Bool :=
+    let m : WriterT String Id I64 := WriterT.lift (Id.id 5i64) in
+    match Id.run (WriterT.run m) {
+        Pair.pair w a => Bool.and (String.is_empty w) (a == 5)
+    }
+
+def writert_listen_result : WriterT String Id (Pair I64 String) :=
+    let m : WriterT String Id I64 :=
+        Monad.bind (WriterT.tell "log") (fn (_ : Unit) => Monad.pure 7i64) in
+    WriterT.listen m
+
+#[test]
+def test_writert_listen : Bool :=
+    match Id.run (WriterT.run writert_listen_result) {
+        Pair.pair w p =>
+            match p {
+                Pair.pair a w2 =>
+                    Bool.and (String.beq w "log")
+                        (Bool.and (String.beq w2 "log") (a == 7))
+            }
+    }
+
+def writert_censor_result : WriterT String Id I64 :=
+    let m : WriterT String Id I64 :=
+        Monad.bind (WriterT.tell "abc") (fn (_ : Unit) => Monad.pure 1i64) in
+    WriterT.censor (fn (w : String) => String.concat w "!") m
+
+#[test]
+def test_writert_censor : Bool :=
+    match Id.run (WriterT.run writert_censor_result) {
+        Pair.pair w a => Bool.and (String.beq w "abc!") (a == 1)
+    }
+
+// ── IdentityT ───────────────────────────────────────────────────────────
+
+#[test]
+def test_idt_lift : Bool :=
+    let m : IdentityT Id I64 := IdentityT.lift (Id.id 5i64) in
+    (Id.run (IdentityT.run m)) == 5
+
+def idt_bind_result : IdentityT Id I64 :=
+    let m : IdentityT Id I64 := Monad.pure 10i64 in
+    Monad.bind m (fn a => Monad.pure (a + 1i64))
+
+#[test]
+def test_idt_bind : Bool :=
+    (Id.run (IdentityT.run idt_bind_result)) == 11
