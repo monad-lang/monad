@@ -18,6 +18,7 @@
 # Local use:
 #   scripts/ci-self-compile.sh [out-dir]
 #   MONAD_ALLOW_RUST_FALLBACK=1 scripts/ci-self-compile.sh   # explicit opt-out
+#   MONADUP_BIN=/path/to/monadup scripts/ci-self-compile.sh  # pick the installer
 #
 # The nightly is installed with `monadup default` (install latest, set it
 # active), so the host is `$MONAD_HOME/bin/monad` -- the active shim, no
@@ -62,9 +63,22 @@ rust_fallback() {
 
 nightly=""
 monad_home="${MONAD_HOME:-"$HOME/.monad"}"
-if ! command -v monadup >/dev/null 2>&1; then
-  rust_fallback "no monadup on PATH"
-elif ! monadup default; then
+# `monadup` is not part of the dev shell: the real tool is a published release
+# asset and the repo ships only the bootstrap stub (`scripts/monadup`). Prefer
+# an explicit MONADUP_BIN, then PATH, then the stub, then an installed copy.
+if [ -n "${MONADUP_BIN:-}" ]; then
+  monadup_bin="$MONADUP_BIN"
+  [ -x "$monadup_bin" ] || rust_fallback "MONADUP_BIN ($monadup_bin) is not executable"
+elif command -v monadup >/dev/null 2>&1; then
+  monadup_bin="$(command -v monadup)"
+elif [ -x "$root/scripts/monadup" ]; then
+  monadup_bin="$root/scripts/monadup"
+elif [ -x "$monad_home/bin/monadup" ]; then
+  monadup_bin="$monad_home/bin/monadup"
+else
+  rust_fallback "no monadup on PATH (and no scripts/monadup installer)"
+fi
+if ! "$monadup_bin" default; then
   rust_fallback "monadup could not install the latest nightly"
 elif [ ! -x "$monad_home/bin/monad" ]; then
   rust_fallback "monadup reported success but $monad_home/bin/monad is not executable"

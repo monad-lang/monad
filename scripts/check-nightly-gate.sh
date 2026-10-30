@@ -141,15 +141,17 @@ expect_log "Rust host fallback" "opt-out fallback"
 NIGHTLY="$head_commit" run_gate 1 "built compiler check failure" FAKE_CHECK_RC=1
 expect_log "cannot check cli/src/main.mo" "built compiler check failure"
 
-# 6. No monadup on PATH is a failure by default. The shell is named
-#    absolutely: PATH below deliberately contains no commands at all.
+# 6. No usable installer is a failure by default. `MONADUP_BIN` is the
+#    explicit override; an unusable one must fail rather than silently reach
+#    for the repo stub (which would hit the network).
 bash_bin="$(command -v bash)"
 mkdir -p "$work/nopath"
 rc=0
 env PATH="$work/nopath" MONAD_HOME="$work/home" \
+  MONADUP_BIN="$work/nopath/monadup" \
   "$bash_bin" "$gate" "$work/out" >"$work/log-nomonadup" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "no monadup: expected failure, got 0"
-grep -qF "no monadup on PATH" "$work/log-nomonadup" \
+grep -qF "MONADUP_BIN" "$work/log-nomonadup" \
   || { cat "$work/log-nomonadup" >&2; fail "no monadup: missing diagnosis"; }
 pass
 
