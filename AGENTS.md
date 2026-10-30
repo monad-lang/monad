@@ -136,6 +136,40 @@ cargo test --manifest-path rust/Cargo.toml -p monad-core <name>   # one Rust tes
 - The flake's packages are on `monad-lang.cachix.org`; `nix build
   --accept-flake-config .#monad` pulls them with no local build.
 
+### Bootstrap compatibility
+
+The **last published nightly must be able to compile the next compiler.**
+`scripts/ci-self-compile.sh` enforces that in CI: it installs the latest
+nightly with `monadup default`, forces a fresh build of `cli/src/main.mo` with
+that nightly, and then runs the built binary's `check cli/src/main.mo`. A
+failure is a failure — the Rust host is not a fallback, because falling back is
+how an incompatible tree used to pass.
+
+The **compiler-source surface** is exactly what `scripts/build-self-hosted.sh`
+scans: `init std lang cli llvm runtime build`, the motes in its input list
+(`clap json lsp parsec toml toolkit`), their `mote.toml`s and `runtime/src`.
+`MONAD_STDLIB` points the host at the checkout's `init/src`, so a prelude
+change is in this surface too.
+
+**Two-step rollout.** When a new construct or native is needed:
+
+1. Land its support (parser/checker/codegen/native wiring) and tests. Do not
+   use it in the compiler-source surface yet; the old nightly must still be
+   able to read the tree.
+2. Wait for a nightly whose commit contains step 1. Only then use the
+   construct from the surface (and, for a rename/removal, delete the old
+   path). `plans/bootstrapping/native-rollout.md` specifies the native half.
+
+A red gate means the change used something the nightly lacks (split it), the
+tree advanced past a nightly that cannot build it (wait for the next nightly —
+do not weaken the gate), or the nightly miscompiles (fix it).
+
+`bootstrap/nightly-floor.txt` is a one-time bootstrap window: while the latest
+nightly predates the commit named there, the script says so and uses the Rust
+host. Once a nightly at or after the floor exists the check is strict; do not
+raise the floor to make a later change pass. `MONAD_ALLOW_RUST_FALLBACK=1`
+exists for a local checkout with no network and is never set in CI.
+
 ## Writing Monad Code
 
 ### Declarations

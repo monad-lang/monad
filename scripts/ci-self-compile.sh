@@ -1,73 +1,124 @@
 #!/usr/bin/env bash
-# Self-compile the compiler for CI: the latest monadup NIGHTLY hosts the
-# build when it can, and the checkout's Rust host (monad-rs) is the FALLBACK.
+# Self-compile the compiler for CI under the LATEST PUBLISHED NIGHTLY.
 #
-# CI runs only the Rust test suite; this script is the pipeline's other
-# compiler leg -- it proves THIS tree's sources still self-compile. The
-# nightly-first order is the point of the transition: the nightly is cut
-# from main, so a PR that changes the parser, the prelude or the sources
-# the compiler is built FROM can outgrow it, and the failure mode is not
-# always a clean parse error -- the derive-handler branch (PR #77) had a
-# nightly whose decls parser silently truncated `std/derive.mo` at the
-# first annotated defmacro. The FALLBACK catches the loud failures; a
-# silently wrong nightly-hosted build is a risk this scheme accepts, and
-# the Rust regression tests (rust/core/tests/constrained_dict_regression_test.rs
-# and the suite they joined) are the coverage that no longer depends on
-# the self-hosted sweeps this replaces.
+# The invariant this script enforces: the last nightly can compile the next
+# compiler. A tree that uses a construct the nightly does not know yet fails
+# here, at the gate, instead of on a user's machine after `monadup update`.
+# The Rust host is the compiler used by the release ladder, but it is NOT a
+# fallback for this check: falling back is how an incompatible tree passed CI
+# before (see plans/bootstrapping/native-rollout.md).
+#
+# `bootstrap/nightly-floor.txt` is the one temporary exception. It names the
+# commit the tree first required from a nightly. While the latest nightly
+# predates that commit, this script says so loudly and uses the Rust host --
+# the nightly that would prove the invariant has not been published yet.
+# Once a nightly at or after the floor exists, the check is strict and stays
+# strict; a future incompatible change cannot use the floor to opt out.
+#
+# Local use:
+#   scripts/ci-self-compile.sh [out-dir]
+#   MONAD_ALLOW_RUST_FALLBACK=1 scripts/ci-self-compile.sh   # explicit opt-out
 #
 # The nightly is installed with `monadup default` (install latest, set it
 # active), so the host is `$MONAD_HOME/bin/monad` -- the active shim, no
-# output parsing. On a runner with no monadup, or a failed install, the
-# script says so and takes the fallback directly.
+# output parsing. `monad version` prints the commit the nightly was built
+# from, and that is what the floor comparison reads.
 #
 # Both hosts build the SAME thing: `scripts/build-self-hosted.sh` compiles
-# `cli/src/main.mo` from THIS checkout (MONAD_STDLIB pinned to the
-# checkout's init/src by that script), one rung for a `monad` host
-# (native speed, ~1 min), an interpreted two-rung build for a monad-rs
-# host (~22 min). The fallback host comes from MONAD_HOST_BIN -- ci.yml
-# sets it to the flake's packaged monad-rs; unset, the default build-self-
-# hosted.sh carries is `cargo run --manifest-path rust/Cargo.toml --release --`.
-#
-# Runnable by hand, which is how it was checked rather than assumed:
-#
-#   MONAD_HOST_BIN=rust/target/release/monad-rs scripts/ci-self-compile.sh
-#
-# with the same warning every other build carries: do not edit the tree
-# while it runs.
+# `cli/src/main.mo` from THIS checkout (MONAD_STDLIB pinned to the checkout's
+# init/src by that script), one rung for a `monad` host (native speed, ~1 min),
+# an interpreted two-rung build for a monad-rs host (~22 min).
 set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-fallback_host="${MONAD_HOST_BIN:-"cargo run --manifest-path $root/rust/Cargo.toml --release --"}"
 out="${1:-$root/target-monad/ci-self-compile}"
+floor_file="$root/bootstrap/nightly-floor.txt"
+allow_fallback="${MONAD_ALLOW_RUST_FALLBACK:-0}"
+fallback_host="${MONAD_HOST_BIN:-"cargo run --manifest-path $root/rust/Cargo.toml --release --"}"
+
+say() { printf 'ci-self-compile: %s\n' "$*" >&2; }
+
+# The Rust-host path. By default this is a FAILURE, not a fallback: the whole
+# point of the gate is that the nightly can build the tree. The opt-out exists
+# for a local checkout with no network, and CI never sets it.
+rust_fallback() {
+  local why="$1"
+  if [ "$allow_fallback" != 1 ]; then
+    say "FAILED: $why"
+    say "The last nightly must be able to build this tree. See AGENTS.md's"
+    say "'Bootstrap compatibility': land new language/native support first and"
+    say "use it in compiler sources only after a nightly contains it. Do not"
+    say "set MONAD_ALLOW_RUST_FALLBACK=1 to make CI green."
+    exit 1
+  fi
+  say "$why -- falling back to the Rust host (MONAD_ALLOW_RUST_FALLBACK=1)"
+  MONAD_HOST_BIN="$fallback_host" scripts/build-self-hosted.sh "$out"
+  say "self-compile OK with the Rust host fallback ($fallback_host)"
+}
+
+# ─── Find the latest nightly ────────────────────────────────────────────────
 
 nightly=""
 monad_home="${MONAD_HOME:-"$HOME/.monad"}"
 if ! command -v monadup >/dev/null 2>&1; then
-  echo "ci-self-compile: no monadup on PATH -- taking the Rust host fallback" >&2
+  rust_fallback "no monadup on PATH"
 elif ! monadup default; then
-  echo "ci-self-compile: monadup could not install the latest nightly -- taking the Rust host fallback" >&2
+  rust_fallback "monadup could not install the latest nightly"
 elif [ ! -x "$monad_home/bin/monad" ]; then
-  echo "ci-self-compile: monadup reported success but $monad_home/bin/monad is not executable -- taking the Rust host fallback" >&2
+  rust_fallback "monadup reported success but $monad_home/bin/monad is not executable"
 else
   nightly="$monad_home/bin/monad"
 fi
 
-if [ -n "$nightly" ]; then
-  # `|| 1` rather than `set -e`'s exit: a failed nightly-hosted build is
-  # this script's EXPECTED middle case, not the end of the run. The build
-  # either leaves no binary (the fallback rebuilds fresh) or fails before
-  # writing one (build-self-hosted.sh's staleness scan only short-circuits
-  # on an existing, newer binary, which a failed attempt never produces).
-  nightly_rc=0
-  MONAD_HOST_BIN="$nightly" scripts/build-self-hosted.sh "$out" || nightly_rc=$?
-  if [ "$nightly_rc" -eq 0 ]; then
-    echo "ci-self-compile: self-compile OK with the latest nightly host ($nightly)"
-    exit 0
-  fi
-  echo "ci-self-compile: the nightly-hosted build exited $nightly_rc -- falling back to the Rust host" >&2
+nightly_commit="$("$nightly" version 2>/dev/null | tr -d '[:space:]' || true)"
+if [ -z "$nightly_commit" ] || [ "$nightly_commit" = unknown ]; then
+  rust_fallback "the installed nightly does not report a commit (\`monad version\` was '${nightly_commit}')"
 fi
 
-MONAD_HOST_BIN="$fallback_host" scripts/build-self-hosted.sh "$out"
-echo "ci-self-compile: self-compile OK with the Rust host fallback ($fallback_host)"
+# ─── The one-time bootstrap window ──────────────────────────────────────────
+
+floor=""
+if [ -f "$floor_file" ]; then
+  floor="$(tr -d '[:space:]' < "$floor_file")"
+fi
+if [ -n "$floor" ]; then
+  if ! git -C "$root" rev-parse --verify --quiet "$floor^{commit}" >/dev/null; then
+    rust_fallback "bootstrap/nightly-floor.txt names '$floor', which is not in this clone"
+  fi
+  # True exactly when the nightly predates the floor: the release that would
+  # prove the invariant has not been cut yet. This is the only non-strict path.
+  if git -C "$root" merge-base --is-ancestor "$nightly_commit" "$floor" 2>/dev/null; then
+    say "the latest nightly ($nightly_commit) predates this tree's floor ($floor)"
+    say "the required check resumes when a nightly at or after $floor is published"
+    MONAD_HOST_BIN="$fallback_host" scripts/build-self-hosted.sh "$out"
+    say "self-compile OK with the Rust host (bootstrap window)"
+    exit 0
+  fi
+fi
+
+# ─── The required check ─────────────────────────────────────────────────────
+
+# A binary left by an earlier run must not satisfy build-self-hosted.sh's
+# staleness check: the host that built it is the thing under test.
+rm -rf "$out"
+
+nightly_rc=0
+MONAD_HOST_BIN="$nightly" scripts/build-self-hosted.sh "$out" || nightly_rc=$?
+if [ "$nightly_rc" -ne 0 ]; then
+  rust_fallback "the latest nightly ($nightly_commit) cannot build this tree"
+fi
+
+# Building is not enough: the binary has to do the job it was built for. A
+# nightly that compiles the sources but miscompiles them is the failure class
+# the old fallback scheme accepted (see the await_fiber_raw incident).
+if ! "$out/monad" check cli/src/main.mo; then
+  rust_fallback "the nightly-built compiler ($nightly_commit) cannot check cli/src/main.mo"
+fi
+built="$("$out/monad" version 2>/dev/null | tr -d '[:space:]' || true)"
+if [ -z "$built" ] || [ "$built" = unknown ]; then
+  rust_fallback "the nightly-built compiler did not report a commit"
+fi
+
+say "self-compile OK with the latest nightly host ($nightly_commit); built compiler reports $built"

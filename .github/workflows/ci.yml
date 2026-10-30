@@ -251,7 +251,13 @@ jobs:
     # room for the runner's co-tenants.
     timeout-minutes: 90
     steps:
+      # Full history: `scripts/ci-self-compile.sh` checks whether the installed
+      # nightly predates `bootstrap/nightly-floor.txt` with `git merge-base`.
+      # A depth-1 checkout would report the floor as "not in this clone" and
+      # fail the required check for the wrong reason.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       # The FALLBACK host for this job's self-compile comes from the flake:
       # `packages.monadHost` is `cargo build -p monad-cli`, hermetically, and
@@ -294,14 +300,19 @@ jobs:
           nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
 
       # The self-compile leg, and the whole substance of this job beyond
-      # building the fallback host: `scripts/ci-self-compile.sh` installs the
-      # latest monadup nightly (`monadup default`), self-compiles this
-      # checkout with it as the host, and falls back to the flake's monad-rs
-      # (MONAD_HOST_BIN from the step above) when the nightly cannot build
-      # the tree -- a PR can outgrow a nightly cut from main, and the
-      # failure is not always loud, so the Rust host stays the reference
-      # the fallback builds with. The script's own header says what it
-      # accepts as failure and what it does not.
+      # building the reference host: `scripts/ci-self-compile.sh` installs the
+      # latest monadup nightly (`monadup default`), builds this checkout with
+      # that nightly, and then runs the built binary's own
+      # `check cli/src/main.mo`. A failure is a failure: the invariant is that
+      # the last published nightly can compile the next compiler, and the Rust
+      # host (MONAD_HOST_BIN from the step above) is only the one-time
+      # bootstrap-window host named by `bootstrap/nightly-floor.txt` -- see
+      # AGENTS.md's "Bootstrap compatibility".
+      #
+      # `scripts/check-nightly-gate.sh` tests the gate's branches (floor
+      # window, strict failure, opt-out, bad built compiler) with fake hosts;
+      # it runs here because those paths cannot be exercised by the real
+      # nightly in one CI run.
       #
       # Called directly rather than through a devenv task: devenv-tasks
       # captures a task's stdout and shows it only on failure, and here the
@@ -319,7 +330,10 @@ jobs:
       # nix/monad.nix), and a mote's libraries reach the link through
       # `[link] pkg-config` (llvm/src/link.mo's `pkg_config_link_flags`)
       # rather than through the environment at all.
-      - name: Self-compile with the latest nightly (Rust host fallback)
+      - name: Nightly compatibility gate self-test
+        run: scripts/check-nightly-gate.sh
+
+      - name: Self-compile with the latest nightly (required)
         run: |
           nix develop --no-pure-eval --accept-flake-config \
             --profile "$HOME/.monad-ci-devshell" \

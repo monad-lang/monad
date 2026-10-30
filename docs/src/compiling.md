@@ -22,6 +22,13 @@ cargo run --manifest-path rust/Cargo.toml --release -- run cli/src/main.mo build
 That produces `monad`, a native binary that needs nothing else. Everything below
 uses it.
 
+The compiler is also expected to build with the **last published nightly**:
+CI's `scripts/ci-self-compile.sh` compiles `cli/src/main.mo` with it before
+running the built binary's own check. New language or native support therefore
+lands in two steps — support first, use in the compiler's own sources after a
+nightly containing it exists. `AGENTS.md`'s "Bootstrap compatibility" section
+has the rule.
+
 The absolute `-o` is not decoration. A relative output name is resolved against
 the compiler's default output directory, `/tmp/monad_out_<pid>` — see
 [Where the binary lands](#where-the-binary-lands).
