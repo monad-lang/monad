@@ -3,6 +3,7 @@
 
 use init::borrow {Borrow, Borrow.get}
 use std::test {}
+use http::cookie {SameSite}
 use http::strings {Strings.split_on}
 use http::body {Body.to_bytes_pure}
 use http::types {
@@ -15,8 +16,9 @@ use moon::handler_t {
   HandlerT.session_io, HandlerT.throw_io, HttpError, HttpError.make,
 }
 use moon::session {
-  Session, Session.get, SessionHandle, SessionHandle.get, SessionHandle.put,
-  SessionStore, SessionStore.new,
+  Session, Session.get, SessionConfig, SessionConfig.default, SessionHandle,
+  SessionHandle.get, SessionHandle.put, SessionStore, SessionStore.new,
+  SessionStore.new_with,
 }
 use moon::session_mw {SessionStore.with_session_t}
 
@@ -107,5 +109,51 @@ def test_session_roundtrip_through_context : IO Bool := do {
         Option.none => IO.pure false,
         Option.some set_cookie => load_after_cookie st (first_cookie_part set_cookie)
       }
+  }
+}
+
+// ── explicit session policy ─────────────────────────────────────────────
+
+#[test]
+def test_session_secure_cookie : IO Bool := do {
+  let cfg := SessionConfig.default "sid" 3600i64;
+  let cfg2 : SessionConfig := { cfg with secure := true };
+  let st_res <- SessionStore.new_with cfg2;
+  match st_res {
+    Result.err _ => IO.pure false,
+    Result.ok st => do {
+      let r <- HandlerT.run_io (SessionStore.with_session_t st set_value) (get_req "/");
+      match r {
+        Result.ok res =>
+          IO.pure (match Headers.get "Set-Cookie" res.headers {
+            Option.some v =>
+              Bool.and (String.contains v "Secure") (String.contains v "SameSite=Lax"),
+            Option.none => false
+          }),
+        Result.err _ => IO.pure false
+      }
+    }
+  }
+}
+
+#[test]
+def test_same_site_none_requires_secure : IO Bool := do {
+  let cfg := SessionConfig.default "sid" 3600i64;
+  let cfg2 : SessionConfig := { cfg with same_site := SameSite.none };
+  let r <- SessionStore.new_with cfg2;
+  match r {
+    Result.err _ => IO.pure true,
+    Result.ok _ => IO.pure false
+  }
+}
+
+#[test]
+def test_same_site_none_with_secure_ok : IO Bool := do {
+  let cfg := SessionConfig.default "sid" 3600i64;
+  let cfg2 : SessionConfig := { cfg with same_site := SameSite.none, secure := true };
+  let r <- SessionStore.new_with cfg2;
+  match r {
+    Result.ok _ => IO.pure true,
+    Result.err _ => IO.pure false
   }
 }

@@ -4,7 +4,8 @@ use std::test {}
 use http::types {
   Body, Headers, Headers.add, Headers.empty, Headers.get, HttpVersion, Method,
   Request, Request.get, Response, Response.ok_text, Response.text,
-  Response.with_header, Status.forbidden, Status.ok, Status.unauthorized, Uri,
+  Response.with_header, Status.forbidden, Status.no_content, Status.ok,
+  Status.unauthorized, Uri,
 }
 use http::body {Body.to_bytes_pure}
 use moon::handler_t {
@@ -12,8 +13,10 @@ use moon::handler_t {
   HttpError, HttpError.make,
 }
 use moon::middleware_t {
+  CorsConfig, CorsConfig.allow_origin, CorsConfig.default,
   MiddlewareT.auth_basic_ct, MiddlewareT.auth_bearer_ct, MiddlewareT.content_type,
-  MiddlewareT.cors, MiddlewareT.map_response, MiddlewareT.recover,
+  MiddlewareT.cors, MiddlewareT.cors_with, MiddlewareT.map_response,
+  MiddlewareT.recover,
 }
 
 def get_req (path : String) : Request :=
@@ -136,6 +139,71 @@ def test_mt_auth_basic_invalid : IO Bool := do {
   let r <- HandlerT.run_io h (with_header "Authorization" "Basic bm9wZQ==" (get_req "/"));
   match r {
     Result.ok res => IO.pure (U16.beq res.status Status.forbidden),
+    Result.err _ => IO.pure false
+  }
+}
+
+// ── configurable CORS ───────────────────────────────────────────────────
+
+def method_req (method : Method) (path : String) : Request :=
+  let r : Request :=
+    { method := method,
+      uri := Uri.uri "" Option.none "" Option.none path Option.none Option.none,
+      headers := Headers.empty, version := HttpVersion.http1_1,
+      body := Body.empty, params := List.empty } in
+  r
+
+def app_cors : CorsConfig :=
+  CorsConfig.allow_origin "https://app.example" CorsConfig.default
+
+#[test]
+def test_mt_cors_with_allowed_origin : IO Bool := do {
+  let h := MiddlewareT.cors_with app_cors ok_handler;
+  let req := with_header "Origin" "https://app.example" (get_req "/");
+  let r <- HandlerT.run_io h req;
+  match r {
+    Result.ok res =>
+      IO.pure (Bool.and
+        (match Headers.get "Access-Control-Allow-Origin" res.headers {
+          Option.some v => String.beq v "https://app.example",
+          Option.none => false
+        })
+        (match Headers.get "Vary" res.headers {
+          Option.some v => String.contains v "Origin",
+          Option.none => false
+        })),
+    Result.err _ => IO.pure false
+  }
+}
+
+#[test]
+def test_mt_cors_with_rejects_unknown_origin : IO Bool := do {
+  let h := MiddlewareT.cors_with app_cors ok_handler;
+  let req := with_header "Origin" "https://evil.example" (get_req "/");
+  let r <- HandlerT.run_io h req;
+  match r {
+    Result.ok res =>
+      IO.pure (match Headers.get "Access-Control-Allow-Origin" res.headers {
+        Option.some _ => false,
+        Option.none => true
+      }),
+    Result.err _ => IO.pure false
+  }
+}
+
+#[test]
+def test_mt_cors_with_preflight : IO Bool := do {
+  let h := MiddlewareT.cors_with app_cors ok_handler;
+  let req := with_header "Access-Control-Request-Method" "POST"
+    (with_header "Origin" "https://app.example" (method_req Method.OPTIONS "/"));
+  let r <- HandlerT.run_io h req;
+  match r {
+    Result.ok res =>
+      IO.pure (Bool.and (U16.beq res.status Status.no_content)
+        (match Headers.get "Access-Control-Allow-Methods" res.headers {
+          Option.some v => String.contains v "POST",
+          Option.none => false
+        })),
     Result.err _ => IO.pure false
   }
 }

@@ -26,13 +26,30 @@ pub def Csrf.check (secret : String) (s : Session) (form : List (Pair String Str
     Option.some submitted => Csrf.verify secret s submitted
   }
 
-/// `CSRF_SECRET`, with a deliberately obvious development fallback. A
-/// deployment that does not set the variable shares the fallback with every
-/// other such deployment; set it.
-pub def Csrf.secret_from_env : IO String := do {
+/// The explicit development-only secret. Never use it in a deployment:
+/// every process that does not set `CSRF_SECRET` would share it.
+pub def Csrf.development_secret : String := "oak-csrf-development-secret"
+
+/// `CSRF_SECRET`, FAIL CLOSED: unset or empty is an error. New code should
+/// use this rather than the historical `secret_from_env`.
+pub def Csrf.secret_from_env_checked : IO (Result String String) := do {
   let v <- IO.get_env "CSRF_SECRET";
   match v {
-    Option.none => return "oak-csrf-development-secret",
-    Option.some s => return s
+    Option.none => IO.pure (Result.err "CSRF_SECRET is not set"),
+    Option.some s =>
+      if String.is_empty s
+      then IO.pure (Result.err "CSRF_SECRET is empty")
+      else IO.pure (Result.ok s)
+  }
+}
+
+/// The historical fallback. It keeps existing programs working; a
+/// deployment that uses it shares a public constant with every other such
+/// deployment. Prefer `secret_from_env_checked`.
+pub def Csrf.secret_from_env : IO String := do {
+  let checked <- Csrf.secret_from_env_checked;
+  match checked {
+    Result.ok s => IO.pure s,
+    Result.err _ => IO.pure Csrf.development_secret
   }
 }

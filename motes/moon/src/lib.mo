@@ -51,8 +51,9 @@ pub use lib::handler_t {
 
 pub use lib::middleware_t {
     MiddlewareT.logging, MiddlewareT.map_response, MiddlewareT.cors,
-    MiddlewareT.content_type, MiddlewareT.recover, MiddlewareT.auth_basic_ct,
-    MiddlewareT.auth_bearer_ct,
+    MiddlewareT.cors_with, CorsConfig, CorsConfig.default,
+    CorsConfig.allow_origin, MiddlewareT.content_type, MiddlewareT.recover,
+    MiddlewareT.auth_basic_ct, MiddlewareT.auth_bearer_ct,
 }
 
 pub use lib::middleware {
@@ -73,17 +74,17 @@ pub use http::request {Request.form_fields, Request.multipart, Request.param}
 
 pub use lib::session {
     Session, Session.get, Session.put, SessionHandle, SessionHandle.make,
-    SessionHandle.get, SessionHandle.put,
-    SessionStore, SessionStore.new, SessionStore.begin, SessionStore.load,
-    SessionStore.commit, SessionStore.rotate, SessionStore.destroy,
-    SessionStore.with_session, SessionStore.middleware,
+    SessionHandle.get, SessionHandle.put, SessionConfig, SessionConfig.default,
+    SessionStore, SessionStore.new, SessionStore.new_with, SessionStore.begin,
+    SessionStore.load, SessionStore.commit, SessionStore.rotate,
+    SessionStore.destroy, SessionStore.with_session, SessionStore.middleware,
 }
 
 pub use lib::session_mw {SessionStore.with_session_t}
 
 pub use lib::csrf {
     Csrf.token, Csrf.verify, Csrf.hidden_field, Csrf.check,
-    Csrf.secret_from_env,
+    Csrf.secret_from_env, Csrf.secret_from_env_checked, Csrf.development_secret,
 }
 
 pub use lib::live {

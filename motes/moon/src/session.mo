@@ -15,7 +15,7 @@ use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new, Ref.set, Ref.update}
 use std::sha256 {Sha256.hash}
 use http::cookie {
   CookieAttrs, CookieAttrs.default, Cookie.clear, Cookie.lookup,
-  Cookie.parse_headers, Cookie.set_cookie,
+  Cookie.parse_headers, Cookie.set_cookie, SameSite,
 }
 use http::types {Headers, Headers.add, Request, Response}
 
@@ -31,7 +31,48 @@ pub struct SessionStore {
   cookie_name : String,
   ttl_seconds : I64,
   secure : Bool,
+  same_site : SameSite,
   max_sessions : I64
+}
+
+/// Explicit session policy. `default` is the historical behaviour; use
+/// `secure := true` and `same_site := SameSite.lax` on HTTPS.
+pub struct SessionConfig {
+  cookie_name : String,
+  ttl_seconds : I64,
+  secure : Bool,
+  same_site : SameSite,
+  max_sessions : I64
+}
+
+pub def SessionConfig.default (cookie_name : String) (ttl_seconds : I64) : SessionConfig :=
+  let c : SessionConfig :=
+    { cookie_name := cookie_name, ttl_seconds := ttl_seconds, secure := false,
+      same_site := SameSite.lax, max_sessions := 1000i64 } in
+  c
+
+/// A store with an explicit policy. `SameSite=None` requires `Secure`, per
+/// RFC 6265bis; a policy that asks for the combination is refused rather
+/// than silently downgraded.
+pub def SessionStore.new_with (cfg : SessionConfig) : IO (Result String SessionStore) := do {
+  match cfg.same_site {
+    SameSite.none =>
+      if Bool.not cfg.secure
+      then IO.pure (Result.err "SameSite=None requires Secure")
+      else SessionStore.make cfg,
+    SameSite.lax => SessionStore.make cfg,
+    SameSite.strict => SessionStore.make cfg
+  }
+}
+
+def SessionStore.make (cfg : SessionConfig) : IO (Result String SessionStore) := do {
+  let sessions : Ref (List Session) <- Ref.new List.empty;
+  let counter : Ref I64 <- Ref.new 0i64;
+  let st : SessionStore :=
+    { sessions := sessions, counter := counter, cookie_name := cfg.cookie_name,
+      ttl_seconds := cfg.ttl_seconds, secure := cfg.secure,
+      same_site := cfg.same_site, max_sessions := cfg.max_sessions };
+  IO.pure (Result.ok st)
 }
 
 pub def SessionStore.new (cookie_name : String) (ttl_seconds : I64) : IO SessionStore := do {
@@ -39,7 +80,8 @@ pub def SessionStore.new (cookie_name : String) (ttl_seconds : I64) : IO Session
   let counter : Ref I64 <- Ref.new 0i64;
   let st : SessionStore :=
     { sessions := sessions, counter := counter, cookie_name := cookie_name,
-      ttl_seconds := ttl_seconds, secure := false, max_sessions := 1000 };
+      ttl_seconds := ttl_seconds, secure := false, same_site := SameSite.lax,
+      max_sessions := 1000i64 };
   return st
 }
 
@@ -133,7 +175,8 @@ pub def SessionStore.commit (st : SessionStore) (s : Session) : IO (List (Pair S
 def SessionStore.attrs (st : SessionStore) : CookieAttrs :=
   let base := CookieAttrs.default in
   let attrs : CookieAttrs :=
-    { base with secure := st.secure, max_age := Option.some st.ttl_seconds } in
+    { base with secure := st.secure, same_site := st.same_site,
+      max_age := Option.some st.ttl_seconds } in
   attrs
 
 #[terminating]

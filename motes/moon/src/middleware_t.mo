@@ -9,9 +9,11 @@
 /// variants remain for callers that need a custom check.
 
 use init::borrow {Borrow, Borrow.get}
+use std::list {List.any}
 use http::types {
-  Body, Headers, Headers.empty, Headers.get, Headers.set, HttpVersion, Request,
-  Response, Status.forbidden, Status.unauthorized,
+  Body, Headers, Headers.add, Headers.empty, Headers.get, Headers.set, HttpVersion,
+  Method, Request, Response, Status.forbidden, Status.no_content,
+  Status.unauthorized,
 }
 use http::strings {
   Strings.base64_decode, Strings.ct_eq, Strings.list_drop_prefix,
@@ -44,6 +46,107 @@ pub def MiddlewareT.map_response (f : Response -> Response)
 
 pub def MiddlewareT.cors (next : HandlerT IO Response) : HandlerT IO Response :=
   MiddlewareT.map_response Middleware.cors_response next
+
+// ── configurable CORS ───────────────────────────────────────────────────
+//
+// The wildcard `cors` above is the historical behaviour. The configurable
+// form never sends `*`: it echoes the request's Origin, adds `Vary:
+// Origin` (so caches do not serve one origin's response to another), and
+// answers preflight with 204. The default is same-origin (no headers).
+
+pub struct CorsConfig {
+  origins : List String,
+  any_origin : Bool,
+  methods : String,
+  headers : String,
+  max_age_seconds : I64,
+  allow_credentials : Bool
+}
+
+pub def CorsConfig.default : CorsConfig :=
+  let c : CorsConfig :=
+    { origins := List.empty, any_origin := false,
+      methods := "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+      headers := "Content-Type, Authorization", max_age_seconds := 600i64,
+      allow_credentials := false } in
+  c
+
+pub def CorsConfig.allow_origin (origin : String) (cfg : CorsConfig) : CorsConfig :=
+  let c : CorsConfig := { cfg with origins := List.cons origin cfg.origins } in c
+
+def MiddlewareT.origin_allowed (cfg : CorsConfig) (origin : String) : Bool :=
+  if cfg.any_origin
+  then true
+  else List.any (fn (o : String) => String.beq o origin) cfg.origins
+
+def MiddlewareT.has_header (name : String) (headers : Headers) : Bool :=
+  match Headers.get name headers {
+    Option.some _ => true,
+    Option.none => false
+  }
+
+def MiddlewareT.is_preflight (req : Request) : Bool :=
+  match req {
+    { method, headers, .. } =>
+      Bool.and (BEq.beq method Method.OPTIONS)
+        (MiddlewareT.has_header "Access-Control-Request-Method" headers)
+  }
+
+def MiddlewareT.preflight_response (cfg : CorsConfig) (origin : String) : Response :=
+  let h1 := Headers.set "Access-Control-Allow-Origin" origin Headers.empty in
+  let h2 := Headers.add "Vary" "Origin" h1 in
+  let h3 := Headers.set "Access-Control-Allow-Methods" cfg.methods h2 in
+  let h4 := Headers.set "Access-Control-Allow-Headers" cfg.headers h3 in
+  let h5 := Headers.set "Access-Control-Max-Age" (I64.to_string cfg.max_age_seconds) h4 in
+  let h6 :=
+    if cfg.allow_credentials
+    then Headers.set "Access-Control-Allow-Credentials" "true" h5
+    else h5 in
+  { status := Status.no_content, headers := h6, version := HttpVersion.http1_1,
+    body := Body.empty }
+
+def MiddlewareT.add_cors_headers (cfg : CorsConfig) (origin : String)
+    (res : Response) : Response :=
+  match res {
+    { status, headers, version, body } =>
+      let h1 := Headers.set "Access-Control-Allow-Origin" origin headers in
+      let h2 := Headers.add "Vary" "Origin" h1 in
+      let h3 :=
+        if cfg.allow_credentials
+        then Headers.set "Access-Control-Allow-Credentials" "true" h2
+        else h2 in
+      { status := status, headers := h3, version := version, body := body }
+  }
+
+def MiddlewareT.cors_origin_at (cfg : CorsConfig) (origin : String)
+    (next : HandlerT IO Response) (req : Request) (ctx : Borrow Ctx) :
+    IO (Result HttpError Response) := do {
+  if Bool.not (MiddlewareT.origin_allowed cfg origin)
+  then HandlerT.run next ctx
+  else if MiddlewareT.is_preflight req
+  then IO.pure (Result.ok (MiddlewareT.preflight_response cfg origin))
+  else do {
+    let r <- HandlerT.run next ctx;
+    match r {
+      Result.ok res => IO.pure (Result.ok (MiddlewareT.add_cors_headers cfg origin res)),
+      Result.err e => IO.pure (Result.err e)
+    }
+  }
+}
+
+def MiddlewareT.cors_at (cfg : CorsConfig) (next : HandlerT IO Response)
+    (ctx : Borrow Ctx) : IO (Result HttpError Response) := do {
+  let req : Request := Borrow.get (Ctx.request (Borrow.get ctx));
+  match Headers.get "Origin" req.headers {
+    Option.none => HandlerT.run next ctx,
+    Option.some origin => MiddlewareT.cors_origin_at cfg origin next req ctx
+  }
+}
+
+/// CORS with an explicit policy. Compose like any other middleware.
+pub def MiddlewareT.cors_with (cfg : CorsConfig)
+    (next : HandlerT IO Response) : HandlerT IO Response :=
+  HandlerT.mk (MiddlewareT.cors_at cfg next)
 
 pub def MiddlewareT.content_type (next : HandlerT IO Response) : HandlerT IO Response :=
   MiddlewareT.map_response Middleware.ensure_content_type next
