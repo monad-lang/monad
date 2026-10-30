@@ -3,8 +3,8 @@
 
 use lang::types {Decl}
 use lib::construct {
-    apps, attr, case, con, con_app, def_of_text, def_text, global, i64, if_,
-    lam, match_, param, str, u32, u8, var, vis_package, vis_public,
+    Vis, apps, attr, case, con, con_app, def_of_text, def_text, global, i64,
+    if_, lam, match_, param, str, u32, u8, var,
 }
 use lib::parser {decls_parser}
 use lib::pretty {show_term}
@@ -48,7 +48,7 @@ def test_numbers_carry_their_suffix : Bool :=
 def test_def_text_shape : Bool :=
     let body := if_ (apps (global "U32.lt") [var 0 "cp", u32 10])
         (global "true") (global "false") in
-    let text := def_text [attr "partial"] vis_public "probe"
+    let text := def_text [attr "partial"] Vis.vis_public "probe"
         [param "cp" (global "U32")] (global "Bool") body in
     String.beq text "#[partial]\npub def probe (cp : U32) : Bool :=\n    if (U32.lt cp 10u32) then true else false\n"
 
@@ -83,12 +83,12 @@ def def_matches (text : String) (decl : Decl) : Bool :=
 /// `Bool` CONSTRUCTOR and the printer spells it back as `Bool.true`.
 #[test]
 def test_def_round_trips : Bool :=
-    round_trips (def_text [attr "partial"] vis_public "probe"
+    round_trips (def_text [attr "partial"] Vis.vis_public "probe"
         [param "cp" (global "U32")] (global "Bool") (global "U32"))
 
 #[test]
 def test_two_params_and_no_attrs_round_trip : Bool :=
-    round_trips (def_text [] vis_package "add"
+    round_trips (def_text [] Vis.vis_package "add"
         [param "a" (global "I64"), param "b" (global "I64")] (global "I64")
         (apps (global "I64.add") [var 1 "a", var 0 "b"]))
 
@@ -96,12 +96,12 @@ def test_two_params_and_no_attrs_round_trip : Bool :=
 /// a real control character.
 #[test]
 def test_escaped_literal_round_trips : Bool :=
-    round_trips (def_text [] vis_package "e"
+    round_trips (def_text [] Vis.vis_package "e"
         [] (global "Option") (str "a\"b\\c\nd\te"))
 
 /// An astral character must survive as itself, not as a `\u{..}` that a
 /// per-byte escaper would have split into invalid UTF-8.
 #[test]
 def test_astral_literal_round_trips : Bool :=
-    round_trips (def_text [] vis_package "a"
+    round_trips (def_text [] Vis.vis_package "a"
         [] (global "Option") (str "\u{1F600}"))
