@@ -10,7 +10,7 @@ The CommonMark 0.31.2 example corpus: 652 examples, split into three parts.
 
 `commonmark-0.31.2.part1.json` … `.part3.json` are the upstream bytes split
 at line boundaries; concatenated they are byte-identical to the upstream
-file (`split_fixture.py` asserts this). The harness reads the parts and joins
+file (`src/tools/split_fixture.mo` reproduces them byte-for-byte). The harness reads the parts and joins
 them before parsing, because the self-hosted compiled backend cannot read a
 file over 64 KiB in one go
 (`plans/implementations/compiled-read-file-second-chunk.md`). When that bug
@@ -28,6 +28,7 @@ Regenerate (only to move to a new spec version, which needs a plan update):
 ```bash
 curl -fsSL https://spec.commonmark.org/0.31.2/spec.json \
     -o /tmp/commonmark-0.31.2.spec.json
-python3 -I tools/split_fixture.py /tmp/commonmark-0.31.2.spec.json
-mv /tmp/commonmark-0.31.2*.part*.json motes/markdown/testdata/
+cargo run --release -- run motes/markdown/src/tools/split_fixture.mo -- \
+    /tmp/commonmark-0.31.2.spec.json
+mv /tmp/commonmark-0.31.2.part*.json motes/markdown/testdata/
 ```

@@ -34,6 +34,17 @@ path = "../xml_html"
 [dev-dependencies.json]
 path = "../json"
 
+# The source generators under src/tools/. `gen` is the code-generation
+# library; `lang` is here because `gen` re-exports nothing across motes, so
+# a generator imports the term builders from `lang::construct` directly.
+# Both are dev-only: `lib.mo` imports neither, so no consumer pays the
+# compiler's load time.
+[dev-dependencies.gen]
+path = "../gen"
+
+[dev-dependencies.lang]
+path = "../../lang"
+
 # Affine-by-default migration exception (measured 2026-10-22). Delete this
 # table when the mote reaches zero violations; the default (no table) is
 # `mode = "error"`. See plans/type-system/quantitative-types.md.

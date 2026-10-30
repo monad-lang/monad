@@ -23,7 +23,7 @@ def test_entity_lookup_basics : Bool :=
         (Bool.and (some_is (Markdown.entity_lookup "lt") "<")
             (some_is (Markdown.entity_lookup "nbsp") "\u{a0}"))
 
-/// A long name from the middle of the alphabet exercises the chunked trees.
+/// A long name from the middle of the alphabet exercises the tree's depth.
 #[test]
 def test_entity_lookup_long_name : Bool :=
     some_is (Markdown.entity_lookup "CounterClockwiseContourIntegral") "\u{2233}"
@@ -32,6 +32,22 @@ def test_entity_lookup_long_name : Bool :=
 #[test]
 def test_entity_lookup_multi_codepoint : Bool :=
     some_is (Markdown.entity_lookup "NotEqualTilde") "\u{2242}\u{338}"
+
+/// An astral entity, whose value only survives if it is built from the
+/// entry's `codepoints`: motes/json leaves the UTF-16 surrogate pair in
+/// `characters` uncombined, which would decode to two U+FFFD.
+#[test]
+def test_entity_lookup_astral : Bool :=
+    some_is (Markdown.entity_lookup "Afr") "\u{1D504}"
+
+/// Two names whose raw `&name;` keys sort the other way round: `;` sorts
+/// after the digits, so ordering by the unstripped key put `emsp13` first
+/// and every lookup in between landed on the wrong leaf.
+#[test]
+def test_entity_lookup_order_sensitive_pair : Bool :=
+    Bool.and (some_is (Markdown.entity_lookup "emsp") "\u{2003}")
+        (Bool.and (some_is (Markdown.entity_lookup "emsp13") "\u{2004}")
+            (some_is (Markdown.entity_lookup "emsp14") "\u{2005}"))
 
 #[test]
 def test_entity_lookup_unknown : Bool :=

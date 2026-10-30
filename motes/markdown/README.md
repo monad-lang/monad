@@ -55,18 +55,34 @@ HTML. The report prints the first failures and a per-section table.
 | `gfm_table.mo`, `gfm_autolink.mo` | the GFM extensions that need their own scanners |
 | `href.mo` | cmark-compatible URL percent-encoding |
 | `html.mo` | AST to `Html.Node`, matching cmark's block formatting |
-| `entities.mo`, `unicode.mo` | generated tables (`tools/`) |
+| `entities.mo`, `unicode.mo` | generated tables (`src/tools/`) |
 
 ## Generating the tables
 
+The three generators are Monad programs under `src/tools/`, built on
+`motes/gen` (balanced trees, surface-form declarations) and
+`lang::construct` (the compiler's own term builders and printer):
+
 ```bash
-python3 -I tools/gen_entities.py --entities entities.json --out src/entities.mo
-python3 -I tools/gen_unicode.py \
-    --unicode-data UnicodeData.txt --case-folding CaseFolding.txt --out src/unicode.mo
+# >64 KiB inputs, so run them on the interpreter host until
+# plans/implementations/compiled-read-file-second-chunk.md lands.
+cargo run --release -- run motes/markdown/src/tools/gen_entities.mo -- \
+    --entities entities.json --out motes/markdown/src/entities.mo
+cargo run --release -- run motes/markdown/src/tools/gen_unicode.mo -- \
+    --unicode-data UnicodeData.txt --case-folding CaseFolding.txt \
+    --out motes/markdown/src/unicode.mo
 ```
 
-The inputs are fetched from the URLs recorded in each script (with their
-SHA-256 in the generated header); the generated files are committed.
+`--check` on either tool verifies the committed file is current instead of
+writing it. The inputs are fetched from the URLs recorded in each file's
+header; the generated files are committed.
+
+Two data decisions are load-bearing and are why the tools are not a
+mechanical port of the Python they replaced: entity names are ordered with
+`&`/`;` stripped (the raw keys sort `emsp13` before `emsp`), and each
+entity's value is built from its `codepoints` array (`motes/json` does not
+combine UTF-16 surrogate pairs, so `characters` decodes an astral entity to
+U+FFFD pairs). `src/tests/table_asset_tests.mo` pins both.
 
 ## Limits
 
