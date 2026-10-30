@@ -24,7 +24,33 @@ pub struct Manifest {
   /// resolve its lib or bin targets -- this is what lets `init` stay pure
   /// (it depends on nothing) while its test files still `use std::test`.
   pub dev_dependencies: BTreeMap<String, Dependency>,
+  /// `[features] name = [...]`, in manifest order. The self-hosted reader is
+  /// authoritative for resolution; this is parity for tooling/tests.
+  pub features: BTreeMap<String, Vec<String>>,
+  /// Optional/feature policy for `[dependencies]` entries, by dependency name.
+  pub dependency_policies: BTreeMap<String, DependencyPolicy>,
+  pub dev_dependency_policies: BTreeMap<String, DependencyPolicy>,
   pub workspace: Option<Workspace>,
+}
+
+/// Optional/feature policy on one dependency entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyPolicy {
+  pub optional: bool,
+  /// Features requested of the dependency.
+  pub features: Vec<String>,
+  /// Whether the dependency's own `default` feature is enabled.
+  pub default_features: bool,
+}
+
+impl Default for DependencyPolicy {
+  fn default() -> Self {
+    Self {
+      optional: false,
+      features: Vec::new(),
+      default_features: true,
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +73,7 @@ pub struct Workspace {
   /// `[workspace.dependencies]`: the sources members inherit with
   /// `workspace = true`. An inherited `Path` is ROOT-relative.
   pub dependencies: BTreeMap<String, Dependency>,
+  pub dependency_policies: BTreeMap<String, DependencyPolicy>,
 }
 
 impl Workspace {
@@ -132,6 +159,8 @@ struct RawManifest {
   dependencies: BTreeMap<String, RawDependency>,
   #[serde(default, rename = "dev-dependencies")]
   dev_dependencies: BTreeMap<String, RawDependency>,
+  #[serde(default)]
+  features: BTreeMap<String, Vec<String>>,
   workspace: Option<RawWorkspace>,
 }
 
@@ -176,17 +205,48 @@ struct RawWorkspace {
 #[serde(untagged)]
 enum RawDependency {
   Version(String),
+  Registry {
+    version: String,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default = "default_true", rename = "default-features")]
+    default_features: bool,
+  },
   Path {
     path: String,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default = "default_true", rename = "default-features")]
+    default_features: bool,
   },
   Git {
     git: String,
     tag: Option<String>,
     rev: Option<String>,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default = "default_true", rename = "default-features")]
+    default_features: bool,
   },
   Workspace {
     workspace: bool,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default = "default_true", rename = "default-features")]
+    default_features: bool,
   },
+}
+
+fn default_true() -> bool {
+  true
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -223,14 +283,55 @@ fn convert_dependencies(raw: BTreeMap<String, RawDependency>) -> BTreeMap<String
     .map(|(name, dep)| {
       let dep = match dep {
         RawDependency::Version(v) => Dependency::Registry(v),
-        RawDependency::Path { path } => Dependency::Path(PathBuf::from(path)),
-        RawDependency::Git { git, tag, rev } => Dependency::Git { url: git, tag, rev },
-        RawDependency::Workspace { workspace } => {
+        RawDependency::Registry { version, .. } => Dependency::Registry(version),
+        RawDependency::Path { path, .. } => Dependency::Path(PathBuf::from(path)),
+        RawDependency::Git { git, tag, rev, .. } => Dependency::Git { url: git, tag, rev },
+        RawDependency::Workspace { workspace, .. } => {
           debug_assert!(workspace, "workspace = false is rejected by parse_str");
           Dependency::Workspace
         }
       };
       (name, dep)
+    })
+    .collect()
+}
+
+fn convert_policies(raw: BTreeMap<String, RawDependency>) -> BTreeMap<String, DependencyPolicy> {
+  raw
+    .into_iter()
+    .map(|(name, dep)| {
+      let policy = match dep {
+        RawDependency::Version(_) => DependencyPolicy::default(),
+        RawDependency::Registry {
+          optional,
+          features,
+          default_features,
+          ..
+        }
+        | RawDependency::Path {
+          optional,
+          features,
+          default_features,
+          ..
+        }
+        | RawDependency::Git {
+          optional,
+          features,
+          default_features,
+          ..
+        }
+        | RawDependency::Workspace {
+          optional,
+          features,
+          default_features,
+          ..
+        } => DependencyPolicy {
+          optional,
+          features,
+          default_features,
+        },
+      };
+      (name, policy)
     })
     .collect()
 }
@@ -278,8 +379,12 @@ impl Manifest {
       lib_path: raw.lib.and_then(|l| l.path),
       workspace: raw.workspace.map(|w| Workspace {
         members: w.members,
+        dependency_policies: convert_policies(w.dependencies.clone()),
         dependencies: convert_dependencies(w.dependencies),
       }),
+      dependency_policies: convert_policies(raw.dependencies.clone()),
+      dev_dependency_policies: convert_policies(raw.dev_dependencies.clone()),
+      features: raw.features,
       dependencies: convert_dependencies(raw.dependencies),
       dev_dependencies: convert_dependencies(raw.dev_dependencies),
     })
@@ -1022,6 +1127,58 @@ path = "../std"
       Dependency::Path(p) => assert_eq!(p, &PathBuf::from("../std")),
       other => panic!("Expected Path, got {:?}", other),
     }
+  }
+
+  #[test]
+  fn test_parse_features_and_optional_dependency_policy() {
+    let toml_str = r#"
+[mote]
+name = "m"
+version = "0.1.0"
+
+[features]
+default = ["crypto-sessions"]
+crypto-sessions = ["dep:crypto"]
+
+[dependencies.crypto]
+path = "../crypto"
+optional = true
+features = ["f1"]
+default-features = false
+"#;
+    let manifest = Manifest::parse_str(toml_str).unwrap();
+    assert_eq!(
+      manifest.features["default"],
+      vec!["crypto-sessions".to_string()]
+    );
+    let policy = &manifest.dependency_policies["crypto"];
+    assert!(policy.optional);
+    assert_eq!(policy.features, vec!["f1".to_string()]);
+    assert!(!policy.default_features);
+    assert!(matches!(
+      manifest.dependencies["crypto"],
+      Dependency::Path(_)
+    ));
+  }
+
+  #[test]
+  fn test_parse_registry_dependency_policy() {
+    let toml_str = r#"
+[mote]
+name = "m"
+version = "0.1.0"
+
+[dependencies.json]
+version = ">=0.2.0"
+optional = true
+"#;
+    let manifest = Manifest::parse_str(toml_str).unwrap();
+    assert_eq!(
+      manifest.dependencies["json"],
+      Dependency::Registry(">=0.2.0".into())
+    );
+    assert!(manifest.dependency_policies["json"].optional);
+    assert!(manifest.dependency_policies["json"].default_features);
   }
 
   #[test]
@@ -1961,6 +2118,7 @@ members = ["motes/lib-a", "motes/lib-b"]
     let workspace = Workspace {
       members: vec!["motes/*".to_string()],
       dependencies: BTreeMap::new(),
+      dependency_policies: BTreeMap::new(),
     };
     let mut members = workspace.resolve_members(&root).unwrap();
     members.sort();
@@ -1982,6 +2140,7 @@ members = ["motes/lib-a", "motes/lib-b"]
     let workspace = Workspace {
       members: vec!["pkgs/engine".to_string()],
       dependencies: BTreeMap::new(),
+      dependency_policies: BTreeMap::new(),
     };
     let members = workspace.resolve_members(&root).unwrap();
     assert_eq!(members, vec![engine_dir]);
@@ -2000,6 +2159,7 @@ members = ["motes/lib-a", "motes/lib-b"]
     let workspace = Workspace {
       members: vec!["pkgs/nonexistent".to_string()],
       dependencies: BTreeMap::new(),
+      dependency_policies: BTreeMap::new(),
     };
     let err = workspace.resolve_members(&root).unwrap_err();
     assert!(err.contains("no mote.toml found"), "got: {err}");

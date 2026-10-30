@@ -12,6 +12,7 @@
 /// serialize/deserialize class machinery.
 
 use std::list {List.filter, List.filter_map, List.intercalate, List.length}
+use lib::features {DepPolicy}
 use toml::toml {
   Toml.Value, Toml.parse, Toml.table_get, Toml.array_at, array, integer, string, table,
 }
@@ -67,6 +68,11 @@ pub struct MoteManifest {
     /// is what `resolve_module_file` consults on its miss path, and it is
     /// what makes resolution key off the mote root rather than the CWD.
     dep_dirs : List (Pair String String),
+    /// `[features]` entries, in manifest order.
+    features : List (Pair String (List String)),
+    /// Optional/feature policy for each `[dependencies]`, `[dev-dependencies]`
+    /// and `[script-dependencies]` entry, keyed by dependency name.
+    dep_policies : List (Pair String DepPolicy),
     /// C libraries this mote links against, from `[link] libs = [...]`.
     /// A LINK-time property of the package, not of any one declaration:
     /// which C functions a module calls is `#[extern "c"]`'s business,
@@ -150,6 +156,8 @@ pub struct BinTarget {
     /// the fallback to a source file's own stem is the FILE compile's rule
     /// and no longer this one's.
     name : String,
+    /// `[[bin]] features = [...]`: this target's feature selection.
+    features : List String,
 }
 
 /// `BinTarget.path`, and its `name` sibling below. Accessors rather than
@@ -162,6 +170,8 @@ pub def BinTarget.target_path (b : BinTarget) : String := b.path
 
 pub def BinTarget.target_name (b : BinTarget) : String := b.name
 
+pub def BinTarget.target_features (b : BinTarget) : List String := b.features
+
 /// One `[[script]]` entry: a named single-file program built against the
 /// manifest's dependency closure. `path` is joined onto the manifest's
 /// directory; `mote` optionally names the member whose manifest and closure
@@ -169,7 +179,9 @@ pub def BinTarget.target_name (b : BinTarget) : String := b.name
 pub struct ScriptTarget {
     name : String,
     path : String,
-    mote : Option String
+    mote : Option String,
+    /// `[[script]] features = [...]`: this script's extra features.
+    features : List String
 }
 
 pub def ScriptTarget.script_name (t : ScriptTarget) : String := t.name
@@ -177,6 +189,8 @@ pub def ScriptTarget.script_name (t : ScriptTarget) : String := t.name
 pub def ScriptTarget.script_path (t : ScriptTarget) : String := t.path
 
 pub def ScriptTarget.script_mote (t : ScriptTarget) : Option String := t.mote
+
+pub def ScriptTarget.script_features (t : ScriptTarget) : List String := t.features
 
 /// Where a declared dependency comes from: the canonical model of
 /// `plans/packaging/package-system.md` §2a, which `mote.lock` shares.
@@ -921,6 +935,12 @@ def Mote.manifest_of_table_root
                 deps_full := deps_full,
                 dep_errors := Mote.dep_entry_errors (mote_toml_in dir) entries,
                 dep_dirs := Mote.dep_dirs_of deps_full,
+                features := Mote.feature_entries root,
+                dep_policies := List.append
+                    (Mote.policies_of_table (Toml.table_get "dependencies" root))
+                    (List.append
+                        (Mote.policies_of_table (Toml.table_get "dev-dependencies" root))
+                        (Mote.script_dep_policies root)),
                 link_libs := libs,
                 link_pkgs := pkgs,
                 lib_path := lib_path,
@@ -1597,6 +1617,7 @@ def Mote.default_bin_target (dir : String) (mote_name : String) : BinTarget :=
     let t : BinTarget := {
         path := raw_path_join dir "src/main.mo",
         name := mote_name,
+        features := List.empty,
     } in
     t
 
@@ -1613,8 +1634,109 @@ def Mote.bin_target_of (dir : String) (mote_name : String) (sub : BTreeMap Strin
         Option.some n => n,
         Option.none => mote_name,
     } in
-    let t : BinTarget := { path := path, name := name } in
+    let features := Mote.string_list (Toml.table_get "features" sub) in
+    let t : BinTarget := { path := path, name := name, features := features } in
     t
+
+// ─── Features and dependency policy ────────────────────────────────────
+
+def Mote.feature_entries_go (entries : List (Pair String Toml.Value)) :
+        List (Pair String (List String)) :=
+    Mote.feature_entries_go_list entries List.empty
+
+def Mote.feature_entries_go_list (entries : List (Pair String Toml.Value))
+        (acc : List (Pair String (List String))) : List (Pair String (List String)) :=
+    match entries {
+        List.empty => List.reverse acc,
+        List.cons p rest =>
+            match p.second {
+                Toml.Value.array _ =>
+                    Mote.feature_entries_go_list rest
+                        (List.cons (Pair.pair p.first (Mote.string_list (Option.some p.second))) acc),
+                _ => Mote.feature_entries_go_list rest acc
+            }
+    }
+
+def Mote.feature_entries (root : BTreeMap String Toml.Value) :
+        List (Pair String (List String)) :=
+    match Toml.table_get "features" root {
+        Option.some v => match v {
+            Toml.Value.table sub => Mote.feature_entries_go (BTreeMap.to_list sub),
+            _ => List.empty
+        },
+        Option.none => List.empty
+    }
+
+def Mote.optional_flag (sub : BTreeMap String Toml.Value) : Bool :=
+    match Toml.table_get "optional" sub {
+        Option.some v => match v {
+            Toml.Value.boolean b => b,
+            _ => false
+        },
+        Option.none => false
+    }
+
+def Mote.default_features_flag (sub : BTreeMap String Toml.Value) : Bool :=
+    match Toml.table_get "default-features" sub {
+        Option.some v => match v {
+            Toml.Value.boolean b => b,
+            _ => true
+        },
+        Option.none => true
+    }
+
+def Mote.dep_policy_of_table (sub : BTreeMap String Toml.Value) : DepPolicy :=
+    let optional := Mote.optional_flag sub in
+    let features := Mote.string_list (Toml.table_get "features" sub) in
+    let default_features := Mote.default_features_flag sub in
+    let p : DepPolicy :=
+        { optional := optional, features := features,
+          default_features := default_features } in
+    p
+
+def Mote.policies_of_entries (entries : List (Pair String Toml.Value)) :
+        List (Pair String DepPolicy) :=
+    Mote.policies_of_entries_go entries List.empty
+
+def Mote.policies_of_entries_go (entries : List (Pair String Toml.Value))
+        (acc : List (Pair String DepPolicy)) : List (Pair String DepPolicy) :=
+    match entries {
+        List.empty => List.reverse acc,
+        List.cons p rest =>
+            match p.second {
+                Toml.Value.table dep =>
+                    Mote.policies_of_entries_go rest
+                        (List.cons (Pair.pair p.first (Mote.dep_policy_of_table dep)) acc),
+                _ => Mote.policies_of_entries_go rest acc
+            }
+    }
+
+def Mote.policies_of_table (found : Option Toml.Value) :
+        List (Pair String DepPolicy) :=
+    match found {
+        Option.some v => match v {
+            Toml.Value.table sub => Mote.policies_of_entries (BTreeMap.to_list sub),
+            _ => List.empty
+        },
+        Option.none => List.empty
+    }
+
+def Mote.policies_of_dep_tables (tables : List (BTreeMap String Toml.Value)) :
+        List (Pair String DepPolicy) :=
+    Mote.policies_of_dep_tables_go tables List.empty
+
+def Mote.policies_of_dep_tables_go (tables : List (BTreeMap String Toml.Value))
+        (acc : List (Pair String DepPolicy)) : List (Pair String DepPolicy) :=
+    match tables {
+        List.empty => List.reverse acc,
+        List.cons t rest =>
+            Mote.policies_of_dep_tables_go rest
+                (List.append acc (Mote.policies_of_entries (BTreeMap.to_list t)))
+    }
+
+def Mote.script_dep_policies (root : BTreeMap String Toml.Value) :
+        List (Pair String DepPolicy) :=
+    Mote.policies_of_dep_tables (Mote.script_dep_tables root)
 
 // ─── Scripts ───────────────────────────────────────────────────────────
 
@@ -1650,6 +1772,7 @@ def Mote.script_target_of (dir : String) (sub : BTreeMap String Toml.Value) : Op
                 name := name,
                 path := path,
                 mote := Mote.string_value (Toml.table_get "mote" sub),
+                features := Mote.string_list (Toml.table_get "features" sub),
             } in
             Option.some t
     }
@@ -2216,6 +2339,8 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
                 deps_full := List.empty,
                 dep_errors := List.empty,
                 dep_dirs := List.empty,
+                features := List.empty,
+                dep_policies := List.empty,
                 link_libs := Mote.mote_attr_list attr "libs",
                 link_pkgs := Mote.mote_attr_list attr "pkg_config",
                 // An inline mote declares no targets: the annotation's own
@@ -3531,3 +3656,85 @@ def test_plain_path_dependency_is_unchanged : Bool :=
             Option.none => false,
         },
     }
+
+// ─── Optional dependencies and features (schema) ────────────────────────
+
+def features_fixture : String :=
+    "[mote]\nname = \"m\"\n\n[features]\ndefault = [\"crypto-sessions\"]\ncrypto-sessions = [\"dep:crypto\"]\n\n[dependencies.crypto]\npath = \"../crypto\"\noptional = true\nfeatures = [\"f1\"]\ndefault-features = false\n\n[[bin]]\nname = \"tool\"\npath = \"src/tool.mo\"\nfeatures = [\"extra\"]\n\n[[script]]\nname = \"dev\"\npath = \"scripts/dev.mo\"\nfeatures = [\"crypto-sessions\"]\n"
+
+#[terminating]
+def feature_items (name : String) (features : List (Pair String (List String))) : Option (List String) :=
+    match features {
+        List.empty => Option.none,
+        List.cons p rest =>
+            match p {
+                Pair.pair k v => if String.beq k name then Option.some v else feature_items name rest,
+            },
+    }
+
+#[terminating]
+def policy_at (name : String) (policies : List (Pair String DepPolicy)) : Option DepPolicy :=
+    match policies {
+        List.empty => Option.none,
+        List.cons p rest =>
+            match p {
+                Pair.pair k v => if String.beq k name then Option.some v else policy_at name rest,
+            },
+    }
+
+#[test]
+def test_manifest_reads_features : Bool :=
+    match Mote.parse_manifest "" features_fixture {
+        Option.none => false,
+        Option.some m =>
+            match feature_items "default" m.features {
+                Option.none => false,
+                Option.some items => list_contains_string "crypto-sessions" items,
+            },
+    }
+
+#[test]
+def test_manifest_reads_optional_dependency_policy : Bool :=
+    match Mote.parse_manifest "" features_fixture {
+        Option.none => false,
+        Option.some m =>
+            match policy_at "crypto" m.dep_policies {
+                Option.none => false,
+                Option.some p =>
+                    match p {
+                        { optional, features, default_features } =>
+                            Bool.and optional
+                                (Bool.and (Bool.not default_features)
+                                    (list_contains_string "f1" features)),
+                    },
+            },
+    }
+
+#[test]
+def test_bin_target_reads_features : Bool :=
+    match Mote.parse_manifest "" features_fixture {
+        Option.none => false,
+        Option.some m =>
+            match bin_target_at m.bins 0 {
+                Option.none => false,
+                Option.some b =>
+                    list_contains_string "extra" (BinTarget.target_features b),
+            },
+    }
+
+#[test]
+def test_script_target_reads_features : Bool :=
+    match Mote.parse_manifest "" features_fixture {
+        Option.none => false,
+        Option.some m =>
+            match script_at m.scripts 0 {
+                Option.none => false,
+                Option.some s =>
+                    list_contains_string "crypto-sessions" (ScriptTarget.script_features s),
+            },
+    }
+
+#[test]
+def test_default_bin_target_has_no_features : Bool :=
+    let b : BinTarget := Mote.default_bin_target "m" "m" in
+    List.is_empty (BinTarget.target_features b)

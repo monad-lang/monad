@@ -18,5 +18,8 @@ pub use lib::module {
   parse_all_decls,
 }
 pub use lib::pretty {show_decls}
+pub use lib::features {
+  DepPolicy, FeaturePackage, FeatureSelection, Features.resolve,
+}
 pub use lib::codegen::emit {compile_loaded_modules_to_ir_with_debug}
 pub use llvm::ir {LLVMModule, emit_module}
