@@ -86,4 +86,8 @@ pub use lib::csrf {
     Csrf.secret_from_env,
 }
 
-pub use lib::live {Live.events, Live.reload, Live.watch, Live.script}
+pub use lib::live {
+    Live.events, Live.reload, Live.reload_t, Live.watch, Live.watch_files,
+    Live.watch_tree, Live.script, Live.inject, Live.dev_middleware,
+    Live.dev_middleware_t,
+}

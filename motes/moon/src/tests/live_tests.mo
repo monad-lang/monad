@@ -5,11 +5,19 @@ use std::concurrent::combine {sleepIO}
 use std::io {IO.write_file}
 use std::path {Path}
 use std::concurrent::fiber {cancel_fiber}
-use std::process {process_id}
+use std::process {exec_cmd, process_id}
 use std::ref {Ref, Ref.add_i64, Ref.get, Ref.new}
 use http::body_io {Body.pull}
-use http::types {Request, Request.get, Uri}
-use moon::live {Live.reload, Live.script, Live.watch}
+use http::sse {Sse.response}
+use http::types {
+  Body, Body.is_stream, Headers, Headers.get, Request, Request.get, Response, Response.html,
+  Response.json, Uri,
+}
+use moon::handler_t {HandlerT, HandlerT.pure_io, HandlerT.run_io, HttpError}
+use moon::live {
+  Live.dev_middleware_t, Live.reload, Live.script, Live.watch, Live.watch_files,
+  Live.watch_tree,
+}
 
 def dummy_req : Request :=
   Request.get (Uri.uri "" Option.none "" Option.none "/live" Option.none Option.none)
@@ -69,3 +77,122 @@ def wait_version (version : Ref I64) (want : I64) (tries : I64) : IO Bool := do 
 def test_script_is_a_script : Bool :=
   Bool.and (String.starts_with "<script>" (Live.script "/live"))
     (String.ends_with (Live.script "/live") "</script>")
+
+// ── initial reload, sanitized script, dev middleware ────────────────────
+
+#[test]
+def test_reload_initial_event_at_zero : IO Bool := do {
+  let version : Ref I64 <- Ref.new 0i64;
+  let handler := Live.reload version;
+  let r <- handler dummy_req;
+  match r {
+    Result.err _ => IO.pure false,
+    Result.ok res => do {
+      let chunk <- Body.pull res.body;
+      match chunk {
+        Option.none => IO.pure false,
+        Option.some bytes =>
+          IO.pure (String.starts_with "event: reload" (String.from_list bytes))
+      }
+    }
+  }
+}
+
+#[test]
+def test_script_sanitizes_endpoint : Bool :=
+  let s := Live.script r#"/a"b<c"# in
+  Bool.and (String.contains s "/abc") (Bool.not (String.contains s "b<c"))
+
+def dev_html_handler : HandlerT IO Response :=
+  HandlerT.pure_io (Response.html 200u16 "<html><body>hi</body></html>")
+
+#[test]
+def test_dev_middleware_injects_html : IO Bool := do {
+  let h := Live.dev_middleware_t "/live" dev_html_handler;
+  let r <- HandlerT.run_io h dummy_req;
+  match r {
+    Result.err _ => IO.pure false,
+    Result.ok res =>
+      match res {
+        { status, headers, version, body } =>
+          match body {
+            Body.text s =>
+              IO.pure (Bool.and (String.contains s "EventSource")
+                (match Headers.get "Cache-Control" headers {
+                  Option.some v => String.beq v "no-store",
+                  Option.none => false
+                })),
+            _ => IO.pure false
+          }
+      }
+  }
+}
+
+#[test]
+def test_dev_middleware_ignores_json : IO Bool := do {
+  let base : HandlerT IO Response :=
+    HandlerT.pure_io (Response.json 200u16 "{}");
+  let h := Live.dev_middleware_t "/live" base;
+  let r <- HandlerT.run_io h dummy_req;
+  match r {
+    Result.err _ => IO.pure false,
+    Result.ok res =>
+      match res.body {
+        Body.text s => IO.pure (String.beq s "{}"),
+        _ => IO.pure false
+      }
+  }
+}
+
+#[test]
+def test_dev_middleware_ignores_stream : IO Bool := do {
+  let base : HandlerT IO Response :=
+    HandlerT.pure_io (Sse.response (fn (_ : Unit) => IO.pure Option.none));
+  let h := Live.dev_middleware_t "/live" base;
+  let r <- HandlerT.run_io h dummy_req;
+  match r {
+    Result.err _ => IO.pure false,
+    Result.ok res => IO.pure (Body.is_stream res.body)
+  }
+}
+
+// ── watchers ────────────────────────────────────────────────────────────
+
+#[test]
+def test_watch_files_bumps_version : IO Bool := do {
+  let name := String.concat "moon_watch_files_" (String.concat (I64.to_string process_id) ".mo");
+  let p1 := String.concat "/tmp/" (String.concat name "_1");
+  let p2 := String.concat "/tmp/" (String.concat name "_2");
+  let _ <- IO.write_file (Path.path p1) "one";
+  let _ <- IO.write_file (Path.path p2) "one";
+  let version : Ref I64 <- Ref.new 0i64;
+  let watcher <- Live.watch_files [Path.path p1, Path.path p2] version;
+  sleepIO 600;
+  let _ <- IO.write_file (Path.path p1) "two";
+  let bumped <- wait_version version 1i64 60i64;
+  cancel_fiber watcher;
+  let _ <- exec_cmd "rm" ["-f", p1, p2];
+  IO.pure bumped
+}
+
+#[test]
+def test_watch_tree_ignores_target : IO Bool := do {
+  let nanos <- IO.current_time_nano;
+  let dir := String.concat "/tmp/moon_tree_"
+    (String.concat (I64.to_string process_id) (String.concat "_" (I64.to_string nanos)));
+  let target_dir := String.concat dir "/target";
+  let _ <- exec_cmd "mkdir" ["-p", target_dir];
+  let source := String.concat dir "/a.mo";
+  let target_file := String.concat target_dir "/x.mo";
+  let _ <- IO.write_file (Path.path source) "one";
+  let _ <- IO.write_file (Path.path target_file) "one";
+  let version : Ref I64 <- Ref.new 0i64;
+  let watcher <- Live.watch_tree (Path.path dir) List.empty version;
+  sleepIO 700;
+  let after_target <- Ref.get version;
+  let _ <- IO.write_file (Path.path source) "two";
+  let bumped <- wait_version version 1i64 60i64;
+  cancel_fiber watcher;
+  let _ <- exec_cmd "rm" ["-rf", dir];
+  IO.pure (Bool.and (I64.beq after_target 0i64) bumped)
+}
