@@ -69,6 +69,7 @@ members = [
   "motes/yaml",
   "motes/time",
   "motes/markdown",
+  "motes/gen",
 ]
 
 # Affine-by-default migration fallback (measured 2026-10-22). This is a
