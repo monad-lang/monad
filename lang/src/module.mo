@@ -29,7 +29,7 @@ use lang::mote {
   Mote.manifest_problem,
   Mote.mote_attr_unknown_keys, Mote.parse_manifest, Mote.toolchain_candidates,
   Mote.toolchain_missing_hint, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
-  MoteManifest.dep_errors_for,
+  MoteManifest.dep_errors_for, ScriptTarget, ScriptTarget.script_path,
 }
 use lib::pretty {show_term, show_decls}
 use lib::typecheck::name_subst {close_named_vars}
@@ -5059,12 +5059,15 @@ def gate_declared_deps (r : Result String LoadedModules) : IO (Result String Loa
 /// Does at least one of this mote's targets exist on disk?
 #[partial]
 def mote_has_a_target (m : MoteManifest) : IO Bool := do {
-    match m.lib_path {
-        Option.none => first_bin_on_disk m.bins,
-        Option.some p => do {
-            let there <- file_exists (Path.path p);
-            if there then return true else first_bin_on_disk m.bins
-        }
+    let lib_ok <- match m.lib_path {
+        Option.none => IO.pure false,
+        Option.some p => file_exists (Path.path p),
+    };
+    if lib_ok
+    then IO.pure true
+    else do {
+        let bin_ok <- first_bin_on_disk m.bins;
+        if bin_ok then IO.pure true else first_script_on_disk m.scripts
     }
 }
 
@@ -5080,6 +5083,19 @@ def first_bin_on_disk (bs : List BinTarget) : IO Bool := do {
     }
 }
 
+/// A manifest whose only runnable entry points are `[[script]]`s is a real
+/// target shape (a "virtual" mote: no `src/lib.mo`, no `[[bin]]`).
+#[partial]
+def first_script_on_disk (ss : List ScriptTarget) : IO Bool := do {
+    match ss {
+        List.empty => return false,
+        List.cons s rest => do {
+            let there <- file_exists (Path.path (ScriptTarget.script_path s));
+            if there then return true else first_script_on_disk rest
+        }
+    }
+}
+
 def option_target_paths (p : Option String) : List String :=
     match p { Option.none => List.empty, Option.some s => List.cons s List.empty }
 
@@ -5089,9 +5105,16 @@ def bin_target_paths (bs : List BinTarget) : List String :=
         List.cons b rest => List.cons (BinTarget.target_path b) (bin_target_paths rest)
     }
 
+def script_target_paths (ss : List ScriptTarget) : List String :=
+    match ss {
+        List.empty => List.empty,
+        List.cons s rest => List.cons (ScriptTarget.script_path s) (script_target_paths rest)
+    }
+
 /// Every path the gate tried for this mote, in the order it tried them.
 def mote_target_paths (m : MoteManifest) : List String :=
-    List.append (option_target_paths m.lib_path) (bin_target_paths m.bins)
+    List.append (option_target_paths m.lib_path)
+        (List.append (bin_target_paths m.bins) (script_target_paths m.scripts))
 
 /// The target-less message. Which paths were tried depends on the manifest,
 /// so they are NAMED: "none of these is a file" is only actionable if the
@@ -5106,7 +5129,8 @@ def targetless_mote_error (m : MoteManifest) : String :=
         "  ", raw_path_join m.dir "mote.toml", " names ", named,
         " as its targets, and none of those is a file\n",
         "  hint: create `", mote_lib_file_of m,
-        "` for a library mote, or add a [[bin]] table naming the file a binary mote builds",
+        "` for a library mote, add a [[bin]] table naming a file a binary mote builds, ",
+        "or add a [[script]] naming an existing file",
     ]
 
 /// `acc` with `m` added, unless a mote rooted at the same directory is

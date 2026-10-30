@@ -88,6 +88,11 @@ pub struct MoteManifest {
     /// pure and cannot probe the filesystem. Whether it exists is
     /// `gate_mote_targets`' question (lang/module.mo).
     lib_path : Option String,
+    /// This mote's runnable scripts, from `[[script]]`. A script is a
+    /// single source file built with this mote's dependency closure and run
+    /// by name (`monad script <name>` / `monad s <name>`). A virtual
+    /// workspace root may declare them too; see `Mote.scripts_at_path`.
+    scripts : List ScriptTarget,
     /// This mote's binary targets, from `[[bin]]` (or the legacy singular
     /// `[bin]` spelling, which means the same thing here). Empty only for an
     /// inline mote, whose own file IS its binary.
@@ -156,6 +161,22 @@ pub struct BinTarget {
 pub def BinTarget.target_path (b : BinTarget) : String := b.path
 
 pub def BinTarget.target_name (b : BinTarget) : String := b.name
+
+/// One `[[script]]` entry: a named single-file program built against the
+/// manifest's dependency closure. `path` is joined onto the manifest's
+/// directory; `mote` optionally names the member whose manifest and closure
+/// the script uses (recommended at a virtual workspace root).
+pub struct ScriptTarget {
+    name : String,
+    path : String,
+    mote : Option String
+}
+
+pub def ScriptTarget.script_name (t : ScriptTarget) : String := t.name
+
+pub def ScriptTarget.script_path (t : ScriptTarget) : String := t.path
+
+pub def ScriptTarget.script_mote (t : ScriptTarget) : Option String := t.mote
 
 /// Where a declared dependency comes from: the canonical model of
 /// `plans/packaging/package-system.md` §2a, which `mote.lock` shares.
@@ -698,6 +719,25 @@ def Mote.affine_mode_of_dir (dir : String) (depth : I64) : IO AffineMode := do {
     }
 }
 
+/// The nearest manifest and its `[[script]]` entries, whether or not that
+/// manifest declares `[mote]` (a virtual workspace root may own scripts).
+/// `Mote.discover` cannot answer this: it returns `none` at a virtual root.
+pub def Mote.scripts_at_path (file : String) : IO (Option (Pair String (List ScriptTarget))) :=
+    Mote.scripts_at_dir (raw_parent_dir file) 32
+
+#[partial]
+def Mote.scripts_at_dir (dir : String) (depth : I64) : IO (Option (Pair String (List ScriptTarget))) := do {
+    if I64.lt depth 1 then return Option.none
+    else do {
+        let found <- read_file_or_none (Path.path (mote_toml_in dir));
+        match found {
+            Option.some text =>
+                return (Option.some (Pair.pair dir (Mote.script_targets_of_text dir text))),
+            Option.none => Mote.scripts_at_dir (config_dir_above dir) (depth - 1),
+        }
+    }
+}
+
 /// `[affine] mode` in a manifest's text. See `Mote.affine_mode_of_path`
 /// for why every non-`"warn"` answer is the strict default.
 pub def Mote.affine_mode_of_text (text : String) : AffineMode :=
@@ -850,17 +890,23 @@ def Mote.manifest_of_table_root
     match Mote.table_string (Toml.table_get "mote" root) "name" {
         Option.none => Option.none,
         Option.some name =>
-            let raw_entries := List.append
+            let base_entries := List.append
                 (Mote.table_dep_entries dir (Toml.table_get "dependencies" root))
                 (Mote.table_dep_entries dir (Toml.table_get "dev-dependencies" root)) in
+            // Script-only dependencies join the same closure: the resolver
+            // and the declared-deps gate key on a mote's manifest, so
+            // keeping a second, per-script table out of it would make a
+            // script's own `use` lines unloadable.
+            let raw_entries := List.append base_entries (Mote.script_dep_entries dir root) in
             let root_entries := match lookup {
                 MoteRootLookup.root_found w => Mote.root_dep_entries w,
                 _ => List.empty,
             } in
             let entries := Mote.resolve_entries lookup root_entries raw_entries in
-            let deps := List.append
+            let base_deps := List.append
                 (Mote.table_keys (Toml.table_get "dependencies" root))
                 (Mote.table_keys (Toml.table_get "dev-dependencies" root)) in
+            let deps := List.append base_deps (Mote.script_dep_names root) in
             let deps_full := Mote.found_deps entries in
             let libs := Mote.table_string_array (Toml.table_get "link" root) "libs" in
             let pkgs := Mote.table_string_array (Toml.table_get "link" root) "pkg-config" in
@@ -878,6 +924,7 @@ def Mote.manifest_of_table_root
                 link_libs := libs,
                 link_pkgs := pkgs,
                 lib_path := lib_path,
+                scripts := Mote.script_targets dir root,
                 bins := bins,
                 targets := targets,
                 inherited := Mote.inherited_names raw_entries,
@@ -1569,6 +1616,101 @@ def Mote.bin_target_of (dir : String) (mote_name : String) (sub : BTreeMap Strin
     let t : BinTarget := { path := path, name := name } in
     t
 
+// ─── Scripts ───────────────────────────────────────────────────────────
+
+def Mote.script_targets (dir : String) (root : BTreeMap String Toml.Value) : List ScriptTarget :=
+    Mote.script_targets_of_values dir (Toml.array_at "script" root)
+
+def Mote.script_targets_of_values (dir : String) (entries : List Toml.Value) : List ScriptTarget :=
+    match entries {
+        List.empty => List.empty,
+        List.cons v rest =>
+            match v {
+                Toml.Value.table sub =>
+                    match Mote.script_target_of dir sub {
+                        Option.some t => List.cons t (Mote.script_targets_of_values dir rest),
+                        Option.none => Mote.script_targets_of_values dir rest
+                    },
+                _ => Mote.script_targets_of_values dir rest
+            }
+    }
+
+/// One `[[script]]`: `name` required, `path` defaulting to
+/// `scripts/<name>.mo`, `mote` optional.
+def Mote.script_target_of (dir : String) (sub : BTreeMap String Toml.Value) : Option ScriptTarget :=
+    match Mote.string_value (Toml.table_get "name" sub) {
+        Option.none => Option.none,
+        Option.some name =>
+            let declared := Mote.joined_table_string dir (Option.some (Toml.Value.table sub)) "path" in
+            let path : String := match declared {
+                Option.some p => p,
+                Option.none => raw_path_join dir (String.concat "scripts/" (String.concat name ".mo")),
+            } in
+            let t : ScriptTarget := {
+                name := name,
+                path := path,
+                mote := Mote.string_value (Toml.table_get "mote" sub),
+            } in
+            Option.some t
+    }
+
+/// Parse a manifest's text for `[[script]]` entries. Used at a virtual
+/// workspace root, where `Mote.discover` returns `none`.
+pub def Mote.script_targets_of_text (dir : String) (text : String) : List ScriptTarget :=
+    match Toml.parse text {
+        err _ => List.empty,
+        ok root => Mote.script_targets dir root
+    }
+
+#[terminating]
+def Mote.script_dep_tables_go (entries : List (Pair String Toml.Value)) : List (BTreeMap String Toml.Value) :=
+    match entries {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p.second {
+                Toml.Value.table sub => List.cons sub (Mote.script_dep_tables_go rest),
+                _ => Mote.script_dep_tables_go rest
+            }
+    }
+
+def Mote.script_dep_tables (root : BTreeMap String Toml.Value) : List (BTreeMap String Toml.Value) :=
+    match Toml.table_get "script-dependencies" root {
+        Option.some v => match v {
+            Toml.Value.table sub => Mote.script_dep_tables_go (BTreeMap.to_list sub),
+            _ => List.empty
+        },
+        Option.none => List.empty
+    }
+
+#[terminating]
+def Mote.script_dep_names_go (tables : List (BTreeMap String Toml.Value)) : List String :=
+    match tables {
+        List.empty => List.empty,
+        List.cons t rest =>
+            List.append (Mote.table_keys (Option.some (Toml.Value.table t)))
+                (Mote.script_dep_names_go rest)
+    }
+
+/// The dependency names declared by `[script-dependencies.<script>]`.
+/// They are merged into the owning manifest's closure for resolution, so a
+/// script can `use` them like any declared dependency.
+pub def Mote.script_dep_names (root : BTreeMap String Toml.Value) : List String :=
+    Mote.script_dep_names_go (Mote.script_dep_tables root)
+
+#[terminating]
+def Mote.script_dep_entries_go (dir : String) (tables : List (BTreeMap String Toml.Value)) :
+        List (Pair String ManifestDepEntry) :=
+    match tables {
+        List.empty => List.empty,
+        List.cons t rest =>
+            List.append (Mote.table_dep_entries dir (Option.some (Toml.Value.table t)))
+                (Mote.script_dep_entries_go dir rest)
+    }
+
+pub def Mote.script_dep_entries (dir : String) (root : BTreeMap String Toml.Value) :
+        List (Pair String ManifestDepEntry) :=
+    Mote.script_dep_entries_go dir (Mote.script_dep_tables root)
+
 /// A table's string field, joined onto the mote's own directory so the
 /// value is a path usable exactly as stored -- `raw_path_join`'s rules
 /// for an empty `dir` and an absolute value included. Shared by the
@@ -2018,7 +2160,8 @@ def mote_attr_keys_of (entries : List AttrArg) (acc : List String) : List String
 
 /// The keys the inline annotation understands.
 def mote_attr_known_keys : List String :=
-    List.cons "name" (List.cons "deps" (List.cons "libs" (List.cons "pkg_config" List.empty)))
+    List.cons "name" (List.cons "version" (List.cons "deps"
+        (List.cons "libs" (List.cons "pkg_config" List.empty))))
 
 /// Keys the annotation sets that no reader consumes — one error per key,
 /// each naming the accepted set.
@@ -2081,6 +2224,7 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
                 // that reason -- `src/main.mo` would name a path it has no
                 // `src/` tree to hold.
                 lib_path := Option.none,
+                scripts := List.empty,
                 bins := List.empty,
                 // The inline annotation carries no `targets` key; it is a
                 // target FILE, and profile availability is per declaration.
@@ -2522,6 +2666,74 @@ def test_manifest_reads_several_bin_targets : Bool :=
                     }
             }
     }
+
+// ─── Scripts ───────────────────────────────────────────────────────────
+
+def script_manifest_fixture : String :=
+    "[mote]\nname = \"app\"\n\n[[script]]\nname = \"dev\"\npath = \"scripts/dev.mo\"\nmote = \"app\"\n\n[[script]]\nname = \"seed\"\n\n[script-dependencies.dev.tool]\npath = \"../tool\"\n"
+
+def script_at (xs : List ScriptTarget) (n : I64) : Option ScriptTarget :=
+    match xs {
+        List.empty => Option.none,
+        List.cons x rest =>
+            if I64.beq n 0 then Option.some x else script_at rest (I64.sub n 1)
+    }
+
+def second_script_ok (scripts : List ScriptTarget) : Bool :=
+    match script_at scripts 1 {
+        Option.none => false,
+        Option.some seed =>
+            if Bool.not (String.beq (ScriptTarget.script_name seed) "seed") then false
+            else if Bool.not (String.beq (ScriptTarget.script_path seed) "scripts/seed.mo") then false
+            else match ScriptTarget.script_mote seed {
+                Option.none => match script_at scripts 2 {
+                    Option.none => true,
+                    Option.some _ => false
+                },
+                Option.some _ => false
+            }
+    }
+
+#[test]
+def test_manifest_reads_scripts : Bool :=
+    match Mote.parse_manifest "" script_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            match script_at m.scripts 0 {
+                Option.none => false,
+                Option.some dev =>
+                    if Bool.not (String.beq (ScriptTarget.script_name dev) "dev") then false
+                    else if Bool.not (String.beq (ScriptTarget.script_path dev) "scripts/dev.mo") then false
+                    else match ScriptTarget.script_mote dev {
+                        Option.some n =>
+                            if String.beq n "app" then second_script_ok m.scripts else false,
+                        Option.none => false
+                    }
+            }
+    }
+
+#[test]
+def test_script_dependencies_join_the_closure : Bool :=
+    match Mote.parse_manifest "" script_manifest_fixture {
+        Option.none => false,
+        Option.some m => list_contains_string "tool" m.deps
+    }
+
+def virtual_script_fixture : String :=
+    "[workspace]\nmembers = []\n\n[[script]]\nname = \"serve\"\npath = \"scripts/serve.mo\"\n"
+
+#[test]
+def test_script_targets_of_text_at_virtual_root : Bool :=
+    match Mote.script_targets_of_text "" virtual_script_fixture {
+        List.cons s rest =>
+            Bool.and (List.is_empty rest)
+                (String.beq (ScriptTarget.script_name s) "serve"),
+        List.empty => false
+    }
+
+#[test]
+def test_inline_annotation_accepts_version : Bool :=
+    list_contains_string "version" mote_attr_known_keys
 
 /// A manifest with NO bin table still gets exactly one target -- the
 /// conventional `src/main.mo`, named after the mote. That default is what
