@@ -62,6 +62,10 @@ pub struct SizedWidget {
 /// amounts; `styled` merges a `TextStyle` into the active style for the subtree.
 pub type DecoratorKind {
     border (style : BorderStyle),
+    /// A border whose FRAME gets `text_style` while the child keeps the
+    /// ambient style. `with_style` cannot express this: it merges into the
+    /// whole subtree, so a `dim` border also dimmed every row inside it.
+    border_styled (style : BorderStyle) (text_style : TextStyle),
     padding (left : I64) (top : I64) (right : I64) (bottom : I64),
     styled (style : TextStyle)
 }
@@ -113,6 +117,11 @@ pub def list (st : ListState) : Widget :=
 pub def border (bs : BorderStyle) (child : Widget) : Widget :=
     Widget.decorator (DecoratorKind.border bs) child
 
+/// `border`, with the frame painted in `s` and the child untinted -- the
+/// structure-is-quieter-than-content rule, without the content dimmed too.
+pub def border_with (s : TextStyle) (bs : BorderStyle) (child : Widget) : Widget :=
+    Widget.decorator (DecoratorKind.border_styled bs s) child
+
 /// Inset `child` by the given number of cells on each side.
 pub def padding (left : I64) (top : I64) (right : I64) (bottom : I64) (child : Widget) : Widget :=
     Widget.decorator (DecoratorKind.padding left top right bottom) child
@@ -160,6 +169,18 @@ def test_border_wraps_child : Bool :=
             match kind {
                 DecoratorKind.border bs => bs == BorderStyle.plain
                     && (match child { Widget.leaf k => match k { LeafWidget.label t => t == "x", _ => false }, _ => false }),
+                _ => false
+            },
+        _ => false
+    }
+
+#[test]
+def test_border_with_carries_its_frame_style : Bool :=
+    let s : TextStyle := { style_default with dim := true } in
+    match border_with s BorderStyle.rounded blank {
+        Widget.decorator kind _ =>
+            match kind {
+                DecoratorKind.border_styled bs st => bs == BorderStyle.rounded && st == s,
                 _ => false
             },
         _ => false

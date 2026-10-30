@@ -24,8 +24,11 @@ use weaver::model {
     Model.display_rows, Model.content_width, DisplayRow,
     Model.display_line, Model.display_plain, Model.display_cap_bytes,
     Model.body_height, Model.thinking_text, Model.live_stream_height, Model.live_row, status_line,
-    Model.row_total_of,
+    Model.row_total_of, Model.view, Model.panel_top_of, Model.panel_left,
 }
+use tui::render {render}
+use tui::core {empty_screen, mk_rect, screen_get_cell}
+use tui::types {Screen}
 use weaver::store {TLine, TLine.plain, TLine.detail_line, TranscriptPage, Transcript.with_page}
 
 def mock_config : ProviderConfig :=
@@ -333,3 +336,28 @@ def test_display_plain_does_not_classify : Bool :=
 #[test]
 def test_display_plain_wraps_like_a_transcript_line : Bool :=
     Bool.not (I64.lt (List.length (Model.display_plain 4 "abcdefghij")) 3)
+
+/// A colored 24x80 model with one block appended. The render pins need the
+/// real palette; `model_of` is colorless (the dumb-mode default).
+def colored_model_of (lines : List TLine) : TuiModel :=
+    let st : WeaverState := { state_of with colors := true } in
+    let m : TuiModel := { (init_tui_model Option.none st 24 80) with banner := false } in
+    Model.append_block m lines
+
+/// V1: the panel's frame is dim, the rows inside it are NOT. The panel used
+/// to be wrapped in `with_style dim`, and `style_merge` propagates into the
+/// whole subtree -- the entire transcript rendered faint, while `--no-color`
+/// (which passes the plain style) did not.
+#[test]
+def test_render_keeps_transcript_rows_undimmed : Bool :=
+    let m : TuiModel := colored_model_of [TLine.plain "hello"] in
+    let screen : Screen := render (Model.view m) (mk_rect 0 0 80 24) (empty_screen 24 80) in
+    let body_dim : Bool := match screen_get_cell screen (Model.panel_top_of m) Model.panel_left {
+        Option.some c => c.style.dim,
+        Option.none => true,
+    } in
+    let border_dim : Bool := match screen_get_cell screen 0 0 {
+        Option.some c => c.style.dim,
+        Option.none => false,
+    } in
+    Bool.not body_dim && border_dim

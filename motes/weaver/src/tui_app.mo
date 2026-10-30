@@ -68,7 +68,7 @@ use weaver::store {TLine, TLine.plain, TLine.user_line}
 use weaver::error {WeaverError, WeaverError.show, WeaverError.recoverable}
 use std::concurrent::fiber {FiberError, FiberError.message}
 use tui::types {Event, Key, MouseEvent, MouseButton, LayoutSize, TextStyle, Rect, Cell, Screen}
-use tui::widget {Widget, SizedWidget, BorderStyle, border, padding, sized, label, with_style}
+use tui::widget {Widget, SizedWidget, BorderStyle, border_with, padding, sized, label, with_style}
 use tui::widgets::input {InputState, input_state, handle_input_multiline_key, insert_text}
 use tui::widgets::input {handle_input_key}
 use tui::core {empty_screen, mk_rect, style_to_ansi}
@@ -1999,8 +1999,8 @@ def dialog_total_rows (d : Dialog) (body_all : List DisplayRow) : I64 :=
 
 def dialog_widget (colors : Bool) (rows : List DisplayRow) : Widget :=
     Widget.column [
-        sized (LayoutSize.fill 1) (with_style (theme_border_style_with colors) (border BorderStyle.rounded
-            (padding 1 1 1 2 (Widget.column (List.map Model.display_row_widget rows))))),
+        sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded
+            (padding 1 1 1 2 (Widget.column (List.map Model.display_row_widget rows)))),
     ]
 
 def render_dialog (colors : Bool) (d : Dialog) : IO Unit := do {

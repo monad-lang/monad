@@ -36,7 +36,7 @@ use tui::widgets::input {
     InputState, input_state, InputState.press, InputState.drag,
     InputState.finish_selection, InputState.clear_selection,
 }
-use tui::widget {Widget, SizedWidget, BorderStyle, border, label, text_input, sized, with_style, padding}
+use tui::widget {Widget, SizedWidget, BorderStyle, border_with, label, text_input, sized, with_style, padding}
 use tui::render {wrap_text}
 use tui::text {Text.width, Text.take_width, Text.slice_cols, Text.padded_slice_cols, Text.snap_span}
 use std::list {List.intercalate}
@@ -459,7 +459,9 @@ pub def Model.view (m : TuiModel) : Widget :=
         Option.none => transcript_column m,
         Option.some p => picker_column m p,
     } in
-    let transcript : SizedWidget := sized (LayoutSize.fill 1) (with_style (theme_border_style_with colors) (border BorderStyle.rounded (padding 1 0 1 0 body))) in
+    // `border_with`, not `with_style (border ...)`: the frame is dim, the
+    // rows inside it are not (with_style merges into the whole subtree).
+    let transcript : SizedWidget := sized (LayoutSize.fill 1) (border_with (theme_border_style_with colors) BorderStyle.rounded (padding 1 0 1 0 body)) in
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
     let input : SizedWidget := sized (LayoutSize.fixed 3) (padding 1 0 1 0 (text_input m.input)) in
     let head : List SizedWidget := if m.banner then [sized (LayoutSize.fixed Model.banner_height) (banner_widget m)] else List.empty in

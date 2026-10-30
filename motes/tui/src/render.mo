@@ -37,7 +37,7 @@ use lib::widgets::list { ListState }
 // patterns.
 use lib::widget {
     Widget, BorderStyle, SizedWidget, LeafWidget, DecoratorKind,
-    label, sized, border, padding, with_style, blank, text_input, list
+    label, sized, border, border_with, padding, with_style, blank, text_input, list
 }
 
 // ==================== Cells ====================
@@ -443,6 +443,12 @@ pub def render_with (w : Widget) (area : Rect) (screen : Screen) (active : TextS
                     // there is no room for a 2x2 frame.
                     let boxed := if area.width < 2 || area.height < 2 then screen else draw_border area bs screen active in
                     render_with child (pad_rect area 1 1 1 1) boxed active,
+                DecoratorKind.border_styled bs s =>
+                    // The frame is styled; the child keeps `active` (see the
+                    // constructor's own note -- this is the whole point).
+                    let frame : TextStyle := style_merge active s in
+                    let boxed := if area.width < 2 || area.height < 2 then screen else draw_border area bs screen frame in
+                    render_with child (pad_rect area 1 1 1 1) boxed active,
                 DecoratorKind.padding l t r b =>
                     render_with child (pad_rect area l t r b) screen active,
                 DecoratorKind.styled s =>
@@ -684,6 +690,28 @@ def test_render_border_then_styled_compose : Bool :=
     // border corners are NOT bold (drawn before the styled child); the inner
     // "x" IS bold.
     cell_bold_is s 0 0 false && cell_bold_is s 1 1 true
+
+/// The cell at `(row,col)` has `dim` set to the given Bool.
+def cell_dim_is (screen : Screen) (row : I64) (col : I64) (want : Bool) : Bool :=
+    match screen_get_cell screen row col {
+        some c => c.style.dim == want,
+        none => false
+    }
+
+#[test]
+def test_render_border_with_styles_only_the_frame : Bool :=
+    let dim_style : TextStyle := { style_default with dim := true } in
+    let s := render (border_with dim_style BorderStyle.plain (label "x")) (mk_rect 0 0 3 3) (mk_screen 3 3) in
+    // The frame is dim, the row inside it is NOT -- the bug `with_style`
+    // (which merges into the whole subtree) shipped as a faint transcript.
+    cell_dim_is s 0 0 true && cell_dim_is s 1 0 true && cell_dim_is s 1 1 false
+
+#[test]
+def test_render_with_style_still_tints_the_child : Bool :=
+    // `border_with` is the exception, not a change to `with_style`.
+    let dim_style : TextStyle := { style_default with dim := true } in
+    let s := render (with_style dim_style (label "x")) (mk_rect 0 0 1 1) (mk_screen 1 1) in
+    cell_dim_is s 0 0 true
 
 /// The cell at `(row,col)` has `underline` set to the given Bool.
 def cell_underline_is (screen : Screen) (row : I64) (col : I64) (want : Bool) : Bool :=
