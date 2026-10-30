@@ -1,0 +1,23 @@
+# The jsonwebtoken mote: JWT compact-serialization parsing, JWKS key
+# selection, and claim validation. It deliberately has no `http`/`moose`
+# dependency -- fetching a JWKS is the caller's job (motes/oauth does it
+# through its injected transport).
+#
+# Sub-table dependencies, not inline tables: the self-hosted TOML reader
+# supports headers only (see motes/moose/mote.toml).
+[mote]
+name = "jsonwebtoken"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.crypto]
+path = "../crypto"
+
+[dependencies.json]
+path = "../json"
+
+# Affine-by-default migration exception, the same one every mote carries.
+# Claim maps and key byte lists are read from more than one validation
+# step; the plan's shapes are immutable values, not shared handles.
+[affine]
+mode = "warn"

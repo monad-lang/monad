@@ -66,6 +66,7 @@ members = [
   "motes/oak",
   "motes/oak_wasm",
   "motes/oauth",
+  "motes/jsonwebtoken",
   "motes/yaml",
   "motes/time",
   "motes/markdown",
