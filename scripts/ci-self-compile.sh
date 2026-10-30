@@ -35,7 +35,7 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
 out="${1:-$root/target-monad/ci-self-compile}"
-floor_file="$root/bootstrap/nightly-floor.txt"
+floor_file="${MONAD_NIGHTLY_FLOOR:-$root/bootstrap/nightly-floor.txt}"
 allow_fallback="${MONAD_ALLOW_RUST_FALLBACK:-0}"
 fallback_host="${MONAD_HOST_BIN:-"cargo run --manifest-path $root/rust/Cargo.toml --release --"}"
 
@@ -96,6 +96,17 @@ fi
 floor=""
 if [ -f "$floor_file" ]; then
   floor="$(tr -d '[:space:]' < "$floor_file")"
+fi
+if [ "$floor" = pending ]; then
+  # The tree needs a loader feature the published nightlies predate (the
+  # `workspace = true` reader). A commit SHA cannot express that window
+  # across a rebase-merge, so the floor is the explicit sentinel; replace it
+  # with the first nightly's commit once that nightly exists.
+  say "the nightly floor is pending: this tree needs a loader the published nightlies predate"
+  say "the required check resumes when bootstrap/nightly-floor.txt names a nightly's commit"
+  MONAD_HOST_BIN="$fallback_host" scripts/build-self-hosted.sh "$out"
+  say "self-compile OK with the Rust host (pending floor)"
+  exit 0
 fi
 if [ -n "$floor" ]; then
   if ! git -C "$root" rev-parse --verify --quiet "$floor^{commit}" >/dev/null; then

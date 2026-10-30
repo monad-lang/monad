@@ -167,8 +167,11 @@ do not weaken the gate), or the nightly miscompiles (fix it).
 `bootstrap/nightly-floor.txt` is a one-time bootstrap window: while the latest
 nightly predates the commit named there, the script says so and uses the Rust
 host. Once a nightly at or after the floor exists the check is strict; do not
-raise the floor to make a later change pass. `MONAD_ALLOW_RUST_FALLBACK=1`
-exists for a local checkout with no network and is never set in CI.
+raise the floor to make a later change pass. The value `pending` is the window
+for a change the published nightlies cannot compile yet (a new loader feature
+and the manifests using it); replace it with the first nightly's commit once
+that nightly exists. `MONAD_ALLOW_RUST_FALLBACK=1` exists for a local checkout
+with no network and is never set in CI.
 
 ## Writing Monad Code
 

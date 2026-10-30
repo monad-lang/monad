@@ -13,8 +13,10 @@ set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 gate="$root/scripts/ci-self-compile.sh"
-floor="$(tr -d '[:space:]' < "$root/bootstrap/nightly-floor.txt")"
 head_commit="$(git -C "$root" rev-parse HEAD)"
+# A real floor for cases 1-5. The repo's own file may say `pending` (the
+# workspace-inheritance window), which is tested separately below.
+real_floor="$(git -C "$root" rev-parse 0af9ff59 2>/dev/null || git -C "$root" rev-parse "$head_commit^")"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/monad-nightly-gate.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -27,6 +29,7 @@ pass() { passed=$((passed + 1)); }
 # ─── fixtures ───────────────────────────────────────────────────────────────
 
 mkdir -p "$work/bin" "$work/home/bin" "$work/out"
+printf '%s\n' "$real_floor" > "$work/floor-real"
 
 # The fallback host, and the nightly's build path (the fake nightly execs it).
 # It accepts both shapes build-self-hosted.sh uses:
@@ -87,6 +90,7 @@ run_gate() {
     MONAD_HOST_BIN="$work/host" FAKE_HOST_SCRIPT="$work/host" \
     FAKE_NIGHTLY_COMMIT="${NIGHTLY:-$head_commit}" \
     FAKE_BUILT_COMMIT="fake-built" FAKE_CHECK_RC=0 FAKE_FAIL_ONE_RUNG=0 \
+    MONAD_NIGHTLY_FLOOR="${MONAD_NIGHTLY_FLOOR:-$work/floor-real}" \
     "$@" "$gate" "$work/out" >"$log" 2>&1 || rc=$?
   if [ "$expect" = 0 ] && [ "$rc" -ne 0 ]; then
     cat "$log" >&2
@@ -112,9 +116,16 @@ expect_log() {
 
 make_nightly
 
+# 0. A `pending` floor: the tree needs a loader the published nightlies
+#    predate, expressed as a sentinel rather than a commit that a rebase-merge
+#    would orphan.
+printf 'pending\n' > "$work/floor-pending"
+NIGHTLY="$head_commit" MONAD_NIGHTLY_FLOOR="$work/floor-pending" run_gate 0 "pending floor"
+expect_log "floor is pending" "pending floor"
+
 # 1. The nightly predates the floor: a loud bootstrap window, then the Rust
 #    host. The fake nightly's commit must be an ancestor of the floor.
-old_nightly="$(git -C "$root" rev-list --max-count=1 "$floor^" 2>/dev/null || true)"
+old_nightly="$(git -C "$root" rev-list --max-count=1 "$real_floor^" 2>/dev/null || true)"
 if [ -n "$old_nightly" ]; then
   NIGHTLY="$old_nightly" run_gate 0 "bootstrap window"
   expect_log "bootstrap window" "bootstrap window"
