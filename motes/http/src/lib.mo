@@ -17,6 +17,8 @@ pub use lib::types {
     Status.not_modified, Status.temporary_redirect, Status.permanent_redirect,
     Status.bad_request, Status.unauthorized, Status.forbidden, Status.not_found,
     Status.method_not_allowed, Status.range_not_satisfiable, Status.conflict,
+    Status.payload_too_large, Status.expectation_failed,
+    Status.request_header_fields_too_large,
     Status.internal_server_error, Status.bad_gateway,
     Status.service_unavailable,
 
@@ -43,7 +45,8 @@ pub use lib::strings {
 }
 
 pub use lib::wire {
-    Wire.parse_request, Wire.parse_response, Wire.parse_response_with_method,
+    Wire.parse_request, Wire.parse_request_strict,
+    Wire.parse_response, Wire.parse_response_with_method,
     Wire.format_request, Wire.format_response, Wire.format_response_head,
     Wire.frame_request, Wire.frame_response,
     Wire.response_framing, Wire.response_has_body,
@@ -51,7 +54,12 @@ pub use lib::wire {
     Wire.hex_i64, Wire.chunk_frame, Wire.terminal_chunk,
     Wire.response_head_chunked, Wire.chunked_request_framing,
     Wire.headers_valid, Wire.find_body_start, Wire.head_headers,
+    Wire.continue_response, Wire.check_request_host, Wire.request_host,
+    Wire.request_target, Wire.valid_host, Wire.validate_target_string,
+    Wire.max_header_count, Wire.max_header_line_bytes,
 }
+
+pub use lib::date {Http.Date.imf_fixdate, Http.Date.parse_imf_fixdate}
 
 pub use lib::body {
     MultipartPart,

@@ -56,6 +56,9 @@ pub def Status.not_found : U16 := 404u16
 pub def Status.method_not_allowed : U16 := 405u16
 pub def Status.range_not_satisfiable : U16 := 416u16
 pub def Status.conflict : U16 := 409u16
+pub def Status.payload_too_large : U16 := 413u16
+pub def Status.expectation_failed : U16 := 417u16
+pub def Status.request_header_fields_too_large : U16 := 431u16
 pub def Status.internal_server_error : U16 := 500u16
 pub def Status.bad_gateway : U16 := 502u16
 pub def Status.service_unavailable : U16 := 503u16
@@ -156,8 +159,15 @@ def Headers.token_all (bytes : List U8) : Bool :=
 pub def Headers.valid_name (name : String) : Bool :=
   Bool.and (Bool.not (String.is_empty name)) (Headers.token_all (String.to_list name))
 
+/// A header value may not contain NUL, CR or LF (message splitting), nor
+/// any other C0 control except HTAB, nor DEL. `Headers.valid_value` is the
+/// backstop every serializer runs, so this is the strict set.
 def Headers.invalid_value_byte (b : U8) : Bool :=
-  Bool.or (U8.beq b 0u8) (Bool.or (U8.beq b 10u8) (U8.beq b 13u8))
+  if U8.beq b 9u8
+  then false
+  else if U8.lt b 32u8
+  then true
+  else U8.beq b 127u8
 
 #[terminating]
 def Headers.value_all (bytes : List U8) : Bool :=

@@ -1,21 +1,24 @@
 /// Phase 3 tests — HTTP/1.1 wire format parse/serialize roundtrips.
 
 use http::types {
-  Body, Framing, Headers, HttpVersion, Method, Request, Response, Response.no_content,
-  Response.text, Response.with_header, Response.with_status, Status.created, Status.no_content,
-  Status.not_found, Status.not_modified, Status.ok, Uri,
+  Body, Framing, Headers, Headers.add, Headers.empty, HttpVersion,
+  Method, Request, Response,
+  Response.no_content, Response.text, Response.with_header, Response.with_status,
+  Status.created, Status.no_content, Status.not_found, Status.not_modified,
+  Status.ok, Uri,
 }
 use http::body {Body.length, Body.to_bytes_pure}
 use http::strings {Strings.drop_bytes}
 use http::wire {
-  Wire.chunk_step, Wire.body_bytes, Wire.content_length_of,
-  Wire.format_request, Wire.format_response, Wire.format_response_head,
-  Wire.frame_request,
-  Wire.frame_response, Wire.parse_chunk_size, Wire.parse_content_length,
-  Wire.parse_method, Wire.parse_request, Wire.parse_response,
+  Wire.chunk_step, Wire.body_bytes, Wire.check_request_host, Wire.content_length_of,
+  Wire.continue_response, Wire.format_request, Wire.format_response,
+  Wire.format_response_head, Wire.frame_request, Wire.frame_response,
+  Wire.parse_chunk_size, Wire.parse_content_length, Wire.parse_method,
+  Wire.parse_request, Wire.parse_request_strict, Wire.parse_response,
   Wire.parse_response_with_method, Wire.parse_u16, Wire.parse_version,
-  Wire.request_target, Wire.request_framing, Wire.response_has_body,
-  Wire.split_lines, Wire.take_bytes,
+  Wire.request_host, Wire.request_target, Wire.request_framing,
+  Wire.response_has_body, Wire.split_lines, Wire.take_bytes, Wire.valid_host,
+  Wire.validate_target_string,
 }
 
 def expect_ok_req (got : Result String Request) (want_method : Method) (want_path : String) : Bool :=
@@ -974,4 +977,183 @@ def test_head_200_keeps_representation_length : Bool :=
     Result.ok bytes =>
       String.beq (String.from_list bytes)
         "HTTP/1.1 200 \r\ncontent-length: 5\r\n\r\n"
+  }
+
+// ── strict parsing: smuggling shapes, limits, Host ─────────────────────
+
+def req_bytes (s : String) : List U8 :=
+  String.to_list s
+
+#[partial]
+def many_header_lines (n : I64) (acc : List String) : List String :=
+  if I64.lt n 1
+  then acc
+  else many_header_lines (I64.sub n 1)
+    (List.cons (String.concat "X-" (String.concat (I64.to_string n) ": v\r\n")) acc)
+
+def request_with_many_headers (n : I64) : List U8 :=
+  String.to_list
+    (String.concat "GET / HTTP/1.1\r\nHost: x\r\n"
+      (String.concat (String.concat_list (many_header_lines n List.empty)) "\r\n"))
+
+#[partial]
+def repeat_byte (b : U8) (n : I64) : List U8 :=
+  if I64.lt n 1 then List.empty else List.cons b (repeat_byte b (I64.sub n 1))
+
+def request_with_long_header (n : I64) : List U8 :=
+  List.append (String.to_list "GET / HTTP/1.1\r\nHost: x\r\nX-Long: ")
+    (List.append (repeat_byte 97u8 n) (String.to_list "\r\n\r\n"))
+
+#[test]
+def test_header_whitespace_before_colon_rejected : Bool :=
+  match Wire.parse_request
+    (req_bytes "POST /x HTTP/1.1\r\nHost: x\r\nContent-Length : 5\r\n\r\nhello") {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_header_obsolete_fold_rejected : Bool :=
+  match Wire.parse_request
+    (req_bytes "GET / HTTP/1.1\r\nHost: x\r\n Transfer-Encoding: chunked\r\n\r\n") {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+def request_with_nul_header : List U8 :=
+  List.append (String.to_list "GET / HTTP/1.1\r\nHost: x\r\nX: a")
+    (List.append (List.singleton 0u8) (String.to_list "b\r\n\r\n"))
+
+#[test]
+def test_header_nul_rejected : Bool :=
+  match Wire.parse_request request_with_nul_header {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_too_many_headers_rejected : Bool :=
+  match Wire.parse_request (request_with_many_headers 101i64) {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_header_line_too_long_rejected : Bool :=
+  match Wire.parse_request (request_with_long_header 8193i64) {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_205_has_no_body : Bool :=
+  Bool.not (Wire.response_has_body Method.GET 205u16)
+
+#[test]
+def test_continue_response_bytes : Bool :=
+  String.beq (String.from_list Wire.continue_response) "HTTP/1.1 100 Continue\r\n\r\n"
+
+#[test]
+def test_valid_host_accepts_authority : Bool :=
+  Bool.and (Wire.valid_host "example.com:8080") (Wire.valid_host "[::1]:443")
+
+#[test]
+def test_valid_host_rejects_whitespace_and_path : Bool :=
+  Bool.and (Bool.not (Wire.valid_host "exa mple")) (Bool.not (Wire.valid_host "a/b"))
+
+#[test]
+def test_request_host_duplicate_rejected : Bool :=
+  let hs : Headers := Headers.add "Host" "b" (Headers.add "Host" "a" Headers.empty) in
+  match Wire.request_host hs {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+def request_with_version (v : HttpVersion) (hs : Headers) : Request :=
+  let req : Request :=
+    { method := Method.GET,
+      uri := Uri.uri "" Option.none "" Option.none "/" Option.none Option.none,
+      headers := hs, version := v, body := Body.empty } in
+  req
+
+#[test]
+def test_check_request_host_missing_on_11 : Bool :=
+  match Wire.check_request_host (request_with_version HttpVersion.http1_1 Headers.empty) {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_check_request_host_missing_ok_on_10 : Bool :=
+  match Wire.check_request_host (request_with_version HttpVersion.http1_0 Headers.empty) {
+    Result.ok _ => true,
+    Result.err _ => false
+  }
+
+def abs_request (host : String) : Request :=
+  let hs : Headers := Headers.add "Host" host Headers.empty in
+  let req : Request :=
+    { method := Method.GET,
+      uri := Uri.uri "http" Option.none "example.com" (Option.some 8080u16) "/x" Option.none Option.none,
+      headers := hs, version := HttpVersion.http1_1, body := Body.empty } in
+  req
+
+#[test]
+def test_check_request_host_absolute_match : Bool :=
+  match Wire.check_request_host (abs_request "example.com:8080") {
+    Result.ok _ => true,
+    Result.err _ => false
+  }
+
+#[test]
+def test_check_request_host_absolute_mismatch : Bool :=
+  match Wire.check_request_host (abs_request "evil.example") {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_strict_parse_accepts_host : Bool :=
+  match Wire.parse_request_strict (req_bytes "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n") {
+    Result.ok _ => true,
+    Result.err _ => false
+  }
+
+#[test]
+def test_strict_parse_rejects_missing_host : Bool :=
+  match Wire.parse_request_strict (req_bytes "GET / HTTP/1.1\r\n\r\n") {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_strict_parse_asterisk_only_for_options : Bool :=
+  Bool.and
+    (match Wire.parse_request_strict (req_bytes "GET * HTTP/1.1\r\nHost: x\r\n\r\n") {
+      Result.ok _ => false,
+      Result.err _ => true
+    })
+    (match Wire.parse_request_strict (req_bytes "OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\n") {
+      Result.ok _ => true,
+      Result.err _ => false
+    })
+
+def request_with_nul_target : List U8 :=
+  List.append (String.to_list "GET /a")
+    (List.append (List.singleton 0u8) (String.to_list "b HTTP/1.1\r\nHost: x\r\n\r\n"))
+
+#[test]
+def test_strict_parse_rejects_nul_target : Bool :=
+  match Wire.parse_request_strict request_with_nul_target {
+    Result.ok _ => false,
+    Result.err _ => true
+  }
+
+#[test]
+def test_format_response_rejects_control_value : Bool :=
+  let v := String.from_list (List.cons 1u8 (String.to_list "x")) in
+  let res := Response.with_header "X-Test" v (Response.text 200u16 "hi") in
+  match Wire.format_response res {
+    Result.ok _ => false,
+    Result.err _ => true
   }

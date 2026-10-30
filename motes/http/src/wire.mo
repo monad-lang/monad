@@ -236,7 +236,7 @@ def Wire.request_line (m : Method) (u : Uri) (v : HttpVersion) : List U8 :=
   let line := Wire.append_all (List.cons (Wire.str_bytes (Wire.method_str m)) (List.cons (Wire.byte 32u8) (List.cons (Wire.str_bytes path) (List.cons (Wire.byte 32u8) (List.singleton (Wire.str_bytes (Wire.version_str v))))))) in
   List.append line Wire.crlf
 
-def Wire.request_target (u : Uri) : String :=
+pub def Wire.request_target (u : Uri) : String :=
   if String.is_empty u.scheme
   then
     let q := match u.query {
@@ -374,35 +374,70 @@ pub def Wire.take_bytes (n : I64) (bytes : List U8) : List U8 :=
 
 // ── parse header lines into Headers ───────────────────────────────────
 
-def Wire.parse_header_lines (lines : List (List U8)) : Result String Headers :=
-  Wire.parse_header_lines_go lines Headers.empty
+/// The most header fields one message may carry.
+pub def Wire.max_header_count : I64 := 100
 
-def Wire.parse_header_lines_go (lines : List (List U8)) (acc : Headers) : Result String Headers :=
+/// The longest single header line, before folding is considered.
+pub def Wire.max_header_line_bytes : I64 := 8192
+
+#[terminating]
+def Wire.contains_byte (target : U8) (bytes : List U8) : Bool :=
+  match bytes {
+    List.empty => false,
+    List.cons b rest =>
+      if U8.beq target b then true else Wire.contains_byte target rest
+  }
+
+def Wire.parse_header_lines (lines : List (List U8)) : Result String Headers :=
+  Wire.parse_header_lines_go lines Headers.empty 0i64
+
+def Wire.parse_header_lines_go (lines : List (List U8)) (acc : Headers) (count : I64) : Result String Headers :=
   match lines {
     List.empty => Result.ok acc,
     List.cons line rest =>
       if List.is_empty line
       then Result.ok acc
+      else if Bool.not (I64.lt count Wire.max_header_count)
+      then Result.err "too many header fields"
+      else if I64.gt (List.length line) Wire.max_header_line_bytes
+      then Result.err "header line too long"
       else
         match Wire.parse_one_header line {
           Result.err e => Result.err e,
-          Result.ok kv => Wire.parse_header_lines_go rest (Headers.add kv.first kv.second acc)
+          Result.ok kv => Wire.parse_header_lines_go rest (Headers.add kv.first kv.second acc) (I64.add count 1)
         }
   }
 
-/// Split one header line at its colon. A line with no colon is an error.
+/// Split one header line at its colon, validating both sides. An empty
+/// line, a leading SP/HTAB (obsolete line folding), a NUL, an invalid token
+/// name (which rejects `Content-Length : 5`'s trailing space) or a value
+/// with a C0 control other than HTAB is an error.
 ///
 /// `Body.parse_part_header_lines_go` also calls this, and *skips* the error
 /// rather than propagating it: one malformed line inside a multipart section
 /// should not cost the caller the whole body. The difference is deliberate and
 /// lives at that call site; this function only reports what it saw.
 def Wire.parse_one_header (line : List U8) : Result String (Pair String String) :=
-  match Strings.split_at_byte_opt 58u8 line {
-    Option.none => Result.err "header line without colon",
-    Option.some sp =>
-      let k := String.from_list sp.first in
-      let v := String.trim (String.from_list (Wire.drop_leading_space sp.second)) in
-      Result.ok (Pair.pair k v)
+  match line {
+    List.empty => Result.err "empty header line",
+    List.cons first _ =>
+      if Bool.or (U8.beq first 32u8) (U8.beq first 9u8)
+      then Result.err "obsolete line folding"
+      else if Wire.contains_byte 0u8 line
+      then Result.err "NUL in header line"
+      else
+        match Strings.split_at_byte_opt 58u8 line {
+          Option.none => Result.err "header line without colon",
+          Option.some sp =>
+            let k := String.from_list sp.first in
+            let raw_v := Wire.drop_leading_space sp.second in
+            let v := String.trim (String.from_list raw_v) in
+            if Bool.not (Headers.valid_name k)
+            then Result.err "invalid header name"
+            else if Bool.not (Headers.valid_value (String.from_list raw_v))
+            then Result.err "invalid header value"
+            else Result.ok (Pair.pair k v)
+        }
   }
 
 def Wire.drop_leading_space (bytes : List U8) : List U8 :=
@@ -714,6 +749,8 @@ pub def Wire.response_has_body (method : Method) (status : U16) : Bool :=
   then false
   else if U16.beq status 204u16
   then false
+  else if U16.beq status 205u16
+  then false
   else Bool.not (U16.beq status 304u16)
 
 /// Whether the head declares exactly `Transfer-Encoding: chunked` -- the
@@ -961,6 +998,136 @@ def Wire.target_to_uri (target : String) : Uri :=
     Result.err _ => Uri.uri "" Option.none "" Option.none target Option.none Option.none,
     Result.ok u => u
   }
+
+// ── request-target and Host validation ─────────────────────────────────
+//
+// These live beside `parse_request` but are separate from it: the client
+// parsers and the pure wire tests do not need a Host, while a SERVER does.
+// `parse_request_strict` is the server edge -- it adds the request-line
+// control check, the target-form check and the Host/authority check on top
+// of the shared parser.
+
+/// A `Host` header value: non-empty after trimming, no SP/controls, and no
+/// character that could change how a downstream parses the authority.
+pub def Wire.valid_host (h : String) : Bool :=
+  let t := String.trim h in
+  if String.is_empty t then false else Wire.host_bytes_valid (String.to_list t)
+
+#[terminating]
+def Wire.host_bytes_valid (bytes : List U8) : Bool :=
+  match bytes {
+    List.empty => true,
+    List.cons b rest =>
+      if U8.lt b 33u8 then false
+      else if U8.beq b 127u8 then false
+      else if U8.beq b 47u8 then false
+      else if U8.beq b 92u8 then false
+      else if U8.beq b 63u8 then false
+      else if U8.beq b 35u8 then false
+      else if U8.beq b 64u8 then false
+      else if U8.beq b 44u8 then false
+      else Wire.host_bytes_valid rest
+  }
+
+/// The single `Host` value, or an error for a duplicate/invalid one.
+pub def Wire.request_host (headers : Headers) : Result String (Option String) :=
+  match Headers.get_all "host" headers {
+    List.empty => Result.ok Option.none,
+    List.cons h rest =>
+      if Bool.not (List.is_empty rest)
+      then Result.err "duplicate Host header"
+      else if Bool.not (Wire.valid_host h)
+      then Result.err "invalid Host header"
+      else Result.ok (Option.some (String.trim h))
+  }
+
+def Wire.authority_matches (host_header : String) (uri : Uri) : Bool :=
+  let h : String := String.to_lowercase (String.trim host_header) in
+  let uh : String := String.to_lowercase uri.host in
+  if String.is_empty uh
+  then true
+  else if String.beq h uh
+  then true
+  else
+    match uri.port {
+      Option.none => false,
+      Option.some p => String.beq h (String.concat uh (String.concat ":" (U16.to_string p)))
+    }
+
+/// HTTP/1.1 requires exactly one valid `Host`; an absolute-form target's
+/// authority must agree with it. HTTP/1.0 may omit Host.
+pub def Wire.check_request_host (req : Request) : Result String Unit :=
+  match Wire.request_host req.headers {
+    Result.err e => Result.err e,
+    Result.ok opt =>
+      match opt {
+        Option.none =>
+          match req.version {
+            HttpVersion.http1_1 => Result.err "missing Host header",
+            HttpVersion.http1_0 => Result.ok unit
+          },
+        Option.some h =>
+          if String.is_empty req.uri.scheme
+          then Result.ok unit
+          else if Wire.authority_matches h req.uri
+          then Result.ok unit
+          else Result.err "Host does not match the absolute-form authority"
+      }
+  }
+
+/// Validate the parsed target's FORM (RFC 9112 §3.2).
+pub def Wire.validate_target_string (method : Method) (target : String) : Result String Unit :=
+  if String.is_empty target
+  then Result.err "empty request target"
+  else if String.beq target "*"
+  then
+    if BEq.beq method Method.OPTIONS
+    then Result.ok unit
+    else Result.err "asterisk-form target is only for OPTIONS"
+  else if BEq.beq method Method.CONNECT
+  then Result.ok unit
+  else if String.starts_with "/" target
+  then Result.ok unit
+  else if Bool.or (String.starts_with "http://" target) (String.starts_with "https://" target)
+  then Result.ok unit
+  else Result.err "unsupported request-target form"
+
+/// Reject C0 controls and DEL in the request line, up to its CR. A NUL in
+/// the target would truncate at `String.from_list` and make two hops
+/// disagree about which path was requested.
+#[terminating]
+def Wire.request_line_valid (bytes : List U8) : Bool :=
+  match bytes {
+    List.empty => true,
+    List.cons b rest =>
+      if U8.beq b 13u8 then true
+      else if U8.lt b 32u8 then false
+      else if U8.beq b 127u8 then false
+      else Wire.request_line_valid rest
+  }
+
+/// The SERVER parse edge: the shared parser plus the checks a server owes a
+/// proxy. The old `parse_request` stays for clients and compatibility.
+pub def Wire.parse_request_strict (bytes : List U8) : Result String Request :=
+  if Bool.not (Wire.request_line_valid bytes)
+  then Result.err "invalid request line"
+  else
+    match Wire.parse_request bytes {
+      Result.err e => Result.err e,
+      Result.ok req =>
+        match Wire.validate_target_string req.method (Wire.request_target req.uri) {
+          Result.err e => Result.err e,
+          Result.ok _ =>
+            match Wire.check_request_host req {
+              Result.err e => Result.err e,
+              Result.ok _ => Result.ok req
+            }
+        }
+    }
+
+/// The interim response for `Expect: 100-continue`.
+pub def Wire.continue_response : List U8 :=
+  String.to_list "HTTP/1.1 100 Continue\r\n\r\n"
 
 // ── parse response ─────────────────────────────────────────────────────
 
