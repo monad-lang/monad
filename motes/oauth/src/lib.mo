@@ -8,11 +8,18 @@
 // Deliberately no `moon` and no `eclipse` here: handlers are plain
 // `Request -> IO (Result String Response)` values the APPLICATION wires
 // into whichever server it uses.
+//
+// JWT/JWKS/claims validation is `motes/jsonwebtoken`'s job, not this
+// mote's. oauth exposes only the adapter (`OauthConfig.claims_config`,
+// `OauthError.of_jwt`) and deliberately does not re-export its types:
+// applications that validate tokens import `jsonwebtoken` directly, so
+// there is exactly one JWT API.
 
-pub use lib::errors {OauthError, OauthError.to_string}
+pub use lib::errors {OauthError, OauthError.of_jwt, OauthError.to_string}
 pub use lib::config {
   ClientAuth,
   OauthConfig,
+  OauthConfig.claims_config,
   OauthConfig.is_loopback_host,
   OauthConfig.scope_string,
   OauthConfig.validate,

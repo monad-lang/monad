@@ -10,6 +10,7 @@ use http::types {Uri}
 use http::uri {Uri.parse}
 use std::list {List.intercalate}
 use lib::errors {OauthError}
+use jsonwebtoken::claims {ClaimsConfig}
 
 /// How the client authenticates at the token endpoint.
 pub type ClientAuth {
@@ -122,4 +123,19 @@ pub def OauthConfig.validate (cfg : OauthConfig) : Result OauthError Unit :=
       clock_skew_seconds, allow_insecure_localhost, .. } =>
       OauthConfig.validate_fields issuer client_id client_secret client_auth
         redirect_uri clock_skew_seconds allow_insecure_localhost
+  }
+
+/// Project the fields claim validation needs. `jsonwebtoken` owns the
+/// validation; this is the one place oauth's configuration crosses into it.
+pub def OauthConfig.claims_config (cfg : OauthConfig) : ClaimsConfig :=
+  match cfg {
+    { issuer, client_id, audience, roles_claim, clock_skew_seconds, .. } =>
+      let c : ClaimsConfig := {
+        issuer := issuer,
+        client_id := client_id,
+        audience := audience,
+        roles_claim := roles_claim,
+        clock_skew_seconds := clock_skew_seconds
+      } in
+      c
   }

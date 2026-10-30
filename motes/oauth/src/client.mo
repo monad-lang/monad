@@ -220,9 +220,9 @@ def Client.get_userinfo
   })
 }
 
-/// The userinfo claims as a JSON object. The plan's Phase 1 does not
-/// compare the `sub` here against the ID token; that is Phase 2's
-/// `Claims.validate_id_token`.
+/// The userinfo claims as a JSON object. Comparing its `sub` against the
+/// ID token is the caller's job; the ID token is parsed and validated by
+/// `motes/jsonwebtoken` (`Claims.check_id_token`), not here.
 pub def Client.userinfo
   (h : OauthHttp) (ep : OauthEndpoints) (access_token : String)
   : IO (Result OauthError Json) := do {

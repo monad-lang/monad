@@ -7,6 +7,8 @@
 /// body — the payloads are configuration field names, status codes, and the
 /// transport's own failure text.
 
+use jsonwebtoken::errors {JwtError, JwtError.to_string}
+
 pub type OauthError {
   // ── configuration ─────────────────────────────────────────────────────
   config_client_id_empty,
@@ -50,7 +52,12 @@ pub type OauthError {
   /// The ONE boundary wrap: an HTTP client (moose) failure, text verbatim.
   /// The transport does not know which flow it serves, so the caller either
   /// discards it or renders it into its own message.
-  transport (detail : String)
+  transport (detail : String),
+
+  /// The ONE JWT boundary wrap: a `jsonwebtoken` rejection, text verbatim.
+  /// `jsonwebtoken` owns the structured error; oauth renders it at the
+  /// point where a flow reports it.
+  jwt (detail : String)
 }
 
 pub def OauthError.to_string (e : OauthError) : String :=
@@ -100,5 +107,12 @@ pub def OauthError.to_string (e : OauthError) : String :=
     OauthError.fake_no_response path =>
       String.concat "fake: no scripted response for " path,
 
-    OauthError.transport detail => detail
+    OauthError.transport detail => detail,
+
+    OauthError.jwt detail => detail
   }
+
+/// The boundary conversion: one place where a `jsonwebtoken` rejection
+/// becomes an `OauthError`. The rendered text is the JWT error's own.
+pub def OauthError.of_jwt (e : JwtError) : OauthError :=
+  OauthError.jwt (JwtError.to_string e)

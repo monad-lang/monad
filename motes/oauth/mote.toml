@@ -21,6 +21,9 @@ workspace = true
 [dependencies.json]
 workspace = true
 
+[dependencies.jsonwebtoken]
+path = "../jsonwebtoken"
+
 [dependencies.moose]
 workspace = true
 

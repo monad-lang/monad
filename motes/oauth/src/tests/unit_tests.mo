@@ -3,13 +3,18 @@
 /// redaction. Runs on the Rust host and the compiled backend alike.
 
 use std::list {}
+use std::base64 {B64Url.encode}
 use http::types {Uri}
 use http::body {Body.from_text}
 use json::json {Json.make_array, Json.parse}
+use jsonwebtoken::claims {Claims.validate_id_token}
+use jsonwebtoken::errors {JwtError}
+use jsonwebtoken::jwt {Jwt.parse}
 use oauth::client {Client.authorize_url}
-use oauth::errors {OauthError, OauthError.to_string}
+use oauth::errors {OauthError, OauthError.of_jwt, OauthError.to_string}
 use oauth::config {
-  ClientAuth, OauthConfig, OauthConfig.scope_string, OauthConfig.validate,
+  ClientAuth, OauthConfig, OauthConfig.claims_config,
+  OauthConfig.scope_string, OauthConfig.validate,
 }
 use oauth::discovery {Discovery.discovery_url, OauthEndpoints}
 use oauth::pkce {Pkce.challenge, Pkce.valid_verifier}
@@ -272,3 +277,40 @@ def test_discovery_url : Bool :=
     == "https://idp.example/.well-known/openid-configuration"
   && Discovery.discovery_url "https://idp.example/"
     == "https://idp.example/.well-known/openid-configuration"
+
+// ── jsonwebtoken adapter ─────────────────────────────────────────────────
+
+def jwt_token (header : String) (claims : String) : String :=
+  B64Url.encode (String.to_list header)
+    ++ "." ++ B64Url.encode (String.to_list claims) ++ ".AQ"
+
+#[test]
+def test_claims_config_maps_every_field : Bool :=
+  let c := OauthConfig.claims_config no_scope_config in
+  c.issuer == "https://idp.example"
+    && c.client_id == "abc"
+    && c.roles_claim == "roles"
+    && c.clock_skew_seconds == 60i64
+    && (match c.audience {
+      Option.none => false,
+      Option.some a => a == "api://x"
+    })
+
+#[test]
+def test_of_jwt_renders_the_jwt_error : Bool :=
+  match OauthError.of_jwt JwtError.claims_expired {
+    OauthError.jwt detail => detail == "claims: token expired",
+    _ => false
+  }
+
+#[test]
+def test_oauth_config_validates_an_id_token : Bool :=
+  let claims := "{\"iss\":\"https://idp.example\",\"sub\":\"u1\",\"aud\":\"abc\",\"exp\":1000,\"nonce\":\"n1\"}" in
+  match Jwt.parse (jwt_token "{\"alg\":\"RS256\"}" claims) {
+    Result.err _ => false,
+    Result.ok j =>
+      match Claims.validate_id_token (OauthConfig.claims_config good_config) 1000i64 "n1" j {
+        Result.ok p => p.subject == "u1",
+        Result.err _ => false
+      }
+  }
