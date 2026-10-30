@@ -8,9 +8,6 @@ use std::stream {StreamError}
 // loop awaits the fibers FIFO. Same-mote `combine.mo` builds `Scope` on
 // the same primitives.
 use std::concurrent::fiber {Fiber, FiberError, FiberError.message, await_fiber, forkIO}
-// `--jobs`' value is argv text; `parse_i64` is the corpus's tested
-// string-to-int (the same one the driver result file goes through).
-use parsec::number {parse_i64}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {
   Decl, LocalScope, ModulePath, NamePath, id, module_path_to_string_colon, show_identifier, show_module_path,
@@ -50,7 +47,12 @@ use std::list {List.contains_by}
 use std::map {}
 use lang::pretty {show_decls}
 use lang::codegen::test_driver {compile_loaded_modules_to_test_ir, is_no_tests_error, driver_report_note, driver_report_parsed}
-use clap::args {*}
+// The command line is declared and parsed in `cli.mo`/`cli_spec.mo`; the
+// wildcard is required because the derive's defs (`decode_command`) are
+// macro-generated and a named import of one does not resolve self-hosted
+// (motes/weaver/src/main.mo records the same constraint).
+use lib::cli {*}
+use lib::cli_spec {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`std/src/log.mo` -- its own header documents the gating rules).
 use std::log {fail_line, ok_line, stage}
@@ -166,7 +168,7 @@ def compile_parsed_decls (decl_list : List Decl) (base_dir : String) (output_dir
 /// inside a do-block does not parse (see that def), and this is the
 /// value it needs there.
 ///
-/// `"source"` is the literal `Command.from_args` substitutes when
+/// `"source"` is the literal `Command.dispatch` substitutes when
 /// neither `-o`/`--output` nor a positional name was given; anything
 /// else is the caller's own choice, which always wins.
 ///
@@ -192,7 +194,7 @@ def compile_out_name (requested : String) (target : BinTarget) : String :=
 /// `monad build .` from inside `cli/`, builds `cli/src/main.mo` as
 /// `monad`, which is what `cli/mote.toml`'s `[[bin]] path`/`[[bin]] name`
 /// declare that binary to be. `--bin <name>` picks between several.
-/// NO path is the third, and it is just `.`: `Command.from_args` supplies
+/// NO path is the third, and it is just `.`: `Command.dispatch` supplies
 /// it, so the mote containing the working directory gets built, matching
 /// `check`/`test`'s own "with no paths" default instead of printing usage.
 ///
@@ -1389,7 +1391,7 @@ def resolve_target_paths (verb : String) (subcommand : String) (files : List Str
 /// `return 1` for the same reason: an invocation that covered zero files
 /// is a broken invocation, not a pass.
 ///
-/// It replaces `print_help` in the `Option.none` arms rather than
+/// It replaces the old usage screen in the `Option.none` arms rather than
 /// sitting beside it. The usage screen answers "how do I use this
 /// command", which is not the question asked here -- the question is
 /// "why did nothing happen", and the answer is three concrete things the
@@ -1574,8 +1576,8 @@ def run_check_body (files : List String) (opts : CheckOptions) : IO I64 := do {
             let cache : ModuleInfoCache := module_info_cache_empty;
             run_check_loop cache expanded 0 0 0 opts plan
         },
-        // Nothing named, inside no mote: say why, and fail. `print_help`
-        // with its exit 0 was the behaviour before any of this existed,
+        // Nothing named, inside no mote: say why, and fail. The usage
+        // screen with its exit 0 was the behaviour before any of this existed,
         // and it is exactly the bug -- see `no_target_diagnostic`.
         Option.none => no_target_diagnostic "check"
     }
@@ -1710,7 +1712,7 @@ def run_store (sub : String) (target_dir_flag : String) : IO I64 := do {
 ///
 /// `jobs` is `--jobs/-j`: how many files' compile-link-run tails may be
 /// in flight at once (see `run_test_loop`'s window). `1` is the serial
-/// runner; the default comes from `Command.from_args`.
+/// runner; the default (4) comes from the `test` dispatch in `main`.
 #[partial]
 def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (verbose : Bool) (jobs : I64) (target_dir_flag : String) (no_cache : Bool) : IO I64 := do {
     let targets <- resolve_target_paths "Testing" "test" files workspace;
@@ -2288,493 +2290,73 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (test
         }
     }
 
-// `Command` and its argv parser are hand-written (not `#[derive Cli]`) and
-// this file stays free of any macro/attribute-derive syntax on purpose:
-// cli/src/main.mo is one of the files the self-hosted parse/scope/typecheck
-// test suite (slow_tests/parser_file_tests.mo, scope_all_tests.mo,
-// typecheck_lang_tests.mo) re-parses with that self-hosted pipeline, and it is
-// the file the bootstrap itself is built from — an attribute here would be
-// load-bearing for the compiler building itself. `#[derive_cli]` was NOT the
-// reason: it has worked self-hosted since `ae3a457`, and this comment claimed
-// otherwise long after that. It does share `cli/src/args.mo`'s small runtime
-// helpers with the macro-derived demo in motes/clap/src/tests/cli_derive_tests.mo,
-// though — same argv-munging primitives either way.
-type Command {
-    build (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (debug: Bool) (no_cache: Bool) (locked: Bool) (target_dir: String) (target: String),
-    /// `monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>]
-    /// [-v] [--no-cache]`: build a RELEASE binary (the `release` profile, no
-    /// DWARF) and install it atomically to `$MONAD_HOME/bin/<name>` (default
-    /// `$HOME/.monad/bin`). The output name is the mote's `[[bin]]` name, or
-    /// `-o` for a single source file (a file has no useful default name).
-    install (file: Path) (out_name: Path) (bin: String) (verbose: Bool) (no_cache: Bool) (target: String),
-    run (file: Path) (verbose: Bool) (debug: Bool) (args: List String),
-    eval (file: Path) (verbose: Bool),
-    /// `monad repl`: an interactive read-eval-print loop on stdin/stdout.
-    /// Expressions print `value : type`; declarations (`def`, `type`,
-    /// `struct`, `class`, `instance`, `use`, `open`, ...) persist in a
-    /// session module. Pure programs only (the interpreter native table).
-    repl,
-    pretty (file: String),
-    check (files: List String) (opts: CheckOptions),
-    test (files: List String) (verbose: Bool) (workspace: Bool) (locked: Bool) (no_cache: Bool) (target_dir: String) (jobs: I64),
-    /// `monad clean [--all] [--target-dir <dir>]`. Removes the output
-    /// directories under `<target-dir>` -- the profile directories -- and
-    /// leaves the store; `--all` is the other verb, `<target-dir>` itself.
-    clean (all: Bool) (target_dir: String),
-    /// `monad gc [<path>...] [--workspace/-w] [--apply] [--target-dir <dir>]`.
-    /// Dry run unless `--apply`; removes only what the named files cannot
-    /// reach, and refuses to remove anything at all when it cannot derive
-    /// a complete reachable set.
-    gc (files: List String) (workspace: Bool) (apply: Bool) (target_dir: String),
-    /// `monad store ls|verify [--target-dir <dir>]`.
-    store (sub: String) (target_dir: String),
-    /// `monad fetch [<dir>]` / `monad update [<dir>]`: resolve git
-    /// dependencies into `$MONAD_HOME/cache/git` and write `mote.lock` in
-    /// the mote's directory. `fetch` keeps the commit an existing lock
-    /// names (a moved tag does not change a locked build); `update`
-    /// re-resolves every pin. The only verbs that touch the network.
-    fetch (update: Bool) (offline: Bool) (dir: String),
-    /// `monad print-targets`: the triples `--target` accepts, which of them
-    /// this llc can actually build for, and what this machine's own target is.
-    print_targets,
-    lsp,
-    version,
-    help
-}
-
-/// Everything after the file path is the compiled program's own argv.
-/// A single LEADING `--` is the separator convention and is dropped
-/// (once, leading only -- a `--` later in the list is a literal
-/// program argument); tokens after the path with no separator are
-/// forwarded unchanged too. One caveat inherited from clap's
-/// position-independent flag scan: an argument that literally matches
-/// one of run's own flags (--verbose/-v/--debug/-g/--release) is
-/// consumed by monad wherever it sits.
-def after_separator (args : List String) : List String :=
-    match args {
-        List.cons hd tl => if hd == "--" then tl else args,
-        List.empty => List.empty,
-    }
-
-/// A `--` typed BEFORE the path separates nothing yet (there are no
-/// program arguments to separate at that point), but users type it
-/// anyway -- every leading separator is peeled before the path is
-/// taken, so `monad run -- a.mo x` runs `a.mo` with argument `x`
-/// instead of dying on a file named `--`.
-#[partial]
-def drop_leading_separators (args : List String) : List String :=
-    match args {
-        List.cons hd tl => if hd == "--" then drop_leading_separators tl else args,
-        List.empty => List.empty,
-    }
-
-/// `compile <path> [name]` (original positional form) and `compile <path>
-/// [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]` (flag
-/// form) both work; an explicit `--output`/`-o` wins over a positional
-/// name if both are given. DWARF debug info (plans/bootstrapping/
-/// debug-info.md: one location per def, plus per-term locations once
-/// stage 3 landed) is ON BY DEFAULT, like rustc's dev profile: a debug
-/// build is what you want from a compile unless you asked for a release
-/// one, and the flag is how you ask. `--release` opts out;
-/// `--debug`/`-g` stays accepted as an explicit opt-in and wins over
-/// `--release` if both are given (asking twice, with the more specific
-/// request, is not an error).
-/// `--offline` means something to `fetch`/`update` only: build, check and
-/// test never use the network, so for them there is nothing to switch
-/// off. It is accepted and DROPPED anyway, so one flag set can drive a
-/// whole script -- and dropped HERE, before any verb's flag chain, so no
-/// chain has to grow a level for a flag it ignores.
-#[partial]
-def strip_local_offline (cmd : String) (args : List String) : List String :=
-    if String.beq cmd "build" || String.beq cmd "check" || String.beq cmd "test"
-    then remove_flag "--offline" args
-    else args
-
-#[partial]
-def remove_flag (flag : String) (args : List String) : List String :=
-    match args {
-        List.empty => List.empty,
-        List.cons a rest =>
-            if String.beq a flag then remove_flag flag rest
-            else List.cons a (remove_flag flag rest)
-    }
-
-def Command.from_args (args : List String) : Command :=
-    match args {
-        List.cons cmd rest0 =>
-            let rest : List String := strip_local_offline cmd rest0 in
-            if cmd == "build" then
-                match Cli.take_flag "verbose" "v" rest {
-                    Cli.FlagResult.flag_result verbose rest1 =>
-                        match Cli.take_flag "debug" "g" rest1 {
-                            Cli.FlagResult.flag_result debug_explicit rest1a =>
-                                match Cli.take_flag "release" "" rest1a {
-                                    Cli.FlagResult.flag_result release rest1b =>
-                                        // Debug info defaults ON (rustc's own
-                                        // dev-profile default): `--release`
-                                        // opts out, an explicit `--debug`/
-                                        // `-g` opts back in over it.
-                                        let debug := if debug_explicit then true else not release in
-                                        // Peeled here rather than after the
-                                        // positionals, for the reason `check`
-                                        // gives: `--no-cache` is a flag, not a
-                                        // path, and left in the list it would be
-                                        // handed to the path expander as a
-                                        // filename.
-                                        match Cli.take_flag "no-cache" "" rest1b {
-                                            Cli.FlagResult.flag_result no_cache rest1c =>
-                                        // `--locked`: a git dependency whose pin no longer
-                                        // matches the manifest is an error. Peeled with the
-                                        // other flags so it can never be read as a path.
-                                        match Cli.take_flag "locked" "" rest1c {
-                                            Cli.FlagResult.flag_result locked rest1c2 =>
-                                        // `--target-dir <dir>`: where the store
-                                        // and the output directories live.
-                                        // Peeled with the other flags for the
-                                        // same reason -- left in the list it
-                                        // is read as the positional path, and
-                                        // its VALUE as the output name (which
-                                        // is the bug this flag existed to
-                                        // stop).
-                                        match Cli.take_opt "target-dir" "" "" rest1c2 {
-                                            Cli.OptResult.opt_result target_dir rest1c3 =>
-                                        // `--bin <name>` selects among a mote's
-                                        // `[[bin]]` targets. Peeled with the
-                                        // other flags, for the same reason:
-                                        // left in the list, `--bin` would be
-                                        // handed to the positional reader as a
-                                        // path and its NAME as the output name.
-                                        match Cli.take_opt "bin" "" "" rest1c3 {
-                                            Cli.OptResult.opt_result bin_name rest1d =>
-                                        // `--target <triple>` is what to build
-                                        // FOR, and it is peeled with the other
-                                        // flags for the same reason: left in
-                                        // the list, `--target` is read as the
-                                        // positional path and its TRIPLE as
-                                        // the output name. Space-separated
-                                        // only -- `Cli.take_opt` has no
-                                        // `--target=<triple>` form.
-                                        match Cli.take_opt "target" "" "" rest1d {
-                                            Cli.OptResult.opt_result target_name rest1e =>
-                                        match Cli.take_opt "output" "o" "" rest1e {
-                                    Cli.OptResult.opt_result opt_out_name rest2 =>
-                                        match Cli.take_positional rest2 {
-                                            Cli.PosResult.pos_result path_opt rest3 =>
-                                                match Cli.take_positional rest3 {
-                                                    Cli.PosResult.pos_result name_opt _ =>
-                                                        let out_name :=
-                                                            if String.is_empty opt_out_name then
-                                                                match name_opt {
-                                                                    Option.some n => n,
-                                                                    Option.none => "source",
-                                                                }
-                                                            else
-                                                                opt_out_name
-                                                        in
-                                                        // No positional path means the mote containing the
-                                                        // working directory -- the same default `check` and
-                                                        // `test` already have. Reached by handing `.` to
-                                                        // `build_target`, whose `Mote.discover` walks up from
-                                                        // there, so `monad build` and `monad build .` are one
-                                                        // spelling of one thing rather than two code paths.
-                                                        let path : String := match path_opt {
-                                                            Option.some p => p,
-                                                            Option.none => ".",
-                                                        } in
-                                                        // A path/out_name that fails to validate (currently:
-                                                        // only the empty string) falls back to `Command.help`.
-                                                        match Path.of path {
-                                                            err _ => Command.help,
-                                                            ok p => match Path.of out_name {
-                                                                err _ => Command.help,
-                                                                ok o => Command.build p o bin_name verbose debug no_cache locked target_dir target_name,
-                                                            },
-                                                        },
-                                                },
-                                        },
-                                            },
-                                            },
-                                },
-                                            },
-                                            },
-                                            },
-                        },
-                },
-                }
-            else if cmd == "install" then
-                match Cli.take_flag "verbose" "v" rest {
-                    Cli.FlagResult.flag_result verbose rest1 =>
-                        match Cli.take_flag "no-cache" "" rest1 {
-                            Cli.FlagResult.flag_result no_cache rest1a =>
-                                match Cli.take_opt "bin" "" "" rest1a {
-                                    Cli.OptResult.opt_result bin_name rest1b =>
-                                        match Cli.take_opt "target" "" "" rest1b {
-                                            Cli.OptResult.opt_result target_name rest1c =>
-                                                match Cli.take_opt "output" "o" "" rest1c {
-                                                    Cli.OptResult.opt_result opt_out_name rest2 =>
-                                                        match Cli.take_positional rest2 {
-                                                            Cli.PosResult.pos_result path_opt _ =>
-                                                                let path : String := match path_opt {
-                                                                    Option.some p => p,
-                                                                    Option.none => ".",
-                                                                } in
-                                                                // `"source"` is the sentinel `build` uses
-                                                                // for "no name"; install rejects it below
-                                                                // instead of installing a binary called
-                                                                // `source`.
-                                                                let out_name : String := if String.is_empty opt_out_name then "source" else opt_out_name in
-                                                                match Path.of path {
-                                                                    err _ => Command.help,
-                                                                    ok p => match Path.of out_name {
-                                                                        err _ => Command.help,
-                                                                        ok o => Command.install p o bin_name verbose no_cache target_name,
-                                                                    },
-                                                                },
-                                                        },
-                                                },
-                                        },
-                                },
-                        },
-                }
-            else if cmd == "run" then
-                match Cli.take_flag "verbose" "v" rest {
-                    Cli.FlagResult.flag_result verbose rest1 =>
-                        match Cli.take_flag "debug" "g" rest1 {
-                            Cli.FlagResult.flag_result debug_explicit rest1a =>
-                                match Cli.take_flag "release" "" rest1a {
-                                    Cli.FlagResult.flag_result release rest1b =>
-                                        let debug := if debug_explicit then true else not release in
-                                        match Cli.take_positional (drop_leading_separators rest1b) {
-                                            Cli.PosResult.pos_result path_opt rest1c =>
-                                                match path_opt {
-                                                    Option.some path =>
-                                                        match Path.of path {
-                                                            err _ => Command.help,
-                                                            ok p => Command.run p verbose debug (after_separator rest1c),
-                                                        },
-                                                    Option.none => Command.help,
-                                                },
-                                        },
-                                },
-                        },
-                }
-            else if cmd == "eval" then
-                match Cli.take_flag "verbose" "v" rest {
-                    Cli.FlagResult.flag_result verbose rest1 =>
-                        match Cli.take_positional rest1 {
-                            Cli.PosResult.pos_result path_opt _ =>
-                                match path_opt {
-                                    Option.some path =>
-                                        match Path.of path {
-                                                            err _ => Command.help,
-                                                            ok p => Command.eval p verbose,
-                                                        },
-                                    Option.none => Command.help,
-                                },
-                        },
-                }
-            else if cmd == "repl" then
-                Command.repl
-            else if cmd == "pretty" then
-                match Cli.take_positional rest {
-                    Cli.PosResult.pos_result path_opt _ =>
-                        match path_opt {
-                            Option.some path => Command.pretty path,
-                            Option.none => Command.help,
-                        },
-                }
-            else if cmd == "check" then
-                match Cli.take_flag "verbose" "v" rest {
-                    Cli.FlagResult.flag_result verbose rest1 =>
-                        // Same peeling order as `test` below, and for
-                        // the same reason: `--workspace` is a flag, not
-                        // a path, and left in the list it would be
-                        // handed to the path expander as a filename.
-                        // It is also what replaced the old
-                        // "no paths -> `Command.help`" arm: a bare
-                        // `monad check` is now the mote-containing-the-
-                        // CWD mode, so emptiness is `run_check`'s
-                        // question, not this one's.
-                        match Cli.take_flag "workspace" "w" rest1 {
-                            Cli.FlagResult.flag_result workspace rest2 =>
-                                // `--no-cache` is peeled here for the same
-                                // reason `--workspace` is: it is a flag,
-                                // not a path, and left in the list it
-                                // would be handed to the path expander as
-                                // a filename.
-                                match Cli.take_flag "no-cache" "" rest2 {
-                                    Cli.FlagResult.flag_result no_cache rest3 =>
-                                        match Cli.take_flag "locked" "" rest3 {
-                                            Cli.FlagResult.flag_result locked rest4 =>
-                                                match Cli.take_opt "target-dir" "" "" rest4 {
-                                                    Cli.OptResult.opt_result target_dir rest5 =>
-                                                let opts : CheckOptions := { verbose := verbose, workspace := workspace, no_cache := no_cache, locked := locked, target_dir := target_dir } in
-                                                Command.check rest5 opts,
-                                                },
-                                        },
-                                },
-                        },
-                }
-            else if cmd == "test" then
-                match Cli.take_flag "verbose" "v" rest {
-                    Cli.FlagResult.flag_result verbose rest1 =>
-                        // `--workspace` is peeled BEFORE the emptiness
-                        // test: it is a flag, not a path, and left in
-                        // `rest1` it would both defeat the "no paths
-                        // given" branch and be handed to the path
-                        // expander as a filename.
-                        match Cli.take_flag "workspace" "w" rest1 {
-                            Cli.FlagResult.flag_result workspace rest2 =>
-                                // `--jobs/-j <N>`, peeled with the other
-                                // flags for the same reason: left in the
-                                // list, `--jobs` is read as a positional
-                                // path and its NUMBER as a second one.
-                                // Default 4 (the parallel runner is ON by
-                                // default); `--jobs 1` is the serial
-                                // runner. A value below 1 is clamped to 1
-                                // rather than refused -- `--jobs 0` reads
-                                // as "no parallelism", and honoring that
-                                // reading beats a help screen.
-                                match Cli.take_flag "locked" "" rest2 {
-                                    Cli.FlagResult.flag_result locked rest2a =>
-                                match Cli.take_flag "no-cache" "" rest2a {
-                                    Cli.FlagResult.flag_result no_cache rest2b =>
-                                match Cli.take_opt "target-dir" "" "" rest2b {
-                                    Cli.OptResult.opt_result target_dir rest2c =>
-                                match Cli.take_opt "jobs" "j" "4" rest2c {
-                                    Cli.OptResult.opt_result jobs_str rest3 =>
-                                        match parse_i64 jobs_str {
-                                            Option.some n =>
-                                                if I64.lt n 1
-                                                then Command.test rest3 verbose workspace locked no_cache target_dir 1
-                                                else Command.test rest3 verbose workspace locked no_cache target_dir n,
-                                            Option.none => Command.help,
-                                        },
-                                },
-                                },
-                                },
-                                },
-                        },
-                }
-            else if cmd == "clean" then
-                // `--all` is peeled before `--target-dir` for the reason
-                // `check` gives for its own two flags: a flag left in the
-                // list is handed to whatever comes next as if it were a
-                // path. Nothing takes a positional here, so the remainder
-                // is deliberately dropped rather than validated.
-                match Cli.take_flag "all" "" rest {
-                    Cli.FlagResult.flag_result all rest1 =>
-                        match Cli.take_opt "target-dir" "" "" rest1 {
-                            Cli.OptResult.opt_result target_dir _rest2 =>
-                                Command.clean all target_dir,
-                        },
-                }
-            else if cmd == "gc" then
-                // The positionals are NOT peeled here: unlike `clean`,
-                // this verb takes paths, and `rest3` is exactly the list
-                // `resolve_target_paths` wants. An empty one means "the
-                // mote containing the working directory", the same
-                // default `check` has.
-                match Cli.take_flag "workspace" "w" rest {
-                    Cli.FlagResult.flag_result workspace rest1 =>
-                        match Cli.take_flag "apply" "" rest1 {
-                            Cli.FlagResult.flag_result apply rest2 =>
-                                match Cli.take_opt "target-dir" "" "" rest2 {
-                                    Cli.OptResult.opt_result target_dir rest3 =>
-                                        Command.gc rest3 workspace apply target_dir,
-                                },
-                        },
-                }
-            else if cmd == "store" then
-                // `ls`/`verify` is a positional, and the flag has to be
-                // taken out from around it first -- `take_opt` walks the
-                // whole list, so `monad store ls --target-dir x` and
-                // `monad store --target-dir x ls` both land here.
-                match Cli.take_opt "target-dir" "" "" rest {
-                    Cli.OptResult.opt_result target_dir rest1 =>
-                        match Cli.take_positional rest1 {
-                            Cli.PosResult.pos_result sub_opt _rest2 =>
-                                match sub_opt {
-                                    Option.some sub => Command.store sub target_dir,
-                                    Option.none => Command.help,
-                                },
-                        },
-                }
-            else if cmd == "fetch" || cmd == "update" then
-                // `--offline` is peeled first: left in the list it would
-                // be read as the positional directory. One optional
-                // positional, defaulting to the working directory.
-                match Cli.take_flag "offline" "" rest {
-                    Cli.FlagResult.flag_result offline rest1 =>
-                        match Cli.take_positional rest1 {
-                            Cli.PosResult.pos_result dir_opt _rest2 =>
-                                match dir_opt {
-                                    Option.none => Command.fetch (String.beq cmd "update") offline ".",
-                                    Option.some d => Command.fetch (String.beq cmd "update") offline d,
-                                },
-                        },
-                }
-            else if cmd == "print-targets" then
-                Command.print_targets
-            else if cmd == "lsp" then
-                Command.lsp
-            else if cmd == "version" then
-                Command.version
-            else
-                Command.help,
-        List.empty => Command.help,
-    }
-
 /// Current main entrypoint of self hosted compiler
-def main (args : List String) : IO I64 {
-    let cmd : Command := Command.from_args args;
+/// The process entry point: parse argv with the clap spec, decode it into a
+/// `Command`, and dispatch. Help/version print and exit 0; a usage error
+/// prints `error: ...` plus usage and exits 2.
+def main (args : List String) : IO I64 :=
+    Command.parse_and_run build_commit args Command.dispatch
+
+def Command.dispatch (cmd : Command) : IO I64 :=
     match cmd {
-        build file_path out_name bin verbose debug no_cache locked target_dir target_name => do {
-            // Resolved HERE rather than in `from_args`, which is pure and
-            // has no IO to probe a toolchain with. An empty name is this
-            // machine, and a name this compiler does not know is still taken
-            // verbatim (see `TargetSpec.resolve`); `--print-targets` is what
-            // answers "can this toolchain build that?".
-            let resolved <- TargetSpec.resolve target_name;
+        Command.build file name verbose debug release no_cache locked target_dir bin target offline output => do {
+            let _ignored : Bool := offline;
+            let path : String := Option.get_or_default "." file;
+            // An explicit `--output` wins over the legacy positional name;
+            // `"source"` is the sentinel `build_target` reads as "keep the
+            // default name".
+            let out_name : String := match output {
+                Option.some o => o,
+                Option.none => match name {
+                    Option.some n => n,
+                    Option.none => "source",
+                },
+            };
+            // Resolved HERE rather than in the parser: it needs IO to probe
+            // the toolchain. An empty name is this machine, and a name this
+            // compiler does not know is still taken verbatim (see
+            // `TargetSpec.resolve`); `--print-targets` is what answers "can
+            // this toolchain build that?".
+            let resolved <- TargetSpec.resolve (Option.get_or_default "" target);
             match resolved {
                 Result.err m => do {
                     println m;
                     return 1
                 },
-                Result.ok target => do {
-                    // A directory is a mote to build (`build_target`); a file
-                    // goes straight to `compile_file`.
-                    build_target (Path.to_string file_path) (Path.to_string out_name) bin verbose debug no_cache locked target_dir target
+                Result.ok spec => do {
+                    build_target path out_name (Option.get_or_default "" bin) verbose
+                        (if debug then true else Bool.not release)
+                        no_cache locked (Option.get_or_default "" target_dir) spec
                 },
             }
         },
-        install file_path out_name bin verbose no_cache target_name => do {
-            let resolved <- TargetSpec.resolve target_name;
+        Command.install file output bin verbose no_cache target => do {
+            let path : String := Option.get_or_default "." file;
+            let out_name : String := Option.get_or_default "source" output;
+            let resolved <- TargetSpec.resolve (Option.get_or_default "" target);
             match resolved {
                 Result.err m => do {
                     println m;
                     return 1
                 },
-                Result.ok target => do {
-                    install_target { path := Path.to_string file_path,
-                        out_name := Path.to_string out_name, bin := bin,
-                        verbose := verbose, no_cache := no_cache, spec := target }
+                Result.ok spec => do {
+                    install_target path out_name (Option.get_or_default "" bin) verbose no_cache spec
                 },
             }
         },
-        run file_path verbose debug program_args => do {
-            run_file (Path.to_string file_path) verbose debug program_args
+        Command.run file args verbose debug release => do {
+            run_file file verbose (if debug then true else Bool.not release) args
         },
-        eval file_path verbose => do {
-            eval_file (Path.to_string file_path) verbose
+        Command.eval file verbose => do {
+            eval_file file verbose
         },
-        repl => do {
+        Command.repl => do {
             repl_main
         },
-        pretty file_path => do {
+        Command.pretty file => do {
             // Prints the TARGET FILE's own declarations, pretty-printed
             // back to source text via `lang.pretty.show_decls`. Only
-            // `file_path`'s own decls are shown (not its transitive `use`
+            // `file`'s own decls are shown (not its transitive `use`
             // dependencies), matching `ModuleInfo.decl_list`'s existing
             // "this module's own decls only" convention (see
             // `lang/codegen/test_driver.mo`'s `discover_test_defs` for the
@@ -2784,8 +2366,8 @@ def main (args : List String) : IO I64 {
             // closure (prelude/init/everything), which this command used
             // to pay for in full only to discard all of it but the
             // target's own decls.
-            let base_dir : String := extract_directory file_path;
-            let module_name : String := module_name_from_path file_path;
+            let base_dir : String := extract_directory file;
+            let module_name : String := module_name_from_path file;
             let mp : ModulePath := ModulePath.mk [Identifier.id module_name];
             let module_opt <- load_module_with_info base_dir mp;
             match module_opt {
@@ -2795,44 +2377,63 @@ def main (args : List String) : IO I64 {
                     return 0
                 },
                 Option.none => do {
-                    println ("Failed to parse " ++ file_path);
+                    println ("Failed to parse " ++ file);
                     return 1
                 }
             }
         },
-        check files opts => do {
+        Command.check files verbose workspace no_cache locked target_dir offline => do {
+            let _ignored : Bool := offline;
+            let opts : CheckOptions := {
+                verbose := verbose,
+                workspace := workspace,
+                no_cache := no_cache,
+                locked := locked,
+                target_dir := Option.get_or_default "" target_dir,
+            };
             run_check files opts
         },
-        test files verbose workspace locked no_cache target_dir jobs => do {
+        Command.test files verbose workspace locked no_cache target_dir jobs offline => do {
+            let _ignored : Bool := offline;
+            // The parallel runner is ON by default; a value below 1 is
+            // clamped to 1 (`--jobs 0` reads as "no parallelism").
+            let jobs_n : I64 := match jobs {
+                Option.none => 4,
+                Option.some n => if I64.lt n 1 then 1 else n,
+            };
             let locks <- check_locks files locked;
             match locks {
                 Option.some e => do { println ("error: " ++ e); return 1 },
-                Option.none => run_test_paths files workspace (Path.to_string default_output_dir) verbose jobs target_dir no_cache
+                Option.none => run_test_paths files workspace (Path.to_string default_output_dir) verbose jobs_n
+                    (Option.get_or_default "" target_dir) no_cache
             }
         },
-        clean all target_dir => do {
-            run_clean all target_dir
+        Command.clean all target_dir => do {
+            run_clean all (Option.get_or_default "" target_dir)
         },
-        gc files workspace apply target_dir => do {
-            run_gc files workspace apply target_dir
+        Command.gc files workspace apply target_dir => do {
+            run_gc files workspace apply (Option.get_or_default "" target_dir)
         },
-        store sub target_dir => do {
-            run_store sub target_dir
+        Command.store sub target_dir => do {
+            run_store sub (Option.get_or_default "" target_dir)
         },
-        fetch update offline dir => do {
-            Build.fetch_run dir (if update then FetchMode.update else FetchMode.fetch) offline
+        Command.fetch dir offline => do {
+            Build.fetch_run (Option.get_or_default "." dir) FetchMode.fetch offline
         },
-        print_targets => run_print_targets,
-        lsp => lsp_serve,
-        version => do {
+        Command.update dir offline => do {
+            Build.fetch_run (Option.get_or_default "." dir) FetchMode.update offline
+        },
+        Command.print_targets => run_print_targets,
+        Command.lsp => lsp_serve,
+        Command.version => do {
             println build_commit;
             return 0
         },
-        help => do {
-            print_help
+        Command.help => do {
+            println (Command.help_text build_commit);
+            return 0
         }
     }
-}
 
 /// `monad print-targets`. The tabulated targets, each marked when this llc
 /// cannot build for it; then this machine's own target (what no `--target`
@@ -2847,92 +2448,5 @@ def run_print_targets : IO I64 := do {
     println (String.concat "This machine: " (String.concat native.triple "  (what no --target builds for)"));
     println "Architectures this llc registers (--target accepts any target built on one):";
     println (TargetSpec.arch_line archs);
-    return 0
-}
-
-#[partial]
-def print_help : IO I64 {
-    println "Monad is in alpha mode and under heavy development.";
-    println "Expect breaking changes, bugs, and incomplete features.";
-    println "";
-    println "Usage: monad build [<path>] [name] [--bin <name>] [--output/-o <name>] [--target <triple>] [--verbose/-v] [--debug/-g] [--release] [--no-cache]";
-    println "         Compile a .mo source file, or a mote, to a native binary";
-    println "         <path> may be a mote DIRECTORY, in which case its [[bin]] target is built";
-    println "           (`monad build cli` builds cli/src/main.mo as `monad`)";
-    println "         --bin <name> picks one when several [[bin]] targets exist on disk";
-    println "           (a mote declares none, but builds `src/main.mo` as its own name, when";
-    println "            `src/main.mo` exists and no [[bin]] table does)";
-    println "         With no <path>, builds the mote containing the working directory";
-    println "         --verbose/-v prints each module as it loads and one line per pipeline stage";
-    println "         --debug/-g emits DWARF debug info (one source location per top-level def)";
-    println "         --target <triple> builds for another target (space-separated: --target=x does not parse)";
-    println "           `monad print-targets` lists the spellings this compiler has measured";
-    println "         --no-cache (or MONAD_NO_CACHE) compiles for real, reading and writing no store entry";
-    println "       monad install [<path>] [-o <name>] [--bin <name>] [--target <triple>] [--verbose/-v] [--no-cache]";
-    println "         Build a RELEASE binary (no debug info) and install it to $MONAD_HOME/bin/<name>";
-    println "         <path> is build's: a mote directory (its [[bin]] name) or a .mo file (then -o names it)";
-    println "         MONAD_HOME defaults to $HOME/.monad; the destination is replaced atomically, symlinks included";
-    println "       monad run <path> [--verbose/-v] [--debug/-g] [--release] [--] [args...]  Compile and execute a .mo source file";
-    println "         <path> may be a mote DIRECTORY (its [[bin]] target is built and run), like build's;";
-    println "         the binary lands where build would put it and the second identical run prints `cached:`";
-    println "         Everything after <path> is the compiled program's own argv -- a leading `--`";
-    println "         separates them and is dropped once (a `--` before <path> is peeled too)";
-    println "       monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)";
-    println "       monad repl  Interactive read-eval-print loop (pure programs only)";
-    println "         Expressions print `value : type`; declarations (def/type/struct/class/instance/use/open) persist";
-    println "         `:help`, `:quit`, `:reset`, `:type <expr>`; a `def` body may continue on the next line";
-    println "         Prompts go to stderr; results and diagnostics to stdout; EOF or :quit leaves";
-    println "       monad pretty <path>  Parse and pretty print a .mo source file";
-    println "       monad check [<path>...] [--workspace/-w] [--verbose/-v] [--no-cache]  Parse and typecheck .mo source files (no execution)";
-    println "         Any <path> that's a directory is recursively expanded to its *.mo files";
-    println "         With no <path>, checks the mote containing the working directory";
-    println "         --workspace/-w checks every mote in the enclosing workspace";
-    println "           (only directories that ARE motes: examples/ has no manifest)";
-    println "         --verbose/-v prints a per-declaration progress trace while checking";
-    println "         Results are cached under <target-dir>/check for multi-file runs, keyed on";
-    println "           the file, its mote's whole declared closure, and the running compiler";
-    println "         --no-cache (or MONAD_NO_CACHE) skips the cache; a single-file run always does";
-    println "         The affine usage rule always runs: a binder used twice without a Copy";
-    println "           instance is an error. A mote can opt into warnings for migration with";
-    println "           `[affine] mode = \"warn\"` in its mote.toml; there is no off switch";
-    println "       monad test [<path>...] [--workspace/-w] [--verbose/-v] [--jobs/-j <N>]  Compile and run each file's own #[test] defs as a native binary";
-    println "         Any <path> that's a directory is recursively expanded to its *.mo files";
-    println "         With no <path>, tests the mote containing the working directory";
-    println "         --workspace/-w tests every mote in the enclosing workspace";
-    println "           (only directories that ARE motes: examples/ has no manifest)";
-    println "         --verbose/-v prints per-file timing and module-cache statistics";
-    println "         --jobs/-j <N> keeps up to N files' compile-link-run tails in flight (default 4);";
-    println "           --jobs 1 is the serial runner. Under the built-in interpreter the tails";
-    println "           never overlap (forkIO is deferred to the await there), but the run is correct";
-    println "         A file with no #[test]s is skipped, not failed";
-    println "       monad clean [--all] [--target-dir <dir>]  Remove build output, keeping the store";
-    println "         Removes every output directory under <target-dir> (the profile directories)";
-    println "         --all removes <target-dir> itself, the store included";
-    println "       monad gc [<path>...] [--workspace/-w] [--apply] [--target-dir <dir>]  Remove store entries the named files cannot reach";
-    println "         Dry run by default; --apply removes them. Takes the same <path> forms as check";
-    println "         Refuses to remove ANYTHING when it cannot derive a complete reachable set,";
-    println "           because an incomplete one would delete the store itself";
-    println "       monad fetch [<dir>] [--offline]  Resolve git dependencies into $MONAD_HOME/cache/git and write mote.lock";
-    println "         The only verb that uses the network. `fetch` keeps the commit mote.lock already names,";
-    println "           so a tag that moved upstream does not change a locked build";
-    println "         --offline uses only what is already cached; a missing mirror is an error naming the URL";
-    println "       monad update [<dir>] [--offline]  Like fetch, but re-resolve every tag/branch/HEAD pin";
-    println "         Writes mote.lock from scratch; `fetch` is the one to run after a manifest edit";
-    println "       build/check take --target-dir <dir>: where the store and the output directories live";
-    println "         (clean/gc/store take the same flag). Without it the config and default decide";
-    println "       build/check/test verify mote.lock before compiling, and take --locked, which also";
-    println "         fails when a dependency's declared tag/branch/rev no longer matches the lock";
-    println "         They accept --offline too, and ignore it: they never use the network";
-    println "       monad store ls|verify [--target-dir <dir>]  List the store, or check its entries";
-    println "         Each line is <kind> <key> <bytes> <state>; an artifact is its binary AND its IR";
-    println "         verify is structural: an entry records neither the file nor the sources behind";
-    println "           it, so it checks that an entry is complete and readable, not that its key";
-    println "           is the right key. It exits non-zero on any incomplete entry";
-    println "       monad print-targets  List the triples --target accepts, and what this llc can build for";
-    println "         Each is the spelling the emitter writes; `(llc ...)` adds the argv when llc needs more";
-    println "         A --target name whose architecture this llc does not register is rejected by name";
-    println "       monad lsp  Speak the Language Server Protocol on stdin and stdout, until stdin ends";
-    println "         Started by an editor, which is told nothing else: no arguments, no flags";
-    println "       monad version  Print the git commit this binary was built from";
     return 0
 }

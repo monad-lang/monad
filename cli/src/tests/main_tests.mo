@@ -1,549 +1,348 @@
-/// Smoke tests for `cli/src/main.mo`'s `Command.from_args` argv parser.
+/// Smoke tests for the compiler's argv parser (`#[derive Cli]` in
+/// `cli.mo`, decoded and exposed by `cli_spec.mo`).
 ///
-/// This used to say `cargo run -- run cli/src/main.mo ...` (actually
-/// executing `main`) hit a separate, pre-existing `instance-Monad-IO
-/// not found` failure — no longer reproduces (confirmed via many real
-/// `build`/`check`/`pretty`/`test` invocations, 2026-08-19); whatever
-/// that was has since been fixed elsewhere, or this repro was itself
-/// stale. Kept testing `Command.from_args` directly anyway (isolating
-/// argv-parsing from everything downstream is still the more precise
-/// unit of test coverage, real end-to-end runs notwithstanding).
-use lib::main {*}
-use std::concurrent::fiber {FiberError.message, cancelled}
+/// `Command.from_args` is the old `Command`-returning facade: anything the
+/// parser rejects becomes `Command.help`. The real entry point uses
+/// `Command.run`, which keeps the error and the exit code; these tests pin
+/// the decoded fields, which is where a flag rename or a positional-order
+/// mistake shows up.
+use lib::cli {*}
+use lib::cli_spec {*}
+
+def some_is (o : Option String) (want : String) : Bool :=
+    match o {
+        Option.some s => String.beq s want,
+        Option.none => false,
+    }
+
+def is_none (o : Option String) : Bool :=
+    match o {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+def one_string (xs : List String) (want : String) : Bool :=
+    match xs {
+        List.cons hd tl => String.beq hd want && List.is_empty tl,
+        List.empty => false,
+    }
+
+def two_strings (xs : List String) (a : String) (b : String) : Bool :=
+    match xs {
+        List.cons x rest => String.beq x a && one_string rest b,
+        List.empty => false,
+    }
+
+// ── build ──────────────────────────────────────────────────────────────
 
 #[test]
-def test_from_args_build_positional_name : Bool :=
+def test_build_positional_name : Bool :=
     match Command.from_args ["build", "a.mo", "myname"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "myname" && verbose == false && debug == true,
+        Command.build file name _verbose debug release _no_cache _locked _target_dir _bin _target _offline output =>
+            some_is file "a.mo" && some_is name "myname" && is_none output
+                && debug == false && release == false,
         _ => false,
     }
 
 #[test]
-def test_from_args_build_default_name : Bool :=
+def test_build_default_name : Bool :=
     match Command.from_args ["build", "a.mo"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "source" && verbose == false && debug == true,
+        Command.build file name _verbose _debug _release _no_cache _locked _target_dir _bin _target _offline output =>
+            some_is file "a.mo" && is_none name && is_none output,
         _ => false,
     }
 
 #[test]
-def test_from_args_build_output_flag : Bool :=
-    match Command.from_args ["build", "a.mo", "--output", "out", "--verbose"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == true,
+def test_build_output_option_wins : Bool :=
+    match Command.from_args ["build", "a.mo", "legacy", "--output", "out", "--verbose"] {
+        Command.build _file _name verbose _debug _release _no_cache _locked _target_dir _bin _target _offline output =>
+            some_is output "out" && verbose == true,
         _ => false,
     }
 
 #[test]
-def test_from_args_build_short_flags : Bool :=
+def test_build_short_output_and_verbose : Bool :=
     match Command.from_args ["build", "a.mo", "-o", "out", "-v"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == true,
+        Command.build _file _name verbose _debug _release _no_cache _locked _target_dir _bin _target _offline output =>
+            some_is output "out" && verbose == true,
         _ => false,
     }
 
+/// Debug info is ON by default; `--release` opts out and `--debug` opts back
+/// in. `Command.debug_of` is the single place that rule lives.
 #[test]
-def test_from_args_build_debug_flag : Bool :=
-    match Command.from_args ["build", "a.mo", "--debug"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && verbose == false && debug == true,
+def test_build_debug_is_on_by_default : Bool :=
+    Command.debug_of (Command.from_args ["build", "a.mo"]) == true
+
+#[test]
+def test_build_release_opts_out_of_debug : Bool :=
+    Command.debug_of (Command.from_args ["build", "a.mo", "--release"]) == false
+
+#[test]
+def test_build_explicit_debug_beats_release : Bool :=
+    Command.debug_of (Command.from_args ["build", "a.mo", "--release", "--debug"]) == true
+
+#[test]
+def test_build_short_debug_flag : Bool :=
+    match Command.from_args ["build", "a.mo", "-g"] {
+        Command.build _file _name _verbose debug _release _no_cache _locked _target_dir _bin _target _offline _output =>
+            debug == true,
         _ => false,
     }
 
+/// No positional path means the dispatch defaults to `.` (the mote
+/// containing the working directory), matching check/test.
 #[test]
-def test_from_args_build_debug_short_flag : Bool :=
-    match Command.from_args ["build", "a.mo", "-g", "-v"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && verbose == true && debug == true,
-        _ => false,
-    }
-
-/// Debug info is ON by default (rustc's own dev-profile default);
-/// `--release` is how you opt out.
-#[test]
-def test_from_args_build_release_opts_out_of_debug : Bool :=
-    match Command.from_args ["build", "a.mo", "--release"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && verbose == false && debug == false,
-        _ => false,
-    }
-
-/// An explicit `--debug` wins over `--release` -- asking twice, with
-/// the more specific request, is not an error.
-#[test]
-def test_from_args_build_debug_beats_release : Bool :=
-    match Command.from_args ["build", "a.mo", "--release", "--debug"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && verbose == false && debug == true,
-        _ => false,
-    }
-
-/// `monad build` with no path is `monad build .` -- the mote containing
-/// the working directory, matching `check`/`test`'s own default. It used
-/// to print usage, which is what made `compile` the one verb with no
-/// zero-argument form.
-#[test]
-def test_from_args_build_with_no_path_defaults_to_the_mote : Bool :=
+def test_build_without_path : Bool :=
     match Command.from_args ["build"] {
-        Command.build path out_name _bin verbose debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "." && Path.to_string out_name == "source" && verbose == false && debug == true,
+        Command.build file _name _verbose _debug _release _no_cache _locked _target_dir _bin _target _offline _output =>
+            is_none file,
         _ => false,
     }
 
-/// `build .` and a bare `build` are one code path, so they must parse to
-/// the same command.
 #[test]
-def test_from_args_build_bare_and_dot_agree : Bool :=
-    match Command.from_args ["build"] {
-        Command.build p1 o1 _b1 _v1 _d1 _n1 _l1 _td1 _target => match Command.from_args ["build", "."] {
-            Command.build p2 o2 _b2 _v2 _d2 _n2 _l2 _td2 _target =>
-                Path.to_string p1 == Path.to_string p2 && Path.to_string o1 == Path.to_string o2,
-            _ => false,
-        },
-        _ => false,
-    }
-
-// `build`'s cache escape hatch, peeled for the same reason `check`'s is:
-// it is a flag, not a path, and left in the list it would be handed to the
-// path expander as a filename.
-#[test]
-def test_from_args_build_no_cache_flag : Bool :=
+def test_build_no_cache_flag : Bool :=
     match Command.from_args ["build", "a.mo", "--no-cache"] {
-        Command.build path _out_name _bin _verbose _debug no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && no_cache == true,
+        Command.build _file _name _verbose _debug _release no_cache _locked _target_dir _bin _target _offline _output =>
+            no_cache == true,
         _ => false,
     }
 
-// `--bin <name>` is peeled with the other flags for the same reason: left
-// in the list it would be read as the positional PATH and its name as the
-// positional output name, so `monad build --bin tool .` would build `.` as
-// `tool` -- one argument, two meanings, both wrong.
 #[test]
-def test_from_args_build_bin_flag : Bool :=
+def test_build_bin_flag : Bool :=
     match Command.from_args ["build", "a.mo", "--bin", "tool"] {
-        Command.build path out_name bin _verbose _debug _no_cache _locked _target_dir _target =>
-            Path.to_string path == "a.mo" && bin == "tool" && Path.to_string out_name == "source",
-        _ => false,
-    }
-
-// `--target <triple>` is peeled with the other flags for the same reason
-// `--bin` is: left in the list, `--target` reads as the positional PATH and
-// the triple as the output name.
-#[test]
-def test_from_args_print_targets : Bool :=
-    match Command.from_args ["print-targets"] {
-        Command.print_targets => true,
+        Command.build _file _name _verbose _debug _release _no_cache _locked _target_dir bin _target _offline _output =>
+            some_is bin "tool",
         _ => false,
     }
 
 #[test]
-def test_from_args_build_target_flag : Bool :=
+def test_build_target_flag : Bool :=
     match Command.from_args ["build", "a.mo", "--target", "aarch64-unknown-linux-gnu"] {
-        Command.build path out_name _bin _verbose _debug _no_cache _locked _target_dir target =>
-            Path.to_string path == "a.mo"
-                && target == "aarch64-unknown-linux-gnu"
-                && Path.to_string out_name == "source",
+        Command.build _file _name _verbose _debug _release _no_cache _locked _target_dir _bin target _offline _output =>
+            some_is target "aarch64-unknown-linux-gnu",
+        _ => false,
+    }
+
+/// The clap parser accepts `--long=value`, which the old hand-written one
+/// could not.
+#[test]
+def test_build_target_equals_form : Bool :=
+    match Command.from_args ["build", "a.mo", "--target=aarch64-unknown-linux-gnu"] {
+        Command.build _file _name _verbose _debug _release _no_cache _locked _target_dir _bin target _offline _output =>
+            some_is target "aarch64-unknown-linux-gnu",
+        _ => false,
+    }
+
+#[test]
+def test_build_locked_and_target_dir : Bool :=
+    match Command.from_args ["build", "a.mo", "--locked", "--target-dir", "t"] {
+        Command.build _file _name _verbose _debug _release _no_cache locked target_dir _bin _target _offline _output =>
+            locked == true && some_is target_dir "t",
+        _ => false,
+    }
+
+/// `--offline` is accepted and ignored by build/check/test so one flag set
+/// can drive a whole script.
+#[test]
+def test_build_accepts_offline : Bool :=
+    match Command.from_args ["build", "a.mo", "--offline"] {
+        Command.build _file _name _verbose _debug _release _no_cache _locked _target_dir _bin _target offline _output =>
+            offline == true,
         _ => false,
     }
 
 // ── install ────────────────────────────────────────────────────────────
 
 #[test]
-def test_from_args_install_mote : Bool :=
+def test_install_mote : Bool :=
     match Command.from_args ["install", "motes/weaver"] {
-        Command.install path out_name bin verbose no_cache target =>
-            Path.to_string path == "motes/weaver" && Path.to_string out_name == "source"
-                && bin == "" && verbose == false && no_cache == false && target == "",
+        Command.install file output _bin _verbose _no_cache _target =>
+            some_is file "motes/weaver" && is_none output,
         _ => false,
     }
 
 #[test]
-def test_from_args_install_default_path_is_cwd : Bool :=
+def test_install_default_path_is_cwd : Bool :=
     match Command.from_args ["install"] {
-        Command.install path out_name _bin _verbose _no_cache _target =>
-            Path.to_string path == "." && Path.to_string out_name == "source",
+        Command.install file _output _bin _verbose _no_cache _target => is_none file,
         _ => false,
     }
 
 #[test]
-def test_from_args_install_output_and_flags : Bool :=
+def test_install_output_and_flags : Bool :=
     match Command.from_args ["install", "a.mo", "-o", "tool", "--bin", "cli", "-v", "--no-cache", "--target", "aarch64-unknown-linux-gnu"] {
-        Command.install path out_name bin verbose no_cache target =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "tool"
-                && bin == "cli" && verbose == true && no_cache == true
-                && target == "aarch64-unknown-linux-gnu",
+        Command.install file output bin verbose no_cache target =>
+            some_is file "a.mo" && some_is output "tool" && some_is bin "cli"
+                && verbose == true && no_cache == true
+                && some_is target "aarch64-unknown-linux-gnu",
+        _ => false,
+    }
+
+// ── run / eval / repl / pretty ─────────────────────────────────────────
+
+#[test]
+def test_run_forwards_program_args_after_separator : Bool :=
+    match Command.from_args ["run", "a.mo", "--", "x", "-y"] {
+        Command.run file args _verbose _debug _release =>
+            String.beq file "a.mo" && two_strings args "x" "-y",
         _ => false,
     }
 
 #[test]
-def test_from_args_install_explicit_name_without_path : Bool :=
-    match Command.from_args ["install", "-o", "tool"] {
-        Command.install path out_name _bin _verbose _no_cache _target =>
-            Path.to_string path == "." && Path.to_string out_name == "tool",
-        _ => false,
-    }
-
-/// And with no `--target` at all it is empty, which `TargetSpec.resolve`
-/// reads as "this machine" rather than as a target named "".
-#[test]
-def test_from_args_build_without_target_is_empty : Bool :=
-    match Command.from_args ["build", "a.mo"] {
-        Command.build _path _out_name _bin _verbose _debug _no_cache _locked _target_dir target => target == "",
-        _ => false,
-    }
-
-/// Empty, not a name: "no `--bin` was given" is a different state from
-/// "`--bin` named something", and only the empty one lets `build_target`
-/// fall back to "the target that exists".
-#[test]
-def test_from_args_build_without_bin_is_empty : Bool :=
-    match Command.from_args ["build", "a.mo"] {
-        Command.build _path _out_name bin _verbose _debug _no_cache _locked _target_dir _target => bin == "",
-        _ => false,
-    }
-
-// Named, not merely accepted: a build that did not ask for the hatch must
-// not get it, or the flag would be indistinguishable from one that is
-// silently always on.
-#[test]
-def test_from_args_build_without_no_cache_is_false : Bool :=
-    match Command.from_args ["build", "a.mo"] {
-        Command.build _path _out_name _bin _verbose _debug no_cache _locked _target_dir _target => no_cache == false,
-        _ => false,
-    }
-
-/// The removed verb must not be silently accepted as something else --
-/// `compile` is now an ordinary unknown word, so it falls to `help`.
-#[test]
-def test_from_args_compile_is_no_longer_a_verb : Bool :=
-    match Command.from_args ["compile", "a.mo"] {
-        Command.help => true,
+def test_run_forwards_plain_args_too : Bool :=
+    match Command.from_args ["run", "a.mo", "x"] {
+        Command.run file args _verbose _debug _release =>
+            String.beq file "a.mo" && one_string args "x",
         _ => false,
     }
 
 #[test]
-def test_from_args_repl : Bool :=
+def test_run_debug_flags : Bool :=
+    match Command.from_args ["run", "a.mo", "-v", "--release"] {
+        Command.run _file _args verbose debug release =>
+            verbose == true && debug == false && release == true,
+        _ => false,
+    }
+
+#[test]
+def test_eval_file_and_verbose : Bool :=
+    match Command.from_args ["eval", "a.mo", "-v"] {
+        Command.eval file verbose => String.beq file "a.mo" && verbose == true,
+        _ => false,
+    }
+
+#[test]
+def test_repl : Bool :=
     match Command.from_args ["repl"] {
         Command.repl => true,
         _ => false,
     }
 
 #[test]
-def test_from_args_pretty : Bool :=
-    match Command.from_args ["pretty", "b.mo"] {
-        Command.pretty path => path == "b.mo",
+def test_pretty : Bool :=
+    match Command.from_args ["pretty", "a.mo"] {
+        Command.pretty file => String.beq file "a.mo",
+        _ => false,
+    }
+
+// ── check / test ───────────────────────────────────────────────────────
+
+#[test]
+def test_check_files_and_flags : Bool :=
+    match Command.from_args ["check", "a.mo", "b.mo", "-w", "--no-cache", "--locked", "--target-dir", "t", "--offline"] {
+        Command.check files verbose workspace no_cache locked target_dir offline =>
+            two_strings files "a.mo" "b.mo" && verbose == false && workspace == true
+                && no_cache == true && locked == true && some_is target_dir "t"
+                && offline == true,
         _ => false,
     }
 
 #[test]
-def test_from_args_check : Bool :=
-    match Command.from_args ["check", "a.mo", "b.mo", "-v"] {
-        Command.check files opts =>
-            files == ["a.mo", "b.mo"] && opts.verbose == true && opts.workspace == false && opts.no_cache == false,
-        _ => false,
-    }
-
-#[test]
-def test_from_args_check_workspace_flag : Bool :=
-    match Command.from_args ["check", "--workspace"] {
-        Command.check files opts =>
-            List.is_empty files && opts.workspace == true && opts.verbose == false && opts.no_cache == false,
-        _ => false,
-    }
-
-#[test]
-def test_from_args_check_workspace_short_flag : Bool :=
-    match Command.from_args ["check", "-w", "-v"] {
-        Command.check files opts =>
-            List.is_empty files && opts.workspace == true && opts.verbose == true && opts.no_cache == false,
-        _ => false,
-    }
-
-// The flag must be PEELED, not left among the paths -- otherwise it is
-// handed to the path expander as a filename.
-#[test]
-def test_from_args_check_workspace_flag_not_a_path : Bool :=
-    match Command.from_args ["check", "--workspace", "a.mo"] {
-        Command.check files opts =>
-            files == ["a.mo"] && opts.workspace == true && opts.no_cache == false,
-        _ => false,
-    }
-
-// A bare `monad check` no longer means "print help": it means "check the
-// mote containing the working directory" (and only falls back, at RUN
-// time and with exit 1, to `no_target_diagnostic` when there is no such
-// mote). Mirroring `test_from_args_test_no_files_is_a_test_command`,
-// which Phase 9b made true for `test` too.
-#[test]
-def test_from_args_check_no_files_is_a_check_command : Bool :=
+def test_check_bare_has_no_files : Bool :=
     match Command.from_args ["check"] {
-        Command.check files opts =>
-            List.is_empty files && opts.workspace == false && opts.verbose == false && opts.no_cache == false,
-        _ => false,
-    }
-
-// `--no-cache` is peeled for the same reason `--workspace` is: it is a
-// flag, not a path. Left in the list it would be handed to the path
-// expander as a filename, where it would surface as a file that does not
-// exist rather than as a flag that was ignored.
-#[test]
-def test_from_args_check_no_cache_flag : Bool :=
-    match Command.from_args ["check", "--no-cache", "a.mo"] {
-        Command.check files opts =>
-            files == ["a.mo"] && opts.no_cache == true && opts.workspace == false && opts.verbose == false,
+        Command.check files _verbose _workspace _no_cache _locked _target_dir _offline =>
+            List.is_empty files,
         _ => false,
     }
 
 #[test]
-def test_from_args_check_no_cache_flag_combines_with_workspace : Bool :=
-    match Command.from_args ["check", "-w", "--no-cache", "a.mo", "b.mo"] {
-        Command.check files opts =>
-            files == ["a.mo", "b.mo"] && opts.workspace == true && opts.no_cache == true,
+def test_check_verbose : Bool :=
+    match Command.from_args ["check", "-v"] {
+        Command.check _files verbose _workspace _no_cache _locked _target_dir _offline =>
+            verbose == true,
         _ => false,
     }
 
 #[test]
-def test_from_args_check_without_no_cache_is_false : Bool :=
-    match Command.from_args ["check", "a.mo"] {
-        Command.check files opts =>
-            files == ["a.mo"] && opts.no_cache == false,
+def test_test_jobs_and_flags : Bool :=
+    match Command.from_args ["test", "a.mo", "-j", "8", "--workspace", "--locked", "--offline"] {
+        Command.test files _verbose workspace locked no_cache target_dir jobs offline =>
+            one_string files "a.mo" && workspace == true && locked == true
+                && no_cache == false && is_none target_dir
+                && match jobs { Option.some n => n == 8, Option.none => false }
+                && offline == true,
         _ => false,
     }
 
-// `Command.test` carries `locked` and then `jobs`, and every match here
-// binds them positionally -- adding a field to the constructor and leaving
-// these at the old arity compiles SELF-HOSTED and then either fails at
-// runtime (the hazard AGENTS.md records: this file shipped that way once,
-// run 38147433273, five red tests) or, since 2026-10-24, silently
-// type-errors that only the Rust host reports
-// (`implementations/if-branch-type-check-divergence.md`).
+/// A non-numeric `--jobs` is rejected at parse time (the I64 validation the
+/// `parsec` dependency used to do by hand), so the facade falls to help.
 #[test]
-def test_from_args_test : Bool :=
-    match Command.from_args ["test", "a.mo", "b.mo", "-v"] {
-        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
-            files == ["a.mo", "b.mo"] && verbose == true && workspace == false && jobs == 4,
+def test_test_bad_jobs_is_a_usage_error : Bool :=
+    match Command.from_args ["test", "-j", "many"] {
+        Command.help => true,
         _ => false,
     }
 
+// ── clean / gc / store / fetch ─────────────────────────────────────────
+
 #[test]
-def test_from_args_test_workspace_flag : Bool :=
-    match Command.from_args ["test", "--workspace"] {
-        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
-            List.is_empty files && workspace == true && verbose == false && jobs == 4,
+def test_clean : Bool :=
+    match Command.from_args ["clean", "--all", "--target-dir", "t"] {
+        Command.clean all target_dir => all == true && some_is target_dir "t",
         _ => false,
     }
 
 #[test]
-def test_from_args_test_workspace_short_flag : Bool :=
-    match Command.from_args ["test", "-w", "-v"] {
-        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
-            List.is_empty files && workspace == true && verbose == true && jobs == 4,
-        _ => false,
-    }
-
-// The flag must be PEELED, not left among the paths -- otherwise it is
-// handed to the path expander as a filename.
-#[test]
-def test_from_args_test_workspace_flag_not_a_path : Bool :=
-    match Command.from_args ["test", "--workspace", "a.mo"] {
-        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
-            files == ["a.mo"] && workspace == true,
-        _ => false,
-    }
-
-// `--jobs/-j <N>`: peeled with the other flags, its number not left among
-// the paths, and its value carried into the command.
-#[test]
-def test_from_args_test_jobs_flag : Bool :=
-    match Command.from_args ["test", "--jobs", "2", "a.mo"] {
-        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
-            files == ["a.mo"] && jobs == 2,
+def test_gc : Bool :=
+    match Command.from_args ["gc", "a.mo", "-w", "--apply"] {
+        Command.gc files workspace apply target_dir =>
+            one_string files "a.mo" && workspace == true && apply == true && is_none target_dir,
         _ => false,
     }
 
 #[test]
-def test_from_args_test_jobs_short_flag_clamps_below_one : Bool :=
-    match Command.from_args ["test", "-j", "0", "a.mo"] {
-        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
-            files == ["a.mo"] && jobs == 1,
+def test_store : Bool :=
+    match Command.from_args ["store", "verify"] {
+        Command.store sub _target_dir => String.beq sub "verify",
         _ => false,
     }
 
-// A bare `monad test` no longer means "print help": it means "test the
-// mote containing the working directory" (and only falls back, at RUN
-// time and with exit 1, to `no_target_diagnostic` when there is no such
-// mote).
 #[test]
-def test_from_args_test_no_files_is_a_test_command : Bool :=
-    match Command.from_args ["test"] {
-        Command.test files verbose workspace _locked _no_cache _target_dir jobs =>
-            List.is_empty files && workspace == false && verbose == false,
+def test_fetch_and_update : Bool :=
+    match Command.from_args ["fetch", "some/dir", "--offline"] {
+        Command.fetch dir offline => some_is dir "some/dir" && offline == true,
         _ => false,
     }
 
-// ─── run: program arguments after the path ───
-//
-// Everything after the path positional is the compiled program's own
-// argv: a single LEADING `--` is the separator convention and is dropped
-// once (a later `--` is a literal program argument); tokens after the
-// path with no separator are forwarded unchanged. No `BEq` instance
-// for lists is in scope here, and the parser takes no nested
-// constructor patterns, so the args are asserted one cons layer at a
-// time rather than with `==`.
+#[test]
+def test_update_defaults_to_cwd : Bool :=
+    match Command.from_args ["update"] {
+        Command.update dir offline => is_none dir && offline == false,
+        _ => false,
+    }
 
-#[partial]
-def same_args (want : List String) (args : List String) : Bool :=
-    match want {
-        List.empty => List.is_empty args,
-        List.cons w wr =>
-            match args {
-                List.cons a ar => w == a && same_args wr ar,
-                List.empty => false,
+// ── simple verbs and the fallback ──────────────────────────────────────
+
+#[test]
+def test_print_targets : Bool :=
+    match Command.from_args ["print-targets"] {
+        Command.print_targets => true,
+        _ => false,
+    }
+
+#[test]
+def test_lsp_and_version : Bool :=
+    match Command.from_args ["lsp"] {
+        Command.lsp => match Command.from_args ["version"] {
+            Command.version => true,
+            _ => false,
+        },
+        _ => false,
+    }
+
+/// Unknown words, an empty argv, and `--help` all fall to the help screen in
+/// the facade. (`Command.run` keeps the distinction: `--help` prints to
+/// stdout and exits 0, a usage error prints to stderr and exits 2.)
+#[test]
+def test_unknown_and_help_fall_to_help : Bool :=
+    match Command.from_args ["compile", "a.mo"] {
+        Command.help => match Command.from_args [] {
+            Command.help => match Command.from_args ["--help"] {
+                Command.help => true,
+                _ => false,
             },
-    }
-
-#[test]
-def test_from_args_run_forwards_args_after_separator : Bool :=
-    match Command.from_args ["run", "a.mo", "--", "x", "y"] {
-        Command.run path _verbose _debug args =>
-            Path.to_string path == "a.mo" && same_args ["x", "y"] args,
-        _ => false,
-    }
-
-#[test]
-def test_from_args_run_forwards_args_without_separator : Bool :=
-    match Command.from_args ["run", "a.mo", "x"] {
-        Command.run path _verbose _debug args =>
-            Path.to_string path == "a.mo" && same_args ["x"] args,
-        _ => false,
-    }
-
-#[test]
-def test_from_args_run_with_no_args_is_empty : Bool :=
-    match Command.from_args ["run", "a.mo"] {
-        Command.run path _verbose _debug args =>
-            Path.to_string path == "a.mo" && same_args List.empty args,
-        _ => false,
-    }
-
-// The caveat pinned as a test: clap's `take_flag` is position-independent,
-// so a token that literally matches one of run's own flags is consumed by
-// monad even when it was meant for the program -- the `--` separator does
-// not fence it off.
-#[test]
-def test_from_args_run_flags_are_position_independent : Bool :=
-    match Command.from_args ["run", "a.mo", "--verbose", "--", "x"] {
-        Command.run path verbose _debug args =>
-            Path.to_string path == "a.mo" && verbose == true && same_args ["x"] args,
-        _ => false,
-    }
-
-// A `--` typed before the path separates nothing yet -- it is peeled
-// there too, so `monad run -- a.mo x` runs `a.mo` instead of dying on
-// a file named `--`.
-#[test]
-def test_from_args_run_peels_a_leading_separator : Bool :=
-    match Command.from_args ["run", "--", "a.mo", "x"] {
-        Command.run path _verbose _debug args =>
-            Path.to_string path == "a.mo" && same_args ["x"] args,
-        _ => false,
-    }
-
-// Only the FIRST `--` after the path separates; a second one is a
-// literal program argument, forwarded exactly as typed.
-#[test]
-def test_from_args_run_second_separator_is_literal : Bool :=
-    match Command.from_args ["run", "a.mo", "--", "--", "x"] {
-        Command.run path _verbose _debug args =>
-            Path.to_string path == "a.mo" && same_args ["--", "x"] args,
-        _ => false,
-    }
-
-#[test]
-def test_from_args_help_on_empty : Bool :=
-    match Command.from_args [] {
-        Command.help => true,
-        _ => false,
-    }
-
-#[test]
-def test_from_args_help_on_unknown : Bool :=
-    match Command.from_args ["bogus"] {
-        Command.help => true,
-        _ => false,
-    }
-
-// ─── the IR path ───
-//
-// Not argv parsing, but the other pure rule in `main.mo`, and the one the
-// artifact cache's correctness rests on: the file `llc` is pointed at must
-// be named by the cache key rather than by the output, because `llc`
-// records that name (its basename) in the object it emits, and an object
-// that records the output name is an object that differs between two
-// builds of one unchanged source. `Build.artifact_ir_path` supplies the
-// keyed path; `resolve_ir_path` is what lets every caller with no key to
-// name one by keep the output-derived path it always had.
-
-/// A key is a key: the IR follows it and nothing else. There is no
-/// output-name parameter to pass, and that is the fix stated as a type.
-#[test]
-def test_resolve_ir_path_prefers_the_keyed_path : Bool :=
-    String.beq
-        (Path.to_string (resolve_ir_path (Option.some (Path.path "target/store/abc.ll")) (Path.path "out") (Path.path "hello")))
-        "target/store/abc.ll"
-
-/// The no-key fallback: `run`, the test driver, and a build whose
-/// compiler digest could not be taken. Unchanged behaviour for all of
-/// them, which is why they did not have to change.
-#[test]
-def test_resolve_ir_path_falls_back_to_the_output : Bool :=
-    String.beq
-        (Path.to_string (resolve_ir_path Option.none (Path.path "out") (Path.path "hello")))
-        "out/hello.ll"
-
-/// ...and the fallback still honours `Path.join`'s absolute-name rule,
-/// which is what every ladder script's absolute `-o` relies on.
-#[test]
-def test_resolve_ir_path_fallback_replaces_an_absolute_output : Bool :=
-    String.beq
-        (Path.to_string (resolve_ir_path Option.none (Path.path "out") (Path.path "/tmp/x/hello")))
-        "/tmp/x/hello.ll"
-
-// `--jobs`: a test tail whose fiber has no result fails its file with
-// the reason, rather than folding a made-up outcome.
-#[test]
-def test_fiber_error_fails_the_file : Bool :=
-    match fiber_outcome (Result.err FiberError.cancelled) {
-        TestFileOutcome.fail_outcome reason => String.beq reason (FiberError.message FiberError.cancelled),
-        _ => false,
-    }
-
-/// `--target-dir` must be PEELED, not left among the positionals: left in
-/// the list, the flag itself becomes the output NAME and its value the
-/// next positional. That was the `--target-dir` finding, and this is the
-/// row that pins the fix.
-#[test]
-def test_from_args_build_target_dir_is_not_the_output_name : Bool :=
-    match Command.from_args ["build", "a.mo", "--target-dir", "/tmp/x"] {
-        Command.build path out_name _bin _verbose _debug _no_cache _locked target_dir target =>
-            Path.to_string path == "a.mo"
-                && Path.to_string out_name == "source"
-                && target_dir == "/tmp/x"
-                && target == "",
-        _ => false,
-    }
-
-#[test]
-def test_from_args_check_target_dir : Bool :=
-    match Command.from_args ["check", "a.mo", "--target-dir", "/tmp/x"] {
-        Command.check files opts => files == ["a.mo"] && opts.target_dir == "/tmp/x",
-        _ => false,
-    }
-
-#[test]
-def test_from_args_check_without_target_dir_is_empty : Bool :=
-    match Command.from_args ["check", "a.mo"] {
-        Command.check files opts => files == ["a.mo"] && opts.target_dir == "",
+            _ => false,
+        },
         _ => false,
     }

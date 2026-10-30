@@ -31,6 +31,7 @@
 # Reference
 
 - [Reference](./reference.md)
+- [Command-line Reference](./cli.md)
 
 # Appendix
 
