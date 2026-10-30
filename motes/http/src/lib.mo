@@ -17,7 +17,7 @@ pub use lib::types {
     Status.not_modified, Status.temporary_redirect, Status.permanent_redirect,
     Status.bad_request, Status.unauthorized, Status.forbidden, Status.not_found,
     Status.method_not_allowed, Status.range_not_satisfiable, Status.conflict,
-    Status.payload_too_large, Status.expectation_failed,
+    Status.request_timeout, Status.payload_too_large, Status.expectation_failed,
     Status.request_header_fields_too_large,
     Status.internal_server_error, Status.bad_gateway,
     Status.service_unavailable,
@@ -46,7 +46,9 @@ pub use lib::strings {
 
 pub use lib::wire {
     Wire.parse_request, Wire.parse_request_strict,
+    Wire.parse_request_head, Wire.parse_request_head_strict,
     Wire.parse_response, Wire.parse_response_with_method,
+    Wire.concat_chunks,
     Wire.format_request, Wire.format_response, Wire.format_response_head,
     Wire.frame_request, Wire.frame_response,
     Wire.response_framing, Wire.response_has_body,

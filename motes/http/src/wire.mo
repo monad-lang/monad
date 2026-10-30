@@ -372,6 +372,26 @@ pub def Wire.take_bytes (n : I64) (bytes : List U8) : List U8 :=
       List.cons x rest => List.cons x (Wire.take_bytes (I64.sub n 1i64) rest)
     }
 
+/// Concatenate byte chunks in O(total bytes), not O(chunks × total). The
+/// accumulator is built reversed and flipped once at the end; a body read
+/// in 64 KiB chunks must not pay a copy of the whole body per chunk.
+pub def Wire.concat_chunks (chunks : List (List U8)) : List U8 :=
+  Wire.concat_chunks_go chunks List.empty
+
+#[terminating]
+def Wire.concat_chunks_go (chunks : List (List U8)) (acc : List U8) : List U8 :=
+  match chunks {
+    List.empty => List.reverse acc,
+    List.cons chunk rest => Wire.concat_chunks_go rest (Wire.prepend_rev chunk acc)
+  }
+
+#[terminating]
+def Wire.prepend_rev (chunk : List U8) (acc : List U8) : List U8 :=
+  match chunk {
+    List.empty => acc,
+    List.cons b rest => Wire.prepend_rev rest (List.cons b acc)
+  }
+
 // ── parse header lines into Headers ───────────────────────────────────
 
 /// The most header fields one message may carry.
@@ -498,7 +518,7 @@ def Wire.content_lengths_agree (first : String) (rest : List String) : Bool :=
 /// The framing a request's head declares. A request with no `Content-Length`
 /// has no body (RFC 9110 §8.6), which is not the response rule: there an
 /// absent length means read-to-close.
-def Wire.request_framing (headers : Headers) : Result String Framing :=
+pub def Wire.request_framing (headers : Headers) : Result String Framing :=
   match Headers.get_all "transfer-encoding" headers {
     List.empty =>
       match Wire.parse_content_length headers {
@@ -1113,6 +1133,53 @@ pub def Wire.parse_request_strict (bytes : List U8) : Result String Request :=
   then Result.err "invalid request line"
   else
     match Wire.parse_request bytes {
+      Result.err e => Result.err e,
+      Result.ok req =>
+        match Wire.validate_target_string req.method (Wire.request_target req.uri) {
+          Result.err e => Result.err e,
+          Result.ok _ =>
+            match Wire.check_request_host req {
+              Result.err e => Result.err e,
+              Result.ok _ => Result.ok req
+            }
+        }
+    }
+
+/// Parse a request HEAD (the bytes through the blank line) and leave the
+/// body to the caller. The server reads head-first so it can enforce caps,
+/// answer `Expect: 100-continue`, and read exactly the body it was promised
+/// without re-parsing the whole accumulation on every read.
+pub def Wire.parse_request_head (head : List U8) : Result String Request :=
+  match Wire.split_lines head {
+    List.empty => Result.err "empty request",
+    List.cons first rest =>
+      match Wire.parse_request_line first {
+        Result.err e => Result.err e,
+        Result.ok pr =>
+          match pr {
+            Pair.pair m t =>
+              match m {
+                Pair.pair method target =>
+                  match Wire.parse_header_lines rest {
+                    Result.err e => Result.err e,
+                    Result.ok headers =>
+                      let req : Request :=
+                        { method := method, uri := Wire.target_to_uri target,
+                          headers := headers, version := t, body := Body.empty } in
+                      Result.ok req
+                  }
+              }
+          }
+      }
+  }
+
+/// The SERVER head parse: request-line controls, target form and Host, all
+/// before any body bytes are read.
+pub def Wire.parse_request_head_strict (head : List U8) : Result String Request :=
+  if Bool.not (Wire.request_line_valid head)
+  then Result.err "invalid request line"
+  else
+    match Wire.parse_request_head head {
       Result.err e => Result.err e,
       Result.ok req =>
         match Wire.validate_target_string req.method (Wire.request_target req.uri) {

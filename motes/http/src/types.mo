@@ -55,6 +55,7 @@ pub def Status.forbidden : U16 := 403u16
 pub def Status.not_found : U16 := 404u16
 pub def Status.method_not_allowed : U16 := 405u16
 pub def Status.range_not_satisfiable : U16 := 416u16
+pub def Status.request_timeout : U16 := 408u16
 pub def Status.conflict : U16 := 409u16
 pub def Status.payload_too_large : U16 := 413u16
 pub def Status.expectation_failed : U16 := 417u16
