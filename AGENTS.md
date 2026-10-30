@@ -94,10 +94,14 @@ carries no dictionary) are likewise a **call-site obligation** in the
 self-hosted compiler: once the call's types are solved, every constraint
 needs a matching instance, or the call is a `no instance of ...` error. A
 still-generic caller forwarding its own parameter is not decidable and stays
-accepted. The Rust host leaves an unresolvable call as a plain application
-instead (see `plans/implementations/class-constraint-not-enforced-at-call-sites.md`),
-and a bare class-*method* call with no instance is still caught at codegen
-rather than at typecheck.
+accepted, and so is a bare reference (`let f : S -> S := op`). A class
+*method* call on a single-param class whose method takes the carrier as its
+first parameter (`Foo.foo x`) is rejected the same way; a higher-kinded
+carrier (`Monad.pure`), a multi-param class and shapes whose promoted method
+does not exist yet (a `#[derive]`'d instance before promotion) keep the
+abstract-signature fallback. The Rust host leaves an unresolvable call as a
+plain application instead (see
+`plans/implementations/class-constraint-not-enforced-at-call-sites.md`).
 
 ### Affine rule quick reference
 

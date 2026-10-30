@@ -1046,11 +1046,46 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                             resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
                     },
                 Option.none =>
+                    let carrier_opt : Option Term := carrier_from_expected_type expected_type in
                     let direct : Result TypeError TypedTerm :=
-                        match carrier_from_expected_type expected_type {
+                        match carrier_opt {
                             Option.none => err (TypeError.custom "cannot infer carrier type for class method"),
                             Option.some carrier =>
                                 resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
+                        } in
+                    // The terminal answer once every carrier candidate has been
+                    // tried. It is a DECIDED miss only when the direct carrier
+                    // is the right one: a single-param class (multi-param
+                    // matching is not decisive enough for `HAdd`/`Map`), a
+                    // method that takes the carrier as its first argument
+                    // (`method_carrier_is_first_arg` -- `Monad.pure`'s first
+                    // domain is the ELEMENT type and its carrier comes from the
+                    // result), and a carrier that is a real type rather than a
+                    // bare variable (`informative_value`).
+                    //
+                    // The instance SEARCH must also have come back empty. A
+                    // direct failure with an instance in hand is a different
+                    // answer -- the instance's promoted method is not
+                    // registered yet -- which is the norm before elaboration's
+                    // promotion pass runs, e.g. for a `#[derive BEq]` type
+                    // whose generated instance is still a raw decl (`lang/
+                    // module.mo`'s note on why the whole-graph
+                    // `validate_no_unresolved_class_calls` had to move to
+                    // codegen). Those keep their own error and the caller's
+                    // abstract-signature fallback; only an empty search becomes
+                    // `missing_instance`.
+                    let undecided : Result TypeError TypedTerm :=
+                        match carrier_opt {
+                            Option.none => direct,
+                            Option.some c =>
+                                if Bool.not (class_has_single_param cls) then direct
+                                else if Bool.not (method_carrier_is_first_arg cls method_name) then direct
+                                else if Bool.not (informative_value c scope) then direct
+                                else
+                                    match find_matching_instance (scope_instance_candidates_in scope class_name) class_name c {
+                                        Option.some _ => direct,
+                                        Option.none => err (TypeError.missing_instance class_name c),
+                                    },
                         } in
                     match direct {
                         ok tt => if mentions_hole expected_type then ok (open_method_vars cls method_name tt) else direct,
@@ -1063,7 +1098,7 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                                         (resolve_with_carrier_hint class_name cls method_name expected_type scope locals
                                             (method_sig_carrier cls method_name expected_type)
                                             (resolve_with_carrier_hint class_name cls method_name expected_type scope locals
-                                                (class_default_carrier cls) direct)),
+                                                (class_default_carrier cls) undecided)),
                             },
                     },
             },
@@ -1149,6 +1184,45 @@ def class_has_single_param (cls : Class) : Bool :=
                         _ => false,
                     },
                 _ => false,
+            },
+    }
+
+/// Does this method take the CARRIER as its first value argument?
+///
+/// `type_check_app` checks an argument before the callee, so a class-method
+/// leaf's expected type is a Pi whose first domain is the FIRST ARGUMENT's
+/// type. That is the carrier exactly when the method's own first parameter is
+/// the class parameter itself — the shape every single-carrier class in this
+/// corpus uses (`Show.show : A -> String`, `BEq.beq : A -> A -> Bool`,
+/// `Add.add : A -> A -> A`). It is NOT the carrier for the higher-kinded
+/// classes, whose method takes the ELEMENT type first and only names the
+/// carrier in its result: `Monad.pure : A -> M A` applied to a `List String`
+/// has first domain `List String`, and neither an instance nor a lookup at
+/// that type is meaningful (`Monad` is resolved through the result-type hint
+/// instead). MEASURED: reporting on that domain turned `return diags` in
+/// `lang/src/module.mo` into `no instance of Monad for (List String)`.
+///
+/// A NULLARY method (`Default.default : A`) answers `true`: its whole expected
+/// type IS the carrier.
+#[partial]
+def method_carrier_is_first_arg (cls : Class) (method_name : Identifier) : Bool :=
+    match class_method_declared_type cls method_name {
+        Option.none => false,
+        Option.some sig =>
+            match term_peel sig {
+                Term.pi b dom _ret =>
+                    if binder_is_explicit b
+                    then
+                        match term_peel dom {
+                            Term.var _ dbg =>
+                                match dbg {
+                                    DebugName.named id => id_member id (class_param_names cls),
+                                    DebugName.unnamed => false,
+                                },
+                            _ => false,
+                        }
+                    else false,
+                _ => true,
             },
     }
 
@@ -3844,7 +3918,17 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                         ok cd =>
                             match resolve_class_method cd expected_type scope locals {
                                 ok tt => ok tt,
-                                err _ =>
+                                // A DECIDED miss (`missing_instance`) is not
+                                // one of the undecidable shapes below: the
+                                // carrier came from the call's own argument
+                                // type and no instance of the class matches it.
+                                // Falling back to the abstract signature here
+                                // typed the call as if the method existed and
+                                // left codegen to reject it.
+                                err e =>
+                                    match e {
+                                        TypeError.missing_instance _ _ => err e,
+                                        _ =>
                                     // Fall back to the class method's own
                                     // abstract signature (not resolved) --
                                     // e.g. a heterogeneous/multi-param
@@ -3869,6 +3953,7 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                                     match cd {
                                         mk _class_name _full_name _ sig =>
                                             ok (mk_typed (Term.var sentinel dbg) sig),
+                                    },
                                     },
                             },
                         err _ =>

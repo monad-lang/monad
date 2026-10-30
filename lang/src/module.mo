@@ -6493,6 +6493,31 @@ def check_affine_diags_of_source (src : String) (module_name : String) : IO (Lis
     }
 }
 
+/// `check_diags_of_source` with the FULL decl preparation
+/// `elaborate_loaded_modules` runs first: `promote_instance_defs` and then
+/// `add_constraint_dict_params_decls`.
+///
+/// The plain harness checks the RAW parsed decls, which is fine for a fixture
+/// that neither declares an instance nor a class constraint -- but a class
+/// METHOD call is looked up against the instance registry (`Bag.put` needs the
+/// instance's promoted method and dict value to exist) and a def's declared
+/// constraint has to become a dictionary parameter for the call inside it to
+/// forward. Without the preparation both shapes read as `no instance of ...`
+/// at the call site, which the real pipeline accepts.
+def check_diags_of_source_prepared (src : String) (module_name : String) : IO (List String) := do {
+    let path : ModulePath := ModulePath.mk (List.cons (Identifier.id module_name) List.empty);
+    match parse_all_decls src {
+        ParseResult.success _ decl_list => do {
+            let prepared : List Decl := add_constraint_dict_params_decls (promote_instance_defs decl_list);
+            let sd : ScopeData := build_scope_from_decls path prepared;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            check_module_with_scope scope prepared locals Option.none false
+        },
+        ParseResult.fail _ => do { return List.cons "PARSE FAILED" List.empty }
+    }
+}
+
 /// The corpus's dominant violation shape, end to end: an unannotated
 /// binder handed to a callee twice. Both uses are call arguments
 /// (non-owning, `usage.mo`'s `up_app_arg`), so the M2 rule's verdict
@@ -7223,7 +7248,7 @@ def class_method_domain_src (row : String) : String := class_method_domain_pream
 /// doesn't have".
 #[test]
 def test_qualified_class_method_domain_comes_from_its_own_class : IO Bool := do {
-    let diags : List String <- check_diags_of_source (class_method_domain_src "def useit (b : T) : Z := Bag.put b (fn x => x.t)") "probe";
+    let diags : List String <- check_diags_of_source_prepared (class_method_domain_src "def useit [Bag T] (b : T) : Z := Bag.put b (fn x => x.t)") "probe";
     return (I64.beq (List.length diags) 0)
 }
 
@@ -7236,7 +7261,7 @@ def test_qualified_class_method_domain_comes_from_its_own_class : IO Bool := do 
 /// resolution".
 #[test]
 def test_qualified_class_method_domain_is_not_borrowed : IO Bool := do {
-    let diags : List String <- check_diags_of_source (class_method_domain_src "def useit (b : T) : Z := Bag.put b (fn x => x.u)") "probe";
+    let diags : List String <- check_diags_of_source_prepared (class_method_domain_src "def useit [Bag T] (b : T) : Z := Bag.put b (fn x => x.u)") "probe";
     return (I64.beq (List.length diags) 1 && diags_contain "doesn't have" diags)
 }
 
@@ -7245,7 +7270,7 @@ def test_qualified_class_method_domain_is_not_borrowed : IO Bool := do {
 /// qualifier damages the case that worked by luck.
 #[test]
 def test_class_method_domain_of_the_declared_class_still_works : IO Bool := do {
-    let diags : List String <- check_diags_of_source (class_method_domain_src "def useit2 (b : U) : Z := Box.put b (fn x => x.u)") "probe";
+    let diags : List String <- check_diags_of_source_prepared (class_method_domain_src "def useit2 [Box U] (b : U) : Z := Box.put b (fn x => x.u)") "probe";
     return (I64.beq (List.length diags) 0)
 }
 

@@ -178,8 +178,12 @@ instance, or the call is a `no instance of …` error. That includes `[Copy A]`,
 which never becomes a dictionary parameter — so `over [Copy S] (ln : Lens S A)
 …` rejects a structure with no `Copy` instance instead of duplicating it
 anyway. A bare reference (`let f : S -> S := op`) is the same obligation: it
-is a partial application. A caller that is itself generic (`[Copy T]`
-forwarding its own parameter) is not decidable and stays accepted.
+is a partial application. So is a class **method** call — `Foo.foo x` with no
+`instance Foo I64` is a type error where the method takes the carrier as its
+first argument (`Show.show`, `BEq.beq`); a higher-kinded carrier
+(`Monad.pure`) or a multi-parameter class keeps the abstract-signature
+fallback. A caller that is itself generic (`[Copy T]` forwarding its own
+parameter) is not decidable and stays accepted.
 
 Two caveats matter. **Nothing frees memory yet.** Codegen still emits no
 `monad_release`, `Shared` is boxed rather than erased, and `String` is
