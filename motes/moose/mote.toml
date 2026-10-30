@@ -9,7 +9,7 @@ edition = "2026"
 # silently turns the declared-deps check off for this mote rather than
 # failing. See the note in the repo root's mote.toml.
 [dependencies.http]
-path = "../http"
+workspace = true
 
 # `moose` is where http's closure-carrying `Transport.secure` and the
 # tls mote are joined, so this is the dependency that puts `-lssl` on a

@@ -786,4 +786,110 @@ grep -q '\.devenv' "$literal_log" \
   || { cat "$literal_log" >&2; die "config 9: an explicit path stopped being literal"; }
 ok "config 9: an explicit path is still literal (the vendor tree is walked)"
 
-echo "check-external-mote: an external mote loads, checks, tests and compiles in all nine configurations"
+# ---------------------------------------------------------------------------
+# 10. A two-member workspace: inherited path AND git dependencies
+# ---------------------------------------------------------------------------
+#
+# `[workspace.dependencies]` at the root plus `workspace = true` in a member:
+# the inherited path is ROOT-relative, and the inherited git source is located
+# through ONE lock at the workspace root (not the member's own). `monad fetch`
+# is handed the virtual root, which has no `[mote]`, so it must walk the
+# members itself.
+ws="$work/ws"
+git_src="$work/git-src"
+home10="$work/home10"
+mkdir -p "$ws/libm/src" "$ws/app/src" "$git_src/gm/src" "$home10"
+
+cat > "$git_src/gm/mote.toml" <<'TOML'
+[mote]
+name = "gm"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+TOML
+
+cat > "$git_src/gm/src/lib.mo" <<'MONAD'
+pub def gvalue : I64 := 7
+MONAD
+
+(
+  cd "$git_src"
+  git init -q
+  git add -A
+  git -c user.email=test@example.invalid -c user.name=test commit -qm "gm"
+  git tag v1
+) || die "config 10: could not create the git fixture"
+
+cat > "$ws/mote.toml" <<TOML
+[workspace]
+members = ["app", "libm"]
+
+[workspace.dependencies.libm]
+path = "libm"
+
+[workspace.dependencies.gm]
+git = "file://$git_src"
+tag = "v1"
+subdir = "gm"
+TOML
+
+cat > "$ws/libm/mote.toml" <<'TOML'
+[mote]
+name = "libm"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+TOML
+
+cat > "$ws/libm/src/lib.mo" <<'MONAD'
+pub def value : I64 := 41
+MONAD
+
+cat > "$ws/app/mote.toml" <<'TOML'
+[mote]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.libm]
+workspace = true
+
+[dependencies.gm]
+workspace = true
+TOML
+
+cat > "$ws/app/src/lib.mo" <<'MONAD'
+use libm::lib {value}
+use gm::lib {gvalue}
+
+#[test]
+def test_inherited_edges : Bool := value + gvalue == 48
+MONAD
+
+fetch_log="$work/ws-fetch.log"
+MONAD_ROOT="$toolchain" MONAD_HOME="$home10" "$monad" fetch "$ws" > "$fetch_log" 2>&1 \
+  || { cat "$fetch_log" >&2; die "config 10: monad fetch at a virtual workspace root failed"; }
+[ -f "$ws/mote.lock" ] || die "config 10: monad fetch did not write the workspace-root mote.lock"
+[ ! -f "$ws/app/mote.lock" ] || die "config 10: monad fetch wrote a member-local mote.lock"
+grep -q 'name = "gm"' "$ws/mote.lock" \
+  || { cat "$ws/mote.lock" >&2; die "config 10: the root lock does not record the inherited git dependency"; }
+ok "config 10: fetch at a virtual root writes one root lock naming the inherited git dep"
+
+(
+  cd "$ws/app"
+  run_log="$work/test10.log"
+  MONAD_ROOT="$toolchain" MONAD_HOME="$home10" "$monad" test > "$run_log" 2>&1 \
+    || { cat "$run_log" >&2; die "config 10: a member inheriting path and git deps did not test"; }
+  grep -q "1/1 total tests passed" "$run_log" \
+    || { cat "$run_log" >&2; die "config 10: the inherited-edge test did not pass"; }
+) || exit 1
+ok "config 10: a member resolves root-relative path and locked git dependencies"
+
+echo "check-external-mote: an external mote loads, checks, tests and compiles in all ten configurations"

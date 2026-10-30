@@ -920,6 +920,14 @@ def Mote.member_manifest_name (dir : String) : IO (Option String) := do {
     }
 }
 
+def Mote.dirs_contain (dirs : List String) (want : String) : Bool :=
+    match dirs {
+        List.empty => false,
+        List.cons d rest =>
+            if String.beq (Mote.norm_dir d) (Mote.norm_dir want) then true
+            else Mote.dirs_contain rest want,
+    }
+
 def Mote.names_contain (names : List String) (want : String) : Bool :=
     match names {
         List.empty => false,
@@ -999,10 +1007,18 @@ def Mote.workspace_root_found
     let w : MoteWorkspaceRoot := { dir := dir, table := root };
     if is_self then return (MoteRootLookup.root_found w)
     else do {
-        let names <- Mote.workspace_member_names dir;
-        if Mote.names_contain names name
-        then return (MoteRootLookup.root_found w)
-        else return (MoteRootLookup.root_rejected dir)
+        let dirs <- Mote.workspace_members dir;
+        // Compare the member's directory spelling first: every ordinary load
+        // takes this path and reads no manifests. The name fallback covers
+        // `""`/`.` (the user inside the member) and an absolute checkout,
+        // where the same member has two spellings.
+        if Mote.dirs_contain dirs dir then return (MoteRootLookup.root_found w)
+        else do {
+            let names <- Mote.member_names_of dirs;
+            if Mote.names_contain names name
+            then return (MoteRootLookup.root_found w)
+            else return (MoteRootLookup.root_rejected dir)
+        }
     }
 }
 

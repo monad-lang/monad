@@ -23,10 +23,10 @@ edition = "2026"
 # The paths climb two levels because this mote lives under `motes/`.
 # `motes/toolkit/mote.toml` is the sibling precedent with the same shape.
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 # `toolkit` is the whole substrate: `framing` reads a message off the stream,
 # `jsonrpc` turns it into a request or a notification, `position` converts between
@@ -34,16 +34,16 @@ path = "../../std"
 # `diagnostic` renders a checker diagnostic for an editor, and `text` finds the
 # identifier under the cursor.
 [dependencies.toolkit]
-path = "../toolkit"
+workspace = true
 
 # `lang` is the engine, not a helper: the checker, the located parse, the
 # declaration span table and `Json` all come from here. Nothing in this mote parses
 # or checks source itself.
 [dependencies.lang]
-path = "../../lang"
+workspace = true
 
 [dependencies.json]
-path = "../json"
+workspace = true
 
 # `llvm` and `runtime` are declared because `lang::module` -- where `Diagnostic`,
 # `ModuleInfoCache` and the load path live -- is not self-contained the way
@@ -53,10 +53,10 @@ path = "../json"
 # the symptom and not the cause. `motes/toolkit/mote.toml` and
 # `motes/ffi_example/mote.toml` declare the same pair for the same reason.
 [dependencies.llvm]
-path = "../../llvm"
+workspace = true
 
 [dependencies.runtime]
-path = "../../runtime"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

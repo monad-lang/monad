@@ -90,6 +90,20 @@ cat > "$staging/mote.toml" <<'TOML'
 
 [workspace]
 members = ["init", "std", "llvm", "runtime"]
+
+# Members inherit these with `workspace = true`; an inherited path is
+# root-relative, which is why the unpacked root (not the member) names them.
+[workspace.dependencies.init]
+path = "init"
+
+[workspace.dependencies.std]
+path = "std"
+
+[workspace.dependencies.llvm]
+path = "llvm"
+
+[workspace.dependencies.runtime]
+path = "runtime"
 TOML
 
 rm -f "$asset" "$neutral"

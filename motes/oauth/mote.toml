@@ -16,13 +16,13 @@ edition = "2026"
 path = "../crypto"
 
 [dependencies.http]
-path = "../http"
+workspace = true
 
 [dependencies.json]
-path = "../json"
+workspace = true
 
 [dependencies.moose]
-path = "../moose"
+workspace = true
 
 # Affine-by-default migration exception, the same one every mote carries.
 # The shapes here are `Ref`-carried mutable state (the state store and the

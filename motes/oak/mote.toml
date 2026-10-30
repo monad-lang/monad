@@ -11,23 +11,23 @@ version = "0.1.0"
 edition = "2026"
 
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 [dependencies.xml_html]
-path = "../xml_html"
+workspace = true
 
 # The pure event vocabulary shared with the browser boundary. Oak names it in
 # `Oak.Attr.on`; `web_wasm` builds it. Neither depends on the other.
 [dependencies.web_event]
-path = "../web_event"
+workspace = true
 
 # `Ssr.to_response` names `http.Response`; the view library itself never
 # depends on the server (`moon` does not depend on Oak).
 [dependencies.http]
-path = "../http"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

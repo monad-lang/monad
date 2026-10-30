@@ -18,19 +18,19 @@ name = "monadup"
 path = "src/main.mo"
 
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 [dependencies.runtime]
-path = "../../runtime"
+workspace = true
 
 [dependencies.clap]
-path = "../clap"
+workspace = true
 
 [dependencies.json]
-path = "../json"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

@@ -72,6 +72,64 @@ members = [
   "motes/gen",
 ]
 
+# Shared dependency sources, inherited by members with `workspace = true`.
+# An inherited `path` is ROOT-relative (the one difference from a member's own
+# entry). See plans/packaging/workspace-dependencies.md.
+
+[workspace.dependencies.build]
+path = "build"
+
+[workspace.dependencies.clap]
+path = "motes/clap"
+
+[workspace.dependencies.eval]
+path = "eval"
+
+[workspace.dependencies.http]
+path = "motes/http"
+
+[workspace.dependencies.init]
+path = "init"
+
+[workspace.dependencies.json]
+path = "motes/json"
+
+[workspace.dependencies.lang]
+path = "lang"
+
+[workspace.dependencies.llvm]
+path = "llvm"
+
+[workspace.dependencies.lsp]
+path = "motes/lsp"
+
+[workspace.dependencies.moose]
+path = "motes/moose"
+
+[workspace.dependencies.parsec]
+path = "motes/parsec"
+
+[workspace.dependencies.runtime]
+path = "runtime"
+
+[workspace.dependencies.serde]
+path = "motes/serde"
+
+[workspace.dependencies.std]
+path = "std"
+
+[workspace.dependencies.toml]
+path = "motes/toml"
+
+[workspace.dependencies.toolkit]
+path = "motes/toolkit"
+
+[workspace.dependencies.web_event]
+path = "motes/web_event"
+
+[workspace.dependencies.xml_html]
+path = "motes/xml_html"
+
 # Affine-by-default migration fallback (measured 2026-10-22). This is a
 # virtual workspace root, so the table covers paths with no manifest of
 # their own (`examples/`); a named mote overrides it in its own mote.toml.

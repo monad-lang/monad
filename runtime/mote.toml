@@ -14,10 +14,10 @@ edition = "2026"
 path = "src/lib.mo"
 
 [dependencies.init]
-path = "../init"
+workspace = true
 
 [dependencies.std]
-path = "../std"
+workspace = true
 
 [dependencies.llvm]
-path = "../llvm"
+workspace = true

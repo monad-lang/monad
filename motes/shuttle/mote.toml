@@ -7,22 +7,22 @@ version = "0.1.0"
 edition = "2026"
 
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 [dependencies.json]
-path = "../json"
+workspace = true
 
 [dependencies.serde]
-path = "../serde"
+workspace = true
 
 [dependencies.http]
-path = "../http"
+workspace = true
 
 [dependencies.moose]
-path = "../moose"
+workspace = true
 
 [dependencies.openai]
 path = "../openai"
@@ -31,10 +31,10 @@ path = "../openai"
 path = "../anthropic"
 
 [dependencies.clap]
-path = "../clap"
+workspace = true
 
 [dependencies.parsec]
-path = "../parsec"
+workspace = true
 
 [dependencies.mcp_client]
 path = "../mcp_client"

@@ -10,16 +10,16 @@ version = "0.1.0"
 edition = "2026"
 
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 # `Json` is the value type everywhere: tool arguments, tool schemas,
 # response decoding. There is no second JSON-shaped ADT and there will
 # not be one.
 [dependencies.json]
-path = "../json"
+workspace = true
 
 # The shared protocol substrate: `framing.mo`'s newline-delimited mode
 # (where a message ends) and `jsonrpc.mo`'s request encoders (how a
@@ -27,7 +27,7 @@ path = "../json"
 # own imports resolve inside `json` and `std`, both declared above, so
 # this mote needs no edge on toolkit's heavier siblings.
 [dependencies.toolkit]
-path = "../toolkit"
+workspace = true
 
 # The language runtime whose C functions this mote's compiled binaries
 # link (`monad_proc_*` from the piped-subprocess natives). Declared so a
@@ -37,7 +37,7 @@ path = "../toolkit"
 # own manifest is the precedent for a mote declaring the toolchain's
 # runtime explicitly.
 [dependencies.runtime]
-path = "../../runtime"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

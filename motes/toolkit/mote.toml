@@ -23,10 +23,10 @@ edition = "2026"
 # `motes/ffi_example/mote.toml` is the precedent, and it declares the same
 # five dependencies in the same form.
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 # `lang` is here for its `Json`, which `jsonrpc.mo` parses into and writes out
 # of, and for its `Diagnostic`, which `diagnostic.mo` converts to the wire.
@@ -36,10 +36,10 @@ path = "../../std"
 # check Monad source in the first place. What it costs is test load time,
 # since a mote's whole dependency closure loads to run one test file.
 [dependencies.lang]
-path = "../../lang"
+workspace = true
 
 [dependencies.json]
-path = "../json"
+workspace = true
 
 # `llvm` and `runtime` are declared because `lang::module` -- where `Diagnostic`
 # lives -- is not self-contained the way `lang::json` is: the compiler's own
@@ -48,10 +48,10 @@ path = "../json"
 # `module not found: llvm.strmap`, which names the symptom and not the cause.
 # `motes/ffi_example` declares the same pair for the same reason.
 [dependencies.llvm]
-path = "../../llvm"
+workspace = true
 
 [dependencies.runtime]
-path = "../../runtime"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

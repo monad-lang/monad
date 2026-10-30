@@ -20,10 +20,10 @@ edition = "2026"
 # `Mote.discover` return none -- silently turning this mote's declared-deps
 # check off rather than failing.
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

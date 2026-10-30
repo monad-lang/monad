@@ -12,36 +12,36 @@ name = "monad"
 path = "src/main.mo"
 
 [dependencies.init]
-path = "../init"
+workspace = true
 
 [dependencies.std]
-path = "../std"
+workspace = true
 
 # Argument parsing, which used to be this mote's own `src/args.mo`. `main.mo`
 # is the one consumer here; the library moved out so a consumer needing only
 # an argv parser does not pull the whole compiler in. `--jobs`' I64 validation
 # is the clap parser's now, so `parsec` is no longer a dependency.
 [dependencies.clap]
-path = "../motes/clap"
+workspace = true
 
 # The build orchestrator: input hashing and the artifact store.
 [dependencies.build]
-path = "../build"
+workspace = true
 
 [dependencies.lang]
-path = "../lang"
+workspace = true
 
 # The shared evaluator behind `monad eval` and `monad repl`: `eval::file`'s
 # filesystem entry plus (for the REPL) `eval::session`. The recipe itself
 # is `eval::run`, which the browser engine imports too.
 [dependencies.eval]
-path = "../eval"
+workspace = true
 
 [dependencies.llvm]
-path = "../llvm"
+workspace = true
 
 [dependencies.runtime]
-path = "../runtime"
+workspace = true
 
 # The language server, which the binary's `lsp` subcommand starts. It is a
 # dependency of THIS mote and not of `lang`, because it is the other end of
@@ -52,7 +52,7 @@ path = "../runtime"
 # and a manifest it cannot parse disables the declared-deps check silently
 # instead of failing.
 [dependencies.lsp]
-path = "../motes/lsp"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default

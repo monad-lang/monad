@@ -11,13 +11,13 @@ version = "0.1.0"
 edition = "2026"
 
 [dependencies.lang]
-path = "../../lang"
+workspace = true
 
 [dependencies.llvm]
-path = "../../llvm"
+workspace = true
 
 [dependencies.runtime]
-path = "../../runtime"
+workspace = true
 
 # The C libraries this mote links against. A build property of the
 # PACKAGE: `sin` lives in libm, and that is true of the mote, not of the

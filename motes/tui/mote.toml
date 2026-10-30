@@ -11,17 +11,17 @@ edition = "2026"
 # `init` and `std` are ambient and need no entry; declared anyway because
 # every other manifest here declares them. See motes/parsec/mote.toml.
 [dependencies.init]
-path = "../../init"
+workspace = true
 
 [dependencies.std]
-path = "../../std"
+workspace = true
 
 # The argument parser, for `src/tests/cli_demo.mo`'s `#[derive_cli]` demo --
 # the launch-argument pattern an application built on this library would
 # follow. This used to be a dependency on the whole `cli` mote, which dragged
 # `lang`/`llvm`/`runtime`/`build`/`lsp` in to get one attribute.
 [dependencies.clap]
-path = "../clap"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default
