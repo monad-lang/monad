@@ -75,6 +75,36 @@ def test_crash_detector_accepts_a_clean_log : IO Bool := do {
     IO.pure (match found { Option.none => true, Option.some _ => false })
 }
 
+/// A clean newest run means there is nothing to report, even when an older
+/// log is dead: that old run is not "the previous session", and reporting it
+/// on every launch is how the detector used to hide the crash that just
+/// happened (it returned the first dead file in `IO.list_dir` order).
+#[test]
+def test_crash_detector_ignores_an_older_crash_behind_a_clean_run : IO Bool := do {
+    let dir : String := temp_dir "newest_clean";
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    let _ <- write_at dir "100-999999.log" "100 INFO ev=process_start pid=999999\n101 INFO ev=submit kind=turn bytes=1\n";
+    let _ <- write_at dir "200-999998.log" "200 INFO ev=process_start pid=999998\n201 INFO ev=process_exit exit=0\n";
+    let found <- Logs.detect_crash (Path.path dir) "";
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    IO.pure (match found { Option.none => true, Option.some _ => false })
+}
+
+/// A dead newest run is the report, and its path is the newest one.
+#[test]
+def test_crash_detector_reports_the_newest_dead_log : IO Bool := do {
+    let dir : String := temp_dir "newest_dead";
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    let _ <- write_at dir "100-999999.log" "100 INFO ev=process_start pid=999999\n101 INFO ev=process_exit exit=0\n";
+    let _ <- write_at dir "200-999998.log" "200 INFO ev=process_start pid=999998\n201 INFO ev=submit kind=turn bytes=1\n";
+    let found <- Logs.detect_crash (Path.path dir) "";
+    let _ <- exec_cmd "rm" ["-rf", dir];
+    IO.pure (match found {
+        Option.some msg => String.contains msg "200-999998.log",
+        Option.none => false,
+    })
+}
+
 #[test]
 def test_finish_writes_the_exit_marker : IO Bool := do {
     let dir : String := temp_dir "finish";

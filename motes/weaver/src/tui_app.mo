@@ -1389,10 +1389,37 @@ def progress_live (log : Option Logger) (store : Option StoreState) (frag : Stri
     if String.starts_with "retrying" frag
     then Logs.warn log (String.concat "ev=provider_retry " frag)
     else if String.starts_with "\u{1}activity\u{2}" frag
-    then write_activity store frag
+    then activity_step log store frag
     else if String.starts_with "\u{1}thinking\u{2}" frag
     then append_thinking store frag
     else persist_chunk store frag
+
+/// The tool name in an activity fragment of `phase` (`start`/`end`), or
+/// none for any other payload.
+pub def activity_name (frag : String) (phase : String) : Option String :=
+    let head : String := "\u{1}activity\u{2}" ++ phase ++ "\u{2}" in
+    if String.starts_with head frag
+    then Option.some (String.drop (String.length head) frag)
+    else Option.none
+
+/// Record a tool's phase at info. The crash detector can only report the
+/// log's LAST line, so this is what makes it name the tool instead of just
+/// the submit when a turn dies mid-dispatch.
+def log_activity (log : Option Logger) (frag : String) : IO Unit :=
+    match activity_name frag "start" {
+        Option.some name => Logs.info log ("ev=tool_start name=" ++ name),
+        Option.none => match activity_name frag "end" {
+            Option.some name => Logs.info log ("ev=tool_end name=" ++ name),
+            Option.none => IO.pure unit,
+        },
+    }
+
+/// An activity fragment's two jobs: the crash record's event, and the live
+/// row's latest phase.
+def activity_step (log : Option Logger) (store : Option StoreState) (frag : String) : IO Unit := do {
+    log_activity log frag;
+    write_activity store frag
+}
 
 /// The activity feed: only the latest event matters, so it is
 /// overwritten rather than appended.

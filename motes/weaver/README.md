@@ -264,12 +264,16 @@ retries, subagent events and `process_exit`. `WEAVER_LOG` sets the level
 the directory, `WEAVER_DEBUG_LOG` one exact file, and
 `WEAVER_LOG_FORMAT=json` switches every line to one JSON object
 (`{"fields":{...},"level":"INFO","msg":"...","ts":...}`) for machine
-consumption. API keys, prompts and file contents are never logged. A run that dies without `process_exit`
-is reported by the next launch (`warning: previous session ended
-unexpectedly (log: …)`) and logged as `crash_detected`; `/log` prints the
-newest log's path, last 20 lines and any crash note. The runtime has no
-signal handler/backtrace, so the last logged event is the crash-location
-evidence.
+consumption. API keys, prompts and file contents are never logged. Each
+tool dispatch logs `ev=tool_start name=…` / `ev=tool_end name=…`, so the
+last event names the tool when a turn dies mid-dispatch. A run that dies
+without `process_exit` is reported by the next launch (`warning: previous
+session ended unexpectedly (log: …)`) and logged as `crash_detected` --
+the NEWEST run's log only: an older dead log is not "the previous
+session", and reporting it on every launch used to hide the run that had
+just crashed. `/log` prints the newest log's path, last 20 lines and any
+crash note. The runtime has no signal handler/backtrace, so the last
+logged event is the crash-location evidence.
 
 ## Subagents (design)
 

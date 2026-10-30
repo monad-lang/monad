@@ -192,30 +192,34 @@ def crash_of (p : Path) : IO (Option String) := do {
     }
 }
 
-#[terminating]
-def detect_one (p : Path) (rest : List Path) (current : String) : IO (Option String) := do {
-    let c <- crash_of p;
-    detect_go rest current c
-}
-
+/// The newest log path other than `current`, by its `epoch-pid.log` name
+/// (the epoch is seconds, so the names sort like their run times).
+/// `IO.list_dir`'s order is the filesystem's, not time's -- scanning for the
+/// first dead file reported whichever old log the directory happened to
+/// list first, on every launch, and hid the crash that had just happened.
 #[partial]
-def detect_go (files : List Path) (current : String) (acc : Option String) : IO (Option String) :=
+def newest_go (files : List Path) (current : String) (best : String) : String :=
     match files {
-        List.empty => IO.pure acc,
+        List.empty => best,
         List.cons p rest =>
-            if Path.to_string p == current
-            then detect_go rest current acc
-            else match acc {
-                Option.some _ => IO.pure acc,
-                Option.none => detect_one p rest current,
-            },
+            let s : String := Path.to_string p in
+            if s == current
+            then newest_go rest current best
+            else if Bool.or (String.is_empty best) (String.lt best s)
+            then newest_go rest current s
+            else newest_go rest current best,
     }
 
-/// The first dead, unclosed log in `dir` other than `current`, as a
-/// human warning. `None` when there is nothing to report.
+/// The newest run's log when it has no exit marker, as a human warning.
+/// `None` when there is nothing to report -- including when the newest run
+/// is clean: an older dead log is not "the previous session", and one run's
+/// crash should not be reported forever.
 pub def Logs.detect_crash (dir : Path) (current : String) : IO (Option String) := do {
     let files <- IO.list_dir dir;
-    detect_go files current Option.none
+    let newest : String := newest_go files current "";
+    if String.is_empty newest
+    then IO.pure Option.none
+    else crash_of (Path.path newest)
 }
 
 // ── setup / events / queries ────────────────────────────────────────────

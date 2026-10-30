@@ -26,7 +26,7 @@ use std::path {Path, Path.of}
 use std::map {Map, BTreeMap}
 use weaver::tui_app {
     TuiApp.update, turn_never_ran, TuiApp.resume_rows, TuiApp.resume_option,
-    TuiApp.resume_action_at,
+    TuiApp.resume_action_at, activity_name,
     ResumeAction, ResumeChoice,
 }
 use weaver::commands {SessionPage, Commands.session_page}
@@ -989,3 +989,14 @@ def test_store_write_completion_starts_the_queued_line : Bool :=
                 && List.length m2.queued == 0
                 && transcript_user_contains "q" m2.transcript.tail,
     }
+
+/// The activity fragment's tool name, for the crash record's `tool_start`/
+/// `tool_end` events: the loop's `start`/`end` payload behind the reserved
+/// tag, and `none` for anything else (model text can carry the byte but the
+/// head will not match).
+#[test]
+def test_activity_name_reads_start_and_end : Bool :=
+    activity_name "\u{1}activity\u{2}start\u{2}read" "start" == Option.some "read"
+        && activity_name "\u{1}activity\u{2}end\u{2}grep" "end" == Option.some "grep"
+        && (match activity_name "\u{1}activity\u{2}end\u{2}grep" "start" { Option.none => true, Option.some _ => false })
+        && (match activity_name "plain model text" "start" { Option.none => true, Option.some _ => false })
