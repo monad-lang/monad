@@ -177,8 +177,9 @@ once a call's types are solved, every `[C A]` it declares needs a matching
 instance, or the call is a `no instance of …` error. That includes `[Copy A]`,
 which never becomes a dictionary parameter — so `over [Copy S] (ln : Lens S A)
 …` rejects a structure with no `Copy` instance instead of duplicating it
-anyway. A caller that is itself generic (`[Copy T]` forwarding its own
-parameter) is not decidable and stays accepted.
+anyway. A bare reference (`let f : S -> S := op`) is the same obligation: it
+is a partial application. A caller that is itself generic (`[Copy T]`
+forwarding its own parameter) is not decidable and stays accepted.
 
 Two caveats matter. **Nothing frees memory yet.** Codegen still emits no
 `monad_release`, `Shared` is boxed rather than erased, and `String` is

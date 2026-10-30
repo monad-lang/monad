@@ -795,7 +795,11 @@ def reify_ordinary_dict_args (name : NamePath) (k : I64) (hints : List String) (
 /// A BARE reference to an ordinary constrained def (`op` in
 /// `let x : Id I64 := op in ...`) needs the same dict argument a call
 /// site gets; with no value arguments, the expected type is the only
-/// evidence. Unchanged wherever it can't resolve.
+/// evidence. Unchanged wherever it can't resolve -- except that a
+/// reference whose dictionary IS decidable and has no instance is the
+/// same `missing_instance` error an applied call now reports (a bare
+/// reference is just a partial application, and leaving it alone made the
+/// value usable with a defaulted dictionary).
 def reify_bare_constrained_ref (name : NamePath) (declared : Term) (expected_type : Term) (scope : Scope) (locals : LocalScope) (dbg : DebugName) : Result TypeError TypedTerm :=
     let plain : Result TypeError TypedTerm := ok (mk_typed (Term.var sentinel dbg) declared) in
     let k : I64 := count_dict_pis declared in
@@ -817,7 +821,13 @@ def reify_bare_constrained_ref (name : NamePath) (declared : Term) (expected_typ
                 if I64.beq (List.length dict_args) k
                 then ok (mk_typed (rebuild_call (Term.var sentinel dbg) dict_args) dict_free)
                 else plain,
-            Option.none => plain,
+            Option.none =>
+                // `term_peel`'d, so the carrier this check derives is the
+                // same one `dict_args_for_constraints` was just given.
+                match missing_constraint_error name bindings List.empty (term_peel expected_type) scope locals {
+                    Option.some e => err e,
+                    Option.none => plain,
+                },
         }
 
 /// Does this call's own nested constraint dictionary reference the
