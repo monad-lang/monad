@@ -9,8 +9,12 @@ pub use lib::server {
     Server.serve, Server.serve_result, Server.serve_concurrent, Server.static,
     Server.handle_connection, Server.serve_connection,
     Server.max_keep_alive_requests, Server.max_header_bytes, Server.max_body_bytes,
-    ServerConfig, ServerConfig.default, ServerConfig.on, ServerHandle,
+    ServerConfig, ServerConfig.default, ServerConfig.on, ServerConfig.with_host,
+    ServerConfig.with_timeouts, ServerConfig.with_limits, ServerConfig.dev,
+    ServerHandle,
     Server.run, Server.run_response, Server.start, Server.wait, Server.shutdown,
+    ServerHandleT, Server.run_t, Server.run_with, Server.start_t, Server.wait_t,
+    Server.shutdown_t, Server.plain_transport, Server.keep_alive_with,
 }
 
 pub use lib::handler {

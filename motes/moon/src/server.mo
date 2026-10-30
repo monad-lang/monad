@@ -32,22 +32,32 @@
 /// not a silent one. A real fix means a socket read deadline, which the IO
 /// layer does not expose yet.
 
-use std::concurrent::fiber {Fiber, FiberError, FiberError.message, await_fiber, forkIO}
-use std::list {List.length}
-use std::stream {Stream, FdStream}
-use http::types {
-  Transport, Transport.read_bytes, Transport.write_bytes,
-  Body, Body.is_stream, Headers, Headers.get_all, Method, Request, Response,
-  Status.bad_request, Status.internal_server_error, Status.not_found, http1_0,
-  http1_1,
+use std::concurrent::fiber {
+  Fiber, FiberError, FiberError.message, await_fiber, cancel_fiber, forkIO,
+  pollFiber,
 }
-use http::strings {Strings.drop_bytes, Strings.parse_i64}
+use std::concurrent::combine {sleepIO}
+use std::list {List.length}
+use std::ref {Ref, Ref.get, Ref.new, Ref.set, Ref.update}
+use std::stream {Stream, FdStream, FdStream.set_timeout}
+use http::types {
+  Transport, Transport.close, Transport.read_bytes, Transport.wait_read,
+  Transport.write_bytes, Body, Body.is_stream, Framing, Headers, Headers.get,
+  Headers.get_all, Method, Request, Response, Status.bad_request,
+  Status.expectation_failed, Status.internal_server_error, Status.not_found,
+  Status.payload_too_large, Status.request_header_fields_too_large,
+  Status.request_timeout, http1_0, http1_1,
+}
+use http::strings {Strings.drop_bytes, Strings.parse_i64, Strings.split_on}
 use http::wire {
-  Wire.find_body_start, Wire.format_response, Wire.format_response_head,
-  Wire.frame_request, Wire.head_headers, Wire.parse_request,
-  Wire.response_has_body, Wire.response_head_chunked, Wire.take_bytes,
+  Wire.chunk_step, Wire.concat_chunks, Wire.continue_response, Wire.find_body_start,
+  Wire.format_response, Wire.format_response_head, Wire.frame_request,
+  Wire.head_headers, Wire.parse_request, Wire.parse_request_head_strict,
+  Wire.request_framing, Wire.response_has_body, Wire.response_head_chunked,
+  Wire.take_bytes,
 }
 use lib::handler {Handler.try}
+use lib::handler_t {HandlerT, HandlerT.run_io, HttpError, HttpError.to_response}
 use http::body_io {Body.write_chunked}
 use lib::static_files {Static.handler, StaticConfig.default}
 
@@ -202,11 +212,24 @@ pub def Server.max_keep_alive_requests : I64 := 100
 def Server.header_has_token (name : String) (token : String) (headers : Headers) : Bool :=
   Server.list_has_token (Headers.get_all name headers) token
 
+#[terminating]
+def Server.any_token (parts : List String) (token : String) : Bool :=
+  match parts {
+    List.empty => false,
+    List.cons p rest =>
+      if String.beq (String.to_lowercase (String.trim p)) token
+      then true
+      else Server.any_token rest token
+  }
+
+/// Split comma-separated token lists: `Connection: close, Foo` still says
+/// close, which a whole-value comparison misses.
+#[terminating]
 def Server.list_has_token (values : List String) (token : String) : Bool :=
   match values {
     List.empty => false,
     List.cons v rest =>
-      if String.beq (String.to_lowercase (String.trim v)) token
+      if Server.any_token (Strings.split_on "," v) token
       then true
       else Server.list_has_token rest token
   }
@@ -218,8 +241,8 @@ def Server.list_has_token (values : List String) (token : String) : Bool :=
 /// closes it unless the peer asks for keep-alive. An explicit
 /// `Connection: close` wins in either version, and the request cap closes
 /// regardless.
-def Server.keep_alive (req : Request) (served : I64) : Bool :=
-  if Bool.not (I64.gt Server.max_keep_alive_requests served)
+pub def Server.keep_alive_with (max_keep_alive : I64) (req : Request) (served : I64) : Bool :=
+  if Bool.not (I64.gt max_keep_alive served)
   then false
   else if Server.header_has_token "connection" "close" req.headers
   then false
@@ -228,6 +251,9 @@ def Server.keep_alive (req : Request) (served : I64) : Bool :=
       HttpVersion.http1_1 => true,
       HttpVersion.http1_0 => Server.header_has_token "connection" "keep-alive" req.headers
     }
+
+def Server.keep_alive (req : Request) (served : I64) : Bool :=
+  Server.keep_alive_with Server.max_keep_alive_requests req served
 
 /// Mark a response as the last one on its connection.
 ///
@@ -434,18 +460,59 @@ pub struct ServerConfig {
   host : String,
   port : U16,
   max_in_flight : I64,
-  max_keep_alive : I64
+  max_keep_alive : I64,
+  /// The whole head must arrive within this many milliseconds.
+  head_timeout_ms : I64,
+  /// The whole body must arrive within this many milliseconds.
+  body_timeout_ms : I64,
+  /// A keep-alive connection may sit idle this long before it is closed.
+  idle_timeout_ms : I64,
+  /// Backstop for a blocked write (SO_SNDTIMEO).
+  write_timeout_ms : I64,
+  max_header_bytes : I64,
+  max_header_count : I64,
+  max_body_bytes : I64,
+  /// When false, an `HttpError`'s detail body is replaced by a canned one.
+  expose_errors : Bool,
+  dev_mode : Bool
 }
 
 pub def ServerConfig.default : ServerConfig :=
   let cfg : ServerConfig :=
-    { host := "0.0.0.0", port := 8080u16, max_in_flight := 1, max_keep_alive := 100 } in
+    { host := "0.0.0.0", port := 8080u16, max_in_flight := 32i64,
+      max_keep_alive := 100i64, head_timeout_ms := 10000i64,
+      body_timeout_ms := 30000i64, idle_timeout_ms := 15000i64,
+      write_timeout_ms := 30000i64, max_header_bytes := 32768i64,
+      max_header_count := 100i64, max_body_bytes := 8388608i64,
+      expose_errors := false, dev_mode := false } in
   cfg
 
 pub def ServerConfig.on (port : U16) : ServerConfig :=
   let base := ServerConfig.default in
   let cfg : ServerConfig := { base with port := port } in
   cfg
+
+pub def ServerConfig.with_host (host : String) (cfg : ServerConfig) : ServerConfig :=
+  let cfg2 : ServerConfig := { cfg with host := host } in cfg2
+
+pub def ServerConfig.with_timeouts (head_ms : I64) (body_ms : I64)
+    (idle_ms : I64) (write_ms : I64) (cfg : ServerConfig) : ServerConfig :=
+  let cfg2 : ServerConfig :=
+    { cfg with head_timeout_ms := head_ms, body_timeout_ms := body_ms,
+               idle_timeout_ms := idle_ms, write_timeout_ms := write_ms } in
+  cfg2
+
+pub def ServerConfig.with_limits (header_bytes : I64) (header_count : I64)
+    (body_bytes : I64) (cfg : ServerConfig) : ServerConfig :=
+  let cfg2 : ServerConfig :=
+    { cfg with max_header_bytes := header_bytes, max_header_count := header_count,
+               max_body_bytes := body_bytes } in
+  cfg2
+
+pub def ServerConfig.dev (cfg : ServerConfig) : ServerConfig :=
+  let cfg2 : ServerConfig :=
+    { cfg with expose_errors := true, dev_mode := true } in
+  cfg2
 
 /// A running server: the listener to close for shutdown and the accept-loop
 /// fiber to await.
@@ -601,3 +668,679 @@ def Server.serve_concurrent_loop (handler : Request -> IO Response) (listener : 
     }
   }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Transformer server (HandlerT) — the hardened path.
+//
+// The original `serve`/`run`/`start` above stay exactly as they were. This
+// path adds what they cannot: per-request deadlines, a head-first reader
+// (so `Expect: 100-continue` works and a body is read exactly once), strict
+// Host/target parsing, a `Transport` factory (TLS is a hook, not a
+// dependency), and continuous acceptance instead of batch draining.
+//
+// Every `let x <- ...` sits at the top level of a def, never inside a match
+// arm: that shape is what the parser rejects (and the checker mis-handles).
+// ════════════════════════════════════════════════════════════════════════
+
+pub struct ServerHandleT {
+  listener : FdStream,
+  fiber : Fiber Unit,
+  stop : Ref Bool,
+  live : Ref (List (Fiber Unit))
+}
+
+// ── deadlines ───────────────────────────────────────────────────────────
+
+/// One read, waiting until `deadline` (absolute milliseconds). `ok none` is
+/// EOF; `err "timeout"` is a missed deadline.
+def Server.read_some (t : Transport) (max : I64) (deadline : I64) :
+    IO (Result String (Option (List U8))) := do {
+  let now <- IO.current_time;
+  let remaining := I64.sub deadline now;
+  if I64.lt remaining 1i64
+  then IO.pure (Result.err "timeout")
+  else do {
+    let ready <- Transport.wait_read t remaining;
+    match ready {
+      Result.err e => IO.pure (Result.err e.message),
+      Result.ok is_ready =>
+        if Bool.not is_ready
+        then IO.pure (Result.err "timeout")
+        else do {
+          let r <- Transport.read_bytes t max;
+          match r {
+            Result.err e => IO.pure (Result.err e),
+            Result.ok bytes => IO.pure (Result.ok (Option.some bytes))
+          }
+        }
+    }
+  }
+}
+
+// ── head-first request reader ──────────────────────────────────────────
+
+def Server.head_eof (carry : List U8) :
+    IO (Result String (Option (Pair (List U8) (List U8)))) :=
+  if List.is_empty carry
+  then IO.pure (Result.ok Option.none)
+  else IO.pure (Result.err "connection closed mid-head")
+
+#[terminating]
+def Server.read_head_more (t : Transport) (carry : List U8) (deadline : I64)
+    (max_bytes : I64) : IO (Result String (Option (Pair (List U8) (List U8)))) := do {
+  let read <- Server.read_some t 4096i64 deadline;
+  match read {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok opt =>
+      match opt {
+        Option.none => Server.head_eof carry,
+        Option.some chunk =>
+          if List.is_empty chunk
+          then Server.head_eof carry
+          else Server.read_head t (List.append carry chunk) deadline max_bytes
+      }
+  }
+}
+
+/// Read through the CRLFCRLF. The head is capped small, so the append here
+/// is bounded; the body is handled separately and never re-parsed.
+#[terminating]
+def Server.read_head (t : Transport) (carry : List U8) (deadline : I64)
+    (max_bytes : I64) : IO (Result String (Option (Pair (List U8) (List U8)))) :=
+  match Wire.find_body_start carry {
+    Option.some n =>
+      let head := Wire.take_bytes n carry in
+      let rest := Strings.drop_bytes n carry in
+      IO.pure (Result.ok (Option.some (Pair.pair head rest))),
+    Option.none =>
+      if I64.gt (List.length carry) max_bytes
+      then IO.pure (Result.err "header block too large")
+      else Server.read_head_more t carry deadline max_bytes
+  }
+
+/// Read exactly `n` body bytes, consuming from `carry` first. Chunks are
+/// accumulated in reverse and flattened once, so a large body is O(n).
+#[terminating]
+def Server.read_exact_loop (t : Transport) (rest : List U8) (remaining : I64)
+    (deadline : I64) (chunks : List (List U8)) :
+    IO (Result String (Pair (List U8) (List U8))) :=
+  if I64.lt remaining 1i64
+  then
+    let body := Wire.concat_chunks (List.reverse chunks) in
+    IO.pure (Result.ok (Pair.pair body rest))
+  else do {
+    let max_read := if I64.lt 65536i64 remaining then remaining else 65536i64;
+    let read <- Server.read_some t max_read deadline;
+    match read {
+      Result.err e => IO.pure (Result.err e),
+      Result.ok opt =>
+        match opt {
+          Option.none => IO.pure (Result.err "connection closed before Content-Length bytes"),
+          Option.some chunk =>
+            if List.is_empty chunk
+            then IO.pure (Result.err "connection closed before Content-Length bytes")
+            else
+              let n := List.length chunk in
+              Server.read_exact_loop t rest (I64.sub remaining n) deadline
+                (List.cons chunk chunks)
+        }
+    }
+  }
+
+def Server.read_exact_body (t : Transport) (carry : List U8) (n : I64)
+    (deadline : I64) : IO (Result String (Pair Body (List U8))) := do {
+  let have := List.length carry;
+  let take_n := if I64.lt have n then have else n;
+  let part := Wire.take_bytes take_n carry;
+  let rest := Strings.drop_bytes take_n carry;
+  let remaining := I64.sub n take_n;
+  let chunks : List (List U8) :=
+    if List.is_empty part then List.empty else List.cons part List.empty;
+  let r <- Server.read_exact_loop t rest remaining deadline chunks;
+  match r {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair bytes rest2 =>
+          let body : Body :=
+            if List.is_empty bytes then Body.empty else Body.bytes bytes in
+          IO.pure (Result.ok (Pair.pair body rest2))
+      }
+  }
+}
+
+/// Continue a chunked decode after a read. Kept out of `read_chunked_loop`'s
+/// match so every bind stays at a def's top level.
+#[terminating]
+def Server.read_chunked_more (t : Transport) (pending : List U8)
+    (chunks : List (List U8)) (total : I64) (encoded : I64) (deadline : I64)
+    (max_body : I64) : IO (Result String (Pair Body (List U8))) := do {
+  let read <- Server.read_some t 65536i64 deadline;
+  match read {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok opt =>
+      match opt {
+        Option.none => IO.pure (Result.err "chunked body ended before terminal chunk"),
+        Option.some chunk =>
+          if List.is_empty chunk
+          then IO.pure (Result.err "chunked body ended before terminal chunk")
+          else
+            let encoded2 := I64.add encoded (List.length chunk) in
+            if I64.gt encoded2 max_body
+            then IO.pure (Result.err "body too large")
+            else Server.read_chunked_loop t pending chunk chunks total encoded2
+              deadline max_body
+      }
+  }
+}
+
+/// Decode a chunked body incrementally. `pending` is the previous step's
+/// undecoded tail; `incoming` is what was just read. The encoded and decoded
+/// totals are both capped, so chunk metadata cannot buy unbounded buffering.
+#[terminating]
+def Server.read_chunked_loop (t : Transport) (pending : List U8) (incoming : List U8)
+    (chunks : List (List U8)) (total : I64) (encoded : I64) (deadline : I64)
+    (max_body : I64) : IO (Result String (Pair Body (List U8))) :=
+  match Wire.chunk_step pending incoming {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair state leftover =>
+          match state {
+            Pair.pair done out =>
+              let total2 := I64.add total (List.length out) in
+              let chunks2 := List.cons out chunks in
+              if I64.gt total2 max_body
+              then IO.pure (Result.err "body too large")
+              else if done
+              then
+                let bytes := Wire.concat_chunks (List.reverse chunks2) in
+                let body : Body :=
+                  if List.is_empty bytes then Body.empty else Body.bytes bytes in
+                IO.pure (Result.ok (Pair.pair body leftover))
+              else Server.read_chunked_more t leftover chunks2 total2 encoded deadline max_body
+          }
+      }
+  }
+
+def Server.expectation (headers : Headers) : Option String :=
+  match Headers.get "expect" headers {
+    Option.none => Option.none,
+    Option.some v => Option.some (String.to_lowercase (String.trim v))
+  }
+
+def Server.expect_continue (headers : Headers) : Bool :=
+  match Server.expectation headers {
+    Option.some v => String.beq v "100-continue",
+    Option.none => false
+  }
+
+def Server.expect_unsupported (headers : Headers) : Bool :=
+  match Server.expectation headers {
+    Option.some v => Bool.not (String.beq v "100-continue"),
+    Option.none => false
+  }
+
+def Server.maybe_continue (t : Transport) (headers : Headers) : IO Unit := do {
+  if Server.expect_continue headers
+  then do {
+    let _ <- Transport.write_bytes t Wire.continue_response;
+    return unit
+  }
+  else return unit
+}
+
+def Server.with_body (req : Request) (body : Body) (rest : List U8) :
+    Result String (Option (Pair Request (List U8))) :=
+  let req2 : Request := { req with body := body } in
+  Result.ok (Option.some (Pair.pair req2 rest))
+
+def Server.read_cl_request (cfg : ServerConfig) (t : Transport) (req : Request)
+    (carry : List U8) (n : I64) (deadline : I64) :
+    IO (Result String (Option (Pair Request (List U8)))) := do {
+  Server.maybe_continue t req.headers;
+  let r <- Server.read_exact_body t carry n deadline;
+  match r {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair body rest => IO.pure (Server.with_body req body rest)
+      }
+  }
+}
+
+def Server.read_chunked_request (cfg : ServerConfig) (t : Transport) (req : Request)
+    (carry : List U8) (deadline : I64) :
+    IO (Result String (Option (Pair Request (List U8)))) := do {
+  Server.maybe_continue t req.headers;
+  let encoded := List.length carry;
+  let r <- Server.read_chunked_loop t List.empty carry List.empty 0i64 encoded
+    deadline cfg.max_body_bytes;
+  match r {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok pr =>
+      match pr {
+        Pair.pair body rest => IO.pure (Server.with_body req body rest)
+      }
+  }
+}
+
+def Server.read_request_body (cfg : ServerConfig) (t : Transport) (req : Request)
+    (framing : Framing) (carry : List U8) :
+    IO (Result String (Option (Pair Request (List U8)))) := do {
+  if Server.expect_unsupported req.headers
+  then IO.pure (Result.err "expectation failed")
+  else do {
+    let now <- IO.current_time;
+    let deadline := I64.add now cfg.body_timeout_ms;
+    match framing {
+      Framing.no_body =>
+        IO.pure (Result.ok (Option.some (Pair.pair req carry))),
+      Framing.until_eof =>
+        IO.pure (Result.err "request body cannot be read-to-close"),
+      Framing.content_length n =>
+        if I64.gt n cfg.max_body_bytes
+        then IO.pure (Result.err "body too large")
+        else Server.read_cl_request cfg t req carry n deadline,
+      Framing.chunked =>
+        Server.read_chunked_request cfg t req carry deadline
+    }
+  }
+}
+
+def Server.read_request_t (cfg : ServerConfig) (t : Transport) (carry : List U8) :
+    IO (Result String (Option (Pair Request (List U8)))) := do {
+  let now <- IO.current_time;
+  let deadline := I64.add now cfg.head_timeout_ms;
+  let head_res <- Server.read_head t carry deadline cfg.max_header_bytes;
+  match head_res {
+    Result.err e => IO.pure (Result.err e),
+    Result.ok opt =>
+      match opt {
+        Option.none => IO.pure (Result.ok Option.none),
+        Option.some pr =>
+          match pr {
+            Pair.pair head rest =>
+              match Wire.parse_request_head_strict head {
+                Result.err e => IO.pure (Result.err e),
+                Result.ok req =>
+                  match Wire.request_framing req.headers {
+                    Result.err e => IO.pure (Result.err e),
+                    Result.ok framing =>
+                      Server.read_request_body cfg t req framing rest
+                  }
+              }
+          }
+      }
+  }
+}
+
+// ── responses ───────────────────────────────────────────────────────────
+
+def Server.reason_of (status : U16) : String :=
+  if U16.beq status Status.bad_request then "Bad Request"
+  else if U16.beq status Status.not_found then "Not Found"
+  else if U16.beq status Status.internal_server_error then "Internal Server Error"
+  else if U16.beq status Status.request_timeout then "Request Timeout"
+  else if U16.beq status Status.payload_too_large then "Payload Too Large"
+  else if U16.beq status Status.request_header_fields_too_large
+  then "Request Header Fields Too Large"
+  else if U16.beq status Status.expectation_failed then "Expectation Failed"
+  else "Error"
+
+def Server.error_status (msg : String) : U16 :=
+  if String.beq msg "timeout" then Status.request_timeout
+  else if String.beq msg "header block too large"
+    || String.beq msg "too many header fields"
+    || String.beq msg "header line too long"
+  then Status.request_header_fields_too_large
+  else if String.beq msg "body too large" then Status.payload_too_large
+  else if String.beq msg "expectation failed" then Status.expectation_failed
+  else Status.bad_request
+
+/// A response for a handler error. Without `expose_errors`, the detail body
+/// is replaced by a canned phrase; status and headers are kept.
+def Server.error_response (cfg : ServerConfig) (e : HttpError) : Response :=
+  if cfg.expose_errors
+  then HttpError.to_response e
+  else
+    let r : Response := HttpError.to_response e in
+    match r {
+      { status, headers, version, .. } =>
+        let res : Response :=
+          { status := status, headers := headers, version := version,
+            body := Body.text (Server.reason_of status) } in
+        res
+    }
+
+def Server.dispatch_t (cfg : ServerConfig) (handler : HandlerT IO Response)
+    (req : Request) : IO Response := do {
+  let r <- HandlerT.run_io handler req;
+  match r {
+    Result.ok res => IO.pure res,
+    Result.err e => IO.pure (Server.error_response cfg e)
+  }
+}
+
+def Server.write_stream_body_t (t : Transport) (res : Response)
+    (closing : Bool) : IO Bool := do {
+  let bw <- Body.write_chunked t res.body;
+  match bw {
+    Result.err _ => IO.pure false,
+    Result.ok _ => IO.pure (Bool.not closing)
+  }
+}
+
+def Server.write_stream_head_t (t : Transport) (head : List U8)
+    (res : Response) (closing : Bool) : IO Bool := do {
+  let hw <- Transport.write_bytes t head;
+  match hw {
+    Result.err _ => IO.pure false,
+    Result.ok _ => Server.write_stream_body_t t res closing
+  }
+}
+
+def Server.write_stream_response_t (t : Transport) (closing : Bool)
+    (res : Response) : IO Bool :=
+  match Wire.response_head_chunked (Server.with_connection_header closing res) {
+    Result.err _ => IO.pure false,
+    Result.ok head => Server.write_stream_head_t t head res closing
+  }
+
+def Server.write_canned_t (t : Transport) : IO Bool := do {
+  let _ <- Transport.write_bytes t (Server.canned_bytes Server.internal_error_response);
+  IO.pure false
+}
+
+def Server.write_formatted_t (t : Transport) (bytes : List U8)
+    (closing : Bool) : IO Bool := do {
+  let w <- Transport.write_bytes t bytes;
+  match w {
+    Result.err _ => IO.pure false,
+    Result.ok _ => IO.pure (Bool.not closing)
+  }
+}
+
+def Server.write_response_t (t : Transport) (closing : Bool)
+    (res : Response) : IO Bool :=
+  if Body.is_stream res.body
+  then Server.write_stream_response_t t closing res
+  else
+    match Wire.format_response (Server.with_connection_header closing res) {
+      Result.err _ => Server.write_canned_t t,
+      Result.ok bytes => Server.write_formatted_t t bytes closing
+    }
+
+def Server.write_head_canned_t (t : Transport) : IO Bool := do {
+  let _ <- Transport.write_bytes t (Server.canned_bytes Server.internal_error_response);
+  IO.pure false
+}
+
+def Server.write_head_bytes_t (t : Transport) (bytes : List U8)
+    (closing : Bool) : IO Bool := do {
+  let _ <- Transport.write_bytes t bytes;
+  IO.pure (Bool.not closing)
+}
+
+def Server.write_response_head_t (t : Transport) (closing : Bool)
+    (res : Response) : IO Bool :=
+  if Body.is_stream res.body
+  then
+    match Wire.response_head_chunked (Server.with_connection_header closing res) {
+      Result.err _ => IO.pure false,
+      Result.ok head => Server.write_head_bytes_t t head closing
+    }
+  else
+    match Wire.format_response_head (Server.with_connection_header closing res) {
+      Result.err _ => Server.write_head_canned_t t,
+      Result.ok bytes => Server.write_head_bytes_t t bytes closing
+    }
+
+def Server.write_response_for_t (t : Transport) (method : Method)
+    (closing : Bool) (res : Response) : IO Bool :=
+  if Bool.not (Wire.response_has_body method res.status)
+  then Server.write_response_head_t t closing res
+  else Server.write_response_t t closing res
+
+def Server.wait_idle (t : Transport) (ms : I64) : IO (Result String Bool) := do {
+  let r <- Transport.wait_read t ms;
+  match r {
+    Result.err e => IO.pure (Result.err e.message),
+    Result.ok b => IO.pure (Result.ok b)
+  }
+}
+
+// ── connection loop ─────────────────────────────────────────────────────
+
+#[terminating]
+def Server.serve_framed_t (cfg : ServerConfig) (handler : HandlerT IO Response)
+    (t : Transport) (req : Request) (rest : List U8) (served : I64) : IO Unit := do {
+  let keep := Server.keep_alive_with cfg.max_keep_alive req served;
+  let closing := Bool.not keep;
+  let res <- Server.dispatch_t cfg handler req;
+  let stay <- Server.write_response_for_t t req.method closing res;
+  if stay
+  then Server.serve_connection_t cfg handler t rest (I64.add served 1)
+  else Transport.close t
+}
+
+def Server.serve_parse_error_t (t : Transport) (e : String) : IO Unit := do {
+  let status := Server.error_status e;
+  let res : Response := Response.text status (Server.reason_of status);
+  let _ <- Transport.write_bytes t (Server.canned_bytes res);
+  Transport.close t
+}
+
+def Server.serve_request_t (cfg : ServerConfig) (handler : HandlerT IO Response)
+    (t : Transport) (msg : Result String (Option (Pair Request (List U8))))
+    (carry : List U8) (served : I64) : IO Unit :=
+  match msg {
+    Result.err e => Server.serve_parse_error_t t e,
+    Result.ok opt =>
+      match opt {
+        Option.none => Transport.close t,
+        Option.some pr =>
+          match pr {
+            Pair.pair req rest => Server.serve_framed_t cfg handler t req rest served
+          }
+      }
+  }
+
+#[terminating]
+def Server.serve_connection_t (cfg : ServerConfig) (handler : HandlerT IO Response)
+    (t : Transport) (carry : List U8) (served : I64) : IO Unit := do {
+  let idle_ok <-
+    if List.is_empty carry
+    then Server.wait_idle t cfg.idle_timeout_ms
+    else IO.pure (Result.ok true);
+  if Bool.not (Server.idle_ready idle_ok)
+  then Transport.close t
+  else do {
+    let msg <- Server.read_request_t cfg t carry;
+    Server.serve_request_t cfg handler t msg carry served
+  }
+}
+
+def Server.idle_ready (r : Result String Bool) : Bool :=
+  match r {
+    Result.err _ => false,
+    Result.ok b => b
+  }
+
+// ── acceptance and lifecycle ────────────────────────────────────────────
+
+#[terminating]
+def Server.reap_one (f : Fiber Unit) (rest : List (Fiber Unit))
+    (live : List (Fiber Unit)) : IO (List (Fiber Unit)) := do {
+  let p <- pollFiber f;
+  match p {
+    Option.none => Server.reap_fibers rest (List.cons f live),
+    Option.some _ => Server.reap_fibers rest live
+  }
+}
+
+#[terminating]
+def Server.reap_fibers (fibers : List (Fiber Unit)) (live : List (Fiber Unit)) :
+    IO (List (Fiber Unit)) :=
+  match fibers {
+    List.empty => IO.pure (List.reverse live),
+    List.cons f rest => Server.reap_one f rest live
+  }
+
+#[terminating]
+def Server.cancel_one (f : Fiber Unit) (rest : List (Fiber Unit)) : IO Unit := do {
+  cancel_fiber f;
+  Server.cancel_fibers rest
+}
+
+#[terminating]
+def Server.cancel_fibers (fibers : List (Fiber Unit)) : IO Unit :=
+  match fibers {
+    List.empty => IO.pure unit,
+    List.cons f rest => Server.cancel_one f rest
+  }
+
+def Server.accept_stop (listener : FdStream) (live : Ref (List (Fiber Unit))) : IO Unit := do {
+  let fibers <- Ref.get live;
+  Server.cancel_fibers fibers;
+  Stream.close listener
+}
+
+#[terminating]
+def Server.accept_continue (cfg : ServerConfig) (listener : FdStream)
+    (stop : Ref Bool) (live : Ref (List (Fiber Unit)))
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response) : IO Unit := do {
+  sleepIO 5i64;
+  Server.accept_loop_with cfg listener stop live mk_transport handler
+}
+
+#[terminating]
+def Server.accept_factory_failed (cfg : ServerConfig) (listener : FdStream)
+    (stop : Ref Bool) (live : Ref (List (Fiber Unit)))
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response) (sock : FdStream) : IO Unit := do {
+  Stream.close sock;
+  Server.accept_loop_with cfg listener stop live mk_transport handler
+}
+
+#[terminating]
+def Server.accept_fork (cfg : ServerConfig) (listener : FdStream)
+    (stop : Ref Bool) (live : Ref (List (Fiber Unit)))
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response) (t : Transport) : IO Unit := do {
+  let fiber <- forkIO (fn (_ : Unit) =>
+    Server.serve_connection_t cfg handler t List.empty 1i64);
+  let _ <- Ref.update live (fn (xs : List (Fiber Unit)) => List.cons fiber xs);
+  Server.accept_loop_with cfg listener stop live mk_transport handler
+}
+
+#[terminating]
+def Server.accept_one (cfg : ServerConfig) (listener : FdStream)
+    (stop : Ref Bool) (live : Ref (List (Fiber Unit)))
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response) (sock : FdStream) : IO Unit := do {
+  let _ <- FdStream.set_timeout sock cfg.idle_timeout_ms cfg.write_timeout_ms;
+  let mt <- mk_transport sock;
+  match mt {
+    Result.err _ => Server.accept_factory_failed cfg listener stop live mk_transport handler sock,
+    Result.ok t => Server.accept_fork cfg listener stop live mk_transport handler t
+  }
+}
+
+def Server.accept_accept_failed (cfg : ServerConfig) (listener : FdStream)
+    (stop : Ref Bool) (live : Ref (List (Fiber Unit)))
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response)
+    (still : List (Fiber Unit)) : IO Unit := do {
+  Server.cancel_fibers still;
+  Stream.close listener
+}
+
+/// Accept continuously. Finished fibers are reaped each pass; while the live
+/// count is at the cap the loop sleeps briefly instead of accepting. A slow
+/// or SSE connection therefore never blocks acceptance until the cap itself
+/// is reached.
+#[terminating]
+def Server.accept_loop_with (cfg : ServerConfig) (listener : FdStream)
+    (stop : Ref Bool) (live : Ref (List (Fiber Unit)))
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response) : IO Unit := do {
+  let stopping <- Ref.get stop;
+  if stopping
+  then Server.accept_stop listener live
+  else do {
+    let current <- Ref.get live;
+    let still <- Server.reap_fibers current List.empty;
+    Ref.set live still;
+    let count := List.length still;
+    if I64.gt count cfg.max_in_flight
+    then Server.accept_continue cfg listener stop live mk_transport handler
+    else do {
+      let accept <- IO.tcp_accept listener;
+      match accept {
+        Result.err _ => Server.accept_accept_failed cfg listener stop live mk_transport handler still,
+        Result.ok sock => Server.accept_one cfg listener stop live mk_transport handler sock
+      }
+    }
+  }
+}
+
+pub def Server.plain_transport (sock : FdStream) : IO (Result String Transport) :=
+  IO.pure (Result.ok (Transport.plain sock))
+
+def Server.start_on (cfg : ServerConfig) (handler : HandlerT IO Response)
+    (listener : FdStream) : IO (Result String ServerHandleT) := do {
+  let stop : Ref Bool <- Ref.new false;
+  let live : Ref (List (Fiber Unit)) <- Ref.new List.empty;
+  let fiber <- forkIO (fn (_ : Unit) =>
+    Server.accept_loop_with cfg listener stop live Server.plain_transport handler);
+  let h : ServerHandleT :=
+    { listener := listener, fiber := fiber, stop := stop, live := live };
+  IO.pure (Result.ok h)
+}
+
+/// Start on a fiber and return a handle whose listener can be closed.
+pub def Server.start_t (cfg : ServerConfig) (handler : HandlerT IO Response) :
+    IO (Result String ServerHandleT) := do {
+  let listen <- IO.tcp_listen_on cfg.host cfg.port;
+  match listen {
+    Result.err e => IO.pure (Result.err e.message),
+    Result.ok listener => Server.start_on cfg handler listener
+  }
+}
+
+pub def Server.wait_t (h : ServerHandleT) : IO (Result FiberError Unit) :=
+  await_fiber h.fiber
+
+pub def Server.shutdown_t (h : ServerHandleT) : IO Unit := do {
+  Ref.set h.stop true;
+  Stream.close h.listener
+}
+
+def Server.run_on (cfg : ServerConfig)
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response) (listener : FdStream) :
+    IO (Result String Unit) := do {
+  let stop : Ref Bool <- Ref.new false;
+  let live : Ref (List (Fiber Unit)) <- Ref.new List.empty;
+  Server.accept_loop_with cfg listener stop live mk_transport handler;
+  IO.pure (Result.ok unit)
+}
+
+/// Run with a per-connection transport factory. TLS is a factory
+/// (`motes/tls` currently has only a client handshake); moon never depends
+/// on it.
+pub def Server.run_with (cfg : ServerConfig)
+    (mk_transport : FdStream -> IO (Result String Transport))
+    (handler : HandlerT IO Response) : IO (Result String Unit) := do {
+  let listen <- IO.tcp_listen_on cfg.host cfg.port;
+  match listen {
+    Result.err e => IO.pure (Result.err e.message),
+    Result.ok listener => Server.run_on cfg mk_transport handler listener
+  }
+}
+
+pub def Server.run_t (cfg : ServerConfig) (handler : HandlerT IO Response) :
+    IO (Result String Unit) :=
+  Server.run_with cfg Server.plain_transport handler
