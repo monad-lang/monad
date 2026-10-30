@@ -83,6 +83,9 @@ path = "build"
 [workspace.dependencies.clap]
 path = "motes/clap"
 
+[workspace.dependencies.crypto]
+path = "motes/crypto"
+
 [workspace.dependencies.eval]
 path = "eval"
 

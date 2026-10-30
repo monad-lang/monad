@@ -15,7 +15,7 @@ workspace = true
 # program that never imports it does not load these externs and does not
 # link libcrypto. See `src/session_crypto.mo`.
 [dependencies.crypto]
-path = "../crypto"
+workspace = true
 
 # Affine-by-default migration exception (measured 2026-10-22).
 # Delete this table when the mote reaches zero violations; the default
