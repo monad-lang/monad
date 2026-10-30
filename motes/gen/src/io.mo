@@ -25,6 +25,16 @@ def head_of (args : List String) : Option String :=
         List.empty => Option.none,
     }
 
+/// Whether a bare flag (`--check`) is present. `Gen.arg` takes a value, so
+/// a switch needs its own test: `--check` is usually the LAST argument and
+/// has nothing after it.
+#[partial]
+pub def Gen.flag (args : List String) (flag : String) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons hd tl => Bool.or (String.beq hd flag) (Gen.flag tl flag),
+    }
+
 /// The AUTO-GENERATED banner: a line naming the generating tool, then each
 /// note as one comment line -- the input URLs and digests, and whatever
 /// prose the file's readers need.

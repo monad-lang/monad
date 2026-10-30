@@ -13,7 +13,7 @@
 // combine UTF-16 surrogate pairs, so an astral entity's `characters`
 // decodes to U+FFFD pairs).
 
-use gen::io {Gen.arg, Gen.banner, Gen.write_or_check}
+use gen::io {Gen.arg, Gen.banner, Gen.flag, Gen.write_or_check}
 use gen::tree {Gen.emit, Leaf, Spec, leaf, spec}
 use lang::construct {Vis, apps, con, con_app, def_text, global, i64, if_, str, var}
 use lang::types {Param}
@@ -40,7 +40,7 @@ def with_out (args : List String) (entities : String) : IO I64 :=
     match Gen.arg args "--out" {
         Option.some out => do {
             let raw <- IO.read_file (Path.path entities);
-            let code <- generate raw out (Gen.arg args "--check");
+            let code <- generate raw out (Gen.flag args "--check");
             return code
         },
         Option.none => usage,
@@ -52,28 +52,22 @@ def usage : IO I64 := do {
     return 2
 }
 
-def generate (raw : Result StreamError String) (out : String) (check : Option String) : IO I64 :=
+def generate (raw : Result StreamError String) (out : String) (check : Bool) : IO I64 :=
     match raw {
         Result.err e => fail_with (String.concat "cannot read the input: " e.message),
         Result.ok text => after_render (render text) out check,
     }
 
-def after_render (rendered : Result String String) (out : String) (check : Option String) : IO I64 :=
+def after_render (rendered : Result String String) (out : String) (check : Bool) : IO I64 :=
     match rendered {
         Result.err message => fail_with message,
-        Result.ok source => Gen.write_or_check (check_wanted check) out source,
+        Result.ok source => Gen.write_or_check check out source,
     }
 
 def fail_with (message : String) : IO I64 := do {
     let _printed <- IO.println message;
     return 1
 }
-
-def check_wanted (check : Option String) : Bool :=
-    match check {
-        Option.some _ => true,
-        Option.none => false,
-    }
 
 // --- Pure generation ---
 

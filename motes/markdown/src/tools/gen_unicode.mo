@@ -14,7 +14,7 @@
 // over codepoints, then appends the two recursive defs that walk a string:
 // they are not table-shaped, so they stay verbatim source.
 
-use gen::io {Gen.arg, Gen.banner, Gen.write_or_check}
+use gen::io {Gen.arg, Gen.banner, Gen.flag, Gen.write_or_check}
 use gen::tree {Gen.emit, Leaf, Spec, leaf, spec}
 use lang::construct {apps, con, con_app, global, if_, str, u32, var}
 use lang::types {Term}
@@ -50,7 +50,7 @@ def with_out (args : List String) (ud : String) (cf : String) : IO I64 :=
         Option.some out => do {
             let ud_raw <- IO.read_file (Path.path ud);
             let cf_raw <- IO.read_file (Path.path cf);
-            let code <- generate ud_raw cf_raw out (Gen.arg args "--check");
+            let code <- generate ud_raw cf_raw out (Gen.flag args "--check");
             return code
         },
         Option.none => usage,
@@ -63,29 +63,23 @@ def usage : IO I64 := do {
 }
 
 def generate (ud : Result StreamError String) (cf : Result StreamError String)
-    (out : String) (check : Option String) : IO I64 :=
+    (out : String) (check : Bool) : IO I64 :=
     match ud {
         Result.err e => fail_with (String.concat "cannot read UnicodeData: " e.message),
         Result.ok ud_text => after_ud ud_text cf out check,
     }
 
 def after_ud (ud_text : String) (cf : Result StreamError String)
-    (out : String) (check : Option String) : IO I64 :=
+    (out : String) (check : Bool) : IO I64 :=
     match cf {
         Result.err e => fail_with (String.concat "cannot read CaseFolding: " e.message),
-        Result.ok cf_text => Gen.write_or_check (check_wanted check) out (render ud_text cf_text),
+        Result.ok cf_text => Gen.write_or_check check out (render ud_text cf_text),
     }
 
 def fail_with (message : String) : IO I64 := do {
     let _printed <- IO.println message;
     return 3
 }
-
-def check_wanted (check : Option String) : Bool :=
-    match check {
-        Option.some _ => true,
-        Option.none => false,
-    }
 
 // --- Scanning ---
 
