@@ -13,7 +13,16 @@ use lib::run {EvalFailure, EvalOptions, EvalStage, EvalTarget, Eval.run_elaborat
 /// (warnings included), `Err` is the staged failure with its diagnostics.
 /// Byte-for-byte the vocabulary `lang::eval_run` printed before the
 /// evaluator moved here, including the warning prefix on failures.
-pub def Eval.run_file (file_path : String) (verbose : Bool) : IO (Result String String) := do {
+pub def Eval.run_file (file_path : String) (verbose : Bool) : IO (Result String String) :=
+    Eval.run_file_limited (-1) (-1) file_path verbose
+
+/// `run_file` with an explicit step budget and nesting cap; either `-1`
+/// keeps that limit off (the CLI's own semantics). Weaver's `monad_eval`
+/// passes finite ones: a non-terminating snippet then reports the evaluator's
+/// `out of fuel` as a tool error instead of pinning the turn fiber forever,
+/// and a deep one reports `recursion too deep` instead of exhausting the
+/// native stack.
+pub def Eval.run_file_limited (fuel : I64) (depth_limit : I64) (file_path : String) (verbose : Bool) : IO (Result String String) := do {
     let em_r <- elaborate_loaded_modules file_path false verbose;
     match em_r {
         Result.err e =>
@@ -23,7 +32,7 @@ pub def Eval.run_file (file_path : String) (verbose : Bool) : IO (Result String 
         Result.ok em => do {
             let mode <- Mote.affine_mode_of_path file_path;
             let options : EvalOptions :=
-                { fuel := -1, depth_limit := -1, affine := mode, label := file_path,
+                { fuel := fuel, depth_limit := depth_limit, affine := mode, label := file_path,
                   verbose := verbose, want_type := false, require_entry := false };
             let target : EvalTarget :=
                 { root := "main", context_path := ModulePath.mk [Identifier.id "main"] };

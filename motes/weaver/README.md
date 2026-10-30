@@ -126,7 +126,7 @@ foreground tool finishes, and the turn ends at the next boundary with a
 `[stopped]` line -- the partial session is kept. Background processes
 keep running and retry backoffs are not interrupted, so stop waits for
 the current call; a stalled provider read is bounded by moose's request
-timeouts instead. While a
+timeouts, and a foreground `shell` by its 300 s wall-clock cap. While a
 dialog owns stdin the loop stops reading and drawing, and the dialog's
 close forces a clear+repaint, so a confirmed prompt never lingers. An approval prompt (`manual`/`allow_edit`'s `ask`
 cells) opens a centered dialog: the diff for a `write`/`edit` pick,
@@ -219,7 +219,16 @@ compiler's own checker, and `monad_eval` runs a REPL-style scratch
 module on the self-hosted interpreter -- `def` snippets accumulate for
 the session, bare expressions get a typed `main`, and a snippet with
 `def main` runs whole. Eval is pure (I64/String natives, no IO) and
-tagged `exec`, so `allow_edit`/`manual` ask before it runs.
+tagged `exec`, so `allow_edit`/`manual` ask before it runs. Every snippet
+runs under a step budget and a nesting cap (the browser REPL's), so a
+runaway one comes back as an `out of fuel` / `recursion too deep` tool
+error instead of pinning the turn (Esc cannot interrupt the evaluator).
+
+`read` streams to a 256 KiB cap and says so, instead of loading a
+multi-GB file (or `/dev/zero`) whole and cutting afterwards. `shell` wraps its command in GNU `timeout` (300 s,
+`-k 5s`), which also puts it in its own process group -- a command that
+stops printing no longer hangs the turn, and a kill reaches its
+grandchildren.
 
 The provider decides which models exist: `/model` with no argument
 fetches its `/v1/models` list (the mock wire answers `mock` offline),

@@ -1,4 +1,4 @@
-use shuttle::tools::shell {shell_run}
+use shuttle::tools::shell {shell_run, shell_run_bounded}
 use shuttle::tools::shell_args {ShellArgs}
 use shuttle::message_types {Content}
 use init::transformers {ResultT}
@@ -90,6 +90,31 @@ def test_shell_byte_budget_truncates_before_line_cap : IO Bool := do {
     let r <- shell_command_result "yes \"$(head -c 350 /dev/zero | tr '\\0' 'a')\"";
     return (match r {
         Result.ok c => content_check c true "[output truncated at ",
+        Result.err _ => false,
+    })
+}
+
+/// A command that never prints must not hang the turn: the wall-clock cap
+/// kills the process group and the result names the timeout. The cap is 2 s
+/// here (the tool's own is 300 s), so this stays a fast test.
+#[test]
+def test_shell_timeout_kills_a_silent_command : IO Bool := do {
+    let args : ShellArgs := { command := "sleep 30" };
+    let r <- ResultT.run (shell_run_bounded 2 "s1" (ShellArgs.serialize_json args));
+    return (match r {
+        Result.ok c => content_check c true "timed out",
+        Result.err _ => false,
+    })
+}
+
+/// The cap must not disturb a command that finishes: the same entry point
+/// with a generous cap still returns the output and `is_error := false`.
+#[test]
+def test_shell_bounded_keeps_a_finishing_command : IO Bool := do {
+    let args : ShellArgs := { command := "echo quick" };
+    let r <- ResultT.run (shell_run_bounded 30 "s1" (ShellArgs.serialize_json args));
+    return (match r {
+        Result.ok c => content_check c false "quick",
         Result.err _ => false,
     })
 }

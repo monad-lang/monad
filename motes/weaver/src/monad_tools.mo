@@ -24,7 +24,7 @@ use lang::module {
     ModuleInfoCache, module_info_cache_empty, check_file_cached,
     FileCheckAndCache, FileCheckResult,
 }
-use eval::file {Eval.run_file}
+use eval::file {Eval.run_file_limited}
 use lang::mote {MoteManifest, Mote.discover}
 use std::ref {Ref, Ref.get, Ref.set}
 use std::map {Map, BTreeMap}
@@ -179,6 +179,18 @@ def check_run (cache : Ref ModuleInfoCache) (root : Option String) (id : String)
 pub def MonadCheck.tool (cache : Ref ModuleInfoCache) (root : Option String) : ToolImpl :=
     { spec := MonadCheck.spec, cap := Capability.read, run := check_run cache root }
 
+/// `monad_eval`'s step budget: the browser REPL's own figure
+/// (`motes/try_engine/src/pipeline.mo`), so a scratch snippet has the same
+/// practical reach in both places and a runaway one stops with the
+/// evaluator's clean "out of fuel" instead of pinning the turn fiber.
+pub def MonadEval.fuel : I64 := 2000000
+
+/// The nesting cap for a scratch snippet. The evaluator's per-call stack is
+/// large (the browser REPL measures ~120 KiB of wasm stack per user call);
+/// 500 user calls stays far below this backend's 128 MB, and a deeper
+/// program reports "recursion too deep" rather than overrunning it.
+pub def MonadEval.max_depth : I64 := 500
+
 // ── monad_eval ─────────────────────────────────────────────────────────
 
 def eval_schema : Json :=
@@ -207,7 +219,7 @@ def run_temp (root : Option String) (content : String) : IO (Result String Strin
     match w {
         Result.err _ => IO.pure (Result.err (String.concat "monad_eval: could not write " path)),
         Result.ok _ => do {
-            let r <- Eval.run_file path false;
+            let r <- Eval.run_file_limited MonadEval.fuel MonadEval.max_depth path false;
             let _ <- cleanup path;
             return r
         },

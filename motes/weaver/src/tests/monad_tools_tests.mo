@@ -140,3 +140,29 @@ def test_monad_eval_failure_is_an_error : IO Bool := do {
         Result.ok c => IO.pure (is_error_of c),
     }
 }
+
+/// A runaway snippet stops at the evaluator's step budget and comes back as
+/// a tool error -- not a hung turn fiber (Esc cannot interrupt it) and not a
+/// stack overrun. The plain `Eval.run_file` keeps `fuel := -1` for the CLI;
+/// this is `monad_eval`'s own bound.
+#[test]
+def test_monad_eval_is_bounded : IO Bool := do {
+    let cache <- Ref.new module_info_cache_empty;
+    let empty_buf : List String := List.empty;
+    let buf <- Ref.new empty_buf;
+    let t : ToolImpl := MonadEval.tool buf cache (Option.some "/tmp");
+    let run : String -> Json -> ResultT String IO Content := t.run;
+    let src : String := "#[partial]\ndef spin (n : I64) : I64 := spin n\n\ndef main : I64 := spin 0\n";
+    let r <- ResultT.run (run "call" (source_input src));
+    match r {
+        Result.err _ => IO.pure false,
+        Result.ok c => match c {
+            Content.tool_result _ out is_error =>
+                // Either cap may fire first: a tail-recursive spin burns
+                // fuel, a growing call chain hits the nesting cap.
+                IO.pure (Bool.and is_error
+                    (Bool.or (String.contains out "fuel") (String.contains out "recursion"))),
+            _ => IO.pure false,
+        },
+    }
+}

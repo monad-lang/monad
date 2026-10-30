@@ -1,4 +1,4 @@
-use shuttle::tools::file {read_run, write_run, edit_run, read_capped}
+use shuttle::tools::file {read_run, write_run, edit_run, read_up_to}
 use shuttle::tools::file_tools {ReadTool.spec, WriteTool.spec, EditTool.spec}
 use shuttle::tool {ToolSpec}
 use shuttle::tools::file_args {ReadArgs, WriteArgs, EditArgs}
@@ -6,7 +6,8 @@ use shuttle::message_types {Content}
 use json::json {Json}
 use json::serde_backend {}
 use init::transformers {ResultT}
-use std::io {IO.get_env}
+use std::io {IO.get_env, IO.write_file}
+use std::path {Path}
 use std::process {process_id}
 
 /// PID-qualified so two sessions' test runs sharing this filesystem's
@@ -115,16 +116,22 @@ def test_tool_specs_declare_parameter_schemas : Bool :=
 def read_big_verdict (c : Content) : Bool :=
     match c {
         Content.tool_result _ text is_error =>
-            Bool.not is_error && String.contains text "truncated:",
+            Bool.not is_error && String.contains text "truncated",
 
         _ => false,
     }
 
+/// `n` copies of `s`, built tail-recursively: `String.repeat` is a
+/// right-nested concat and takes seconds at this size.
+#[partial]
+def repeat_chunks (s : String) (n : I64) (acc : List String) : List String :=
+    if n < 1i64 then acc else repeat_chunks s (n - 1i64) (List.cons s acc)
+
 #[test]
 def test_read_caps_a_huge_file : IO Bool := do {
-    // "x" then 2-byte chars: byte 262144 lands on a continuation byte,
-    // so the cut has to back off to a character boundary.
-    let big : String := String.concat "x" (String.repeat "é" 150000i64);
+    // "x" then 2-byte chars: the 262144-byte cut lands on a lead byte with
+    // no continuation, so the cut has to back off to a character boundary.
+    let big : String := String.concat "x" (String.concat_list (repeat_chunks "é" 131073i64 List.empty));
     let args : WriteArgs := { path := scratch_path "big.txt", content := big };
     let wr <- ResultT.run (write_run "w2" (WriteArgs.serialize_json args));
     match wr {
@@ -140,12 +147,43 @@ def test_read_caps_a_huge_file : IO Bool := do {
     }
 }
 
-/// The cut backs off to a character boundary: `String.slice` answers ""
-/// when its end offset is a UTF-8 continuation byte, which would return
-/// an empty payload for a large non-ASCII file.
+/// The byte cap cuts on a CHARACTER boundary: `é` is two bytes (C3 A9), so a
+/// 2-byte cap would end mid-character. The reader backs off to "x" and reports
+/// that the file continued.
 #[test]
-def test_read_cap_keeps_a_utf8_payload : Bool :=
-    let s : String := String.concat "x" (String.repeat "é" 10i64) in
-    // Byte 2 is a continuation byte (é = C3 A9), so a naive cut at 2 is "".
-    let out : String := read_capped s 2i64 in
-    String.contains out "x" && String.contains out "truncated:"
+def test_read_up_to_keeps_a_utf8_payload : IO Bool := do {
+    let path : String := scratch_path "utf8cap.txt";
+    let text : String := String.concat "x" (String.repeat "é" 10i64);
+    let w <- IO.write_file (Path.path path) text;
+    match w {
+        Result.err _ => IO.pure false,
+        Result.ok _ => do {
+            let r <- read_up_to (Path.path path) 2i64;
+            match r {
+                Result.err _ => IO.pure false,
+                Result.ok pr => match pr {
+                    Pair.pair got more => IO.pure (more && String.beq got "x"),
+                },
+            }
+        },
+    }
+}
+
+/// A file shorter than the cap comes back whole, with the flag off.
+#[test]
+def test_read_up_to_reports_a_complete_file : IO Bool := do {
+    let path : String := scratch_path "short.txt";
+    let w <- IO.write_file (Path.path path) "hello";
+    match w {
+        Result.err _ => IO.pure false,
+        Result.ok _ => do {
+            let r <- read_up_to (Path.path path) 100i64;
+            match r {
+                Result.err _ => IO.pure false,
+                Result.ok pr => match pr {
+                    Pair.pair got more => IO.pure (Bool.not more && String.beq got "hello"),
+                },
+            }
+        },
+    }
+}

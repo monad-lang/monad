@@ -80,24 +80,49 @@ def shell_truncated_marker : String := "[output truncated after "
 /// The byte cap's marker, same naming reason.
 def shell_byte_truncated_marker : String := "[output truncated at "
 
+/// The timeout's marker: a command killed by the wall-clock cap reports this
+/// rather than looking like a clean empty exit (124 is `timeout`'s status).
+pub def shell_timeout_marker : String := "[timed out; command killed]\n"
+
+/// The wall-clock cap on a foreground command, in seconds. `Proc.read_line`
+/// BLOCKS and no native can interrupt it, so without this a command that
+/// stops printing (`sleep infinity`, a build waiting on a lock) hangs the
+/// turn until weaver exits -- Esc is checked only at model/tool boundaries.
+/// GNU `timeout` runs the child in its OWN process group and signals the
+/// group on expiry, which is also the fix for a detached grandchild surviving
+/// a kill. A setting for this is a follow-up; the 300 s default is the
+/// harness's protection, not the model's dial.
+pub def shell_timeout_s : I64 := 300
+
+/// How long a child that ignores TERM gets before KILL.
+def shell_kill_after_s : I64 := 5
+
 pub def shell_run (id : String) (j : Json) : ResultT String IO Content :=
+    shell_run_bounded shell_timeout_s id j
+
+/// `shell_run` with an explicit wall-clock cap: the tool's own entry passes
+/// `shell_timeout_s`; the tests pass a couple of seconds so the cap is
+/// observable without a 5-minute suite.
+pub def shell_run_bounded (seconds : I64) (id : String) (j : Json) : ResultT String IO Content :=
     match ShellArgs.deserialize_json j {
         Result.err e => ResultT.mk (return (Result.ok (tool_err id e))),
         Result.ok args =>
             ResultT.mk (do {
-                let c <- shell_spawn id args.command;
+                let c <- shell_spawn id args.command seconds;
                 return (Result.ok c)
             }),
     }
 
-/// Spawn `sh -c "exec 2>&1; <command>"` and enter the read loop. The
-/// redirect is a PREFIX on the command string, not a suffix -- see the
-/// module doc for why. The command text is NOT quoted: unlike every other
-/// tool here, `command` IS shell script by contract.
-def shell_spawn (id : String) (command : String) : IO Content := do {
-    let spawned <- Proc.spawn "sh" ["-c", "exec 2>&1; " ++ command];
+/// Spawn `timeout -k <k> <n>s sh -c "exec 2>&1; <command>"` and enter the
+/// read loop. The redirect is a PREFIX on the command string, not a suffix
+/// -- see the module doc for why. The command text is NOT quoted: unlike
+/// every other tool here, `command` IS shell script by contract.
+def shell_spawn (id : String) (command : String) (seconds : I64) : IO Content := do {
+    let limit : String := (I64.to_string seconds) ++ "s";
+    let kill_after : String := (I64.to_string shell_kill_after_s) ++ "s";
+    let spawned <- Proc.spawn "timeout" ["-k", kill_after, limit, "sh", "-c", "exec 2>&1; " ++ command];
     match spawned {
-        Result.err e => return (tool_err id ("shell: could not spawn sh: " ++ e.message)),
+        Result.err e => return (tool_err id ("shell: could not spawn timeout: " ++ e.message)),
         Result.ok child => shell_read id child 0 "",
     }
 }
@@ -149,10 +174,15 @@ def shell_grow (id : String) (c : Child) (count : I64) (acc : String) (s : Strin
     else shell_read id c (count + 1) grown
 
 /// Clean end of stream: the child exited on its own, so `is_error` is
-/// exactly its exit status.
+/// exactly its exit status. 124 is `timeout`'s own status -- name the cap
+/// instead of reporting the partial output as an ordinary failure.
 def shell_eof (id : String) (c : Child) (acc : String) : IO Content := do {
     let code <- Proc.wait c;
-    return (if code == 0 then tool_ok id acc else tool_err id acc)
+    if code == 0
+    then return (tool_ok id acc)
+    else if code == 124
+    then return (tool_err id (acc ++ shell_timeout_marker))
+    else return (tool_err id acc)
 }
 
 /// The cap fired: SIGKILL the child, reap it, and report an ERROR -- the
