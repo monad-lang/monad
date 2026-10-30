@@ -629,6 +629,29 @@ impl Manifest {
   }
 }
 
+/// Is `start` one of the root's declared members? Patterns are the manifest's
+/// own spellings: an exact relative path, or a trailing `/*` that matches one
+/// level. No filesystem reads, so a filtered source tree (nix's
+/// `compilerSrc`, an unpacked bundle) works even when other members are absent.
+fn workspace_is_member(root_dir: &Path, start: &Path, patterns: &[String]) -> bool {
+  let rel = match start.strip_prefix(root_dir) {
+    Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+    Err(_) => return false,
+  };
+  patterns
+    .iter()
+    .any(|pattern| match pattern.strip_suffix("/*") {
+      Some(prefix) => {
+        let prefix = prefix.trim_end_matches('/');
+        match rel.strip_prefix(&format!("{prefix}/")) {
+          Some(rest) => !rest.is_empty() && !rest.contains('/'),
+          None => false,
+        }
+      }
+      None => rel == pattern.trim_end_matches('/'),
+    })
+}
+
 /// The nearest ancestor manifest with a `[workspace]` table, provided `name`
 /// is a member (or the root is the same package). A root that exists but
 /// does not list the package is an error, not a reason to keep walking.
@@ -644,13 +667,13 @@ fn find_workspace_root(start: &Path, name: &str) -> Result<(PathBuf, Manifest), 
           if root.mote.as_ref().map(|m| m.name == name).unwrap_or(false) {
             return Ok((root_dir, root));
           }
-          let members = ws.resolve_members(&root_dir)?;
           let target = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
-          if members.iter().any(|m| {
-            std::fs::canonicalize(m)
-              .map(|c| c == target)
-              .unwrap_or(false)
-          }) {
+          // Pattern membership, not `resolve_members`: a build may carry only
+          // a SUBSET of the workspace (nix/monad.nix's `compilerSrc` does),
+          // and a missing sibling must not turn a present member into "no
+          // workspace root". The self-hosted reader is tolerant for the same
+          // reason (`Mote.workspace_members` drops absent members).
+          if workspace_is_member(&root_dir, &target, &ws.members) {
             return Ok((root_dir, root));
           }
           return Err(format!(
@@ -2018,6 +2041,119 @@ members = ["motes/*"]
     assert_eq!(resolved.motes.len(), 1);
     assert_eq!(resolved.motes[0].name, "lib-b");
 
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+  fn write_manifest(path: &Path, content: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, content).unwrap();
+  }
+
+  #[test]
+  fn test_inherited_path_is_root_relative() {
+    let root =
+      std::env::temp_dir().join(format!("monad-test-inherit-path-{:x}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    write_manifest(
+      &root.join("mote.toml"),
+      "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies.std]\npath = \"std\"\n",
+    );
+    write_manifest(
+      &root.join("app/mote.toml"),
+      "[mote]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.std]\nworkspace = true\n",
+    );
+    write_manifest(
+      &root.join("std/mote.toml"),
+      "[mote]\nname = \"std\"\nversion = \"0.1.0\"\n",
+    );
+    let m = Manifest::parse(&root.join("app/mote.toml")).unwrap();
+    let expected = std::fs::canonicalize(root.join("std")).unwrap();
+    assert_eq!(m.dependencies.get("std"), Some(&Dependency::Path(expected)));
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_inherited_marker_with_a_sibling_key_is_rejected() {
+    let err = Manifest::parse_str(
+      "[mote]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.std]\nworkspace = true\npath = \"../std\"\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("only key"), "got: {err}");
+  }
+
+  #[test]
+  fn test_inherited_marker_must_be_true() {
+    let err = Manifest::parse_str(
+      "[mote]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.std]\nworkspace = false\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("boolean `true`"), "got: {err}");
+  }
+
+  #[test]
+  fn test_inherited_name_missing_from_the_root_is_an_error() {
+    let root = std::env::temp_dir().join(format!(
+      "monad-test-inherit-missing-{:x}",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    write_manifest(
+      &root.join("mote.toml"),
+      "[workspace]\nmembers = [\"app\"]\n",
+    );
+    write_manifest(
+      &root.join("app/mote.toml"),
+      "[mote]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.std]\nworkspace = true\n",
+    );
+    let err = Manifest::parse(&root.join("app/mote.toml")).unwrap_err();
+    assert!(err.contains("[workspace.dependencies.std]"), "got: {err}");
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  /// nix/monad.nix's `compilerSrc` carries only a subset of the workspace.
+  /// A missing sibling member must not turn a present member into "no
+  /// workspace root" (that was the CI failure in flake-package).
+  #[test]
+  fn test_inheritance_tolerates_a_missing_sibling_member() {
+    let root = std::env::temp_dir().join(format!(
+      "monad-test-inherit-subset-{:x}",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    write_manifest(
+      &root.join("mote.toml"),
+      "[workspace]\nmembers = [\"app\", \"absent\"]\n\n[workspace.dependencies.std]\npath = \"std\"\n",
+    );
+    write_manifest(
+      &root.join("app/mote.toml"),
+      "[mote]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.std]\nworkspace = true\n",
+    );
+    write_manifest(
+      &root.join("std/mote.toml"),
+      "[mote]\nname = \"std\"\nversion = \"0.1.0\"\n",
+    );
+    let m = Manifest::parse(&root.join("app/mote.toml")).unwrap();
+    let expected = std::fs::canonicalize(root.join("std")).unwrap();
+    assert_eq!(m.dependencies.get("std"), Some(&Dependency::Path(expected)));
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_inheritance_rejects_a_non_member() {
+    let root = std::env::temp_dir().join(format!(
+      "monad-test-inherit-nonmember-{:x}",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    write_manifest(
+      &root.join("mote.toml"),
+      "[workspace]\nmembers = [\"other\"]\n\n[workspace.dependencies.std]\npath = \"std\"\n",
+    );
+    write_manifest(
+      &root.join("app/mote.toml"),
+      "[mote]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.std]\nworkspace = true\n",
+    );
+    let err = Manifest::parse(&root.join("app/mote.toml")).unwrap_err();
+    assert!(err.contains("not a member"), "got: {err}");
     std::fs::remove_dir_all(&root).unwrap();
   }
 }
