@@ -1,7 +1,7 @@
 use lang::types {
   DebugName, Elim, Identifier, Literal, LocalScope, LocalVar, Location, MatchCase,
   ModulePath, NamePath, Scope, ScopeData, Similar, Term, binder_anon, binder_explicit,
-  cub_i0, cub_i1, cub_ijoin,
+  cub_i0, cub_i1, cub_ijoin, cub_interval,
   cub_imeet, cub_ineg, many, sentinel, sort_n,
   cub, imeet, ineg,
 }
@@ -103,6 +103,22 @@ def test_whnf_delta_then_beta_constant_function : Bool :=
     match reduced {
         Term.app _ _ => false,
         _ => Similar.similar reduced (free_var "P"),
+    }
+
+/// A def parameter occurring in a `Term.pi`'s CODOMAIN is substituted
+/// like one in the body: `ArrowT I I` used to unfold to `(I -> B)`, with
+/// `B` dangling, because an anonymous arrow's codomain lowered one binder
+/// short (`pi_ret_ctx`, `lang/parser/lower_parse.mo`). The same
+/// substitution under a `Term.lam` was always correct (`fiber I I f b`),
+/// which is what localized it to the pi case. Reverting that fix makes
+/// this pin see the unsubstituted parameter instead of the interval.
+#[test]
+def test_whnf_delta_substitutes_a_parameter_in_a_pi_codomain : Bool :=
+    let scope : Scope := scope_of "def ArrowT (A B : Type) : Type := A -> B" in
+    let app : Term := Term.app (Term.app (free_var "ArrowT") cub_interval) cub_interval in
+    match whnf scope empty_locals app {
+        Term.pi _ _ cod => Similar.similar cod cub_interval,
+        _ => false,
     }
 
 #[test]

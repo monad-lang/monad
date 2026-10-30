@@ -170,15 +170,19 @@ def pi_binder (arg_name : Option Identifier) : Binder :=
     }
 
 
-/// The context a `Term.pi`'s return type is lowered under: extended by
-/// the arrow's own binder when the source named one, unchanged when it
-/// did not. Split out so both halves of that rule sit in one place
-/// rather than being re-derived at the match arm.
+/// The context a `Term.pi`'s return type is lowered under. ALWAYS extended:
+/// a `Term.pi`'s codomain sits one binder deep whatever its binder is
+/// called, which is what every consumer assumes (`term_map_children_at_depth`
+/// walks `ret` at depth 1, `type_check_pi` pushes the domain). An anonymous
+/// arrow binds a name no source can spell -- the same `Identifier.id ""`
+/// placeholder `class_method_unnamed_param` pushes for an unnamed
+/// class-method parameter -- so the slot is counted without ever being
+/// referenceable.
 #[partial]
 def pi_ret_ctx (arg_name : Option Identifier) (ctx : ParseLowerCtx) : ParseLowerCtx :=
     match arg_name {
         Option.some n => lower_ctx_bind n ctx,
-        Option.none => ctx,
+        Option.none => lower_ctx_bind (Identifier.id "") ctx,
     }
 
 
@@ -675,11 +679,14 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // `lam_parsed_params` (`lang/parser.mo`), which already gives the
         // body's lambda chain this same discipline.
         //
-        // A still-NAMELESS `pi` does not extend, because the grammar that
-        // produces one does not: `build_pi_chain` folds class-method
-        // parameter types (which carry no names) with the return type at
-        // the same depth as the argument. That case is genuinely
-        // non-dependent, and matching the producer is what preserves it.
+        // A NAMELESS `pi` extends too (`pi_ret_ctx`): its binder cannot be
+        // referred to, but it still occupies a de Bruijn slot, so every
+        // OUTER name in the codomain is one index higher -- the same depth
+        // the two consumers above assume. Leaving it out made `A -> B` lower
+        // `B` at index 0, which delta/beta then left dangling
+        // (`whnf (ArrowT I I)` was `(I -> B)`); the pins are
+        // `lang/src/tests/lower_parse_tests.mo` and `whnf_tests.mo`'s
+        // pi-codomain delta case.
         // R1 on both sides: a pi is entirely type-level.
         ParseTermKind.pi arg_name arg ret =>
             Term.pi (pi_binder arg_name) (lower_parse_term_bare ctx arg)

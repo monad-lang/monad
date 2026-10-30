@@ -1585,7 +1585,8 @@ pub type Term {
     /// The binder is an ANNOTATION, exactly as `lam`'s `dbg` is: the name never
     /// affects an index, because the parser already binds it before `Term`
     /// exists (`lower_parse.mo`'s `pi_ret_ctx` extends the lowering context by
-    /// the arrow's own binder when the source named one), and
+    /// the arrow's own binder -- the anonymous case included, under a name no
+    /// source can spell), and
     /// `term_map_children_at_depth` already walks `ret` at depth 1. R2a stopped
     /// `pi` from DROPPING the name it was given; R2a' made the grammar actually
     /// give it one for a `def`'s parameter list (`binder_named` above).
