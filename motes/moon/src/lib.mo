@@ -21,6 +21,34 @@ pub use lib::router {
     Route, Router.route, Router.get, Router.post, Router.put, Router.delete,
     Router.patch, Router.head, Router.options, Router.mount, Router.allowed,
     Router.param,
+    RouteT, RouterT.get, RouterT.post, RouterT.put, RouterT.delete,
+    RouterT.patch, RouterT.head, RouterT.options, RouterT.route, RouterT.scope,
+    RouterT.find, RouterT.allowed,
+}
+
+pub use lib::context {
+    Ctx, Ctx.make, Ctx.request, Ctx.session, Ctx.with_request, Ctx.with_session,
+    SessionSlot, SessionSlot.handle,
+}
+
+pub use lib::handler_t {
+    HttpError, HttpError.make, HttpError.to_response, HttpError.with_header,
+    HttpError.not_found, HttpError.bad_request, HttpError.forbidden,
+    HttpError.unauthorized, HttpError.internal, HttpError.payload_too_large,
+    HttpError.headers_too_large,
+    HandlerT, HandlerT.run, HandlerT.pure, HandlerT.lift, HandlerT.ask,
+    HandlerT.request, HandlerT.session, HandlerT.throw, HandlerT.catch,
+    HandlerT.map_error, HandlerT.local, HandlerT.with_request,
+    HandlerT.with_session, HandlerT.pure_io, HandlerT.throw_io, HandlerT.lift_io,
+    HandlerT.ask_io, HandlerT.request_io, HandlerT.session_io, HandlerT.catch_io,
+    HandlerT.map_error_io, HandlerT.io_bind, HandlerT.run_io, HandlerT.to_old,
+    HandlerT.of_old,
+}
+
+pub use lib::middleware_t {
+    MiddlewareT.logging, MiddlewareT.map_response, MiddlewareT.cors,
+    MiddlewareT.content_type, MiddlewareT.recover, MiddlewareT.auth_basic_ct,
+    MiddlewareT.auth_bearer_ct,
 }
 
 pub use lib::middleware {
@@ -40,12 +68,14 @@ pub use lib::static_files {
 pub use http::request {Request.form_fields, Request.multipart, Request.param}
 
 pub use lib::session {
-    Session, Session.get, Session.put, SessionHandle,
+    Session, Session.get, Session.put, SessionHandle, SessionHandle.make,
     SessionHandle.get, SessionHandle.put,
     SessionStore, SessionStore.new, SessionStore.begin, SessionStore.load,
     SessionStore.commit, SessionStore.rotate, SessionStore.destroy,
     SessionStore.with_session, SessionStore.middleware,
 }
+
+pub use lib::session_mw {SessionStore.with_session_t}
 
 pub use lib::csrf {
     Csrf.token, Csrf.verify, Csrf.hidden_field, Csrf.check,

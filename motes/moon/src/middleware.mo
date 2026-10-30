@@ -47,7 +47,7 @@ pub def Middleware.cors (handler : Request -> IO (Result String Response)) (req 
 }
 
 /// Add CORS headers to a response.
-def Middleware.cors_response (res : Response) : Response :=
+pub def Middleware.cors_response (res : Response) : Response :=
   let h1 := Headers.set "Access-Control-Allow-Origin" "*" res.headers in
   let h2 := Headers.set "Access-Control-Allow-Methods" "GET, POST, PUT, DELETE, PATCH, OPTIONS" h1 in
   let h3 := Headers.set "Access-Control-Allow-Headers" "Content-Type, Authorization" h2 in
@@ -66,7 +66,7 @@ pub def Middleware.content_type (handler : Request -> IO (Result String Response
 }
 
 /// Add Content-Type if missing, inferred from the body.
-def Middleware.ensure_content_type (res : Response) : Response :=
+pub def Middleware.ensure_content_type (res : Response) : Response :=
   match Headers.get "Content-Type" res.headers {
     Option.some _ => res,
     Option.none =>

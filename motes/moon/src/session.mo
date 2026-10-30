@@ -205,6 +205,12 @@ pub struct SessionHandle {
   session : Ref Session
 }
 
+/// Build a handle around a session cell. The struct's field is not
+/// reachable from another module otherwise; the transformer middleware
+/// uses this instead of a bare literal.
+pub def SessionHandle.make (session : Ref Session) : SessionHandle :=
+  let h : SessionHandle := { session := session } in h
+
 pub def SessionHandle.get (h : SessionHandle) : IO Session := Ref.get h.session
 
 pub def SessionHandle.put (h : SessionHandle) (key : String) (value : String) : IO Unit := do {
@@ -250,7 +256,7 @@ pub def SessionStore.middleware
     : IO (Result String Response) :=
   SessionStore.with_session st (fn (_ : SessionHandle) (r : Request) => handler r) req
 
-def SessionStore.add_cookies (res : Response) (pairs : List (Pair String String)) : Response :=
+pub def SessionStore.add_cookies (res : Response) (pairs : List (Pair String String)) : Response :=
   let hs := SessionStore.add_cookie_pairs res.headers pairs in
   { res with headers := hs }
 
