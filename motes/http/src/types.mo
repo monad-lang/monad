@@ -5,6 +5,9 @@
 /// plus `std.show` for the `Show` class and, for `Transport`, `std.stream`'s
 /// byte streams over `std.bytebuf`'s buffers.
 
+use init::clone {Clone}
+use init::copy {Copy}
+use init::shared {Shared, Shared.get}
 use std::show {Show}
 use std::bytebuf {ByteBuf, ByteBuf.free, ByteBuf.length, ByteBuf.of_list, ByteBuf.to_list}
 use std::stream {Stream, StreamError, FdStream, FdStream.poll, FdStream.poll_read, FdStream.poll_write}
@@ -76,6 +79,16 @@ open Headers { headers }
 
 pub def Headers.empty : Headers :=
   Headers.headers List.empty
+
+/// Explicit deep copy. `Clone` is never inserted; a handler that needs an
+/// owned `Headers` from a shared one asks for it (e.g. the dev middleware
+/// when it rebuilds a response).
+pub instance Clone Headers {
+  def clone (h : Shared Headers) : Headers :=
+    match Shared.get h {
+      Headers.headers pairs => Headers.headers (Clone.clone (Shared.of pairs))
+    }
+}
 
 pub def Headers.get (key : String) (h : Headers) : Option String :=
   let lk : String := String.to_lowercase key in
@@ -493,6 +506,11 @@ pub instance BEq Method {
   def beq (a b : Method) : Bool := I64.beq (Method.to_i64 a) (Method.to_i64 b)
 }
 
+/// Nullary enum: a bitwise duplicate is a register move.
+pub instance Copy Method {
+  def copy (m : Method) : Pair Method Method := Pair.pair m m
+}
+
 pub instance Show Method {
   def show (m : Method) : String :=
     match m {
@@ -516,6 +534,10 @@ def HttpVersion.to_i64 (v : HttpVersion) : I64 :=
 
 pub instance BEq HttpVersion {
   def beq (a b : HttpVersion) : Bool := I64.beq (HttpVersion.to_i64 a) (HttpVersion.to_i64 b)
+}
+
+pub instance Copy HttpVersion {
+  def copy (v : HttpVersion) : Pair HttpVersion HttpVersion := Pair.pair v v
 }
 
 pub instance Show HttpVersion {
