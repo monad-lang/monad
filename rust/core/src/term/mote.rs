@@ -44,6 +44,9 @@ pub struct MoteMeta {
 pub struct Workspace {
   /// Member path patterns relative to the manifest's directory, e.g. `"motes/*"` or `"pkgs/engine"`.
   pub members: Vec<String>,
+  /// `[workspace.dependencies]`: the sources members inherit with
+  /// `workspace = true`. An inherited `Path` is ROOT-relative.
+  pub dependencies: BTreeMap<String, Dependency>,
 }
 
 impl Workspace {
@@ -91,6 +94,10 @@ pub enum Dependency {
     tag: Option<String>,
     rev: Option<String>,
   },
+  /// `workspace = true`, before `Manifest::parse` resolves it. A manifest
+  /// parsed with `parse_str` (no path) keeps the marker; the resolver
+  /// refuses one that was never resolved.
+  Workspace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +168,8 @@ struct RawMoteMeta {
 struct RawWorkspace {
   #[serde(default)]
   members: Vec<String>,
+  #[serde(default)]
+  dependencies: BTreeMap<String, RawDependency>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -174,6 +183,9 @@ enum RawDependency {
     git: String,
     tag: Option<String>,
     rev: Option<String>,
+  },
+  Workspace {
+    workspace: bool,
   },
 }
 
@@ -213,6 +225,10 @@ fn convert_dependencies(raw: BTreeMap<String, RawDependency>) -> BTreeMap<String
         RawDependency::Version(v) => Dependency::Registry(v),
         RawDependency::Path { path } => Dependency::Path(PathBuf::from(path)),
         RawDependency::Git { git, tag, rev } => Dependency::Git { url: git, tag, rev },
+        RawDependency::Workspace { workspace } => {
+          debug_assert!(workspace, "workspace = false is rejected by parse_str");
+          Dependency::Workspace
+        }
       };
       (name, dep)
     })
@@ -236,10 +252,14 @@ impl Manifest {
   pub fn parse(path: &Path) -> Result<Self, String> {
     let content = std::fs::read_to_string(path)
       .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    Self::parse_str(&content)
+    let mut manifest = Self::parse_str(&content)?;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    manifest.resolve_inheritance(dir)?;
+    Ok(manifest)
   }
 
   pub fn parse_str(content: &str) -> Result<Self, String> {
+    validate_workspace_markers(content)?;
     let raw: RawManifest =
       toml::from_str(content).map_err(|e| format!("Failed to parse mote.toml: {e}"))?;
 
@@ -256,7 +276,10 @@ impl Manifest {
       }),
       link_libs: raw.link.map(|l| l.libs).unwrap_or_default(),
       lib_path: raw.lib.and_then(|l| l.path),
-      workspace: raw.workspace.map(|w| Workspace { members: w.members }),
+      workspace: raw.workspace.map(|w| Workspace {
+        members: w.members,
+        dependencies: convert_dependencies(w.dependencies),
+      }),
       dependencies: convert_dependencies(raw.dependencies),
       dev_dependencies: convert_dependencies(raw.dev_dependencies),
     })
@@ -501,6 +524,150 @@ fn copy_source_tree(source: &Path, dest: &Path, root: &Path) -> Result<(), Strin
   Ok(())
 }
 
+/// Reject the marker shapes serde's untagged enum cannot express: a sibling
+/// key, a non-`true` value, and chained inheritance in the root table.
+fn validate_workspace_markers(content: &str) -> Result<(), String> {
+  let value: toml::Value =
+    toml::from_str(content).map_err(|e| format!("Failed to parse mote.toml: {e}"))?;
+  for table in ["dependencies", "dev-dependencies"] {
+    if let Some(toml::Value::Table(deps)) = value.get(table) {
+      for (name, dep) in deps {
+        if let toml::Value::Table(entry) = dep {
+          if let Some(marker) = entry.get("workspace") {
+            if entry.len() != 1 {
+              return Err(format!(
+                "dependency '{name}': `workspace = true` is the only key an inherited dependency may declare"
+              ));
+            }
+            if marker.as_bool() != Some(true) {
+              return Err(format!(
+                "dependency '{name}': `workspace` must be the boolean `true`"
+              ));
+            }
+          }
+        }
+      }
+    }
+  }
+  if let Some(toml::Value::Table(ws)) = value.get("workspace") {
+    if let Some(toml::Value::Table(deps)) = ws.get("dependencies") {
+      for (name, dep) in deps {
+        if let toml::Value::Table(entry) = dep {
+          if entry.contains_key("workspace") {
+            return Err(format!(
+              "[workspace.dependencies.{name}] cannot itself set `workspace = true`"
+            ));
+          }
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+impl Manifest {
+  /// Replace every `workspace = true` with the workspace root's entry.
+  /// Inherited `Path`s are joined onto the ROOT (the one semantic that
+  /// differs from a member's own `[dependencies]`).
+  fn resolve_inheritance(&mut self, manifest_dir: &Path) -> Result<(), String> {
+    let has_marker = self
+      .dependencies
+      .values()
+      .chain(self.dev_dependencies.values())
+      .any(|d| matches!(d, Dependency::Workspace));
+    if !has_marker {
+      return Ok(());
+    }
+    let name = self
+      .mote
+      .as_ref()
+      .ok_or("a manifest with no [mote] section cannot inherit dependencies")?
+      .name
+      .clone();
+    let start = std::fs::canonicalize(manifest_dir).unwrap_or_else(|_| manifest_dir.to_path_buf());
+    let (root_dir, root) = find_workspace_root(&start, &name)?;
+    let root_deps = root
+      .workspace
+      .as_ref()
+      .map(|w| w.dependencies.clone())
+      .unwrap_or_default();
+    let replace = |deps: &mut BTreeMap<String, Dependency>,
+                   root_deps: &BTreeMap<String, Dependency>| {
+      for (dep_name, dep) in deps.iter_mut() {
+        if !matches!(dep, Dependency::Workspace) {
+          continue;
+        }
+        let root_dep = match root_deps.get(dep_name) {
+          Some(d) => d,
+          None => {
+            return Err(format!(
+              "dependency '{dep_name}': sets `workspace = true`, but the workspace root {} does not declare [workspace.dependencies.{dep_name}]",
+              root_dir.display()
+            ));
+          }
+        };
+        *dep = match root_dep {
+          Dependency::Path(p) => Dependency::Path(root_dir.join(p)),
+          Dependency::Git { url, tag, rev } => Dependency::Git {
+            url: url.clone(),
+            tag: tag.clone(),
+            rev: rev.clone(),
+          },
+          Dependency::Registry(r) => Dependency::Registry(r.clone()),
+          Dependency::Workspace => {
+            return Err(format!(
+              "[workspace.dependencies.{dep_name}] cannot itself set `workspace = true`"
+            ));
+          }
+        };
+      }
+      Ok(())
+    };
+    replace(&mut self.dependencies, &root_deps)?;
+    replace(&mut self.dev_dependencies, &root_deps)?;
+    Ok(())
+  }
+}
+
+/// The nearest ancestor manifest with a `[workspace]` table, provided `name`
+/// is a member (or the root is the same package). A root that exists but
+/// does not list the package is an error, not a reason to keep walking.
+fn find_workspace_root(start: &Path, name: &str) -> Result<(PathBuf, Manifest), String> {
+  let mut current = Some(start.to_path_buf());
+  while let Some(dir) = current {
+    let manifest_path = dir.join("mote.toml");
+    if manifest_path.is_file() {
+      let content = std::fs::read_to_string(&manifest_path).unwrap_or_default();
+      if let Ok(root) = Manifest::parse_str(&content) {
+        if let Some(ws) = &root.workspace {
+          let root_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+          if root.mote.as_ref().map(|m| m.name == name).unwrap_or(false) {
+            return Ok((root_dir, root));
+          }
+          let members = ws.resolve_members(&root_dir)?;
+          let target = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+          if members.iter().any(|m| {
+            std::fs::canonicalize(m)
+              .map(|c| c == target)
+              .unwrap_or(false)
+          }) {
+            return Ok((root_dir, root));
+          }
+          return Err(format!(
+            "manifest is not a member of the workspace at {}; add it to [workspace] members or declare the dependency directly",
+            root_dir.display()
+          ));
+        }
+      }
+    }
+    current = dir.parent().map(|p| p.to_path_buf());
+  }
+  Err(format!(
+    "dependency sets `workspace = true`, but no workspace root above {} declares a [workspace.dependencies] entry",
+    start.display()
+  ))
+}
+
 pub struct Resolver;
 
 impl Resolver {
@@ -527,6 +694,11 @@ impl Resolver {
 
     while let Some((dep_name, dependency, dep_manifest_dir)) = queue.pop() {
       match dependency {
+        Dependency::Workspace => {
+          return Err(format!(
+            "dependency {dep_name}: unresolved `workspace = true`; parse the manifest from a path so inheritance can run"
+          ));
+        }
         Dependency::Path(path) => {
           let dep_dir = dep_manifest_dir.join(&path).canonicalize().map_err(|e| {
             format!(
@@ -1765,6 +1937,7 @@ members = ["motes/lib-a", "motes/lib-b"]
 
     let workspace = Workspace {
       members: vec!["motes/*".to_string()],
+      dependencies: BTreeMap::new(),
     };
     let mut members = workspace.resolve_members(&root).unwrap();
     members.sort();
@@ -1785,6 +1958,7 @@ members = ["motes/lib-a", "motes/lib-b"]
 
     let workspace = Workspace {
       members: vec!["pkgs/engine".to_string()],
+      dependencies: BTreeMap::new(),
     };
     let members = workspace.resolve_members(&root).unwrap();
     assert_eq!(members, vec![engine_dir]);
@@ -1802,6 +1976,7 @@ members = ["motes/lib-a", "motes/lib-b"]
 
     let workspace = Workspace {
       members: vec!["pkgs/nonexistent".to_string()],
+      dependencies: BTreeMap::new(),
     };
     let err = workspace.resolve_members(&root).unwrap_err();
     assert!(err.contains("no mote.toml found"), "got: {err}");

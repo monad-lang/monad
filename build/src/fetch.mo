@@ -29,7 +29,7 @@ use lang::lock {
   GitPin, Lock.pin_to_string, Lock.read, Lock.write, LockRead, LockedGit,
   LockedMote, Lockfile,
 }
-use lang::mote {Dependency, Mote.any_git_dep, Mote.discover, MoteManifest}
+use lang::mote {Dependency, Mote.any_git_dep, Mote.discover, Mote.manifest_at, Mote.workspace_member_dirs, MoteManifest}
 use std::io {IO.println}
 use std::list {List.contains_by, List.filter, List.length}
 
@@ -163,13 +163,19 @@ pub def Build.fetch_run_with (home : String) (dir : String) (mode : FetchMode) :
 
 #[partial]
 pub def Build.fetch_run_with_opts (home : String) (dir : String) (mode : FetchMode) (offline : Bool) : IO I64 := do {
-    let found <- Mote.discover dir;
-    match found {
+    let members <- Mote.workspace_member_dirs dir;
+    match members {
+        Option.some ms => Build.fetch_workspace home dir ms mode offline,
         Option.none => do {
-            IO.println ("error: no `mote.toml` at or above `" ++ dir ++ "`: `monad fetch` resolves a mote's dependencies, so it needs one");
-            return 1
-        },
-        Option.some root => Build.fetch_with home root mode offline
+            let found <- Mote.discover dir;
+            match found {
+                Option.none => do {
+                    IO.println ("error: no `mote.toml` at or above `" ++ dir ++ "`: `monad fetch` resolves a mote's dependencies, so it needs one");
+                    return 1
+                },
+                Option.some root => Build.fetch_with home root mode offline
+            }
+        }
     }
 }
 
@@ -188,9 +194,102 @@ def Build.fetch_with (home : String) (root : MoteManifest) (mode : FetchMode) (o
     }
 }
 
+/// `monad fetch` at a virtual workspace root: resolve every member's
+/// dependencies (inherited edges included) and write ONE root `mote.lock`.
+#[partial]
+def Build.fetch_workspace
+        (home : String) (dir : String) (members : List String)
+        (mode : FetchMode) (offline : Bool) : IO I64 := do {
+    let ok <- Git.available;
+    if Bool.not ok then do {
+        IO.println ("error: " ++ Git.missing_error);
+        return 1
+    } else do {
+        let tool <- Build.probe_digest_tool;
+        match tool {
+            Result.err m => do { IO.println ("error: " ++ m); return 1 },
+            Result.ok t => Build.fetch_workspace_locked home dir members mode offline t
+        }
+    }
+}
+
+#[partial]
+def Build.fetch_workspace_locked
+        (home : String) (dir : String) (members : List String)
+        (mode : FetchMode) (offline : Bool) (tool : DigestTool) : IO I64 := do {
+    let lock_path : String := raw_path_join dir "mote.lock";
+    let read <- Lock.read (Path.path lock_path);
+    match read {
+        Result.err m => do { IO.println ("error: " ++ m); return 1 },
+        Result.ok found => do {
+            let manifests <- Build.workspace_manifests dir members;
+            let existing <- Build.existing_entries found;
+            let st : FetchState := {
+                home := home,
+                mode := mode,
+                offline := offline,
+                tool := tool,
+                existing := existing,
+                seen := List.empty,
+                entries := List.empty,
+            };
+            let walked <- Build.visit_manifests st manifests;
+            match walked {
+                Result.err e => do { IO.println ("error: " ++ e); return 1 },
+                Result.ok done => Build.write_fetch_lock lock_path done
+            }
+        }
+    }
+}
+
+/// The root's own manifest (when it is also a package) followed by every
+/// member's. `manifest_at` resolves `workspace = true`, so an inherited git
+/// edge reaches the walk in `deps_full`.
+#[partial]
+def Build.workspace_manifests (dir : String) (members : List String) : IO (List MoteManifest) := do {
+    let root <- Mote.manifest_at dir;
+    let rest <- Build.member_manifests members;
+    match root {
+        Option.some m => return (List.cons m rest),
+        Option.none => return rest,
+    }
+}
+
+#[partial]
+def Build.member_manifests (members : List String) : IO (List MoteManifest) :=
+    match members {
+        List.empty => return List.empty,
+        List.cons d rest => do {
+            let m <- Mote.manifest_at d;
+            let tail <- Build.member_manifests rest;
+            match m {
+                Option.some found => return (List.cons found tail),
+                Option.none => return tail,
+            }
+        }
+    }
+
+#[partial]
+def Build.visit_manifests (st : FetchState) (manifests : List MoteManifest) : IO (Result String FetchState) :=
+    match manifests {
+        List.empty => return (Result.ok st),
+        List.cons m rest => do {
+            let walked <- Build.visit_manifest st m;
+            match walked {
+                Result.err e => return (Result.err e),
+                Result.ok st2 => Build.visit_manifests st2 rest,
+            }
+        }
+    }
+
 #[partial]
 def Build.fetch_locked (home : String) (root : MoteManifest) (mode : FetchMode) (offline : Bool) (tool : DigestTool) : IO I64 := do {
-    let lock_path : String := raw_path_join root.dir "mote.lock";
+    // One lock per workspace: a member's inherited edges live in the root's.
+    let lock_dir : String := match root.workspace_root {
+        Option.some r => r,
+        Option.none => root.dir,
+    };
+    let lock_path : String := raw_path_join lock_dir "mote.lock";
     let read <- Lock.read (Path.path lock_path);
     match read {
         Result.err m => do { IO.println ("error: " ++ m); return 1 },

@@ -106,6 +106,29 @@ pub struct MoteManifest {
     /// every target. Do not confuse it with `Mote.target_roots`, which is
     /// about SOURCE files.
     targets : List String,
+    /// Names whose dependency entry said `workspace = true`. Recorded even
+    /// after resolution so a driver can explain where an inherited edge came
+    /// from; empty for an ordinary manifest.
+    inherited : List String,
+    /// The workspace root whose `[workspace.dependencies]` resolved
+    /// `inherited`, when one was used. `with_locked_dirs` reads that root's
+    /// `mote.lock` rather than this mote's own.
+    workspace_root : Option String,
+}
+
+/// A workspace root found above a member: its directory (as spelled on the
+/// walk) and its parsed `mote.toml`.
+struct MoteWorkspaceRoot {
+    dir : String,
+    table : BTreeMap String Toml.Value,
+}
+
+/// What `workspace_root_of` found: a usable root, no root at all, or a root
+/// that exists but does not list this manifest as a member.
+type MoteRootLookup {
+    root_found (root : MoteWorkspaceRoot),
+    root_none,
+    root_rejected (dir : String),
 }
 
 /// One binary target: what `monad build` selects between.
@@ -470,7 +493,10 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
             // A `mote.toml` with no `[mote]` is a virtual workspace
             // root: stop there rather than walking past it, since
             // nothing above a workspace root is part of this mote.
-            Option.some text => Mote.discover_parsed (Mote.parse_manifest dir text),
+            Option.some text => do {
+                let parsed <- Mote.load_manifest dir text;
+                Mote.discover_parsed parsed
+            },
             Option.none => Mote.discover_above dir depth
         }
     }
@@ -501,10 +527,10 @@ def Mote.discover_parsed (parsed : Option MoteManifest) : IO (Option MoteManifes
 /// is somebody else's. Resolution needs the dependency's own `[lib] path`.
 pub def Mote.manifest_at (dir : String) : IO (Option MoteManifest) := do {
     let text <- read_file_or_none (Path.path (mote_toml_in dir));
-    return (match text {
-        Option.none => Option.none,
-        Option.some t => Mote.parse_manifest dir t
-    })
+    match text {
+        Option.none => return Option.none,
+        Option.some t => Mote.load_manifest dir t,
+    }
 }
 
 // ─── Workspace members ──────────────────────────────────────────────
@@ -696,16 +722,145 @@ def Mote.manifest_version (root : BTreeMap String Toml.Value) : String :=
         Option.none => "",
     }
 
+def Mote.lookup_dep_entry (entries : List (Pair String ManifestDepEntry)) (name : String) : Option ManifestDepEntry :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest => match e {
+            Pair.pair k v => if String.beq k name then Option.some v else Mote.lookup_dep_entry rest name,
+        },
+    }
+
+def Mote.inherited_names (entries : List (Pair String ManifestDepEntry)) : List String :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k v => match v {
+                ManifestDepEntry.inherited => List.cons k (Mote.inherited_names rest),
+                _ => Mote.inherited_names rest,
+            }
+        },
+    }
+
+/// The root's `[workspace.dependencies]`, parsed with its own directory as
+/// the path base -- an inherited `path` is ROOT-relative.
+def Mote.root_dep_entries (w : MoteWorkspaceRoot) : List (Pair String ManifestDepEntry) :=
+    match Toml.table_get "workspace" w.table {
+        Option.none => List.empty,
+        Option.some v => match v {
+            Toml.Value.table ws => Mote.table_dep_entries w.dir (Toml.table_get "dependencies" ws),
+            _ => List.empty,
+        },
+    }
+
+def Mote.resolve_entries
+        (lookup : MoteRootLookup)
+        (root_entries : List (Pair String ManifestDepEntry))
+        (entries : List (Pair String ManifestDepEntry))
+        : List (Pair String ManifestDepEntry) :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest => match e {
+            Pair.pair k v =>
+                List.cons (Pair.pair k (Mote.resolve_entry lookup k root_entries v))
+                    (Mote.resolve_entries lookup root_entries rest),
+        },
+    }
+
+def Mote.resolve_entry
+        (lookup : MoteRootLookup)
+        (name : String)
+        (root_entries : List (Pair String ManifestDepEntry))
+        (entry : ManifestDepEntry)
+        : ManifestDepEntry :=
+    match entry {
+        ManifestDepEntry.inherited => Mote.resolve_inherited lookup name root_entries,
+        _ => entry,
+    }
+
+def Mote.inherit_missing_root_message (name : String) : String :=
+    String.concat "sets `workspace = true`, but no workspace root above this manifest declares [workspace.dependencies."
+        (String.concat name "]")
+
+def Mote.inherit_not_member_message (root_dir : String) : String :=
+    String.concat "is not a member of the workspace at "
+        (String.concat root_dir "; add it to [workspace] members or declare the dependency directly")
+
+def Mote.inherit_missing_name_message (w : MoteWorkspaceRoot) (name : String) : String :=
+    String.concat "sets `workspace = true`, but the workspace root "
+        (String.concat w.dir (String.concat " does not declare [workspace.dependencies."
+            (String.concat name "]")))
+
+def Mote.inherit_root_invalid_message (w : MoteWorkspaceRoot) (name : String) (reason : String) : String :=
+    String.concat "[workspace.dependencies."
+        (String.concat name (String.concat "] in "
+            (String.concat w.dir (String.concat ": " reason))))
+
+def Mote.inherit_root_sourceless_message (w : MoteWorkspaceRoot) (name : String) : String :=
+    String.concat "[workspace.dependencies."
+        (String.concat name (String.concat "] in " (String.concat w.dir " names no source")))
+
+def Mote.inherit_chained_message (name : String) : String :=
+    String.concat "[workspace.dependencies."
+        (String.concat name "] cannot itself set `workspace = true`")
+
+def Mote.resolve_root_entry
+        (w : MoteWorkspaceRoot) (name : String) (entry : ManifestDepEntry) : ManifestDepEntry :=
+    match entry {
+        ManifestDepEntry.found d => ManifestDepEntry.found d,
+        ManifestDepEntry.invalid reason => ManifestDepEntry.invalid (Mote.inherit_root_invalid_message w name reason),
+        ManifestDepEntry.sourceless => ManifestDepEntry.invalid (Mote.inherit_root_sourceless_message w name),
+        ManifestDepEntry.inherited => ManifestDepEntry.invalid (Mote.inherit_chained_message name),
+    }
+
+def Mote.resolve_from_root
+        (w : MoteWorkspaceRoot) (name : String)
+        (root_entries : List (Pair String ManifestDepEntry)) : ManifestDepEntry :=
+    match Mote.lookup_dep_entry root_entries name {
+        Option.none => ManifestDepEntry.invalid (Mote.inherit_missing_name_message w name),
+        Option.some entry => Mote.resolve_root_entry w name entry,
+    }
+
+def Mote.resolve_inherited
+        (lookup : MoteRootLookup)
+        (name : String)
+        (root_entries : List (Pair String ManifestDepEntry))
+        : ManifestDepEntry :=
+    match lookup {
+        MoteRootLookup.root_none => ManifestDepEntry.invalid (Mote.inherit_missing_root_message name),
+        MoteRootLookup.root_rejected root_dir => ManifestDepEntry.invalid (Mote.inherit_not_member_message root_dir),
+        MoteRootLookup.root_found w => Mote.resolve_from_root w name root_entries,
+    }
+
 def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : Option MoteManifest :=
+    Mote.manifest_of_table_root dir MoteRootLookup.root_none root
+
+/// `manifest_of_table` with a workspace root in hand: `workspace = true`
+/// entries are replaced by the root's `[workspace.dependencies]` entry. Kept
+/// as a separate entry point so callers with no workspace context keep the
+/// pure signature.
+pub def Mote.manifest_of_table_in_workspace
+        (dir : String) (root_dir : String) (root_table : BTreeMap String Toml.Value)
+        (table : BTreeMap String Toml.Value) : Option MoteManifest :=
+    let w : MoteWorkspaceRoot := { dir := root_dir, table := root_table } in
+    Mote.manifest_of_table_root dir (MoteRootLookup.root_found w) table
+
+def Mote.manifest_of_table_root
+        (dir : String) (lookup : MoteRootLookup) (root : BTreeMap String Toml.Value)
+        : Option MoteManifest :=
     match Mote.table_string (Toml.table_get "mote" root) "name" {
         Option.none => Option.none,
         Option.some name =>
+            let raw_entries := List.append
+                (Mote.table_dep_entries dir (Toml.table_get "dependencies" root))
+                (Mote.table_dep_entries dir (Toml.table_get "dev-dependencies" root)) in
+            let root_entries := match lookup {
+                MoteRootLookup.root_found w => Mote.root_dep_entries w,
+                _ => List.empty,
+            } in
+            let entries := Mote.resolve_entries lookup root_entries raw_entries in
             let deps := List.append
                 (Mote.table_keys (Toml.table_get "dependencies" root))
                 (Mote.table_keys (Toml.table_get "dev-dependencies" root)) in
-            let entries := List.append
-                (Mote.table_dep_entries dir (Toml.table_get "dependencies" root))
-                (Mote.table_dep_entries dir (Toml.table_get "dev-dependencies" root)) in
             let deps_full := Mote.found_deps entries in
             let libs := Mote.table_string_array (Toml.table_get "link" root) "libs" in
             let pkgs := Mote.table_string_array (Toml.table_get "link" root) "pkg-config" in
@@ -725,16 +880,234 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
                 lib_path := lib_path,
                 bins := bins,
                 targets := targets,
+                inherited := Mote.inherited_names raw_entries,
+                workspace_root := match lookup {
+                    MoteRootLookup.root_found w => Option.some w.dir,
+                    _ => Option.none,
+                },
             } in
             Option.some m
     }
 
+// ─── Workspace root lookup ─────────────────────────────────────────
+
+/// A directory spelling with the redundant `./` and trailing `/` removed.
+/// Used only to compare two spellings of the same member; it does not try to
+/// be a general path normalizer.
+def Mote.norm_dir (d : String) : String :=
+    let a := if String.starts_with "./" d then String.drop 2 d else d in
+    let b := if String.ends_with "/" a then String.slice a 0 (String.length a - 1) else a in
+    if String.is_empty b then "." else b
+
+/// One step up, handling the `""`/`.` spellings the same way
+/// `config_dir_above` does: `""` and `.` mean the working directory, whose
+/// parent has to be written `..` because `raw_parent_dir ""` is `""`.
+def Mote.dir_above (d : String) : String :=
+    if String.beq d "" || String.beq d "." then ".."
+    else if String.starts_with ".." d then String.concat d "/.."
+    else parent_of d
+
+/// The `[mote] name` of the manifest at `dir`, if there is one.
+#[partial]
+def Mote.member_manifest_name (dir : String) : IO (Option String) := do {
+    let text <- read_file_or_none (Path.path (mote_toml_in dir));
+    match text {
+        Option.none => return Option.none,
+        Option.some t => match Mote.parse_manifest dir t {
+            Option.none => return Option.none,
+            Option.some m => return (Option.some m.name),
+        },
+    }
+}
+
+def Mote.names_contain (names : List String) (want : String) : Bool :=
+    match names {
+        List.empty => false,
+        List.cons n rest => if String.beq n want then true else Mote.names_contain rest want,
+    }
+
+/// The `[mote] name` of every directory in `dirs`, dropping the ones that
+/// are not manifests. Membership is decided by NAME rather than by spelling
+/// the member's directory relative to the root: a user may be standing
+/// inside the member (`""`), name it `./cli`, or reach it through an
+/// absolute git checkout, and all of those are the same member.
+#[partial]
+def Mote.member_names_of (dirs : List String) : IO (List String) :=
+    match dirs {
+        List.empty => return List.empty,
+        List.cons d rest => do {
+            let n <- Mote.member_manifest_name d;
+            let tail <- Mote.member_names_of rest;
+            match n {
+                Option.some x => return (List.cons x tail),
+                Option.none => return tail,
+            }
+        },
+    }
+
+#[partial]
+pub def Mote.workspace_member_names (root_dir : String) : IO (List String) := do {
+    let dirs <- Mote.workspace_members root_dir;
+    Mote.member_names_of dirs
+}
+
+/// Walk up from `dir` for the first manifest with a `[workspace]` table and
+/// decide whether `name` (the manifest being loaded) belongs to it.
+/// `root_found` gives the root and its parsed table; `root_rejected` names a
+/// root that exists but does not list this package; `root_none` means there
+/// is no root above.
+#[partial]
+pub def Mote.workspace_root_of (dir : String) (name : String) : IO MoteRootLookup :=
+    Mote.workspace_root_go dir name 32
+
+#[partial]
+def Mote.workspace_root_go (dir : String) (name : String) (depth : I64) : IO MoteRootLookup := do {
+    if I64.lt depth 1 || String.beq dir "/" then return MoteRootLookup.root_none
+    else do {
+        let text <- read_file_or_none (Path.path (mote_toml_in dir));
+        match text {
+            Option.none => Mote.workspace_root_above dir name depth,
+            Option.some t => match Toml.parse t {
+                err _ => Mote.workspace_root_above dir name depth,
+                ok root => match Toml.table_get "workspace" root {
+                    Option.none => Mote.workspace_root_above dir name depth,
+                    Option.some v => match v {
+                        Toml.Value.table _ => Mote.workspace_root_found dir name root,
+                        _ => Mote.workspace_root_above dir name depth,
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[partial]
+def Mote.workspace_root_above (dir : String) (name : String) (depth : I64) : IO MoteRootLookup :=
+    Mote.workspace_root_go (Mote.dir_above dir) name (depth - 1)
+
+/// A `[workspace]` manifest was found at `dir`. A root that also declares
+/// its own `[mote]` name may inherit from its own table; otherwise the
+/// member must be listed (by name) in `[workspace] members`.
+#[partial]
+def Mote.workspace_root_found
+        (dir : String) (name : String) (root : BTreeMap String Toml.Value) : IO MoteRootLookup := do {
+    let own := Mote.table_string (Toml.table_get "mote" root) "name";
+    let is_self := match own {
+        Option.some n => String.beq n name,
+        Option.none => false,
+    };
+    let w : MoteWorkspaceRoot := { dir := dir, table := root };
+    if is_self then return (MoteRootLookup.root_found w)
+    else do {
+        let names <- Mote.workspace_member_names dir;
+        if Mote.names_contain names name
+        then return (MoteRootLookup.root_found w)
+        else return (MoteRootLookup.root_rejected dir)
+    }
+}
+
+/// `parse_manifest` with a root lookup already decided.
+def Mote.parse_manifest_with_lookup
+        (dir : String) (lookup : MoteRootLookup) (text : String) : Option MoteManifest :=
+    match Toml.parse text {
+        err _ => Option.none,
+        ok root => Mote.manifest_of_table_root dir lookup root,
+    }
+
+/// Read a manifest, resolving `workspace = true` entries against the
+/// workspace root above it. The pure `parse_manifest` stays available for
+/// callers with no filesystem; this is the loader's entry point.
+#[partial]
+pub def Mote.load_manifest (dir : String) (text : String) : IO (Option MoteManifest) := do {
+    match Mote.parse_manifest dir text {
+        Option.none => return Option.none,
+        Option.some m =>
+            if List.is_empty m.inherited
+            then return (Option.some m)
+            else do {
+                let lookup <- Mote.workspace_root_of dir m.name;
+                match lookup {
+                    // `m` already carries the "no root" errors.
+                    MoteRootLookup.root_none => return (Option.some m),
+                    MoteRootLookup.root_rejected _ =>
+                        return (Mote.parse_manifest_with_lookup dir lookup text),
+                    MoteRootLookup.root_found _ =>
+                        return (Mote.parse_manifest_with_lookup dir lookup text),
+                }
+            }
+    }
+}
+
+/// The member directories of the workspace rooted at `dir`, or `none` when
+/// `dir` has no `[workspace]` table. Used by `monad fetch`, which is handed a
+/// virtual root and must resolve every member's dependencies.
+#[partial]
+pub def Mote.workspace_member_dirs (dir : String) : IO (Option (List String)) := do {
+    let text <- read_file_or_none (Path.path (mote_toml_in dir));
+    match text {
+        Option.none => return Option.none,
+        Option.some t => match Toml.parse t {
+            err _ => return Option.none,
+            ok root => match Toml.table_get "workspace" root {
+                Option.none => return Option.none,
+                Option.some v => match v {
+                    Toml.Value.table _ => do {
+                        let dirs <- Mote.workspace_members dir;
+                        return (Option.some dirs)
+                    },
+                    _ => return Option.none,
+                }
+            }
+        }
+    }
+}
+
+/// The first unresolved-inheritance problem for the manifest at `dir`, as a
+/// finished diagnostic. `none` means either there is no such problem or the
+/// manifest uses no `workspace = true`.
+#[partial]
+pub def Mote.manifest_problem (dir : String) : IO (Option String) := do {
+    let text <- read_file_or_none (Path.path (mote_toml_in dir));
+    match text {
+        Option.none => return Option.none,
+        Option.some t => match Mote.parse_manifest dir t {
+            Option.none => return Option.none,
+            Option.some m =>
+                if List.is_empty m.inherited then return Option.none
+                else do {
+                    let lookup <- Mote.workspace_root_of dir m.name;
+                    let root_entries := match lookup {
+                        MoteRootLookup.root_found w => Mote.root_dep_entries w,
+                        _ => List.empty,
+                    };
+                    return (Mote.inherited_problem (mote_toml_in dir) lookup root_entries m.inherited)
+                }
+        }
+    }
+}
+
+def Mote.inherited_problem
+        (manifest : String) (lookup : MoteRootLookup)
+        (root_entries : List (Pair String ManifestDepEntry)) (names : List String)
+        : Option String :=
+    match names {
+        List.empty => Option.none,
+        List.cons name rest => match Mote.resolve_entry lookup name root_entries ManifestDepEntry.inherited {
+            ManifestDepEntry.invalid reason => Option.some (Mote.dep_error_message manifest name reason),
+            _ => Mote.inherited_problem manifest lookup root_entries rest,
+        },
+    }
+
 /// One `[dependencies]`/`[dev-dependencies]` entry, read: a source, an
-/// error to report, or neither (an empty table, `workspace = true`).
+/// error to report, an inheritance marker, or neither (an empty table).
 type ManifestDepEntry {
     found (d : Dependency),
     invalid (reason : String),
     sourceless,
+    /// `workspace = true`: the source comes from the workspace root's
+    /// `[workspace.dependencies]` table and is resolved before a `Dependency`
+    /// exists.
+    inherited,
 }
 
 /// The string-valued keys a dependency table understands, read once so the
@@ -784,6 +1157,26 @@ def Mote.dep_entry (mote_dir : String) (v : Toml.Value) : ManifestDepEntry :=
 /// absent key: `tag = 1` quietly meaning "no tag" would follow the
 /// remote's `HEAD` instead of the pin the author wrote.
 def Mote.dep_entry_of_table (mote_dir : String) (sub : BTreeMap String Toml.Value) : ManifestDepEntry :=
+    match Toml.table_get "workspace" sub {
+        Option.some v => Mote.inherit_entry sub v,
+        Option.none => Mote.dep_entry_of_plain_table mote_dir sub,
+    }
+
+/// `workspace = true` is a parse-time marker: the only key the entry may
+/// name, and it must be the boolean `true`. Everything else is resolved from
+/// the workspace root before a `Dependency` exists.
+def Mote.inherit_entry (sub : BTreeMap String Toml.Value) (v : Toml.Value) : ManifestDepEntry :=
+    if I64.lt 1 (List.length (BTreeMap.to_list sub))
+    then ManifestDepEntry.invalid "`workspace = true` is the only key an inherited dependency may declare"
+    else match v {
+        Toml.Value.boolean b =>
+            if b
+            then ManifestDepEntry.inherited
+            else ManifestDepEntry.invalid "`workspace` must be `true`, not `false`",
+        _ => ManifestDepEntry.invalid "`workspace` must be the boolean `true`",
+    }
+
+def Mote.dep_entry_of_plain_table (mote_dir : String) (sub : BTreeMap String Toml.Value) : ManifestDepEntry :=
     match List.filter (fn (key : String) => Mote.dep_key_not_string sub key) dep_string_keys {
         List.cons key _ => ManifestDepEntry.invalid (String.concat (String.concat "`" key) "` must be a string"),
         List.empty => Mote.dep_entry_of_keys mote_dir (Mote.dep_keys sub),
@@ -950,11 +1343,36 @@ pub def Mote.with_locked_dirs_at (home : String) (m : MoteManifest) : IO MoteMan
     if Bool.not (Mote.any_git_dep m.deps_full)
     then return m
     else do {
-        let read <- Lock.read (Path.path (raw_path_join m.dir "mote.lock"));
-        match read {
-            Result.err _ => return m,
-            Result.ok found => Mote.with_locked_lock home m found
+        let read <- Mote.read_lock_for m;
+        Mote.with_locked_lock home m read
+    }
+}
+
+/// One `mote.lock` per workspace: an inherited edge's commit lives in the
+/// root's lock, not the member's. A member with no root lock still falls
+/// back to its own, so an existing single-mote lock keeps working.
+#[partial]
+def Mote.read_lock_for (m : MoteManifest) : IO (Option LockRead) :=
+    match m.workspace_root {
+        Option.none => Mote.read_lock_at m.dir,
+        Option.some root => do {
+            let root_read <- Mote.read_lock_at root;
+            match root_read {
+                Option.some r => return (Option.some r),
+                Option.none =>
+                    if String.beq root m.dir
+                    then return Option.none
+                    else Mote.read_lock_at m.dir,
+            }
         }
+    }
+
+#[partial]
+def Mote.read_lock_at (dir : String) : IO (Option LockRead) := do {
+    let read <- Lock.read (Path.path (raw_path_join dir "mote.lock"));
+    match read {
+        Result.err _ => return Option.none,
+        Result.ok found => return found,
     }
 }
 
@@ -1651,6 +2069,9 @@ def Mote.manifest_of_attr (dir : String) (attr : Attribute) : Option MoteManifes
                 // The inline annotation carries no `targets` key; it is a
                 // target FILE, and profile availability is per declaration.
                 targets := List.empty,
+                // An inline mote belongs to no workspace manifest.
+                inherited := List.empty,
+                workspace_root := Option.none,
             } in
             Option.some m
     }
@@ -1996,16 +2417,17 @@ def test_version_only_dependency_is_not_located_at_the_declaring_mote : Bool :=
 def sourceless_manifest_fixture : String :=
   "[mote]\nname = \"app\"\n\n[dependencies.shared]\nworkspace = true\n"
 
-/// `workspace = true` names no source until inheritance resolves it, and
-/// that is not an error: declared, no source, nothing reported.
+/// `workspace = true` is declared by name, but with no workspace root above
+/// it there is nothing to inherit: that is an error naming the dependency,
+/// not a silent "declared, no source".
 #[test]
-def test_workspace_marker_is_declared_without_a_source : Bool :=
+def test_workspace_marker_without_a_root_is_an_error : Bool :=
     match Mote.parse_manifest "app" sourceless_manifest_fixture {
         Option.none => false,
         Option.some m =>
             MoteManifest.declares m "shared"
             && dep_has_no_source m "shared"
-            && List.length m.dep_errors == 0
+            && Bool.not (List.is_empty (MoteManifest.dep_errors_for m "shared"))
     }
 
 def bad_deps_manifest_fixture : String :=
@@ -2738,4 +3160,146 @@ def test_affine_mode_treats_unknown_values_as_error : Bool :=
     match Mote.affine_mode_of_text "[affine]\nmode = \"off\"\n" {
         AffineMode.affine_error => true,
         AffineMode.affine_warn => false,
+    }
+
+// ─── Workspace dependency inheritance ───────────────────────────────
+
+def test_dep_in (deps : List (Pair String Dependency)) (name : String) : Option Dependency :=
+    match deps {
+        List.empty => Option.none,
+        List.cons p rest => match p {
+            Pair.pair k v => if String.beq k name then Option.some v else test_dep_in rest name,
+        },
+    }
+
+def inherited_root_fixture (text : String) : MoteRootLookup :=
+    match Toml.parse text {
+        err _ => MoteRootLookup.root_none,
+        ok root =>
+            let w : MoteWorkspaceRoot := { dir := "", table := root } in
+            MoteRootLookup.root_found w,
+    }
+
+def inherited_member_fixture (dep_table : String) : String :=
+    String.concat "[mote]\nname = \"lang\"\nversion = \"0.1.0\"\n\n" dep_table
+
+def inherited_root_text : String :=
+    "[workspace]\nmembers = [\"lang\"]\n\n[workspace.dependencies.std]\npath = \"std\"\n"
+
+/// The one semantic that differs from a direct dependency: the path is
+/// ROOT-relative, so a member at `lang` still resolves to `std`, not
+/// `lang/std`.
+#[test]
+def test_inherited_path_resolves_against_the_root : Bool :=
+    match Mote.parse_manifest_with_lookup "lang"
+        (inherited_root_fixture inherited_root_text)
+        (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
+        Option.none => false,
+        Option.some m => match MoteManifest.dep_dir_of m "std" {
+            Option.some d => String.beq d "std" && match m.workspace_root {
+                Option.some r => String.beq r "",
+                Option.none => false,
+            },
+            Option.none => false,
+        },
+    }
+
+/// A git source is inherited the same way; it is located only after the
+/// root lock supplies a checkout.
+#[test]
+def test_inherited_git_source_keeps_its_pin : Bool :=
+    let root_text : String := "[workspace]\nmembers = [\"lang\"]\n\n[workspace.dependencies.json]\ngit = \"https://example.invalid/json\"\ntag = \"v1\"\n" in
+    match Mote.parse_manifest_with_lookup "lang"
+        (inherited_root_fixture root_text)
+        (inherited_member_fixture "[dependencies.json]\nworkspace = true\n") {
+        Option.none => false,
+        Option.some m => match test_dep_in m.deps_full "json" {
+            Option.none => false,
+            Option.some d => match d {
+                Dependency.git url tag _branch _rev _subdir =>
+                    String.beq url "https://example.invalid/json"
+                        && match tag { Option.some t => String.beq t "v1", Option.none => false },
+                _ => false,
+            },
+        },
+    }
+
+#[test]
+def test_inherited_dev_dependency : Bool :=
+    let member : String := inherited_member_fixture "[dev-dependencies.std]\nworkspace = true\n" in
+    match Mote.parse_manifest_with_lookup "lang" (inherited_root_fixture inherited_root_text) member {
+        Option.none => false,
+        Option.some m => match MoteManifest.dep_dir_of m "std" {
+            Option.some d => String.beq d "std",
+            Option.none => false,
+        },
+    }
+
+#[test]
+def test_inherited_name_missing_from_the_root_is_an_error : Bool :=
+    let root_text : String := "[workspace]\nmembers = [\"lang\"]\n" in
+    match Mote.parse_manifest_with_lookup "lang"
+        (inherited_root_fixture root_text)
+        (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
+        Option.none => false,
+        Option.some m => Bool.not (List.is_empty (MoteManifest.dep_errors_for m "std")),
+    }
+
+#[test]
+def test_workspace_marker_with_a_sibling_key_is_an_error : Bool :=
+    match Mote.parse_manifest "lang"
+        (inherited_member_fixture "[dependencies.std]\nworkspace = true\npath = \"../std\"\n") {
+        Option.none => false,
+        Option.some m => Bool.not (List.is_empty (MoteManifest.dep_errors_for m "std")),
+    }
+
+#[test]
+def test_workspace_marker_must_be_true : Bool :=
+    match Mote.parse_manifest "lang"
+        (inherited_member_fixture "[dependencies.std]\nworkspace = false\n") {
+        Option.none => false,
+        Option.some m => Bool.not (List.is_empty (MoteManifest.dep_errors_for m "std")),
+    }
+
+#[test]
+def test_chained_workspace_marker_is_an_error : Bool :=
+    let root_text : String := "[workspace]\nmembers = [\"lang\"]\n\n[workspace.dependencies.std]\nworkspace = true\n" in
+    match Mote.parse_manifest_with_lookup "lang"
+        (inherited_root_fixture root_text)
+        (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
+        Option.none => false,
+        Option.some m => Bool.not (List.is_empty (MoteManifest.dep_errors_for m "std")),
+    }
+
+/// No root at all is an error, not a silent "declared but unlocated".
+#[test]
+def test_marker_with_no_workspace_root_is_an_error : Bool :=
+    match Mote.parse_manifest "lang"
+        (inherited_member_fixture "[dependencies.std]\nworkspace = true\n") {
+        Option.none => false,
+        Option.some m => Bool.not (List.is_empty (MoteManifest.dep_errors_for m "std")),
+    }
+
+/// A root that is also the package may inherit from its own table.
+#[test]
+def test_package_root_inherits_from_its_own_table : Bool :=
+    let text : String := "[mote]\nname = \"root\"\n\n[workspace]\nmembers = [\"root\"]\n\n[workspace.dependencies.std]\npath = \"std\"\n\n[dependencies.std]\nworkspace = true\n" in
+    match Mote.parse_manifest_with_lookup "root"
+        (inherited_root_fixture text) text {
+        Option.none => false,
+        Option.some m => match MoteManifest.dep_dir_of m "std" {
+            Option.some d => String.beq d "std",
+            Option.none => false,
+        },
+    }
+
+/// An ordinary manifest is untouched by the new path.
+#[test]
+def test_plain_path_dependency_is_unchanged : Bool :=
+    match Mote.parse_manifest "lang" (inherited_member_fixture "[dependencies.std]\npath = \"../std\"\n") {
+        Option.none => false,
+        Option.some m => match MoteManifest.dep_dir_of m "std" {
+            Option.some d => String.beq d "lang/../std",
+            Option.none => false,
+        },
     }

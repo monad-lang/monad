@@ -26,6 +26,7 @@ use parsec::core {ParseError, ParseResult, parse_error_remaining}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
 use lang::mote {
   BinTarget, Mote.affine_mode_of_path, Mote.discover, Mote.manifest_at, Mote.manifest_of_attr,
+  Mote.manifest_problem,
   Mote.mote_attr_unknown_keys, Mote.parse_manifest, Mote.toolchain_candidates,
   Mote.toolchain_missing_hint, Mote.toolchain_root, Mote.workspace_members, MoteManifest,
   MoteManifest.dep_errors_for,
@@ -5195,6 +5196,22 @@ def first_targetless_mote (motes : List MoteManifest) : IO (Option MoteManifest)
     }
 }
 
+/// The first unresolved `workspace = true` (a missing root, a non-member
+/// manifest, a missing or chained root entry) among the loaded motes. A
+/// sibling of `first_targetless_mote`: one finished diagnostic, not a list.
+#[partial]
+def first_manifest_problem (motes : List MoteManifest) : IO (Option String) :=
+    match motes {
+        List.empty => return Option.none,
+        List.cons m rest => do {
+            let problem <- Mote.manifest_problem m.dir;
+            match problem {
+                Option.some msg => return (Option.some msg),
+                Option.none => first_manifest_problem rest,
+            }
+        }
+    }
+
 /// Turn the first target-less mote, if any, into the load's own failure. One
 /// error, not all of them, matching `gate_declared_deps`.
 #[partial]
@@ -5203,10 +5220,16 @@ def gate_mote_targets (r : Result String LoadedModules) : IO (Result String Load
         Result.err e => return (Result.err e),
         Result.ok loaded => do {
             let motes <- mote_target_candidates (get_loaded_all loaded);
-            let bad <- first_targetless_mote motes;
-            match bad {
-                Option.none => return (Result.ok loaded),
-                Option.some m => return (Result.err (targetless_mote_error m))
+            let problem <- first_manifest_problem motes;
+            match problem {
+                Option.some msg => return (Result.err msg),
+                Option.none => do {
+                    let bad <- first_targetless_mote motes;
+                    match bad {
+                        Option.none => return (Result.ok loaded),
+                        Option.some m => return (Result.err (targetless_mote_error m))
+                    }
+                }
             }
         }
     }
