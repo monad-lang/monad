@@ -120,6 +120,26 @@ void monad_release(void* ptr) {
    does not recurse deeply never pays for it in RSS -- and the stack is
    unmapped again when the (detached) thread exits. */
 #define MONAD_DEEP_STACK_BYTES ((size_t)128 * 1024 * 1024)
+/* The smallest reservation `MONAD_STACK_BYTES` may ask for. A test wants a
+   small stack to make an overrun fail in seconds instead of after tens of
+   thousands of frames; a typo must not make every program crash, so the
+   override is clamped at both ends. */
+#define MONAD_MIN_STACK_BYTES ((size_t)1024 * 1024)
+#define MONAD_MAX_STACK_BYTES ((size_t)1024 * 1024 * 1024)
+
+/* The reservation for the main trampoline and every fiber. `MONAD_STACK_BYTES`
+   (a plain decimal byte count) overrides it; unset or unparsable keeps the
+   default. Both trampolines call this so one knob moves both. */
+static size_t monad_stack_bytes(void) {
+    const char* v = getenv("MONAD_STACK_BYTES");
+    if (!v || !*v) return MONAD_DEEP_STACK_BYTES;
+    long n = strtol(v, NULL, 10);
+    if (n <= 0) return MONAD_DEEP_STACK_BYTES;
+    size_t s = (size_t)n;
+    if (s < MONAD_MIN_STACK_BYTES) s = MONAD_MIN_STACK_BYTES;
+    if (s > MONAD_MAX_STACK_BYTES) s = MONAD_MAX_STACK_BYTES;
+    return s;
+}
 
 typedef struct {
     Header header;
@@ -218,7 +238,7 @@ void* monad_fork_io(void* closure) {
     int rc = pthread_attr_init(&attr);
     if (rc == 0) {
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        pthread_attr_setstacksize(&attr, MONAD_DEEP_STACK_BYTES);
+        pthread_attr_setstacksize(&attr, monad_stack_bytes());
         rc = pthread_create(&thread, &attr, fiber_main, f);
         if (rc != 0) {
             /* The 128 MB reservation can be refused (thread-count or
@@ -2187,7 +2207,7 @@ int main(int argc, char** argv) {
     pthread_attr_t attr;
     int rc = pthread_attr_init(&attr);
     if (rc == 0) {
-        pthread_attr_setstacksize(&attr, MONAD_DEEP_STACK_BYTES);
+        pthread_attr_setstacksize(&attr, monad_stack_bytes());
         rc = pthread_create(&thread, &attr, main_thread_main, &m);
         if (rc != 0) {
             pthread_attr_destroy(&attr);
