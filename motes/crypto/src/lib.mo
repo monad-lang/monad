@@ -8,3 +8,5 @@
 
 pub use lib::types {CryptoSigAlg, CryptoPublicKey}
 pub use lib::ct {Ct.eq}
+pub use lib::der {Der.ecdsa_raw_to_der}
+pub use lib::pubkey {Pubkey.verify}
