@@ -8,6 +8,7 @@
 /// transport's own failure text.
 
 use jsonwebtoken::errors {JwtError, JwtError.to_string}
+use std::list {List.intercalate}
 
 pub type OauthError {
   // ── configuration ─────────────────────────────────────────────────────
@@ -116,3 +117,29 @@ pub def OauthError.to_string (e : OauthError) : String :=
 /// becomes an `OauthError`. The rendered text is the JWT error's own.
 pub def OauthError.of_jwt (e : JwtError) : OauthError :=
   OauthError.jwt (JwtError.to_string e)
+
+/// A resource-server authentication failure (Phase 3).
+///
+/// The public response is deliberately generic: `Bearer.response_of` maps
+/// each variant to a status, an RFC 6750 `WWW-Authenticate` challenge and a
+/// body naming only the error code. `AuthError.to_string` is for audit/log
+/// output and carries the JWT reason; it never contains a token.
+pub type AuthError {
+  auth_missing_token,
+  auth_invalid_token (reason : String),
+  auth_expired,
+  auth_insufficient_scope (required : List String),
+  auth_temporarily_unavailable
+}
+
+pub def AuthError.to_string (e : AuthError) : String :=
+  match e {
+    AuthError.auth_missing_token => "auth: missing bearer token",
+    AuthError.auth_invalid_token reason =>
+      String.concat "auth: invalid token: " reason,
+    AuthError.auth_expired => "auth: token expired",
+    AuthError.auth_insufficient_scope required =>
+      String.concat "auth: insufficient scope: " (List.intercalate " " required),
+    AuthError.auth_temporarily_unavailable =>
+      "auth: identity provider temporarily unavailable"
+  }

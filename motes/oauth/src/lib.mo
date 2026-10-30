@@ -15,7 +15,11 @@
 // applications that validate tokens import `jsonwebtoken` directly, so
 // there is exactly one JWT API.
 
-pub use lib::errors {OauthError, OauthError.of_jwt, OauthError.to_string}
+pub use lib::errors {
+  OauthError,
+  OauthError.of_jwt,
+  OauthError.to_string,
+}
 pub use lib::config {
   ClientAuth,
   OauthConfig,
@@ -54,3 +58,4 @@ pub use lib::client {
   Client.refresh,
   Client.userinfo,
 }
+pub use lib::bearer {Bearer.require, BearerValidator, BearerValidator.jwt}
