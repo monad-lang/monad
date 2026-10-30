@@ -28,6 +28,41 @@ type Shape {
 
 open Shape {circle, rectangle}
 
+// --- Copy instances ---
+//
+// `over` and `over_prism` rebuild the whole structure from a read of it, so
+// they declare `[Copy S]`; the checker enforces that at the call site. Each
+// of these is a plain field-wise duplicate (a `String` field is `Copy`), which
+// is the "genuinely immutable small record" case the instance is for.
+
+instance Copy Address {
+    def copy (a : Address) : Pair Address Address :=
+        match a {
+            { street, city } =>
+                let one : Address := { street := street, city := city } in
+                let two : Address := { street := street, city := city } in
+                Pair.pair one two,
+        }
+}
+
+instance Copy Person {
+    def copy (p : Person) : Pair Person Person :=
+        match p {
+            { name, age, address } =>
+                let one : Person := { name := name, age := age, address := address } in
+                let two : Person := { name := name, age := age, address := address } in
+                Pair.pair one two,
+        }
+}
+
+instance Copy Shape {
+    def copy (s : Shape) : Pair Shape Shape :=
+        match s {
+            circle r => Pair.pair (circle r) (circle r),
+            rectangle w h => Pair.pair (rectangle w h) (rectangle w h),
+        }
+}
+
 // --- Lenses for Person ---
 
 def get_name (p : Person) : String :=

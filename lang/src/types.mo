@@ -1752,6 +1752,11 @@ pub type TypeError {
     /// two owners to one value. Read it, pass the `Shared` handle on, or
     /// make an explicit copy with `Clone.clone`.
     borrowed_value_escapes (name: Identifier) (typ: Term),
+    /// A call to a def declaring `[C A]` where every constraint variable
+    /// is solved to a concrete type, and no instance of `C` matches it.
+    /// Without this the dictionary is silently defaulted (and a
+    /// dict-generating constraint leaves the call a parameter short).
+    missing_instance (cls: NamePath) (typ: Term),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`

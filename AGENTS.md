@@ -89,6 +89,16 @@ A mote's `mote.toml` may carry `[affine] mode = "warn"` while it migrates;
 the default (no table) is `error`, and there is no off switch. `String` is
 `Copy` (an immutable pointer); `ByteBuf` is not (it is mutable).
 
+A def's declared constraints (`[Foo A]`, and `[Copy A]` too — that one
+carries no dictionary) are likewise a **call-site obligation** in the
+self-hosted compiler: once the call's types are solved, every constraint
+needs a matching instance, or the call is a `no instance of ...` error. A
+still-generic caller forwarding its own parameter is not decidable and stays
+accepted. The Rust host leaves an unresolvable call as a plain application
+instead (see `plans/implementations/class-constraint-not-enforced-at-call-sites.md`),
+and a bare class-*method* call with no instance is still caught at codegen
+rather than at typecheck.
+
 ### Affine rule quick reference
 
 ```monad,ignore

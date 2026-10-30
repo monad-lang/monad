@@ -20,6 +20,19 @@ derive_debug! Point
 derive_beq! Point
 derive_bord! Point
 
+/// `over` rebuilds the whole structure from a read of it, so it declares
+/// `[Copy S]` and the checker enforces it at the call site. A derived lens
+/// does not derive the instance: two `I64`s are a plain field-wise duplicate.
+instance Copy Point {
+    def copy (pt : Point) : Pair Point Point :=
+        match pt {
+            { x, y } =>
+                let one : Point := { x := x, y := y } in
+                let two : Point := { x := x, y := y } in
+                Pair.pair one two,
+        }
+}
+
 #[test]
 def test_derive_lens_view_x : Bool :=
     let pt : Point := { x := 3, y := 5 } in

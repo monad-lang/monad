@@ -172,6 +172,14 @@ binder used more than once but *owned* at most once wants a borrow or a `Copy`
 instance; a binder owned twice really is moved twice and wants a rewrite; a
 `!x` never used is the one case affine's weakening does not excuse.
 
+A def's declared constraints are also enforced where the def is **called**:
+once a call's types are solved, every `[C A]` it declares needs a matching
+instance, or the call is a `no instance of …` error. That includes `[Copy A]`,
+which never becomes a dictionary parameter — so `over [Copy S] (ln : Lens S A)
+…` rejects a structure with no `Copy` instance instead of duplicating it
+anyway. A caller that is itself generic (`[Copy T]` forwarding its own
+parameter) is not decidable and stays accepted.
+
 Two caveats matter. **Nothing frees memory yet.** Codegen still emits no
 `monad_release`, `Shared` is boxed rather than erased, and `String` is
 collector-owned, so the GC described in

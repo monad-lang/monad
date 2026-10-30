@@ -28,9 +28,10 @@ use lang::scope {
   instance_wildcard_names, instance_head_is_concrete, list_append, mangle_instance_dict_name,
   mangle_instance_method_name, mangled_to_identifier, param_names,
   rebuild_call,
-  resolve_dict_args, scope_data_add_inductive, scope_data_classes, scope_data_constrained_def_classes,
+  resolve_dict_arg, resolve_dict_args, scope_data_add_inductive, scope_data_classes, scope_data_constrained_def_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
-  scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_dict_constraints,
+  scope_find_class_def_by_name, scope_find_class_def_for_ref, scope_find_def_constraints,
+  scope_find_def_dict_constraints,
   scope_find_def_params, scope_find_def_return_type,
   scope_find_def_sig, scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_instance_by_name, scope_find_local, scope_globals,
@@ -707,6 +708,64 @@ def dict_args_for_constraints (constraints : List TypeConstraint) (bindings : Li
                 resolve_dict_args (scope_data_classes (scope_globals scope)) (scope_all_instances_in scope) (dict_env_from_locals locals) List.empty bindings c List.empty constraints,
             Option.none => Option.none,
         }
+
+/// The first declared constraint this call cannot satisfy, or `None` when
+/// every one either resolves or is not yet decidable.
+///
+/// "Decidable" mirrors `dict_args_for_constraints`: a constraint answered
+/// by a dictionary already bound in this scope is satisfied, and one whose
+/// variables are all bound to informative types can be resolved against
+/// the instances in scope. A variable still on a hole is SKIPPED -- the
+/// checker cannot tell, and guessing would reject a valid call.
+///
+/// What is no longer skipped is a SOLVED variable with no matching
+/// instance. `reify_ordinary_dict_args` used to leave such a call with no
+/// dictionary at all (and a dict-generating one a parameter short), so the
+/// program compiled and ran with a defaulted dictionary. This is the check
+/// that turns it into a type error.
+def missing_constraint_error (name : NamePath) (bindings : List (Pair Identifier Term)) (hints : List String) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    match scope_find_def_constraints name scope {
+        Option.none => Option.none,
+        Option.some cs =>
+            let carrier : Option Term := informative_carrier_of expected_type in
+            missing_constraint_go cs bindings hints carrier scope locals,
+    }
+
+#[partial]
+def missing_constraint_go (cs : List TypeConstraint) (bindings : List (Pair Identifier Term)) (hints : List String) (carrier : Option Term) (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    match cs {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match missing_constraint_one c bindings hints carrier scope locals {
+                Option.some e => Option.some e,
+                Option.none => missing_constraint_go rest bindings hints carrier scope locals,
+            },
+    }
+
+def missing_constraint_one (c : TypeConstraint) (bindings : List (Pair Identifier Term)) (hints : List String) (carrier : Option Term) (scope : Scope) (locals : LocalScope) : Option TypeError :=
+    match c {
+        TypeConstraint.mk cls vars =>
+            match local_dict_for_class cls locals {
+                // Forwarded from this scope's own dictionary parameter.
+                Option.some _ => Option.none,
+                Option.none =>
+                    if Bool.not (vars_informative_go vars bindings scope) then Option.none
+                    else
+                        let fallback : Option Term :=
+                            match carrier {
+                                Option.some car => Option.some car,
+                                Option.none => first_bound_constraint_value (List.cons c List.empty) bindings,
+                            } in
+                        match fallback {
+                            Option.none => Option.none,
+                            Option.some car =>
+                                match resolve_dict_arg (scope_data_classes (scope_globals scope)) (scope_all_instances_in scope) (dict_env_from_locals locals) hints bindings car List.empty c {
+                                    Option.some _ => Option.none,
+                                    Option.none => Option.some (TypeError.missing_instance cls car),
+                                },
+                        },
+            },
+    }
 
 /// Insert the dict argument(s) an ordinary constrained def CALL needs
 /// into its elaborated spine -- the checker-side counterpart of
@@ -4468,13 +4527,24 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                     // answer -- see `call_result_typ`.
                                                                                     let result_typ : Term :=
                                                                                         call_result_typ refined_ret expected_type scope locals in
-                                                                                    // Re-attach the peeled `#` markers ahead of
-                                                                                    // the elaborated arguments (the dict pass reads
-                                                                                    // the hint off them) and insert the callee's
-                                                                                    // dict argument(s) behind them.
-                                                                                    let rebuilt : Term :=
-                                                                                        reify_ordinary_dict_args resolved_name k dict_hints (dict_hint_marker_terms dict_hints) subst ret_subst expected_type scope locals head elab_args in
-                                                                                    Option.some (ok (mk_typed rebuilt result_typ)),
+                                                                                    // A DECLARED class constraint is a
+                                                                                    // requirement, not advice: once every
+                                                                                    // constraint variable is solved, the
+                                                                                    // instance must exist. Checked before
+                                                                                    // the dictionary is inserted so a
+                                                                                    // missing one is an error rather than
+                                                                                    // a silently-defaulted call.
+                                                                                    match missing_constraint_error resolved_name (List.append subst ret_subst) dict_hints expected_type scope locals {
+                                                                                        Option.some e => Option.some (err e),
+                                                                                        Option.none =>
+                                                                                            // Re-attach the peeled `#` markers ahead of
+                                                                                            // the elaborated arguments (the dict pass reads
+                                                                                            // the hint off them) and insert the callee's
+                                                                                            // dict argument(s) behind them.
+                                                                                            let rebuilt : Term :=
+                                                                                                reify_ordinary_dict_args resolved_name k dict_hints (dict_hint_marker_terms dict_hints) subst ret_subst expected_type scope locals head elab_args in
+                                                                                            Option.some (ok (mk_typed rebuilt result_typ)),
+                                                                                    },
                                                                             },
                                                                     },
                                                         },

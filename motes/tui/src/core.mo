@@ -21,6 +21,40 @@ use lib::types { Rect, TextStyle, Cell, LayoutSize, MouseButton, Key, MouseEvent
 
 use init::optics {view, set, over}
 
+// --- Copy instances ---
+//
+// `over` rebuilds the whole structure from a read of it, so it declares
+// `[Copy S]` and the checker enforces that at the call site: `over Rect.y …`
+// needs `Copy Rect`. Both of these are plain immutable value records (four
+// `I64`s; colors and flags, with `Copy (Option Color)` from `std::ansi`), so
+// a field-wise duplicate is the right remedy.
+
+instance Copy Rect {
+    def copy (r : Rect) : Pair Rect Rect :=
+        match r {
+            { x, y, width, height } =>
+                let one : Rect := { x := x, y := y, width := width, height := height } in
+                let two : Rect := { x := x, y := y, width := width, height := height } in
+                Pair.pair one two,
+        }
+}
+
+instance Copy TextStyle {
+    def copy (s : TextStyle) : Pair TextStyle TextStyle :=
+        match s {
+            { fg, bg, bold, dim, italic, underline, strikethrough, reverse } =>
+                let one : TextStyle :=
+                    { fg := fg, bg := bg, bold := bold, dim := dim,
+                      italic := italic, underline := underline,
+                      strikethrough := strikethrough, reverse := reverse } in
+                let two : TextStyle :=
+                    { fg := fg, bg := bg, bold := bold, dim := dim,
+                      italic := italic, underline := underline,
+                      strikethrough := strikethrough, reverse := reverse } in
+                Pair.pair one two,
+        }
+}
+
 /// The style with no colors or attributes set.
 //
 // Fields are listed explicitly (not `{ }`) to work around a compiler bug:

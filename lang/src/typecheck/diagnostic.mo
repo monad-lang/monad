@@ -92,6 +92,12 @@ pub def type_error_message (e : TypeError) : String :=
 			String.concat "`" (String.concat (show_identifier name)
 				(String.concat "` : " (String.concat (show_term typ)
 				" is a borrowed view from `Shared.get`; it cannot be stored, returned, or passed to an owning parameter -- read it, or copy it with `Clone.clone`"))),
+		// A declared class constraint with no instance: name the class and
+		// the carrier, because the fix is an `instance C T`.
+		TypeError.missing_instance cls typ =>
+			String.concat "no instance of `" (String.concat (show_name_path cls)
+				(String.concat "` for `" (String.concat (show_term typ)
+				"` -- the call declares that constraint, and a dictionary cannot be defaulted"))),
 	}
 
 /// Render a full diagnostic for a type error — same visual family as

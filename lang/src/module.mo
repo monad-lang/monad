@@ -6531,6 +6531,44 @@ def test_affine_check_recognises_a_marked_shared_type : IO Bool := do {
         && I64.beq (List.length plain_diags) 1)
 }
 
+/// A declared class constraint is enforced at the CALL site: once its
+/// variable is solved to a concrete type, an instance must exist.
+#[test]
+def test_a_call_without_a_declared_instance_is_rejected : IO Bool := do {
+    let src : String :=
+        "class Foo A { def foo : A -> A }\n"
+        ++ "def use_foo [Foo S] (s : S) : S := Foo.foo s\n"
+        ++ "struct Pt { x : I64 }\n"
+        ++ "def caller (p : Pt) : Pt := use_foo p";
+    let diags : List String <- check_diags_of_source src "probe";
+    return (diags_contain "no instance of `Foo` for" diags)
+}
+
+/// ...and the same call is accepted once the instance exists.
+#[test]
+def test_a_call_with_the_instance_is_accepted : IO Bool := do {
+    let src : String :=
+        "class Foo A { def foo : A -> A }\n"
+        ++ "instance Foo I64 { def foo (x : I64) : I64 := x }\n"
+        ++ "def use_foo [Foo S] (s : S) : S := Foo.foo s\n"
+        ++ "def caller (x : I64) : I64 := use_foo x";
+    let diags : List String <- check_diags_of_source src "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
+/// An unsolved constraint variable (a still-generic caller) is not
+/// decidable, so it is not rejected -- guessing there would break
+/// constraint forwarding.
+#[test]
+def test_an_unsolved_constraint_is_not_rejected : IO Bool := do {
+    let src : String :=
+        "class Foo A { def foo : A -> A }\n"
+        ++ "def use_foo [Foo S] (s : S) : S := Foo.foo s\n"
+        ++ "def generic_caller [Foo T] (t : T) : T := use_foo t";
+    let diags : List String <- check_diags_of_source src "probe";
+    return (I64.beq (List.length diags) 0)
+}
+
 /// The rule's other verdict, end to end: two CONSTRUCTOR stores of one
 /// binder are two owning uses, so no shared view can help and the reported
 /// error is `value_used_after_move` with its own wording.

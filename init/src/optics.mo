@@ -29,11 +29,9 @@ pub def set (ln : Lens S A) (a : A) (s : S) : S :=
 /// closures, and function values are deliberately never `Copy`.)
 pub def over [Copy S] (ln : Lens S A) (g : A -> A) (s : S) : S :=
     // `s` is used twice because a lens reads the focus and rebuilds the
-    // whole; `[Copy S]` is the declared permission for that duplication
-    // (and the affine rule reads it). The checker does not yet ENFORCE a
-    // def-level constraint at call sites -- a language-wide gap tracked in
-    // `plans/type-system/quantitative-types.md` -- so a caller with no
-    // `Copy S` instance is accepted today.
+    // whole; `[Copy S]` is the declared permission for that duplication.
+    // The checker enforces it at the CALL site: a caller whose `S` has no
+    // `Copy` instance gets a "no instance of Copy" type error.
     match ln { mkLens v st => st (g (v s)) s }
 
 // --- Prism ---

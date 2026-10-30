@@ -47,6 +47,52 @@ pub instance BEq Color {
     def beq (a b : Color) : Bool := Color.beq a b
 }
 
+/// `Color` is immutable and every payload is a `U8`, so a duplicate is a
+/// value copy — the instance an `over`/`set` caller on a color-bearing
+/// struct needs (a lens rebuilds the whole structure, so it declares
+/// `[Copy S]`).
+///
+/// The rebuilt constructors are written `Color.black`, not bare `black`:
+/// the Rust host resolves a same-file constructor reference in EXPRESSION
+/// position only when it is type-qualified (bare ones are `unbound
+/// variable` there), while the self-hosted checker takes both. Patterns
+/// stay bare, as everywhere else.
+pub instance Copy Color {
+    def copy (c : Color) : Pair Color Color :=
+        match c {
+            black => Pair.pair Color.black Color.black,
+            red => Pair.pair Color.red Color.red,
+            green => Pair.pair Color.green Color.green,
+            yellow => Pair.pair Color.yellow Color.yellow,
+            blue => Pair.pair Color.blue Color.blue,
+            magenta => Pair.pair Color.magenta Color.magenta,
+            cyan => Pair.pair Color.cyan Color.cyan,
+            white => Pair.pair Color.white Color.white,
+            bright_black => Pair.pair Color.bright_black Color.bright_black,
+            bright_red => Pair.pair Color.bright_red Color.bright_red,
+            bright_green => Pair.pair Color.bright_green Color.bright_green,
+            bright_yellow => Pair.pair Color.bright_yellow Color.bright_yellow,
+            bright_blue => Pair.pair Color.bright_blue Color.bright_blue,
+            bright_magenta => Pair.pair Color.bright_magenta Color.bright_magenta,
+            bright_cyan => Pair.pair Color.bright_cyan Color.bright_cyan,
+            bright_white => Pair.pair Color.bright_white Color.bright_white,
+            color256 code => Pair.pair (Color.color256 code) (Color.color256 code),
+            true_color r g b => Pair.pair (Color.true_color r g b) (Color.true_color r g b),
+        }
+}
+
+/// A CONCRETE `Copy (Option Color)`: a constrained parametric instance
+/// (`[Copy A] Copy (Option A)`) never resolves in this checker
+/// (`lang/typecheck/copy_class.mo`), so a struct with an `Option Color`
+/// field — `TextStyle` in `motes/tui` — needs this one to be duplicable.
+pub instance Copy (Option Color) {
+    def copy (o : Option Color) : Pair (Option Color) (Option Color) :=
+        match o {
+            some c => Pair.pair (some c) (some c),
+            none => Pair.pair none none,
+        }
+}
+
 type Style {
     bold, dim, italic, underline, blink, reverse, hidden, strikethrough
 }
